@@ -1,0 +1,16 @@
+node_modules
+dist
+.vercel
+.DS_Store
+
+# Local Claude Code settings (may embed secrets)
+.claude/settings.local.json
+
+# Reference doc with plaintext credentials — never commit
+api.rtf
+
+# Local env (contains secrets) — never commit
+.env
+.env.local
+.env.*.local
+*.log

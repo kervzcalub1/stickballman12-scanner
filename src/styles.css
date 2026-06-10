@@ -43,7 +43,27 @@ body {
   justify-content: space-between;
   margin-bottom: 14px;
 }
-.brand { font-weight: 700; letter-spacing: 0.2px; }
+.brand { font-weight: 700; letter-spacing: 0.2px; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-actions { display: flex; gap: 8px; align-items: center; flex: none; }
+
+/* Logos — the source image isn't transparent, so we crop it into a circle
+   (like a social-media avatar) with object-fit: cover. */
+.brand-logo {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  border: 1px solid var(--border);
+}
+.app-logo {
+  width: 96px; height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  margin: 0 auto 14px;
+  border: 1px solid var(--border);
+}
 
 /* Cards */
 .card {
@@ -158,12 +178,152 @@ input:focus, select:focus { border-color: var(--primary); }
 }
 
 .rows-title { margin: 18px 0 10px; font-size: 15px; }
-.rows { display: flex; flex-direction: column; gap: 8px; }
-.qty-row { display: flex; gap: 8px; }
-.size-in { flex: 1; }
-.qty-in { width: 90px; }
+
+/* Size / quantity table */
+.size-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+.size-table th {
+  text-align: left;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  padding: 0 0 8px;
+}
+.size-table th:last-child { text-align: center; }
+.size-table td {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+.size-cell { padding-right: 12px; }
+.size-label { font-weight: 600; }
+.size-in { width: 100%; }
+
+/* Quantity stepper: − [ input ] + (and × to remove a custom row) */
+.qty-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.qty-in {
+  width: 64px;
+  text-align: center;
+  padding: 10px 6px;
+  /* hide the native number spinners — the steppers replace them */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.qty-in::-webkit-outer-spin-button,
+.qty-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.btn.icon.step { width: 40px; height: 40px; flex: none; }
+.btn.icon.remove { width: 40px; height: 40px; flex: none; }
+
+/* Per-row actions: ＋ (add a manual row) and × (remove it). The ＋ is accented
+   so it reads as a row action, distinct from the quantity stepper's + inside
+   the bordered group. */
+.size-table-wrap { overflow-x: auto; }
+.size-table .actions-col { width: 1%; }
+.row-actions { white-space: nowrap; text-align: right; padding-left: 8px; }
+.row-actions .btn + .btn { margin-left: 6px; }
+.btn.icon.add-row {
+  width: 40px; height: 40px; flex: none;
+  border-color: var(--primary);
+  color: var(--primary);
+  font-size: 20px;
+}
+.btn.icon.add-row:hover:not(:disabled) { background: rgba(79, 124, 255, 0.12); }
+
+/* Single variant (StockX gives the exact size; user types a quantity) */
+.single-variant {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sv-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sv-field:first-child { flex: 1; min-width: 120px; }
+.sv-label {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.sv-size {
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 10px 12px;
+  font-size: 18px;
+  font-weight: 700;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+/* In the single-variant view the quantity input lives inside a − [ ] + stepper,
+   so keep it the same compact width as the table stepper. */
+.sv-field .qty-stepper { justify-content: flex-start; }
+.sv-qty { width: 64px; }
 
 .send { margin-top: 16px; }
+
+/* Result dialog (success / error) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 100;
+  animation: overlay-in 0.15s ease-out;
+}
+.modal {
+  width: 100%;
+  max-width: 380px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 24px 22px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: modal-in 0.2s cubic-bezier(0.2, 0.8, 0.3, 1.2);
+}
+.modal-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34px;
+  font-weight: 700;
+  color: #fff;
+}
+.modal-icon.success { background: var(--ok); }
+.modal-icon.error { background: var(--err); }
+.modal-title { margin: 0 0 6px; font-size: 19px; }
+.modal-msg { margin: 0 0 20px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.modal-actions { display: flex; gap: 8px; justify-content: center; }
+.modal-actions .btn { flex: 1; }
+
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 
 /* Camera scanner */
 .scanner { display: flex; flex-direction: column; gap: 10px; }
@@ -188,7 +348,57 @@ input:focus, select:focus { border-color: var(--primary); }
 .scanner-controls { display: flex; gap: 8px; align-items: center; }
 .scanner-controls select { flex: 1; }
 
-@media (max-width: 520px) {
+/* Zoom toggle (1× / 2×) — shared by the camera overlay and the prefs modal */
+.zoom-toggle { display: flex; gap: 6px; }
+.zoom-toggle .btn { min-width: 44px; }
+.zoom-toggle.on-frame {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  border-radius: 10px;
+  backdrop-filter: blur(2px);
+}
+
+/* Preferences modal */
+.modal.prefs { text-align: left; max-width: 420px; }
+.modal.prefs .modal-title { text-align: center; }
+.pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 14px 0 22px;
+}
+.pref-text { min-width: 0; }
+.pref-label { font-weight: 600; }
+.pref-help { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* ------------------------------- Mobile -------------------------------- */
+@media (max-width: 600px) {
+  .app { padding: 12px; }
+  .card { padding: 14px; border-radius: 12px; }
+
+  /* Stack the mode tabs and search row so controls stay full-width & tappable */
+  .tabs { flex-direction: column; }
+  .tab { padding: 14px; }
+  .searchrow { flex-direction: column; }
+  .searchrow .btn { width: 100%; }
+
+  .topbar { gap: 8px; }
+  .brand { font-size: 15px; }
+
   .result-grid { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .details { width: 100%; }
   .details dl > div { justify-content: center; }
+
+  .login { width: 100%; max-width: 340px; }
+
+  /* Roomier tap targets for the quantity steppers on touch screens */
+  .btn.icon.step,
+  .btn.icon.remove,
+  .btn.icon.add-row { width: 44px; height: 44px; }
+  .qty-in { width: 56px; }
+  .modal-actions { flex-direction: column; }
 }

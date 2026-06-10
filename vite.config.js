@@ -46,6 +46,6 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), ''); // load all vars (no VITE_ prefix filter)
   return {
     plugins: [react(), devApi(env)],
-    server: { port: 5173 },
+    server: { port: 5173, allowedHosts: true },
   };
 });

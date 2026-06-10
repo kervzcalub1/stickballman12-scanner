@@ -7,14 +7,20 @@ and send them to a sheet.
 ## What it does
 
 - **Two lookup modes**
-  - **Barcode (UPC)** — search via the Alias UPC API.
+  - **Barcode (UPC)** — the **StockX UPC Search is the primary** lookup; if it
+    returns nothing or errors, the search automatically rotates to the **Alias**
+    UPC API as a fallback.
     - **Barcode Scanner** — a focused input that captures a HID scanner gun (or
       manual typing) and searches on Enter.
     - **Camera** — scans the barcode with the device camera (`@zxing`).
   - **SKU** — search via KicksDB (StockX products).
 - **Result** — Name, SKU, UPC (when available), and **one** reference image.
-- **Sizes & quantities** — add a `SIZE` + `QUANTITY` row; the **+** button on
-  each row adds another (− removes). Available sizes autocomplete when known.
+- **Sizes & quantities** — the layout depends on the provider:
+  - **StockX** (UPC) resolves the exact size for the scanned barcode, so it
+    shows that single size plus a **quantity text box**.
+  - **Alias** (UPC) and **KicksDB** (SKU) return the full size run, shown as a
+    **two-column table** (Size | Quantity) with − / + steppers per size.
+  - When no sizes are known, you type sizes into editable rows and can add more.
 - **Send to Sheet** — posts the product + rows to the backend.
 
 ## Security model
@@ -41,24 +47,32 @@ Default local access password: `stickball2026` (change it in `.env`).
 
 ## Deploy to Vercel
 
-1. Push to a Git repo and import it in Vercel (framework preset: **Vite**).
-2. Add these **Environment Variables** (Production + Preview):
-   `ALIAS_EMAIL`, `ALIAS_PASSWORD`, `KICKSDB_KEY`, `APP_PASSWORD`,
-   `SESSION_SECRET`, and optionally `SHEET_WEBHOOK_URL`.
-3. Deploy. The `/api` folder is auto-detected as serverless functions.
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for the full end-to-end guide,
+including the Google Sheets service-account setup and all environment variables.
 
-> Rotate `APP_PASSWORD`/`SESSION_SECRET` for production and never commit `.env`.
+## "Send to Sheet" integration (Google Sheets API)
 
-## "Send to Sheet" integration (pending)
-
-`/api/send-to-sheet` forwards the payload to `SHEET_WEBHOOK_URL` if set (e.g. a
-Google Apps Script Web App). Until that URL is provided, submissions are
-validated and acknowledged as a stub. Payload shape:
+`/api/send-to-sheet` appends one row per variant directly to a Google Sheet
+using a service account. Until the `GOOGLE_*` keys are provided, submissions are
+validated and acknowledged as a stub. Request shape (from the browser):
 
 ```json
 {
-  "submittedAt": "ISO-8601",
-  "name": "…", "sku": "…", "upc": "…", "image": "…",
+  "product": { "name": "…", "sku": "…" },
   "rows": [{ "size": "10", "quantity": 2 }]
 }
 ```
+
+Each variant becomes a sheet row across columns **A–I**:
+`[ unique_id, name, sku, size, quantity, "", "", "Not Added", "" ]`
+(unique_id, Product Name, SKU, Size, Quantity, Price, Remarks, Status, Added by).
+
+**Concurrency safety.** Google's `values.append` + `OVERWRITE` can silently
+overwrite rows when two users submit at the same instant (measured: 37/40 rows
+lost in a 40-way burst). To prevent that, each row carries a per-row `unique_id`
+in column A; after appending, the server reads those cells back and re-appends
+any row whose id didn't survive (bounded retries with backoff + jitter). Keep
+column A **hidden + protected**, with the service account granted edit access.
+This eliminates loss at realistic concurrency; note that very large
+simultaneous bursts are instead bounded by Google's per-user write quota
+(~60/min). See [DEPLOYMENT.md](./DEPLOYMENT.md) for the sheet layout and setup.

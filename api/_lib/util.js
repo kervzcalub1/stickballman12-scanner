@@ -150,3 +150,47 @@ export function cleanSku(raw) {
   if (!/^[A-Za-z0-9 .\-_/]+$/.test(s)) return null;
   return s;
 }
+
+/* ------------------------------------------------------------------ */
+/* Upstream helpers: timeouts + a tiny in-memory lookup cache.         */
+/* ------------------------------------------------------------------ */
+
+// fetch() with an abort timeout so a slow/hung upstream fails fast (which, for
+// UPC search, lets us rotate to the Alias fallback quickly instead of hanging).
+export async function fetchWithTimeout(url, opts = {}, ms = 9000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Process-local TTL cache for product lookups. Serverless instances are
+// ephemeral, so this only helps repeat scans on a warm instance — but those
+// are exactly the common case (re-scanning the same item) and it skips the
+// ~1s upstream round trip entirely. Product metadata (name/sku/sizes) is
+// effectively static over a short window, so a few minutes is safe.
+const _lookupCache = new Map();
+
+export function cacheGet(key) {
+  const hit = _lookupCache.get(key);
+  if (!hit) return null;
+  if (Date.now() > hit.exp) {
+    _lookupCache.delete(key);
+    return null;
+  }
+  // Refresh LRU position.
+  _lookupCache.delete(key);
+  _lookupCache.set(key, hit);
+  return hit.value;
+}
+
+export function cacheSet(key, value, ttlMs = 5 * 60 * 1000) {
+  _lookupCache.set(key, { value, exp: Date.now() + ttlMs });
+  // Bound memory: drop the oldest entry once we exceed the cap.
+  if (_lookupCache.size > 500) {
+    _lookupCache.delete(_lookupCache.keys().next().value);
+  }
+}

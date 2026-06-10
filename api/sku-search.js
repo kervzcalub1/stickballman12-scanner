@@ -3,12 +3,42 @@
 
 import {
   getJsonBody, send, applySecurity, rateLimit, requireAuth, cleanSku,
+  fetchWithTimeout, cacheGet, cacheSet,
 } from './_lib/util.js';
 
 const KICKS_BASE = 'https://api.kicks.dev/v3/stockx/products';
 
+// Sort sizes by numeric value (1, 1.5, 2 … 13) instead of the lexicographic
+// order that puts 10–13 before 2. Non-numeric sizes sort last by string.
+function sortSizes(list) {
+  const num = (s) => {
+    const m = String(s).match(/[\d.]+/);
+    return m ? parseFloat(m[0]) : NaN;
+  };
+  return [...list].sort((a, b) => {
+    const na = num(a);
+    const nb = num(b);
+    if (Number.isNaN(na) && Number.isNaN(nb)) return String(a).localeCompare(String(b));
+    if (Number.isNaN(na)) return 1;
+    if (Number.isNaN(nb)) return -1;
+    return na - nb;
+  });
+}
+
 function normalize(item, querySku) {
   if (!item) return null;
+  // KicksDB returns the size run under `variants` (requested via
+  // display[variants]=true). Each variant's `size` is the StockX primary size
+  // (e.g. "10", "8.5W"); take the visible ones so the UI shows the same
+  // size/quantity table as an Alias result.
+  const variants = Array.isArray(item.variants) ? item.variants : [];
+  const sizes = sortSizes([
+    ...new Set(
+      variants
+        .filter((v) => !v.hidden && v.size != null && String(v.size).trim())
+        .map((v) => String(v.size).trim())
+    ),
+  ]);
   return {
     name: item.title || item.model || 'Unknown product',
     sku: item.sku || querySku || null,
@@ -16,7 +46,7 @@ function normalize(item, querySku) {
     image: item.image || (Array.isArray(item.gallery) ? item.gallery[0] : null) || null,
     brand: item.brand || null,
     colorway: item.secondary_title || null,
-    sizes: [],
+    sizes,
     source: 'kicksdb',
   };
 }
@@ -35,9 +65,16 @@ export default async function handler(req, res) {
   const sku = cleanSku(body.sku);
   if (!sku) return send(res, 400, { ok: false, error: 'Invalid SKU.' });
 
+  // Repeat lookups of the same SKU skip the upstream round trip.
+  const cacheKey = `sku:${sku.toLowerCase()}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return send(res, 200, { ok: true, product: cached, cached: true });
+
   try {
-    const url = `${KICKS_BASE}?query=${encodeURIComponent(sku)}`;
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${key}` } });
+    // display[variants]=true returns the size run in the same call (no second
+    // round trip); limit=1 keeps the payload small since we use the top match.
+    const url = `${KICKS_BASE}?query=${encodeURIComponent(sku)}&display[variants]=true&limit=1`;
+    const r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${key}` } });
     if (!r.ok) return send(res, 502, { ok: false, error: `KicksDB failed (${r.status})` });
 
     const data = await r.json();
@@ -45,6 +82,7 @@ export default async function handler(req, res) {
     const normalized = normalize(item, sku);
     if (!normalized) return send(res, 404, { ok: false, error: 'No product found for that SKU.' });
 
+    cacheSet(cacheKey, normalized);
     return send(res, 200, { ok: true, product: normalized });
   } catch (e) {
     return send(res, 502, { ok: false, error: e.message || 'Upstream error.' });

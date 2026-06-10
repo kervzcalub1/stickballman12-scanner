@@ -4,13 +4,37 @@ import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 
 // Camera-based 1D barcode scanner (UPC-A / UPC-E / EAN-13 / EAN-8 / Code-128).
 // Calls onDetected(code) once with the decoded digits, then stops.
-export default function CameraScanner({ onDetected, onClose }) {
+//
+// `zoom` (1 or 2) is applied to the live camera track when the device supports
+// the `zoom` capability (true optical/digital zoom, so the decoder also sees
+// the magnified frames). On devices without that capability we fall back to a
+// CSS transform — that magnifies the preview only, not the decoded frame.
+export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomChange }) {
   const videoRef = useRef(null);
   const controlsRef = useRef(null);
+  const trackRef = useRef(null);
   const doneRef = useRef(false);
   const [error, setError] = useState('');
   const [devices, setDevices] = useState([]);
   const [deviceId, setDeviceId] = useState(undefined);
+  // Whether the active camera supports a real (hardware) zoom constraint.
+  const [hwZoom, setHwZoom] = useState(false);
+
+  // Apply the requested zoom to the live track if the camera supports it.
+  // Returns true when hardware zoom is available.
+  function applyZoom(track, z) {
+    try {
+      const caps = track?.getCapabilities?.();
+      if (!caps || !('zoom' in caps)) return false;
+      const min = caps.zoom.min ?? 1;
+      const max = caps.zoom.max ?? z;
+      const value = Math.min(max, Math.max(min, z));
+      track.applyConstraints({ advanced: [{ zoom: value }] }).catch(() => {});
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   useEffect(() => {
     const hints = new Map();
@@ -46,6 +70,13 @@ export default function CameraScanner({ onDetected, onClose }) {
             }
           }
         );
+
+        // Grab the live video track so we can drive zoom, then apply the
+        // current preference.
+        const stream = videoRef.current?.srcObject;
+        const track = stream?.getVideoTracks?.()[0] || null;
+        trackRef.current = track;
+        if (!cancelled) setHwZoom(applyZoom(track, zoom));
       } catch (e) {
         if (!cancelled) {
           setError(
@@ -59,11 +90,21 @@ export default function CameraScanner({ onDetected, onClose }) {
 
     return () => {
       cancelled = true;
+      trackRef.current = null;
       try { controlsRef.current?.stop(); } catch { /* noop */ }
     };
     // Re-run when the selected device changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId]);
+
+  // Re-apply zoom whenever the preference changes while the camera is open.
+  useEffect(() => {
+    if (trackRef.current) setHwZoom(applyZoom(trackRef.current, zoom));
+  }, [zoom]);
+
+  // CSS fallback only kicks in when the camera lacks hardware zoom.
+  const videoStyle =
+    !hwZoom && zoom !== 1 ? { transform: `scale(${zoom})` } : undefined;
 
   return (
     <div className="scanner">
@@ -72,8 +113,23 @@ export default function CameraScanner({ onDetected, onClose }) {
       ) : (
         <>
           <div className="scanner-frame">
-            <video ref={videoRef} className="scanner-video" muted playsInline />
+            <video ref={videoRef} className="scanner-video" style={videoStyle} muted playsInline />
             <div className="scanner-reticle" />
+            {onZoomChange && (
+              <div className="zoom-toggle on-frame" role="group" aria-label="Camera zoom">
+                {[1, 2].map((z) => (
+                  <button
+                    key={z}
+                    type="button"
+                    className={`btn sm ${zoom === z ? 'primary' : 'ghost'}`}
+                    aria-pressed={zoom === z}
+                    onClick={() => onZoomChange(z)}
+                  >
+                    {z}×
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <p className="scanner-hint">Point the camera at the barcode.</p>
         </>

@@ -1,117 +1,124 @@
 # Stickballman12 · Shoe Scanner — Project Context
 
 Quick-reference context for this repo. For the user-facing overview see
-[README.md](./README.md); for hosting/env setup see [DEPLOYMENT.md](./DEPLOYMENT.md).
+[README.md](./README.md); for hosting/env setup see [DEPLOYMENT.md](./DEPLOYMENT.md)
+and [UPDATE_VERSION.md](./UPDATE_VERSION.md).
 
 ## What it is
 
-A React (Vite) web app that scans a shoe barcode (UPC) or takes a SKU, looks it
-up, shows the shoe details + one reference image, then captures sizes &
-quantities and appends them to a Google Sheet. A small set of Vercel serverless
-functions under `/api` proxy all third-party calls so credentials never reach
-the browser.
+A React (Vite) web app for a shoe-inventory team. Users sign in (admin-approved
+accounts), scan a barcode (UPC) or enter a SKU, look up the shoe, and record
+sizes & quantities into a Google Sheet. Vercel serverless functions under `/api`
+proxy all third-party calls; **user accounts live in Neon Postgres**.
 
 ## Stack
 
-- **Frontend:** React 18 + Vite. Source in `src/`.
-- **Barcode camera:** `@zxing/browser` + `@zxing/library` (lazy-loaded).
+- **Frontend:** React 18 + Vite (`src/`).
+- **Barcode camera:** `@zxing/browser` + `@zxing/library` (lazy-loaded;
+  `TRY_HARDER` enables vertical-barcode reading).
 - **Backend:** Vercel serverless functions in `api/` (Node). Locally they run
-  through Vite middleware, so `npm run dev` serves both the app and `/api/*`.
-- **Sheets:** `google-auth-library` (service account) appends rows.
+  through Vite middleware, so `npm run dev` serves the app and `/api/*`.
+- **Database:** Neon Postgres via `@neondatabase/serverless` (`DATABASE_URL`).
+- **Sheets:** `google-auth-library` (service account).
 
 ## Commands
 
 ```bash
 npm install        # install deps
+npm run db:setup   # create Postgres tables (users, login_attempts, locks) — idempotent
 npm run dev        # http://localhost:5173 — app + /api via Vite middleware
 npm run build      # production build
-npm run preview    # preview the production build
 ```
 
-Local access password defaults to `stickball2026` (set in `.env`; see
-`.env.example`).
+Admin login: username `admin`, password = `ADMIN_PASSWORD` (in `.env`).
 
 ## Layout
 
 ```
 src/
-  App.jsx                 # whole UI: Login, Scanner, size/qty table, modals
-  api.js                  # frontend API client (token storage + fetch wrappers)
-  prefs.js                # user preferences (localStorage): camera zoom, …
+  App.jsx                 # all UI: Auth (login/signup), Home, CheckAccess,
+                          #         BulkScan, RapidScan, ConfirmSend, modals
+  api.js                  # frontend API client (token+user storage, fetch wrappers)
+  prefs.js                # user prefs (localStorage): camera zoom
   styles.css              # all styles (dark theme, responsive)
-  main.jsx                # React entry
-  components/
-    CameraScanner.jsx     # @zxing camera barcode scanner
+  components/CameraScanner.jsx
 api/
-  auth.js                 # POST /api/auth — password -> signed session token
-  upc-search.js           # POST /api/upc-search — StockX (primary) -> Alias (fallback)
-  sku-search.js           # POST /api/sku-search — KicksDB/StockX SKU lookup
-  send-to-sheet.js        # POST /api/send-to-sheet — append rows to Google Sheet
+  auth/login.js           # POST — username/password (DB or env admin) -> session
+  auth/signup.js          # POST — create a pending employee account
+  admin/users.js          # GET  — list accounts (admin only)
+  admin/review.js         # POST — approve/reject an account (admin only)
+  upc-search.js           # POST — StockX (primary) -> Alias (fallback)
+  sku-search.js           # POST — KicksDB/StockX SKU lookup (full size run)
+  send-to-sheet.js        # POST — Bulk Scan write (consolidating)
+  rapid-send.js           # POST — Rapid Scan write (qty 1, consolidating)
   _lib/
-    util.js               # auth, rate limiting, security headers, body parsing
-    sheets.js             # Google Sheets append helper
+    util.js               # auth (requireAuth/requireAdmin), scrypt, sessions,
+                          # rate limiting, security headers, body parsing (256KB cap)
+    db.js                 # Neon access: users, login_attempts, distributed lock
+    sheets.js             # Sheets read/append/update + upsertVariants
+scripts/db-setup.mjs      # schema migration
 ```
+
+## Auth & accounts
+
+- **Login** (`api/auth/login.js`): `admin` is an env account (username `admin`,
+  name `Alex`, `ADMIN_PASSWORD`); everyone else is a DB row. Passwords hashed
+  with **scrypt**. On success the server returns `{ token, user }`; the client
+  stores both in `sessionStorage` (`sb_session_token`, `sb_user`) and sends the
+  token as `Authorization: Bearer` on every call.
+- **Signup** (`api/auth/signup.js`): creates a `pending` `employee`; can't log
+  in until approved.
+- **Approval**: admin `Check Access` screen → `api/admin/*` (gated by
+  `requireAdmin`) sets status `approved`/`rejected`.
+- **Brute force**: `login_attempts` table; per-username and per-IP failure counts
+  in a 15-min window trigger a 429 lockout. Generic auth errors (no enumeration).
+- `users(id, name, username UNIQUE, pass_hash, role, status, …)`.
 
 ## Data flow
 
-1. **Login** — user enters `APP_PASSWORD`; server returns an HMAC-signed,
-   expiring session token (`SESSION_SECRET`). The client stores it in
-   `sessionStorage` (`sb_session_token`) and sends it as `Authorization: Bearer`
-   on every API call.
-2. **Lookup** — `searchUpc` / `searchSku` return a normalized product:
+1. **Lookup** — `searchUpc`/`searchSku` return
    `{ name, sku, upc, image, brand, colorway, sizes[], source }`.
-   - **UPC** rotates providers server-side in `api/upc-search.js`:
-     **StockX UPC Search is primary** (Railway bypass host `/stockx-upc-search`,
-     POST `{upc}`, no key); if it returns null or errors, it falls back to
-     **Alias**. StockX resolves the exact size for the scanned barcode from
-     `result.data.variants[0]` (title + styleId + traits.size/sizeChart.baseSize)
-     → `source: 'stockx'`, `sizes: [theSize]`. Alias returns the full size list
-     → `source: 'alias'`.
-   - **SKU** (KicksDB) returns the size run via `display[variants]=true`
-     (mapping `variants[].size`) → `source: 'kicksdb'`, `sizes: [...]`.
-3. **Sizes & quantities** — the UI layout depends on `source`:
-   - `stockx` → the single resolved size + one **quantity text box**.
-   - `alias` / `kicksdb` → the two-column **size/quantity table** (Size |
-     Quantity) with − / + steppers, one fixed row per known size, **plus a blank
-     manual-entry row** at the end. Manual rows show ＋ (add another row) and ×
-     (remove); at least one blank manual row is always kept.
-   - no sizes (any source returning an empty list) → just editable manual rows
-     (same ＋ / × controls).
-4. **Send to Sheet** — posts `{ product, rows: [{ size, quantity }] }`. Each
-   variant becomes a sheet row across columns **A–I**:
-   `[ unique_id, name, sku, size, quantity, "", "", "Not Added", "" ]`
-   (unique_id, Product Name, SKU, Size, Quantity, Price, Remarks, Status, Added by).
-   - **Concurrency:** `values.append`+`OVERWRITE` can silently clobber rows under
-     simultaneous writes. `_lib/sheets.js` mitigates this with verify-and-retry:
-     each row gets a short, time-ordered unique id in column A (base36 timestamp
-     + per-submission salt + row index — no read-before-write, so it's safe
-     under concurrency), and after appending it reads those cells back and
-     re-appends any that were overwritten (bounded retries,
-     backoff + jitter). Column A is hidden + protected in the sheet (service
-     account has edit access). This is best-effort, not a hard guarantee.
+   - **UPC**: StockX primary (Railway `/stockx-upc-search`, no key) → Alias
+     fallback. StockX → `source:'stockx'`, single `sizes:[size]`. Alias →
+     `source:'alias'`, full list.
+   - **SKU**: KicksDB `?display[variants]=true` → `source:'kicksdb'`, full list.
+2. **Scan modes**
+   - **Bulk** (`BulkScan`): size/quantity table (steppers + a blank manual row);
+     `prepareSend` validates → `ConfirmSend` → `api.sendToSheet`.
+   - **Rapid** (`RapidScan`): scan → StockX size auto / Alias size grid (`+W` for
+     women's) → `ConfirmSend` → `api.rapidSend` (qty 1) → re-arm.
+   - **ConfirmSend**: image + name + **emphasized SKU** + size (+qty for Bulk);
+     dismissable only via Yes/No.
+3. **Sheet write** (cols **A–J**: unique_id, **Scanned by**, name, sku, size,
+   qty, price, **status**, **remarks**, added_by):
+   - Both modes call `sheets.upsertVariants` under a **global Postgres write
+     lock** (`acquireLock('sheet:write')`). For each size, if a row with the same
+     **SKU + Size + Status 'Not Added' + same Scanned-by** exists, its quantity
+     is increased; otherwise a new row is appended. Different scanner → own row.
+     `Added`/`WITH REMARKS` rows are never merged.
+   - The lock serializes all writes, so appends use a plain (non-verify) append.
+     Column A still gets a short unique id.
 
 ## Security model
 
-All credentials/keys live server-side only (Vercel env vars), never shipped to
-the browser. The frontend only calls same-origin `/api/*`. There's input
-validation (UPC digits, SKU charset), per-IP rate limiting, and hardened
-HTTP/CSP headers (`vercel.json`).
+Credentials/keys (Alias, KicksDB, Google SA, `DATABASE_URL`, `ADMIN_PASSWORD`)
+are server-side only; the browser only calls same-origin `/api/*`. scrypt
+hashing, HMAC bearer sessions (role-checked server-side), DB-backed login
+throttling, parameterized SQL, 256 KB body cap, per-IP rate limiting, CSP/headers
+in `vercel.json`.
 
 ## Conventions / gotchas
 
-- `api/_lib/util.js` is the shared gate for every endpoint: call
-  `applySecurity`, `requireAuth`, and `rateLimit` at the top of each handler.
-- A 401 from any API means an expired/invalid token — the client clears the
-  token and the app drops back to the login screen (`err.unauthorized`).
-- **Sheets write quota:** Google enforces ~60 write requests/min **per user**
-  (per service account). Verify-and-retry multiplies write calls, so a very
-  large simultaneous burst surfaces as `429` errors (explicit, not silent loss).
-  Realistic concurrency (a handful of users) stays well under it.
-- The barcode-scanner input stays auto-focused so a HID scanner gun "types"
-  straight in and searches on Enter.
-- **Camera zoom** (1×/2×) lives in `prefs.js` (localStorage), editable via the
-  ⚙ Settings modal or an in-camera toggle. It uses the `MediaStreamTrack` `zoom`
-  capability when available (real zoom the decoder also sees); otherwise it
-  falls back to a CSS `transform: scale()` that magnifies the preview only.
-</content>
-</invoke>
+- Every endpoint starts with `applySecurity`, then `requireAuth`/`requireAdmin`
+  (returns the user object or sends 401/403), then `rateLimit`.
+- A 401 from any API → client clears the session and returns to login
+  (`err.unauthorized`).
+- **Neon free tier auto-suspends (~5 min idle)** → the first DB query (the lock)
+  after idle can take ~1–5s, then it's warm. For low latency, **match the Vercel
+  function region to the Neon region**.
+- The global `sheet:write` lock serializes all sheet writes — simple and correct,
+  but caps write throughput; if heavy multi-device load needs more parallelism,
+  split into per-SKU locks (which would reintroduce verify-on-append).
+- **Camera zoom** (1×/2×) in `prefs.js` (localStorage); uses the
+  `MediaStreamTrack` `zoom` capability, else a CSS `transform: scale()` fallback.
+- The scanner-gun input stays auto-focused so a HID scanner "types" straight in.

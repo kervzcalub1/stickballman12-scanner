@@ -1,0 +1,91 @@
+// POST /api/auth/login  { username, password }  ->  { ok, token, user }
+// Authenticates against the DB (employees) or the env admin account, with
+// DB-backed brute-force throttling. Generic errors avoid username enumeration.
+
+import crypto from 'node:crypto';
+import {
+  getJsonBody, send, applySecurity, signToken, verifyPassword, clientIp,
+} from '../_lib/util.js';
+import {
+  findUserByUsername, recordLoginAttempt, countRecentFailures, dbConfigured,
+} from '../_lib/db.js';
+
+const MAX_FAILS_PER_USER = 5;   // per window, then locked
+const MAX_FAILS_PER_IP = 30;    // per window, across usernames
+const WINDOW_MINS = 15;
+
+function constantTimeEqual(a, b) {
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+export default async function handler(req, res) {
+  applySecurity(req, res);
+  if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
+  if (!dbConfigured())
+    return send(res, 500, { ok: false, error: 'Accounts are not configured on the server.' });
+
+  const body = await getJsonBody(req);
+  const username = String(body.username || '').trim().toLowerCase();
+  const password = String(body.password || '');
+  const ip = clientIp(req);
+
+  if (!username || !password)
+    return send(res, 400, { ok: false, error: 'Enter your username and password.' });
+
+  // Brute-force throttle (checked before verifying the password).
+  try {
+    const { by_user, by_ip } = await countRecentFailures({ username, ip, windowMins: WINDOW_MINS });
+    if (by_user >= MAX_FAILS_PER_USER || by_ip >= MAX_FAILS_PER_IP) {
+      return send(res, 429, {
+        ok: false,
+        error: `Too many failed attempts. Try again in about ${WINDOW_MINS} minutes.`,
+      });
+    }
+  } catch (e) {
+    console.error('[login] throttle check failed:', e.message);
+    // fail closed-ish: continue but without throttle data
+  }
+
+  const fail = async (msg = 'Incorrect username or password.', code = 401) => {
+    try { await recordLoginAttempt({ username, ip, success: false }); } catch { /* noop */ }
+    return send(res, code, { ok: false, error: msg });
+  };
+
+  // Admin account lives in env, not the DB.
+  if (username === 'admin') {
+    const adminPass = process.env.ADMIN_PASSWORD;
+    if (!adminPass) return send(res, 500, { ok: false, error: 'Admin login is not configured.' });
+    if (!constantTimeEqual(password, adminPass)) return fail();
+    await recordLoginAttempt({ username, ip, success: true });
+    const user = { uid: 'admin', username: 'admin', name: 'Alex', role: 'admin' };
+    return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });
+  }
+
+  // Employees from the DB.
+  let row;
+  try {
+    row = await findUserByUsername(username);
+  } catch (e) {
+    console.error('[login] lookup failed:', e.message);
+    return send(res, 500, { ok: false, error: 'Login is temporarily unavailable.' });
+  }
+
+  if (!row || !verifyPassword(password, row.pass_hash)) return fail();
+
+  // Correct password — now gate on approval status.
+  if (row.status === 'pending')
+    return send(res, 403, { ok: false, error: 'Your account is awaiting admin approval.' });
+  if (row.status === 'rejected')
+    return send(res, 403, { ok: false, error: 'Your account was not approved. Contact the admin.' });
+
+  await recordLoginAttempt({ username, ip, success: true });
+  const user = { uid: row.id, username: row.username, name: row.name, role: row.role };
+  return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });
+}
+
+function publicUser(u) {
+  return { username: u.username, name: u.name, role: u.role };
+}

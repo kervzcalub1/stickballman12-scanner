@@ -26,27 +26,38 @@ site](#5-verify-after-deploy).
 
 ## 0. One-time data migration for THIS release ⚠️
 
-This update changed the Google Sheet layout and the write path. **Do this in the
-sheet before (or right as) you deploy**, or "Send to Sheet" will write to the
-wrong columns.
+**Version 3** adds accounts (database) + Rapid Scan and changed the sheet layout.
+Do all of this **before/as you deploy** or it will break.
 
-The sheet must now have **9 columns (A–I)** with this header in row 1:
+**a) Database (Neon Postgres).** In Vercel, attach the **Neon** integration to the
+project (Storage → it adds `DATABASE_URL` automatically). Then create the tables
+once — locally against the same DB, or via any environment that has
+`DATABASE_URL`:
+```bash
+npm run db:setup     # creates users, login_attempts, locks (idempotent)
+```
 
-| A | B | C | D | E | F | G | H | I |
-|---|---|---|---|---|---|---|---|---|
-| unique_id | Product Name | SKU | Size | Quantity | Price | Remarks | Status | Added by |
+**b) New environment variables** (Vercel → Settings → Environment Variables):
 
-- **Column A (`unique_id`)** is written by the app and used to detect/repair
-  concurrent overwrites. Keep it **hidden** and **protected** (Data → Protect
-  range over the whole column `A:A`), with the **service account email granted
-  edit access** so the app can still write it while people can't.
-- Keep the **Status** dropdown on column **H** (it moved from G): `Not Added`,
-  `Added`, `With Remarks`. The app writes `Not Added`.
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | added automatically by the Neon integration |
+| `ADMIN_PASSWORD` | **strong** password for the `admin` account (name "Alex") |
+| `SESSION_SECRET` | already set (still used to sign sessions) |
 
-> No new environment variables are needed for this release — the existing
-> `ALIAS_*`, `KICKSDB_KEY`, `APP_PASSWORD`, `SESSION_SECRET`, and `GOOGLE_*`
-> values already set on Vercel are unchanged. (Only add/update env vars when you
-> introduce a new one; see [§4](#4-if-you-changed-environment-variables).)
+`APP_PASSWORD` (the old shared gate) is no longer used and can be removed.
+
+**c) Sheet layout — now 10 columns (A–J)** with this header in row 1:
+
+| A | B | C | D | E | F | G | H | I | J |
+|---|---|---|---|---|---|---|---|---|---|
+| unique_id | Scanned by | Product Name | SKU | Size | Quantity | Price | Status | Remarks | Added by |
+
+- **Column A (`unique_id`)**: keep **hidden** and **protected** (`A:A`) with the
+  **service account** granted edit access (used to repair concurrent overwrites).
+- **Column B (`Scanned by`)**: written by the app with the signed-in user's name.
+- **Status** is on column **H**, **Remarks** on **I**. Status dropdown options:
+  `Not Added`, `Added`, `With Remarks`.
 
 ---
 

@@ -10,11 +10,11 @@
 // per-row token used by the verify-and-retry write path to detect/repair
 // concurrent overwrites. price/remarks/addedBy are blank; status -> "Not Added".
 
-import crypto from 'node:crypto';
 import {
   getJsonBody, send, applySecurity, rateLimit, requireAuth, cleanSku,
 } from './_lib/util.js';
-import { appendRows, sheetsConfigured } from './_lib/sheets.js';
+import { upsertVariants, sheetsConfigured } from './_lib/sheets.js';
+import { acquireLock, releaseLock } from './_lib/db.js';
 
 const MAX_VARIANTS = 100;
 const MAX_QTY = 9999;
@@ -68,7 +68,8 @@ function validate(body) {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  if (!requireAuth(req, res)) return;
+  const user = requireAuth(req, res);
+  if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
 
@@ -88,34 +89,37 @@ export default async function handler(req, res) {
     });
   }
 
-  // One row per variant, matching the sheet columns A–I:
-  // [ unique_id, Product Name, SKU, Size, Quantity, Price, Remarks, Status, Added by ].
-  // Column A is a short, time-ordered unique id used to verify the write
-  // survived concurrent appends. A plain 1000+ counter is intentionally NOT
-  // used: assigning the next number requires reading the sheet's current max
-  // before writing, and that read-before-write races under concurrent
-  // submissions. Instead we derive a coordination-free token:
-  //   <base36 ms timestamp><per-submission salt><row index>
-  // — compact (~13 chars), sortable by time, and unique without coordination.
-  // Price / Remarks / Added by are blank; Status defaults to "Not Added".
-  const stamp = Date.now().toString(36);
-  const salt = crypto.randomBytes(2).toString('hex');
-  const rows = v.variants.map((variant, i) => [
-    `${stamp}${salt}${i}`, v.name, v.sku, variant.size, variant.quantity, '', '', 'Not Added', '',
-  ]);
+  // Consolidating write: for each size, if a 'Not Added' row with the same
+  // SKU + Size exists, add to its quantity; otherwise append a new row.
+  // Scanned by = the signed-in user's name. The per-SKU lock serializes this
+  // read/modify/write against concurrent scans of the same product (Bulk or
+  // Rapid use the same lock key), so quantities can't be lost.
+  const scannedBy = user.name || user.username || '';
+  // Single global write lock (shared with Rapid Scan) serializes all sheet
+  // writes so the consolidating read/modify/write is race-free.
+  const lockKey = 'sheet:write';
+
+  const locked = await acquireLock(lockKey, { waitMs: 15000 }).catch(() => false);
+  if (!locked)
+    return send(res, 409, { ok: false, error: 'Busy — another scan of this product is in progress. Try again.' });
 
   try {
-    const count = await appendRows(rows);
+    const r = await upsertVariants({ scannedBy, name: v.name, sku: v.sku, variants: v.variants });
+    const parts = [];
+    if (r.appended) parts.push(`added ${r.appended} new size(s)`);
+    if (r.incremented) parts.push(`updated ${r.incremented} existing`);
     return send(res, 200, {
       ok: true,
       forwarded: true,
-      count,
-      message: `Added ${count} size(s) to the sheet.`,
+      count: r.total,
+      message: `Sheet ${parts.join(' & ') || 'updated'}.`,
     });
   } catch (e) {
     const msg = e.name === 'AbortError'
       ? 'Google Sheets request timed out.'
       : (e.message || 'Google Sheets error.');
     return send(res, 502, { ok: false, error: msg });
+  } finally {
+    await releaseLock(lockKey);
   }
 }

@@ -9,9 +9,21 @@ dist
 # Reference doc with plaintext credentials — never commit
 api.rtf
 
-# Local env (contains secrets) — never commit
+# Local env & secrets — never commit (DB creds, API keys, tokens, etc.)
 .env
-.env.local
-.env.*.local
-*.log
+.env.*
+*.env
+vercel.env
 env.env
+!.env.example
+*.log
+
+# Service-account / key material
+*.pem
+*.key
+*-service-account*.json
+gcp-*.json
+credentials*.json
+
+#version
+version-update.txt

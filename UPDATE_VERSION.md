@@ -152,12 +152,14 @@ On the live `*.vercel.app` URL:
 2. **Favicon + logo** show the new circular image (tab icon + login screen +
    top bar). If the favicon looks stale, favicons cache aggressively — try a new
    tab or clear site data.
-3. Sign in with `APP_PASSWORD`.
+3. Sign in as **`admin`** (your `ADMIN_PASSWORD`); approve a test account in
+   **Check Access**; sign in as that employee.
 4. **UPC scan** (StockX primary → Alias fallback) and a **SKU search** both
    return a product with the size/quantity table.
-5. Set a quantity (including a manually-added size row) and **Send to Sheet** →
-   confirm a new row appears in columns **A–I**, with a value in `unique_id`.
-6. Camera zoom toggle (⚙ Settings / in-camera 1×/2×) still works.
+5. **Bulk** and **Rapid** sends → confirm dialog → a row appears in columns
+   **A–J** with **Scanned by** (col B) set and a value in `unique_id` (col A).
+6. Camera zoom toggle (⚙ Settings / in-camera 1×/2×) and **vertical-barcode**
+   reading work.
 
 ---
 

@@ -45,6 +45,9 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
       BarcodeFormat.EAN_8,
       BarcodeFormat.CODE_128,
     ]);
+    // TRY_HARDER makes the 1D reader also attempt a 90°-rotated scan, so a
+    // barcode held vertically reads without rotating the phone or the box.
+    hints.set(DecodeHintType.TRY_HARDER, true);
     const reader = new BrowserMultiFormatReader(hints);
     let cancelled = false;
 

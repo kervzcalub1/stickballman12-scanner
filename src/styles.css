@@ -77,6 +77,103 @@ body {
 .login h1 { margin: 0 0 4px; }
 .login input { width: 100%; margin: 16px 0 4px; }
 
+/* Auth (login / signup) */
+.auth-tabs { margin: 16px 0 14px; gap: 6px; }
+.auth-tabs .tab { padding: 9px; font-size: 14px; }
+.auth-form { display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.auth-form input { width: 100%; }
+.auth-form .btn { margin-top: 4px; }
+.auth-done { text-align: center; }
+.auth-done .modal-icon { margin: 4px auto 12px; }
+
+/* Home */
+.home-greeting { margin: 4px 2px 16px; font-size: 18px; font-weight: 600; }
+.role-badge {
+  display: inline-block; margin-left: 6px; padding: 2px 8px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  border-radius: 999px; background: var(--panel-2); color: var(--muted);
+  vertical-align: middle;
+}
+.home-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.home-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 18px; border-radius: 14px; cursor: pointer; text-align: left;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  transition: border-color 0.12s, transform 0.06s;
+}
+.home-card:hover { border-color: var(--primary); }
+.home-card:active { transform: translateY(1px); }
+.home-card-icon { font-size: 28px; }
+.home-card-title { font-size: 17px; font-weight: 700; }
+.home-card-sub { font-size: 12px; color: var(--muted); }
+
+/* Check Access table */
+.access-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.access-table th {
+  text-align: left; color: var(--muted); font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 0 8px 8px 0;
+}
+.access-table td { padding: 8px 8px 8px 0; border-top: 1px solid var(--border); vertical-align: middle; }
+.access-actions { white-space: nowrap; text-align: right; }
+.access-actions .btn + .btn { margin-left: 6px; }
+.status-pill {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; text-transform: capitalize;
+}
+.status-pill.pending { background: rgba(255,193,7,0.15); color: #ffca3a; }
+.status-pill.approved { background: rgba(46,204,113,0.15); color: var(--ok); }
+.status-pill.rejected { background: rgba(255,107,107,0.15); color: var(--err); }
+
+/* Rapid Scan */
+.rapid-hint { font-size: 12px; margin: 12px 0 0; }
+.size-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+.size-box {
+  padding: 14px 6px; border-radius: 10px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  font-size: 16px; font-weight: 700; text-align: center;
+}
+.size-box:hover { border-color: var(--primary); color: #fff; }
+.size-box:active { transform: translateY(1px); }
+
+/* Confirm-before-send dialog */
+.modal.confirm { max-width: 420px; text-align: left; }
+.modal.confirm .modal-title { text-align: center; }
+.confirm-body { display: flex; gap: 14px; align-items: flex-start; margin: 8px 0 18px; }
+.confirm-img {
+  width: 84px; height: 84px; flex: none; object-fit: contain;
+  background: #fff; border-radius: 10px;
+}
+.confirm-img.placeholder {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); color: var(--muted); font-size: 11px;
+}
+.confirm-info { min-width: 0; flex: 1; }
+.confirm-name { font-size: 14px; font-weight: 600; margin-bottom: 8px; line-height: 1.35; }
+/* SKU is the thing to verify — make it loud. */
+.confirm-sku-box {
+  display: block; padding: 8px 12px; border-radius: 10px;
+  background: rgba(79,124,255,0.12); border: 1px solid var(--primary);
+  margin-bottom: 8px;
+}
+.confirm-sku-label {
+  display: block; font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--primary); font-weight: 700; margin-bottom: 2px;
+}
+.confirm-sku {
+  display: block; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all; color: #fff;
+}
+.confirm-meta { display: flex; gap: 16px; font-size: 14px; }
+.confirm-meta b { color: var(--muted); font-weight: 600; margin-right: 4px; font-size: 12px; text-transform: uppercase; }
+/* Bulk: list of size × qty chips */
+.confirm-items { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; overflow-y: auto; }
+.confirm-item {
+  padding: 4px 10px; border-radius: 999px; font-size: 13px;
+  background: var(--panel-2); border: 1px solid var(--border);
+}
+.confirm-item b { color: var(--primary); }
+
 /* Tabs */
 .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
 .tab {

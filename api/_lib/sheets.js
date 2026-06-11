@@ -148,3 +148,80 @@ export async function appendRows(rows) {
     `after ${MAX_VERIFY_ATTEMPTS} attempts (likely heavy concurrent writes). Please retry.`
   );
 }
+
+/* ----------------------- Rapid Scan consolidation --------------------- */
+// Columns (0-based) in A:J: 0 unique_id, 1 scanned_by, 2 name, 3 sku, 4 size,
+// 5 quantity, 6 price, 7 status, 8 remarks, 9 added_by.
+const COL = { scannedBy: 1, sku: 3, size: 4, qty: 5, status: 7 };
+
+async function readGrid(id, token) {
+  const r = await sheetsFetch(valuesUrl(id, `${tabName()}!A2:J`), { method: 'GET' }, token);
+  if (!r.ok) throw new Error(`Google Sheets read failed (${r.status}).`);
+  const body = await r.json();
+  return body.values || [];
+}
+
+// Update several quantity cells (column F) in a single batch call.
+async function batchSetQty(id, token, updates) {
+  const data = updates.map((u) => ({ range: `${tabName()}!F${u.row}`, values: [[u.qty]] }));
+  const url = `${BASE}/${id}/values:batchUpdate`;
+  const r = await sheetsFetch(url, {
+    method: 'POST',
+    body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data }),
+  }, token);
+  if (!r.ok) throw new Error(`Google Sheets batch update failed (${r.status}).`);
+}
+
+function shortId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// Consolidating writer for BOTH scan modes. For each variant, if a row with the
+// same SKU + Size, Status 'Not Added', AND the same scanner ('Scanned by')
+// already exists, add the quantity to it; otherwise append a new row. Keeping
+// each scanner on their own row avoids conflicts and makes it clear who did
+// what. Reads the grid once, then batches the cell updates and appends. MUST be
+// called while holding the global write lock (caller's job) so the
+// read/modify/write can't race another write.
+// `variants`: [{ size, quantity }]. Returns { incremented, appended, total }.
+export async function upsertVariants({ scannedBy, name, sku, variants }) {
+  const id = process.env.GOOGLE_SHEET_ID;
+  if (!id) throw new Error('GOOGLE_SHEET_ID is not set.');
+  const token = await authToken();
+  const wantSku = String(sku).trim();
+  const wantBy = String(scannedBy ?? '').trim();
+
+  // Index existing consolidatable rows for this SKU + scanner by size.
+  const grid = await readGrid(id, token);
+  const existing = new Map(); // size -> { row, qty }
+  for (let i = 0; i < grid.length; i++) {
+    const r = grid[i];
+    if (
+      String(r[COL.sku] ?? '').trim() === wantSku &&
+      String(r[COL.status] ?? '').trim() === 'Not Added' &&
+      String(r[COL.scannedBy] ?? '').trim() === wantBy
+    ) {
+      const size = String(r[COL.size] ?? '').trim();
+      if (!existing.has(size)) existing.set(size, { row: i + 2, qty: parseInt(r[COL.qty], 10) || 0 });
+    }
+  }
+
+  const updates = [];
+  const appends = [];
+  for (const v of variants) {
+    const size = String(v.size).trim();
+    const qty = Math.max(1, parseInt(v.quantity, 10) || 0);
+    const hit = existing.get(size);
+    if (hit) {
+      updates.push({ row: hit.row, qty: hit.qty + qty });
+    } else {
+      appends.push([shortId(), scannedBy, name, wantSku, size, qty, '', 'Not Added', '', '']);
+    }
+  }
+
+  if (updates.length) await batchSetQty(id, token, updates);
+  // Plain append (no verify-and-retry): callers hold the global write lock, so
+  // no two appends run concurrently and there's nothing to clobber.
+  if (appends.length) await appendBlock(id, token, appends);
+  return { incremented: updates.length, appended: appends.length, total: variants.length };
+}

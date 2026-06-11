@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { api, getToken, setToken, clearToken } from './api.js';
+import { api, setToken, setUser, getUser, clearAuth } from './api.js';
 import { loadPrefs, savePrefs } from './prefs.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
@@ -64,59 +64,406 @@ function Modal({ type, title, message, onClose, children }) {
 }
 
 export default function App() {
-  const [authed, setAuthed] = useState(Boolean(getToken()));
+  const [user, setUserState] = useState(getUser);
+  const [view, setView] = useState('home'); // 'home' | 'bulk' | 'rapid' | 'access'
 
-  if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
-  return <Scanner onSignOut={() => { clearToken(); setAuthed(false); }} />;
+  function onAuthed(u) { setUserState(u); setView('home'); }
+  function signOut() { clearAuth(); setUserState(null); setView('home'); }
+
+  if (!user) return <Auth onAuthed={onAuthed} />;
+
+  const go = (v) => setView(v);
+  if (view === 'bulk') return <BulkScan onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'rapid') return <RapidScan user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  return <Home user={user} onPick={go} onSignOut={signOut} />;
 }
 
-/* ------------------------------- Login --------------------------------- */
+/* -------------------------------- Auth --------------------------------- */
 
-function Login({ onSuccess }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  async function submit(e) {
-    e.preventDefault();
-    setError('');
-    setBusy(true);
-    try {
-      const { token } = await api.login(password);
-      setToken(token);
-      onSuccess();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
+function Auth({ onAuthed }) {
+  const [tab, setTab] = useState('login'); // 'login' | 'signup'
   return (
     <div className="app center">
-      <form className="card login" onSubmit={submit}>
+      <div className="card login">
         <img className="app-logo" src="/logo.png" alt="Stickballman12 logo" />
         <h1>Stickballman12</h1>
-        <p className="muted">Shoe Scanner — sign in to continue</p>
-        <input
-          type="password"
-          placeholder="Access password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoFocus
-        />
-        {error && <div className="error">{error}</div>}
-        <button className="btn primary" disabled={busy}>
-          {busy ? 'Checking…' : 'Sign in'}
-        </button>
-      </form>
+        <p className="muted">Shoe Scanner</p>
+        <div className="tabs auth-tabs">
+          <button className={`tab ${tab === 'login' ? 'active' : ''}`} onClick={() => setTab('login')}>Sign in</button>
+          <button className={`tab ${tab === 'signup' ? 'active' : ''}`} onClick={() => setTab('signup')}>Create account</button>
+        </div>
+        {tab === 'login'
+          ? <LoginForm onAuthed={onAuthed} />
+          : <SignupForm onDone={() => setTab('login')} />}
+      </div>
     </div>
   );
 }
 
-/* ------------------------------ Scanner -------------------------------- */
+function LoginForm({ onAuthed }) {
+  const [username, setU] = useState('');
+  const [password, setP] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function submit(e) {
+    e.preventDefault(); setError(''); setBusy(true);
+    try {
+      const { token, user } = await api.login(username.trim(), password);
+      setToken(token); setUser(user);
+      onAuthed(user);
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+  return (
+    <form onSubmit={submit} className="auth-form">
+      <input placeholder="Username" autoCapitalize="none" autoCorrect="off" value={username} onChange={(e) => setU(e.target.value)} autoFocus />
+      <input type="password" placeholder="Password" value={password} onChange={(e) => setP(e.target.value)} />
+      {error && <div className="error">{error}</div>}
+      <button className="btn primary wide" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+    </form>
+  );
+}
 
-function Scanner({ onSignOut }) {
+function SignupForm({ onDone }) {
+  const [name, setName] = useState('');
+  const [username, setU] = useState('');
+  const [password, setP] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  async function submit(e) {
+    e.preventDefault(); setError(''); setBusy(true);
+    try {
+      await api.signup({ name: name.trim(), username: username.trim(), password });
+      setDone(true);
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+  if (done) return (
+    <div className="auth-done">
+      <div className="modal-icon success">✓</div>
+      <h3 className="modal-title">Account created</h3>
+      <p className="muted">Please wait for an admin to approve your access. You can sign in once approved.</p>
+      <button className="btn primary wide" onClick={onDone}>Back to sign in</button>
+    </div>
+  );
+  return (
+    <form onSubmit={submit} className="auth-form">
+      <input placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+      <input placeholder="Username" autoCapitalize="none" autoCorrect="off" value={username} onChange={(e) => setU(e.target.value)} />
+      <input type="password" placeholder="Password (min 8 chars)" value={password} onChange={(e) => setP(e.target.value)} />
+      {error && <div className="error">{error}</div>}
+      <button className="btn primary wide" disabled={busy}>{busy ? 'Creating…' : 'Create account'}</button>
+    </form>
+  );
+}
+
+/* ------------------------------ TopBar --------------------------------- */
+
+function TopBar({ title, onHome, onSignOut, right }) {
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <img className="brand-logo" src="/logo.png" alt="" />
+        <span>{title || 'Stickballman12'}</span>
+      </div>
+      <div className="topbar-actions">
+        {right}
+        {onHome && <button className="btn ghost sm" onClick={onHome}>← Home</button>}
+        <button className="btn ghost sm" onClick={onSignOut}>Sign out</button>
+      </div>
+    </header>
+  );
+}
+
+/* ------------------------------- Home ---------------------------------- */
+
+function Home({ user, onPick, onSignOut }) {
+  const isAdmin = user.role === 'admin';
+  return (
+    <div className="app">
+      <TopBar onSignOut={onSignOut} />
+      <div className="home-greeting">Hi {user.name} <span className="role-badge">{user.role}</span></div>
+      <div className="home-grid">
+        {isAdmin && (
+          <button className="home-card" onClick={() => onPick('access')}>
+            <span className="home-card-icon">🔑</span>
+            <span className="home-card-title">Check Access</span>
+            <span className="home-card-sub">Approve new accounts</span>
+          </button>
+        )}
+        <button className="home-card" onClick={() => onPick('bulk')}>
+          <span className="home-card-icon">📦</span>
+          <span className="home-card-title">Bulk Scan</span>
+          <span className="home-card-sub">Enter sizes &amp; quantities</span>
+        </button>
+        <button className="home-card" onClick={() => onPick('rapid')}>
+          <span className="home-card-icon">⚡</span>
+          <span className="home-card-title">Rapid Scan</span>
+          <span className="home-card-sub">Scan → confirm → qty 1</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------- Check Access ------------------------------ */
+
+function CheckAccess({ onHome, onSignOut }) {
+  const [users, setUsers] = useState(null);
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState(null);
+  async function load() {
+    setError('');
+    try { const { users } = await api.adminListUsers(); setUsers(users); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  async function review(id, decision) {
+    setBusyId(id);
+    try { await api.adminReview(id, decision); await load(); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusyId(null); }
+  }
+  return (
+    <div className="app">
+      <TopBar title="Check Access" onHome={onHome} onSignOut={onSignOut} />
+      {error && <div className="error mt">{error}</div>}
+      {!users ? <p className="muted">Loading…</p> : (
+        <div className="card">
+          {users.length === 0 ? <p className="muted">No accounts yet.</p> : (
+            <table className="access-table">
+              <thead><tr><th>Name</th><th>Username</th><th>Status</th><th aria-label="actions" /></tr></thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.id}>
+                    <td>{u.name}</td>
+                    <td>{u.username}</td>
+                    <td><span className={`status-pill ${u.status}`}>{u.status}</span></td>
+                    <td className="access-actions">
+                      {u.status !== 'approved' && <button className="btn sm primary" disabled={busyId === u.id} onClick={() => review(u.id, 'approve')}>Approve</button>}
+                      {u.status !== 'rejected' && <button className="btn sm ghost" disabled={busyId === u.id} onClick={() => review(u.id, 'reject')}>Reject</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* --------------------------- Confirm dialog ---------------------------- */
+// Pre-send double-check. NOT dismissable by backdrop or Escape — only Yes/No.
+// SKU is given visual prominence so the user actually verifies it.
+function ConfirmSend({ product, size, quantity, items, busy, onYes, onNo }) {
+  return (
+    <div className="modal-overlay">
+      <div className="modal confirm" role="dialog" aria-modal="true">
+        <h3 className="modal-title">Double-check before sending</h3>
+        <div className="confirm-body">
+          {product.image
+            ? <img className="confirm-img" src={product.image} alt="" />
+            : <div className="confirm-img placeholder">No image</div>}
+          <div className="confirm-info">
+            <div className="confirm-name">{product.name}</div>
+            <div className="confirm-sku-box">
+              <span className="confirm-sku-label">Verify this SKU</span>
+              <span className="confirm-sku">{product.sku || '—'}</span>
+            </div>
+            {items ? (
+              <div className="confirm-items">
+                {items.map((it) => (
+                  <span key={it.size} className="confirm-item">{it.size} <b>×{it.quantity}</b></span>
+                ))}
+              </div>
+            ) : (
+              <div className="confirm-meta">
+                <span><b>Size</b> {size}</span>
+                {quantity != null && <span><b>Qty</b> {quantity}</span>}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onNo} disabled={busy}>No</button>
+          <button className="btn primary" onClick={onYes} disabled={busy}>
+            {busy ? 'Sending…' : 'Yes, send'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------- Rapid Scan ------------------------------- */
+// Scan → confirm → send qty 1 → re-arm. StockX resolves the size automatically;
+// Alias asks for the size first (selectable boxes, +W for women's).
+function RapidScan({ onHome, onSignOut }) {
+  const [subMode, setSubMode] = useState('scanner'); // 'scanner' | 'camera'
+  const [prefs, setPrefs] = useState(loadPrefs);
+  const [showPrefs, setShowPrefs] = useState(false);
+  function setCameraZoom(zoom) {
+    setPrefs((p) => { const n = { ...p, cameraZoom: zoom }; savePrefs(n); return n; });
+  }
+
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [product, setProduct] = useState(null);
+  const [pendingSize, setPendingSize] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [flash, setFlash] = useState(null); // { type:'ok'|'err', msg }
+  const [camKey, setCamKey] = useState(0);   // bump to remount camera for the next scan
+
+  const inputRef = useRef(null);
+  const staleRef = useRef(false);
+
+  useEffect(() => { if (subMode === 'scanner' && !product) inputRef.current?.focus(); }, [subMode, product]);
+  useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3500); return () => clearTimeout(t); }, [flash]);
+
+  const isWomens = (p) => p && /women/i.test(p.name || '');
+  const sizesWithW = (p) =>
+    isWomens(p) ? (p.sizes || []).map((s) => (/[wW]$/.test(String(s)) ? s : `${s}W`)) : (p.sizes || []);
+
+  function rearm() {
+    setProduct(null);
+    setPendingSize(null);
+    setInput('');
+    staleRef.current = false;
+    setCamKey((k) => k + 1);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  async function runSearch(value) {
+    const q = (value ?? input).trim();
+    if (!q) return;
+    setLoading(true); setError(''); setProduct(null); setPendingSize(null);
+    try {
+      const { product: p } = await api.searchUpc(q);
+      setProduct(p);
+      // StockX already knows the size → straight to confirm; Alias → size grid.
+      if (p.source === 'stockx' && p.sizes?.[0]) setPendingSize(p.sizes[0]);
+      setInput('');
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setError(err.message);
+    } finally {
+      staleRef.current = true;
+      setLoading(false);
+    }
+  }
+
+  function onScannerKeyDown(e) {
+    if (staleRef.current && e.key.length === 1) {
+      staleRef.current = false;
+      if (inputRef.current) inputRef.current.value = '';
+      setInput('');
+    }
+  }
+  function onCameraDetected(code) { setSubMode('scanner'); setInput(code); runSearch(code); }
+
+  async function confirmYes() {
+    if (!product || !pendingSize) return;
+    setSending(true);
+    try {
+      const res = await api.rapidSend(product, pendingSize);
+      setFlash({ type: 'ok', msg: res.message || 'Sent.' });
+      rearm();
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setFlash({ type: 'err', msg: err.message });
+    } finally {
+      setSending(false);
+    }
+  }
+  function confirmNo() { rearm(); }
+
+  const showConfirm = product && pendingSize;
+  const showSizeGrid = product && !pendingSize;
+
+  return (
+    <div className="app">
+      <TopBar
+        title="Rapid Scan"
+        onHome={onHome}
+        onSignOut={onSignOut}
+        right={
+          <button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences" aria-label="Preferences">
+            ⚙ Settings
+          </button>
+        }
+      />
+
+      <div className="card">
+        <div className="subtabs">
+          <button className={`subtab ${subMode === 'scanner' ? 'active' : ''}`} onClick={() => setSubMode('scanner')}>🔫 Scanner</button>
+          <button className={`subtab ${subMode === 'camera' ? 'active' : ''}`} onClick={() => setSubMode('camera')}>📷 Camera</button>
+        </div>
+
+        {subMode === 'scanner' ? (
+          <form className="searchrow" onSubmit={(e) => { e.preventDefault(); runSearch(); }}>
+            <input
+              ref={inputRef}
+              inputMode="numeric"
+              placeholder="Scan a barcode (UPC), then Enter"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onScannerKeyDown}
+            />
+            <button className="btn primary" disabled={loading}>{loading ? 'Searching…' : 'Go'}</button>
+          </form>
+        ) : (
+          <Suspense fallback={<p className="muted">Loading camera…</p>}>
+            <CameraScanner
+              key={camKey}
+              onDetected={onCameraDetected}
+              onClose={() => setSubMode('scanner')}
+              zoom={prefs.cameraZoom}
+              onZoomChange={setCameraZoom}
+            />
+          </Suspense>
+        )}
+
+        {error && <div className="error mt">{error}</div>}
+        {flash && <div className={`mt ${flash.type === 'ok' ? 'ok' : 'error'}`}>{flash.msg}</div>}
+        <p className="muted rapid-hint">
+          Records quantity 1 per scan. StockX sends after you confirm; Alias asks for the size first.
+        </p>
+      </div>
+
+      {showSizeGrid && (
+        <div className="card">
+          <h3 className="rows-title">Select size</h3>
+          <p className="muted confirm-name">{product.name}</p>
+          {(product.sizes && product.sizes.length) ? (
+            <div className="size-grid">
+              {sizesWithW(product).map((s) => (
+                <button key={s} type="button" className="size-box" onClick={() => setPendingSize(s)}>{s}</button>
+              ))}
+            </div>
+          ) : (
+            <p className="error">No sizes available for this product.</p>
+          )}
+          <button className="btn ghost mt" onClick={rearm}>Cancel</button>
+        </div>
+      )}
+
+      {showConfirm && (
+        <ConfirmSend product={product} size={pendingSize} busy={sending} onYes={confirmYes} onNo={confirmNo} />
+      )}
+
+      {showPrefs && (
+        <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------ Bulk Scan ------------------------------ */
+
+function BulkScan({ onHome, onSignOut }) {
   const [mode, setMode] = useState('upc'); // 'upc' | 'sku'
   const [upcSubMode, setUpcSubMode] = useState('scanner'); // 'scanner' | 'camera'
 
@@ -139,6 +486,7 @@ function Scanner({ onSignOut }) {
   const [rows, setRows] = useState([]);
 
   const [sendState, setSendState] = useState({ status: 'idle', msg: '' });
+  const [confirmItems, setConfirmItems] = useState(null); // opens the confirm dialog
   const inputRef = useRef(null);
   // True once a search has run and the box still holds that (now stale) value.
   // The next keystroke from the scanner gun (or keyboard) then replaces it
@@ -225,7 +573,9 @@ function Scanner({ onSignOut }) {
     setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.id !== id) : rs));
   }
 
-  async function sendToSheet() {
+  // Validate the rows, then open the confirm dialog (the actual send happens on
+  // "Yes" in the dialog).
+  function prepareSend() {
     const clean = rows
       .map((r) => ({ size: String(r.size).trim(), quantity: toQty(r.quantity) }))
       .filter((r) => r.size && r.quantity > 0);
@@ -239,14 +589,22 @@ function Scanner({ onSignOut }) {
       setSendState({ status: 'error', msg: `Size "${dup}" is listed more than once. Combine it into one row.` });
       return;
     }
+    setConfirmItems(clean);
+  }
+
+  async function doSend() {
+    const clean = confirmItems;
+    if (!clean) return;
     setSendState({ status: 'sending', msg: '' });
     try {
       const res = await api.sendToSheet(product, clean);
+      setConfirmItems(null);
       setSendState({
         status: 'done',
         msg: res.message || `Sent ${res.count} size(s) to the sheet.`,
       });
     } catch (err) {
+      setConfirmItems(null);
       if (err.unauthorized) return onSignOut();
       setSendState({ status: 'error', msg: err.message });
     }
@@ -257,7 +615,7 @@ function Scanner({ onSignOut }) {
       <header className="topbar">
         <div className="brand">
           <img className="brand-logo" src="/logo.png" alt="" />
-          <span>Stickballman12 · Shoe Scanner</span>
+          <span>Bulk Scan</span>
         </div>
         <div className="topbar-actions">
           <button
@@ -268,6 +626,7 @@ function Scanner({ onSignOut }) {
           >
             ⚙ Settings
           </button>
+          <button className="btn ghost sm" onClick={onHome}>← Home</button>
           <button className="btn ghost sm" onClick={onSignOut}>Sign out</button>
         </div>
       </header>
@@ -531,7 +890,7 @@ function Scanner({ onSignOut }) {
           <div className="send">
             <button
               className="btn primary wide"
-              onClick={sendToSheet}
+              onClick={prepareSend}
               disabled={sendState.status === 'sending'}
             >
               {sendState.status === 'sending' ? 'Sending…' : 'Send to Sheet'}
@@ -561,6 +920,16 @@ function Scanner({ onSignOut }) {
         >
           <button className="btn primary" onClick={dismissDialog}>OK</button>
         </Modal>
+      )}
+
+      {confirmItems && (
+        <ConfirmSend
+          product={product}
+          items={confirmItems}
+          busy={sendState.status === 'sending'}
+          onYes={doSend}
+          onNo={() => setConfirmItems(null)}
+        />
       )}
 
       {showPrefs && (

@@ -121,58 +121,133 @@ body {
   font-size: 12px; font-weight: 600; text-transform: capitalize;
 }
 .status-pill.pending { background: rgba(255,193,7,0.15); color: #ffca3a; }
-.status-pill.approved { background: rgba(46,204,113,0.15); color: var(--ok); }
-.status-pill.rejected { background: rgba(255,107,107,0.15); color: var(--err); }
-
-/* Rapid Scan */
-.rapid-hint { font-size: 12px; margin: 12px 0 0; }
-.size-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
-.size-box {
-  padding: 14px 6px; border-radius: 10px; cursor: pointer;
-  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-  font-size: 16px; font-weight: 700; text-align: center;
-}
-.size-box:hover { border-color: var(--primary); color: #fff; }
-.size-box:active { transform: translateY(1px); }
+.status-pill.approved, .status-pill.in_stock { background: rgba(46,204,113,0.15); color: var(--ok); }
+.status-pill.rejected, .status-pill.issue, .status-pill.missing { background: rgba(255,107,107,0.15); color: var(--err); }
+.status-pill.sold { background: rgba(130,125,189,0.18); color: #b1b9f9; }
+.status-pill.returned { background: rgba(255,193,7,0.15); color: #ffca3a; }
 
 /* Confirm-before-send dialog */
 .modal.confirm { max-width: 420px; text-align: left; }
 .modal.confirm .modal-title { text-align: center; }
-.confirm-body { display: flex; gap: 14px; align-items: flex-start; margin: 8px 0 18px; }
-.confirm-img {
-  width: 84px; height: 84px; flex: none; object-fit: contain;
-  background: #fff; border-radius: 10px;
+.confirm-summary { text-align: center; margin: 6px 0 18px; display: flex; flex-direction: column; gap: 4px; }
+
+/* Receiving / Batch intake */
+.batch-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.batch-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.batch-form input { width: 100%; }
+.batch-form-wide { grid-column: 1 / -1; }
+.batch-form select { width: 100%; }
+.scan-flash {
+  margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+  font-weight: 700; text-align: center; animation: overlay-in 0.12s ease-out;
 }
-.confirm-img.placeholder {
-  display: flex; align-items: center; justify-content: center;
-  background: var(--panel-2); color: var(--muted); font-size: 11px;
+.scan-flash.added { background: rgba(46, 204, 113, 0.18); color: var(--ok); border: 1px solid var(--ok); }
+.scan-flash.dup { background: rgba(255, 193, 7, 0.15); color: #ffca3a; border: 1px solid #ffca3a; }
+
+.track-field { display: flex; gap: 6px; }
+.track-field input { flex: 1; min-width: 0; }
+.track-field .btn { flex: none; }
+
+.cart { display: flex; flex-direction: column; gap: 10px; }
+.cart-line { padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
+.cart-line.resolving { opacity: 0.75; }
+.cart-line.error { border-color: var(--err); }
+.cart-head { display: flex; gap: 10px; align-items: flex-start; }
+.cart-thumb { width: 48px; height: 48px; flex: none; object-fit: contain; background: #fff; border-radius: 8px; }
+.cart-thumb.placeholder { display: flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--muted); }
+.cart-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.cart-name { width: 100%; font-weight: 600; }
+.cart-fields input { width: 100%; min-width: 0; }
+.error.sm { font-size: 12px; }
+
+/* per-product size rows */
+.size-rows { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 6px; }
+.size-line { display: flex; gap: 6px; align-items: center; }
+.size-line .sz { flex: 1; min-width: 0; }
+.size-line .qty { width: 64px; flex: none; text-align: center; }
+.size-line .cst { width: 84px; flex: none; }
+.size-line .sz.need { border-color: var(--err); }
+.size-add { display: flex; gap: 6px; align-items: center; }
+.size-add select { flex: 1; }
+
+.issue-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.issue-row select { flex: none; }
+.issue-row input { flex: 1; min-width: 120px; }
+.issue-counts { display: flex; gap: 6px; }
+.issue-counts input { width: 60px; flex: none; }
+
+.batch-bar { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; margin-top: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+.batch-totals { font-size: 15px; }
+.batch-bar .btn { flex: none; }
+
+.batch-item { border-top: 1px solid var(--border); }
+.batch-item:first-child { border-top: none; }
+.batch-head { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 12px 0; cursor: pointer; }
+.batch-code { font-weight: 700; }
+.batch-detail { padding: 4px 0 12px; }
+.batch-detail-row { font-size: 13px; padding: 3px 0; border-top: 1px dashed var(--border); }
+.batch-detail-row.issue { color: var(--err); }
+.vin { font-family: ui-monospace, Menlo, monospace; color: var(--primary); font-weight: 600; }
+
+@media (max-width: 600px) {
+  .batch-form { grid-template-columns: 1fr; }
 }
-.confirm-info { min-width: 0; flex: 1; }
-.confirm-name { font-size: 14px; font-weight: 600; margin-bottom: 8px; line-height: 1.35; }
-/* SKU is the thing to verify — make it loud. */
-.confirm-sku-box {
-  display: block; padding: 8px 12px; border-radius: 10px;
-  background: rgba(79,124,255,0.12); border: 1px solid var(--primary);
-  margin-bottom: 8px;
+
+/* Reports */
+.report-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.report-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.report-wrap { overflow-x: auto; }
+.report-table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+.report-table th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 0 10px 8px 0; }
+.report-table td { padding: 6px 10px 6px 0; border-top: 1px solid var(--border); }
+.report-table tr.sel { background: rgba(79, 124, 255, 0.08); }
+.report-check { width: 1%; padding-right: 8px; }
+.report-actions { display: flex; gap: 8px; }
+.vin-link { background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; font: inherit; }
+.vin-link:hover { color: #fff; }
+
+/* Inventory lookup */
+.status-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.status-actions .btn { text-transform: capitalize; }
+.status-reason { width: 100%; margin: 0 0 8px; }
+.timeline { display: flex; flex-direction: column; gap: 2px; }
+.tl-item { display: flex; gap: 10px; }
+.tl-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--primary); margin-top: 5px; flex: none; }
+.tl-body { padding-bottom: 12px; border-left: 1px solid var(--border); margin-left: -5px; padding-left: 15px; font-size: 14px; }
+
+/* VIN labels + print (Rollo / Dymo rolls — one label per page) */
+.label-overlay { position: fixed; inset: 0; z-index: 200; background: var(--bg); overflow: auto; }
+.label-toolbar { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.label-tools { display: flex; gap: 8px; align-items: center; }
+.label-roll { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; justify-content: center; }
+
+/* one label = the chosen stock size; white like the printed sticker */
+.rlabel {
+  width: var(--lw); height: var(--lh); box-sizing: border-box;
+  background: #fff; color: #000; border: 1px solid #999; border-radius: 4px;
+  padding: 0.08in 0.1in; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 0.02in; overflow: hidden;
 }
-.confirm-sku-label {
-  display: block; font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
-  color: var(--primary); font-weight: 700; margin-bottom: 2px;
+.rlabel-top { font-weight: 800; font-size: 13pt; display: flex; gap: 8px; align-items: baseline; }
+.rlabel-sep { font-weight: 400; color: #666; }
+.rlabel-size { font-weight: 800; }
+.rlabel-vinlabel { font-size: 8.5pt; }
+.rlabel-vinlabel b { font-weight: 700; }
+.barcode-svg { width: 96%; height: 0.42in; display: block; }
+.rlabel-vin { font-family: ui-monospace, Menlo, monospace; font-size: 8pt; letter-spacing: 0.5px; }
+
+@media print {
+  /* Hide the whole app; only the portal'd label overlay prints. */
+  #root { display: none !important; }
+  .no-print { display: none !important; }
+  .label-overlay { position: static !important; background: #fff; overflow: visible; }
+  .label-roll { display: block; padding: 0; gap: 0; }
+  .rlabel {
+    width: var(--lw); height: var(--lh); border: none; border-radius: 0;
+    break-after: page; page-break-after: always;
+  }
+  .rlabel:last-child { break-after: auto; page-break-after: auto; }
 }
-.confirm-sku {
-  display: block; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  word-break: break-all; color: #fff;
-}
-.confirm-meta { display: flex; gap: 16px; font-size: 14px; }
-.confirm-meta b { color: var(--muted); font-weight: 600; margin-right: 4px; font-size: 12px; text-transform: uppercase; }
-/* Bulk: list of size × qty chips */
-.confirm-items { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; overflow-y: auto; }
-.confirm-item {
-  padding: 4px 10px; border-radius: 999px; font-size: 13px;
-  background: var(--panel-2); border: 1px solid var(--border);
-}
-.confirm-item b { color: var(--primary); }
 
 /* Tabs */
 .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
@@ -187,18 +262,6 @@ body {
   cursor: pointer;
 }
 .tab.active { background: var(--primary); border-color: var(--primary); }
-
-.subtabs { display: flex; gap: 8px; margin-bottom: 12px; }
-.subtab {
-  flex: 1;
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  cursor: pointer;
-}
-.subtab.active { border-color: var(--primary); color: #fff; }
 
 /* Inputs */
 input, select {
@@ -265,111 +328,11 @@ input:focus, select:focus { border-color: var(--primary); }
 .details dl > div { display: flex; gap: 8px; padding: 3px 0; font-size: 14px; }
 .details dt { color: var(--muted); width: 70px; flex: none; }
 .details dd { margin: 0; word-break: break-word; }
-.source {
-  display: inline-block;
-  margin-top: 8px;
-  font-size: 11px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
 
 .rows-title { margin: 18px 0 10px; font-size: 15px; }
 
-/* Size / quantity table */
-.size-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 15px;
-}
-.size-table th {
-  text-align: left;
-  color: var(--muted);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  font-weight: 600;
-  padding: 0 0 8px;
-}
-.size-table th:last-child { text-align: center; }
-.size-table td {
-  padding: 6px 0;
-  border-top: 1px solid var(--border);
-  vertical-align: middle;
-}
-.size-cell { padding-right: 12px; }
-.size-label { font-weight: 600; }
-.size-in { width: 100%; }
-
-/* Quantity stepper: − [ input ] + (and × to remove a custom row) */
-.qty-stepper {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-.qty-in {
-  width: 64px;
-  text-align: center;
-  padding: 10px 6px;
-  /* hide the native number spinners — the steppers replace them */
-  -moz-appearance: textfield;
-  appearance: textfield;
-}
-.qty-in::-webkit-outer-spin-button,
-.qty-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.btn.icon.step { width: 40px; height: 40px; flex: none; }
+/* Icon button used to remove a cart line / size row / issue. */
 .btn.icon.remove { width: 40px; height: 40px; flex: none; }
-
-/* Per-row actions: ＋ (add a manual row) and × (remove it). The ＋ is accented
-   so it reads as a row action, distinct from the quantity stepper's + inside
-   the bordered group. */
-.size-table-wrap { overflow-x: auto; }
-.size-table .actions-col { width: 1%; }
-.row-actions { white-space: nowrap; text-align: right; padding-left: 8px; }
-.row-actions .btn + .btn { margin-left: 6px; }
-.btn.icon.add-row {
-  width: 40px; height: 40px; flex: none;
-  border-color: var(--primary);
-  color: var(--primary);
-  font-size: 20px;
-}
-.btn.icon.add-row:hover:not(:disabled) { background: rgba(79, 124, 255, 0.12); }
-
-/* Single variant (StockX gives the exact size; user types a quantity) */
-.single-variant {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.sv-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.sv-field:first-child { flex: 1; min-width: 120px; }
-.sv-label {
-  color: var(--muted);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  font-weight: 600;
-}
-.sv-size {
-  display: flex;
-  align-items: center;
-  min-height: 46px;
-  padding: 10px 12px;
-  font-size: 18px;
-  font-weight: 700;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-/* In the single-variant view the quantity input lives inside a − [ ] + stepper,
-   so keep it the same compact width as the table stepper. */
-.sv-field .qty-stepper { justify-content: flex-start; }
-.sv-qty { width: 64px; }
 
 .send { margin-top: 16px; }
 
@@ -492,10 +455,7 @@ input:focus, select:focus { border-color: var(--primary); }
 
   .login { width: 100%; max-width: 340px; }
 
-  /* Roomier tap targets for the quantity steppers on touch screens */
-  .btn.icon.step,
-  .btn.icon.remove,
-  .btn.icon.add-row { width: 44px; height: 44px; }
-  .qty-in { width: 56px; }
+  /* Roomier tap target for the remove (×) buttons on touch screens */
+  .btn.icon.remove { width: 44px; height: 44px; }
   .modal-actions { flex-direction: column; }
 }

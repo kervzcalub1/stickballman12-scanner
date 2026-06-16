@@ -1,40 +1,10 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api, setToken, setUser, getUser, clearAuth } from './api.js';
 import { loadPrefs, savePrefs } from './prefs.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('./components/CameraScanner.jsx'));
-
-let rowId = 1;
-// A custom (user-typed) size row. `fixed` rows come from a known size list and
-// show the size as a static label instead of an editable input.
-const newRow = () => ({ id: rowId++, size: '', quantity: 0, fixed: false });
-
-// Build the initial size/quantity rows for a product.
-//   • StockX  — the API already knows the exact size for the scanned barcode,
-//     so there is a single fixed-size row (quantity typed into a text box).
-//   • Alias / KicksDB — a known size list laid out as the size/quantity table,
-//     plus one blank editable row at the end for manually adding extra variants.
-//   • Neither — start with one editable row the user can fill in / add to.
-function buildRows(product) {
-  const sizes = product?.sizes ?? [];
-  if (product?.source === 'stockx') {
-    return [{ id: rowId++, size: sizes[0] || '', quantity: '', fixed: Boolean(sizes[0]) }];
-  }
-  if (sizes.length) {
-    return [
-      ...sizes.map((s) => ({ id: rowId++, size: s, quantity: 0, fixed: true })),
-      newRow(), // blank manual-entry row for sizes/variants not in the list
-    ];
-  }
-  return [newRow()];
-}
-
-// Coerce an input value into a non-negative integer quantity.
-function toQty(v) {
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
 
 /* --------------------------- Result dialog ----------------------------- */
 // Lightweight modal used to confirm a successful "Send to Sheet" or surface a
@@ -65,7 +35,7 @@ function Modal({ type, title, message, onClose, children }) {
 
 export default function App() {
   const [user, setUserState] = useState(getUser);
-  const [view, setView] = useState('home'); // 'home' | 'bulk' | 'rapid' | 'access'
+  const [view, setView] = useState('home'); // 'home' | 'bulk' | 'rapid' | 'receiving' | 'inventory' | 'access'
 
   function onAuthed(u) { setUserState(u); setView('home'); }
   function signOut() { clearAuth(); setUserState(null); setView('home'); }
@@ -73,8 +43,8 @@ export default function App() {
   if (!user) return <Auth onAuthed={onAuthed} />;
 
   const go = (v) => setView(v);
-  if (view === 'bulk') return <BulkScan onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'rapid') return <RapidScan user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'receiving') return <Receiving user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'inventory') return <Inventory onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;
   return <Home user={user} onPick={go} onSignOut={signOut} />;
 }
@@ -116,8 +86,8 @@ function LoginForm({ onAuthed }) {
   }
   return (
     <form onSubmit={submit} className="auth-form">
-      <input placeholder="Username" autoCapitalize="none" autoCorrect="off" value={username} onChange={(e) => setU(e.target.value)} autoFocus />
-      <input type="password" placeholder="Password" value={password} onChange={(e) => setP(e.target.value)} />
+      <input placeholder="Username" autoCapitalize="none" autoCorrect="off" autoComplete="username" value={username} onChange={(e) => setU(e.target.value)} autoFocus />
+      <input type="password" placeholder="Password" autoComplete="current-password" value={password} onChange={(e) => setP(e.target.value)} />
       {error && <div className="error">{error}</div>}
       <button className="btn primary wide" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
     </form>
@@ -148,9 +118,9 @@ function SignupForm({ onDone }) {
   );
   return (
     <form onSubmit={submit} className="auth-form">
-      <input placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-      <input placeholder="Username" autoCapitalize="none" autoCorrect="off" value={username} onChange={(e) => setU(e.target.value)} />
-      <input type="password" placeholder="Password (min 8 chars)" value={password} onChange={(e) => setP(e.target.value)} />
+      <input placeholder="Full name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+      <input placeholder="Username" autoCapitalize="none" autoCorrect="off" autoComplete="username" value={username} onChange={(e) => setU(e.target.value)} />
+      <input type="password" placeholder="Password (min 8 chars)" autoComplete="new-password" value={password} onChange={(e) => setP(e.target.value)} />
       {error && <div className="error">{error}</div>}
       <button className="btn primary wide" disabled={busy}>{busy ? 'Creating…' : 'Create account'}</button>
     </form>
@@ -191,15 +161,15 @@ function Home({ user, onPick, onSignOut }) {
             <span className="home-card-sub">Approve new accounts</span>
           </button>
         )}
-        <button className="home-card" onClick={() => onPick('bulk')}>
-          <span className="home-card-icon">📦</span>
-          <span className="home-card-title">Bulk Scan</span>
-          <span className="home-card-sub">Enter sizes &amp; quantities</span>
+        <button className="home-card" onClick={() => onPick('receiving')}>
+          <span className="home-card-icon">📥</span>
+          <span className="home-card-title">Receiving</span>
+          <span className="home-card-sub">Scan a shipment into a batch</span>
         </button>
-        <button className="home-card" onClick={() => onPick('rapid')}>
-          <span className="home-card-icon">⚡</span>
-          <span className="home-card-title">Rapid Scan</span>
-          <span className="home-card-sub">Scan → confirm → qty 1</span>
+        <button className="home-card" onClick={() => onPick('inventory')}>
+          <span className="home-card-icon">🔎</span>
+          <span className="home-card-title">Inventory</span>
+          <span className="home-card-sub">Search, scan, report &amp; print labels</span>
         </button>
       </div>
     </div>
@@ -254,105 +224,198 @@ function CheckAccess({ onHome, onSignOut }) {
   );
 }
 
-/* --------------------------- Confirm dialog ---------------------------- */
-// Pre-send double-check. NOT dismissable by backdrop or Escape — only Yes/No.
-// SKU is given visual prominence so the user actually verifies it.
-function ConfirmSend({ product, size, quantity, items, busy, onYes, onNo }) {
-  return (
-    <div className="modal-overlay">
-      <div className="modal confirm" role="dialog" aria-modal="true">
-        <h3 className="modal-title">Double-check before sending</h3>
-        <div className="confirm-body">
-          {product.image
-            ? <img className="confirm-img" src={product.image} alt="" />
-            : <div className="confirm-img placeholder">No image</div>}
-          <div className="confirm-info">
-            <div className="confirm-name">{product.name}</div>
-            <div className="confirm-sku-box">
-              <span className="confirm-sku-label">Verify this SKU</span>
-              <span className="confirm-sku">{product.sku || '—'}</span>
-            </div>
-            {items ? (
-              <div className="confirm-items">
-                {items.map((it) => (
-                  <span key={it.size} className="confirm-item">{it.size} <b>×{it.quantity}</b></span>
-                ))}
-              </div>
-            ) : (
-              <div className="confirm-meta">
-                <span><b>Size</b> {size}</span>
-                {quantity != null && <span><b>Qty</b> {quantity}</span>}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="modal-actions">
-          <button className="btn ghost" onClick={onNo} disabled={busy}>No</button>
-          <button className="btn primary" onClick={onYes} disabled={busy}>
-            {busy ? 'Sending…' : 'Yes, send'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+/* ------------------------------ Receiving ------------------------------ */
+// Batch intake: fill shipment details, scan many items into a cart (lookups
+// resolve in the background so scanning never blocks), add shipment issues,
+// then commit once → DB (one VIN per item) + Sheet mirror.
 
-/* ---------------------------- Rapid Scan ------------------------------- */
-// Scan → confirm → send qty 1 → re-arm. StockX resolves the size automatically;
-// Alias asks for the size first (selectable boxes, +W for women's).
-function RapidScan({ onHome, onSignOut }) {
-  const [subMode, setSubMode] = useState('scanner'); // 'scanner' | 'camera'
+let cartKey = 1;
+const SUPPLIERS = ['Sunny', 'Nike', 'Foot Locker', 'DTLR', 'Snipes', 'Champs', 'Finish Line', 'Shoe Palace'];
+
+// Extract a clean carrier tracking number from a scanned shipping barcode.
+// UPS 1Z barcodes encode the tracking directly; FedEx Ground "96…" barcodes
+// encode 34 digits whose last 12 are the tracking number.
+function parseTrackingNumber(raw) {
+  const s = String(raw || '').toUpperCase().replace(/\s+/g, '');
+  const ups = s.match(/1Z[0-9A-Z]{16}/);            // UPS: 1Z + 16 chars
+  if (ups) return ups[0];
+  if (/^\d{20,40}$/.test(s) && s.startsWith('96')) return s.slice(-12); // FedEx Ground 96-barcode
+  if (/^\d{12}$/.test(s)) return s;                 // FedEx Express
+  return s;                                         // anything else: as scanned
+}
+// Standard US shoe-size chart — a last-resort fallback to populate the "add
+// another size" dropdown when the API returns only the single scanned size.
+// `kind`: 'w' women's (5–12, "W" suffix), 'y' youth/kids (1–7, "Y" suffix),
+// '' men's (6–16, no suffix). Half sizes included.
+function usSizeChart(kind) {
+  const ranges = { w: [5, 12], y: [1, 7], '': [6, 16] };
+  const [lo, hi] = ranges[kind] || ranges[''];
+  const out = [];
+  for (let h = lo * 2; h <= hi * 2; h++) {
+    const n = h / 2;
+    const label = Number.isInteger(n) ? String(n) : n.toFixed(1);
+    out.push(kind ? `${label}${kind.toUpperCase()}` : label);
+  }
+  return out;
+}
+const ISSUE_TYPES = [
+  ['mismatched', 'Mismatched shoe'],
+  ['stolen', 'Stolen package'],
+  ['ripped', 'Package ripped open'],
+  ['improperly_packed', 'Improperly packed'],
+  ['missing_boxes', 'Missing boxes'],
+  ['shortfall', 'Short count (expected vs received)'],
+  ['other', 'Other'],
+];
+
+function Receiving({ onHome, onSignOut }) {
+  const [tab, setTab] = useState('intake'); // 'intake' | 'recent'
+  const today = new Date().toISOString().slice(0, 10);
+  const [header, setHeader] = useState({
+    buyer: '', supplier: '', tracking: '', dateReceived: today,
+    defaultCost: '', notes: '', specialRules: '',
+  });
+  const setH = (k, v) => setHeader((h) => ({ ...h, [k]: v }));
+  const [customSupplier, setCustomSupplier] = useState(false);
+  const [scanTracking, setScanTracking] = useState(false);
+
+  const [showCam, setShowCam] = useState(false); // camera needs activating; the gun just types into the field
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showPrefs, setShowPrefs] = useState(false);
-  function setCameraZoom(zoom) {
-    setPrefs((p) => { const n = { ...p, cameraZoom: zoom }; savePrefs(n); return n; });
-  }
+  const setCameraZoom = (zoom) => setPrefs((p) => { const n = { ...p, cameraZoom: zoom }; savePrefs(n); return n; });
 
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [product, setProduct] = useState(null);
-  const [pendingSize, setPendingSize] = useState(null);
-  const [sending, setSending] = useState(false);
-  const [flash, setFlash] = useState(null); // { type:'ok'|'err', msg }
-  const [camKey, setCamKey] = useState(0);   // bump to remount camera for the next scan
-
   const inputRef = useRef(null);
   const staleRef = useRef(false);
 
-  useEffect(() => { if (subMode === 'scanner' && !product) inputRef.current?.focus(); }, [subMode, product]);
-  useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3500); return () => clearTimeout(t); }, [flash]);
+  const [cart, setCart] = useState([]);
+  const [issues, setIssues] = useState([]);
+  const [error, setError] = useState('');
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [scanFlash, setScanFlash] = useState(null); // { type:'added'|'dup', text }
+  const [printLabels, setPrintLabels] = useState(null); // { batchCode, items }
 
-  const isWomens = (p) => p && /women/i.test(p.name || '');
-  const sizesWithW = (p) =>
-    isWomens(p) ? (p.sizes || []).map((s) => (/[wW]$/.test(String(s)) ? s : `${s}W`)) : (p.sizes || []);
+  // Refs (always current, even inside the camera's captured callback):
+  const recentRef = useRef({});        // code -> last scan time (cooldown vs camera re-reads)
+  const codesRef = useRef(new Set());  // codes already in the cart (de-dupe)
+  const defaultCostRef = useRef(header.defaultCost);
+  defaultCostRef.current = header.defaultCost;
 
-  function rearm() {
-    setProduct(null);
-    setPendingSize(null);
-    setInput('');
-    staleRef.current = false;
-    setCamKey((k) => k + 1);
-    setTimeout(() => inputRef.current?.focus(), 0);
+  useEffect(() => { if (tab === 'intake' && !showCam) inputRef.current?.focus(); }, [tab, showCam, cart.length]);
+  useEffect(() => { if (!scanFlash) return; const t = setTimeout(() => setScanFlash(null), 2200); return () => clearTimeout(t); }, [scanFlash]);
+
+  // Short audible + haptic confirmation that a box registered.
+  function scanFeedback(kind) {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) {
+        const ctx = new Ctx();
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.frequency.value = kind === 'added' ? 920 : 330;
+        g.gain.value = 0.05; o.connect(g); g.connect(ctx.destination);
+        o.start(); setTimeout(() => { o.stop(); ctx.close(); }, 90);
+      }
+    } catch { /* no audio */ }
+    try { navigator.vibrate?.(kind === 'added' ? 70 : [30, 40, 30]); } catch { /* no haptics */ }
   }
 
-  async function runSearch(value) {
-    const q = (value ?? input).trim();
-    if (!q) return;
-    setLoading(true); setError(''); setProduct(null); setPendingSize(null);
+  const updateLine = (key, patch) => setCart((c) => c.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  const removeLine = (key) => setCart((c) => {
+    const l = c.find((x) => x.key === key);
+    if (l?.code) codesRef.current.delete(l.code);
+    return c.filter((x) => x.key !== key);
+  });
+
+  // Sizes are used exactly as the API returns them (a "W" appears only if the
+  // API's own size value has it — we never synthesize it from the title).
+  const newSizeRow = (size = '') => ({ key: cartKey++, size, quantity: 1, cost: defaultCostRef.current });
+
+  // size sub-rows within a scanned product line
+  function addSizeRow(lineKey, size) {
+    setCart((c) => c.map((l) => {
+      if (l.key !== lineKey) return l;
+      if (size && l.rows.some((r) => r.size === size)) return l; // already added
+      return { ...l, rows: [...l.rows, newSizeRow(size)] };
+    }));
+  }
+  function updateSizeRow(lineKey, rowKey, patch) {
+    setCart((c) => c.map((l) => (l.key === lineKey
+      ? { ...l, rows: l.rows.map((r) => (r.key === rowKey ? { ...r, ...patch } : r)) }
+      : l)));
+  }
+  function removeSizeRow(lineKey, rowKey) {
+    setCart((c) => c.map((l) => (l.key === lineKey
+      ? { ...l, rows: l.rows.filter((r) => r.key !== rowKey) }
+      : l)));
+  }
+
+  async function resolve(key, code) {
     try {
-      const { product: p } = await api.searchUpc(q);
-      setProduct(p);
-      // StockX already knows the size → straight to confirm; Alias → size grid.
-      if (p.source === 'stockx' && p.sizes?.[0]) setPendingSize(p.sizes[0]);
-      setInput('');
+      const isUpc = /^\d{8,14}$/.test(code);
+      const { product: p } = isUpc ? await api.searchUpc(code) : await api.searchSku(code);
+      const sizes = p.sizes || []; // full option list for the dropdown (W only if the API has it)
+      setCart((c) => c.map((l) => {
+        if (l.key !== key) return l;
+        // StockX resolves the exact scanned size → auto-add it as a row; the full
+        // size run (enriched from Alias) stays in `sizes` to feed the dropdown.
+        const autoRow = p.scannedSize ? [newSizeRow(p.scannedSize)] : l.rows;
+        return {
+          ...l, name: p.name || '', sku: p.sku || '', image: p.image || '',
+          source: p.source || 'manual', sizes, rows: autoRow, status: 'ready',
+        };
+      }));
+      // StockX (and barcodes generally) resolve only the scanned size, so the
+      // "add another size" dropdown would be empty. Fetch the full size run by
+      // SKU so every API ends up with the complete list to choose from.
+      if (sizes.length <= 1 && p.sku) {
+        try {
+          const { product: full } = await api.searchSku(p.sku);
+          const fullSizes = full?.sizes || [];
+          if (fullSizes.length > 1) updateLine(key, { sizes: fullSizes });
+        } catch { /* keep the single known size */ }
+      }
     } catch (err) {
       if (err.unauthorized) return onSignOut();
-      setError(err.message);
-    } finally {
-      staleRef.current = true;
-      setLoading(false);
+      updateLine(key, { status: 'error', error: err.message });
     }
+  }
+
+  function addScan(code) {
+    const c = String(code).trim();
+    if (!c) return;
+    const now = Date.now();
+    // Cooldown: ignore the same code re-read within 1.2s (kills the camera's
+    // continuous re-detection of a box still held in frame).
+    if (recentRef.current[c] && now - recentRef.current[c] < 1200) return;
+    recentRef.current[c] = now;
+    setInput(''); staleRef.current = false;
+    // De-dupe: one line per product. A second scan of the same box just flashes
+    // a reminder to use the quantity field (don't add a duplicate line).
+    if (codesRef.current.has(c)) {
+      setScanFlash({ type: 'dup', text: 'Already in list — set its quantity below.' });
+      scanFeedback('dup');
+      return;
+    }
+    codesRef.current.add(c);
+    const key = cartKey++;
+    const upc = /^\d{8,14}$/.test(c) ? c : '';
+    setCart((prev) => [...prev, {
+      key, code: c, upc, name: '', sku: '', image: '', source: 'manual',
+      sizes: [], rows: [], status: 'resolving',
+    }]);
+    resolve(key, c);
+    setScanFlash({ type: 'added', text: `✓ Scanned ${c}` });
+    scanFeedback('added');
+  }
+
+  function addManual() {
+    const key = cartKey++;
+    setCart((prev) => [...prev, {
+      key, code: '', upc: '', name: '', sku: '', image: '', source: 'manual',
+      sizes: [], rows: [newSizeRow('')], status: 'manual',
+    }]);
   }
 
   function onScannerKeyDown(e) {
@@ -362,585 +425,684 @@ function RapidScan({ onHome, onSignOut }) {
       setInput('');
     }
   }
-  function onCameraDetected(code) { setSubMode('scanner'); setInput(code); runSearch(code); }
 
-  async function confirmYes() {
-    if (!product || !pendingSize) return;
-    setSending(true);
+  const addIssue = () => setIssues((is) => [...is, { key: cartKey++, type: 'mismatched', description: '', expectedCount: '', receivedCount: '' }]);
+  const updateIssue = (key, patch) => setIssues((is) => is.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+  const removeIssue = (key) => setIssues((is) => is.filter((i) => i.key !== key));
+
+  const rowQty = (r) => Math.max(1, Number(r.quantity) || 0);
+  const totalItems = cart.reduce((s, l) => s + l.rows.reduce((a, r) => a + rowQty(r), 0), 0);
+  const totalCost = cart.reduce((s, l) => s + l.rows.reduce((a, r) => a + rowQty(r) * (Number(r.cost) || 0), 0), 0);
+  const resolving = cart.some((l) => l.status === 'resolving');
+
+  function startCommit() {
+    setError('');
+    // Shipment details required for traceability (tracking stays optional —
+    // drop-offs may have none).
+    if (!String(header.supplier).trim()) { setError('Select a supplier.'); return; }
+    if (!String(header.buyer).trim()) { setError('Enter the buyer.'); return; }
+    if (!String(header.dateReceived).trim()) { setError('Enter the date received.'); return; }
+    if (!cart.length) { setError('Scan or add at least one item first.'); return; }
+    if (cart.some((l) => !String(l.name).trim())) { setError('Every item needs a name.'); return; }
+    if (cart.some((l) => !l.rows.length)) { setError('Every item needs at least one size — pick from the dropdown.'); return; }
+    if (cart.some((l) => l.rows.some((r) => !String(r.size).trim()))) { setError('Fill in the highlighted sizes.'); return; }
+    setShowConfirm(true);
+  }
+
+  async function doCommit() {
+    setCommitting(true);
     try {
-      const res = await api.rapidSend(product, pendingSize);
-      setFlash({ type: 'ok', msg: res.message || 'Sent.' });
-      rearm();
+      // Expand each product's size rows into individual physical items
+      // (quantity N → N items → N VINs).
+      const items = [];
+      for (const l of cart) {
+        for (const r of l.rows) {
+          const cost = r.cost === '' || r.cost == null ? null : Number(r.cost);
+          for (let n = 0; n < rowQty(r); n++) {
+            items.push({ name: l.name, sku: l.sku, size: r.size, upc: l.upc, image: l.image, source: l.source, cost });
+          }
+        }
+      }
+      const payload = {
+        batch: { ...header, defaultCost: header.defaultCost === '' ? null : Number(header.defaultCost) },
+        items,
+        issues: issues.map((i) => ({
+          type: i.type, description: i.description,
+          expectedCount: i.expectedCount === '' ? null : Number(i.expectedCount),
+          receivedCount: i.receivedCount === '' ? null : Number(i.receivedCount),
+        })),
+      };
+      const res = await api.batchCommit(payload);
+      setShowConfirm(false);
+      // Pair each returned VIN with its item so labels can print right away.
+      const printItems = (res.vins || []).map((vin, i) => ({
+        vin, name: payload.items[i]?.name, sku: payload.items[i]?.sku, size: payload.items[i]?.size,
+      }));
+      setResult({ ...res, printItems });
+      setCart([]); setIssues([]); setScanFlash(null);
+      codesRef.current.clear(); recentRef.current = {};
+      setHeader((h) => ({ ...h, tracking: '', notes: '', specialRules: '' })); // keep buyer/supplier/date/cost
     } catch (err) {
+      setShowConfirm(false);
       if (err.unauthorized) return onSignOut();
-      setFlash({ type: 'err', msg: err.message });
+      setError(err.message);
     } finally {
-      setSending(false);
+      setCommitting(false);
     }
   }
-  function confirmNo() { rearm(); }
-
-  const showConfirm = product && pendingSize;
-  const showSizeGrid = product && !pendingSize;
 
   return (
     <div className="app">
       <TopBar
-        title="Rapid Scan"
+        title="Receiving"
         onHome={onHome}
         onSignOut={onSignOut}
-        right={
-          <button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences" aria-label="Preferences">
-            ⚙ Settings
-          </button>
-        }
+        right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences">⚙</button>}
       />
 
-      <div className="card">
-        <div className="subtabs">
-          <button className={`subtab ${subMode === 'scanner' ? 'active' : ''}`} onClick={() => setSubMode('scanner')}>🔫 Scanner</button>
-          <button className={`subtab ${subMode === 'camera' ? 'active' : ''}`} onClick={() => setSubMode('camera')}>📷 Camera</button>
-        </div>
-
-        {subMode === 'scanner' ? (
-          <form className="searchrow" onSubmit={(e) => { e.preventDefault(); runSearch(); }}>
-            <input
-              ref={inputRef}
-              inputMode="numeric"
-              placeholder="Scan a barcode (UPC), then Enter"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onScannerKeyDown}
-            />
-            <button className="btn primary" disabled={loading}>{loading ? 'Searching…' : 'Go'}</button>
-          </form>
-        ) : (
-          <Suspense fallback={<p className="muted">Loading camera…</p>}>
-            <CameraScanner
-              key={camKey}
-              onDetected={onCameraDetected}
-              onClose={() => setSubMode('scanner')}
-              zoom={prefs.cameraZoom}
-              onZoomChange={setCameraZoom}
-            />
-          </Suspense>
-        )}
-
-        {error && <div className="error mt">{error}</div>}
-        {flash && <div className={`mt ${flash.type === 'ok' ? 'ok' : 'error'}`}>{flash.msg}</div>}
-        <p className="muted rapid-hint">
-          Records quantity 1 per scan. StockX sends after you confirm; Alias asks for the size first.
-        </p>
+      <div className="tabs auth-tabs">
+        <button className={`tab ${tab === 'intake' ? 'active' : ''}`} onClick={() => setTab('intake')}>New Batch</button>
+        <button className={`tab ${tab === 'recent' ? 'active' : ''}`} onClick={() => setTab('recent')}>Recent</button>
       </div>
 
-      {showSizeGrid && (
-        <div className="card">
-          <h3 className="rows-title">Select size</h3>
-          <p className="muted confirm-name">{product.name}</p>
-          {(product.sizes && product.sizes.length) ? (
-            <div className="size-grid">
-              {sizesWithW(product).map((s) => (
-                <button key={s} type="button" className="size-box" onClick={() => setPendingSize(s)}>{s}</button>
-              ))}
+      {tab === 'recent' ? <BatchList onSignOut={onSignOut} /> : (
+        <>
+          {/* Shipment details */}
+          <div className="card">
+            <h3 className="rows-title">Shipment details</h3>
+            <div className="batch-form">
+              <label>Buyer *<input value={header.buyer} onChange={(e) => setH('buyer', e.target.value)} /></label>
+              <label>Supplier *
+                <select
+                  value={customSupplier ? '__custom__' : header.supplier}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === '__custom__') { setCustomSupplier(true); setH('supplier', ''); }
+                    else { setCustomSupplier(false); setH('supplier', v); }
+                  }}
+                >
+                  <option value="">Select supplier…</option>
+                  {SUPPLIERS.map((s) => <option key={s} value={s}>{s}</option>)}
+                  <option value="__custom__">Custom…</option>
+                </select>
+              </label>
+              {customSupplier && (
+                <label>Custom supplier<input autoFocus value={header.supplier} onChange={(e) => setH('supplier', e.target.value)} placeholder="Type supplier name" /></label>
+              )}
+              <label>Tracking #
+                <span className="track-field">
+                  <input value={header.tracking} onChange={(e) => setH('tracking', e.target.value)} placeholder="Scan or type" />
+                  <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => setScanTracking(true)}>📷</button>
+                </span>
+              </label>
+              <label>Date received *<input type="date" value={header.dateReceived} onChange={(e) => setH('dateReceived', e.target.value)} /></label>
+              <label>Default cost ($)<input type="number" min="0" step="0.01" value={header.defaultCost} onChange={(e) => setH('defaultCost', e.target.value)} /></label>
+              <label className="batch-form-wide">Special rules<input value={header.specialRules} onChange={(e) => setH('specialRules', e.target.value)} /></label>
+              <label className="batch-form-wide">Notes<input value={header.notes} onChange={(e) => setH('notes', e.target.value)} /></label>
             </div>
-          ) : (
-            <p className="error">No sizes available for this product.</p>
-          )}
-          <button className="btn ghost mt" onClick={rearm}>Cancel</button>
-        </div>
+          </div>
+
+          {/* Scan items — a scanner gun types straight into this field; the
+              camera is an optional toggle for when there's no gun. */}
+          <div className="card">
+            <form className="searchrow" onSubmit={(e) => { e.preventDefault(); addScan(input); staleRef.current = true; }}>
+              <input ref={inputRef} autoCapitalize="characters" autoCorrect="off" placeholder="Scan or type a barcode/SKU, Enter to add"
+                value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onScannerKeyDown} />
+              <button className="btn primary">Add</button>
+              <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">📷</button>
+            </form>
+            {showCam && (
+              <Suspense fallback={<p className="muted">Loading camera…</p>}>
+                <CameraScanner continuous onDetected={addScan} onClose={() => setShowCam(false)}
+                  zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+              </Suspense>
+            )}
+            <div className="scan-flash-live" role="status" aria-live="polite">
+              {scanFlash && <div className={`scan-flash ${scanFlash.type}`}>{scanFlash.text}</div>}
+            </div>
+            <button type="button" className="btn add-size" onClick={addManual}>+ Add item manually</button>
+          </div>
+
+          {/* Cart */}
+          <div className="card">
+            <h3 className="rows-title">Items <span className="muted">({totalItems}{resolving ? ', resolving…' : ''})</span></h3>
+            {!cart.length ? <p className="muted">No items yet — scan or add manually.</p> : (
+              <div className="cart">
+                {cart.map((l) => {
+                  // Use the API's size run when it returned more than one; otherwise
+                  // fall back to the standard US chart so the dropdown is never empty.
+                  const apiSizes = l.sizes || [];
+                  const womens = [...apiSizes, ...l.rows.map((r) => r.size)].some((s) => /w/i.test(String(s || '')));
+                  const pool = apiSizes.length > 1 ? apiSizes : [...new Set([...apiSizes, ...usSizeChart(womens)])];
+                  const available = pool.filter((s) => !l.rows.some((r) => r.size === s));
+                  return (
+                    <div className={`cart-line ${l.status}`} key={l.key}>
+                      <div className="cart-head">
+                        {l.image ? <img className="cart-thumb" src={l.image} alt="" /> : <div className="cart-thumb placeholder">{l.status === 'resolving' ? '…' : '—'}</div>}
+                        <div className="cart-fields">
+                          <input className="cart-name" placeholder="Product name" value={l.name} onChange={(e) => updateLine(l.key, { name: e.target.value })} />
+                          <input placeholder="SKU" value={l.sku} onChange={(e) => updateLine(l.key, { sku: e.target.value })} />
+                          {l.status === 'error' && <div className="error sm">Lookup failed — type details + add sizes.</div>}
+                        </div>
+                        <button type="button" className="btn icon ghost remove" title="Remove item" onClick={() => removeLine(l.key)}>×</button>
+                      </div>
+
+                      {/* sizes for this product */}
+                      <div className="size-rows">
+                        {l.rows.map((r) => (
+                          <div className="size-line" key={r.key}>
+                            <input className={`sz ${!String(r.size).trim() ? 'need' : ''}`} placeholder="Size" value={r.size} onChange={(e) => updateSizeRow(l.key, r.key, { size: e.target.value })} />
+                            <input className="qty" type="number" min="1" placeholder="Qty" value={r.quantity} onChange={(e) => updateSizeRow(l.key, r.key, { quantity: e.target.value })} />
+                            <input className="cst" type="number" min="0" step="0.01" placeholder="Cost" value={r.cost} onChange={(e) => updateSizeRow(l.key, r.key, { cost: e.target.value })} />
+                            <button type="button" className="btn icon ghost remove" title="Remove size" onClick={() => removeSizeRow(l.key, r.key)}>×</button>
+                          </div>
+                        ))}
+                        <div className="size-add">
+                          <select value="" onChange={(e) => { if (e.target.value) addSizeRow(l.key, e.target.value); }}>
+                            <option value="">{available.length ? 'Add a size…' : 'Add another size…'}</option>
+                            {available.map((s) => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                          <button type="button" className="btn sm ghost" onClick={() => addSizeRow(l.key, '')}>+ custom</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Issues */}
+          <div className="card">
+            <h3 className="rows-title">Shipment issues <span className="muted">(optional)</span></h3>
+            {issues.map((i) => (
+              <div className="issue-row" key={i.key}>
+                <select value={i.type} onChange={(e) => updateIssue(i.key, { type: e.target.value })}>
+                  {ISSUE_TYPES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                </select>
+                {i.type === 'shortfall' && (
+                  <span className="issue-counts">
+                    <input type="number" min="0" placeholder="Exp" value={i.expectedCount} onChange={(e) => updateIssue(i.key, { expectedCount: e.target.value })} />
+                    <input type="number" min="0" placeholder="Got" value={i.receivedCount} onChange={(e) => updateIssue(i.key, { receivedCount: e.target.value })} />
+                  </span>
+                )}
+                <input placeholder="Description" value={i.description} onChange={(e) => updateIssue(i.key, { description: e.target.value })} />
+                <button type="button" className="btn icon ghost remove" onClick={() => removeIssue(i.key)}>×</button>
+              </div>
+            ))}
+            <button type="button" className="btn add-size" onClick={addIssue}>+ Add issue</button>
+          </div>
+
+          {error && <div className="error mt">{error}</div>}
+
+          <div className="batch-bar">
+            <div className="batch-totals"><b>{totalItems}</b> items · <b>${totalCost.toFixed(2)}</b></div>
+            <button className="btn primary" onClick={startCommit} disabled={committing || resolving}>
+              {resolving ? 'Resolving…' : 'Finish batch'}
+            </button>
+          </div>
+        </>
       )}
 
       {showConfirm && (
-        <ConfirmSend product={product} size={pendingSize} busy={sending} onYes={confirmYes} onNo={confirmNo} />
+        <div className="modal-overlay">
+          <div className="modal confirm" role="dialog" aria-modal="true">
+            <h3 className="modal-title">Commit this batch?</h3>
+            <div className="confirm-summary">
+              <div><b>{totalItems}</b> items ({cart.length} product{cart.length === 1 ? '' : 's'}) · total <b>${totalCost.toFixed(2)}</b></div>
+              <div className="muted">Supplier: {header.supplier || '—'} · Buyer: {header.buyer || '—'}</div>
+              <div className="muted">Tracking: {header.tracking || '—'} · {header.dateReceived}</div>
+              {issues.length > 0 && <div className="muted">{issues.length} issue(s) recorded</div>}
+              <p className="muted sm">Each item gets a VIN; items mirror to the sheet (consolidated).</p>
+            </div>
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setShowConfirm(false)} disabled={committing}>No</button>
+              <button className="btn primary" onClick={doCommit} disabled={committing}>{committing ? 'Saving…' : 'Yes, commit'}</button>
+            </div>
+          </div>
+        </div>
       )}
 
-      {showPrefs && (
-        <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />
+      {result && (
+        <Modal type="success" title={`Batch ${result.batchCode} saved`}
+          message={`${result.count} item(s) recorded${result.mirror?.error ? ' (sheet mirror failed — data is safe in the database)' : ''}. VINs ${result.vins?.[0]}…${result.vins?.[result.vins.length - 1]}.`}
+          onClose={() => setResult(null)}>
+          <button className="btn primary" onClick={() => setPrintLabels({ batchCode: result.batchCode, items: result.printItems })}>🖨 Print labels</button>
+          <button className="btn ghost" onClick={() => setResult(null)}>Start another</button>
+        </Modal>
       )}
+
+      {printLabels && <LabelSheet batchCode={printLabels.batchCode} items={printLabels.items} onClose={() => setPrintLabels(null)} />}
+
+      {scanTracking && (
+        <div className="modal-overlay" onClick={() => setScanTracking(false)}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Scan tracking barcode</h3>
+            <Suspense fallback={<p className="muted">Loading camera…</p>}>
+              <CameraScanner mode="tracking"
+                onDetected={(code) => { setH('tracking', parseTrackingNumber(code)); setScanTracking(false); }}
+                onClose={() => setScanTracking(false)}
+                zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+            </Suspense>
+            <div className="modal-actions"><button className="btn ghost" onClick={() => setScanTracking(false)}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+
+      {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
     </div>
   );
 }
 
-/* ------------------------------ Bulk Scan ------------------------------ */
+/* Recent batches list (Phase 1: read-only, expand to see items/issues). */
+function BatchList({ onSignOut }) {
+  const [batches, setBatches] = useState(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(null); // batch id -> details
+  const [detail, setDetail] = useState(null);
+  const [labels, setLabels] = useState(null); // { batchCode, items }
 
-function BulkScan({ onHome, onSignOut }) {
-  const [mode, setMode] = useState('upc'); // 'upc' | 'sku'
-  const [upcSubMode, setUpcSubMode] = useState('scanner'); // 'scanner' | 'camera'
+  useEffect(() => {
+    api.batchList()
+      .then(({ batches }) => setBatches(batches))
+      .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persisted user preferences (e.g. camera zoom).
-  const [prefs, setPrefs] = useState(loadPrefs);
-  const [showPrefs, setShowPrefs] = useState(false);
-  function setCameraZoom(zoom) {
-    setPrefs((p) => {
-      const next = { ...p, cameraZoom: zoom };
-      savePrefs(next);
-      return next;
-    });
+  async function toggle(id) {
+    if (open === id) { setOpen(null); setDetail(null); return; }
+    setOpen(id); setDetail(null);
+    try { setDetail(await api.batchGet(id)); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
 
-  const [input, setInput] = useState('');
+  if (error) return <div className="error mt">{error}</div>;
+  if (!batches) return <p className="muted">Loading…</p>;
+  if (!batches.length) return <div className="card"><p className="muted">No batches yet.</p></div>;
+
+  return (
+    <>
+      <div className="card">
+        {batches.map((b) => (
+          <div className="batch-item" key={b.id}>
+            <button className="batch-head" onClick={() => toggle(b.id)}>
+              <span className="batch-code">{b.batch_code}</span>
+              <span className="muted">{b.supplier_name || '—'} · {b.item_count} items · ${Number(b.total_cost).toFixed(2)}{b.issue_count ? ` · ${b.issue_count}⚠` : ''}</span>
+              <span className="muted sm">{(b.date_received || b.created_at || '').slice(0, 10)}</span>
+            </button>
+            {open === b.id && (
+              <div className="batch-detail">
+                {!detail ? <p className="muted">Loading…</p> : (
+                  <>
+                    <button className="btn sm primary" onClick={() => setLabels({ batchCode: detail.batch.batch_code, items: detail.items })}>🖨 Print labels</button>
+                    {detail.items.map((it) => (
+                      <div className="batch-detail-row" key={it.id}>
+                        <span className="vin">{it.vin}</span> {it.name} · {it.sku || '—'} · sz {it.size || '—'} · ${Number(it.cost || 0).toFixed(2)}
+                      </div>
+                    ))}
+                    {detail.issues.map((is) => (
+                      <div className="batch-detail-row issue" key={is.id}>⚠ {is.type}: {is.description || ''}{is.type === 'shortfall' ? ` (${is.received_count}/${is.expected_count})` : ''}</div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {labels && <LabelSheet batchCode={labels.batchCode} items={labels.items} onClose={() => setLabels(null)} />}
+    </>
+  );
+}
+
+/* ------------------------------ Inventory ------------------------------ */
+// One page: search/scan inventory, filter (date/supplier/status) with totals +
+// CSV (the daily report), select rows → print VIN labels, and click a row (or
+// scan a VIN) to open an item's detail + history + status/notes.
+function Inventory({ onHome, onSignOut }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [mode, setMode] = useState('list'); // 'list' | 'detail'
+
+  // list / filters
+  const [q, setQ] = useState('');
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
+  const [supplier, setSupplier] = useState('');
+  const [status, setStatus] = useState('');
+  const [data, setData] = useState(null); // { rows, totals }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [sel, setSel] = useState(() => new Set());
+  const [labels, setLabels] = useState(null);
 
-  const [product, setProduct] = useState(null);
-  const [rows, setRows] = useState([]);
+  // scan (camera optional; a scanner gun just types into the search box)
+  const [showCam, setShowCam] = useState(false);
+  const [prefs, setPrefs] = useState(loadPrefs);
+  const [showPrefs, setShowPrefs] = useState(false);
+  const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
+  const searchRef = useRef(null);
 
-  const [sendState, setSendState] = useState({ status: 'idle', msg: '' });
-  const [confirmItems, setConfirmItems] = useState(null); // opens the confirm dialog
-  const inputRef = useRef(null);
-  // True once a search has run and the box still holds that (now stale) value.
-  // The next keystroke from the scanner gun (or keyboard) then replaces it
-  // instead of appending to it.
-  const staleRef = useRef(false);
+  // detail
+  const [detail, setDetail] = useState(null); // { item, events }
+  const [note, setNote] = useState('');
+  const [statusNote, setStatusNote] = useState(''); // optional reason saved with a status change
+  const [busy, setBusy] = useState(false);
 
-  // Keep the scanner-gun input focused so a HID scanner "types" straight in.
-  useEffect(() => {
-    if (mode === 'upc' && upcSubMode === 'scanner') inputRef.current?.focus();
-  }, [mode, upcSubMode, product]);
+  async function load(over = {}) {
+    setLoading(true); setError(''); setSel(new Set());
+    const f = { q, from, to, supplier, status, ...over };
+    const params = {};
+    if (f.q) params.q = f.q;
+    if (f.from) params.from = f.from;
+    if (f.to) params.to = f.to;
+    if (f.supplier) params.supplier = f.supplier;
+    if (f.status) params.status = f.status;
+    try { setData(await api.itemsQuery(params)); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Keep the search box focused in list mode so a scanner gun types into it.
+  useEffect(() => { if (mode === 'list' && !showCam) searchRef.current?.focus(); }, [mode, showCam, data]);
 
-  function resetResult() {
-    setProduct(null);
-    setRows([]);
-    setSendState({ status: 'idle', msg: '' });
+  // One box for everything: a scanned/typed VIN opens its detail; anything else
+  // searches the whole inventory (dates cleared so search isn't limited to today).
+  function submit() {
+    const v = q.trim();
+    if (!v) return;
+    if (/^s[a-z]*-?\d/i.test(v)) { openDetail(v); setQ(''); return; } // looks like a VIN (SBM-…/SB-…)
+    // Text search: clear the date window (so it isn't limited to today) but keep
+    // the query visible in the box so the user can see/refine what they searched.
+    setFrom(''); setTo(''); load({ q: v, from: '', to: '' });
+  }
+  function viewToday() {
+    setQ(''); setFrom(today); setTo(today); setSupplier(''); setStatus('');
+    load({ q: '', from: today, to: today, supplier: '', status: '' });
   }
 
-  function dismissDialog() {
-    setSendState({ status: 'idle', msg: '' });
+  async function openDetail(vin) {
+    const v = String(vin).trim();
+    if (!v) return;
+    setMode('detail'); setDetail(null); setError(''); setShowCam(false);
+    try { setDetail(await api.itemLookup(v)); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
+  function backToList() { setMode('list'); setDetail(null); setError(''); load(); }
 
-  // Modal "Scan another": clear everything and put the cursor back in the box.
-  function scanAnother() {
-    setInput('');
-    staleRef.current = false;
-    resetResult();
-  }
-
-  // On the scanner bar: if a previous search left a stale value in the box, the
-  // first new keystroke wipes it so the freshly scanned barcode replaces it.
-  function onScannerKeyDown(e) {
-    if (staleRef.current && e.key.length === 1) {
-      staleRef.current = false;
-      if (inputRef.current) inputRef.current.value = '';
-      setInput('');
-    }
-  }
-
-  async function runSearch(value) {
-    const q = (value ?? input).trim();
-    if (!q) return;
-    setLoading(true);
-    setError('');
-    resetResult();
+  const STATUS = ['in_stock', 'sold', 'returned', 'missing', 'issue'];
+  async function setItemStatus(s) {
+    if (!detail) return;
+    const reason = statusNote.trim();
+    setBusy(true); setError('');
     try {
-      const { product: p } =
-        mode === 'upc' ? await api.searchUpc(q) : await api.searchSku(q);
-      setProduct(p);
-      setRows(buildRows(p));
-      setInput(''); // clear so the next scan starts fresh
-    } catch (err) {
-      if (err.unauthorized) return onSignOut();
-      setError(err.message);
-    } finally {
-      staleRef.current = true; // box holds a searched value; replace it on next keystroke
-      setLoading(false);
+      setDetail(await api.itemEvent(detail.item.vin, 'status_change', { status: s, from: detail.item.status, note: reason || undefined }));
+      setStatusNote('');
     }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(false); }
   }
+  async function submitNote() {
+    const text = note.trim();
+    if (!text || !detail) return;
+    setBusy(true); setError('');
+    try { setDetail(await api.itemEvent(detail.item.vin, 'note', { text })); setNote(''); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(false); }
+  }
+  const eventLabel = (e) => {
+    if (e.type === 'received') return 'Received into inventory';
+    if (e.type === 'status_change') return `Status → ${e.details?.status}${e.details?.note ? ` — ${e.details.note}` : ''}`;
+    if (e.type === 'note') return `Note: ${e.details?.text || ''}`;
+    if (e.type === 'issue') return `Issue: ${e.details?.text || e.details?.type || ''}`;
+    return e.type;
+  };
 
-  function onCameraDetected(code) {
-    setUpcSubMode('scanner');
-    setInput(code);
-    runSearch(code);
-  }
+  /* ----- detail view ----- */
+  if (mode === 'detail') {
+    const it = detail?.item;
+    return (
+      <div className="app">
+        <TopBar title="Inventory" onHome={onHome} onSignOut={onSignOut}
+          right={<button className="btn ghost sm" onClick={backToList}>← Back to list</button>} />
+        {error && <div className="error mt">{error}</div>}
+        {!detail ? <p className="muted">Loading…</p> : (
+          <>
+            <div className="card result">
+              <div className="result-grid">
+                {it.image_url ? <img className="shoe-img" src={it.image_url} alt="" loading="lazy" /> : <div className="shoe-img placeholder">No image</div>}
+                <div className="details">
+                  <h2>{it.name}</h2>
+                  <dl>
+                    <div><dt>VIN</dt><dd><span className="vin">{it.vin}</span></dd></div>
+                    <div><dt>SKU</dt><dd>{it.sku || '—'}</dd></div>
+                    <div><dt>Size</dt><dd>{it.size || '—'}</dd></div>
+                    <div><dt>Cost</dt><dd>${Number(it.cost || 0).toFixed(2)}</dd></div>
+                    <div><dt>Status</dt><dd><span className={`status-pill ${it.status}`}>{it.status}</span></dd></div>
+                    <div><dt>Batch</dt><dd>{it.batch_code || '—'}</dd></div>
+                    <div><dt>Supplier</dt><dd>{it.supplier_name || '—'}</dd></div>
+                    <div><dt>Received</dt><dd>{(it.date_received || '').slice(0, 10) || '—'}</dd></div>
+                  </dl>
+                </div>
+              </div>
 
-  /* ---- size / quantity rows ---- */
-  function updateRow(id, field, val) {
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: val } : r)));
-  }
-  // Set a row's quantity from the text box (clamped to a non-negative integer).
-  function setQty(id, val) {
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, quantity: toQty(val) } : r)));
-  }
-  // Step a row's quantity up/down by `delta`, never below zero.
-  function stepQty(id, delta) {
-    setRows((rs) =>
-      rs.map((r) => (r.id === id ? { ...r, quantity: Math.max(0, toQty(r.quantity) + delta) } : r))
+              <h3 className="rows-title">Set status</h3>
+              <input className="status-reason" placeholder="Optional reason — saved with the status change (e.g. why it was returned)" value={statusNote} onChange={(e) => setStatusNote(e.target.value)} />
+              <div className="status-actions">
+                {STATUS.map((s) => (
+                  <button key={s} className={`btn sm ${it.status === s ? 'primary' : 'ghost'}`} disabled={busy || it.status === s} onClick={() => setItemStatus(s)}>{s.replace('_', ' ')}</button>
+                ))}
+              </div>
+
+              <h3 className="rows-title">Add note</h3>
+              <form className="searchrow" onSubmit={(e) => { e.preventDefault(); submitNote(); }}>
+                <input placeholder="Note about this item…" value={note} onChange={(e) => setNote(e.target.value)} />
+                <button className="btn primary" disabled={busy || !note.trim()}>Add</button>
+              </form>
+
+              <div className="send"><button className="btn ghost wide" onClick={() => setLabels([{ vin: it.vin, sku: it.sku, size: it.size }])}>🖨 Print this label</button></div>
+            </div>
+
+            <div className="card">
+              <h3 className="rows-title">History</h3>
+              <div className="timeline">
+                {detail.events.map((e) => (
+                  <div className="tl-item" key={e.id}>
+                    <div className="tl-dot" />
+                    <div className="tl-body">
+                      <div>{eventLabel(e)}</div>
+                      <div className="muted sm">{e.created_by || '—'} · {new Date(e.created_at).toLocaleString()}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+        {labels && <LabelSheet items={labels} onClose={() => setLabels(null)} />}
+        {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
+      </div>
     );
   }
-  function addRow() {
-    setRows((rs) => [...rs, newRow()]);
-  }
-  function removeRow(id) {
-    setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.id !== id) : rs));
-  }
 
-  // Validate the rows, then open the confirm dialog (the actual send happens on
-  // "Yes" in the dialog).
-  function prepareSend() {
-    const clean = rows
-      .map((r) => ({ size: String(r.size).trim(), quantity: toQty(r.quantity) }))
-      .filter((r) => r.size && r.quantity > 0);
-    if (!clean.length) {
-      setSendState({ status: 'error', msg: 'Add at least one size with a quantity.' });
-      return;
-    }
-    const sizeKeys = clean.map((r) => r.size.toLowerCase());
-    const dup = sizeKeys.find((s, i) => sizeKeys.indexOf(s) !== i);
-    if (dup) {
-      setSendState({ status: 'error', msg: `Size "${dup}" is listed more than once. Combine it into one row.` });
-      return;
-    }
-    setConfirmItems(clean);
-  }
-
-  async function doSend() {
-    const clean = confirmItems;
-    if (!clean) return;
-    setSendState({ status: 'sending', msg: '' });
-    try {
-      const res = await api.sendToSheet(product, clean);
-      setConfirmItems(null);
-      setSendState({
-        status: 'done',
-        msg: res.message || `Sent ${res.count} size(s) to the sheet.`,
-      });
-    } catch (err) {
-      setConfirmItems(null);
-      if (err.unauthorized) return onSignOut();
-      setSendState({ status: 'error', msg: err.message });
-    }
-  }
+  /* ----- list view ----- */
+  const rows = data?.rows || [];
+  const toggle = (vin) => setSel((s) => { const n = new Set(s); n.has(vin) ? n.delete(vin) : n.add(vin); return n; });
+  const toggleAll = () => setSel((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.vin))));
+  const selectedItems = rows.filter((r) => sel.has(r.vin));
 
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <img className="brand-logo" src="/logo.png" alt="" />
-          <span>Bulk Scan</span>
-        </div>
-        <div className="topbar-actions">
-          <button
-            className="btn ghost sm"
-            onClick={() => setShowPrefs(true)}
-            title="Preferences"
-            aria-label="Preferences"
-          >
-            ⚙ Settings
-          </button>
-          <button className="btn ghost sm" onClick={onHome}>← Home</button>
-          <button className="btn ghost sm" onClick={onSignOut}>Sign out</button>
-        </div>
-      </header>
-
-      {/* Mode tabs */}
-      <div className="tabs">
-        <button
-          className={`tab ${mode === 'upc' ? 'active' : ''}`}
-          onClick={() => { setMode('upc'); setInput(''); }}
-        >
-          Scan / Enter Barcode (UPC)
-        </button>
-        <button
-          className={`tab ${mode === 'sku' ? 'active' : ''}`}
-          onClick={() => { setMode('sku'); setInput(''); }}
-        >
-          Enter SKU
-        </button>
-      </div>
+      <TopBar title="Inventory" onHome={onHome} onSignOut={onSignOut}
+        right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences">⚙</button>} />
 
       <div className="card">
-        {mode === 'upc' && (
-          <>
-            <div className="subtabs">
-              <button
-                className={`subtab ${upcSubMode === 'scanner' ? 'active' : ''}`}
-                onClick={() => setUpcSubMode('scanner')}
-              >
-                🔫 Barcode Scanner
-              </button>
-              <button
-                className={`subtab ${upcSubMode === 'camera' ? 'active' : ''}`}
-                onClick={() => setUpcSubMode('camera')}
-              >
-                📷 Camera
-              </button>
-            </div>
-
-            {upcSubMode === 'scanner' ? (
-              <form
-                className="searchrow"
-                onSubmit={(e) => { e.preventDefault(); runSearch(); }}
-              >
-                <input
-                  ref={inputRef}
-                  inputMode="numeric"
-                  placeholder="Scan with the gun or type the UPC, then Enter"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={onScannerKeyDown}
-                />
-                <button className="btn primary" disabled={loading}>
-                  {loading ? 'Searching…' : 'Search'}
-                </button>
-              </form>
-            ) : (
-              <Suspense fallback={<p className="muted">Loading camera…</p>}>
-                <CameraScanner
-                  onDetected={onCameraDetected}
-                  onClose={() => setUpcSubMode('scanner')}
-                  zoom={prefs.cameraZoom}
-                  onZoomChange={setCameraZoom}
-                />
-              </Suspense>
-            )}
-          </>
+        {/* One box: scan a VIN (gun or camera) to open it, or type to search. */}
+        <form className="searchrow" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <input ref={searchRef} placeholder="Scan a VIN, or search VIN / SKU / name…" value={q}
+            onChange={(e) => setQ(e.target.value)} autoCapitalize="characters" />
+          <button className="btn primary" disabled={loading}>Go</button>
+          <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">📷</button>
+        </form>
+        {showCam && (
+          <Suspense fallback={<p className="muted">Loading camera…</p>}>
+            <CameraScanner mode="vin" onDetected={(c) => openDetail(c)} onClose={() => setShowCam(false)}
+              zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+          </Suspense>
         )}
 
-        {mode === 'sku' && (
-          <form
-            className="searchrow"
-            onSubmit={(e) => { e.preventDefault(); runSearch(); }}
-          >
-            <input
-              placeholder="Enter shoe SKU (e.g. DX2931-600)"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              autoFocus
-            />
-            <button className="btn primary" disabled={loading}>
-              {loading ? 'Searching…' : 'Search'}
-            </button>
-          </form>
-        )}
-
-        {error && <div className="error mt">{error}</div>}
+        <div className="report-filters mt">
+          <label>From<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+          <label>To<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+          <label>Supplier
+            <select value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+              <option value="">All</option>
+              {SUPPLIERS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label>Status
+            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="">All</option>
+              {['in_stock', 'sold', 'returned', 'missing', 'issue'].map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+            </select>
+          </label>
+          <button className="btn primary" onClick={() => load()} disabled={loading}>{loading ? '…' : 'Apply'}</button>
+          <button className="btn ghost" onClick={viewToday}>Today</button>
+        </div>
       </div>
 
-      {/* Result */}
-      {product && (
-        <div className="card result">
-          <div className="result-grid">
-            {product.image ? (
-              <img className="shoe-img" src={product.image} alt={product.name} loading="lazy" />
-            ) : (
-              <div className="shoe-img placeholder">No image</div>
-            )}
-            <div className="details">
-              <h2>{product.name}</h2>
-              <dl>
-                <div><dt>SKU</dt><dd>{product.sku || '—'}</dd></div>
-                <div><dt>UPC</dt><dd>{product.upc || '—'}</dd></div>
-                {product.brand && <div><dt>Brand</dt><dd>{product.brand}</dd></div>}
-                {product.colorway && <div><dt>Colorway</dt><dd>{product.colorway}</dd></div>}
-              </dl>
-              <span className="source">via {product.source}</span>
+      {error && <div className="error mt">{error}</div>}
+
+      {data && (
+        <>
+          <div className="batch-bar">
+            <div className="batch-totals">
+              <b>{data.totals.count}</b> items · <b>${data.totals.totalCost.toFixed(2)}</b>
+              {Object.entries(data.totals.byStatus).map(([s, n]) => <span key={s} className="muted"> · {s.replace('_', ' ')}: {n}</span>)}
             </div>
+            <span className="report-actions">
+              <button className="btn sm primary" disabled={!sel.size} onClick={() => setLabels(selectedItems)}>🖨 Print {sel.size || ''} label{sel.size === 1 ? '' : 's'}</button>
+              <button className="btn sm ghost" disabled={!rows.length} onClick={() => downloadCSV(`inventory_${from || 'all'}_${to || ''}.csv`, toCSV(rows))}>Export CSV</button>
+            </span>
           </div>
-
-          {/* Size / Quantity */}
-          {product.source === 'stockx' && rows[0] ? (
-            // StockX already resolved the exact size for this barcode — show it
-            // and just take a typed quantity.
-            <>
-              <h3 className="rows-title">Size &amp; Quantity</h3>
-              <div className="single-variant">
-                <div className="sv-field">
-                  <span className="sv-label">Size</span>
-                  {rows[0].fixed ? (
-                    <span className="sv-size">{rows[0].size}</span>
-                  ) : (
-                    <input
-                      className="size-in"
-                      placeholder="Size"
-                      value={rows[0].size}
-                      onChange={(e) => updateRow(rows[0].id, 'size', e.target.value)}
-                    />
-                  )}
-                </div>
-                <div className="sv-field">
-                  <span className="sv-label">Quantity</span>
-                  <div className="qty-stepper">
-                    <button
-                      type="button"
-                      className="btn icon ghost step"
-                      title="Decrease quantity"
-                      aria-label="Decrease quantity"
-                      onClick={() => stepQty(rows[0].id, -1)}
-                      disabled={toQty(rows[0].quantity) === 0}
-                    >
-                      −
-                    </button>
-                    <input
-                      className="qty-in sv-qty"
-                      type="number"
-                      min="0"
-                      inputMode="numeric"
-                      placeholder="Qty"
-                      value={rows[0].quantity}
-                      onChange={(e) => setQty(rows[0].id, e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="btn icon step"
-                      title="Increase quantity"
-                      aria-label="Increase quantity"
-                      onClick={() => stepQty(rows[0].id, 1)}
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </>
-          ) : (() => {
-            // Manual (non-fixed) rows can be added/removed; always keep at least
-            // one blank manual row so the "add" affordance is never lost.
-            const editableCount = rows.filter((r) => !r.fixed).length;
-            return (
-              <>
-                <h3 className="rows-title">Sizes &amp; Quantities</h3>
-                <div className="size-table-wrap">
-                  <table className="size-table">
-                    <thead>
-                      <tr>
-                        <th>Size</th>
-                        <th>Quantity</th>
-                        <th className="actions-col" aria-label="Add or remove row" />
+          <div className="card">
+            {!rows.length ? <p className="muted">No items.</p> : (
+              <div className="report-wrap">
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th className="report-check"><input type="checkbox" checked={sel.size === rows.length && rows.length > 0} onChange={toggleAll} /></th>
+                      {REPORT_COLS.map(([, label]) => <th key={label}>{label}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={r.vin} className={sel.has(r.vin) ? 'sel' : ''}>
+                        <td className="report-check"><input type="checkbox" checked={sel.has(r.vin)} onChange={() => toggle(r.vin)} /></td>
+                        <td><button className="vin vin-link" onClick={() => openDetail(r.vin)} title="View history">{r.vin}</button></td>
+                        <td>{r.name}</td>
+                        <td>{r.sku || '—'}</td>
+                        <td>{r.size || '—'}</td>
+                        <td>${Number(r.cost || 0).toFixed(2)}</td>
+                        <td><span className={`status-pill ${r.status}`}>{r.status}</span></td>
+                        <td>{r.supplier_name || '—'}</td>
+                        <td>{r.batch_code || '—'}</td>
+                        <td>{(r.date_received || '').slice(0, 10) || '—'}</td>
+                        <td>{r.created_by || '—'}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((r) => (
-                        <tr key={r.id}>
-                          <td className="size-cell">
-                            {r.fixed ? (
-                              <span className="size-label">{r.size}</span>
-                            ) : (
-                              <input
-                                className="size-in"
-                                placeholder="Add size…"
-                                value={r.size}
-                                onChange={(e) => updateRow(r.id, 'size', e.target.value)}
-                              />
-                            )}
-                          </td>
-                          <td>
-                            <div className="qty-stepper">
-                              <button
-                                type="button"
-                                className="btn icon ghost step"
-                                title="Decrease quantity"
-                                aria-label={`Decrease quantity for size ${r.size || 'row'}`}
-                                onClick={() => stepQty(r.id, -1)}
-                                disabled={toQty(r.quantity) === 0}
-                              >
-                                −
-                              </button>
-                              <input
-                                className="qty-in"
-                                type="number"
-                                min="0"
-                                inputMode="numeric"
-                                value={r.quantity}
-                                onChange={(e) => setQty(r.id, e.target.value)}
-                              />
-                              <button
-                                type="button"
-                                className="btn icon step"
-                                title="Increase quantity"
-                                aria-label={`Increase quantity for size ${r.size || 'row'}`}
-                                onClick={() => stepQty(r.id, 1)}
-                              >
-                                +
-                              </button>
-                            </div>
-                          </td>
-                          <td className="row-actions">
-                            {!r.fixed && (
-                              <>
-                                <button
-                                  type="button"
-                                  className="btn icon add-row"
-                                  title="Add another row"
-                                  aria-label="Add another manual row"
-                                  onClick={addRow}
-                                >
-                                  ＋
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn icon ghost remove"
-                                  title="Remove this row"
-                                  aria-label="Remove this row"
-                                  onClick={() => removeRow(r.id)}
-                                  disabled={editableCount === 1}
-                                >
-                                  ×
-                                </button>
-                              </>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            );
-          })()}
-
-          <div className="send">
-            <button
-              className="btn primary wide"
-              onClick={prepareSend}
-              disabled={sendState.status === 'sending'}
-            >
-              {sendState.status === 'sending' ? 'Sending…' : 'Send to Sheet'}
-            </button>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        </div>
+        </>
       )}
 
-      {sendState.status === 'done' && (
-        <Modal
-          type="success"
-          title="Added to sheet"
-          message={sendState.msg}
-          onClose={dismissDialog}
-        >
-          <button className="btn primary" onClick={scanAnother}>Scan another</button>
-          <button className="btn ghost" onClick={dismissDialog}>Close</button>
-        </Modal>
-      )}
-
-      {sendState.status === 'error' && (
-        <Modal
-          type="error"
-          title="Couldn’t add to sheet"
-          message={sendState.msg}
-          onClose={dismissDialog}
-        >
-          <button className="btn primary" onClick={dismissDialog}>OK</button>
-        </Modal>
-      )}
-
-      {confirmItems && (
-        <ConfirmSend
-          product={product}
-          items={confirmItems}
-          busy={sendState.status === 'sending'}
-          onYes={doSend}
-          onNo={() => setConfirmItems(null)}
-        />
-      )}
-
-      {showPrefs && (
-        <PreferencesModal
-          prefs={prefs}
-          onCameraZoom={setCameraZoom}
-          onClose={() => setShowPrefs(false)}
-        />
-      )}
+      {labels && <LabelSheet items={labels} onClose={() => setLabels(null)} />}
+      {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
     </div>
   );
+}
+
+/* ----------------------------- VIN labels ------------------------------ */
+// Code128 barcode (jsbarcode lazy-loaded so it's not in the main bundle).
+function Barcode({ value }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    import('jsbarcode').then(({ default: JsBarcode }) => {
+      if (cancelled || !ref.current) return;
+      try {
+        JsBarcode(ref.current, value, { format: 'CODE128', displayValue: false, height: 42, width: 1.5, margin: 0 });
+      } catch { /* ignore */ }
+    });
+    return () => { cancelled = true; };
+  }, [value]);
+  return <svg ref={ref} className="barcode-svg" />;
+}
+
+// Printable VIN labels for label-printer rolls (Rollo / Dymo). One label per
+// page, sized to the selected stock. Layout per the warehouse mockup:
+//   SKU | Size  /  VIN: <vin>  /  [barcode]  /  <vin>
+const LABEL_SIZES = {
+  rollo: { w: 2.25, h: 1.25, label: 'Rollo 30256/30327 — 2.25 × 1.25"' },
+  dymo: { w: 2.125, h: 1.125, label: 'Dymo 30334 — 2.125 × 1.125"' },
+};
+
+function LabelSheet({ items, onClose }) {
+  const [size, setSize] = useState('rollo');
+  const s = LABEL_SIZES[size];
+  // Rendered into <body> (a portal) so printing can hide #root entirely — this
+  // avoids the app content adding blank/repeated pages behind the labels.
+  return createPortal(
+    <div className="label-overlay" style={{ '--lw': `${s.w}in`, '--lh': `${s.h}in` }}>
+      <style>{`@media print { @page { size: ${s.w}in ${s.h}in; margin: 0; } }`}</style>
+      <div className="label-toolbar no-print">
+        <span>{items.length} label(s)</span>
+        <span className="label-tools">
+          <select value={size} onChange={(e) => setSize(e.target.value)}>
+            {Object.entries(LABEL_SIZES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <button className="btn ghost sm" onClick={onClose}>Close</button>
+          <button className="btn primary sm" onClick={() => window.print()}>🖨 Print</button>
+        </span>
+      </div>
+      <div className="label-roll">
+        {items.map((it) => (
+          <div className="rlabel" key={it.vin}>
+            <div className="rlabel-top">
+              <span className="rlabel-sku">{it.sku || '—'}</span>
+              <span className="rlabel-sep">|</span>
+              <span className="rlabel-size">{it.size || '—'}</span>
+            </div>
+            <div className="rlabel-vinlabel">VIN: <b>{it.vin}</b></div>
+            <Barcode value={it.vin} />
+            <div className="rlabel-vin">{it.vin}</div>
+          </div>
+        ))}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/* ------------------- Inventory table columns + CSV --------------------- */
+const REPORT_COLS = [
+  ['vin', 'VIN'], ['name', 'Name'], ['sku', 'SKU'], ['size', 'Size'],
+  ['cost', 'Cost'], ['status', 'Status'], ['supplier_name', 'Supplier'],
+  ['batch_code', 'Batch'], ['date_received', 'Received'], ['created_by', 'By'],
+];
+
+function toCSV(rows) {
+  const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const head = REPORT_COLS.map(([, label]) => esc(label)).join(',');
+  const body = rows.map((r) => REPORT_COLS.map(([k]) => esc(k === 'date_received' ? (r[k] || '').slice(0, 10) : r[k])).join(',')).join('\n');
+  return `${head}\n${body}`;
+}
+function downloadCSV(filename, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 
 /* ----------------------------- Preferences ----------------------------- */

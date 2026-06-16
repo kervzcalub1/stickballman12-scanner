@@ -66,5 +66,91 @@ await sql`
   )
 `;
 
+/* ---- v4: inventory (batches, items, history, issues) ---- */
+
+// Sequences for human-readable codes (atomic — no races).
+await sql`CREATE SEQUENCE IF NOT EXISTS batch_seq START 100001`;
+await sql`CREATE SEQUENCE IF NOT EXISTS vin_seq   START 1`; // VINs: SBM-<YYMMDD>-000001
+
+await sql`
+  CREATE TABLE IF NOT EXISTS batches (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    batch_code      TEXT UNIQUE NOT NULL DEFAULT ('B-' || nextval('batch_seq')),
+    buyer_name      TEXT,
+    supplier_name   TEXT,
+    tracking_number TEXT,
+    date_received   DATE,
+    default_cost    NUMERIC(12,2),
+    notes           TEXT,
+    special_rules   TEXT,
+    status          TEXT NOT NULL DEFAULT 'committed',
+    created_by      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    committed_at    TIMESTAMPTZ
+  )
+`;
+
+await sql`
+  CREATE TABLE IF NOT EXISTS items (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    vin         TEXT UNIQUE NOT NULL DEFAULT ('SB-' || nextval('vin_seq')),
+    batch_id    BIGINT REFERENCES batches(id) ON DELETE CASCADE,
+    name        TEXT,
+    sku         TEXT,
+    size        TEXT,
+    upc         TEXT,
+    image_url   TEXT,
+    cost        NUMERIC(12,2),
+    source      TEXT,   -- 'stockx' | 'alias' | 'kicksdb' | 'manual'
+    status      TEXT NOT NULL DEFAULT 'in_stock',
+    notes       TEXT,
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`;
+await sql`CREATE INDEX IF NOT EXISTS items_batch_idx ON items (batch_id)`;
+await sql`CREATE INDEX IF NOT EXISTS items_sku_idx   ON items (sku)`;
+await sql`CREATE INDEX IF NOT EXISTS items_created_idx ON items (created_at)`;
+
+await sql`
+  CREATE TABLE IF NOT EXISTS item_events (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    item_id     BIGINT REFERENCES items(id) ON DELETE CASCADE,
+    type        TEXT NOT NULL,   -- 'received' | 'status_change' | 'issue' | 'note' | 'moved' | 'sold'
+    details     JSONB,
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`;
+await sql`CREATE INDEX IF NOT EXISTS item_events_item_idx ON item_events (item_id, created_at)`;
+
+await sql`
+  CREATE TABLE IF NOT EXISTS shipment_issues (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    batch_id       BIGINT REFERENCES batches(id) ON DELETE CASCADE,
+    type           TEXT NOT NULL,
+    description    TEXT,
+    expected_count INT,
+    received_count INT,
+    created_by     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`;
+
+// Future (Phase 4) — profit tracking. Schema now, UI later.
+await sql`
+  CREATE TABLE IF NOT EXISTS sales (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    item_id     BIGINT UNIQUE REFERENCES items(id) ON DELETE CASCADE,
+    sale_price  NUMERIC(12,2),
+    fees        NUMERIC(12,2),
+    sold_at     TIMESTAMPTZ,
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`;
+
 const [{ count }] = await sql`SELECT count(*)::int AS count FROM users`;
-console.log(`✓ Tables ready. users rows: ${count}`);
+const [{ b }] = await sql`SELECT count(*)::int AS b FROM batches`;
+console.log(`✓ Tables ready. users: ${count}, batches: ${b}`);

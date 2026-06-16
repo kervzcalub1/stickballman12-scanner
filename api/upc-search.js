@@ -41,6 +41,7 @@ function normalizeStockx(data, upc) {
     variant.sizeChart?.displayOptions?.[0]?.size ||
     null;
 
+  const scannedSize = size ? String(size).trim() : null;
   return {
     name,
     sku,
@@ -48,7 +49,8 @@ function normalizeStockx(data, upc) {
     image: product.media?.imageUrl || product.media?.smallImageUrl || null,
     brand: product.brand || null,
     colorway: product.secondaryTitle || null,
-    sizes: size ? [String(size).trim()] : [], // StockX gives the exact size
+    sizes: scannedSize ? [scannedSize] : [], // StockX gives only the scanned size
+    scannedSize,                             // …which the UI auto-adds as a row
     source: 'stockx',
   };
 }
@@ -129,11 +131,21 @@ function sortSizes(list) {
   });
 }
 
+// The full size run lives in `size_options` (fall back to `standard_size_options`).
+// Sizes are taken verbatim — a "W" appears only if the API's own value has one
+// (Alias returns plain US numbers, e.g. "10"; it does not suffix women's sizes).
+function aliasSizeList(product) {
+  const raw =
+    (Array.isArray(product.size_options) && product.size_options.length && product.size_options) ||
+    (Array.isArray(product.standard_size_options) && product.standard_size_options) ||
+    [];
+  return raw
+    .map((s) => String(s.name ?? s.presentation ?? s.value ?? s.size ?? '').trim())
+    .filter(Boolean);
+}
+
 function normalizeAlias(product, upc) {
   if (!product) return null;
-  const sizes = Array.isArray(product.size_options)
-    ? product.size_options.map((s) => String(s.name ?? s.value)).filter(Boolean)
-    : [];
   return {
     name: product.name || product.nickname || 'Unknown product',
     sku: product.sku || null,
@@ -141,7 +153,8 @@ function normalizeAlias(product, upc) {
     image: product.main_picture_url || product.grid_picture_url || null,
     brand: product.brand || null,
     colorway: product.colorway || null,
-    sizes: sortSizes(sizes), // full size list — the UI shows the size/qty table
+    sizes: sortSizes(aliasSizeList(product)), // full size list for the dropdown
+    scannedSize: null,                        // Alias doesn't resolve a single size
     source: 'alias',
   };
 }
@@ -197,10 +210,33 @@ export default async function handler(req, res) {
   const cached = cacheGet(cacheKey);
   if (cached) return send(res, 200, { ok: true, product: cached, cached: true });
 
+  const email = process.env.ALIAS_EMAIL;
+  const password = process.env.ALIAS_PASSWORD;
+
   // 1) PRIMARY — StockX UPC Search. Any null result or error rotates to Alias.
   try {
     const product = await searchStockxByUpc(upc);
     if (product) {
+      // StockX matches only the scanned size, so the "add another size" dropdown
+      // would be empty. Pull the full US size run from Alias and use it as the
+      // dropdown's default list. Alias returns plain numbers; StockX encodes the
+      // gender/age on the scanned size's suffix — "W" for women's, "Y" for
+      // youth/kids — so carry that suffix onto the full run so the options line
+      // up with the scanned size. Best-effort — the result is cached.
+      if (product.sizes.length <= 1 && email && password) {
+        try {
+          const alias = await searchAlias(upc, email, password);
+          const full = alias?.sizes || [];
+          if (full.length > 1) {
+            const suffix = (product.scannedSize || product.sizes[0] || '').match(/(W|Y)$/i)?.[1]?.toUpperCase() || '';
+            const opts = suffix ? full.map((s) => (/[wy]$/i.test(s) ? s : `${s}${suffix}`)) : full;
+            const scanned = product.scannedSize ? [product.scannedSize] : [];
+            product.sizes = sortSizes([...new Set([...scanned, ...opts])]);
+          }
+        } catch (e) {
+          console.warn('[upc-search] Alias size enrichment failed:', e.message);
+        }
+      }
       cacheSet(cacheKey, product);
       return send(res, 200, { ok: true, product });
     }
@@ -209,8 +245,6 @@ export default async function handler(req, res) {
   }
 
   // 2) FALLBACK — Alias.
-  const email = process.env.ALIAS_EMAIL;
-  const password = process.env.ALIAS_PASSWORD;
   if (!email || !password)
     return send(res, 404, {
       ok: false,

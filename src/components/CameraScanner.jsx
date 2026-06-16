@@ -9,11 +9,18 @@ import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 // the `zoom` capability (true optical/digital zoom, so the decoder also sees
 // the magnified frames). On devices without that capability we fall back to a
 // CSS transform — that magnifies the preview only, not the decoded frame.
-export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomChange }) {
+// `mode`: 'product' (default — shoe UPC/EAN, digits only) vs any other value
+// ('tracking', 'vin') which reads alphanumeric Code128/39 RAW (keeps letters &
+// dashes, e.g. UPS 1Z… or our VIN SBM-…), at higher resolution with a two-read
+// confirm for accuracy.
+// `continuous`: keep decoding and fire onDetected for every read (the parent
+// must de-dupe). Default false = stop after the first read.
+export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomChange, mode = 'product', continuous = false }) {
   const videoRef = useRef(null);
   const controlsRef = useRef(null);
   const trackRef = useRef(null);
   const doneRef = useRef(false);
+  const lastTextRef = useRef(null); // tracking: require two agreeing reads
   const [error, setError] = useState('');
   const [devices, setDevices] = useState([]);
   const [deviceId, setDeviceId] = useState(undefined);
@@ -38,13 +45,15 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
 
   useEffect(() => {
     const hints = new Map();
-    hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-      BarcodeFormat.UPC_A,
-      BarcodeFormat.UPC_E,
-      BarcodeFormat.EAN_13,
-      BarcodeFormat.EAN_8,
-      BarcodeFormat.CODE_128,
-    ]);
+    // Non-product modes (tracking, vin) read alphanumeric Code128 (UPS 1Z,
+    // FedEx Ground 96, our VIN SBM-…) + Code39. We exclude ITF/Codabar — their
+    // weak self-checking causes false reads on long/partial barcodes.
+    const rawMode = mode !== 'product';
+    const formats = rawMode
+      ? [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]
+      : [BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.EAN_13,
+         BarcodeFormat.EAN_8, BarcodeFormat.CODE_128];
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
     // TRY_HARDER makes the 1D reader also attempt a 90°-rotated scan, so a
     // barcode held vertically reads without rotating the phone or the box.
     hints.set(DecodeHintType.TRY_HARDER, true);
@@ -61,15 +70,33 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
         const chosen = deviceId || back?.deviceId || cams[0]?.deviceId;
         setDeviceId(chosen);
 
-        controlsRef.current = await reader.decodeFromVideoDevice(
-          chosen,
+        // Long barcodes (e.g. FedEx's 34-digit Code128) need resolution to
+        // resolve the narrow bars — request a high-res stream, higher for
+        // tracking. Falls back gracefully if the camera can't provide it.
+        const want = rawMode ? { w: 1920, h: 1080 } : { w: 1280, h: 720 };
+        const videoConstraints = {
+          width: { ideal: want.w },
+          height: { ideal: want.h },
+          ...(chosen ? { deviceId: { exact: chosen } } : { facingMode: { ideal: 'environment' } }),
+        };
+
+        lastTextRef.current = null;
+        controlsRef.current = await reader.decodeFromConstraints(
+          { video: videoConstraints },
           videoRef.current,
           (result, err, controls) => {
             if (result && !doneRef.current) {
-              doneRef.current = true;
-              controls.stop();
-              const text = result.getText().replace(/\D/g, '');
-              onDetected(text || result.getText());
+              const raw = result.getText();
+              // Raw modes keep letters/dashes (UPS 1Z…, VIN SBM-…); product = digits.
+              const text = rawMode ? raw.trim() : (raw.replace(/\D/g, '') || raw);
+              // Raw modes: require two agreeing reads to reject transient misreads.
+              if (rawMode) {
+                if (lastTextRef.current !== text) { lastTextRef.current = text; return; }
+              }
+              // Single-shot: stop after the (confirmed) read. Continuous: keep
+              // decoding and let the parent de-dupe (cooldown).
+              if (!continuous) { doneRef.current = true; controls.stop(); }
+              onDetected(text);
             }
           }
         );

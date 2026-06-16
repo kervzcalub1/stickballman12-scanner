@@ -64,6 +64,11 @@ export const api = {
   // Product search + sheet
   searchUpc: (upc) => post('/api/upc-search', { upc }),
   searchSku: (sku) => post('/api/sku-search', { sku }),
-  sendToSheet: (product, rows) => post('/api/send-to-sheet', { product, rows }),
-  rapidSend: (product, size) => post('/api/rapid-send', { product, size }),
+  // v4 — receiving / batches
+  batchCommit: (payload) => post('/api/batches/commit', payload),
+  batchList: () => get('/api/batches/list'),
+  batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
+  itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
+  itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
+  itemsQuery: (params) => get(`/api/items/query?${new URLSearchParams(params).toString()}`),
 };

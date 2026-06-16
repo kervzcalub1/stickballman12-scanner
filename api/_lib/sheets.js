@@ -161,6 +161,13 @@ async function readGrid(id, token) {
   return body.values || [];
 }
 
+// Write a single cell.
+async function setCell(id, token, a1, value) {
+  const url = `${valuesUrl(id, a1)}?valueInputOption=USER_ENTERED`;
+  const r = await sheetsFetch(url, { method: 'PUT', body: JSON.stringify({ values: [[value]] }) }, token);
+  if (!r.ok) throw new Error(`Google Sheets cell update failed (${r.status}).`);
+}
+
 // Update several quantity cells (column F) in a single batch call.
 async function batchSetQty(id, token, updates) {
   const data = updates.map((u) => ({ range: `${tabName()}!F${u.row}`, values: [[u.qty]] }));
@@ -175,53 +182,118 @@ async function batchSetQty(id, token, updates) {
 function shortId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
-
-// Consolidating writer for BOTH scan modes. For each variant, if a row with the
-// same SKU + Size, Status 'Not Added', AND the same scanner ('Scanned by')
-// already exists, add the quantity to it; otherwise append a new row. Keeping
-// each scanner on their own row avoids conflicts and makes it clear who did
-// what. Reads the grid once, then batches the cell updates and appends. MUST be
-// called while holding the global write lock (caller's job) so the
-// read/modify/write can't race another write.
-// `variants`: [{ size, quantity }]. Returns { incremented, appended, total }.
-export async function upsertVariants({ scannedBy, name, sku, variants }) {
+// Mirror a whole committed batch to the Sheet in ONE grid read — for each line,
+// if a row with the same SKU + Size + scanner and Status 'Not Added' exists,
+// add to its quantity; otherwise append. `lines`: [{ name, sku, size, quantity }].
+// Caller holds the global write lock. Returns { incremented, appended }.
+export async function mirrorBatch({ scannedBy, lines }) {
   const id = process.env.GOOGLE_SHEET_ID;
   if (!id) throw new Error('GOOGLE_SHEET_ID is not set.');
   const token = await authToken();
-  const wantSku = String(sku).trim();
   const wantBy = String(scannedBy ?? '').trim();
 
-  // Index existing consolidatable rows for this SKU + scanner by size.
   const grid = await readGrid(id, token);
-  const existing = new Map(); // size -> { row, qty }
+  const existing = new Map(); // `${sku}||${size}` -> { row, qty, touched }
   for (let i = 0; i < grid.length; i++) {
     const r = grid[i];
     if (
-      String(r[COL.sku] ?? '').trim() === wantSku &&
       String(r[COL.status] ?? '').trim() === 'Not Added' &&
       String(r[COL.scannedBy] ?? '').trim() === wantBy
     ) {
-      const size = String(r[COL.size] ?? '').trim();
-      if (!existing.has(size)) existing.set(size, { row: i + 2, qty: parseInt(r[COL.qty], 10) || 0 });
+      const key = `${String(r[COL.sku] ?? '').trim()}||${String(r[COL.size] ?? '').trim()}`;
+      if (!existing.has(key)) {
+        existing.set(key, { row: i + 2, qty: parseInt(r[COL.qty], 10) || 0, touched: false });
+      }
+    }
+  }
+
+  const appends = [];
+  const appendIdxByKey = new Map();
+  for (const ln of lines) {
+    const sku = String(ln.sku ?? '').trim();
+    const size = String(ln.size ?? '').trim();
+    const qty = Math.max(1, parseInt(ln.quantity, 10) || 0);
+    const key = `${sku}||${size}`;
+    const hit = existing.get(key);
+    if (hit) {
+      hit.qty += qty;
+      hit.touched = true;
+    } else if (appendIdxByKey.has(key)) {
+      appends[appendIdxByKey.get(key)][5] += qty;
+    } else {
+      appendIdxByKey.set(key, appends.length);
+      appends.push([shortId(), wantBy, ln.name || '', sku, size, qty, '', 'Not Added', '', '']);
     }
   }
 
   const updates = [];
-  const appends = [];
-  for (const v of variants) {
-    const size = String(v.size).trim();
-    const qty = Math.max(1, parseInt(v.quantity, 10) || 0);
-    const hit = existing.get(size);
-    if (hit) {
-      updates.push({ row: hit.row, qty: hit.qty + qty });
-    } else {
-      appends.push([shortId(), scannedBy, name, wantSku, size, qty, '', 'Not Added', '', '']);
-    }
-  }
+  for (const v of existing.values()) if (v.touched) updates.push({ row: v.row, qty: v.qty });
 
   if (updates.length) await batchSetQty(id, token, updates);
-  // Plain append (no verify-and-retry): callers hold the global write lock, so
-  // no two appends run concurrently and there's nothing to clobber.
   if (appends.length) await appendBlock(id, token, appends);
-  return { incremented: updates.length, appended: appends.length, total: variants.length };
+  return { incremented: updates.length, appended: appends.length };
+}
+
+/* ----------------- v4: Inventory / Batches / Issues tabs --------------- */
+// Per-item detail (Inventory), shipment summary (Batches), and shipment issues
+// (Issues) — created by `npm run sheet:setup`. These are append-only readable
+// tables; the DB remains the source of truth.
+const INVENTORY_TAB = 'Inventory';
+const BATCHES_TAB = 'Batches';
+const ISSUES_TAB = 'Issues';
+// Inventory columns: A VIN, B name, C sku, D size, E cost, F status,
+// G supplier, H buyer, I batch, J tracking, K date received, L scanned by,
+// M date added, N notes.
+const INV_STATUS_COL = 'F';
+
+async function appendToTab(id, token, tab, rows) {
+  if (!rows.length) return;
+  const url = `${valuesUrl(id, `${tab}!A1`)}:append?valueInputOption=USER_ENTERED&insertDataOption=OVERWRITE`;
+  const r = await sheetsFetch(url, { method: 'POST', body: JSON.stringify({ values: rows }) }, token);
+  if (!r.ok) throw new Error(`Sheets append to ${tab} failed (${r.status}).`);
+}
+
+// Write a committed batch to the v4 tabs. `items` must each carry a `vin`.
+// Caller holds the global write lock. Best-effort (caller catches).
+export async function writeReceivingSheets({ batchCode, header, items, issues, scannedBy }) {
+  const id = process.env.GOOGLE_SHEET_ID;
+  if (!id) return;
+  const token = await authToken();
+  const today = new Date().toISOString().slice(0, 10);
+  const dateRecv = header.dateReceived || today;
+
+  const invRows = items.map((it) => [
+    it.vin, it.name, it.sku, it.size, it.cost ?? '', 'in_stock',
+    header.supplier || '', header.buyer || '', batchCode, header.tracking || '',
+    dateRecv, scannedBy, today, it.notes || '',
+  ]);
+  await appendToTab(id, token, INVENTORY_TAB, invRows);
+
+  const totalCost = items.reduce((s, it) => s + (Number(it.cost) || 0), 0);
+  await appendToTab(id, token, BATCHES_TAB, [[
+    batchCode, dateRecv, header.supplier || '', header.buyer || '', header.tracking || '',
+    items.length, totalCost, header.defaultCost ?? '', header.specialRules || '',
+    header.notes || '', issues.length, scannedBy, today,
+  ]]);
+
+  if (issues.length) {
+    await appendToTab(id, token, ISSUES_TAB, issues.map((is) => [
+      batchCode, today, is.type, is.description || '', is.expectedCount ?? '', is.receivedCount ?? '', scannedBy,
+    ]));
+  }
+}
+
+// Reflect a status change on the Inventory tab (find the VIN row, update its
+// Status cell). Best-effort; returns true if a row was updated.
+export async function updateInventoryStatus(vin, status) {
+  const id = process.env.GOOGLE_SHEET_ID;
+  if (!id) return false;
+  const token = await authToken();
+  const r = await sheetsFetch(valuesUrl(id, `${INVENTORY_TAB}!A2:A`), { method: 'GET' }, token);
+  if (!r.ok) return false;
+  const vals = (await r.json()).values || [];
+  const idx = vals.findIndex((row) => (row[0] || '') === vin);
+  if (idx < 0) return false;
+  await setCell(id, token, `${INVENTORY_TAB}!${INV_STATUS_COL}${idx + 2}`, status);
+  return true;
 }

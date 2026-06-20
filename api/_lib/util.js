@@ -146,6 +146,18 @@ export function requireAdmin(req, res) {
   return user;
 }
 
+// Like requireAuth but restricts to a set of roles (admin always allowed).
+// Returns the user or null (after sending 401/403). Use for page-scoped access.
+export function requireRole(req, res, roles) {
+  const user = requireAuth(req, res);
+  if (!user) return null;
+  if (user.role !== 'admin' && !roles.includes(user.role)) {
+    send(res, 403, { ok: false, error: 'You do not have access to this feature.' });
+    return null;
+  }
+  return user;
+}
+
 /* ------------------------------------------------------------------ */
 /* Password hashing (scrypt — built into Node, no extra dependency).   */
 /* Stored format: s2$<saltHex>$<hashHex>                               */
@@ -195,6 +207,33 @@ export function cleanSku(raw) {
   if (!s) return null;
   if (!/^[A-Za-z0-9 .\-_/]+$/.test(s)) return null;
   return s;
+}
+
+// Normalize a product gender for store listing. Accepts a raw provider value
+// (Alias `gender`/`single_gender`, e.g. "men"/"women"/"youth"/"infant") and/or
+// a size string + title to derive it when the provider is silent: StockX encodes
+// gender on the size suffix ("8.5W" → women's, "5Y"/"5C" → youth/kids), and shoe
+// titles often carry "(Women's)"/"(GS)"/"(TD)". Returns a clean label
+// ('Men' | 'Women' | 'Youth' | 'Toddler' | 'Unisex') or null when unknown.
+export function normalizeGender(raw, { size = '', title = '' } = {}) {
+  const r = String(raw || '').trim().toLowerCase();
+  if (/wom|female|\bw\b|ladies/.test(r)) return 'Women';
+  if (/\bmen\b|male|\bm\b/.test(r)) return 'Men';
+  if (/unisex|adult/.test(r)) return 'Unisex';
+  if (/infant|toddler|\btd\b|crib|\bps\b|preschool/.test(r)) return 'Toddler';
+  if (/youth|grade|kids?|child|\bgs\b|\by\b/.test(r)) return 'Youth';
+
+  const s = String(size || '').trim().toUpperCase();
+  if (/\d(W)$/.test(s)) return 'Women';
+  if (/\d(C|TD|PS)$/.test(s)) return 'Toddler';
+  if (/\d(Y|GS|K)$/.test(s)) return 'Youth';
+
+  const t = String(title || '').toLowerCase();
+  if (/women|wmns|\(w\)/.test(t)) return 'Women';
+  if (/\(td\)|toddler|\(ps\)/.test(t)) return 'Toddler';
+  if (/\(gs\)|grade school|youth|\bkids?\b/.test(t)) return 'Youth';
+  if (/\bmen\b|mens|\bmn\b/.test(t)) return 'Men';
+  return null;
 }
 
 /* ------------------------------------------------------------------ */

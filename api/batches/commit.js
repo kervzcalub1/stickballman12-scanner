@@ -1,22 +1,20 @@
 // POST /api/batches/commit
 //   { batch:{buyer,supplier,tracking,dateReceived,defaultCost,notes,specialRules},
-//     items:[{name,sku,size,upc,image,cost,source,notes}],
-//     issues:[{type,description,expectedCount,receivedCount}],
-//     mirror?:boolean }
-//   -> { ok, batchCode, count, vins, mirror }
+//     items:[{name,sku,size,upc,image,cost,source,notes,withBox}],
+//     issues:[{type,description,expectedCount,receivedCount}] }
+//   -> { ok, batchCode, count, vins }
 //
-// Persists a whole receiving batch to the DB (one VIN per item, atomic inserts),
-// records shipment issues, and (by default) mirrors the items to the Google
-// Sheet (consolidated, V3 rules). DB is the source of truth.
+// Persists a whole receiving batch to the database (one VIN per item, atomic
+// inserts) and records shipment issues. The database is the single source of
+// truth (V5 — Google Sheets removed). Each item's history starts with
+// "Scanned by <user>" then "Received into inventory".
 
 import {
-  getJsonBody, send, applySecurity, rateLimit, requireAuth, cleanSku,
+  getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku,
 } from '../_lib/util.js';
 import {
-  createBatch, insertItems, insertReceivedEvents, insertIssues,
-  acquireLock, releaseLock, dbConfigured,
+  createBatch, insertItems, insertIntakeEvents, insertIssues, dbConfigured,
 } from '../_lib/db.js';
-import { mirrorBatch, writeReceivingSheets, sheetsConfigured } from '../_lib/sheets.js';
 
 const MAX_ITEMS = 2000;
 
@@ -33,7 +31,7 @@ const normSku = (s) => {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireAuth(req, res);
+  const user = requireRole(req, res, ['warehouse']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
@@ -42,8 +40,9 @@ export default async function handler(req, res) {
   const body = await getJsonBody(req);
   const header = body.batch || {};
   const rawItems = Array.isArray(body.items) ? body.items : [];
-  const issues = Array.isArray(body.issues) ? body.issues : [];
-  const doMirror = body.mirror !== false; // default: mirror to the sheet
+  const kind = body.kind === 'rescale' ? 'rescale' : 'receiving';
+  // Rescale has no shipment, so it carries no shipment issues.
+  const issues = kind === 'rescale' ? [] : (Array.isArray(body.issues) ? body.issues : []);
 
   if (!rawItems.length)
     return send(res, 400, { ok: false, error: 'Add at least one item before committing the batch.' });
@@ -53,71 +52,51 @@ export default async function handler(req, res) {
   const createdBy = user.name || user.username || '';
   const defaultCost = toCost(header.defaultCost);
 
-  // Normalize items.
-  const items = rawItems.map((it) => ({
-    name: cleanName(it.name) || 'Unknown',
-    sku: normSku(it.sku),
-    size: String(it.size ?? '').trim().slice(0, 24),
-    upc: String(it.upc ?? '').replace(/\D/g, '').slice(0, 14) || null,
-    image: it.image || null,
-    cost: toCost(it.cost) ?? defaultCost,
-    source: ['stockx', 'alias', 'kicksdb', 'manual'].includes(it.source) ? it.source : 'manual',
-    notes: String(it.notes ?? '').trim().slice(0, 500) || null,
-  }));
+  // Normalize items. "With Box" unchecked → status 'no_box' + with_box=false.
+  const items = rawItems.map((it) => {
+    const withBox = it.withBox !== false;
+    return {
+      name: cleanName(it.name) || 'Unknown',
+      sku: normSku(it.sku),
+      size: String(it.size ?? '').trim().slice(0, 24),
+      upc: String(it.upc ?? '').replace(/\D/g, '').slice(0, 14) || null,
+      image: it.image || null,
+      cost: toCost(it.cost) ?? defaultCost,
+      source: ['stockx', 'alias', 'kicksdb', 'manual'].includes(it.source) ? it.source : 'manual',
+      gender: ['Men', 'Women', 'Youth', 'Toddler', 'Unisex'].includes(it.gender) ? it.gender : null,
+      notes: String(it.notes ?? '').trim().slice(0, 500) || null,
+      withBox,
+      status: withBox ? 'needs_shelf' : 'no_box',
+      // Reserved VIN (assigned during receiving). Validated; else server generates.
+      vin: /^SBM-\d{6}-\d{6}$/.test(String(it.vin || '')) ? it.vin : null,
+    };
+  });
 
+  // Rescale carries no shipment — buyer/supplier/tracking are dropped.
   const bh = {
-    buyer: cleanName(header.buyer),
-    supplier: cleanName(header.supplier),
-    tracking: String(header.tracking ?? '').trim().slice(0, 120) || null,
+    buyer: kind === 'rescale' ? null : cleanName(header.buyer),
+    supplier: kind === 'rescale' ? null : cleanName(header.supplier),
+    tracking: kind === 'rescale' ? null : (String(header.tracking ?? '').trim().slice(0, 120) || null),
     dateReceived: header.dateReceived || null,
     defaultCost,
     notes: String(header.notes ?? '').trim().slice(0, 2000) || null,
     specialRules: String(header.specialRules ?? '').trim().slice(0, 2000) || null,
+    kind,
+    origin: kind === 'rescale' ? (String(header.origin ?? '').trim().slice(0, 80) || null) : null,
   };
 
   try {
-    // 1) DB (source of truth)
     const batch = await createBatch(bh, createdBy);
     const created = await insertItems(batch.id, items, createdBy, bh.dateReceived);
-    await insertReceivedEvents(created.map((r) => r.id), createdBy);
+    // First history per item: "Scanned by <user>" then received / rescaled.
+    await insertIntakeEvents(created.map((r) => r.id), createdBy, kind);
     await insertIssues(batch.id, issues, createdBy);
-    const itemsWithVin = items.map((it, i) => ({ ...it, vin: created[i].vin }));
-
-    // 2) Sheet mirror (best-effort; DB already committed)
-    let mirror = { skipped: true };
-    if (doMirror && sheetsConfigured()) {
-      // group items by sku|size for consolidation
-      const byKey = new Map();
-      for (const it of items) {
-        if (!it.sku || !it.size) continue;
-        const key = `${it.sku}||${it.size}`;
-        const g = byKey.get(key) || { name: it.name, sku: it.sku, size: it.size, quantity: 0 };
-        g.quantity += 1;
-        byKey.set(key, g);
-      }
-      const lines = [...byKey.values()];
-      const locked = await acquireLock('sheet:write', { waitMs: 20000 }).catch(() => false);
-      if (locked) {
-        try {
-          // Consolidated counts (Monitoring) + per-item detail / batch / issues tabs.
-          mirror = lines.length ? await mirrorBatch({ scannedBy: createdBy, lines }) : { skipped: true };
-          await writeReceivingSheets({ batchCode: batch.batch_code, header: bh, items: itemsWithVin, issues, scannedBy: createdBy });
-        } catch (e) {
-          mirror = { error: e.message };
-        } finally {
-          await releaseLock('sheet:write');
-        }
-      } else {
-        mirror = { error: 'Sheet busy — could not mirror (data is saved in the database).' };
-      }
-    }
 
     return send(res, 200, {
       ok: true,
       batchCode: batch.batch_code,
       count: created.length,
       vins: created.map((r) => r.vin),
-      mirror,
     });
   } catch (e) {
     console.error('[batches/commit]', e.message);

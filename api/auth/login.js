@@ -4,7 +4,7 @@
 
 import crypto from 'node:crypto';
 import {
-  getJsonBody, send, applySecurity, signToken, verifyPassword, clientIp,
+  getJsonBody, send, applySecurity, rateLimit, signToken, verifyPassword, clientIp,
 } from '../_lib/util.js';
 import {
   findUserByUsername, recordLoginAttempt, countRecentFailures, dbConfigured,
@@ -24,6 +24,9 @@ function constantTimeEqual(a, b) {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
+  // In-memory burst guard (per IP) in front of the DB-backed window throttle.
+  if (!rateLimit(req, { windowMs: 60_000, max: 20 }))
+    return send(res, 429, { ok: false, error: 'Too many attempts. Slow down a moment.' });
   if (!dbConfigured())
     return send(res, 500, { ok: false, error: 'Accounts are not configured on the server.' });
 

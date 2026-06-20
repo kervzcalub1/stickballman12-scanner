@@ -1,15 +1,76 @@
-// Neon Postgres access layer (HTTP driver — serverless-friendly, no pooling).
-// All queries use tagged-template parameterization, so values are never
-// interpolated into SQL text (injection-safe).
+// Postgres access layer (standard `pg` driver + a connection pool).
+// A thin tagged-template shim keeps the Neon-style API — `` sql`… ${v} …` ``
+// builds a parameterized `$1,$2…` query, so values are never interpolated into
+// SQL text (injection-safe) — and `sql.transaction([…])` runs a list of those
+// queries on a single client inside BEGIN/COMMIT.
+//
+// V5: moved off the Neon HTTP driver to plain Postgres so the app runs on a
+// local database now and on any real host later (not tied to Vercel/Neon).
 
-import { neon } from '@neondatabase/serverless';
+import pg from 'pg';
 
-let _sql = null;
-function db() {
-  if (_sql) return _sql;
+const { Pool } = pg;
+
+let _pool = null;
+function pool() {
+  if (_pool) return _pool;
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not configured.');
-  _sql = neon(process.env.DATABASE_URL);
-  return _sql;
+  _pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: 10,
+    idleTimeoutMillis: 30_000,
+    // Managed hosts (Neon/RDS/etc.) require TLS; local dev does not.
+    ssl: /\bsslmode=require\b|\.neon\.tech/.test(process.env.DATABASE_URL || '')
+      ? { rejectUnauthorized: false }
+      : undefined,
+  });
+  return _pool;
+}
+
+// Build a parameterized statement from the template parts + interpolated values.
+function buildQuery(strings, values) {
+  let text = strings[0];
+  for (let i = 0; i < values.length; i++) text += `$${i + 1}${strings[i + 1]}`;
+  return { text, values };
+}
+
+// A lazily-executed query. Awaiting it (or calling .then) runs it on the pool
+// and resolves to the `rows` array — matching how the Neon `sql` tag behaves.
+// Collected unexecuted by `sql.transaction([...])` so they run on one client.
+class Query {
+  constructor(text, values) { this.text = text; this.values = values; }
+  then(onFulfilled, onRejected) {
+    return pool().query(this.text, this.values).then((r) => r.rows).then(onFulfilled, onRejected);
+  }
+  catch(onRejected) { return this.then(undefined, onRejected); }
+  finally(onFinally) { return this.then().finally(onFinally); }
+}
+
+function sqlTag(strings, ...values) {
+  const { text, values: vals } = buildQuery(strings, values);
+  return new Query(text, vals);
+}
+// Run the given queries in order inside a transaction; returns one rows[] per
+// query (same contract as @neondatabase/serverless's sql.transaction).
+sqlTag.transaction = async (queries) => {
+  const client = await pool().connect();
+  try {
+    await client.query('BEGIN');
+    const out = [];
+    for (const q of queries) out.push((await client.query(q.text, q.values)).rows);
+    await client.query('COMMIT');
+    return out;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch { /* connection already gone */ }
+    throw e;
+  } finally {
+    client.release();
+  }
+};
+
+function db() {
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not configured.');
+  return sqlTag;
 }
 
 export function dbConfigured() {
@@ -18,13 +79,14 @@ export function dbConfigured() {
 
 /* ------------------------------- Users -------------------------------- */
 
-// Create a pending employee. Throws { code: 'USERNAME_TAKEN' } on conflict.
-export async function createUser({ name, username, passHash }) {
+// Create a pending account with the requested role. Throws { code:
+// 'USERNAME_TAKEN' } on conflict. Role is validated by the caller (signup).
+export async function createUser({ name, username, passHash, role = 'warehouse' }) {
   const sql = db();
   try {
     const rows = await sql`
       INSERT INTO users (name, username, pass_hash, role, status)
-      VALUES (${name}, ${username}, ${passHash}, 'employee', 'pending')
+      VALUES (${name}, ${username}, ${passHash}, ${role}, 'pending')
       RETURNING id, name, username, role, status, created_at
     `;
     return rows[0];
@@ -64,6 +126,23 @@ export async function reviewUser(id, status, reviewer) {
     RETURNING id, name, username, role, status
   `;
   return rows[0] || null;
+}
+
+// Admin: change an account's role.
+export async function setUserRole(id, role, reviewer) {
+  const rows = await db()`
+    UPDATE users
+    SET role = ${role}, reviewed_at = now(), reviewed_by = ${reviewer}
+    WHERE id = ${id}
+    RETURNING id, name, username, role, status
+  `;
+  return rows[0] || null;
+}
+
+// Admin: permanently delete an account.
+export async function deleteUser(id) {
+  const rows = await db()`DELETE FROM users WHERE id = ${id} RETURNING id`;
+  return rows.length > 0;
 }
 
 /* -------------------------- Login throttling -------------------------- */
@@ -128,11 +207,12 @@ export async function createBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, tracking_number, date_received,
-       default_cost, notes, special_rules, status, created_by, committed_at)
+       default_cost, notes, special_rules, kind, origin, status, created_by, committed_at)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
-       ${h.specialRules || null}, 'committed', ${createdBy || null}, now())
+       ${h.specialRules || null}, ${h.kind === 'rescale' ? 'rescale' : 'receiving'},
+       ${h.origin || null}, 'committed', ${createdBy || null}, now())
     RETURNING id, batch_code
   `;
   return rows[0];
@@ -141,30 +221,58 @@ export async function createBatch(h, createdBy) {
 // Bulk-insert items in one transaction; returns [{ id, vin }] in input order.
 // VIN format: SBM-<YYMMDD of date received>-<6-digit sequence>, e.g.
 // SBM-250615-000123. Falls back to today's date when no received date is given.
+// Reserve `count` real VINs up front (atomic — each nextval is unique even
+// across concurrent reservations, so two users can never get the same VIN).
+// Used during receiving so the warehouse can sticker the exact VIN before
+// submitting. Abandoned reservations just leave (harmless) gaps in the run.
+export async function reserveVins(count, dateReceived = null) {
+  const n = Math.min(2000, Math.max(1, Number(count) || 0));
+  const rows = await db()`
+    SELECT 'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
+           || '-' || lpad(nextval('vin_seq')::text, 6, '0') AS vin
+    FROM generate_series(1, ${n})
+  `;
+  return rows.map((r) => r.vin);
+}
+
 export async function insertItems(batchId, items, createdBy, dateReceived = null) {
   const sql = db();
   const queries = items.map((it) => sql`
     INSERT INTO items
-      (vin, batch_id, name, sku, size, upc, image_url, cost, source, status, notes, created_by)
+      (vin, batch_id, name, sku, size, upc, image_url, cost, source, status, with_box, gender, notes, created_by)
     VALUES
-      ('SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
-            || '-' || lpad(nextval('vin_seq')::text, 6, '0'),
+      (coalesce(${it.vin || null},
+        'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
+              || '-' || lpad(nextval('vin_seq')::text, 6, '0')),
        ${batchId}, ${it.name || null}, ${it.sku || null}, ${it.size || null},
        ${it.upc || null}, ${it.image || null}, ${it.cost ?? null},
-       ${it.source || 'manual'}, 'in_stock', ${it.notes || null}, ${createdBy || null})
+       ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false},
+       ${it.gender || null}, ${it.notes || null}, ${createdBy || null})
     RETURNING id, vin
   `);
   const results = await sql.transaction(queries);
   return results.map((r) => r[0]);
 }
 
-export async function insertReceivedEvents(itemIds, createdBy) {
+// First two history events per item: "scanned" (Scanned by <user>) then the
+// intake event — "received" for a shipment, "rescaled" for re-scaled stock.
+// Inserted in order so the timeline reads scanned → received/rescaled.
+export async function insertIntakeEvents(itemIds, createdBy, kind = 'receiving') {
   if (!itemIds.length) return;
   const sql = db();
-  await sql.transaction(itemIds.map((id) => sql`
-    INSERT INTO item_events (item_id, type, details, created_by)
-    VALUES (${id}, 'received', '{}'::jsonb, ${createdBy || null})
-  `));
+  const intakeType = kind === 'rescale' ? 'rescaled' : 'received';
+  const queries = [];
+  for (const id of itemIds) {
+    queries.push(sql`
+      INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${id}, 'scanned', ${JSON.stringify({ by: createdBy })}::jsonb, ${createdBy || null})
+    `);
+    queries.push(sql`
+      INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${id}, ${intakeType}, '{}'::jsonb, ${createdBy || null})
+    `);
+  }
+  await sql.transaction(queries);
 }
 
 export async function insertIssues(batchId, issues, createdBy) {
@@ -179,14 +287,15 @@ export async function insertIssues(batchId, issues, createdBy) {
   `));
 }
 
-export async function listBatches(limit = 50) {
+export async function listBatches(limit = 50, kind = null) {
   return await db()`
-    SELECT b.id, b.batch_code, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.date_received, b.created_by, b.created_at,
+    SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
+           b.origin, b.date_received, b.created_by, b.created_at,
            (SELECT count(*)::int FROM items i WHERE i.batch_id = b.id) AS item_count,
            (SELECT coalesce(sum(i.cost), 0) FROM items i WHERE i.batch_id = b.id) AS total_cost,
            (SELECT count(*)::int FROM shipment_issues s WHERE s.batch_id = b.id) AS issue_count
     FROM batches b
+    WHERE (${kind}::text IS NULL OR b.kind = ${kind})
     ORDER BY b.created_at DESC
     LIMIT ${limit}
   `;
@@ -210,46 +319,239 @@ export async function getBatch(id) {
 // Any combination of: text search (q over vin/sku/name), received-date range
 // (from/to), supplier, status. Nulls are ignored. Received date = the batch's
 // date_received (falling back to the item's created date).
-export async function queryItems({ q = null, from = null, to = null, supplier = null, status = null, limit = 2000 }) {
+export async function queryItems({ q = null, from = null, to = null, supplier = null, status = null, kind = null, limit = 2000 }) {
   const lim = Math.min(5000, Math.max(1, Number(limit) || 2000));
   const like = q ? `%${q}%` : null;
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.cost, i.status, i.created_by, i.created_at,
-           b.batch_code, b.supplier_name, b.date_received
+           i.with_box, i.price, i.added_to_intel_inv,
+           i.synced_alias, i.synced_stockx, i.synced_shopify,
+           b.batch_code, b.supplier_name, b.buyer_name, b.date_received, b.kind
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE (${from}::date IS NULL OR coalesce(b.date_received, i.created_at::date) >= ${from}::date)
       AND (${to}::date   IS NULL OR coalesce(b.date_received, i.created_at::date) <= ${to}::date)
       AND (${supplier}::text IS NULL OR b.supplier_name = ${supplier})
       AND (${status}::text   IS NULL OR i.status = ${status})
+      AND (${kind}::text     IS NULL OR b.kind = ${kind})
       AND (${like}::text IS NULL OR i.vin ILIKE ${like} OR i.sku ILIKE ${like} OR i.name ILIKE ${like})
     ORDER BY i.created_at DESC
     LIMIT ${lim}
   `;
 }
 
+/* ------------------------------ PH Team ------------------------------- */
+// The PH Team's monthly editable grid. `kind` splits the workflow:
+//   'rescale'   — units RE-SCANNED in the month: rows carry a 'rescaled' event
+//                 (added either by a VIN re-scan of existing stock, or by the
+//                 rescale intake of new/unlabeled stock). Dated by that event,
+//                 so a unit shows up in the month it was rescaled (for re-listing
+//                 to Intelligent Inventory / Alias / StockX / Shopify).
+//   'receiving' — newly RECEIVED stock in the month (excludes rescale batches),
+//                 dated by the item's scan date.
+//   null        — everything scanned in the month, dated by scan date (admin).
+export async function phListItems(month, year, kind = null) {
+  if (kind === 'rescale') {
+    // Date/scanned-by come from the latest 'rescaled' event so the grid columns
+    // reflect the rescale (not the original receive).
+    return await db()`
+      SELECT i.vin, ev.created_at, ev.created_by, i.name, i.sku, i.size, i.gender,
+             i.status, i.cost, i.price,
+             i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
+             i.ph_note, i.last_edit_by, i.last_edit_at
+      FROM items i
+      JOIN LATERAL (
+        SELECT e.created_at, e.created_by FROM item_events e
+        WHERE e.item_id = i.id AND e.type = 'rescaled'
+        ORDER BY e.created_at DESC LIMIT 1
+      ) ev ON true
+      WHERE EXTRACT(MONTH FROM (ev.created_at AT TIME ZONE 'America/New_York')) = ${month}
+        AND EXTRACT(YEAR  FROM (ev.created_at AT TIME ZONE 'America/New_York')) = ${year}
+      ORDER BY ev.created_at, i.id
+      LIMIT 5000
+    `;
+  }
+  return await db()`
+    SELECT i.vin, i.created_at, i.created_by, i.name, i.sku, i.size, i.gender,
+           i.status, i.cost, i.price,
+           i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
+           i.ph_note, i.last_edit_by, i.last_edit_at
+    FROM items i
+    LEFT JOIN batches b ON b.id = i.batch_id
+    WHERE EXTRACT(MONTH FROM (i.created_at AT TIME ZONE 'America/New_York')) = ${month}
+      AND EXTRACT(YEAR  FROM (i.created_at AT TIME ZONE 'America/New_York')) = ${year}
+      AND (${kind}::text IS NULL OR b.kind = 'receiving' OR b.kind IS NULL)
+    ORDER BY i.created_at, i.id
+    LIMIT 5000
+  `;
+}
+
+// Apply a PH-Team edit to ONE OR MANY items (a consolidated grid row covers
+// several VINs that share identical details). Updates the editable fields, sets
+// the last-editor stamp, and appends a discrete history event for EVERY changed
+// field on EVERY affected item — all in one transaction. Returns the updated
+// rows (one per VIN, same shape phListItems returns).
+export async function phUpdateItems(vins, fields, by) {
+  const list = (Array.isArray(vins) ? vins : [vins]).filter(Boolean);
+  if (!list.length) return [];
+  const sql = db();
+  const num = (v) => (v === '' || v == null ? null : Number(v));
+  const f = fields || {};
+
+  const curRows = await sql`
+    SELECT id, vin, price, added_to_intel_inv, synced_alias, synced_stockx, synced_shopify, ph_note
+    FROM items WHERE vin = ANY(${list})
+  `;
+  if (!curRows.length) return [];
+
+  const queries = [];
+  const ids = [];
+  for (const cur of curRows) {
+    ids.push(cur.id);
+    const next = {
+      price: 'price' in f ? num(f.price) : cur.price,
+      intel: 'added_to_intel_inv' in f ? !!f.added_to_intel_inv : cur.added_to_intel_inv,
+      alias: 'synced_alias' in f ? !!f.synced_alias : cur.synced_alias,
+      stockx: 'synced_stockx' in f ? !!f.synced_stockx : cur.synced_stockx,
+      shopify: 'synced_shopify' in f ? !!f.synced_shopify : cur.synced_shopify,
+      note: 'ph_note' in f ? (String(f.ph_note || '').slice(0, 2000) || null) : cur.ph_note,
+    };
+    const descs = [];
+    if (String(next.price) !== String(cur.price)) descs.push(next.price == null ? 'Price cleared' : `Price set to $${Number(next.price).toFixed(2)}`);
+    if (next.intel !== cur.added_to_intel_inv) descs.push(next.intel ? 'Added to Intelligent Inventory' : 'Removed from Intelligent Inventory');
+    if (next.alias !== cur.synced_alias) descs.push(next.alias ? 'Synced to Alias' : 'Unsynced from Alias');
+    if (next.stockx !== cur.synced_stockx) descs.push(next.stockx ? 'Synced to StockX' : 'Unsynced from StockX');
+    if (next.shopify !== cur.synced_shopify) descs.push(next.shopify ? 'Synced to Shopify' : 'Unsynced from Shopify');
+    if ((next.note || '') !== (cur.ph_note || '')) descs.push('Note updated');
+
+    queries.push(sql`
+      UPDATE items SET price = ${next.price}, added_to_intel_inv = ${next.intel},
+        synced_alias = ${next.alias}, synced_stockx = ${next.stockx}, synced_shopify = ${next.shopify},
+        ph_note = ${next.note}, last_edit_by = ${by || null}, last_edit_at = now(), updated_at = now()
+      WHERE id = ${cur.id}
+    `);
+    for (const text of descs) {
+      queries.push(sql`
+        INSERT INTO item_events (item_id, type, details, created_by)
+        VALUES (${cur.id}, 'ph_update', ${JSON.stringify({ text })}::jsonb, ${by || null})
+      `);
+    }
+  }
+  await sql.transaction(queries);
+
+  return await sql`
+    SELECT vin, created_at, created_by, name, sku, size, gender, status, cost, price,
+           added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
+           ph_note, last_edit_by, last_edit_at
+    FROM items WHERE id = ANY(${ids}) ORDER BY created_at, id
+  `;
+}
+
+// Single-VIN convenience wrapper (kept for callers that edit one item).
+export async function phUpdateItem(vin, fields, by) {
+  const rows = await phUpdateItems([vin], fields, by);
+  return rows[0] || null;
+}
+
+// Selling an item removes it from Intelligent Inventory which cascades the
+// delist to every store (II → stores). So marking an item 'sold' clears all
+// four sync flags. This text is logged so the audit trail explains the change.
+const SOLD_CASCADE_TEXT = 'Sold — removed from Intelligent Inventory & all stores';
+
+// Bulk status change (Report page) — update each item AND log a status_change
+// event, atomically per VIN, in one transaction. When the new status is 'sold',
+// also clears the sync flags (II + Alias + StockX + Shopify) and logs the
+// cascade. Returns the count updated.
+export async function bulkSetStatus(vins, status, createdBy) {
+  if (!vins.length) return 0;
+  const sql = db();
+  const details = JSON.stringify({ status, bulk: true });
+  const cascade = JSON.stringify({ text: SOLD_CASCADE_TEXT, soldCascade: true });
+  const queries = vins.map((vin) => (status === 'sold'
+    ? sql`
+      WITH up AS (
+        UPDATE items SET status = ${status}, updated_at = now(),
+          added_to_intel_inv = false, synced_alias = false,
+          synced_stockx = false, synced_shopify = false
+        WHERE vin = ${vin} RETURNING id
+      )
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT id, 'status_change', ${details}::jsonb, ${createdBy || null} FROM up
+      UNION ALL
+      SELECT id, 'ph_update', ${cascade}::jsonb, ${createdBy || null} FROM up
+      RETURNING item_id
+    `
+    : sql`
+      WITH up AS (
+        UPDATE items SET status = ${status}, updated_at = now() WHERE vin = ${vin} RETURNING id
+      )
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT id, 'status_change', ${details}::jsonb, ${createdBy || null} FROM up
+      RETURNING item_id
+    `));
+  const res = await sql.transaction(queries);
+  return res.filter((r) => r.length).length;
+}
+
 // Look up an item by its VIN (internal barcode) with its batch + full history.
 export async function getItemByVin(vin) {
   const rows = await db()`
-    SELECT i.*, b.batch_code, b.buyer_name, b.supplier_name, b.tracking_number, b.date_received
+    SELECT i.*, b.batch_code, b.buyer_name, b.supplier_name, b.tracking_number,
+           b.date_received, b.kind, b.origin
     FROM items i LEFT JOIN batches b ON b.id = i.batch_id
     WHERE i.vin = ${vin} LIMIT 1
   `;
   if (!rows[0]) return null;
   const events = await db()`
     SELECT id, type, details, created_by, created_at
-    FROM item_events WHERE item_id = ${rows[0].id} ORDER BY created_at
+    FROM item_events WHERE item_id = ${rows[0].id} ORDER BY created_at, id
   `;
   return { item: rows[0], events };
 }
 
-// Append an event to an item's history; on a status change, also update the item.
+// Re-scan an EXISTING in-hand unit (Rescale by VIN). Appends a 'rescaled' event
+// and — when a new status/tag is given — a 'status_change' event, and updates
+// the item's status. All in one transaction so the unit keeps a single,
+// continuous history (no new VIN is minted; the physical shoe stays one record).
+export async function rescaleItem({ itemId, status, note = null, reason = null, createdBy }) {
+  const sql = db();
+  const queries = [sql`
+    INSERT INTO item_events (item_id, type, details, created_by)
+    VALUES (${itemId}, 'rescaled', ${JSON.stringify({ reason, note })}::jsonb, ${createdBy || null})
+  `];
+  if (status) {
+    queries.push(sql`
+      INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${itemId}, 'status_change', ${JSON.stringify({ status, note, rescale: true })}::jsonb, ${createdBy || null})
+    `);
+    queries.push(sql`UPDATE items SET status = ${status}, updated_at = now() WHERE id = ${itemId}`);
+  }
+  await sql.transaction(queries);
+}
+
+// Append an event to an item's history; on a status change, also update the
+// item. Marking 'sold' clears the sync flags (II → stores cascade) and logs it.
 export async function addItemEvent({ itemId, type, details, createdBy }) {
-  await db()`
+  const sql = db();
+  const queries = [sql`
     INSERT INTO item_events (item_id, type, details, created_by)
     VALUES (${itemId}, ${type}, ${JSON.stringify(details || {})}::jsonb, ${createdBy || null})
-  `;
+  `];
   if (type === 'status_change' && details?.status) {
-    await db()`UPDATE items SET status = ${details.status}, updated_at = now() WHERE id = ${itemId}`;
+    if (details.status === 'sold') {
+      queries.push(sql`
+        UPDATE items SET status = ${details.status},
+          added_to_intel_inv = false, synced_alias = false,
+          synced_stockx = false, synced_shopify = false, updated_at = now()
+        WHERE id = ${itemId}
+      `);
+      queries.push(sql`
+        INSERT INTO item_events (item_id, type, details, created_by)
+        VALUES (${itemId}, 'ph_update', ${JSON.stringify({ text: SOLD_CASCADE_TEXT, soldCascade: true })}::jsonb, ${createdBy || null})
+      `);
+    } else {
+      queries.push(sql`UPDATE items SET status = ${details.status}, updated_at = now() WHERE id = ${itemId}`);
+    }
   }
+  await sql.transaction(queries);
 }

@@ -49,10 +49,17 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
     // FedEx Ground 96, our VIN SBM-…) + Code39. We exclude ITF/Codabar — their
     // weak self-checking causes false reads on long/partial barcodes.
     const rawMode = mode !== 'product';
-    const formats = rawMode
-      ? [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]
-      : [BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.EAN_13,
-         BarcodeFormat.EAN_8, BarcodeFormat.CODE_128];
+    // 'rescale' reads BOTH our alphanumeric VIN (Code128/39) AND a product
+    // UPC/EAN, keeping the raw text so VIN letters/dashes survive (a UPC still
+    // comes through as digits). Other raw modes (tracking/vin) are Code128/39
+    // only; product mode is the UPC/EAN set.
+    const formats = mode === 'rescale'
+      ? [BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.EAN_13,
+         BarcodeFormat.EAN_8, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]
+      : rawMode
+        ? [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]
+        : [BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.EAN_13,
+           BarcodeFormat.EAN_8, BarcodeFormat.CODE_128];
     hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
     // TRY_HARDER makes the 1D reader also attempt a 90°-rotated scan, so a
     // barcode held vertically reads without rotating the phone or the box.

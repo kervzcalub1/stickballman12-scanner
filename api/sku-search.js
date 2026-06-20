@@ -2,8 +2,8 @@
 // Queries KicksDB (StockX products) by SKU. API key stays server-side.
 
 import {
-  getJsonBody, send, applySecurity, rateLimit, requireAuth, cleanSku,
-  fetchWithTimeout, cacheGet, cacheSet,
+  getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku,
+  fetchWithTimeout, cacheGet, cacheSet, normalizeGender,
 } from './_lib/util.js';
 
 const KICKS_BASE = 'https://api.kicks.dev/v3/stockx/products';
@@ -47,6 +47,7 @@ function normalize(item, querySku) {
     brand: item.brand || null,
     colorway: item.secondary_title || null,
     sizes,
+    gender: normalizeGender(item.gender || item.category, { size: sizes[0] || '', title: item.title || item.model || '' }),
     source: 'kicksdb',
   };
 }
@@ -54,7 +55,7 @@ function normalize(item, querySku) {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  if (!requireAuth(req, res)) return;
+  if (!requireRole(req, res, ['warehouse'])) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 40 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
 

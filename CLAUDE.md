@@ -4,6 +4,16 @@ Quick-reference context for this repo. For the user-facing overview see
 [README.md](./README.md); for hosting/env setup see [DEPLOYMENT.md](./DEPLOYMENT.md)
 and [UPDATE_VERSION.md](./UPDATE_VERSION.md).
 
+> **V5 (current) supersedes parts of the notes below — see
+> [version-5.md](./version-5.md).** Key changes: **Google Sheets removed**, data
+> lives in **local PostgreSQL via the standard `pg` driver** (tagged-template
+> shim in `api/_lib/db.js`); production runs on **Express (`server.mjs`,
+> `npm start`)**, not Vercel. Receiving is a **3-step wizard** with an Add-Item
+> scanning modal; new **`ph_team`** role + monthly grid (`api/ph/*`); statuses
+> expanded (keys in `api/_lib/statuses.js` / `src/statuses.js`); bulk status
+> change (`api/items/bulk-status.js`); EST top-bar clock. Where this file says
+> "Sheets", read "Postgres".
+
 ## What it is
 
 A React (Vite) web app for a shoe-inventory team. Users sign in (admin-approved

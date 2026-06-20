@@ -8,8 +8,8 @@
 // vs 'alias') so it can pick the right size/quantity layout.
 
 import {
-  getJsonBody, send, applySecurity, rateLimit, requireAuth, cleanUpc,
-  fetchWithTimeout, cacheGet, cacheSet,
+  getJsonBody, send, applySecurity, rateLimit, requireRole, cleanUpc,
+  fetchWithTimeout, cacheGet, cacheSet, normalizeGender,
 } from './_lib/util.js';
 
 const ALIAS_BASE = 'https://bypass-alias-host-railway-alias.up.railway.app';
@@ -51,6 +51,8 @@ function normalizeStockx(data, upc) {
     colorway: product.secondaryTitle || null,
     sizes: scannedSize ? [scannedSize] : [], // StockX gives only the scanned size
     scannedSize,                             // …which the UI auto-adds as a row
+    // StockX has no explicit gender field — derive it from the size suffix/title.
+    gender: normalizeGender(product.gender || product.productCategory, { size: scannedSize, title: name }),
     source: 'stockx',
   };
 }
@@ -155,6 +157,11 @@ function normalizeAlias(product, upc) {
     colorway: product.colorway || null,
     sizes: sortSizes(aliasSizeList(product)), // full size list for the dropdown
     scannedSize: null,                        // Alias doesn't resolve a single size
+    // Alias carries an explicit gender on the product — the most reliable source.
+    gender: normalizeGender(
+      product.gender ?? product.single_gender ?? (Array.isArray(product.genders) ? product.genders.join(' ') : ''),
+      { title: product.name || product.nickname || '' },
+    ),
     source: 'alias',
   };
 }
@@ -197,7 +204,7 @@ async function searchAlias(upc, email, password) {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  if (!requireAuth(req, res)) return;
+  if (!requireRole(req, res, ['warehouse'])) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 40 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
 
@@ -226,6 +233,8 @@ export default async function handler(req, res) {
       if (product.sizes.length <= 1 && email && password) {
         try {
           const alias = await searchAlias(upc, email, password);
+          // Alias has an explicit gender — prefer it over StockX's derived guess.
+          if (alias?.gender) product.gender = alias.gender;
           const full = alias?.sizes || [];
           if (full.length > 1) {
             const suffix = (product.scannedSize || product.sizes[0] || '').match(/(W|Y)$/i)?.[1]?.toUpperCase() || '';

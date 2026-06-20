@@ -23,6 +23,8 @@ export default async function handler(req, res) {
   const name = String(body.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   const username = String(body.username || '').trim().toLowerCase();
   const password = String(body.password || '');
+  // Requested role — admin is never self-assignable at signup.
+  const role = ['warehouse', 'ph_team'].includes(body.role) ? body.role : 'warehouse';
 
   if (!name) return send(res, 400, { ok: false, error: 'Please enter your name.' });
   if (!USERNAME_RE.test(username))
@@ -36,7 +38,7 @@ export default async function handler(req, res) {
     return send(res, 400, { ok: false, error: 'Password must be at least 8 characters.' });
 
   try {
-    await createUser({ name, username, passHash: hashPassword(password) });
+    await createUser({ name, username, passHash: hashPassword(password), role });
     return send(res, 201, {
       ok: true,
       message: 'Account created. Please wait for an admin to approve your access.',

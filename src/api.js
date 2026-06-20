@@ -61,14 +61,23 @@ export const api = {
   // Admin
   adminListUsers: () => get('/api/admin/users'),
   adminReview: (userId, decision) => post('/api/admin/review', { userId, decision }),
+  adminSetRole: (userId, role) => post('/api/admin/review', { userId, decision: 'role', role }),
+  adminDeleteUser: (userId) => post('/api/admin/review', { userId, decision: 'delete' }),
   // Product search + sheet
   searchUpc: (upc) => post('/api/upc-search', { upc }),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // v4 — receiving / batches
   batchCommit: (payload) => post('/api/batches/commit', payload),
-  batchList: () => get('/api/batches/list'),
+  reserveVins: (count, dateReceived) => post('/api/vins/reserve', { count, dateReceived }),
+  batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
   itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
+  rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),
   itemsQuery: (params) => get(`/api/items/query?${new URLSearchParams(params).toString()}`),
+  bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
+  // v5 — PH Team monthly grid
+  phList: (month, year, kind) => get(`/api/ph/list?month=${month}&year=${year}${kind ? `&kind=${kind}` : ''}`),
+  phUpdate: (vin, fields) => post('/api/ph/update', { vin, fields }),
+  phUpdateMany: (vins, fields) => post('/api/ph/update', { vins, fields }),
 };

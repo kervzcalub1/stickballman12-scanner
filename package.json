@@ -1,23 +1,25 @@
 {
   "name": "stickballman-scanner",
   "private": true,
-  "version": "3.0.0",
+  "version": "5.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "db:setup": "node scripts/db-setup.mjs",
-    "sheet:setup": "node scripts/sheet-setup.mjs"
+    "start": "node server.mjs",
+    "serve": "vite build && node server.mjs",
+    "db:setup": "node scripts/db-setup.mjs"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^0.10.4",
     "@zxing/browser": "^0.1.5",
     "@zxing/library": "^0.21.3",
-    "google-auth-library": "^10.7.0",
+    "express": "^5.2.1",
     "jsbarcode": "^3.12.3",
+    "pg": "^8.21.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "tesseract.js": "^5.1.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

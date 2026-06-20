@@ -367,6 +367,7 @@ export async function phListItems(month, year, kind = null) {
       ) ev ON true
       WHERE EXTRACT(MONTH FROM (ev.created_at AT TIME ZONE 'America/New_York')) = ${month}
         AND EXTRACT(YEAR  FROM (ev.created_at AT TIME ZONE 'America/New_York')) = ${year}
+        AND i.status <> 'no_box'  -- no-box units aren't postable; PH never lists them
       ORDER BY ev.created_at, i.id
       LIMIT 5000
     `;
@@ -381,8 +382,27 @@ export async function phListItems(month, year, kind = null) {
     WHERE EXTRACT(MONTH FROM (i.created_at AT TIME ZONE 'America/New_York')) = ${month}
       AND EXTRACT(YEAR  FROM (i.created_at AT TIME ZONE 'America/New_York')) = ${year}
       AND (${kind}::text IS NULL OR b.kind = 'receiving' OR b.kind IS NULL)
+      -- Hide no-box from the PH team's New Inventory page; keep it in the admin
+      -- Report (kind IS NULL) for oversight.
+      AND (${kind}::text IS NULL OR i.status <> 'no_box')
     ORDER BY i.created_at, i.id
     LIMIT 5000
+  `;
+}
+
+// The "No Box / Not Ready" worklist: every unit still marked Bought Without Box,
+// across all batches (a pending queue, not month-scoped). Shown to admin + PH;
+// admin/warehouse resolve each by changing its status (then it leaves this list
+// and becomes visible in the PH report).
+export async function listNoBoxItems() {
+  return await db()`
+    SELECT i.vin, i.name, i.sku, i.size, i.gender, i.status, i.created_at, i.created_by,
+           b.batch_code, b.supplier_name
+    FROM items i
+    LEFT JOIN batches b ON b.id = i.batch_id
+    WHERE i.status = 'no_box'
+    ORDER BY i.created_at DESC, i.id DESC
+    LIMIT 2000
   `;
 }
 
@@ -391,7 +411,11 @@ export async function phListItems(month, year, kind = null) {
 // the last-editor stamp, and appends a discrete history event for EVERY changed
 // field on EVERY affected item — all in one transaction. Returns the updated
 // rows (one per VIN, same shape phListItems returns).
-export async function phUpdateItems(vins, fields, by) {
+//
+// Optimistic concurrency (A): pass `baseEditedAt` = the latest last_edit_at the
+// client saw for this group. If any unit has been edited since (someone else
+// saved in between), throws an error tagged `.conflict` so the API can 409.
+export async function phUpdateItems(vins, fields, by, baseEditedAt = undefined) {
   const list = (Array.isArray(vins) ? vins : [vins]).filter(Boolean);
   if (!list.length) return [];
   const sql = db();
@@ -399,10 +423,27 @@ export async function phUpdateItems(vins, fields, by) {
   const f = fields || {};
 
   const curRows = await sql`
-    SELECT id, vin, price, added_to_intel_inv, synced_alias, synced_stockx, synced_shopify, ph_note
+    SELECT id, vin, price, added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
+           ph_note, last_edit_at, last_edit_by
     FROM items WHERE vin = ANY(${list})
   `;
   if (!curRows.length) return [];
+
+  // Conflict check: if the group's newest last_edit_at is newer than the
+  // baseline the client loaded, someone else saved first — refuse.
+  if (baseEditedAt !== undefined) {
+    const baseMs = baseEditedAt ? new Date(baseEditedAt).getTime() : 0;
+    let curMs = 0; let by2 = null;
+    for (const r of curRows) {
+      const t = r.last_edit_at ? new Date(r.last_edit_at).getTime() : 0;
+      if (t > curMs) { curMs = t; by2 = r.last_edit_by; }
+    }
+    if (curMs > baseMs) {
+      const err = new Error(`This item was just updated by ${by2 || 'someone else'}. Reload to see the change, then re-apply yours.`);
+      err.conflict = true;
+      throw err;
+    }
+  }
 
   const queries = [];
   const ids = [];
@@ -451,6 +492,77 @@ export async function phUpdateItems(vins, fields, by) {
 export async function phUpdateItem(vin, fields, by) {
   const rows = await phUpdateItems([vin], fields, by);
   return rows[0] || null;
+}
+
+/* --------------------- PH edit locks (presence, B2) -------------------- */
+// A lock is "active" while its heartbeat is within EDIT_LOCK_TTL_SEC. The
+// client pings heartbeat ~every 10s; a stale lock (closed tab / crash) is
+// stealable after the TTL. Locks are per-VIN; a consolidated row claims all its
+// units. holder = display name, holderId = per-tab id (so one user's two tabs
+// don't fight, and ownership is unambiguous).
+const EDIT_LOCK_TTL_SEC = 30;
+
+// Try to claim every vin for this holder. Succeeds for a vin if it's unlocked,
+// already mine, or the prior holder's lock expired. All-or-nothing: on any
+// blocker, releases what was just taken and returns the active blockers.
+export async function claimEditLocks(vins, holder, holderId) {
+  const sql = db();
+  const list = [...new Set((vins || []).filter(Boolean))];
+  if (!list.length) return { ok: true, claimed: [] };
+  const claimed = [];
+  for (const vin of list) {
+    const rows = await sql`
+      INSERT INTO edit_locks (vin, holder, holder_id, claimed_at, heartbeat_at)
+      VALUES (${vin}, ${holder}, ${holderId}, now(), now())
+      ON CONFLICT (vin) DO UPDATE SET holder = ${holder}, holder_id = ${holderId},
+        claimed_at = now(), heartbeat_at = now()
+      WHERE edit_locks.holder_id = ${holderId}
+         OR edit_locks.heartbeat_at < now() - (${EDIT_LOCK_TTL_SEC} * interval '1 second')
+      RETURNING vin
+    `;
+    if (rows.length) claimed.push(vin);
+  }
+  if (claimed.length === list.length) return { ok: true, claimed };
+  if (claimed.length) await sql`DELETE FROM edit_locks WHERE vin = ANY(${claimed}) AND holder_id = ${holderId}`;
+  const blockers = await sql`
+    SELECT vin, holder FROM edit_locks
+    WHERE vin = ANY(${list}) AND heartbeat_at > now() - (${EDIT_LOCK_TTL_SEC} * interval '1 second')
+  `;
+  return { ok: false, blockers };
+}
+
+// Refresh my locks' heartbeat; returns the vins I still hold (a vin missing
+// means my lock was lost/stolen — the client should drop out of edit).
+export async function heartbeatEditLocks(vins, holderId) {
+  const sql = db();
+  const list = [...new Set((vins || []).filter(Boolean))];
+  if (!list.length) return [];
+  const rows = await sql`
+    UPDATE edit_locks SET heartbeat_at = now()
+    WHERE vin = ANY(${list}) AND holder_id = ${holderId}
+    RETURNING vin
+  `;
+  return rows.map((r) => r.vin);
+}
+
+export async function releaseEditLocks(vins, holderId) {
+  const sql = db();
+  const list = [...new Set((vins || []).filter(Boolean))];
+  if (!list.length) return;
+  await sql`DELETE FROM edit_locks WHERE vin = ANY(${list}) AND holder_id = ${holderId}`;
+}
+
+// All currently-active locks (for painting "being edited by X"). Opportunistically
+// prunes long-dead rows so the table stays small.
+export async function listActiveEditLocks() {
+  const sql = db();
+  if (Math.random() < 0.1) {
+    try { await sql`DELETE FROM edit_locks WHERE heartbeat_at < now() - interval '5 minutes'`; } catch { /* best effort */ }
+  }
+  return await sql`
+    SELECT vin, holder, holder_id FROM edit_locks
+    WHERE heartbeat_at > now() - (${EDIT_LOCK_TTL_SEC} * interval '1 second')
+  `;
 }
 
 // Selling an item removes it from Intelligent Inventory which cascades the

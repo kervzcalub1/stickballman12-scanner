@@ -255,3 +255,58 @@ to No and logs a `ph_update` event explaining it. The rule lives in the DB layer
 wherever 'sold' is set — the inventory detail view, the inline list dropdown, and
 bulk status change. It's one-way (sold ⇒ flags off; toggling a flag off by hand
 does not imply sold). Only `sold` triggers it.
+
+## 14. No-Box worklist (not ready for posting)
+
+Units **bought without a box** (`no_box`) aren't postable, so they're now
+**excluded from the PH team's New Inventory and Rescale Stock** views
+(`phListItems` filters `status <> 'no_box'` for those two `kind`s; the admin
+Report with no `kind` still shows them for oversight). A dedicated **No Box /
+Not Ready** page lists every pending `no_box` unit (all batches, not month-
+scoped — `GET /api/items/no-box`, readable by `warehouse`/`ph_team`/admin):
+- **PH team** gets it as a third home card — **view-only** (so they can see
+  what's pending).
+- **Admin** gets it as a home card and **resolves** each unit with a status
+  dropdown + Save (warehouse can too via the existing Inventory page). The save
+  uses the warehouse/admin-gated `POST /api/items/event`, so PH genuinely can't
+  change status. Once resolved, the unit leaves this queue and reappears in the
+  PH report.
+
+## 15. PH concurrent-edit safety (A + B2)
+
+Two PH users can be logged in at once, so editing the same consolidated row is
+guarded two ways:
+
+- **A — optimistic concurrency (save-time check).** Each save sends the group's
+  latest `last_edit_at` as a baseline (`phUpdateItems(..., baseEditedAt)`). If
+  any unit was edited since, the server returns **409** and the client shows
+  *"just updated by X — reload"* and reloads. Prevents silent overwrites even if
+  a lock is ever lost. No new column (reuses `last_edit_at`).
+- **B2 — hard edit lock + presence (Google-Sheets style).** New `edit_locks`
+  table (one row per VIN) + `GET/POST /api/ph/locks` (claim · heartbeat ·
+  release · list). Clicking **Edit** claims the row's units; others see a
+  **🔒 "being edited by X"** badge with **Edit disabled**, and a **Cancel**
+  button now sits next to Submit to release without saving.
+  - **Heartbeat** every **10s** (silent) keeps the lock alive; the report polls
+    presence every 10s to paint badges.
+  - **TTL 30s** — a crashed/closed tab's lock auto-frees server-side (stealable).
+  - **Idle auto-release after 1 hour** of no edits (PH needs processing time),
+    with a notice; locks also release on Submit/Cancel and on leaving the page.
+  - Per-tab `holderId` so one user's two tabs don't fight, and ownership is
+    unambiguous. Claiming/heartbeat/release are `ph_team`-gated; presence list is
+    viewable by warehouse/admin too.
+
+## 16. Mark Sold / Mark Shipped pages + unsaved-changes guard
+
+- **Mark Sold / Mark Shipped (warehouse).** Two straightforward home cards
+  (`StatusScanPage`, also for admin). Scan many **VINs** (VIN only — a UPC is
+  rejected with a clear message), each is looked up and listed with its shoe +
+  current status, then one **Save** marks them all via the existing
+  `POST /api/items/bulk-status` (`sold` cascades the delist; `shipped` doesn't).
+  Gun-friendly auto-focus + camera VIN mode + duplicate cooldown.
+- **Unsaved-changes guard (global).** `useUnsavedGuard(isDirty)` arms the
+  browser's native "Leave site?" prompt on **refresh/reload/close**, and flips a
+  shared flag the app's **Back** handler checks to **confirm before leaving**
+  (Cancel keeps you put). Applied on every page that holds unsaved state: Mark
+  Sold/Shipped (scanned rows), the Report (edit mode), Receiving (cart/draft),
+  Inventory (staged status), and No Box (staged resolutions).

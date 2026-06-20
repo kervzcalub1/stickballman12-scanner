@@ -46,7 +46,11 @@ async function request(method, path, body, { auth = true } = {}) {
     throw err;
   }
   if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `Request failed (${res.status})`);
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.data = data;
+    if (res.status === 409) err.conflict = true;
+    throw err;
   }
   return data;
 }
@@ -75,9 +79,15 @@ export const api = {
   itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
   rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),
   itemsQuery: (params) => get(`/api/items/query?${new URLSearchParams(params).toString()}`),
+  noBoxList: () => get('/api/items/no-box'),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // v5 — PH Team monthly grid
   phList: (month, year, kind) => get(`/api/ph/list?month=${month}&year=${year}${kind ? `&kind=${kind}` : ''}`),
   phUpdate: (vin, fields) => post('/api/ph/update', { vin, fields }),
-  phUpdateMany: (vins, fields) => post('/api/ph/update', { vins, fields }),
+  phUpdateMany: (vins, fields, baseEditedAt) => post('/api/ph/update', { vins, fields, baseEditedAt }),
+  // PH edit locks (presence)
+  lockList: () => get('/api/ph/locks'),
+  lockClaim: (vins, holderId) => post('/api/ph/locks', { action: 'claim', vins, holderId }),
+  lockHeartbeat: (vins, holderId) => post('/api/ph/locks', { action: 'heartbeat', vins, holderId }),
+  lockRelease: (vins, holderId) => post('/api/ph/locks', { action: 'release', vins, holderId }),
 };

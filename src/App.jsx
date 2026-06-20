@@ -76,12 +76,27 @@ function Modal({ type, title, message, onClose, children }) {
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-const ROUTES = ['receiving', 'rescale', 'inventory', 'report', 'access'];
+const ROUTES = ['receiving', 'rescale', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped'];
 const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
   return ROUTES.includes(seg) ? seg : 'home';
 };
+
+// Global unsaved-changes guard. A page calls useUnsavedGuard(true) while it has
+// unsaved data (edit mode, scanned-but-unsaved rows, a cart, …). It (1) arms the
+// browser's native "Leave site?" prompt on refresh/reload/close, and (2) flips a
+// shared flag the app's Back handler checks to confirm before navigating away.
+let unsavedDirty = false;
+function useUnsavedGuard(isDirty) {
+  useEffect(() => {
+    unsavedDirty = !!isDirty;
+    if (!isDirty) return undefined;
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => { window.removeEventListener('beforeunload', onBeforeUnload); unsavedDirty = false; };
+  }, [isDirty]);
+}
 
 export default function App() {
   const [user, setUserState] = useState(getUser);
@@ -107,9 +122,15 @@ export default function App() {
   useEffect(() => {
     if (!user) return undefined;
     const onPop = () => {
+      // Let the page handle Back internally first (close a modal, step back a
+      // wizard) — that keeps you on the page, so no "lose changes" prompt.
       const back = navBack.current;
       if (back && back()) {
-        // A modal/step handled it — keep the URL on the current page.
+        window.history.pushState(null, '', pathForView(appRef.current.view));
+        return;
+      }
+      // Back would now leave the page — if there's unsaved data, confirm first.
+      if (unsavedDirty && !window.confirm('You have unsaved changes. Leave this page and lose them?')) {
         window.history.pushState(null, '', pathForView(appRef.current.view));
         return;
       }
@@ -135,6 +156,9 @@ export default function App() {
   if (view === 'inventory') return <Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'report') return <PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'nobox') return <NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'sold') return <StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'shipped') return <StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   return <Home user={user} onPick={go} onSignOut={signOut} />;
 }
 
@@ -247,41 +271,46 @@ function TopBar({ title, onHome, onSignOut, right }) {
 const ROLE_LABEL = { admin: 'Admin', warehouse: 'Warehouse', ph_team: 'PH Team' };
 const roleLabel = (r) => ROLE_LABEL[r] || r;
 
+// Home is grouped into categories. `adminOnly` cards/sections show for admin only.
+const HOME_SECTIONS = [
+  { title: 'Administration', adminOnly: true, cards: [
+    { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, or remove accounts' },
+  ] },
+  { title: 'Receiving & Stock', cards: [
+    { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
+    { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },
+    { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Resolve units bought without a box' },
+  ] },
+  { title: 'Sales & Shipment', cards: [
+    { key: 'sold', icon: '💰', title: 'Mark Sold', sub: 'Scan VINs to mark sold (delists from all stores)' },
+    { key: 'shipped', icon: '📦', title: 'Mark Shipped', sub: 'Scan VINs to mark shipped' },
+  ] },
+  { title: 'Reports & Lookup', cards: [
+    { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
+    { key: 'report', icon: '📊', title: 'Report', sub: 'Monthly listing & store sync' },
+  ] },
+];
+
 function Home({ user, onPick, onSignOut }) {
   const isAdmin = user.role === 'admin';
   return (
     <div className="app">
       <TopBar onSignOut={onSignOut} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
-      <div className="home-grid">
-        {isAdmin && (
-          <button className="home-card" onClick={() => onPick('access')}>
-            <span className="home-card-icon">🔑</span>
-            <span className="home-card-title">Check Access</span>
-            <span className="home-card-sub">Approve, change role, or remove accounts</span>
-          </button>
-        )}
-        <button className="home-card" onClick={() => onPick('receiving')}>
-          <span className="home-card-icon">📥</span>
-          <span className="home-card-title">Receive New</span>
-          <span className="home-card-sub">Scan a new shipment into a batch</span>
-        </button>
-        <button className="home-card" onClick={() => onPick('rescale')}>
-          <span className="home-card-icon">♻️</span>
-          <span className="home-card-title">Rescale Stock</span>
-          <span className="home-card-sub">Re-scan in-hand stock (no shipment)</span>
-        </button>
-        <button className="home-card" onClick={() => onPick('inventory')}>
-          <span className="home-card-icon">🔎</span>
-          <span className="home-card-title">Inventory</span>
-          <span className="home-card-sub">Search, scan &amp; print labels</span>
-        </button>
-        <button className="home-card" onClick={() => onPick('report')}>
-          <span className="home-card-icon">📊</span>
-          <span className="home-card-title">Report</span>
-          <span className="home-card-sub">Monthly listing &amp; store sync{isAdmin ? '' : ' (view-only)'}</span>
-        </button>
-      </div>
+      {HOME_SECTIONS.filter((s) => !s.adminOnly || isAdmin).map((section) => (
+        <section className="home-section" key={section.title}>
+          <h2 className="home-section-title">{section.title}</h2>
+          <div className="home-grid">
+            {section.cards.map((c) => (
+              <button className="home-card" key={c.key} onClick={() => onPick(c.key)}>
+                <span className="home-card-icon">{c.icon}</span>
+                <span className="home-card-title">{c.title}</span>
+                <span className="home-card-sub">{c.key === 'report' && !isAdmin ? `${c.sub} (view-only)` : c.sub}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }
@@ -424,8 +453,12 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
 
   const [header, setHeader] = useState({
     buyer: 'stickballman12', supplier: '', tracking: '', dateReceived: today,
-    defaultCost: '', notes: '', specialRules: '', origin: 'returned',
+    defaultCost: '', notes: '', specialRules: '', origin: 'returned', originOther: '',
   });
+  // The reason stored on the batch: the custom text when "Other" is picked.
+  const effectiveOrigin = header.origin === 'other'
+    ? (String(header.originOther || '').trim() || 'Other')
+    : header.origin;
   const setH = (k, v) => setHeader((h) => ({ ...h, [k]: v }));
   const [customSupplier, setCustomSupplier] = useState(false);
 
@@ -456,6 +489,7 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
   const [draft, setDraft] = useState(null);
   const draftRef = useRef(null); draftRef.current = draft;
   const rescannedRef = useRef([]); rescannedRef.current = rescanned; // mirror so the camera callback dedupes against fresh state
+  useUnsavedGuard(items.length > 0 || !!draft || rescanned.length > 0 || issues.length > 0); // guard the cart against Back/refresh
   const [mInput, setMInput] = useState('');
   const [mBusy, setMBusy] = useState(false);
   const [mError, setMError] = useState('');
@@ -685,6 +719,7 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
     if (!isRescale && !String(header.supplier).trim()) { setError('Select a supplier.'); return; }
     if (!isRescale && !String(header.buyer).trim()) { setError('Enter the buyer.'); return; }
     if (!String(header.dateReceived).trim()) { setError('Enter the date.'); return; }
+    if (isRescale && header.origin === 'other' && !String(header.originOther).trim()) { setError('Enter a custom reason.'); return; }
     setStep(2);
   }
   function goStep3() {
@@ -710,7 +745,7 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
         }
         const payload = {
           kind: mode,
-          batch: { ...header, defaultCost: defaultCostNum },
+          batch: { ...header, origin: effectiveOrigin, defaultCost: defaultCostNum },
           items: out,
           issues: isRescale ? [] : [
             ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
@@ -728,7 +763,9 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
       // (a 'rescaled' event + the picked status). No new VIN is minted.
       let rescaledDone = 0;
       if (isRescale && rescanned.length) {
-        const reasonLabel = RESCALE_REASONS.find(([v]) => v === header.origin)?.[1] || header.origin;
+        const reasonLabel = header.origin === 'other'
+          ? effectiveOrigin
+          : (RESCALE_REASONS.find(([v]) => v === header.origin)?.[1] || effectiveOrigin);
         for (const r of rescanned) {
           await api.rescaleItem(r.vin, effRescaleStatus(r), undefined, reasonLabel);
           rescaledDone++;
@@ -820,6 +857,12 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
                       <select value={header.origin} onChange={(e) => setH('origin', e.target.value)}>
                         {RESCALE_REASONS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
                       </select>
+                    </label>
+                  )}
+                  {isRescale && header.origin === 'other' && (
+                    <label>Custom reason *
+                      <input value={header.originOther} placeholder="Describe the reason"
+                        maxLength={80} onChange={(e) => setH('originOther', e.target.value)} />
                     </label>
                   )}
                   <label>{isRescale ? 'Date *' : 'Date received *'}<input type="date" value={header.dateReceived} onChange={(e) => setH('dateReceived', e.target.value)} /></label>
@@ -1028,10 +1071,18 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
                   </div>
                 </div>
                 <div className="size-rows">
-                  <div className="muted sm">Sizes &amp; quantities</div>
+                  <div className="muted sm">Tap a size to add it (tap again for +1), or “+ Custom”.</div>
+                  {/* One-tap size boxes — faster and clearer than a dropdown:
+                      every option is visible and a single tap adds/increments. */}
+                  <div className="size-chips">
+                    {sizePool(draft).map((s) => (
+                      <button type="button" key={s} className="size-chip" onClick={() => addDraftSize(s)}>{s}</button>
+                    ))}
+                    <button type="button" className="size-chip custom" onClick={addCustomSize}>+ Custom</button>
+                  </div>
                   {draft.rows.map((r) => (
                     <div className="size-line" key={r.key}>
-                      <input className={`sz ${!String(r.size).trim() ? 'need' : ''}`} placeholder="Size" value={r.size} onChange={(e) => setRowSize(r.key, e.target.value)} />
+                      <input className={`sz ${!String(r.size).trim() ? 'need' : ''}`} placeholder="Size" value={r.size} onChange={(e) => setRowSize(r.key, e.target.value)} autoFocus={!String(r.size).trim()} />
                       <div className="qty-stepper">
                         <button type="button" className="btn icon ghost step" onClick={() => bumpRow(r.key, -1)}>−</button>
                         <input className="qty" type="number" min="1" value={r.qty} onChange={(e) => setRowQty(r.key, e.target.value)} />
@@ -1040,13 +1091,6 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
                       <button type="button" className="btn icon ghost remove" title="Remove size" onClick={() => removeDraftRow(r.key)}>×</button>
                     </div>
                   ))}
-                  <div className="size-add">
-                    <select value="" onChange={(e) => { if (e.target.value) addDraftSize(e.target.value); }}>
-                      <option value="">Add a size…</option>
-                      {sizePool(draft).map((s) => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                    <button type="button" className="btn sm ghost" onClick={addCustomSize}>+ custom</button>
-                  </div>
                 </div>
                 <div className="modal-actions">
                   <button type="button" className="btn primary wide" onClick={completeItem}>Complete item ✓</button>
@@ -1079,7 +1123,7 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
               {isRescale
                 ? (<>
                     <div><b>{rescaledCount}</b> existing VIN{rescaledCount === 1 ? '' : 's'} rescanned{totalItems ? <> · <b>{totalItems}</b> new unit{totalItems === 1 ? '' : 's'}</> : ''}</div>
-                    <div className="muted">Rescale · {RESCALE_REASONS.find(([v]) => v === header.origin)?.[1] || header.origin} · {header.dateReceived}</div>
+                    <div className="muted">Rescale · {header.origin === 'other' ? effectiveOrigin : (RESCALE_REASONS.find(([v]) => v === header.origin)?.[1] || effectiveOrigin)} · {header.dateReceived}</div>
                     <p className="muted sm">Rescanned units keep their VIN &amp; history (a “Rescaled” event + your chosen status is added). New stock gets a fresh VIN.</p>
                   </>)
                 : (<>
@@ -1256,6 +1300,7 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
   const [detailStatusDraft, setDetailStatusDraft] = useState(null); // staged status/tag — applied only on Save
   const [customTag, setCustomTag] = useState(''); // free-text custom tag being typed
   const [busy, setBusy] = useState(false);
+  useUnsavedGuard(Object.keys(statusDrafts).length > 0 || !!detailStatusDraft); // guard staged status edits
 
   async function load(over = {}) {
     setLoading(true); setError(''); setSel(new Set()); setExpanded(new Set()); setHist({});
@@ -1327,8 +1372,17 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
     if (!status || status === current) return;
     setSavingStatusVin(vin); setError('');
     try {
-      await api.itemEvent(vin, 'status_change', { status });
-      setData((d) => (d ? { ...d, rows: d.rows.map((r) => (r.vin === vin ? { ...r, status } : r)) } : d));
+      const res = await api.itemEvent(vin, 'status_change', { status });
+      // Merge the server's updated item so cascades (e.g. sold → sync flags
+      // cleared) reflect in the row immediately, not just the status text.
+      const u = res?.item || {};
+      setData((d) => (d ? { ...d, rows: d.rows.map((r) => (r.vin === vin ? {
+        ...r, status,
+        added_to_intel_inv: u.added_to_intel_inv ?? r.added_to_intel_inv,
+        synced_alias: u.synced_alias ?? r.synced_alias,
+        synced_stockx: u.synced_stockx ?? r.synced_stockx,
+        synced_shopify: u.synced_shopify ?? r.synced_shopify,
+      } : r)) } : d));
       setStatusDrafts((d) => { const n = { ...d }; delete n[vin]; return n; }); // clear → Save disabled again
       setHist((h) => { const n = { ...h }; delete n[vin]; return n; }); // reload history on next expand
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
@@ -1385,15 +1439,18 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusy(false); }
   }
+  // Each history line names WHO did it. System-driven changes (e.g. the sold →
+  // delist cascade) are tagged "(system-generated)" since no person did them.
   const eventLabel = (e) => {
-    if (e.type === 'scanned') return `Scanned by ${e.details?.by || e.created_by || '—'}`;
-    if (e.type === 'received') return 'Received into inventory';
-    if (e.type === 'rescaled') return `Rescaled${e.details?.reason ? ` (${e.details.reason})` : ''}${e.details?.note ? ` — ${e.details.note}` : ''}`;
-    if (e.type === 'status_change') return `Status → ${statusLabel(e.details?.status)}${e.details?.note ? ` — ${e.details.note}` : ''}`;
-    if (e.type === 'ph_update') return e.details?.text || 'Updated';
-    if (e.type === 'note') return `Note: ${e.details?.text || ''}`;
-    if (e.type === 'issue') return `Issue: ${e.details?.text || e.details?.type || ''}`;
-    return e.type;
+    const by = e.created_by || '—';
+    if (e.type === 'scanned') return `Scanned by ${e.details?.by || by}`;
+    if (e.type === 'received') return `Received into inventory (by ${by})`;
+    if (e.type === 'rescaled') return `Rescaled${e.details?.reason ? ` (${e.details.reason})` : ''}${e.details?.note ? ` — ${e.details.note}` : ''} (by ${by})`;
+    if (e.type === 'status_change') return `Status → ${statusLabel(e.details?.status)}${e.details?.note ? ` — ${e.details.note}` : ''} (marked by: ${by})`;
+    if (e.type === 'ph_update') return `${e.details?.text || 'Updated'} ${e.details?.soldCascade ? '(system-generated)' : `(by ${by})`}`;
+    if (e.type === 'note') return `Note: ${e.details?.text || ''} (by ${by})`;
+    if (e.type === 'issue') return `Issue: ${e.details?.text || e.details?.type || ''} (by ${by})`;
+    return `${e.type} (by ${by})`;
   };
 
   /* ----- detail view ----- */
@@ -1466,7 +1523,7 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
                     <div className="tl-dot" />
                     <div className="tl-body">
                       <div>{eventLabel(e)}</div>
-                      <div className="muted sm">{e.created_by || '—'} · {new Date(e.created_at).toLocaleString()}</div>
+                      <div className="muted sm">{new Date(e.created_at).toLocaleString()}</div>
                     </div>
                   </div>
                 ))}
@@ -1606,7 +1663,7 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
                                         <div className="tl-dot" />
                                         <div className="tl-body">
                                           <div>{eventLabel(e)}</div>
-                                          <div className="muted sm">{e.created_by || '—'} · {new Date(e.created_at).toLocaleString()}</div>
+                                          <div className="muted sm">{new Date(e.created_at).toLocaleString()}</div>
                                         </div>
                                       </div>
                                     ))}
@@ -1747,27 +1804,39 @@ function YesNo({ value, editing, onChange }) {
 // received stock) or Rescale Stock (units re-scanned for re-listing). Both do
 // the same job: price + sync to Intelligent Inventory / Alias / StockX / Shopify.
 function PHTeamApp({ user, onSignOut }) {
-  const [kind, setKind] = useState(null); // null = home chooser; 'receiving' | 'rescale'
-  if (kind) return <PHGrid user={user} kind={kind} onHome={() => setKind(null)} onSignOut={onSignOut} />;
+  const [page, setPage] = useState(null); // null = home chooser | 'receiving' | 'rescale' | 'nobox'
+  if (page === 'nobox') return <NoBoxReport user={user} onHome={() => setPage(null)} onSignOut={onSignOut} />;
+  if (page) return <PHGrid user={user} kind={page} onHome={() => setPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
       <TopBar onSignOut={onSignOut} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
       <div className="home-grid">
-        <button className="home-card" onClick={() => setKind('receiving')}>
+        <button className="home-card" onClick={() => setPage('receiving')}>
           <span className="home-card-icon">📥</span>
           <span className="home-card-title">New Inventory</span>
           <span className="home-card-sub">Price &amp; list newly received stock — Intelligent Inventory, Alias, StockX, Shopify</span>
         </button>
-        <button className="home-card" onClick={() => setKind('rescale')}>
+        <button className="home-card" onClick={() => setPage('rescale')}>
           <span className="home-card-icon">♻️</span>
           <span className="home-card-title">Rescale Stock</span>
           <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
+        </button>
+        <button className="home-card" onClick={() => setPage('nobox')}>
+          <span className="home-card-icon">🚫</span>
+          <span className="home-card-title">No Box / Not Ready</span>
+          <span className="home-card-sub">Units bought without a box — not yet postable (view-only; warehouse resolves)</span>
         </button>
       </div>
     </div>
   );
 }
+
+// PH edit-lock (B2) timings — heartbeat keeps a lock alive (silent), TTL frees a
+// crashed/closed editor server-side, idle auto-releases a forgotten-open edit.
+const HEARTBEAT_MS = 10_000;       // keep MY lock alive (well under the 30s server TTL)
+const PRESENCE_POLL_MS = 2_000;    // how fast OTHERS see a lock appear/clear — kept snappy
+const IDLE_RELEASE_MS = 60 * 60 * 1000; // 1 hour — PH needs time to process the upload
 
 // `kind`: 'receiving' (New Inventory) · 'rescale' (Rescale Stock) · null (all — admin Report).
 function PHGrid({ user, kind = null, onHome, onSignOut }) {
@@ -1788,9 +1857,69 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [drafts, setDrafts] = useState({});                // group key -> edited fields
   const [savingKey, setSavingKey] = useState(null);
   const [sortDir, setSortDir] = useState('asc'); // by scan date: asc = oldest first
+  useUnsavedGuard(editing.size > 0); // unsaved edits → guard Back/refresh
+
+  // ---- B2 edit locks / presence ----
+  const [locks, setLocks] = useState({});    // vin -> { holder, holder_id } (active locks)
+  const [notice, setNotice] = useState('');  // transient (idle release / lost lock)
+  const holderIdRef = useRef(null);
+  if (!holderIdRef.current) holderIdRef.current = `${user?.username || 'ph'}-${Math.random().toString(36).slice(2, 10)}`;
+  const editVinsRef = useRef({});            // group key -> [vins] I currently hold
+  const heartbeatRef = useRef(null);
+  const idleRef = useRef(null);
+  const heldVins = () => [...new Set(Object.values(editVinsRef.current).flat())];
+
+  function stopTimers() {
+    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+    if (idleRef.current) { clearTimeout(idleRef.current); idleRef.current = null; }
+  }
+  function onIdle() {
+    releaseAll();
+    setEditing(new Set()); setDrafts({});
+    setNotice('Your edit was released after 1 hour of inactivity. Click Edit again to continue.');
+  }
+  function resetIdle() {
+    if (idleRef.current) clearTimeout(idleRef.current);
+    idleRef.current = setTimeout(onIdle, IDLE_RELEASE_MS);
+  }
+  function releaseAll() {
+    const v = heldVins();
+    editVinsRef.current = {};
+    if (v.length) api.lockRelease(v, holderIdRef.current).catch(() => {});
+    stopTimers();
+  }
+  function closeEdit(key, { release = true } = {}) {
+    const vins = editVinsRef.current[key];
+    delete editVinsRef.current[key];
+    if (release && vins?.length) api.lockRelease(vins, holderIdRef.current).catch(() => {});
+    setEditing((s) => { const n = new Set(s); n.delete(key); return n; });
+    setDrafts((d) => { const n = { ...d }; delete n[key]; return n; });
+    if (!Object.keys(editVinsRef.current).length) stopTimers();
+  }
+  async function doHeartbeat() {
+    const v = heldVins();
+    if (!v.length) { stopTimers(); return; }
+    try {
+      const { held } = await api.lockHeartbeat(v, holderIdRef.current);
+      const heldSet = new Set(held || []);
+      for (const [key, vins] of Object.entries(editVinsRef.current)) {
+        if (!vins.some((x) => heldSet.has(x))) { // lost the lock (expired & stolen)
+          setNotice('A lock expired and was taken by another editor — your unsaved change on that row was discarded.');
+          closeEdit(key, { release: false });
+        }
+      }
+    } catch { /* transient network blip — TTL is generous */ }
+  }
+  async function refreshLocks() {
+    try { const { locks: ls } = await api.lockList(); const m = {}; for (const l of ls) m[l.vin] = l; setLocks(m); }
+    catch { /* ignore */ }
+  }
+  const myId = holderIdRef.current;
+  const lockHolder = (g) => { for (const v of g.vins) { const l = locks[v]; if (l && l.holder_id !== myId) return l.holder; } return null; };
 
   async function load(m = month, y = year) {
-    setLoading(true); setError('');
+    releaseAll();
+    setLoading(true); setError(''); setNotice('');
     try {
       const { rows: r } = await api.phList(m, Number(y) || curYear, kind);
       setRows(r); setEditing(new Set()); setDrafts({});
@@ -1798,26 +1927,58 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Poll presence so "being edited by X" stays current (editors only).
+  useEffect(() => {
+    if (!canEdit) return undefined;
+    refreshLocks();
+    const t = setInterval(refreshLocks, PRESENCE_POLL_MS);
+    return () => clearInterval(t);
+  }, [canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Release my locks when leaving the page.
+  useEffect(() => () => { releaseAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function startEdit(g) {
+  // Claim the lock first; only enter edit mode if no one else holds it.
+  async function startEdit(g) {
+    setError(''); setNotice('');
+    try {
+      await api.lockClaim(g.vins, holderIdRef.current);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      if (err.conflict) {
+        const who = err.data?.blockers?.[0]?.holder;
+        setError(`🔒 ${who || 'Another PH user'} is editing this item right now. Try again in a moment.`);
+        refreshLocks();
+        return;
+      }
+      return setError(err.message);
+    }
+    editVinsRef.current[g.key] = g.vins;
     setEditing((s) => new Set(s).add(g.key));
     setDrafts((d) => ({ ...d, [g.key]: {
       price: g.price ?? '', added_to_intel_inv: !!g.added_to_intel_inv,
       synced_alias: !!g.synced_alias, synced_stockx: !!g.synced_stockx,
       synced_shopify: !!g.synced_shopify, ph_note: g.ph_note || '',
     } }));
+    if (!heartbeatRef.current) heartbeatRef.current = setInterval(doHeartbeat, HEARTBEAT_MS);
+    resetIdle();
+    refreshLocks();
   }
-  const setField = (key, k, v) => setDrafts((d) => ({ ...d, [key]: { ...d[key], [k]: v } }));
-  // Save a consolidated group — the same edit is applied to every member VIN.
+  const setField = (key, k, v) => { setDrafts((d) => ({ ...d, [key]: { ...d[key], [k]: v } })); resetIdle(); };
+  // Save a consolidated group — same edit applied to every member VIN, with an
+  // optimistic-concurrency baseline (A). On conflict, reload so they see fresh data.
   async function submitGroup(g) {
     setSavingKey(g.key); setError('');
     try {
-      const { rows: updated } = await api.phUpdateMany(g.vins, drafts[g.key]);
+      const { rows: updated } = await api.phUpdateMany(g.vins, drafts[g.key], g.last_edit_at || null);
       const byVin = new Map((updated || []).map((u) => [u.vin, u]));
       setRows((rs) => rs.map((x) => byVin.get(x.vin) || x));
-      setEditing((s) => { const n = new Set(s); n.delete(g.key); return n; });
-    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
-    finally { setSavingKey(null); }
+      closeEdit(g.key, { release: true });
+      refreshLocks();
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      if (err.conflict) { setError(err.message); closeEdit(g.key, { release: true }); load(); return; }
+      setError(err.message);
+    } finally { setSavingKey(null); }
   }
 
   // Consolidate, then sort groups by scan date (asc = oldest first).
@@ -1844,6 +2005,7 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
       </div>
 
       {error && <div className="error mt">{error}</div>}
+      {notice && <div className="notice mt">{notice}</div>}
 
       <div className="card">
         {!rows ? <p className="muted">Loading…</p> : !groups.length ? <p className="muted">No items {emptyKind} in {MONTHS[month - 1]} {year}.</p> : isMobile ? (
@@ -1883,9 +2045,17 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   </div>
                   <div className="ph-card-foot">
                     <span className="muted sm">{g.last_edit_by ? `By ${g.last_edit_by}${g.last_edit_at ? ` · ${PH_DATETIME.format(new Date(g.last_edit_at))} EST` : ''}` : '—'}</span>
-                    {canEdit && (ed
-                      ? <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : `Submit ×${g.qty}`}</button>
-                      : <button className="btn sm ghost" onClick={() => startEdit(g)}>Edit</button>)}
+                    {canEdit && (() => {
+                      const locked = !ed && lockHolder(g);
+                      if (ed) return (
+                        <span className="ph-edit-actions">
+                          <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : `Submit ×${g.qty}`}</button>
+                          <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
+                        </span>
+                      );
+                      if (locked) return <span className="lock-badge" title={`Being edited by ${locked}`}>🔒 {locked}</span>;
+                      return <button className="btn sm ghost" onClick={() => startEdit(g)}>Edit</button>;
+                    })()}
                   </div>
                 </div>
               );
@@ -1940,8 +2110,13 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                       <td style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first">
                         {!canEdit ? <span className="muted">—</span>
                           : ed
-                            ? <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : `Submit ×${g.qty}`}</button>
-                            : <button className="btn sm ghost" onClick={() => startEdit(g)}>Edit</button>}
+                            ? (<span className="ph-edit-actions">
+                                <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : `Submit ×${g.qty}`}</button>
+                                <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
+                              </span>)
+                            : (lockHolder(g)
+                                ? <span className="lock-badge" title={`Being edited by ${lockHolder(g)}`}>🔒 {lockHolder(g)}</span>
+                                : <button className="btn sm ghost" onClick={() => startEdit(g)}>Edit</button>)}
                       </td>
                       <td style={rightStyle('addedby')} className="ph-rfrozen ph-addedby">
                         {g.last_edit_by ? <>{g.last_edit_by}<div className="muted sm">{g.last_edit_at ? `${PH_DATETIME.format(new Date(g.last_edit_at))} EST` : ''}</div></> : '—'}
@@ -1954,6 +2129,211 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------ No Box --------------------------------- */
+// Pending "Bought Without Box" units — not postable, so hidden from the PH
+// report. Visible to admin + PH; admin/warehouse change the status to resolve a
+// unit (it then leaves this queue and re-appears in the PH report). PH is
+// read-only (the status endpoint is warehouse/admin-gated anyway).
+function NoBoxReport({ user, onHome, onSignOut }) {
+  const canEdit = user.role === 'admin' || user.role === 'warehouse';
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState('');
+  const [drafts, setDrafts] = useState({}); // vin -> chosen status
+  const [savingVin, setSavingVin] = useState(null);
+  useUnsavedGuard(Object.keys(drafts).length > 0); // guard staged no-box resolutions
+
+  async function load() {
+    setError('');
+    try { const { rows: r } = await api.noBoxList(); setRows(r); setDrafts({}); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setDraft = (vin, status) => setDrafts((d) => ({ ...d, [vin]: status }));
+  async function save(vin) {
+    const status = drafts[vin];
+    if (!status || status === 'no_box') return;
+    setSavingVin(vin); setError('');
+    try {
+      await api.itemEvent(vin, 'status_change', { status, from: 'no_box', note: 'Resolved from No Box' });
+      setRows((rs) => rs.filter((r) => r.vin !== vin)); // resolved → leaves the queue
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setSavingVin(null); }
+  }
+
+  return (
+    <div className="app">
+      <TopBar title="No Box — Not Ready" onHome={onHome} onSignOut={onSignOut} />
+      <div className="card">
+        <p className="muted sm">
+          Units received <b>without a box</b> — not ready for posting, so they’re hidden from the PH report.{' '}
+          {canEdit
+            ? 'Change a unit’s status once a box is sourced (or it’s cleared to sell without one) — it then returns to the report.'
+            : 'Warehouse/admin resolves these; this view is read-only for you.'}
+        </p>
+        {error && <div className="error mt">{error}</div>}
+        {!rows ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">No “Bought Without Box” items. 🎉</p> : (
+          <div className="inv-tablewrap">
+            <table className="inv-table">
+              <thead>
+                <tr>
+                  <th className="inv-col-vin">VIN</th>
+                  <th>Shoe</th>
+                  <th className="inv-col-size">Size</th>
+                  <th className="inv-col-sku">SKU</th>
+                  <th>Received</th>
+                  <th>{canEdit ? 'Resolve → status' : 'Status'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.vin}>
+                    <td className="inv-col-vin"><span className="vin">{r.vin}</span></td>
+                    <td className="inv-name" title={r.name}>{r.name}</td>
+                    <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>
+                    <td className="inv-col-sku">{r.sku || '—'}</td>
+                    <td className="muted sm" style={{ whiteSpace: 'nowrap' }}>{(r.created_at || '').slice(0, 10)}{r.created_by ? ` · ${r.created_by}` : ''}</td>
+                    <td>
+                      {canEdit ? (
+                        <span className="nobox-resolve">
+                          <select value={drafts[r.vin] ?? 'no_box'} onChange={(e) => setDraft(r.vin, e.target.value)}>
+                            <option value="no_box">Bought Without Box</option>
+                            {STATUSES.filter((s) => s.key !== 'no_box').map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                          </select>
+                          <button className="btn sm primary" disabled={!drafts[r.vin] || drafts[r.vin] === 'no_box' || savingVin === r.vin} onClick={() => save(r.vin)}>
+                            {savingVin === r.vin ? '…' : 'Save'}
+                          </button>
+                        </span>
+                      ) : <StatusPill status={r.status} />}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------- Mark Sold / Shipped ------------------------ */
+// Warehouse bulk action: scan many VINs (VIN only — not UPC) and mark them all
+// Sold or Shipped at once. Reuses the bulk-status endpoint (sold cascades the
+// delist). Unsaved scans are guarded against accidental Back/refresh.
+function StatusScanPage({ target, navBack, onHome, onSignOut }) {
+  const label = target === 'sold' ? 'Sold' : 'Shipped';
+  const [rows, setRows] = useState([]);   // { vin, name, sku, size, status }
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState('');
+  const [showCam, setShowCam] = useState(false);
+  const [prefs, setPrefs] = useState(loadPrefs);
+  const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
+  const inputRef = useRef(null);
+  const recentRef = useRef({});
+  useUnsavedGuard(rows.length > 0);
+
+  // Keep the box focused so a scanner gun types straight in.
+  useEffect(() => { if (!showCam) { const t = setTimeout(() => inputRef.current?.focus(), 50); return () => clearTimeout(t); } }, [showCam, rows]);
+
+  // Back closes the camera first; otherwise falls through to app navigation.
+  useEffect(() => {
+    if (!navBack) return undefined;
+    navBack.current = () => { if (showCam) { setShowCam(false); return true; } return false; };
+    return () => { if (navBack) navBack.current = null; };
+  }, [navBack, showCam]);
+
+  async function addVin(code) {
+    const c = String(code).trim().toUpperCase();
+    if (!c) return;
+    const now = Date.now();
+    if (recentRef.current[c] && now - recentRef.current[c] < 1200) return; // gun/camera re-read
+    recentRef.current[c] = now;
+    setInput(''); setError('');
+    if (!isVinCode(c)) { setError(`“${c}” is not a VIN — scan the SBM-… label, not the UPC.`); return; }
+    if (rows.some((r) => r.vin === c)) { setError(`${c} is already in the list.`); return; }
+    setBusy(true);
+    try {
+      const { item } = await api.itemLookup(c);
+      if (item.status === target) { setError(`${item.vin} is already ${label}.`); return; }
+      setRows((rs) => [{ vin: item.vin, name: item.name, sku: item.sku, size: item.size, status: item.status }, ...rs]);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setError(err.message);
+    } finally { setBusy(false); }
+  }
+  const removeRow = (vin) => setRows((rs) => rs.filter((r) => r.vin !== vin));
+
+  async function save() {
+    if (!rows.length) return;
+    setBusy(true); setError('');
+    try {
+      await api.bulkStatus(rows.map((r) => r.vin), target);
+      setResult(`${rows.length} item${rows.length === 1 ? '' : 's'} marked ${label}.`);
+      setRows([]);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="app">
+      <TopBar title={`Mark ${label}`} onHome={onHome} onSignOut={onSignOut} />
+      <div className="card">
+        <form className="searchrow" onSubmit={(e) => { e.preventDefault(); addVin(input); }}>
+          <input ref={inputRef} autoFocus autoCapitalize="characters" autoCorrect="off"
+            placeholder="Scan a VIN (SBM-…)" value={input} onChange={(e) => setInput(e.target.value)} disabled={busy} />
+          <button className="btn primary" disabled={busy}>Add</button>
+          <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">📷</button>
+        </form>
+        {showCam && (
+          <Suspense fallback={<p className="muted">Loading camera…</p>}>
+            <CameraScanner continuous mode="vin" onDetected={addVin} onClose={() => setShowCam(false)}
+              zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+          </Suspense>
+        )}
+        {error && <div className="error mt">{error}</div>}
+        <p className="muted sm mt">Scan each box’s VIN to mark it <b>{label}</b> (VIN only — not the product UPC).{target === 'sold' ? ' Marking sold also delists it from Intelligent Inventory and all stores.' : ''}</p>
+      </div>
+
+      <div className="batch-bar">
+        <button className="btn ghost" onClick={onHome}>← Home</button>
+        <div className="batch-totals"><b>{rows.length}</b> to mark {label}</div>
+        <button className="btn primary" disabled={busy || !rows.length} onClick={save}>{busy ? 'Saving…' : `Save → ${label}`}</button>
+      </div>
+
+      {rows.length > 0 && (
+        <div className="card">
+          <div className="inv-tablewrap">
+            <table className="inv-table">
+              <thead><tr><th className="inv-col-vin">VIN</th><th>Shoe</th><th className="inv-col-size">Size</th><th>Current status</th><th aria-label="remove" /></tr></thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.vin}>
+                    <td className="inv-col-vin"><span className="vin">{r.vin}</span></td>
+                    <td className="inv-name" title={r.name}>{r.name || '—'}</td>
+                    <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>
+                    <td><StatusPill status={r.status} /></td>
+                    <td><button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeRow(r.vin)}>×</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <Modal type="success" title={`Marked ${label}`} message={result} onClose={() => setResult('')}>
+          <button className="btn primary" onClick={() => setResult('')}>Scan more</button>
+          <button className="btn ghost" onClick={onHome}>← Home</button>
+        </Modal>
+      )}
     </div>
   );
 }

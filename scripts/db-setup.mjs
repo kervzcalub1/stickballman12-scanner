@@ -142,6 +142,11 @@ await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS last_edit_at       TIMESTA
 // Gender/age group (Men | Women | Youth | Toddler | Unisex) — from the product
 // lookup (Alias gender, else derived from StockX size suffix) for store listing.
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS gender             TEXT`);
+// Align the VIN column default to the real format (SBM-YYMMDD-######). This
+// default is only a fallback — every insert supplies a VIN — but keeping it
+// consistent avoids ever minting a stray "SB-…" id. Idempotent.
+await sql(`ALTER TABLE items ALTER COLUMN vin SET DEFAULT
+  ('SBM-' || to_char(current_date, 'YYMMDD') || '-' || lpad(nextval('vin_seq')::text, 6, '0'))`);
 
 await sql(`
   CREATE TABLE IF NOT EXISTS item_events (
@@ -167,6 +172,21 @@ await sql(`
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+
+// PH-Team edit locks (presence). One row per VIN currently being edited; a lock
+// is "active" while its heartbeat is fresh (the client pings every ~10s; locks
+// older than the ~30s TTL are stealable). Used to show "being edited by X" and
+// to block a second editor on the same consolidated row.
+await sql(`
+  CREATE TABLE IF NOT EXISTS edit_locks (
+    vin          TEXT PRIMARY KEY,
+    holder       TEXT NOT NULL,
+    holder_id    TEXT NOT NULL,
+    claimed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS edit_locks_hb_idx ON edit_locks (heartbeat_at)`);
 
 // Future — profit tracking. Schema now, UI later.
 await sql(`

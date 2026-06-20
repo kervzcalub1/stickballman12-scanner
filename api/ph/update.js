@@ -38,11 +38,15 @@ export default async function handler(req, res) {
   for (const k of BOOL_FIELDS) if (k in raw) fields[k] = Boolean(raw[k]);
   if ('ph_note' in raw) fields.ph_note = String(raw.ph_note ?? '').slice(0, 2000);
 
+  // Optimistic concurrency baseline (the latest last_edit_at the client saw).
+  const baseEditedAt = 'baseEditedAt' in body ? body.baseEditedAt : undefined;
+
   try {
-    const rows = await phUpdateItems(vins, fields, user.name || user.username || '');
+    const rows = await phUpdateItems(vins, fields, user.name || user.username || '', baseEditedAt);
     if (!rows.length) return send(res, 404, { ok: false, error: 'No matching items found.' });
     return send(res, 200, { ok: true, row: rows[0], rows });
   } catch (e) {
+    if (e.conflict) return send(res, 409, { ok: false, error: e.message, conflict: true });
     console.error('[ph/update]', e.message);
     return send(res, 500, { ok: false, error: 'Could not save the change.' });
   }

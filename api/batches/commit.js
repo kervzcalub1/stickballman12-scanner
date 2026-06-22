@@ -64,6 +64,7 @@ export default async function handler(req, res) {
       cost: toCost(it.cost) ?? defaultCost,
       source: ['stockx', 'alias', 'kicksdb', 'manual'].includes(it.source) ? it.source : 'manual',
       gender: ['Men', 'Women', 'Youth', 'Toddler', 'Unisex'].includes(it.gender) ? it.gender : null,
+      colorway: String(it.colorway ?? '').trim().slice(0, 120) || null,
       notes: String(it.notes ?? '').trim().slice(0, 500) || null,
       withBox,
       status: withBox ? 'needs_shelf' : 'no_box',

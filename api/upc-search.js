@@ -11,8 +11,8 @@ import {
   getJsonBody, send, applySecurity, rateLimit, requireRole, cleanUpc,
   fetchWithTimeout, cacheGet, cacheSet, normalizeGender,
 } from './_lib/util.js';
+import { aliasAuthed, aliasPost } from './_lib/alias.js';
 
-const ALIAS_BASE = 'https://bypass-alias-host-railway-alias.up.railway.app';
 const STOCKX_BASE = 'https://bypass-stock-x-host-railway-stock-x.up.railway.app';
 
 /* ===================================================================== */
@@ -78,42 +78,8 @@ async function searchStockxByUpc(upc) {
 /* FALLBACK: Alias                                                       */
 /* ===================================================================== */
 
-// Cache the Alias access token across warm invocations (expires in ~1h).
-let tokenCache = { value: null, expires: 0 };
-
-async function getAliasToken(email, password) {
-  if (tokenCache.value && Date.now() < tokenCache.expires) return tokenCache.value;
-
-  const r = await fetchWithTimeout(`${ALIAS_BASE}/alias-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!r.ok) throw new Error(`Alias login failed (${r.status})`);
-  const data = await r.json();
-  const token = data?.auth_token?.access_token;
-  if (!token) throw new Error('Alias login returned no access_token');
-
-  // Refresh a little early.
-  tokenCache = { value: token, expires: Date.now() + 50 * 60 * 1000 };
-  return token;
-}
-
-// True if a search response looks like an expired/invalid token — either by
-// HTTP status (401/403) or by an auth-flavored message in the body. This
-// catches upstreams that return 200/500 with an error body instead of a 401.
-function looksLikeAuthFailure(status, data) {
-  if (status === 401 || status === 403) return true;
-  const text = JSON.stringify(data ?? '').toLowerCase();
-  return (
-    /unauthor/.test(text) ||
-    /forbidden/.test(text) ||
-    /\b(token|session)\b[^]*\b(expir|invalid|missing|revok)/.test(text) ||
-    /\b(expir|invalid|missing|revok)[^]*\b(token|session)\b/.test(text) ||
-    /not\s+authenticated/.test(text) ||
-    /authentication\s+(failed|required)/.test(text)
-  );
-}
+// Login / token caching / auto-relogin-on-401 live in the shared Alias client
+// (api/_lib/alias.js) so every Alias call gets the same behavior.
 
 // Sort sizes by their numeric value so the list reads 1, 1.5, 2 … 13 instead
 // of the lexicographic order the API returns (which puts 10.5–13 before 1–10).
@@ -167,32 +133,11 @@ function normalizeAlias(product, upc) {
 }
 
 // Returns a normalized product or null. Throws on a hard upstream error.
+// Uses the shared client, which auto re-logs-in and retries once on a 401 /
+// auth failure (so an expired Alias token self-heals).
 async function searchAlias(upc, email, password) {
-  let token = await getAliasToken(email, password);
-
-  // Runs the search and returns status + parsed body (read once so we can
-  // inspect the body for auth failures without consuming it twice).
-  const doSearch = async (authToken) => {
-    const resp = await fetchWithTimeout(`${ALIAS_BASE}/alias-upc-search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, authorization_token: authToken, upc }),
-    });
-    let parsed = null;
-    try { parsed = await resp.json(); } catch { /* may not be JSON */ }
-    return { status: resp.status, ok: resp.ok, data: parsed };
-  };
-
-  let r = await doSearch(token);
-  // If the token expired — by status OR an auth error in the body — refresh
-  // once with a brand-new token and retry the search.
-  if (looksLikeAuthFailure(r.status, r.data)) {
-    tokenCache = { value: null, expires: 0 };
-    token = await getAliasToken(email, password);
-    r = await doSearch(token);
-  }
+  const r = await aliasAuthed((token) => aliasPost('/alias-upc-search', { email, password, authorization_token: token, upc }));
   if (!r.ok) throw new Error(`Alias search failed (${r.status})`);
-
   const product = r.data?.result?.results?.[0]?.product;
   return normalizeAlias(product, upc);
 }

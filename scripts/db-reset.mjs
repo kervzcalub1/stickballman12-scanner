@@ -43,6 +43,8 @@ const before = {
 // One statement: cascades cover the FK graph; RESTART IDENTITY rewinds the
 // per-table id columns. The standalone VIN/batch sequences are reset separately.
 await sql(`TRUNCATE TABLE item_events, items, shipment_issues, sales, batches RESTART IDENTITY CASCADE`);
+// Rescale requests are inventory-related — clear them too (table may not exist on older DBs).
+await sql(`TRUNCATE TABLE rescale_requests RESTART IDENTITY`).catch(() => {});
 await sql(`ALTER SEQUENCE batch_seq RESTART WITH 100001`);
 await sql(`ALTER SEQUENCE vin_seq   RESTART WITH 1`);
 

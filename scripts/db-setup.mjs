@@ -142,6 +142,13 @@ await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS last_edit_at       TIMESTA
 // Gender/age group (Men | Women | Youth | Toddler | Unisex) — from the product
 // lookup (Alias gender, else derived from StockX size suffix) for store listing.
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS gender             TEXT`);
+// Colorway (e.g. "Black/Varsity Royal/White") — from the product lookup, used on
+// the no-box box-style label alongside the UPC barcode.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS colorway           TEXT`);
+// Restock pending — set when a unit is rescaled/restocked; cleared when the team
+// marks it restocked (it then drops off the Rescale list into normal inventory).
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS restock_pending    BOOLEAN NOT NULL DEFAULT false`);
+await sql(`CREATE INDEX IF NOT EXISTS items_restock_idx ON items (restock_pending) WHERE restock_pending`);
 // Align the VIN column default to the real format (SBM-YYMMDD-######). This
 // default is only a fallback — every insert supplies a VIN — but keeping it
 // consistent avoids ever minting a stray "SB-…" id. Idempotent.
@@ -187,6 +194,29 @@ await sql(`
   )
 `);
 await sql(`CREATE INDEX IF NOT EXISTS edit_locks_hb_idx ON edit_locks (heartbeat_at)`);
+
+// PH-requested rescales — PH flags a SKU (sizes/qty, current price, reason) for
+// the warehouse to recount/rescan. Warehouse resolves from its inbox.
+await sql(`
+  CREATE TABLE IF NOT EXISTS rescale_requests (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    sku          TEXT NOT NULL,
+    name         TEXT,
+    sizes        JSONB,            -- [{ size, qty }]
+    price        NUMERIC(12,2),
+    reason       TEXT,
+    note         TEXT,
+    status       TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'done'
+    requested_by TEXT,
+    resolved_by  TEXT,
+    resolved_at  TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS rescale_requests_open_idx ON rescale_requests (status) WHERE status = 'open'`);
+// Warehouse audit results: actual qty per size counted on the shelf (+ a note).
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS actual_sizes JSONB`);
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS audit_note   TEXT`);
 
 // Future — profit tracking. Schema now, UI later.
 await sql(`

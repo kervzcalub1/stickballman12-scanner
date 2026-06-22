@@ -55,7 +55,7 @@ function normalize(item, querySku) {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  if (!requireRole(req, res, ['warehouse'])) return;
+  if (!requireRole(req, res, ['warehouse', 'ph_team'])) return; // PH uses it to look up a SKU on the rescale-request form
   if (!rateLimit(req, { windowMs: 60_000, max: 40 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
 

@@ -1,6 +1,5 @@
-// GET /api/ph/list?month=&year=  ->  { ok, rows }
-// PH Team monthly grid: items scanned in the given EST month, sorted by scan
-// date. Restricted to the ph_team and admin roles.
+// GET /api/ph/list?from=YYYY-MM-DD&to=YYYY-MM-DD&kind=  ->  { ok, rows }
+// PH grid for an EST date range. Restricted to the ph_team and admin roles.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { phListItems, dbConfigured } from '../_lib/db.js';
 
@@ -15,15 +14,14 @@ export default async function handler(req, res) {
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
   const p = new URL(req.url, 'http://x').searchParams;
-  const month = Math.min(12, Math.max(1, Number(p.get('month')) || 0));
-  const year = Number(p.get('year')) || 0;
+  const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+  const from = isDate(p.get('from')) ? p.get('from') : null;
+  const to = isDate(p.get('to')) ? p.get('to') : null;
   const kindParam = p.get('kind');
   const kind = kindParam === 'receiving' || kindParam === 'rescale' ? kindParam : null;
-  if (!month || year < 2000 || year > 3000)
-    return send(res, 400, { ok: false, error: 'Provide a valid month and year.' });
 
   try {
-    const rows = await phListItems(month, year, kind);
+    const rows = await phListItems(from, to, kind);
     return send(res, 200, { ok: true, rows });
   } catch (e) {
     console.error('[ph/list]', e.message);

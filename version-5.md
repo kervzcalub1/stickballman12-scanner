@@ -310,3 +310,70 @@ guarded two ways:
   (Cancel keeps you put). Applied on every page that holds unsaved state: Mark
   Sold/Shipped (scanned rows), the Report (edit mode), Receiving (cart/draft),
   Inventory (staged status), and No Box (staged resolutions).
+
+## 17. Home pending badges · restock tracking · "Box found"
+
+- **Home pending badges.** Each home card shows live count pills from
+  `GET /api/items/pending-counts`: the listing card (Report / New Inventory)
+  shows **II · AL · SX · SH** (sellable units not yet synced to each store);
+  Inventory shows **Needs shelf**; No Box shows **No box**; Rescale shows
+  **Restock**. Counts ignore non-sellable units (sold/shipped/missing/no-box).
+- **Restock tracking.** New `items.restock_pending` column — set true when a unit
+  is rescaled (VIN re-scan or rescale-batch intake). The PH **Rescale Stock**
+  page is now a *pending worklist* (shows `restock_pending` units, not month-
+  scoped) with a **✓ Restocked** action per row that clears the flag via
+  `POST /api/items/restock-done` — the unit then drops off the list and behaves
+  as normal inventory. This is the explicit "rescale processed" indicator.
+- **No Box → With Box.** Since no shoe is sold without a box, the No Box page's
+  primary action is **"📦 Box found → With Box"** (`POST /api/items/box-found`):
+  sets `with_box = true` + status *Needs to be Added to Shelf*, making it
+  sellable (it then appears in the PH report). A secondary "Other status…"
+  dropdown still covers edge cases (e.g. Missing).
+
+## 18. SKU-merged Report/Inventory · PH-requested rescales
+
+- **Merge by SKU + status.** The PH Report **and** the warehouse Inventory now
+  show **one row per SKU + status** (regardless of size). The row lists each
+  size with its quantity (e.g. `9 ×2 · 9.5 ×3 · 10 ×1`) and a total Qty, because
+  PH encodes a SKU to Intelligent Inventory once for all its sizes. Price /
+  II / AL / SX / SH / Note are set **once per SKU** and applied to every member
+  VIN; a sync flag reads Yes only when *all* units have it, and a `~` marks a
+  mixed price/cost. (`groupPhRows` regroups by `sku|status`.) Inventory's
+  expanded row keeps a per-VIN **Units** list (drill into any one for its
+  history); checkbox/bulk/labels still operate on the underlying VINs.
+- **PH Request Rescale.** PH submits **SKU, sizes + qty, current price, reason**
+  (mismatch / quantity / recount / …) via a form → `rescale_requests` table
+  (`POST /api/rescale-requests/create`). The **warehouse** gets a **Rescale
+  Requests** inbox card (with an open-count badge) listing each request; **Mark
+  done** resolves it (`/resolve`). This is the PH→scanner loop from the workflow
+  diagram. `db-reset` clears requests along with inventory.
+
+## 19. Sizes as chips · date filter on all report pages
+
+- **Sizes as chips.** The merged SKU rows now render each size as a discrete
+  chip (`SizesQty`) — `[8 ×5] [9 ×5] [10 ×5] [11 ×5]` — instead of a run-on
+  dotted string, so many sizes read clearly.
+- **Calendar date filter everywhere.** Extracted the Inventory Day/Week/Month
+  switcher into a reusable `DateRangeBar` (+ `rangeOf(mode,anchor)`), and wired
+  it into the **Report**, **Rescale Stock**, **No Box**, and **Rescale Requests**
+  pages. Defaults: **Month** for the Report, **Day** for the others. Backend list
+  queries (`phListItems`, `listNoBoxItems`, `listRescaleRequests`) now take a
+  `from`/`to` EST date range instead of month/year. ‹ / › navigates periods and
+  reloads instantly.
+
+## 20. Rescale requests: reported vs actual audit
+
+The rescale request is now a two-way audit:
+- **PH** submits the **reported** qty per size (and can look up the SKU to
+  auto-fill the shoe name — `sku-search` now allows `ph_team`).
+- **Warehouse** opens the request and runs an **audit** ("🔍 Audit shelf"):
+  enters the **actual** qty counted per size (pre-filled from the reported sizes;
+  can add sizes found that weren't reported, set 0 for none on shelf) + an audit
+  note. Saving sets `rescale_requests.actual_sizes` / `audit_note` and flips the
+  status `open → audited`.
+- A shared **report** (`RescaleRequestsReport`) shows each request as a compact
+  **Reported (top) / Actual (bottom)** grid per size, with discrepancies
+  highlighted in red. Visible to **both** roles; warehouse audits, PH views +
+  creates ("+ New request"). Filter by Open / Audited / All and by date.
+- `auditRescaleRequest` replaces the old `resolve`; the open-count home badge
+  clears once a request is audited.

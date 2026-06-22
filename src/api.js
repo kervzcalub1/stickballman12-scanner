@@ -79,10 +79,17 @@ export const api = {
   itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
   rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),
   itemsQuery: (params) => get(`/api/items/query?${new URLSearchParams(params).toString()}`),
-  noBoxList: () => get('/api/items/no-box'),
+  noBoxList: (from, to) => get(`/api/items/no-box?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}`),
+  pendingCounts: () => get('/api/items/pending-counts'),
+  boxFound: (vin) => post('/api/items/box-found', { vin }),
+  restockDone: (vins) => post('/api/items/restock-done', { vins }),
+  // PH-requested rescales
+  rescaleRequestCreate: (payload) => post('/api/rescale-requests/create', payload),
+  rescaleRequestList: (status, from, to) => get(`/api/rescale-requests/list?${new URLSearchParams({ ...(status ? { status } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}`),
+  rescaleRequestAudit: (id, actualSizes, note) => post('/api/rescale-requests/audit', { id, actualSizes, note }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // v5 — PH Team monthly grid
-  phList: (month, year, kind) => get(`/api/ph/list?month=${month}&year=${year}${kind ? `&kind=${kind}` : ''}`),
+  phList: (from, to, kind) => get(`/api/ph/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(kind ? { kind } : {}) }).toString()}`),
   phUpdate: (vin, fields) => post('/api/ph/update', { vin, fields }),
   phUpdateMany: (vins, fields, baseEditedAt) => post('/api/ph/update', { vins, fields, baseEditedAt }),
   // PH edit locks (presence)

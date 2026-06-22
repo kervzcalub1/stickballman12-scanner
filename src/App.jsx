@@ -76,7 +76,7 @@ function Modal({ type, title, message, onClose, children }) {
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-const ROUTES = ['receiving', 'rescale', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped'];
+const ROUTES = ['receiving', 'rescale', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped', 'rescalereq'];
 const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -159,6 +159,7 @@ export default function App() {
   if (view === 'nobox') return <NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'sold') return <StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'shipped') return <StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'rescalereq') return <RescaleRequestsReport canAudit onHome={() => go('home')} onSignOut={signOut} />;
   return <Home user={user} onPick={go} onSignOut={signOut} />;
 }
 
@@ -272,6 +273,39 @@ const ROLE_LABEL = { admin: 'Admin', warehouse: 'Warehouse', ph_team: 'PH Team' 
 const roleLabel = (r) => ROLE_LABEL[r] || r;
 
 // Home is grouped into categories. `adminOnly` cards/sections show for admin only.
+// Pending-work counts for home badges (fetched once when a home screen mounts).
+function usePendingCounts() {
+  const [counts, setCounts] = useState(null);
+  useEffect(() => {
+    let on = true;
+    api.pendingCounts().then(({ counts: c }) => { if (on) setCounts(c); }).catch(() => {});
+    return () => { on = false; };
+  }, []);
+  return counts;
+}
+// Small count pills under a home card. `badges` = [[label, n], …]; only n>0 show.
+function CardBadges({ badges }) {
+  const shown = (badges || []).filter(([, n]) => Number(n) > 0);
+  if (!shown.length) return null;
+  return (
+    <span className="card-badges">
+      {shown.map(([label, n]) => <span key={label} className="card-badge">{label} {n}</span>)}
+    </span>
+  );
+}
+// Which badges a given home-card key shows. The four store badges (II/AL/SX/SH)
+// go on the listing card; the others on their matching card.
+const SYNC_BADGES = (c) => [['II', c.not_ii], ['AL', c.not_alias], ['SX', c.not_stockx], ['SH', c.not_shopify]];
+function homeCardBadges(key, c) {
+  if (!c) return [];
+  if (key === 'report') return SYNC_BADGES(c);
+  if (key === 'inventory') return [['Needs shelf', c.needs_shelf]];
+  if (key === 'nobox') return [['No box', c.no_box]];
+  if (key === 'rescale') return [['Restock', c.restock_pending]];
+  if (key === 'rescalereq') return [['Requests', c.rescale_requests]];
+  return [];
+}
+
 const HOME_SECTIONS = [
   { title: 'Administration', adminOnly: true, cards: [
     { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, or remove accounts' },
@@ -279,6 +313,7 @@ const HOME_SECTIONS = [
   { title: 'Receiving & Stock', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
     { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },
+    { key: 'rescalereq', icon: '📨', title: 'Rescale Requests', sub: 'PH-flagged SKUs to recount / rescan' },
     { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Resolve units bought without a box' },
   ] },
   { title: 'Sales & Shipment', cards: [
@@ -293,6 +328,7 @@ const HOME_SECTIONS = [
 
 function Home({ user, onPick, onSignOut }) {
   const isAdmin = user.role === 'admin';
+  const counts = usePendingCounts();
   return (
     <div className="app">
       <TopBar onSignOut={onSignOut} />
@@ -306,6 +342,7 @@ function Home({ user, onPick, onSignOut }) {
                 <span className="home-card-icon">{c.icon}</span>
                 <span className="home-card-title">{c.title}</span>
                 <span className="home-card-sub">{c.key === 'report' && !isAdmin ? `${c.sub} (view-only)` : c.sub}</span>
+                <CardBadges badges={homeCardBadges(c.key, counts)} />
               </button>
             ))}
           </div>
@@ -594,8 +631,10 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
       const { product: p } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
       const incoming = {
         name: p.name || '', sku: p.sku || '', image: p.image || '', source: p.source || 'manual',
-        upc: isUpc ? c : '', scannedSize: p.scannedSize || null, sizeOptions: p.sizes || [],
-        gender: p.gender || null,
+        // Keep the UPC whether it was scanned directly or returned by a SKU
+        // lookup — it's needed to print the no-box box-style barcode label.
+        upc: (isUpc ? c : '') || p.upc || '', scannedSize: p.scannedSize || null, sizeOptions: p.sizes || [],
+        gender: p.gender || null, colorway: p.colorway || '',
       };
       const d = draftRef.current;
       if (!d) {
@@ -619,6 +658,12 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
   // Validate the draft and build a completed item — reserving REAL VINs for each
   // unit up front so they can be stickered before submit (esp. no-box shoes).
   // If reservation fails, the item still commits (server assigns VINs then).
+  // Build a completed item from the draft, RESERVING real VINs up front so they
+  // are visible in the cart before submit — the warehouse needs the VIN while
+  // handling each unit (especially no-box shoes, which must be stickered/noted
+  // by hand). Reserved-but-uncommitted numbers are never reused (a gap is safer
+  // than risking the same VIN on two different shoes), so abandoning a session
+  // can leave harmless gaps in the sequence.
   async function buildItemFromDraft(d) {
     if (!d || !String(d.name).trim()) { setMError('Scan or type a product first.'); return null; }
     const rows = (d.rows || []).filter((r) => String(r.size).trim());
@@ -626,21 +671,38 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
     const total = rows.reduce((a, r) => a + Math.max(1, Number(r.qty) || 1), 0);
     let vins = [];
     try { const res = await api.reserveVins(total, header.dateReceived); vins = res.vins || []; }
-    catch (err) { if (err.unauthorized) { onSignOut(); return null; } /* else proceed without preview VINs */ }
+    catch (err) { if (err.unauthorized) { onSignOut(); return null; } /* else proceed; server assigns on commit */ }
     let idx = 0;
     const sizes = rows.map((r) => {
       const qty = Math.max(1, Number(r.qty) || 1);
       const vs = vins.slice(idx, idx + qty); idx += qty;
       return { key: r.key, size: r.size, qty, vins: vs };
     });
-    return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, withBox: d.withBox !== false, sizes };
+    return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, colorway: d.colorway || null, withBox: d.withBox !== false, sizes };
+  }
+  // Add a completed item to the cart, MERGING into an existing item when it's the
+  // same product + same box status (so the same shoe scanned in two sessions
+  // shows as one line with combined sizes/quantities/VINs). Different box status
+  // stays separate (boxed vs no-box are tracked apart).
+  function addOrMergeItem(item) {
+    setItems((arr) => {
+      const i = arr.findIndex((x) => x.withBox === item.withBox && sameSku(x.sku, item.sku));
+      if (i === -1) return [...arr, item];
+      const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
+      for (const s of item.sizes) {
+        const j = sizes.findIndex((z) => z.size === s.size);
+        if (j === -1) sizes.push({ key: cartKey++, size: s.size, qty: s.qty, vins: s.vins || [] });
+        else { sizes[j].qty += s.qty; sizes[j].vins = [...sizes[j].vins, ...(s.vins || [])]; }
+      }
+      const copy = [...arr]; copy[i] = { ...arr[i], sizes }; return copy;
+    });
   }
   async function completeItem() {
     setMBusy(true);
     try {
       const item = await buildItemFromDraft(draftRef.current);
       if (!item) return;
-      setItems((arr) => [...arr, item]);
+      addOrMergeItem(item);
       closeAddItem();
     } finally { setMBusy(false); }
   }
@@ -649,7 +711,7 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
     try {
       const item = await buildItemFromDraft(draftRef.current);
       if (!item) return; // current invalid — keep editing it (prompt stays)
-      setItems((arr) => [...arr, item]);
+      addOrMergeItem(item);
       const next = pendingSwitch; setPendingSwitch(null);
       const rows = next.scannedSize ? [{ key: cartKey++, size: next.scannedSize, qty: 1 }] : [];
       setDraft({ ...next, withBox: true, rows });
@@ -739,7 +801,7 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
         for (const it of items) {
           for (const r of it.sizes) {
             for (let n = 0; n < Math.max(1, Number(r.qty) || 1); n++) {
-              out.push({ name: it.name, sku: it.sku, size: r.size, upc: it.upc, image: it.image, source: it.source, gender: it.gender, cost: defaultCostNum, withBox: it.withBox, vin: r.vins?.[n] || null });
+              out.push({ name: it.name, sku: it.sku, size: r.size, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, vin: r.vins?.[n] || null });
             }
           }
         }
@@ -773,7 +835,10 @@ function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut 
       }
 
       setShowConfirm(false);
-      const printItems = (batchRes?.vins || []).map((vin, i) => ({ vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size }));
+      const printItems = (batchRes?.vins || []).map((vin, i) => ({
+        vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
+        upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
+      }));
       setResult({
         batchCode: batchRes?.batchCode || null,
         newCount: batchRes?.count || 0,
@@ -1262,6 +1327,56 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
 // One page: search/scan inventory, filter (date/supplier/status) with totals +
 // CSV (the daily report), select rows → print VIN labels, and click a row (or
 // scan a VIN) to open an item's detail + history + status/notes.
+// Calendar-style date navigation helpers for the Inventory period switcher.
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function periodRange(mode, a) {
+  if (mode === 'week') { const s = new Date(a); s.setDate(a.getDate() - a.getDay()); const e = new Date(s); e.setDate(s.getDate() + 6); return [s, e]; }
+  if (mode === 'month') return [new Date(a.getFullYear(), a.getMonth(), 1), new Date(a.getFullYear(), a.getMonth() + 1, 0)];
+  return [new Date(a), new Date(a)]; // day
+}
+function shiftAnchor(mode, a, dir) {
+  const n = new Date(a);
+  if (mode === 'week') n.setDate(a.getDate() + 7 * dir);
+  else if (mode === 'month') n.setMonth(a.getMonth() + dir);
+  else n.setDate(a.getDate() + dir);
+  return n;
+}
+function periodLabel(mode, a) {
+  if (mode === 'month') return a.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const [s, e] = periodRange(mode, a);
+  if (mode === 'day') return s.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  // Week — built explicitly so it reads e.g. "Jun 21 – 27, 2026" (same month),
+  // "Jun 28 – Jul 4, 2026" (cross-month), "Dec 29, 2025 – Jan 4, 2026" (cross-year).
+  const mon = (d) => d.toLocaleDateString('en-US', { month: 'short' });
+  if (s.getFullYear() !== e.getFullYear()) return `${mon(s)} ${s.getDate()}, ${s.getFullYear()} – ${mon(e)} ${e.getDate()}, ${e.getFullYear()}`;
+  if (s.getMonth() !== e.getMonth()) return `${mon(s)} ${s.getDate()} – ${mon(e)} ${e.getDate()}, ${e.getFullYear()}`;
+  return `${mon(s)} ${s.getDate()} – ${e.getDate()}, ${e.getFullYear()}`;
+}
+
+// Reusable Day/Week/Month calendar switcher. Controlled: parent owns
+// {mode, anchor} and reloads when onChange fires. Pages compute from/to with
+// periodRange(mode, anchor).map(ymd).
+function DateRangeBar({ mode, anchor, onChange, right }) {
+  return (
+    <div className="cal-bar">
+      <div className="seg cal-modes" role="group" aria-label="Date range">
+        {[['day', 'Day'], ['week', 'Week'], ['month', 'Month']].map(([m, lbl]) => (
+          <button key={m} type="button" className={`seg-btn ${mode === m ? 'on' : ''}`} onClick={() => onChange(m, anchor)}>{lbl}</button>
+        ))}
+      </div>
+      <div className="cal-nav">
+        <button type="button" className="btn ghost sm" onClick={() => onChange(mode, shiftAnchor(mode, anchor, -1))} aria-label="Previous">‹</button>
+        <span className="cal-label">{periodLabel(mode, anchor)}</span>
+        <button type="button" className="btn ghost sm" onClick={() => onChange(mode, shiftAnchor(mode, anchor, 1))} aria-label="Next">›</button>
+        <button type="button" className="btn ghost sm" onClick={() => onChange(mode, new Date())}>Today</button>
+      </div>
+      {right}
+    </div>
+  );
+}
+// from/to (YYYY-MM-DD) for the current period.
+const rangeOf = (mode, anchor) => periodRange(mode, anchor).map(ymd);
+
 function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
   const today = new Date().toISOString().slice(0, 10);
   const [mode, setMode] = useState('list'); // 'list' | 'detail'
@@ -1273,6 +1388,8 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
   const [supplier, setSupplier] = useState('');
   const [status, setStatus] = useState('');
   const [intake, setIntake] = useState(''); // '' | 'receiving' | 'rescale'
+  const [periodMode, setPeriodMode] = useState('day'); // 'day' | 'week' | 'month' | 'custom'
+  const [anchor, setAnchor] = useState(() => new Date()); // reference date for the current period
   const [data, setData] = useState(null); // { rows, totals }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1292,6 +1409,7 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
   const [showPrefs, setShowPrefs] = useState(false);
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const searchRef = useRef(null);
+  const isMobile = useMediaQuery('(max-width: 768px)');
 
   // detail
   const [detail, setDetail] = useState(null); // { item, events }
@@ -1352,7 +1470,16 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
   }
   function viewToday() {
     setQ(''); setFrom(today); setTo(today); setSupplier(''); setStatus(''); setIntake('');
+    setPeriodMode('day'); setAnchor(new Date());
     load({ q: '', from: today, to: today, supplier: '', status: '', intake: '' });
+  }
+  // Calendar-style navigation: switch period (day/week/month) or step ‹ / › and
+  // immediately load that range — no Apply needed.
+  function gotoPeriod(mode, a) {
+    const [s, e] = periodRange(mode, a);
+    const fs = ymd(s); const es = ymd(e);
+    setPeriodMode(mode); setAnchor(a); setFrom(fs); setTo(es); setQ('');
+    load({ q: '', from: fs, to: es });
   }
 
   async function openDetail(vin) {
@@ -1512,7 +1639,7 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
                 <button className="btn primary" disabled={busy || !note.trim()}>Add</button>
               </form>
 
-              <div className="send"><button className="btn ghost wide" onClick={() => setLabels([{ vin: it.vin, sku: it.sku, size: it.size }])}>🖨 Print this label</button></div>
+              <div className="send"><button className="btn ghost wide" onClick={() => setLabels([{ vin: it.vin, sku: it.sku, size: it.size, name: it.name, upc: it.upc, colorway: it.colorway, gender: it.gender, withBox: it.with_box }])}>🖨 Print this label</button></div>
             </div>
 
             <div className="card">
@@ -1539,9 +1666,64 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
 
   /* ----- list view ----- */
   const rows = data?.rows || [];
+  // Merge by SKU + status (sizes aggregated), same as the PH report.
+  const groups = groupPhRows(rows);
+  const groupItems = (g) => rows.filter((r) => g.vins.includes(r.vin));
   const toggle = (vin) => setSel((s) => { const n = new Set(s); n.has(vin) ? n.delete(vin) : n.add(vin); return n; });
   const toggleAll = () => setSel((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.vin))));
+  const groupChecked = (g) => g.vins.every((v) => sel.has(v));
+  const toggleGroup = (g) => setSel((s) => { const n = new Set(s); const all = g.vins.every((v) => n.has(v)); g.vins.forEach((v) => (all ? n.delete(v) : n.add(v))); return n; });
   const selectedItems = rows.filter((r) => sel.has(r.vin));
+
+  // Status change over a whole SKU group (all its VINs) via bulk-status.
+  async function saveGroupStatus(g) {
+    const status = statusDrafts[g.key];
+    if (!status || status === g.status) return;
+    setSavingStatusVin(g.key); setError('');
+    try {
+      await api.bulkStatus(g.vins, status);
+      setStatusDrafts((d) => { const n = { ...d }; delete n[g.key]; return n; });
+      load();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setSavingStatusVin(null); }
+  }
+
+  // Expanded detail for a SKU group — metrics, group status change, print all,
+  // and a per-VIN units list (drill into any one for its full history).
+  const invDetail = (g) => (
+    <div className="inv-detail">
+      <dl className="inv-metrics">
+        <div><dt>Date received</dt><dd>{(g.date_received || '').slice(0, 10) || '—'}</dd></div>
+        <div><dt>Cost</dt><dd>{g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : '—'}</dd></div>
+        <div><dt>Supplier / Buyer</dt><dd>{g.supplier_name || '—'}{g.buyer_name ? ` / ${g.buyer_name}` : ''}</dd></div>
+        <div><dt>Total units</dt><dd>{g.qty}</dd></div>
+        <div className="inv-metrics-wide"><dt>Sizes</dt><dd><SizesQty sizes={g.sizes} /></dd></div>
+        <div><dt>Price</dt><dd>{g.price != null ? `${g.priceMixed ? '~' : ''}$${Number(g.price).toFixed(2)}` : '—'}</dd></div>
+        <div className="inv-metrics-wide"><dt>Listed / synced</dt><dd><SyncBadges item={g} /></dd></div>
+      </dl>
+      <div className="inv-actions">
+        <label className="inv-status-edit">Status (all {g.qty})
+          <select value={statusDrafts[g.key] ?? g.status} onChange={(e) => setStatusDraft(g.key, e.target.value)}>
+            {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        </label>
+        <button className="btn sm primary" disabled={(statusDrafts[g.key] ?? g.status) === g.status || savingStatusVin === g.key} onClick={() => saveGroupStatus(g)}>
+          {savingStatusVin === g.key ? 'Saving…' : 'Save'}
+        </button>
+        <button className="btn sm ghost" onClick={() => setLabels(groupItems(g))}>🖨 Print labels ({g.qty})</button>
+      </div>
+      <div className="inv-units">
+        <div className="inv-history-title">Units</div>
+        {groupItems(g).map((r) => (
+          <div className="inv-unit-row" key={r.vin}>
+            <span className="vin">{r.vin}</span>
+            <span className="muted sm">{r.size ? `US ${r.size}` : '—'}</span>
+            <button className="btn sm ghost" onClick={() => openDetail(r.vin)}>Details →</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="app">
@@ -1563,9 +1745,26 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
           </Suspense>
         )}
 
+        <div className="cal-bar mt">
+          <div className="seg cal-modes" role="group" aria-label="Date range">
+            {[['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['custom', 'Custom']].map(([m, lbl]) => (
+              <button key={m} type="button" className={`seg-btn ${periodMode === m ? 'on' : ''}`}
+                onClick={() => (m === 'custom' ? setPeriodMode('custom') : gotoPeriod(m, anchor))}>{lbl}</button>
+            ))}
+          </div>
+          {periodMode !== 'custom' && (
+            <div className="cal-nav">
+              <button type="button" className="btn ghost sm" onClick={() => gotoPeriod(periodMode, shiftAnchor(periodMode, anchor, -1))} aria-label="Previous">‹</button>
+              <span className="cal-label">{periodLabel(periodMode, anchor)}</span>
+              <button type="button" className="btn ghost sm" onClick={() => gotoPeriod(periodMode, shiftAnchor(periodMode, anchor, 1))} aria-label="Next">›</button>
+              <button type="button" className="btn ghost sm" onClick={viewToday}>Today</button>
+            </div>
+          )}
+        </div>
+
         <div className="report-filters mt">
-          <label>From<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
-          <label>To<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+          {periodMode === 'custom' && <label>From<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>}
+          {periodMode === 'custom' && <label>To<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>}
           <label>Supplier
             <select value={supplier} onChange={(e) => setSupplier(e.target.value)}>
               <option value="">All</option>
@@ -1585,8 +1784,7 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
               <option value="rescale">Rescaled</option>
             </select>
           </label>
-          <button className="btn primary" onClick={() => load()} disabled={loading}>{loading ? '…' : 'Apply'}</button>
-          <button className="btn ghost" onClick={viewToday}>Today</button>
+          <button className="btn primary" onClick={() => load()} disabled={loading}>{loading ? '…' : 'Apply filters'}</button>
         </div>
       </div>
 
@@ -1606,7 +1804,28 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
             </span>
           </div>
           <div className="card">
-            {!rows.length ? <p className="muted">No items.</p> : (
+            {!rows.length ? <p className="muted">No items.</p> : isMobile ? (
+              <div className="dcards">
+                <label className="dcard-selectall"><input type="checkbox" checked={sel.size === rows.length && rows.length > 0} onChange={toggleAll} /> Select all ({rows.length} units)</label>
+                {groups.map((g) => {
+                  const open = expanded.has(g.key);
+                  return (
+                    <div className={`dcard ${open ? 'open' : ''}`} key={g.key}>
+                      <div className="dcard-top">
+                        <label onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} /> <span className="dcard-name">{g.name}</span></label>
+                        <button className="btn icon ghost sm" onClick={() => toggleRow(g.key)} aria-expanded={open}>{open ? '▾' : '▸'}</button>
+                      </div>
+                      <button className="dcard-main" onClick={() => toggleRow(g.key)}>
+                        <div className="dcard-line"><span className="muted">{g.sku || '—'}</span><span>×{g.qty}</span></div>
+                        <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} /></span></div>
+                        <div className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} /></div>
+                      </button>
+                      {open && invDetail(g)}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
               <div className="inv-tablewrap">
                 <table className="inv-table">
                   <thead>
@@ -1614,76 +1833,31 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
                       <th className="inv-col-check">
                         <input type="checkbox" checked={sel.size === rows.length && rows.length > 0} onChange={toggleAll} aria-label="Select all" />
                       </th>
-                      <th className="inv-col-vin">VIN</th>
                       <th>Shoe</th>
-                      <th className="inv-col-size">Size</th>
                       <th className="inv-col-sku">SKU</th>
+                      <th>Sizes (qty)</th>
+                      <th className="inv-col-size">Qty</th>
                       <th className="inv-col-status">Status &amp; sync</th>
                     </tr>
                   </thead>
                   <tbody>
-                  {rows.map((r) => {
-                    const open = expanded.has(r.vin);
-                    const h = hist[r.vin];
+                  {groups.map((g) => {
+                    const open = expanded.has(g.key);
                     return (
-                      <React.Fragment key={r.vin}>
-                        <tr className={`inv-trow ${open ? 'open' : ''}`} onClick={() => toggleRow(r.vin)}>
+                      <React.Fragment key={g.key}>
+                        <tr className={`inv-trow ${open ? 'open' : ''}`} onClick={() => toggleRow(g.key)}>
                           <td className="inv-col-check" onClick={(e) => e.stopPropagation()}>
-                            <input type="checkbox" checked={sel.has(r.vin)} onChange={() => toggle(r.vin)} aria-label={`Select ${r.vin}`} />
+                            <input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} aria-label={`Select ${g.sku}`} />
                           </td>
-                          <td className="inv-col-vin"><span className="inv-caret">{open ? '▾' : '▸'}</span><span className="vin">{r.vin}</span></td>
-                          <td className="inv-name" title={r.name}>{r.name}</td>
-                          <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>
-                          <td className="inv-col-sku">{r.sku || '—'}</td>
-                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={r.status} /><SyncBadges item={r} /></span></td>
+                          <td className="inv-name" title={g.name}><span className="inv-caret">{open ? '▾' : '▸'}</span>{g.name}</td>
+                          <td className="inv-col-sku">{g.sku || '—'}</td>
+                          <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
+                          <td className="inv-col-size"><b>×{g.qty}</b></td>
+                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} /></span></td>
                         </tr>
                         {open && (
                           <tr className="inv-drow">
-                            <td colSpan={6}>
-                          <div className="inv-detail">
-                            <dl className="inv-metrics">
-                              <div><dt>Date received</dt><dd>{(r.date_received || '').slice(0, 10) || '—'}</dd></div>
-                              <div><dt>Cost</dt><dd>${Number(r.cost || 0).toFixed(2)}</dd></div>
-                              <div><dt>Batch ID</dt><dd>{r.batch_code || '—'}</dd></div>
-                              <div><dt>Supplier / Buyer</dt><dd>{r.supplier_name || '—'}{r.buyer_name ? ` / ${r.buyer_name}` : ''}</dd></div>
-                              <div><dt>Received by</dt><dd>{r.created_by || '—'}</dd></div>
-                              <div><dt>Size</dt><dd>{r.size || '—'}</dd></div>
-                              <div><dt>Price</dt><dd>{r.price != null ? `$${Number(r.price).toFixed(2)}` : '—'}</dd></div>
-                              <div className="inv-metrics-wide"><dt>Listed / synced</dt><dd><SyncBadges item={r} /></dd></div>
-                            </dl>
-                            <div className="inv-history">
-                              <div className="inv-history-title">Audit notes &amp; history</div>
-                              {!h || h.loading ? <p className="muted sm">Loading…</p>
-                                : h.error ? <p className="error sm">{h.error}</p>
-                                : !h.events?.length ? <p className="muted sm">No history yet.</p>
-                                : (
-                                  <div className="timeline">
-                                    {h.events.map((e) => (
-                                      <div className="tl-item" key={e.id}>
-                                        <div className="tl-dot" />
-                                        <div className="tl-body">
-                                          <div>{eventLabel(e)}</div>
-                                          <div className="muted sm">{new Date(e.created_at).toLocaleString()}</div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                            </div>
-                            <div className="inv-actions">
-                              <label className="inv-status-edit">Status
-                                <select value={statusDrafts[r.vin] ?? r.status} onChange={(e) => setStatusDraft(r.vin, e.target.value)}>
-                                  {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                                </select>
-                              </label>
-                              <button className="btn sm primary" disabled={(statusDrafts[r.vin] ?? r.status) === r.status || savingStatusVin === r.vin} onClick={() => saveRowStatus(r.vin, r.status)}>
-                                {savingStatusVin === r.vin ? 'Saving…' : 'Save'}
-                              </button>
-                              <button className="btn sm ghost" onClick={() => setLabels([{ vin: r.vin, sku: r.sku, size: r.size }])}>🖨 Print label</button>
-                              <button className="btn sm ghost" onClick={() => openDetail(r.vin)}>Details →</button>
-                            </div>
-                          </div>
-                            </td>
+                            <td colSpan={6}>{invDetail(g)}</td>
                           </tr>
                         )}
                       </React.Fragment>
@@ -1728,13 +1902,11 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
 // pricing + cross-store sync flags. Frozen left columns (through Qty) so the
 // many editable columns scroll horizontally inside a fixed-height box. Every
 // edit is audited to the item's history.
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const PH_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit' });
 const PH_DATETIME = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: 'numeric', minute: '2-digit', hour12: true });
-// Frozen columns and their fixed widths (px): Date, Title, SKU, Size, Qty.
-// (Rows are CONSOLIDATED — identical units collapse into one row with a Qty —
-// so there's no per-VIN column; Qty replaces it.)
-const PH_FROZEN_W = [86, 200, 110, 64, 50];
+// Frozen columns and their fixed widths (px): Date, Title, SKU, Qty.
+// Rows are merged per SKU+status; the size breakdown is a scrolling column.
+const PH_FROZEN_W = [86, 210, 120, 54];
 const PH_LEFTS = PH_FROZEN_W.reduce((a, _w, i) => { a.push(i ? a[i - 1] + PH_FROZEN_W[i - 1] : 0); return a; }, []);
 const frozenStyle = (i) => ({ position: 'sticky', left: PH_LEFTS[i], minWidth: PH_FROZEN_W[i], width: PH_FROZEN_W[i] });
 // Right-frozen columns: Action then Added by (Added by is rightmost).
@@ -1762,32 +1934,55 @@ const PH_FLAGS = [
   ['synced_stockx', 'StockX'], ['synced_shopify', 'Shopify'],
 ];
 
-// Consolidate identical units into one row so the PH team lists by SKU+size+qty
-// instead of counting individual VINs. Units group only when ALL listing-
-// relevant details match (name, sku, size, gender, status, cost, price, every
-// sync flag, note) — so applying one edit to the whole group is always correct.
-// The group carries every member VIN (`vins`) for the bulk save + a `qty`.
+// Merge into ONE row per SKU + status (regardless of size), because the PH team
+// encodes a SKU to Intelligent Inventory once for all its sizes. The row lists
+// each size with its quantity; Price + II/AL/SX/SH + Note are set once for the
+// whole SKU and applied to every member VIN. A sync flag reads "Yes" only when
+// ALL units have it (so a partially-synced SKU shows as not-done).
+const sizeNum = (s) => { const m = String(s).match(/[\d.]+/); return m ? parseFloat(m[0]) : NaN; };
 function groupPhRows(list) {
   const map = new Map();
   for (const r of list) {
-    const key = ['name', 'sku', 'size', 'gender', 'status', 'cost', 'price',
-      'added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify', 'ph_note']
-      .map((k) => (r[k] == null ? '' : String(r[k]))).join('|#|');
+    const key = `${r.sku || ''}|#|${r.status || ''}`;
     let g = map.get(key);
     if (!g) {
-      g = { ...r, key, vins: [], qty: 0, _mixedBy: false };
+      g = {
+        ...r, key, vins: [], qty: 0, _mixedBy: false, _sizeMap: {}, _prices: new Set(), _costs: new Set(),
+        _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
+      };
       map.set(key, g);
     }
     g.vins.push(r.vin);
     g.qty += 1;
+    const sz = r.size || '—';
+    g._sizeMap[sz] = (g._sizeMap[sz] || 0) + 1;
+    g._prices.add(r.price == null ? '' : String(r.price));
+    g._costs.add(r.cost == null ? '' : String(r.cost));
+    for (const f of ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify']) g._flags[f] = g._flags[f] && !!r[f];
     if (r.created_by !== g.created_by) g._mixedBy = true;
     if (r.created_at < g.created_at) g.created_at = r.created_at; // earliest scan
-    // Most recent editor stamp across the group.
     if (r.last_edit_at && (!g.last_edit_at || r.last_edit_at > g.last_edit_at)) {
       g.last_edit_at = r.last_edit_at; g.last_edit_by = r.last_edit_by;
     }
   }
-  return [...map.values()];
+  return [...map.values()].map((g) => ({
+    ...g,
+    ...g._flags, // representative flags = all-units-true
+    priceMixed: g._prices.size > 1,
+    costMixed: g._costs.size > 1,
+    sizes: Object.entries(g._sizeMap).sort((a, b) => (sizeNum(a[0]) - sizeNum(b[0])) || String(a[0]).localeCompare(b[0])).map(([size, qty]) => ({ size, qty })),
+  }));
+}
+// "9 ×2 · 9.5 ×3 · 10 ×1"
+const sizesLabel = (g) => (g.sizes || []).map((s) => `${s.size} ×${s.qty}`).join(', ');
+// Sizes as discrete chips (clearer than a run-on string when there are many).
+function SizesQty({ sizes }) {
+  if (!sizes || !sizes.length) return <span className="muted">—</span>;
+  return (
+    <span className="szq">
+      {sizes.map((s) => <span className="szq-chip" key={s.size}><span className="szq-size">{s.size}</span><span className="szq-qty">×{s.qty}</span></span>)}
+    </span>
+  );
 }
 
 function YesNo({ value, editing, onChange }) {
@@ -1805,7 +2000,9 @@ function YesNo({ value, editing, onChange }) {
 // the same job: price + sync to Intelligent Inventory / Alias / StockX / Shopify.
 function PHTeamApp({ user, onSignOut }) {
   const [page, setPage] = useState(null); // null = home chooser | 'receiving' | 'rescale' | 'nobox'
+  const counts = usePendingCounts();
   if (page === 'nobox') return <NoBoxReport user={user} onHome={() => setPage(null)} onSignOut={onSignOut} />;
+  if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => setPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => setPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -1816,16 +2013,24 @@ function PHTeamApp({ user, onSignOut }) {
           <span className="home-card-icon">📥</span>
           <span className="home-card-title">New Inventory</span>
           <span className="home-card-sub">Price &amp; list newly received stock — Intelligent Inventory, Alias, StockX, Shopify</span>
+          <CardBadges badges={counts ? SYNC_BADGES(counts) : []} />
         </button>
         <button className="home-card" onClick={() => setPage('rescale')}>
           <span className="home-card-icon">♻️</span>
           <span className="home-card-title">Rescale Stock</span>
           <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
+          <CardBadges badges={counts ? [['Restock', counts.restock_pending]] : []} />
         </button>
         <button className="home-card" onClick={() => setPage('nobox')}>
           <span className="home-card-icon">🚫</span>
           <span className="home-card-title">No Box / Not Ready</span>
           <span className="home-card-sub">Units bought without a box — not yet postable (view-only; warehouse resolves)</span>
+          <CardBadges badges={counts ? [['No box', counts.no_box]] : []} />
+        </button>
+        <button className="home-card" onClick={() => setPage('request')}>
+          <span className="home-card-icon">📨</span>
+          <span className="home-card-title">Request Rescale</span>
+          <span className="home-card-sub">Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)</span>
         </button>
       </div>
     </div>
@@ -1844,12 +2049,8 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const title = kind === 'rescale' ? 'Rescale Stock' : kind === 'receiving' ? 'New Inventory' : 'Report';
   const emptyKind = kind === 'rescale' ? 'rescaled' : kind === 'receiving' ? 'received' : 'scanned';
   const isMobile = useMediaQuery('(max-width: 768px)'); // phones get cards, not the wide grid
-  const estNow = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'numeric', year: 'numeric' }).formatToParts(new Date());
-  const curMonth = Number(estNow.find((p) => p.type === 'month').value);
-  const curYear = Number(estNow.find((p) => p.type === 'year').value);
-
-  const [month, setMonth] = useState(curMonth);
-  const [year, setYear] = useState(String(curYear));
+  // Date range: Report (kind null/receiving) defaults to Month; Rescale to Day.
+  const [dr, setDr] = useState(() => ({ mode: kind === 'rescale' ? 'day' : 'month', anchor: new Date() }));
   const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1863,7 +2064,13 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [locks, setLocks] = useState({});    // vin -> { holder, holder_id } (active locks)
   const [notice, setNotice] = useState('');  // transient (idle release / lost lock)
   const holderIdRef = useRef(null);
-  if (!holderIdRef.current) holderIdRef.current = `${user?.username || 'ph'}-${Math.random().toString(36).slice(2, 10)}`;
+  // Per-SESSION id (one per tab/device) — unique even across two sessions of the
+  // SAME account, so each session locks/edits independently and can't override
+  // another's row. Prefer a UUID; fall back to a random suffix.
+  if (!holderIdRef.current) {
+    const rand = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2, 12);
+    holderIdRef.current = `${user?.username || 'ph'}-${rand}`;
+  }
   const editVinsRef = useRef({});            // group key -> [vins] I currently hold
   const heartbeatRef = useRef(null);
   const idleRef = useRef(null);
@@ -1917,16 +2124,17 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const myId = holderIdRef.current;
   const lockHolder = (g) => { for (const v of g.vins) { const l = locks[v]; if (l && l.holder_id !== myId) return l.holder; } return null; };
 
-  async function load(m = month, y = year) {
+  async function load() {
     releaseAll();
     setLoading(true); setError(''); setNotice('');
     try {
-      const { rows: r } = await api.phList(m, Number(y) || curYear, kind);
+      const [from, to] = rangeOf(dr.mode, dr.anchor);
+      const { rows: r } = await api.phList(from, to, kind);
       setRows(r); setEditing(new Set()); setDrafts({});
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setLoading(false); }
   }
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [dr]); // eslint-disable-line react-hooks/exhaustive-deps
   // Poll presence so "being edited by X" stays current (editors only).
   useEffect(() => {
     if (!canEdit) return undefined;
@@ -1940,6 +2148,11 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // Claim the lock first; only enter edit mode if no one else holds it.
   async function startEdit(g) {
     setError(''); setNotice('');
+    // One row at a time per session — finish or cancel the current edit first.
+    if (editing.size > 0 && !editing.has(g.key)) {
+      setNotice('You can only edit one row at a time on this device — submit or cancel the current edit first.');
+      return;
+    }
     try {
       await api.lockClaim(g.vins, holderIdRef.current);
     } catch (err) {
@@ -1980,6 +2193,17 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
       setError(err.message);
     } finally { setSavingKey(null); }
   }
+  // Rescale worklist: mark a group restocked → clears restock_pending so it drops
+  // off this list and behaves as normal inventory.
+  async function markRestockedGroup(g) {
+    setSavingKey(g.key); setError('');
+    try {
+      await api.restockDone(g.vins);
+      setRows((rs) => rs.filter((x) => !g.vins.includes(x.vin)));
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setSavingKey(null); }
+  }
+  const isRescale = kind === 'rescale';
 
   // Consolidate, then sort groups by scan date (asc = oldest first).
   const groups = groupPhRows(rows || []);
@@ -1989,26 +2213,20 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
     <div className="app app-wide">
       <TopBar title={title} onHome={onHome} onSignOut={onSignOut} />
       <div className="card">
-        <div className="ph-filters">
-          <label>Month
-            <select value={month} onChange={(e) => setMonth(Number(e.target.value))}>
-              {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-            </select>
-          </label>
-          <label>Year<input value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" /></label>
-          <button className="btn primary" onClick={() => load()} disabled={loading}>{loading ? '…' : 'Load'}</button>
-          <button className="btn ghost" type="button" onClick={() => setSortDir((s) => (s === 'asc' ? 'desc' : 'asc'))} title="Sort by scan date">
-            Date {sortDir === 'asc' ? '↑ oldest' : '↓ newest'}
-          </button>
-          <span className="muted sm">{groups.length} line{groups.length === 1 ? '' : 's'} · {totalUnits} unit{totalUnits === 1 ? '' : 's'} · all times EST{canEdit ? '' : ' · view only'}</span>
-        </div>
+        <DateRangeBar mode={dr.mode} anchor={dr.anchor} onChange={(mode, anchor) => setDr({ mode, anchor })}
+          right={(
+            <span className="muted sm">
+              {isRescale ? 'pending restocks · ' : ''}{groups.length} line{groups.length === 1 ? '' : 's'} · {totalUnits} unit{totalUnits === 1 ? '' : 's'}{canEdit ? '' : ' · view only'}
+              {!isRescale && <button className="btn ghost sm" type="button" style={{ marginLeft: 8 }} onClick={() => setSortDir((s) => (s === 'asc' ? 'desc' : 'asc'))}>Date {sortDir === 'asc' ? '↑' : '↓'}</button>}
+            </span>
+          )} />
       </div>
 
       {error && <div className="error mt">{error}</div>}
       {notice && <div className="notice mt">{notice}</div>}
 
       <div className="card">
-        {!rows ? <p className="muted">Loading…</p> : !groups.length ? <p className="muted">No items {emptyKind} in {MONTHS[month - 1]} {year}.</p> : isMobile ? (
+        {!rows ? <p className="muted">Loading…</p> : !groups.length ? <p className="muted">No {emptyKind} items in this range.</p> : isMobile ? (
           <div className="ph-cards">
             {groups.map((g) => {
               const ed = editing.has(g.key);
@@ -2021,13 +2239,14 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   </div>
                   <div className="ph-card-title">{g.name || '—'} <span className="muted">— {g.sku || '—'}</span></div>
                   <div className="ph-card-subline muted sm">
-                    Size <b>{g.size || '—'}</b>{g.gender ? <> · {g.gender}</> : ''} · <StatusPill status={g.status} />
+                    {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
                   </div>
+                  <div className="ph-card-sizes"><span className="muted sm">Sizes</span> <SizesQty sizes={g.sizes} /></div>
                   <div className="ph-card-line">
-                    <span>Cost <b>{g.cost != null ? `$${Number(g.cost).toFixed(2)}` : '—'}</b></span>
+                    <span>Cost <b>{g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : '—'}</b></span>
                     <span className="ph-card-price">Price {ed
                       ? <input className="ph-price" type="number" min="0" step="0.01" value={d.price} onChange={(e) => setField(g.key, 'price', e.target.value)} />
-                      : <b>{g.price != null ? `$${Number(g.price).toFixed(2)}` : '—'}</b>}</span>
+                      : <b>{g.price != null ? `${g.priceMixed ? '~' : ''}$${Number(g.price).toFixed(2)}` : '—'}</b>}</span>
                   </div>
                   <div className="ph-card-flags">
                     {PH_FLAGS.map(([k, label]) => (
@@ -2054,7 +2273,12 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                         </span>
                       );
                       if (locked) return <span className="lock-badge" title={`Being edited by ${locked}`}>🔒 {locked}</span>;
-                      return <button className="btn sm ghost" onClick={() => startEdit(g)}>Edit</button>;
+                      return (
+                        <span className="ph-edit-actions">
+                          <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>
+                          {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
+                        </span>
+                      );
                     })()}
                   </div>
                 </div>
@@ -2069,9 +2293,8 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   <th style={frozenStyle(0)} className="ph-frozen">Date</th>
                   <th style={frozenStyle(1)} className="ph-frozen">Shoe Title</th>
                   <th style={frozenStyle(2)} className="ph-frozen">SKU</th>
-                  <th style={frozenStyle(3)} className="ph-frozen">Size</th>
-                  <th style={frozenStyle(4)} className="ph-frozen ph-frozen-last">Qty</th>
-                  <th>Gender</th><th>Status</th><th>Scanned by</th><th>Cost</th><th>Price</th>
+                  <th style={frozenStyle(3)} className="ph-frozen ph-frozen-last">Qty</th>
+                  <th>Sizes (qty)</th><th>Gender</th><th>Status</th><th>Scanned by</th><th>Cost</th><th>Price</th>
                   <th>Intelligent Inv.</th><th>Alias</th><th>StockX</th><th>Shopify</th><th>Note</th>
                   <th style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first">Action</th>
                   <th style={rightStyle('addedby')} className="ph-rfrozen">Added by</th>
@@ -2087,16 +2310,16 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                       <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
                       <td style={frozenStyle(1)} className="ph-frozen ph-title">{g.name || '—'}</td>
                       <td style={frozenStyle(2)} className="ph-frozen">{g.sku || '—'}</td>
-                      <td style={frozenStyle(3)} className="ph-frozen ph-size">{g.size || '—'}</td>
-                      <td style={frozenStyle(4)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
+                      <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
+                      <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                       <td>{g.gender || '—'}</td>
                       <td><StatusPill status={g.status} /></td>
                       <td>{g._mixedBy ? <span className="muted">multiple</span> : (g.created_by || '—')}</td>
-                      <td>{g.cost != null ? `$${Number(g.cost).toFixed(2)}` : '—'}</td>
+                      <td>{g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : '—'}</td>
                       <td>
                         {ed
                           ? <input className="ph-price" type="number" min="0" step="0.01" value={d.price} onChange={(e) => setField(g.key, 'price', e.target.value)} />
-                          : (g.price != null ? `$${Number(g.price).toFixed(2)}` : '—')}
+                          : (g.price != null ? `${g.priceMixed ? '~' : ''}$${Number(g.price).toFixed(2)}` : '—')}
                       </td>
                       <td><YesNo value={val('added_to_intel_inv', g.added_to_intel_inv)} editing={ed} onChange={(v) => setField(g.key, 'added_to_intel_inv', v)} /></td>
                       <td><YesNo value={val('synced_alias', g.synced_alias)} editing={ed} onChange={(v) => setField(g.key, 'synced_alias', v)} /></td>
@@ -2116,7 +2339,10 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                               </span>)
                             : (lockHolder(g)
                                 ? <span className="lock-badge" title={`Being edited by ${lockHolder(g)}`}>🔒 {lockHolder(g)}</span>
-                                : <button className="btn sm ghost" onClick={() => startEdit(g)}>Edit</button>)}
+                                : (<span className="ph-edit-actions">
+                                    <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>
+                                    {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
+                                  </span>))}
                       </td>
                       <td style={rightStyle('addedby')} className="ph-rfrozen ph-addedby">
                         {g.last_edit_by ? <>{g.last_edit_by}<div className="muted sm">{g.last_edit_at ? `${PH_DATETIME.format(new Date(g.last_edit_at))} EST` : ''}</div></> : '—'}
@@ -2144,14 +2370,17 @@ function NoBoxReport({ user, onHome, onSignOut }) {
   const [error, setError] = useState('');
   const [drafts, setDrafts] = useState({}); // vin -> chosen status
   const [savingVin, setSavingVin] = useState(null);
+  const [labels, setLabels] = useState(null); // box-style UPC labels to print
+  const [dr, setDr] = useState(() => ({ mode: 'day', anchor: new Date() }));
+  const isMobile = useMediaQuery('(max-width: 768px)');
   useUnsavedGuard(Object.keys(drafts).length > 0); // guard staged no-box resolutions
 
   async function load() {
     setError('');
-    try { const { rows: r } = await api.noBoxList(); setRows(r); setDrafts({}); }
+    try { const [from, to] = rangeOf(dr.mode, dr.anchor); const { rows: r } = await api.noBoxList(from, to); setRows(r); setDrafts({}); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [dr]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setDraft = (vin, status) => setDrafts((d) => ({ ...d, [vin]: status }));
   async function save(vin) {
@@ -2164,6 +2393,34 @@ function NoBoxReport({ user, onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setSavingVin(null); }
   }
+  // A box was sourced → mark With Box (now sellable; we never sell without a box).
+  async function boxFound(vin) {
+    setSavingVin(vin); setError('');
+    try {
+      await api.boxFound(vin);
+      setRows((rs) => rs.filter((r) => r.vin !== vin)); // now With Box → leaves the queue
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setSavingVin(null); }
+  }
+
+  // Shared controls (used by both the desktop table and the mobile cards).
+  // Primary action: "Box found → With Box". A secondary dropdown handles edge
+  // cases (e.g. mark Missing/Issue) without selling a no-box pair.
+  const resolveCtl = (r) => (canEdit ? (
+    <span className="nobox-resolve">
+      <button className="btn sm primary" disabled={savingVin === r.vin} onClick={() => boxFound(r.vin)}>
+        {savingVin === r.vin ? '…' : '📦 Box found → With Box'}
+      </button>
+      <select value={drafts[r.vin] ?? ''} onChange={(e) => setDraft(r.vin, e.target.value)}>
+        <option value="">Other status…</option>
+        {STATUSES.filter((s) => s.key !== 'no_box' && s.key !== 'needs_shelf').map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+      </select>
+      <button className="btn sm ghost" disabled={!drafts[r.vin] || savingVin === r.vin} onClick={() => save(r.vin)}>Set</button>
+    </span>
+  ) : <StatusPill status={r.status} />);
+  const boxBtn = (r) => (
+    <button className="btn sm ghost" title={upcDigits(r.upc) ? 'Print box label' : 'No UPC on file'} onClick={() => setLabels([r])}>🖨 Box label</button>
+  );
 
   return (
     <div className="app">
@@ -2172,11 +2429,31 @@ function NoBoxReport({ user, onHome, onSignOut }) {
         <p className="muted sm">
           Units received <b>without a box</b> — not ready for posting, so they’re hidden from the PH report.{' '}
           {canEdit
-            ? 'Change a unit’s status once a box is sourced (or it’s cleared to sell without one) — it then returns to the report.'
+            ? 'Once a box is found, “Box found → With Box” makes it sellable.'
             : 'Warehouse/admin resolves these; this view is read-only for you.'}
         </p>
+        <DateRangeBar mode={dr.mode} anchor={dr.anchor} onChange={(mode, anchor) => setDr({ mode, anchor })}
+          right={<span className="muted sm">{rows ? `${rows.length} unit${rows.length === 1 ? '' : 's'}` : ''}</span>} />
+        {canEdit && rows?.length > 0 && (
+          <div className="nobox-actions">
+            <button className="btn sm primary" onClick={() => setLabels(rows)}>🖨 Print box labels (all {rows.length})</button>
+            <span className="muted sm">Box-style UPC labels for no-box shoes — recreate the original box label so it scans normally.</span>
+          </div>
+        )}
         {error && <div className="error mt">{error}</div>}
-        {!rows ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">No “Bought Without Box” items. 🎉</p> : (
+        {!rows ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">No “Bought Without Box” items. 🎉</p> : isMobile ? (
+          <div className="dcards">
+            {rows.map((r) => (
+              <div className="dcard" key={r.vin}>
+                <div className="dcard-top"><span className="vin">{r.vin}</span>{!canEdit && <StatusPill status={r.status} />}</div>
+                <div className="dcard-name">{r.name || '—'}</div>
+                <div className="dcard-line"><span>Size {r.size ? `US ${r.size}` : '—'}</span><span className="muted">{r.sku || '—'}</span></div>
+                <div className="dcard-line muted sm">{(r.created_at || '').slice(0, 10)}{r.created_by ? ` · ${r.created_by}` : ''}</div>
+                {canEdit && <div className="dcard-actions">{resolveCtl(r)}{boxBtn(r)}</div>}
+              </div>
+            ))}
+          </div>
+        ) : (
           <div className="inv-tablewrap">
             <table className="inv-table">
               <thead>
@@ -2186,6 +2463,7 @@ function NoBoxReport({ user, onHome, onSignOut }) {
                   <th className="inv-col-size">Size</th>
                   <th className="inv-col-sku">SKU</th>
                   <th>Received</th>
+                  {canEdit && <th aria-label="label" />}
                   <th>{canEdit ? 'Resolve → status' : 'Status'}</th>
                 </tr>
               </thead>
@@ -2197,19 +2475,8 @@ function NoBoxReport({ user, onHome, onSignOut }) {
                     <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>
                     <td className="inv-col-sku">{r.sku || '—'}</td>
                     <td className="muted sm" style={{ whiteSpace: 'nowrap' }}>{(r.created_at || '').slice(0, 10)}{r.created_by ? ` · ${r.created_by}` : ''}</td>
-                    <td>
-                      {canEdit ? (
-                        <span className="nobox-resolve">
-                          <select value={drafts[r.vin] ?? 'no_box'} onChange={(e) => setDraft(r.vin, e.target.value)}>
-                            <option value="no_box">Bought Without Box</option>
-                            {STATUSES.filter((s) => s.key !== 'no_box').map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                          </select>
-                          <button className="btn sm primary" disabled={!drafts[r.vin] || drafts[r.vin] === 'no_box' || savingVin === r.vin} onClick={() => save(r.vin)}>
-                            {savingVin === r.vin ? '…' : 'Save'}
-                          </button>
-                        </span>
-                      ) : <StatusPill status={r.status} />}
-                    </td>
+                    {canEdit && <td>{boxBtn(r)}</td>}
+                    <td>{resolveCtl(r)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -2217,6 +2484,7 @@ function NoBoxReport({ user, onHome, onSignOut }) {
           </div>
         )}
       </div>
+      {labels && <LabelSheet items={labels} mode="upc" onClose={() => setLabels(null)} />}
     </div>
   );
 }
@@ -2237,6 +2505,7 @@ function StatusScanPage({ target, navBack, onHome, onSignOut }) {
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const inputRef = useRef(null);
   const recentRef = useRef({});
+  const isMobile = useMediaQuery('(max-width: 768px)');
   useUnsavedGuard(rows.length > 0);
 
   // Keep the box focused so a scanner gun types straight in.
@@ -2309,22 +2578,37 @@ function StatusScanPage({ target, navBack, onHome, onSignOut }) {
 
       {rows.length > 0 && (
         <div className="card">
-          <div className="inv-tablewrap">
-            <table className="inv-table">
-              <thead><tr><th className="inv-col-vin">VIN</th><th>Shoe</th><th className="inv-col-size">Size</th><th>Current status</th><th aria-label="remove" /></tr></thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.vin}>
-                    <td className="inv-col-vin"><span className="vin">{r.vin}</span></td>
-                    <td className="inv-name" title={r.name}>{r.name || '—'}</td>
-                    <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>
-                    <td><StatusPill status={r.status} /></td>
-                    <td><button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeRow(r.vin)}>×</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {isMobile ? (
+            <div className="dcards">
+              {rows.map((r) => (
+                <div className="dcard" key={r.vin}>
+                  <div className="dcard-top">
+                    <span className="vin">{r.vin}</span>
+                    <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeRow(r.vin)}>×</button>
+                  </div>
+                  <div className="dcard-name">{r.name || '—'}</div>
+                  <div className="dcard-line"><span>Size {r.size ? `US ${r.size}` : '—'}</span><StatusPill status={r.status} /></div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="inv-tablewrap">
+              <table className="inv-table">
+                <thead><tr><th className="inv-col-vin">VIN</th><th>Shoe</th><th className="inv-col-size">Size</th><th>Current status</th><th aria-label="remove" /></tr></thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.vin}>
+                      <td className="inv-col-vin"><span className="vin">{r.vin}</span></td>
+                      <td className="inv-name" title={r.name}>{r.name || '—'}</td>
+                      <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>
+                      <td><StatusPill status={r.status} /></td>
+                      <td><button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeRow(r.vin)}>×</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -2338,41 +2622,309 @@ function StatusScanPage({ target, navBack, onHome, onSignOut }) {
   );
 }
 
+/* ------------------------- Rescale requests ---------------------------- */
+const REQUEST_REASONS = [['mismatch', 'Mismatch'], ['quantity', 'Quantity mismatch'], ['recount', 'Recount'], ['returned', 'Returned'], ['relisting', 'Re-listing'], ['other', 'Other']];
+
+// PH form: flag a SKU (sizes/qty, current price, reason) for the warehouse to
+// recount / rescan. Lands in the warehouse Rescale Requests inbox.
+function RescaleRequestForm({ onHome, onSignOut, backLabel = '← Home' }) {
+  const [sku, setSku] = useState('');
+  const [name, setName] = useState('');
+  const [price, setPrice] = useState('');
+  const [reason, setReason] = useState('mismatch');
+  const [reasonOther, setReasonOther] = useState('');
+  const [note, setNote] = useState('');
+  const [sizes, setSizes] = useState(() => [{ key: cartKey++, size: '', qty: 1 }]);
+  const [busy, setBusy] = useState(false);
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const dirty = !done && (sku.trim() || name.trim() || note.trim() || sizes.some((s) => String(s.size).trim()));
+  useUnsavedGuard(!!dirty);
+
+  // Look the SKU up and auto-fill the shoe name (KicksDB).
+  async function lookupSku() {
+    const s = sku.trim();
+    if (!s) return;
+    setLookupBusy(true); setError('');
+    try {
+      const { product } = await api.searchSku(s);
+      if (product?.name) setName(product.name);
+      if (product?.sku) setSku(product.sku);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(`Lookup failed: ${err.message}`); }
+    finally { setLookupBusy(false); }
+  }
+
+  const addSize = () => setSizes((a) => [...a, { key: cartKey++, size: '', qty: 1 }]);
+  const setSize = (k, patch) => setSizes((a) => a.map((s) => (s.key === k ? { ...s, ...patch } : s)));
+  const removeSize = (k) => setSizes((a) => a.filter((s) => s.key !== k));
+
+  async function submit() {
+    setError('');
+    if (!sku.trim()) { setError('Enter the SKU.'); return; }
+    if (reason === 'other' && !reasonOther.trim()) { setError('Enter a custom reason.'); return; }
+    const cleanSizes = sizes.filter((s) => String(s.size).trim()).map((s) => ({ size: String(s.size).trim(), qty: Math.max(1, Number(s.qty) || 1) }));
+    if (!cleanSizes.length) { setError('Add at least one size + quantity.'); return; }
+    setBusy(true);
+    try {
+      await api.rescaleRequestCreate({
+        sku: sku.trim(), name: name.trim(), sizes: cleanSizes,
+        price: price === '' ? null : Number(price),
+        reason: reason === 'other' ? reasonOther.trim() : reason, note: note.trim(),
+      });
+      setDone(true);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(false); }
+  }
+
+  if (done) return (
+    <div className="app">
+      <TopBar title="Request Rescale" onHome={onHome} onSignOut={onSignOut} />
+      <div className="card">
+        <div className="modal-icon success">✓</div>
+        <h3 className="modal-title">Rescale requested</h3>
+        <p className="muted">The warehouse will see it in their <b>Rescale Requests</b> inbox.</p>
+        <div className="modal-actions">
+          <button className="btn primary" onClick={() => { setDone(false); setSku(''); setName(''); setPrice(''); setNote(''); setReason('mismatch'); setReasonOther(''); setSizes([{ key: cartKey++, size: '', qty: 1 }]); }}>New request</button>
+          <button className="btn ghost" onClick={onHome}>{backLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="app">
+      <TopBar title="Request Rescale" onHome={onHome} onSignOut={onSignOut} />
+      <div className="card">
+        <h3 className="rows-title">Request a rescale</h3>
+        <div className="batch-form">
+          <label><span className="cap">SKU / Style *</span>
+            <span className="searchrow">
+              <input value={sku} onChange={(e) => setSku(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookupSku(); } }} autoCapitalize="characters" autoCorrect="off" placeholder="e.g. FV5104-004" />
+              <button type="button" className="btn ghost" disabled={lookupBusy || !sku.trim()} onClick={lookupSku}>{lookupBusy ? '…' : 'Search'}</button>
+            </span>
+          </label>
+          <label><span className="cap">Shoe name <span className="muted">(auto-fills from SKU)</span></span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Search a SKU to fill this" /></label>
+          <label><span className="cap">Reason *</span>
+            <select value={reason} onChange={(e) => setReason(e.target.value)}>
+              {REQUEST_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          {reason === 'other' && <label><span className="cap">Custom reason *</span><input value={reasonOther} maxLength={80} onChange={(e) => setReasonOther(e.target.value)} /></label>}
+          <label><span className="cap">Current price ($)</span><input type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} /></label>
+          <label className="batch-form-wide"><span className="cap">Note <span className="muted">(optional)</span></span><input value={note} onChange={(e) => setNote(e.target.value)} /></label>
+        </div>
+        <div className="size-rows">
+          <div className="muted sm">Sizes &amp; quantities *</div>
+          {sizes.map((s) => (
+            <div className="size-line" key={s.key}>
+              <input className="sz" placeholder="Size" value={s.size} onChange={(e) => setSize(s.key, { size: e.target.value })} />
+              <div className="qty-stepper">
+                <button type="button" className="btn icon ghost step" onClick={() => setSize(s.key, { qty: Math.max(1, (Number(s.qty) || 1) - 1) })}>−</button>
+                <input className="qty" type="number" min="1" value={s.qty} onChange={(e) => setSize(s.key, { qty: e.target.value })} />
+                <button type="button" className="btn icon ghost step" onClick={() => setSize(s.key, { qty: (Number(s.qty) || 1) + 1 })}>+</button>
+              </div>
+              <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeSize(s.key)}>×</button>
+            </div>
+          ))}
+          <button type="button" className="btn sm ghost" onClick={addSize}>+ Add size</button>
+        </div>
+        {error && <div className="error mt">{error}</div>}
+      </div>
+      <div className="batch-bar">
+        <button className="btn ghost" onClick={onHome}>{backLabel}</button>
+        <button className="btn primary" disabled={busy} onClick={submit}>{busy ? 'Submitting…' : 'Submit request'}</button>
+      </div>
+    </div>
+  );
+}
+
+const sumQty = (arr) => (Array.isArray(arr) ? arr : []).reduce((n, s) => n + (Number(s.qty) || 0), 0);
+
+// Reported (top) vs actual-on-shelf (bottom) per size; discrepancies highlighted.
+function RescaleCompare({ reported, actual }) {
+  const sizes = [...new Set([...(reported || []).map((s) => String(s.size)), ...(actual || []).map((s) => String(s.size))])]
+    .sort((a, b) => (sizeNum(a) - sizeNum(b)) || a.localeCompare(b));
+  const rep = Object.fromEntries((reported || []).map((s) => [String(s.size), s.qty]));
+  const act = actual ? Object.fromEntries(actual.map((s) => [String(s.size), s.qty])) : null;
+  return (
+    <table className="rcmp">
+      <tbody>
+        <tr className="rcmp-head"><td /><>{sizes.map((s) => <td key={s}>{s}</td>)}</><td>Total</td></tr>
+        <tr><td className="rcmp-lbl">Reported</td>{sizes.map((s) => <td key={s}>{rep[s] ?? '·'}</td>)}<td><b>{sumQty(reported)}</b></td></tr>
+        <tr><td className="rcmp-lbl">Actual</td>{sizes.map((s) => {
+          if (!act) return <td key={s} className="muted">—</td>;
+          const a = act[s] ?? 0; const r = rep[s] ?? 0;
+          return <td key={s} className={a !== r ? 'rcmp-diff' : ''}>{a}</td>;
+        })}<td>{act ? <b>{sumQty(actual)}</b> : <span className="muted">pending</span>}</td></tr>
+      </tbody>
+    </table>
+  );
+}
+
+// Shared report of rescale requests — reported vs actual. Warehouse can audit
+// (enter actual shelf counts); PH can view + create. Both see the comparison.
+function RescaleRequestsReport({ canAudit, canCreate, onHome, onSignOut }) {
+  const [mode, setMode] = useState('list'); // 'list' | 'new'
+  const [requests, setRequests] = useState(null);
+  const [error, setError] = useState('');
+  const [statusF, setStatusF] = useState(canAudit ? 'open' : 'all');
+  const [dr, setDr] = useState(() => ({ mode: 'day', anchor: new Date() }));
+  const [auditId, setAuditId] = useState(null);
+  const [auditRows, setAuditRows] = useState([]);
+  const [auditNote, setAuditNote] = useState('');
+  const [busyId, setBusyId] = useState(null);
+
+  async function load() {
+    setError('');
+    try { const [from, to] = rangeOf(dr.mode, dr.anchor); const { requests: r } = await api.rescaleRequestList(statusF, from, to); setRequests(r); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  useEffect(() => { if (mode === 'list') load(); }, [dr, statusF, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function startAudit(r) {
+    setError(''); setAuditId(r.id);
+    setAuditRows((r.sizes || []).map((s) => ({ key: cartKey++, size: String(s.size), qty: s.qty })));
+    setAuditNote('');
+  }
+  const setAuditRow = (k, patch) => setAuditRows((a) => a.map((x) => (x.key === k ? { ...x, ...patch } : x)));
+  const addAuditRow = () => setAuditRows((a) => [...a, { key: cartKey++, size: '', qty: 0 }]);
+  const rmAuditRow = (k) => setAuditRows((a) => a.filter((x) => x.key !== k));
+
+  async function submitAudit(r) {
+    const actual = auditRows.filter((x) => String(x.size).trim()).map((x) => ({ size: String(x.size).trim(), qty: Math.max(0, Number(x.qty) || 0) }));
+    if (!actual.length) { setError('Enter the actual count for at least one size.'); return; }
+    setBusyId(r.id); setError('');
+    try { await api.rescaleRequestAudit(r.id, actual, auditNote.trim()); setAuditId(null); load(); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusyId(null); }
+  }
+
+  if (mode === 'new') return <RescaleRequestForm onHome={() => setMode('list')} onSignOut={onSignOut} backLabel="← Requests" />;
+
+  return (
+    <div className="app app-wide">
+      <TopBar title="Rescale Requests" onHome={onHome} onSignOut={onSignOut} />
+      <div className="card">
+        <p className="muted sm">{canAudit
+          ? 'PH-flagged SKUs. Audit the shelf and enter the actual count per size — both teams then see reported vs actual.'
+          : 'Track your rescale requests and the warehouse audit (reported vs actual on shelf).'}</p>
+        <DateRangeBar mode={dr.mode} anchor={dr.anchor} onChange={(m, a) => setDr({ mode: m, anchor: a })}
+          right={(
+            <span className="ph-edit-actions">
+              <span className="seg">
+                {[['open', 'Open'], ['audited', 'Audited'], ['all', 'All']].map(([v, l]) =>
+                  <button key={v} type="button" className={`seg-btn ${statusF === v ? 'on' : ''}`} onClick={() => setStatusF(v)}>{l}</button>)}
+              </span>
+              {canCreate && <button className="btn sm primary" onClick={() => setMode('new')}>+ New request</button>}
+            </span>
+          )} />
+        {error && <div className="error mt">{error}</div>}
+        {!requests ? <p className="muted">Loading…</p> : !requests.length ? <p className="muted">No requests in this range.</p> : (
+          <div className="rc-list">
+            {requests.map((r) => (
+              <div className="rc-item" key={r.id}>
+                <div className="rc-head">
+                  <div>
+                    <div className="rc-title">{r.name || r.sku}</div>
+                    <div className="muted sm">{r.sku} · {r.reason}{r.price != null ? ` · $${Number(r.price).toFixed(2)}` : ''}</div>
+                  </div>
+                  <span className={`rc-pill ${r.status}`}>{r.status === 'audited' ? 'Audited' : 'Open'}</span>
+                </div>
+                <RescaleCompare reported={r.sizes} actual={r.actual_sizes} />
+                {r.note ? <div className="muted sm">Request note: “{r.note}”</div> : null}
+                {r.audit_note ? <div className="muted sm">Audit note: “{r.audit_note}”</div> : null}
+                <div className="rc-foot muted sm">
+                  Requested by {r.requested_by || '—'} · {new Date(r.created_at).toLocaleString()}
+                  {r.status === 'audited' && r.resolved_by ? ` · audited by ${r.resolved_by}` : ''}
+                </div>
+                {canAudit && r.status === 'open' && (auditId === r.id ? (
+                  <div className="rc-audit">
+                    <div className="muted sm">Actual on shelf (per size):</div>
+                    {auditRows.map((row) => (
+                      <div className="size-line" key={row.key}>
+                        <input className="sz" placeholder="Size" value={row.size} onChange={(e) => setAuditRow(row.key, { size: e.target.value })} />
+                        <div className="qty-stepper">
+                          <button type="button" className="btn icon ghost step" onClick={() => setAuditRow(row.key, { qty: Math.max(0, (Number(row.qty) || 0) - 1) })}>−</button>
+                          <input className="qty" type="number" min="0" value={row.qty} onChange={(e) => setAuditRow(row.key, { qty: e.target.value })} />
+                          <button type="button" className="btn icon ghost step" onClick={() => setAuditRow(row.key, { qty: (Number(row.qty) || 0) + 1 })}>+</button>
+                        </div>
+                        <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => rmAuditRow(row.key)}>×</button>
+                      </div>
+                    ))}
+                    <button type="button" className="btn sm ghost" onClick={addAuditRow}>+ Add size</button>
+                    <input className="rc-auditnote" placeholder="Audit note (optional)" value={auditNote} onChange={(e) => setAuditNote(e.target.value)} />
+                    <div className="ph-edit-actions">
+                      <button className="btn sm primary" disabled={busyId === r.id} onClick={() => submitAudit(r)}>{busyId === r.id ? '…' : 'Submit audit'}</button>
+                      <button className="btn sm ghost" onClick={() => setAuditId(null)}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rc-foot"><button className="btn sm primary" onClick={() => startAudit(r)}>🔍 Audit shelf</button></div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------------- VIN labels ------------------------------ */
-// Code128 barcode (jsbarcode lazy-loaded so it's not in the main bundle).
-function Barcode({ value }) {
+// Barcode via jsbarcode (lazy-loaded). `format` defaults to CODE128 (our VIN);
+// for product UPCs pass a retail format — falls back to CODE128 if the value
+// doesn't satisfy that symbology (wrong length / bad check digit).
+function Barcode({ value, format = 'CODE128', displayValue = false, height = 42 }) {
   const ref = useRef(null);
   useEffect(() => {
     let cancelled = false;
     import('jsbarcode').then(({ default: JsBarcode }) => {
       if (cancelled || !ref.current) return;
-      try {
-        JsBarcode(ref.current, value, { format: 'CODE128', displayValue: false, height: 42, width: 1.5, margin: 0 });
-      } catch { /* ignore */ }
+      const opts = { displayValue, height, width: 1.6, margin: 0, fontSize: 13 };
+      try { JsBarcode(ref.current, value, { format, ...opts }); }
+      catch {
+        try { JsBarcode(ref.current, value, { format: 'CODE128', ...opts }); } catch { /* ignore */ }
+      }
     });
     return () => { cancelled = true; };
-  }, [value]);
+  }, [value, format, displayValue, height]);
   return <svg ref={ref} className="barcode-svg" />;
 }
 
-// Printable VIN labels for label-printer rolls (Rollo / Dymo). One label per
-// page, sized to the selected stock. Layout per the warehouse mockup:
-//   SKU | Size  /  VIN: <vin>  /  [barcode]  /  <vin>
+// Pick the retail symbology for a product UPC by digit length.
+const upcDigits = (u) => String(u || '').replace(/\D/g, '');
+function upcFormat(u) {
+  const d = upcDigits(u);
+  if (d.length === 12) return 'UPC';
+  if (d.length === 13) return 'EAN13';
+  if (d.length === 8) return 'EAN8';
+  return 'CODE128';
+}
+
+// Printable labels for label-printer rolls (Rollo / Dymo). Two types:
+//  • VIN label  — our SBM- barcode (used to track every unit)
+//  • UPC label  — the product's box-style barcode (name / size / colorway / SKU)
+//    for NO-BOX shoes, recreating the manufacturer's box label so it scans like
+//    a normal boxed pair downstream.
 const LABEL_SIZES = {
   rollo: { w: 2.25, h: 1.25, label: 'Rollo 30256/30327 — 2.25 × 1.25"' },
   dymo: { w: 2.125, h: 1.125, label: 'Dymo 30334 — 2.125 × 1.125"' },
+  box: { w: 3.14, h: 1.96, label: 'Box label — 3.14 × 1.96"' },
 };
 
-function LabelSheet({ items, onClose }) {
-  const [size, setSize] = useState('rollo');
+// `mode`: 'vin' (default — our SBM tracking label) or 'upc' (box-style label with
+// the product UPC barcode, used only from the No Box page). Box-style matches the
+// real shoe-box label: vertical UPC barcode on the left, text stacked on the right.
+function LabelSheet({ items, onClose, mode = 'vin' }) {
+  const list = items || [];
+  const [size, setSize] = useState(mode === 'upc' ? 'box' : 'rollo');
   const s = LABEL_SIZES[size];
-  // Rendered into <body> (a portal) so printing can hide #root entirely — this
-  // avoids the app content adding blank/repeated pages behind the labels.
   return createPortal(
     <div className="label-overlay" style={{ '--lw': `${s.w}in`, '--lh': `${s.h}in` }}>
       <style>{`@media print { @page { size: ${s.w}in ${s.h}in; margin: 0; } }`}</style>
       <div className="label-toolbar no-print">
-        <span>{items.length} label(s)</span>
+        <span>{list.length} {mode === 'upc' ? 'box' : 'VIN'} label(s)</span>
         <span className="label-tools">
           <select value={size} onChange={(e) => setSize(e.target.value)}>
             {Object.entries(LABEL_SIZES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -2382,7 +2934,29 @@ function LabelSheet({ items, onClose }) {
         </span>
       </div>
       <div className="label-roll">
-        {items.map((it) => (
+        {list.map((it) => (mode === 'upc' ? (
+          upcDigits(it.upc) ? (
+            // Box-style label: vertical UPC barcode (left) + text block (right).
+            <div className="rlabel boxlabel" key={it.vin}>
+              <div className="blabel-bc"><Barcode value={upcDigits(it.upc)} format={upcFormat(it.upc)} displayValue height={44} /></div>
+              <div className="blabel-text">
+                <div className="blabel-name">{(it.name || '—').toUpperCase()}</div>
+                <div className="blabel-size">{it.size || '—'}</div>
+                {it.colorway ? <div className="blabel-cw">{String(it.colorway).toUpperCase()}</div> : null}
+                <div className="blabel-sku">{it.sku || '—'}</div>
+              </div>
+            </div>
+          ) : (
+            <div className="rlabel boxlabel missing" key={it.vin}>
+              <div className="blabel-text">
+                <div className="blabel-name">{(it.name || '—').toUpperCase()}</div>
+                <div className="blabel-size">{it.size || '—'}</div>
+                <div className="blabel-sku">{it.sku || '—'}</div>
+                <div className="rlabel-vinlabel">No UPC on file — {it.vin}</div>
+              </div>
+            </div>
+          )
+        ) : (
           <div className="rlabel" key={it.vin}>
             <div className="rlabel-top">
               <span className="rlabel-sku">{it.sku || '—'}</span>
@@ -2393,7 +2967,7 @@ function LabelSheet({ items, onClose }) {
             <Barcode value={it.vin} />
             <div className="rlabel-vin">{it.vin}</div>
           </div>
-        ))}
+        )))}
       </div>
     </div>,
     document.body,

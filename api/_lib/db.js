@@ -239,7 +239,7 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   const sql = db();
   const queries = items.map((it) => sql`
     INSERT INTO items
-      (vin, batch_id, name, sku, size, upc, image_url, cost, source, status, with_box, gender, notes, created_by)
+      (vin, batch_id, name, sku, size, upc, image_url, cost, source, status, with_box, gender, colorway, notes, created_by)
     VALUES
       (coalesce(${it.vin || null},
         'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
@@ -247,7 +247,7 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
        ${batchId}, ${it.name || null}, ${it.sku || null}, ${it.size || null},
        ${it.upc || null}, ${it.image || null}, ${it.cost ?? null},
        ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false},
-       ${it.gender || null}, ${it.notes || null}, ${createdBy || null})
+       ${it.gender || null}, ${it.colorway || null}, ${it.notes || null}, ${createdBy || null})
     RETURNING id, vin
   `);
   const results = await sql.transaction(queries);
@@ -272,6 +272,8 @@ export async function insertIntakeEvents(itemIds, createdBy, kind = 'receiving')
       VALUES (${id}, ${intakeType}, '{}'::jsonb, ${createdBy || null})
     `);
   }
+  // Rescaled stock starts restock-pending so it surfaces in the Rescale worklist.
+  if (kind === 'rescale') queries.push(sql`UPDATE items SET restock_pending = true WHERE id = ANY(${itemIds})`);
   await sql.transaction(queries);
 }
 
@@ -305,7 +307,7 @@ export async function getBatch(id) {
   const b = await db()`SELECT * FROM batches WHERE id = ${id}`;
   if (!b[0]) return null;
   const items = await db()`
-    SELECT id, vin, name, sku, size, cost, source, status, created_at
+    SELECT id, vin, name, sku, size, cost, source, status, created_at, upc, colorway, gender, with_box
     FROM items WHERE batch_id = ${id} ORDER BY id
   `;
   const issues = await db()`
@@ -324,7 +326,7 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
   const like = q ? `%${q}%` : null;
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.cost, i.status, i.created_by, i.created_at,
-           i.with_box, i.price, i.added_to_intel_inv,
+           i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv,
            i.synced_alias, i.synced_stockx, i.synced_shopify,
            b.batch_code, b.supplier_name, b.buyer_name, b.date_received, b.kind
     FROM items i
@@ -335,40 +337,38 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
       AND (${status}::text   IS NULL OR i.status = ${status})
       AND (${kind}::text     IS NULL OR b.kind = ${kind})
       AND (${like}::text IS NULL OR i.vin ILIKE ${like} OR i.sku ILIKE ${like} OR i.name ILIKE ${like})
-    ORDER BY i.created_at DESC
+    ORDER BY i.vin
     LIMIT ${lim}
   `;
 }
 
 /* ------------------------------ PH Team ------------------------------- */
-// The PH Team's monthly editable grid. `kind` splits the workflow:
-//   'rescale'   — units RE-SCANNED in the month: rows carry a 'rescaled' event
-//                 (added either by a VIN re-scan of existing stock, or by the
-//                 rescale intake of new/unlabeled stock). Dated by that event,
-//                 so a unit shows up in the month it was rescaled (for re-listing
-//                 to Intelligent Inventory / Alias / StockX / Shopify).
-//   'receiving' — newly RECEIVED stock in the month (excludes rescale batches),
-//                 dated by the item's scan date.
-//   null        — everything scanned in the month, dated by scan date (admin).
-export async function phListItems(month, year, kind = null) {
+// The PH Team's editable grid, filtered to a date range (from/to, NY dates).
+// `kind` splits the workflow:
+//   'rescale'   — restock-pending units, dated by their latest 'rescaled' event.
+//   'receiving' — newly RECEIVED stock (excludes rescale batches), by scan date.
+//   null        — everything scanned in range, by scan date (admin report).
+export async function phListItems(from, to, kind = null) {
   if (kind === 'rescale') {
     // Date/scanned-by come from the latest 'rescaled' event so the grid columns
     // reflect the rescale (not the original receive).
     return await db()`
-      SELECT i.vin, ev.created_at, ev.created_by, i.name, i.sku, i.size, i.gender,
+      SELECT i.vin, coalesce(ev.created_at, i.updated_at) AS created_at,
+             coalesce(ev.created_by, i.created_by) AS created_by, i.name, i.sku, i.size, i.gender,
              i.status, i.cost, i.price,
              i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
              i.ph_note, i.last_edit_by, i.last_edit_at
       FROM items i
-      JOIN LATERAL (
+      LEFT JOIN LATERAL (
         SELECT e.created_at, e.created_by FROM item_events e
         WHERE e.item_id = i.id AND e.type = 'rescaled'
         ORDER BY e.created_at DESC LIMIT 1
       ) ev ON true
-      WHERE EXTRACT(MONTH FROM (ev.created_at AT TIME ZONE 'America/New_York')) = ${month}
-        AND EXTRACT(YEAR  FROM (ev.created_at AT TIME ZONE 'America/New_York')) = ${year}
-        AND i.status <> 'no_box'  -- no-box units aren't postable; PH never lists them
-      ORDER BY ev.created_at, i.id
+      WHERE i.restock_pending = true  -- pending worklist; cleared on "Mark restocked"
+        AND i.status <> 'no_box'      -- no-box units aren't postable; PH never lists them
+        AND (${from}::date IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+        AND (${to}::date   IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+      ORDER BY created_at DESC, i.id
       LIMIT 5000
     `;
   }
@@ -379,8 +379,8 @@ export async function phListItems(month, year, kind = null) {
            i.ph_note, i.last_edit_by, i.last_edit_at
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
-    WHERE EXTRACT(MONTH FROM (i.created_at AT TIME ZONE 'America/New_York')) = ${month}
-      AND EXTRACT(YEAR  FROM (i.created_at AT TIME ZONE 'America/New_York')) = ${year}
+    WHERE (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
       AND (${kind}::text IS NULL OR b.kind = 'receiving' OR b.kind IS NULL)
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
       -- Report (kind IS NULL) for oversight.
@@ -394,16 +394,107 @@ export async function phListItems(month, year, kind = null) {
 // across all batches (a pending queue, not month-scoped). Shown to admin + PH;
 // admin/warehouse resolve each by changing its status (then it leaves this list
 // and becomes visible in the PH report).
-export async function listNoBoxItems() {
+export async function listNoBoxItems(from = null, to = null) {
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.gender, i.status, i.created_at, i.created_by,
+           i.upc, i.colorway, i.with_box,
            b.batch_code, b.supplier_name
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE i.status = 'no_box'
+      AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
     ORDER BY i.created_at DESC, i.id DESC
     LIMIT 2000
   `;
+}
+
+// Pending-work counts for the home-screen badges. "Listable" = a sellable unit
+// (has a box, not already sold/shipped/missing/issue/no-box) — those are what PH
+// still needs to push to each store.
+export async function pendingCounts() {
+  const rows = await db()`
+    SELECT
+      count(*) FILTER (WHERE listable AND NOT added_to_intel_inv)::int AS not_ii,
+      count(*) FILTER (WHERE listable AND NOT synced_alias)::int       AS not_alias,
+      count(*) FILTER (WHERE listable AND NOT synced_stockx)::int      AS not_stockx,
+      count(*) FILTER (WHERE listable AND NOT synced_shopify)::int     AS not_shopify,
+      count(*) FILTER (WHERE status = 'needs_shelf')::int              AS needs_shelf,
+      count(*) FILTER (WHERE status = 'no_box')::int                   AS no_box,
+      count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
+      (SELECT count(*) FROM rescale_requests WHERE status = 'open')::int AS rescale_requests
+    FROM (
+      SELECT *, (with_box AND status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable
+      FROM items
+    ) i
+  `;
+  return rows[0] || {};
+}
+
+/* --------------------- PH-requested rescales --------------------------- */
+
+export async function createRescaleRequest({ sku, name, sizes, price, reason, note, by }) {
+  const rows = await db()`
+    INSERT INTO rescale_requests (sku, name, sizes, price, reason, note, requested_by)
+    VALUES (${sku}, ${name || null}, ${JSON.stringify(sizes || [])}::jsonb, ${price ?? null},
+            ${reason || null}, ${note || null}, ${by || null})
+    RETURNING id, created_at
+  `;
+  return rows[0];
+}
+
+export async function listRescaleRequests(status = 'open', from = null, to = null) {
+  return await db()`
+    SELECT id, sku, name, sizes, actual_sizes, audit_note, price, reason, note, status,
+           requested_by, resolved_by, resolved_at, created_at
+    FROM rescale_requests
+    WHERE (${status}::text IS NULL OR status = ${status})
+      AND (${from}::date IS NULL OR (created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR (created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+    ORDER BY created_at DESC LIMIT 500
+  `;
+}
+
+// Warehouse audit: record the actual qty per size counted on the shelf and close
+// the request (status 'audited'). Both roles then see reported-vs-actual.
+export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
+  const rows = await db()`
+    UPDATE rescale_requests
+    SET actual_sizes = ${JSON.stringify(actualSizes || [])}::jsonb, audit_note = ${auditNote || null},
+        status = 'audited', resolved_by = ${by || null}, resolved_at = now()
+    WHERE id = ${id} AND status = 'open' RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+// "Box found": a no-box unit gets a box → becomes sellable. Sets with_box=true +
+// status needs_shelf and logs it. (We never sell without a box.)
+export async function markBoxFound(itemId, createdBy) {
+  const sql = db();
+  await sql.transaction([
+    sql`UPDATE items SET with_box = true, status = 'needs_shelf', updated_at = now() WHERE id = ${itemId}`,
+    sql`INSERT INTO item_events (item_id, type, details, created_by)
+        VALUES (${itemId}, 'status_change', ${JSON.stringify({ status: 'needs_shelf', note: 'Box found — now With Box' })}::jsonb, ${createdBy || null})`,
+  ]);
+}
+
+// Mark units restocked — clears restock_pending so they drop off the Rescale
+// worklist into normal inventory. Logs one event per VIN. Returns count cleared.
+export async function markRestocked(vins, createdBy) {
+  const list = [...new Set((vins || []).filter(Boolean))];
+  if (!list.length) return 0;
+  const sql = db();
+  const queries = list.map((vin) => sql`
+    WITH up AS (
+      UPDATE items SET restock_pending = false, updated_at = now()
+      WHERE vin = ${vin} AND restock_pending = true RETURNING id
+    )
+    INSERT INTO item_events (item_id, type, details, created_by)
+    SELECT id, 'note', ${JSON.stringify({ text: 'Restocked — moved to inventory' })}::jsonb, ${createdBy || null} FROM up
+    RETURNING item_id
+  `);
+  const res = await sql.transaction(queries);
+  return res.filter((r) => r.length).length;
 }
 
 // Apply a PH-Team edit to ONE OR MANY items (a consolidated grid row covers
@@ -631,12 +722,15 @@ export async function rescaleItem({ itemId, status, note = null, reason = null, 
     INSERT INTO item_events (item_id, type, details, created_by)
     VALUES (${itemId}, 'rescaled', ${JSON.stringify({ reason, note })}::jsonb, ${createdBy || null})
   `];
+  // Rescanned units are restock-pending until the team marks them restocked.
   if (status) {
     queries.push(sql`
       INSERT INTO item_events (item_id, type, details, created_by)
       VALUES (${itemId}, 'status_change', ${JSON.stringify({ status, note, rescale: true })}::jsonb, ${createdBy || null})
     `);
-    queries.push(sql`UPDATE items SET status = ${status}, updated_at = now() WHERE id = ${itemId}`);
+    queries.push(sql`UPDATE items SET status = ${status}, restock_pending = true, updated_at = now() WHERE id = ${itemId}`);
+  } else {
+    queries.push(sql`UPDATE items SET restock_pending = true, updated_at = now() WHERE id = ${itemId}`);
   }
   await sql.transaction(queries);
 }

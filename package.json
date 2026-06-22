@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "start": "node server.mjs",
     "serve": "vite build && node server.mjs",
-    "db:setup": "node scripts/db-setup.mjs"
+    "db:setup": "node scripts/db-setup.mjs",
+    "db:reset": "node scripts/db-reset.mjs"
   },
   "dependencies": {
     "@zxing/browser": "^0.1.5",

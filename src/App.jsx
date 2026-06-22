@@ -285,11 +285,14 @@ function usePendingCounts() {
 }
 // Small count pills under a home card. `badges` = [[label, n], …]; only n>0 show.
 function CardBadges({ badges }) {
+  // Each badge: [label, count, variant?] — variant 'ok' (green) | default (amber).
   const shown = (badges || []).filter(([, n]) => Number(n) > 0);
   if (!shown.length) return null;
   return (
     <span className="card-badges">
-      {shown.map(([label, n]) => <span key={label} className="card-badge">{label} {n}</span>)}
+      {shown.map(([label, n, variant]) => (
+        <span key={label} className={`card-badge${variant ? ` card-badge--${variant}` : ''}`}>{label} {n}</span>
+      ))}
     </span>
   );
 }
@@ -302,7 +305,7 @@ function homeCardBadges(key, c) {
   if (key === 'inventory') return [['Needs shelf', c.needs_shelf]];
   if (key === 'nobox') return [['No box', c.no_box]];
   if (key === 'rescale') return [['Restock', c.restock_pending]];
-  if (key === 'rescalereq') return [['Requests', c.rescale_requests]];
+  if (key === 'rescalereq') return [['Pending', c.rescale_requests], ['Done', c.rescale_requests_audited, 'ok']];
   return [];
 }
 
@@ -2031,6 +2034,7 @@ function PHTeamApp({ user, onSignOut }) {
           <span className="home-card-icon">📨</span>
           <span className="home-card-title">Request Rescale</span>
           <span className="home-card-sub">Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)</span>
+          <CardBadges badges={counts ? [['Pending audit', counts.rescale_requests], ['Audited', counts.rescale_requests_audited, 'ok']] : []} />
         </button>
       </div>
     </div>
@@ -2755,7 +2759,7 @@ function RescaleCompare({ reported, actual }) {
         <tr><td className="rcmp-lbl">Actual</td>{sizes.map((s) => {
           if (!act) return <td key={s} className="muted">—</td>;
           const a = act[s] ?? 0; const r = rep[s] ?? 0;
-          return <td key={s} className={a !== r ? 'rcmp-diff' : ''}>{a}</td>;
+          return <td key={s} className={a !== r ? 'rcmp-diff' : 'rcmp-match'}>{a}</td>;
         })}<td>{act ? <b>{sumQty(actual)}</b> : <span className="muted">pending</span>}</td></tr>
       </tbody>
     </table>

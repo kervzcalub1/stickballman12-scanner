@@ -422,7 +422,8 @@ export async function pendingCounts() {
       count(*) FILTER (WHERE status = 'needs_shelf')::int              AS needs_shelf,
       count(*) FILTER (WHERE status = 'no_box')::int                   AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
-      (SELECT count(*) FROM rescale_requests WHERE status = 'open')::int AS rescale_requests
+      (SELECT count(*) FROM rescale_requests WHERE status = 'open')::int     AS rescale_requests,
+      (SELECT count(*) FROM rescale_requests WHERE status = 'audited')::int  AS rescale_requests_audited
     FROM (
       SELECT *, (with_box AND status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable
       FROM items

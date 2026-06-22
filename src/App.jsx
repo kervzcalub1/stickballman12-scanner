@@ -2754,7 +2754,7 @@ function RescaleCompare({ reported, actual }) {
   return (
     <table className="rcmp">
       <tbody>
-        <tr className="rcmp-head"><td /><>{sizes.map((s) => <td key={s}>{s}</td>)}</><td>Total</td></tr>
+        <tr className="rcmp-head"><td>Size →</td><>{sizes.map((s) => <td key={s}>{s}</td>)}</><td>Total</td></tr>
         <tr><td className="rcmp-lbl">Reported</td>{sizes.map((s) => <td key={s}>{rep[s] ?? '·'}</td>)}<td><b>{sumQty(reported)}</b></td></tr>
         <tr><td className="rcmp-lbl">Actual</td>{sizes.map((s) => {
           if (!act) return <td key={s} className="muted">—</td>;

@@ -109,6 +109,9 @@ export default function App() {
 
   function onAuthed(u) {
     setUserState(u);
+    // PH users route under /ph/* inside PHTeamApp, which reads the URL itself —
+    // don't rewrite it here or we'd clobber a /ph/... deep link.
+    if (u.role === 'ph_team') return;
     // Honor a deep link the user landed on before signing in (e.g. /inventory).
     const v = viewForPath(window.location.pathname);
     setView(v);
@@ -2001,36 +2004,57 @@ function YesNo({ value, editing, onChange }) {
 // PH Team home: pick which monthly report to work — New Inventory (newly
 // received stock) or Rescale Stock (units re-scanned for re-listing). Both do
 // the same job: price + sync to Intelligent Inventory / Alias / StockX / Shopify.
+// PH pages are URL-routed under /ph/* (their own namespace, separate from the
+// warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
+const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', request: '/ph/request' };
+const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
+const phPageForPath = (p) => {
+  const path = String(p || '/').replace(/\/+$/, '') || '/';
+  return Object.keys(PH_PATHS).find((k) => PH_PATHS[k] === path) || null;
+};
+
 function PHTeamApp({ user, onSignOut }) {
-  const [page, setPage] = useState(null); // null = home chooser | 'receiving' | 'rescale' | 'nobox'
+  // page <-> URL: null = home chooser | 'receiving' | 'rescale' | 'nobox' | 'request'
+  const [page, setPage] = useState(() => phPageForPath(window.location.pathname));
   const counts = usePendingCounts();
-  if (page === 'nobox') return <NoBoxReport user={user} onHome={() => setPage(null)} onSignOut={onSignOut} />;
-  if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => setPage(null)} onSignOut={onSignOut} />;
-  if (page) return <PHGrid user={user} kind={page} onHome={() => setPage(null)} onSignOut={onSignOut} />;
+  // Navigate + push the matching /ph/* URL; Back/Forward + refresh restore it.
+  const goPage = (p) => {
+    setPage(p);
+    const path = phPathForPage(p);
+    if (window.location.pathname !== path) window.history.pushState(null, '', path);
+  };
+  useEffect(() => {
+    const onPop = () => setPage(phPageForPath(window.location.pathname));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
       <TopBar onSignOut={onSignOut} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
       <div className="home-grid">
-        <button className="home-card" onClick={() => setPage('receiving')}>
+        <button className="home-card" onClick={() => goPage('receiving')}>
           <span className="home-card-icon">📥</span>
           <span className="home-card-title">New Inventory</span>
           <span className="home-card-sub">Price &amp; list newly received stock — Intelligent Inventory, Alias, StockX, Shopify</span>
           <CardBadges badges={counts ? SYNC_BADGES(counts) : []} />
         </button>
-        <button className="home-card" onClick={() => setPage('rescale')}>
+        <button className="home-card" onClick={() => goPage('rescale')}>
           <span className="home-card-icon">♻️</span>
           <span className="home-card-title">Rescale Stock</span>
           <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
           <CardBadges badges={counts ? [['Restock', counts.restock_pending]] : []} />
         </button>
-        <button className="home-card" onClick={() => setPage('nobox')}>
+        <button className="home-card" onClick={() => goPage('nobox')}>
           <span className="home-card-icon">🚫</span>
           <span className="home-card-title">No Box / Not Ready</span>
           <span className="home-card-sub">Units bought without a box — not yet postable (view-only; warehouse resolves)</span>
           <CardBadges badges={counts ? [['No box', counts.no_box]] : []} />
         </button>
-        <button className="home-card" onClick={() => setPage('request')}>
+        <button className="home-card" onClick={() => goPage('request')}>
           <span className="home-card-icon">📨</span>
           <span className="home-card-title">Request Rescale</span>
           <span className="home-card-sub">Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)</span>

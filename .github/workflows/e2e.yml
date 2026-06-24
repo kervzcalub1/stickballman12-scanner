@@ -1,0 +1,52 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+
+    # Hermetic: ephemeral Postgres + throwaway test secrets. No production creds.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sbm_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/sbm_test
+      # Test-only values (ephemeral CI DB has no real data). The auth fixture mints
+      # tokens with this same SESSION_SECRET, so they verify against the server.
+      SESSION_SECRET: ci-e2e-session-secret-0123456789
+      ADMIN_PASSWORD: ci-e2e-admin-pass
+      CI: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright (chromium)
+        run: npx playwright install --with-deps chromium
+      - name: Migrate test DB (idempotent schema)
+        run: npm run db:setup
+      - name: Run E2E
+        run: npm run e2e
+      - name: Upload report on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

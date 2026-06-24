@@ -1,5 +1,6 @@
-// POST /api/ph/update  { vin | vins[], fields:{price,added_to_intel_inv,
-//   synced_alias,synced_stockx,synced_shopify,ph_note} }  ->  { ok, row, rows }
+// POST /api/ph/update  { vin | vins[], fields:{price,global_indicator,
+//   added_to_intel_inv,synced_alias,synced_stockx,synced_shopify,ph_note} }
+//   ->  { ok, row, rows }
 // Saves a PH-Team row edit, logging each changed field to the item's history.
 // Accepts a single `vin` OR a `vins[]` array (a consolidated grid row that
 // covers several identical units). Restricted to the ph_team and admin roles.
@@ -34,6 +35,12 @@ export default async function handler(req, res) {
     if (n != null && (!Number.isFinite(n) || n < 0 || n > 1_000_000))
       return send(res, 400, { ok: false, error: 'Invalid price.' });
     fields.price = n;
+  }
+  if ('global_indicator' in raw) {
+    const n = raw.global_indicator === '' || raw.global_indicator == null ? null : Number(raw.global_indicator);
+    if (n != null && (!Number.isFinite(n) || n < 0 || n > 1_000_000))
+      return send(res, 400, { ok: false, error: 'Invalid global indicator.' });
+    fields.global_indicator = n;
   }
   for (const k of BOOL_FIELDS) if (k in raw) fields[k] = Boolean(raw[k]);
   if ('ph_note' in raw) fields.ph_note = String(raw.ph_note ?? '').slice(0, 2000);

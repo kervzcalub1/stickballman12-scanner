@@ -44,6 +44,72 @@ function SyncBadges({ item, compact }) {
   );
 }
 
+// One history line, naming WHO did it. System-driven changes (e.g. the sold →
+// delist cascade) are tagged "(system-generated)". Shared by the Inventory detail
+// view and the PH/admin/warehouse History modal.
+function eventLabel(e) {
+  const by = e.created_by || '—';
+  if (e.type === 'scanned') return `Scanned by ${e.details?.by || by}`;
+  if (e.type === 'received') return `Received into inventory (by ${by})`;
+  if (e.type === 'rescaled') return `Rescaled${e.details?.reason ? ` (${e.details.reason})` : ''}${e.details?.note ? ` — ${e.details.note}` : ''} (by ${by})`;
+  if (e.type === 'status_change') return `Status → ${statusLabel(e.details?.status)}${e.details?.note ? ` — ${e.details.note}` : ''} (marked by: ${by})`;
+  if (e.type === 'ph_update') return `${e.details?.text || 'Updated'} ${(e.details?.soldCascade || e.details?.system) ? '(system-generated)' : `(by ${by})`}`;
+  if (e.type === 'note') return `Note: ${e.details?.text || ''} (by ${by})`;
+  if (e.type === 'issue') return `Issue: ${e.details?.text || e.details?.type || ''} (by ${by})`;
+  return `${e.type} (by ${by})`;
+}
+
+// One PH edit applies to several VINs at once → identical events. Collapse exact
+// duplicates (same type / details / who / time) so the timeline reads once.
+function dedupeEvents(events) {
+  const seen = new Set();
+  const out = [];
+  for (const e of events || []) {
+    const k = `${e.type}|${e.created_by}|${e.created_at}|${JSON.stringify(e.details)}`;
+    if (seen.has(k)) continue;
+    seen.add(k); out.push(e);
+  }
+  return out;
+}
+
+// Read-only change history for a PH grid line (its VINs) — who changed what, when.
+// Visible to PH team, warehouse, and admin.
+function HistoryModal({ vins, title, onClose }) {
+  const [state, setState] = useState({ loading: true, events: [], error: '' });
+  useEffect(() => {
+    let cancelled = false;
+    api.itemHistory(vins)
+      .then((d) => { if (!cancelled) setState({ loading: false, events: dedupeEvents(d.events || []), error: '' }); })
+      .catch((e) => { if (!cancelled) setState({ loading: false, events: [], error: e.message || 'Failed to load history.' }); });
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal hist-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">History — {title}</h3>
+        {state.loading ? <p className="muted">Loading…</p>
+          : state.error ? <div className="error">{state.error}</div>
+            : !state.events.length ? <p className="muted">No history yet.</p>
+              : (
+                <div className="timeline hist-timeline">
+                  {state.events.map((e) => (
+                    <div className="tl-item" key={e.id}>
+                      <div className="tl-dot" />
+                      <div className="tl-body">
+                        <div>{eventLabel(e)}</div>
+                        <div className="muted sm">{PH_DATETIME.format(new Date(e.created_at))} EST{e.vin ? ` · ${e.vin}` : ''}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+        <div className="modal-actions"><button className="btn ghost" onClick={onClose}>Close</button></div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('./components/CameraScanner.jsx'));
 
@@ -1572,19 +1638,6 @@ function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusy(false); }
   }
-  // Each history line names WHO did it. System-driven changes (e.g. the sold →
-  // delist cascade) are tagged "(system-generated)" since no person did them.
-  const eventLabel = (e) => {
-    const by = e.created_by || '—';
-    if (e.type === 'scanned') return `Scanned by ${e.details?.by || by}`;
-    if (e.type === 'received') return `Received into inventory (by ${by})`;
-    if (e.type === 'rescaled') return `Rescaled${e.details?.reason ? ` (${e.details.reason})` : ''}${e.details?.note ? ` — ${e.details.note}` : ''} (by ${by})`;
-    if (e.type === 'status_change') return `Status → ${statusLabel(e.details?.status)}${e.details?.note ? ` — ${e.details.note}` : ''} (marked by: ${by})`;
-    if (e.type === 'ph_update') return `${e.details?.text || 'Updated'} ${e.details?.soldCascade ? '(system-generated)' : `(by ${by})`}`;
-    if (e.type === 'note') return `Note: ${e.details?.text || ''} (by ${by})`;
-    if (e.type === 'issue') return `Issue: ${e.details?.text || e.details?.type || ''} (by ${by})`;
-    return `${e.type} (by ${by})`;
-  };
 
   /* ----- detail view ----- */
   if (mode === 'detail') {
@@ -1940,6 +1993,16 @@ const PH_FLAGS = [
   ['synced_stockx', 'StockX'], ['synced_shopify', 'Shopify'],
 ];
 
+// Final price auto-derives from the global indicator: entered amount + 20%.
+// Empty/non-numeric global indicator clears the final price.
+const PRICE_MARKUP = 1.2;
+function calcFinalPrice(globalIndicator) {
+  if (globalIndicator === '' || globalIndicator == null) return '';
+  const n = Number(globalIndicator);
+  if (!Number.isFinite(n)) return '';
+  return (Math.round(n * PRICE_MARKUP * 100) / 100).toFixed(2);
+}
+
 // Merge into ONE row per SKU + status (regardless of size), because the PH team
 // encodes a SKU to Intelligent Inventory once for all its sizes. The row lists
 // each size with its quantity; Price + II/AL/SX/SH + Note are set once for the
@@ -1953,7 +2016,7 @@ function groupPhRows(list) {
     let g = map.get(key);
     if (!g) {
       g = {
-        ...r, key, vins: [], qty: 0, _mixedBy: false, _sizeMap: {}, _prices: new Set(), _costs: new Set(),
+        ...r, key, vins: [], qty: 0, _mixedBy: false, _sizeMap: {}, _prices: new Set(), _globals: new Set(), _costs: new Set(),
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
       };
       map.set(key, g);
@@ -1963,6 +2026,7 @@ function groupPhRows(list) {
     const sz = r.size || '—';
     g._sizeMap[sz] = (g._sizeMap[sz] || 0) + 1;
     g._prices.add(r.price == null ? '' : String(r.price));
+    g._globals.add(r.global_indicator == null ? '' : String(r.global_indicator));
     g._costs.add(r.cost == null ? '' : String(r.cost));
     for (const f of ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify']) g._flags[f] = g._flags[f] && !!r[f];
     if (r.created_by !== g.created_by) g._mixedBy = true;
@@ -1975,8 +2039,74 @@ function groupPhRows(list) {
     ...g,
     ...g._flags, // representative flags = all-units-true
     priceMixed: g._prices.size > 1,
+    globalMixed: g._globals.size > 1,
     costMixed: g._costs.size > 1,
     sizes: Object.entries(g._sizeMap).sort((a, b) => (sizeNum(a[0]) - sizeNum(b[0])) || String(a[0]).localeCompare(b[0])).map(([size, qty]) => ({ size, qty })),
+  }));
+}
+
+// Like groupPhRows, but keeps a per-SIZE breakdown inside each SKU+status group
+// (the PH grid's expandable detail). Cost / global indicator / final price are
+// tracked PER SIZE (each can differ); II/AL/SX/SH + Note stay per-SKU (set once,
+// applied to all sizes). `sizes[]` carries each size's vins, qty and its own
+// cost/global_indicator/price (+ *Mixed flags when units within a size differ).
+const FLAG_KEYS = ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify'];
+function groupPhSized(list) {
+  const map = new Map();
+  for (const r of list) {
+    const key = `${r.sku || ''}|#|${r.status || ''}`;
+    let g = map.get(key);
+    if (!g) {
+      g = {
+        key, sku: r.sku, name: r.name, status: r.status, gender: r.gender,
+        created_at: r.created_at, created_by: r.created_by, _mixedBy: false,
+        vins: [], qty: 0,
+        first_edit_at: null, first_edit_by: null, _hasSubsequent: false,
+        last_edit_at: r.last_edit_at, last_edit_by: r.last_edit_by,
+        _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
+        _sizes: new Map(),
+      };
+      map.set(key, g);
+    }
+    g.vins.push(r.vin); g.qty += 1;
+    if (r.created_by !== g.created_by) g._mixedBy = true;
+    if (r.created_at < g.created_at) g.created_at = r.created_at;
+    if (r.last_edit_at && (!g.last_edit_at || r.last_edit_at > g.last_edit_at)) { g.last_edit_at = r.last_edit_at; g.last_edit_by = r.last_edit_by; }
+    // First editor = earliest first_edit_at across the group ("Added by").
+    if (r.first_edit_at && (!g.first_edit_at || r.first_edit_at < g.first_edit_at)) { g.first_edit_at = r.first_edit_at; g.first_edit_by = r.first_edit_by; }
+    // A unit edited more than once has last_edit_at strictly after its own
+    // first_edit_at (per-VIN, same-submit edits share now()) → subsequent edits exist.
+    if (r.first_edit_at && r.last_edit_at && new Date(r.last_edit_at) > new Date(r.first_edit_at)) g._hasSubsequent = true;
+    for (const f of FLAG_KEYS) g._flags[f] = g._flags[f] && !!r[f]; // group badge = all units true
+    const sz = r.size || '—';
+    let s = g._sizes.get(sz);
+    if (!s) {
+      s = { size: sz, vins: [], qty: 0, cost: null, global_indicator: null, price: null, note: null, _costs: new Set(), _globals: new Set(), _prices: new Set(),
+        _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true } };
+      g._sizes.set(sz, s);
+    }
+    s.vins.push(r.vin); s.qty += 1;
+    s._costs.add(r.cost == null ? '' : String(r.cost));
+    s._globals.add(r.global_indicator == null ? '' : String(r.global_indicator));
+    s._prices.add(r.price == null ? '' : String(r.price));
+    if (s.cost == null && r.cost != null) s.cost = r.cost;
+    if (s.global_indicator == null && r.global_indicator != null) s.global_indicator = r.global_indicator;
+    if (s.price == null && r.price != null) s.price = r.price;
+    if (!(s.note || '') && (r.ph_note || '')) s.note = r.ph_note; // per-size note (first non-empty)
+    for (const f of FLAG_KEYS) s._flags[f] = s._flags[f] && !!r[f]; // per-size flag = all units of that size true
+  }
+  return [...map.values()].map((g) => ({
+    ...g, ...g._flags,
+    sizes: [...g._sizes.values()]
+      .sort((a, b) => (sizeNum(a.size) - sizeNum(b.size)) || String(a.size).localeCompare(b.size))
+      .map((s) => ({
+        size: s.size, vins: s.vins, qty: s.qty,
+        cost: s.cost, costMixed: s._costs.size > 1,
+        global_indicator: s.global_indicator, globalMixed: s._globals.size > 1,
+        price: s.price, priceMixed: s._prices.size > 1,
+        note: s.note,
+        ...s._flags,
+      })),
   }));
 }
 // "9 ×2 · 9.5 ×3 · 10 ×1"
@@ -1993,11 +2123,11 @@ function SizesQty({ sizes }) {
 
 function YesNo({ value, editing, onChange }) {
   if (!editing) return <span className={`ph-yn ${value ? 'yes' : 'no'}`}>{value ? 'Yes' : 'No'}</span>;
+  // Edit mode: a colored checkbox (blue = checked/yes, red = unchecked/no) —
+  // one click to toggle, no dropdown.
   return (
-    <select className={`ph-yn-sel ${value ? 'yes' : 'no'}`} value={value ? 'yes' : 'no'} onChange={(e) => onChange(e.target.value === 'yes')}>
-      <option value="no">No</option>
-      <option value="yes">Yes</option>
-    </select>
+    <input type="checkbox" className={`ph-yn-check ${value ? 'yes' : 'no'}`} checked={!!value}
+      onChange={(e) => onChange(e.target.checked)} aria-label={value ? 'Yes' : 'No'} title={value ? 'Yes' : 'No'} />
   );
 }
 
@@ -2070,10 +2200,12 @@ function PHTeamApp({ user, onSignOut }) {
 const HEARTBEAT_MS = 10_000;       // keep MY lock alive (well under the 30s server TTL)
 const PRESENCE_POLL_MS = 2_000;    // how fast OTHERS see a lock appear/clear — kept snappy
 const IDLE_RELEASE_MS = 60 * 60 * 1000; // 1 hour — PH needs time to process the upload
+const LIST_POLL_MS = 15_000;       // quietly re-fetch the list (new shoes / others' saved edits)
 
 // `kind`: 'receiving' (New Inventory) · 'rescale' (Rescale Stock) · null (all — admin Report).
 function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const canEdit = user?.role === 'ph_team'; // admin + warehouse are read-only
+  const showPricing = user?.role !== 'warehouse'; // GI + Final price hidden from warehouse
   const title = kind === 'rescale' ? 'Rescale Stock' : kind === 'receiving' ? 'New Inventory' : 'Report';
   const emptyKind = kind === 'rescale' ? 'rescaled' : kind === 'receiving' ? 'received' : 'scanned';
   const isMobile = useMediaQuery('(max-width: 768px)'); // phones get cards, not the wide grid
@@ -2086,6 +2218,9 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [drafts, setDrafts] = useState({});                // group key -> edited fields
   const [savingKey, setSavingKey] = useState(null);
   const [sortDir, setSortDir] = useState('asc'); // by scan date: asc = oldest first
+  const [expanded, setExpanded] = useState(() => new Set()); // group keys showing per-size detail
+  const toggleExpand = (key) => setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  const [historyFor, setHistoryFor] = useState(null); // { vins, title } — open History modal
   useUnsavedGuard(editing.size > 0); // unsaved edits → guard Back/refresh
 
   // ---- B2 edit locks / presence ----
@@ -2158,7 +2293,7 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
     try {
       const [from, to] = rangeOf(dr.mode, dr.anchor);
       const { rows: r } = await api.phList(from, to, kind);
-      setRows(r); setEditing(new Set()); setDrafts({});
+      setRows(r); setEditing(new Set()); setDrafts({}); setExpanded(new Set());
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setLoading(false); }
   }
@@ -2170,6 +2305,29 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
     const t = setInterval(refreshLocks, PRESENCE_POLL_MS);
     return () => clearInterval(t);
   }, [canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live list: quietly re-fetch so new shoes from the warehouse and other users'
+  // saved edits appear without a manual reload. Skips while THIS session is
+  // editing or saving (so an in-progress draft is never disturbed) and while a
+  // fetch is already in flight; no spinner, and expanded rows stay open.
+  const editingCountRef = useRef(0); editingCountRef.current = editing.size;
+  const savingRef = useRef(false); savingRef.current = savingKey != null;
+  const pollBusyRef = useRef(false);
+  async function quietRefresh() {
+    if (editingCountRef.current > 0 || savingRef.current || pollBusyRef.current) return;
+    pollBusyRef.current = true;
+    try {
+      const [from, to] = rangeOf(dr.mode, dr.anchor);
+      const { rows: r } = await api.phList(from, to, kind);
+      // Re-check: the user may have started editing during the fetch.
+      if (editingCountRef.current === 0 && !savingRef.current) setRows(r);
+    } catch { /* transient — try again next tick */ }
+    finally { pollBusyRef.current = false; }
+  }
+  useEffect(() => {
+    const t = setInterval(quietRefresh, LIST_POLL_MS);
+    return () => clearInterval(t);
+  }, [dr, kind]); // eslint-disable-line react-hooks/exhaustive-deps
   // Release my locks when leaving the page.
   useEffect(() => () => { releaseAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2195,23 +2353,49 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
     }
     editVinsRef.current[g.key] = g.vins;
     setEditing((s) => new Set(s).add(g.key));
-    setDrafts((d) => ({ ...d, [g.key]: {
-      price: g.price ?? '', added_to_intel_inv: !!g.added_to_intel_inv,
-      synced_alias: !!g.synced_alias, synced_stockx: !!g.synced_stockx,
-      synced_shopify: !!g.synced_shopify, ph_note: g.ph_note || '',
-    } }));
+    setExpanded((s) => new Set(s).add(g.key)); // editing reveals the per-size detail
+    // Everything is per-size — GI, final price, II/AL/SX/SH, and Note (a size can
+    // sync / be noted independently of the others).
+    const sizes = {};
+    for (const s of g.sizes) sizes[s.size] = {
+      global_indicator: s.global_indicator ?? '', price: s.price ?? '',
+      added_to_intel_inv: !!s.added_to_intel_inv, synced_alias: !!s.synced_alias,
+      synced_stockx: !!s.synced_stockx, synced_shopify: !!s.synced_shopify,
+      ph_note: s.note || '',
+    };
+    setDrafts((d) => ({ ...d, [g.key]: { sizes } }));
     if (!heartbeatRef.current) heartbeatRef.current = setInterval(doHeartbeat, HEARTBEAT_MS);
     resetIdle();
     refreshLocks();
   }
-  const setField = (key, k, v) => { setDrafts((d) => ({ ...d, [key]: { ...d[key], [k]: v } })); resetIdle(); };
-  // Save a consolidated group — same edit applied to every member VIN, with an
-  // optimistic-concurrency baseline (A). On conflict, reload so they see fresh data.
+  // Update one field of one size's draft (preserving the size's other fields).
+  const setSizeField = (key, size, patch) => {
+    setDrafts((d) => ({ ...d, [key]: { ...d[key], sizes: { ...d[key].sizes, [size]: { ...d[key].sizes[size], ...patch } } } }));
+    resetIdle();
+  };
+  // Per-size Global indicator drives that size's Final price (entered amount + 20%).
+  const setSizeGI = (key, size, v) => setSizeField(key, size, { global_indicator: v, price: calcFinalPrice(v) });
+  const setSizePrice = (key, size, v) => setSizeField(key, size, { price: v });
+  const setSizeFlag = (key, size, flagKey, v) => setSizeField(key, size, { [flagKey]: v });
+  const setSizeNote = (key, size, v) => setSizeField(key, size, { ph_note: v });
+  // Save a group: every field is per-size now (GI, final price, II/AL/SX/SH, Note).
+  // Sizes touch disjoint VINs, so the per-size updates run in parallel; each uses
+  // the group's last_edit_at as the optimistic-concurrency base.
   async function submitGroup(g) {
     setSavingKey(g.key); setError('');
+    const d = drafts[g.key] || {};
     try {
-      const { rows: updated } = await api.phUpdateMany(g.vins, drafts[g.key], g.last_edit_at || null);
-      const byVin = new Map((updated || []).map((u) => [u.vin, u]));
+      const results = await Promise.all(g.sizes.map((s) => {
+        const sd = d.sizes?.[s.size] || {};
+        return api.phUpdateMany(s.vins, {
+          global_indicator: sd.global_indicator, price: sd.price,
+          added_to_intel_inv: sd.added_to_intel_inv, synced_alias: sd.synced_alias,
+          synced_stockx: sd.synced_stockx, synced_shopify: sd.synced_shopify,
+          ph_note: sd.ph_note,
+        }, g.last_edit_at || null);
+      }));
+      const byVin = new Map();
+      for (const r of results) for (const u of (r.rows || [])) byVin.set(u.vin, u);
       setRows((rs) => rs.map((x) => byVin.get(x.vin) || x));
       closeEdit(g.key, { release: true });
       refreshLocks();
@@ -2233,8 +2417,8 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
   }
   const isRescale = kind === 'rescale';
 
-  // Consolidate, then sort groups by scan date (asc = oldest first).
-  const groups = groupPhRows(rows || []);
+  // Consolidate per SKU+status (with per-size detail), then sort by scan date.
+  const groups = groupPhSized(rows || []);
   groups.sort((a, b) => (sortDir === 'desc' ? (a.created_at < b.created_at ? 1 : -1) : (a.created_at < b.created_at ? -1 : 1)));
   const totalUnits = (rows || []).length;
   return (
@@ -2259,6 +2443,7 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
             {groups.map((g) => {
               const ed = editing.has(g.key);
               const d = drafts[g.key] || {};
+              const open = ed || expanded.has(g.key);
               return (
                 <div className={`ph-card ${ed ? 'editing' : ''}`} key={g.key}>
                   <div className="ph-card-top">
@@ -2269,29 +2454,57 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
                   </div>
-                  <div className="ph-card-sizes"><span className="muted sm">Sizes</span> <SizesQty sizes={g.sizes} /></div>
-                  <div className="ph-card-line">
-                    <span>Cost <b>{g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : '—'}</b></span>
-                    <span className="ph-card-price">Price {ed
-                      ? <input className="ph-price" type="number" min="0" step="0.01" value={d.price} onChange={(e) => setField(g.key, 'price', e.target.value)} />
-                      : <b>{g.price != null ? `${g.priceMixed ? '~' : ''}$${Number(g.price).toFixed(2)}` : '—'}</b>}</span>
-                  </div>
-                  <div className="ph-card-flags">
-                    {PH_FLAGS.map(([k, label]) => (
-                      <div className="ph-card-flag" key={k}>
-                        <span className="muted sm">{label}</span>
-                        <YesNo value={ed ? d[k] : g[k]} editing={ed} onChange={(v) => setField(g.key, k, v)} />
-                      </div>
-                    ))}
-                  </div>
-                  <div className="ph-card-note">
-                    <span className="muted sm">Note</span>
-                    {ed
-                      ? <textarea className="ph-note" rows={2} value={d.ph_note} onChange={(e) => setField(g.key, 'ph_note', e.target.value)} />
-                      : <div>{g.ph_note || '—'}</div>}
-                  </div>
+                  <button type="button" className="ph-card-sizes ph-card-sizes-btn" onClick={() => toggleExpand(g.key)} aria-expanded={open}>
+                    <span className="ph-caret">{open ? '▾' : '▸'}</span><SizesQty sizes={g.sizes} />
+                  </button>
+                  {open && (
+                    <div className="ph-sizedetail">
+                      {g.sizes.map((s) => {
+                        const sd = ed ? (d.sizes?.[s.size] || {}) : null;
+                        return (
+                          <div className="ph-sizedetail-row" key={s.size}>
+                            <span className="ph-sizedetail-size">US {s.size} <span className="muted">×{s.qty}</span></span>
+                            <span className="muted sm">Cost {s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</span>
+                            {showPricing && <span className="ph-card-price">GI {ed
+                              ? <input className="ph-price" type="number" min="0" step="0.01" value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} />
+                              : <b>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}</b>}</span>}
+                            {showPricing && <span className="ph-card-price">Final {ed
+                              ? <input className="ph-price" type="number" min="0" step="0.01" value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
+                              : <b>{s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—'}</b>}</span>}
+                            <span className="ph-sizedetail-flags">
+                              {PH_FLAGS.map(([k, label]) => (
+                                <span className="ph-sizedetail-flag" key={k}>
+                                  <span className="muted sm">{label}</span>
+                                  <YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} />
+                                </span>
+                              ))}
+                            </span>
+                            <span className="ph-sizedetail-note">
+                              <span className="muted sm">Note</span>
+                              {ed
+                                ? <textarea className="ph-note" rows={1} value={sd.ph_note} onChange={(e) => setSizeNote(g.key, s.size, e.target.value)} />
+                                : <span className="ph-note-view" title={s.note || ''}>{s.note || '—'}</span>}
+                            </span>
+                            <span className="ph-sizedetail-hist">
+                              <button type="button" className="btn sm ghost" onClick={() => setHistoryFor({ vins: s.vins, title: `${g.name || g.sku || ''} · US ${s.size}` })}>🕘 History</button>
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="ph-card-synced"><span className="muted sm">Listed / synced (all sizes)</span> <SyncBadges item={g} /></div>
                   <div className="ph-card-foot">
-                    <span className="muted sm">{g.last_edit_by ? `By ${g.last_edit_by}${g.last_edit_at ? ` · ${PH_DATETIME.format(new Date(g.last_edit_at))} EST` : ''}` : '—'}</span>
+                    <span className="muted sm ph-card-credit">
+                      {g.first_edit_by ? (
+                        <>
+                          Added by {g.first_edit_by}{g.first_edit_at ? ` · ${PH_DATETIME.format(new Date(g.first_edit_at))} EST` : ''}
+                          {g._hasSubsequent && g.last_edit_by && (
+                            <div>Last edited by: {g.last_edit_by}{g.last_edit_at ? ` · ${PH_DATETIME.format(new Date(g.last_edit_at))} EST` : ''}</div>
+                          )}
+                        </>
+                      ) : '—'}
+                    </span>
                     {canEdit && (() => {
                       const locked = !ed && lockHolder(g);
                       if (ed) return (
@@ -2322,8 +2535,7 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   <th style={frozenStyle(1)} className="ph-frozen">Shoe Title</th>
                   <th style={frozenStyle(2)} className="ph-frozen">SKU</th>
                   <th style={frozenStyle(3)} className="ph-frozen ph-frozen-last">Qty</th>
-                  <th>Sizes (qty)</th><th>Gender</th><th>Status</th><th>Scanned by</th><th>Cost</th><th>Price</th>
-                  <th>Intelligent Inv.</th><th>Alias</th><th>StockX</th><th>Shopify</th><th>Note</th>
+                  <th>Sizes (qty)</th><th>Gender</th><th>Status</th><th>Listed / synced</th><th>Scanned by</th>
                   <th style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first">Action</th>
                   <th style={rightStyle('addedby')} className="ph-rfrozen">Added by</th>
                 </tr>
@@ -2332,50 +2544,96 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
                 {groups.map((g) => {
                   const ed = editing.has(g.key);
                   const d = drafts[g.key] || {};
-                  const val = (k, fallback) => (ed ? d[k] : fallback);
+                  const open = ed || expanded.has(g.key);
                   return (
-                    <tr key={g.key} className={ed ? 'ph-editing' : ''}>
-                      <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
-                      <td style={frozenStyle(1)} className="ph-frozen ph-title">{g.name || '—'}</td>
-                      <td style={frozenStyle(2)} className="ph-frozen">{g.sku || '—'}</td>
-                      <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
-                      <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
-                      <td>{g.gender || '—'}</td>
-                      <td><StatusPill status={g.status} /></td>
-                      <td>{g._mixedBy ? <span className="muted">multiple</span> : (g.created_by || '—')}</td>
-                      <td>{g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : '—'}</td>
-                      <td>
-                        {ed
-                          ? <input className="ph-price" type="number" min="0" step="0.01" value={d.price} onChange={(e) => setField(g.key, 'price', e.target.value)} />
-                          : (g.price != null ? `${g.priceMixed ? '~' : ''}$${Number(g.price).toFixed(2)}` : '—')}
-                      </td>
-                      <td><YesNo value={val('added_to_intel_inv', g.added_to_intel_inv)} editing={ed} onChange={(v) => setField(g.key, 'added_to_intel_inv', v)} /></td>
-                      <td><YesNo value={val('synced_alias', g.synced_alias)} editing={ed} onChange={(v) => setField(g.key, 'synced_alias', v)} /></td>
-                      <td><YesNo value={val('synced_stockx', g.synced_stockx)} editing={ed} onChange={(v) => setField(g.key, 'synced_stockx', v)} /></td>
-                      <td><YesNo value={val('synced_shopify', g.synced_shopify)} editing={ed} onChange={(v) => setField(g.key, 'synced_shopify', v)} /></td>
-                      <td className="ph-note-cell">
-                        {ed
-                          ? <textarea className="ph-note" rows={1} value={d.ph_note} onChange={(e) => setField(g.key, 'ph_note', e.target.value)} />
-                          : <span className="ph-note-view" title={g.ph_note || ''}>{g.ph_note || '—'}</span>}
-                      </td>
-                      <td style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first">
-                        {!canEdit ? <span className="muted">—</span>
-                          : ed
-                            ? (<span className="ph-edit-actions">
-                                <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : `Submit ×${g.qty}`}</button>
-                                <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
-                              </span>)
-                            : (lockHolder(g)
-                                ? <span className="lock-badge" title={`Being edited by ${lockHolder(g)}`}>🔒 {lockHolder(g)}</span>
-                                : (<span className="ph-edit-actions">
-                                    <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>
-                                    {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
-                                  </span>))}
-                      </td>
-                      <td style={rightStyle('addedby')} className="ph-rfrozen ph-addedby">
-                        {g.last_edit_by ? <>{g.last_edit_by}<div className="muted sm">{g.last_edit_at ? `${PH_DATETIME.format(new Date(g.last_edit_at))} EST` : ''}</div></> : '—'}
-                      </td>
-                    </tr>
+                    <React.Fragment key={g.key}>
+                      <tr className={`ph-trow ${ed ? 'ph-editing' : ''} ${open ? 'open' : ''}`} onClick={() => toggleExpand(g.key)}>
+                        <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
+                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-caret">{open ? '▾' : '▸'}</span>{g.name || '—'}</td>
+                        <td style={frozenStyle(2)} className="ph-frozen">{g.sku || '—'}</td>
+                        <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
+                        <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
+                        <td>{g.gender || '—'}</td>
+                        <td><StatusPill status={g.status} /></td>
+                        <td><SyncBadges item={g} /></td>
+                        <td>{g._mixedBy ? <span className="muted">multiple</span> : (g.created_by || '—')}</td>
+                        <td style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first" onClick={(e) => e.stopPropagation()}>
+                          {!canEdit ? <span className="muted">—</span>
+                            : ed
+                              ? (<span className="ph-edit-actions">
+                                  <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : `Submit ×${g.qty}`}</button>
+                                  <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
+                                </span>)
+                              : (lockHolder(g)
+                                  ? <span className="lock-badge" title={`Being edited by ${lockHolder(g)}`}>🔒 {lockHolder(g)}</span>
+                                  : (<span className="ph-edit-actions">
+                                      <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>
+                                      {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
+                                    </span>))}
+                        </td>
+                        <td style={rightStyle('addedby')} className="ph-rfrozen ph-addedby">
+                          {g.first_edit_by ? (
+                            <>
+                              {g.first_edit_by}
+                              <div className="muted sm">{g.first_edit_at ? `${PH_DATETIME.format(new Date(g.first_edit_at))} EST` : ''}</div>
+                              {g._hasSubsequent && g.last_edit_by && (
+                                <div className="ph-lastedit muted sm">Last edited by: {g.last_edit_by}{g.last_edit_at ? ` · ${PH_DATETIME.format(new Date(g.last_edit_at))} EST` : ''}</div>
+                              )}
+                            </>
+                          ) : '—'}
+                        </td>
+                      </tr>
+                      {open && (
+                        <tr className="ph-drow">
+                          <td colSpan={11}>
+                            <div className="ph-detail">
+                              <table className="ph-sizetable">
+                                <thead><tr>
+                                  <th>Size</th><th>Qty</th><th>Cost</th>
+                                  {showPricing && <><th>Global indicator</th><th>Final Price (GI+20%)</th></>}
+                                  {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
+                                  <th>Note</th><th>History</th>
+                                </tr></thead>
+                                <tbody>
+                                  {g.sizes.map((s) => {
+                                    const sd = ed ? (d.sizes?.[s.size] || {}) : null;
+                                    return (
+                                      <tr key={s.size}>
+                                        <td>US {s.size}</td>
+                                        <td>×{s.qty}</td>
+                                        <td>{s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</td>
+                                        {showPricing && (
+                                          <td>{ed
+                                            ? <input className="ph-price" type="number" min="0" step="0.01" value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} />
+                                            : (s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—')}</td>
+                                        )}
+                                        {showPricing && (
+                                          <td>{ed
+                                            ? <input className="ph-price" type="number" min="0" step="0.01" value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
+                                            : (s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—')}</td>
+                                        )}
+                                        {PH_FLAGS.map(([k]) => (
+                                          <td key={k}><YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} /></td>
+                                        ))}
+                                        <td className="ph-note-cell">
+                                          {ed
+                                            ? <textarea className="ph-note" rows={1} value={sd.ph_note} onChange={(e) => setSizeNote(g.key, s.size, e.target.value)} />
+                                            : <span className="ph-note-view" title={s.note || ''}>{s.note || '—'}</span>}
+                                        </td>
+                                        <td>
+                                          <button type="button" className="btn sm ghost" title="View change history"
+                                            onClick={() => setHistoryFor({ vins: s.vins, title: `${g.name || g.sku || ''} · US ${s.size}` })}>🕘 History</button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -2383,6 +2641,7 @@ function PHGrid({ user, kind = null, onHome, onSignOut }) {
           </div>
         )}
       </div>
+      {historyFor && <HistoryModal vins={historyFor.vins} title={historyFor.title} onClose={() => setHistoryFor(null)} />}
     </div>
   );
 }

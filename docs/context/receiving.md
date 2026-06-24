@@ -25,6 +25,13 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
 - First event chain: "Scanned by <user>" → "Received into inventory".
 - Rescale intake (`mode='rescale'`) sets `kind='rescale'` + `restock_pending=true`
   (see `rescale.md`).
+- **Global indicator price**: after responding, `enrichGlobalIndicators`
+  best-effort resolves each unit's Alias `catalog_id` — **by UPC** (Alias UPC
+  search) or, for SKU-only scans, **by SKU** (official catalog search) — caching it
+  in `products`, then fetches the global indicator (official `api.alias.org`,
+  `ALIAS_API_KEY`, region 3) per catalog_id + size and stores `global_indicator`
+  (+ seeds `price` = GI×1.2). Never blocks the commit; failure leaves GI null for
+  PH to fill. See `integrations.md` / `ph-report.md`.
 
 ## Product lookup (fills name/sku/image/sizes/gender/colorway)
 `searchUpc` / `searchSku` — see `integrations.md`.

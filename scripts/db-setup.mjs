@@ -132,6 +132,7 @@ await sql(`CREATE INDEX IF NOT EXISTS items_status_idx  ON items (status)`);
 await sql(`ALTER TABLE items ALTER COLUMN status SET DEFAULT 'needs_shelf'`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS with_box           BOOLEAN NOT NULL DEFAULT true`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS price              NUMERIC(12,2)`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS global_indicator   NUMERIC(12,2)`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS added_to_intel_inv BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_alias       BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_stockx      BOOLEAN NOT NULL DEFAULT false`);
@@ -139,6 +140,10 @@ await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_shopify     BOOLEAN
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS ph_note            TEXT`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS last_edit_by       TEXT`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS last_edit_at       TIMESTAMPTZ`);
+// First PH edit (who "added" the pricing) — set once; last_edit_* tracks the most
+// recent change so the grid can show "Added by" + "Last edited by".
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS first_edit_by      TEXT`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS first_edit_at      TIMESTAMPTZ`);
 // Gender/age group (Men | Women | Youth | Toddler | Unisex) — from the product
 // lookup (Alias gender, else derived from StockX size suffix) for store listing.
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS gender             TEXT`);
@@ -179,6 +184,34 @@ await sql(`
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+
+// Product catalog — cached shoe details keyed by UPC (the box-label barcode).
+// Sourced primarily from Alias (the only API that returns a `catalog_id` plus a
+// full colorway). Powers Box Labels (name/size/colorway/sku) and stores the
+// Alias `catalog_id` used to fetch the Global Indicator price. One row per UPC
+// (a UPC encodes a specific size); the SKU's catalog_id is shared across sizes.
+await sql(`
+  CREATE TABLE IF NOT EXISTS products (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    upc         TEXT UNIQUE,
+    sku         TEXT,
+    size        TEXT,
+    name        TEXT,
+    colorway    TEXT,
+    gender      TEXT,
+    brand       TEXT,
+    image_url   TEXT,
+    catalog_id  TEXT,        -- Alias product id (for pricing_insights / GI)
+    source      TEXT,        -- where the details came from (alias/stockx/kicksdb)
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS products_sku_idx     ON products (sku)`);
+await sql(`CREATE INDEX IF NOT EXISTS products_catalog_idx ON products (catalog_id)`);
+// One catalog row per SKU when there's no box UPC (SKU-scanned products). Lets the
+// SKU upsert path use a clean ON CONFLICT and blocks concurrent duplicate inserts.
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS products_sku_nullupc_idx ON products (sku) WHERE upc IS NULL`);
 
 // PH-Team edit locks (presence). One row per VIN currently being edited; a lock
 // is "active" while its heartbeat is fresh (the client pings every ~10s; locks

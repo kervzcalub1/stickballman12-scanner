@@ -91,7 +91,6 @@ export const api = {
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // v5 — PH Team monthly grid
   phList: (from, to, kind) => get(`/api/ph/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(kind ? { kind } : {}) }).toString()}`),
-  phUpdate: (vin, fields) => post('/api/ph/update', { vin, fields }),
   phUpdateMany: (vins, fields, baseEditedAt) => post('/api/ph/update', { vins, fields, baseEditedAt }),
   // PH edit locks (presence)
   lockList: () => get('/api/ph/locks'),

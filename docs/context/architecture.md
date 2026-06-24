@@ -30,7 +30,24 @@ npm run build      # production build to dist/
 npm start          # node server.mjs (serves dist/ + /api)
 npm run db:setup   # idempotent schema migrate (CREATE/ALTER IF NOT EXISTS)
 npm run db:reset   # wipe inventory data, KEEP accounts (destructive)
+npm run e2e        # Playwright E2E (auto-starts dev on :5189); npm run e2e:ui for the UI
 ```
+
+## Testing (Playwright E2E)
+- Specs in `e2e/*.spec.js`; config `playwright.config.js` (chromium, auto-starts
+  `npm run dev` on a fixed port). The only tests in the repo — there's no unit suite.
+- **Auth without passwords:** `e2e/helpers/auth.js` `loginAs(page, role)` mints a
+  signed session with the server's own `signToken` (`verifyToken` trusts the
+  signed payload — no DB lookup) and injects it into `sessionStorage`. One smoke
+  test does a *real* admin UI login (needs `ADMIN_PASSWORD`); it **skips** (not
+  fails) on a 429 from the login rate-limiter during rapid re-runs.
+- Screen-render assertions target chrome that survives an **empty DB**; data-
+  dependent PH-grid tests `test.skip` when the range has no rows.
+- CI: `.github/workflows/e2e.yml` — hermetic (ephemeral Postgres + throwaway test
+  secrets), runs `db:setup` then the suite. No production credentials.
+- Local run reads `.env` (same `SESSION_SECRET` the dev server uses). The login
+  route is rate-limited (20 req/IP/60s, in-memory); rapid re-runs trip it, so the
+  real-login test skips — wait ~60s or restart the dev server to reset.
 
 ## Routing (SPA, History API)
 `ROUTES` array in `src/lib/constants.js` → `pathForView` / `viewForPath`. Views:

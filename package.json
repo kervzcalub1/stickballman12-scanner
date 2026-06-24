@@ -10,7 +10,9 @@
     "start": "node server.mjs",
     "serve": "vite build && node server.mjs",
     "db:setup": "node scripts/db-setup.mjs",
-    "db:reset": "node scripts/db-reset.mjs"
+    "db:reset": "node scripts/db-reset.mjs",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@zxing/browser": "^0.1.5",
@@ -23,6 +25,7 @@
     "tesseract.js": "^5.1.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^5.4.11"
   }

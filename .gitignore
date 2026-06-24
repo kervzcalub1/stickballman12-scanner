@@ -3,6 +3,12 @@ dist
 .vercel
 .DS_Store
 
+# Playwright E2E artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 # Local Claude Code settings (may embed secrets)
 .claude/settings.local.json
 

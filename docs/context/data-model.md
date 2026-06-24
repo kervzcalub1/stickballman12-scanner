@@ -14,9 +14,16 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   kind ∈ receiving | rescale.
 - **items** — one row per physical unit. Key columns:
   `id, vin UNIQUE NOT NULL, batch_id, name, sku, size, status, cost, price,
-  with_box, upc, gender, colorway, restock_pending,
+  global_indicator, with_box, upc, gender, colorway, restock_pending,
   added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
-  ph_note, last_edit_by, last_edit_at, created_by, created_at, updated_at`.
+  ph_note, first_edit_by, first_edit_at, last_edit_by, last_edit_at,
+  created_by, created_at, updated_at`. (`first_edit_*` set once = "Added by";
+  `last_edit_*` = most recent edit = "Last edited by".)
+- **products** — catalog cache keyed by `upc UNIQUE`: `sku, size, name, colorway,
+  gender, brand, image_url, catalog_id, source`. Sourced from **Alias** (only API
+  returning a `catalog_id` + full colorway). Powers **Box Labels** and stores the
+  Alias `catalog_id` for **Global Indicator** pricing. Upsert coalesces (a later
+  richer lookup fills gaps without wiping good values).
 - **item_events** — audit trail. `item_id, type, details JSONB, created_by,
   created_at`. types: scanned, received, rescaled, status_change, ph_update,
   note, issue.
@@ -38,8 +45,10 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
 - Locks: `acquireLock, releaseLock`.
 - Receiving: `createBatch, reserveVins, insertItems, insertIntakeEvents,
   insertIssues, listBatches, getBatch`.
-- Inventory/items: `queryItems, getItemByVin, addItemEvent, bulkSetStatus,
-  rescaleItem, markBoxFound, markRestocked, pendingCounts`.
+- Inventory/items: `queryItems, getItemByVin, getEventsForVins, addItemEvent,
+  bulkSetStatus, rescaleItem, markBoxFound, markRestocked, pendingCounts,
+  setItemGlobalIndicators`.
+- Catalog: `upsertProduct, getProductByUpc, getCatalogIdBySku`.
 - PH report: `phListItems(from,to,kind), phUpdateItems, phUpdateItem`.
 - Edit locks: `claimEditLocks, heartbeatEditLocks, releaseEditLocks, listActiveEditLocks`.
 - No-box: `listNoBoxItems(from,to)`.

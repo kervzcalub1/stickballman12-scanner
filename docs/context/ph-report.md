@@ -11,18 +11,60 @@ Component: `PHGrid` in `src/App.jsx`. Endpoints: `api/ph/list.js`
 - `kind='rescale'` — PH "Rescale Stock": `restock_pending` units, by rescale-event
   date (see `rescale.md`).
 
-## SKU-merge (`groupPhRows`)
-- One row per **SKU + status** (regardless of size). Size breakdown as qty chips
-  (`SizesQty`) + total qty. Price / II / AL / SX / SH / Note set **once per SKU**,
-  applied to every member VIN. A sync flag shows "Yes" only if **all** units have
-  it; `~` marks a mixed price/cost.
+## SKU-merge — expandable per-size rows (`groupPhSized`)
+- One **collapsed row per SKU + status**: Date · Shoe · SKU · size×qty chips ·
+  total Qty · Status · sync badges (`SyncBadges`) · Edit. Click the row (or the
+  caret) to **expand** a detail drawer; editing auto-expands it.
+- The drawer holds a **per-size table** — `Size | Qty | Cost | Global indicator |
+  Final price | II | AL | SX | SH | Note` — because **every editable field is per
+  SIZE** (cost/GI/final price/flags/note can all differ; `~` marks units that differ
+  within a size). The collapsed-row `SyncBadges` is the group summary (a flag reads
+  "on" only if **all** units have it).
+- The PH-team Inventory browse page still uses the merged `groupPhRows`.
 
-## Editable fields (Edit ⇄ Submit per row)
-- Price, **added_to_intel_inv (II)**, **synced_alias/stockx/shopify (AL/SX/SH)**,
-  ph_note. Yes/No toggles: soft blue = yes, soft red = no.
-- Save = `phUpdateMany(vins, fields, baseEditedAt)` — optimistic concurrency:
-  409 if `last_edit_at` moved (reloads fresh). Every changed field → one
+## Editable fields (one Edit ⇄ Submit per group)
+- **Per size**: Global indicator (number) → **Final price auto-calculates** = GI +
+  20% (`calcFinalPrice`, `PRICE_MARKUP = 1.2`); Final price stays editable so it
+  can be overridden. Plus **II / AL / SX / SH** Yes/No toggles per size (soft blue =
+  yes, soft red = no — rendered as a colored **checkbox** in edit mode) plus a
+  per-size **Note**. Persist to `items` (`global_indicator`, `price`, sync flags, `ph_note`).
+- Nothing is group-level anymore; each size's fields apply to that size's VINs.
+- **GI fetched at receiving** (Alias pricing insights, per unit) seeds these; PH
+  reviews/overrides. GI fetched best-effort, so it may be null. See `integrations.md`.
+- **Global indicator + Final price are hidden from the warehouse role**
+  (`showPricing = role !== 'warehouse'`); admin sees them read-only.
+- Save: one `phUpdateMany(vins, fields, baseEditedAt)` **per size** (sizes touch
+  disjoint VINs → run in parallel), each using the group's `last_edit_at` as the
+  optimistic-concurrency baseline (409 → reload fresh). Every changed field → one
   `ph_update` event.
+
+## Added by / Last edited by / History (all roles)
+- **Added by** column = the **first** PH editor (`items.first_edit_by/at`, set once
+  via `coalesce` on the first `phUpdateItems`). When later edits happen it also
+  shows **"Last edited by: {name} {date} EST"** (`last_edit_by/at`). "Subsequent
+  edits exist" = any unit whose `last_edit_at > first_edit_at` (`groupPhSized`
+  `_hasSubsequent`). Visible to PH, warehouse, and admin.
+- **History** button per size → `HistoryModal` (`api/items/history.js` →
+  `getEventsForVins`, allowed for warehouse + ph_team, admin auto). Shows the
+  who/what/when timeline (`eventLabel`); identical per-VIN edits are collapsed
+  (`dedupeEvents`). Read-only, all roles.
+- **System-generated vs by-name** (per `ph_update` event, `details.system` flag):
+  - **Global indicator**: the auto Alias fetch (`setItemGlobalIndicators`) logs it
+    **system-generated**; a manual change in the grid logs **by name**.
+  - **Final price**: **system-generated** while it equals the calculated GI + 20%;
+    **by name** only when the user **overrides** that calculated value.
+  - `eventLabel` shows "(system-generated)" when `details.system` (or `soldCascade`).
+  - Money changes are compared **numerically** (pg returns NUMERIC as a string),
+    so an unchanged resubmit logs nothing.
+
+## Live list (auto-refresh)
+- The grid quietly re-fetches `phList` every `LIST_POLL_MS` (15s) so **new shoes
+  from the warehouse and other users' saved edits appear without a manual reload**
+  (`quietRefresh`). No spinner; expanded rows stay open.
+- **Skipped while this session is editing or saving** (and while a fetch is in
+  flight) so an in-progress draft is never disturbed; resumes after submit/cancel.
+- Respects the current date filter (only refreshes what's in view); runs for
+  read-only viewers (admin/warehouse) too.
 
 ## Edit locks (concurrent / shared accounts)
 - Per-**session** holder id (UUID per tab/device) — two sessions of the SAME

@@ -11,7 +11,11 @@ add-on. Full guide: `RAILWAY.md`. Hosting overview: `DEPLOYMENT.md`.
 
 ## Env vars (Railway → service → Variables)
 `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` (internal). `SESSION_SECRET` (≥16),
-`ADMIN_PASSWORD`, `KICKSDB_KEY`, `ALIAS_EMAIL`, `ALIAS_PASSWORD`.
+`ADMIN_PASSWORD`, `ALIAS_EMAIL`, `ALIAS_PASSWORD`, **`ALIAS_API_KEY`**.
+- `ALIAS_API_KEY` = the GOAT/Alias key for the **official `api.alias.org`** API
+  (Global Indicator pricing + SKU catalog search). Without it, GI stays null and
+  SKU search fails — see `integrations.md`.
+- `KICKSDB_KEY` is **no longer used** (SKU search moved to Alias) — safe to remove.
 - Railway mangles special chars ($, #, quotes) → use the single-variable field,
   keep passwords alphanumeric, verify with `node -e` JSON.stringify.
 
@@ -42,3 +46,10 @@ run the migration after schema changes, on every environment.**
   `railway login`, `railway link`, then `railway ssh`.
 - After deploys, hard-refresh the browser (cached bundle shows stale UI).
 - Backfill colorway by SKU: `scripts/backfill-upc.mjs`.
+
+## Maintenance scripts (run with `.env` present, or `DATABASE_URL=… node …`)
+- `scripts/backfill-gi.mjs [--apply]` — fill Global Indicator (+ Final price =
+  GI×1.2) for existing items missing it, resolving catalog_id by UPC or SKU and
+  caching catalog rows. Dry-run by default. Needs `ALIAS_API_KEY`.
+- `scripts/probe-apis.mjs [SKU] [UPC]` — diagnostic: dumps StockX / Alias-proxy /
+  official-Alias fields for a shoe (handy when a lookup misbehaves).

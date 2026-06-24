@@ -254,6 +254,98 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   return results.map((r) => r[0]);
 }
 
+// Store the Alias-fetched global indicator on freshly received items, and seed
+// the final price (= GI + 20%). Best-effort enrichment at intake; `updates` is
+// [{ id, global_indicator, price }]. Skips rows with a null GI. Logs a
+// SYSTEM-GENERATED ph_update event per item so the history shows the auto-fetched
+// GI as "system-generated" (not a person) — a later manual change is attributed
+// to the editor by name.
+export async function setItemGlobalIndicators(updates) {
+  const list = (updates || []).filter((u) => u && u.id != null && u.global_indicator != null);
+  if (!list.length) return 0;
+  const sql = db();
+  const queries = [];
+  for (const u of list) {
+    queries.push(sql`
+      UPDATE items SET global_indicator = ${u.global_indicator}, price = ${u.price ?? null}, updated_at = now()
+      WHERE id = ${u.id}
+    `);
+    const text = `Global indicator $${Number(u.global_indicator).toFixed(2)}`
+      + (u.price != null ? ` · Final price $${Number(u.price).toFixed(2)}` : '')
+      + ' (auto from Alias)';
+    queries.push(sql`
+      INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${u.id}, 'ph_update', ${JSON.stringify({ text, system: true })}::jsonb, NULL)
+    `);
+  }
+  await sql.transaction(queries);
+  return list.length;
+}
+
+/* --------------------------- Product catalog --------------------------- */
+// Cache of shoe details keyed by UPC (box-label barcode). Stores the Alias
+// catalog_id used for Global Indicator pricing. Upsert keeps existing non-null
+// values when the new payload omits a field (coalesce), so a later, richer
+// lookup fills gaps without wiping good data.
+export async function upsertProduct(p) {
+  if (!p || (!p.upc && !p.sku)) return null;
+  const sql = db();
+  // UPC-keyed (box-label variant): one row per UPC.
+  if (p.upc) {
+    const rows = await sql`
+      INSERT INTO products (upc, sku, size, name, colorway, gender, brand, image_url, catalog_id, source)
+      VALUES (${p.upc}, ${p.sku || null}, ${p.size || null}, ${p.name || null}, ${p.colorway || null},
+              ${p.gender || null}, ${p.brand || null}, ${p.image || null}, ${p.catalogId || null}, ${p.source || null})
+      ON CONFLICT (upc) DO UPDATE SET
+        sku        = coalesce(EXCLUDED.sku, products.sku),
+        size       = coalesce(EXCLUDED.size, products.size),
+        name       = coalesce(EXCLUDED.name, products.name),
+        colorway   = coalesce(EXCLUDED.colorway, products.colorway),
+        gender     = coalesce(EXCLUDED.gender, products.gender),
+        brand      = coalesce(EXCLUDED.brand, products.brand),
+        image_url  = coalesce(EXCLUDED.image_url, products.image_url),
+        catalog_id = coalesce(EXCLUDED.catalog_id, products.catalog_id),
+        source     = coalesce(EXCLUDED.source, products.source),
+        updated_at = now()
+      RETURNING id, upc, sku, size, name, colorway, gender, brand, image_url, catalog_id, source
+    `;
+    return rows[0] || null;
+  }
+  // SKU-only (no box-label UPC, e.g. a SKU scan): ONE catalog row per SKU
+  // (upc IS NULL), enforced by the partial unique index products_sku_nullupc_idx
+  // so concurrent upserts can't duplicate. coalesce keeps existing non-null values.
+  const rows = await sql`
+    INSERT INTO products (upc, sku, size, name, colorway, gender, brand, image_url, catalog_id, source)
+    VALUES (NULL, ${p.sku}, ${p.size || null}, ${p.name || null}, ${p.colorway || null},
+            ${p.gender || null}, ${p.brand || null}, ${p.image || null}, ${p.catalogId || null}, ${p.source || null})
+    ON CONFLICT (sku) WHERE upc IS NULL DO UPDATE SET
+      size       = coalesce(EXCLUDED.size, products.size),
+      name       = coalesce(EXCLUDED.name, products.name),
+      colorway   = coalesce(EXCLUDED.colorway, products.colorway),
+      gender     = coalesce(EXCLUDED.gender, products.gender),
+      brand      = coalesce(EXCLUDED.brand, products.brand),
+      image_url  = coalesce(EXCLUDED.image_url, products.image_url),
+      catalog_id = coalesce(EXCLUDED.catalog_id, products.catalog_id),
+      source     = coalesce(EXCLUDED.source, products.source),
+      updated_at = now()
+    RETURNING id, upc, sku, size, name, colorway, gender, brand, image_url, catalog_id, source
+  `;
+  return rows[0] || null;
+}
+
+export async function getProductByUpc(upc) {
+  if (!upc) return null;
+  const rows = await db()`SELECT * FROM products WHERE upc = ${upc} LIMIT 1`;
+  return rows[0] || null;
+}
+
+// The Alias catalog_id for a SKU (shared across its sizes) — first known row.
+export async function getCatalogIdBySku(sku) {
+  if (!sku) return null;
+  const rows = await db()`SELECT catalog_id FROM products WHERE sku = ${sku} AND catalog_id IS NOT NULL LIMIT 1`;
+  return rows[0]?.catalog_id || null;
+}
+
 // First two history events per item: "scanned" (Scanned by <user>) then the
 // intake event — "received" for a shipment, "rescaled" for re-scaled stock.
 // Inserted in order so the timeline reads scanned → received/rescaled.
@@ -355,9 +447,9 @@ export async function phListItems(from, to, kind = null) {
     return await db()`
       SELECT i.vin, coalesce(ev.created_at, i.updated_at) AS created_at,
              coalesce(ev.created_by, i.created_by) AS created_by, i.name, i.sku, i.size, i.gender,
-             i.status, i.cost, i.price,
+             i.status, i.cost, i.price, i.global_indicator,
              i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
-             i.ph_note, i.last_edit_by, i.last_edit_at
+             i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at
       FROM items i
       LEFT JOIN LATERAL (
         SELECT e.created_at, e.created_by FROM item_events e
@@ -374,9 +466,9 @@ export async function phListItems(from, to, kind = null) {
   }
   return await db()`
     SELECT i.vin, i.created_at, i.created_by, i.name, i.sku, i.size, i.gender,
-           i.status, i.cost, i.price,
+           i.status, i.cost, i.price, i.global_indicator,
            i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
-           i.ph_note, i.last_edit_by, i.last_edit_at
+           i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
@@ -515,7 +607,7 @@ export async function phUpdateItems(vins, fields, by, baseEditedAt = undefined) 
   const f = fields || {};
 
   const curRows = await sql`
-    SELECT id, vin, price, added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
+    SELECT id, vin, price, global_indicator, added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
            ph_note, last_edit_at, last_edit_by
     FROM items WHERE vin = ANY(${list})
   `;
@@ -543,39 +635,59 @@ export async function phUpdateItems(vins, fields, by, baseEditedAt = undefined) 
     ids.push(cur.id);
     const next = {
       price: 'price' in f ? num(f.price) : cur.price,
+      global: 'global_indicator' in f ? num(f.global_indicator) : cur.global_indicator,
       intel: 'added_to_intel_inv' in f ? !!f.added_to_intel_inv : cur.added_to_intel_inv,
       alias: 'synced_alias' in f ? !!f.synced_alias : cur.synced_alias,
       stockx: 'synced_stockx' in f ? !!f.synced_stockx : cur.synced_stockx,
       shopify: 'synced_shopify' in f ? !!f.synced_shopify : cur.synced_shopify,
       note: 'ph_note' in f ? (String(f.ph_note || '').slice(0, 2000) || null) : cur.ph_note,
     };
+    // Final price is auto = GI + 20%. It only counts as a human change (gets a
+    // name) when the user OVERRIDES that calculated value; otherwise it's the
+    // system-derived figure. `descs` carries { text, system } per change.
+    const calcPrice = next.global == null ? null : Math.round(Number(next.global) * 1.2 * 100) / 100;
+    const priceIsCalc = (next.price == null && calcPrice == null)
+      || (next.price != null && calcPrice != null && Math.abs(Number(next.price) - calcPrice) < 0.005);
+    // Compare money numerically — pg returns NUMERIC as a string ("80.00"), so a
+    // raw String() compare would treat an unchanged 80 vs "80.00" as a change and
+    // spuriously re-log on every submit.
+    const numEq = (a, b) => {
+      const x = a == null || a === '' ? null : Number(a);
+      const y = b == null || b === '' ? null : Number(b);
+      if (x == null && y == null) return true;
+      if (x == null || y == null) return false;
+      return Math.abs(x - y) < 0.005;
+    };
     const descs = [];
-    if (String(next.price) !== String(cur.price)) descs.push(next.price == null ? 'Price cleared' : `Price set to $${Number(next.price).toFixed(2)}`);
-    if (next.intel !== cur.added_to_intel_inv) descs.push(next.intel ? 'Added to Intelligent Inventory' : 'Removed from Intelligent Inventory');
-    if (next.alias !== cur.synced_alias) descs.push(next.alias ? 'Synced to Alias' : 'Unsynced from Alias');
-    if (next.stockx !== cur.synced_stockx) descs.push(next.stockx ? 'Synced to StockX' : 'Unsynced from StockX');
-    if (next.shopify !== cur.synced_shopify) descs.push(next.shopify ? 'Synced to Shopify' : 'Unsynced from Shopify');
-    if ((next.note || '') !== (cur.ph_note || '')) descs.push('Note updated');
+    if (!numEq(next.global, cur.global_indicator)) descs.push({ text: next.global == null ? 'Global indicator cleared' : `Global indicator set to $${Number(next.global).toFixed(2)}`, system: false });
+    if (!numEq(next.price, cur.price)) descs.push({ text: next.price == null ? 'Final price cleared' : `Final price set to $${Number(next.price).toFixed(2)}`, system: priceIsCalc });
+    if (next.intel !== cur.added_to_intel_inv) descs.push({ text: next.intel ? 'Added to Intelligent Inventory' : 'Removed from Intelligent Inventory', system: false });
+    if (next.alias !== cur.synced_alias) descs.push({ text: next.alias ? 'Synced to Alias' : 'Unsynced from Alias', system: false });
+    if (next.stockx !== cur.synced_stockx) descs.push({ text: next.stockx ? 'Synced to StockX' : 'Unsynced from StockX', system: false });
+    if (next.shopify !== cur.synced_shopify) descs.push({ text: next.shopify ? 'Synced to Shopify' : 'Unsynced from Shopify', system: false });
+    if ((next.note || '') !== (cur.ph_note || '')) descs.push({ text: 'Note updated', system: false });
 
     queries.push(sql`
-      UPDATE items SET price = ${next.price}, added_to_intel_inv = ${next.intel},
+      UPDATE items SET price = ${next.price}, global_indicator = ${next.global}, added_to_intel_inv = ${next.intel},
         synced_alias = ${next.alias}, synced_stockx = ${next.stockx}, synced_shopify = ${next.shopify},
-        ph_note = ${next.note}, last_edit_by = ${by || null}, last_edit_at = now(), updated_at = now()
+        ph_note = ${next.note},
+        first_edit_by = coalesce(first_edit_by, ${by || null}), first_edit_at = coalesce(first_edit_at, now()),
+        last_edit_by = ${by || null}, last_edit_at = now(), updated_at = now()
       WHERE id = ${cur.id}
     `);
-    for (const text of descs) {
+    for (const d of descs) {
       queries.push(sql`
         INSERT INTO item_events (item_id, type, details, created_by)
-        VALUES (${cur.id}, 'ph_update', ${JSON.stringify({ text })}::jsonb, ${by || null})
+        VALUES (${cur.id}, 'ph_update', ${JSON.stringify(d.system ? { text: d.text, system: true } : { text: d.text })}::jsonb, ${d.system ? null : (by || null)})
       `);
     }
   }
   await sql.transaction(queries);
 
   return await sql`
-    SELECT vin, created_at, created_by, name, sku, size, gender, status, cost, price,
+    SELECT vin, created_at, created_by, name, sku, size, gender, status, cost, price, global_indicator,
            added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
-           ph_note, last_edit_by, last_edit_at
+           ph_note, first_edit_by, first_edit_at, last_edit_by, last_edit_at
     FROM items WHERE id = ANY(${ids}) ORDER BY created_at, id
   `;
 }
@@ -711,6 +823,22 @@ export async function getItemByVin(vin) {
     FROM item_events WHERE item_id = ${rows[0].id} ORDER BY created_at, id
   `;
   return { item: rows[0], events };
+}
+
+// Combined event history for a set of VINs (a PH grid size line covers several
+// identical units). Returns events newest-first with the owning VIN attached, so
+// the PH/admin/warehouse History view can show who changed what, when.
+export async function getEventsForVins(vins, limit = 500) {
+  const list = [...new Set((vins || []).filter(Boolean))];
+  if (!list.length) return [];
+  const lim = Math.min(2000, Math.max(1, Number(limit) || 500));
+  return await db()`
+    SELECT e.id, e.type, e.details, e.created_by, e.created_at, i.vin, i.size
+    FROM item_events e JOIN items i ON i.id = e.item_id
+    WHERE i.vin = ANY(${list})
+    ORDER BY e.created_at DESC, e.id DESC
+    LIMIT ${lim}
+  `;
 }
 
 // Re-scan an EXISTING in-hand unit (Rescale by VIN). Appends a 'rescaled' event

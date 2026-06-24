@@ -1,23 +1,20 @@
 // POST /api/sku-search  { sku }  ->  { ok, product }
-// Queries KicksDB (StockX products) by SKU. API key stays server-side.
+// Looks a SKU up on the official Alias catalog (api.alias.org) — Alias has the
+// canonical shoe titles + colorway and gives us the catalog_id. Replaces the old
+// KicksDB lookup. The API key stays server-side.
 
 import {
   getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku,
-  fetchWithTimeout, cacheGet, cacheSet, normalizeGender,
+  cacheGet, cacheSet, normalizeGender,
 } from './_lib/util.js';
+import { aliasCatalogBySku } from './_lib/alias.js';
 
-const KICKS_BASE = 'https://api.kicks.dev/v3/stockx/products';
-
-// Sort sizes by numeric value (1, 1.5, 2 … 13) instead of the lexicographic
-// order that puts 10–13 before 2. Non-numeric sizes sort last by string.
+// Sort sizes numerically (1, 1.5, 2 … 13) — Alias usually returns them in order,
+// but normalize defensively so the UI's size table is always ascending.
 function sortSizes(list) {
-  const num = (s) => {
-    const m = String(s).match(/[\d.]+/);
-    return m ? parseFloat(m[0]) : NaN;
-  };
+  const num = (s) => { const m = String(s).match(/[\d.]+/); return m ? parseFloat(m[0]) : NaN; };
   return [...list].sort((a, b) => {
-    const na = num(a);
-    const nb = num(b);
+    const na = num(a); const nb = num(b);
     if (Number.isNaN(na) && Number.isNaN(nb)) return String(a).localeCompare(String(b));
     if (Number.isNaN(na)) return 1;
     if (Number.isNaN(nb)) return -1;
@@ -25,30 +22,22 @@ function sortSizes(list) {
   });
 }
 
-function normalize(item, querySku) {
-  if (!item) return null;
-  // KicksDB returns the size run under `variants` (requested via
-  // display[variants]=true). Each variant's `size` is the StockX primary size
-  // (e.g. "10", "8.5W"); take the visible ones so the UI shows the same
-  // size/quantity table as an Alias result.
-  const variants = Array.isArray(item.variants) ? item.variants : [];
-  const sizes = sortSizes([
-    ...new Set(
-      variants
-        .filter((v) => !v.hidden && v.size != null && String(v.size).trim())
-        .map((v) => String(v.size).trim())
-    ),
-  ]);
+// Map the Alias catalog hit to our shared product shape. Alias writes the SKU
+// with a space ("DQ8426 109"); normalize to the dash form the app uses. No UPC
+// here (the catalog is per-SKU; UPCs are per-size) — same as the old behavior.
+function normalize(c, querySku) {
+  if (!c) return null;
+  const sku = (c.sku || querySku || '').replace(/\s+/g, '-') || null;
   return {
-    name: item.title || item.model || 'Unknown product',
-    sku: item.sku || querySku || null,
-    upc: item.upc || item.gtin || null, // present only if KicksDB returns it
-    image: item.image || (Array.isArray(item.gallery) ? item.gallery[0] : null) || null,
-    brand: item.brand || null,
-    colorway: item.secondary_title || null,
-    sizes,
-    gender: normalizeGender(item.gender || item.category, { size: sizes[0] || '', title: item.title || item.model || '' }),
-    source: 'kicksdb',
+    name: c.name || 'Unknown product',
+    sku,
+    upc: null,
+    image: c.image || null,
+    brand: c.brand || null,
+    colorway: c.colorway || null,
+    sizes: sortSizes(c.sizes || []),
+    gender: normalizeGender(c.gender, { size: c.sizes?.[0] || '', title: c.name || '' }),
+    source: 'alias',
   };
 }
 
@@ -59,8 +48,7 @@ export default async function handler(req, res) {
   if (!rateLimit(req, { windowMs: 60_000, max: 40 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
 
-  const key = process.env.KICKSDB_KEY;
-  if (!key) return send(res, 500, { ok: false, error: 'Server is missing the KicksDB key.' });
+  if (!process.env.ALIAS_API_KEY) return send(res, 500, { ok: false, error: 'Server is missing the Alias API key.' });
 
   const body = await getJsonBody(req);
   const sku = cleanSku(body.sku);
@@ -72,15 +60,8 @@ export default async function handler(req, res) {
   if (cached) return send(res, 200, { ok: true, product: cached, cached: true });
 
   try {
-    // display[variants]=true returns the size run in the same call (no second
-    // round trip); limit=1 keeps the payload small since we use the top match.
-    const url = `${KICKS_BASE}?query=${encodeURIComponent(sku)}&display[variants]=true&limit=1`;
-    const r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${key}` } });
-    if (!r.ok) return send(res, 502, { ok: false, error: `KicksDB failed (${r.status})` });
-
-    const data = await r.json();
-    const item = Array.isArray(data?.data) ? data.data[0] : null;
-    const normalized = normalize(item, sku);
+    const c = await aliasCatalogBySku(sku);
+    const normalized = normalize(c, sku);
     if (!normalized) return send(res, 404, { ok: false, error: 'No product found for that SKU.' });
 
     cacheSet(cacheKey, normalized);

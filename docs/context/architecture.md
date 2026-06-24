@@ -3,10 +3,19 @@
 React (Vite) SPA + Express server + local/managed PostgreSQL. No Google Sheets.
 
 ## Stack
-- **Frontend:** React 18 + Vite. The **entire UI lives in `src/App.jsx`** (~3000
-  lines, one file). Styles in `src/styles.css`. API client in `src/api.js`.
-  Barcode camera: `@zxing/browser` (`src/components/CameraScanner.jsx`, lazy).
-  Label barcodes: `jsbarcode` (`Barcode` / `LabelSheet` in App.jsx).
+- **Frontend:** React 18 + Vite, organized into modules (no longer one file):
+  - `src/App.jsx` — thin shell + top-level router only (~90 lines).
+  - `src/screens/*.jsx` — one file per page (Auth, Home, CheckAccess, Receiving,
+    Inventory, PHTeam [PHTeamApp + PHGrid], NoBoxReport, StatusScanPage,
+    RescaleRequests).
+  - `src/components/common.jsx` — shared presentational components (TopBar,
+    StatusPill, SyncBadges, Modal, HistoryModal, CardBadges, DateRangeBar,
+    SizesQty, YesNo, Barcode, LabelSheet, PreferencesModal, RescaleCompare,
+    EstClock). Camera scanner: `src/components/CameraScanner.jsx` (lazy, zxing).
+  - `src/lib/*.js` — pure helpers: `format` (dates), `codes` (VIN/UPC/size),
+    `ph` (PH grid grouping/pricing/constants), `history` (event labels),
+    `csv`, `constants` (routing/roles/domain lists). `src/hooks.js` — shared hooks.
+  - Styles in `src/styles.css`. API client in `src/api.js`.
 - **Backend:** plain Node handlers in `api/**/*.js`, each `export default
   (req,res)`. `server.mjs` (Express) serves built `dist/` + mounts every
   `api/**/*.js` at its path. Vite dev middleware mirrors this for `npm run dev`.
@@ -24,23 +33,26 @@ npm run db:reset   # wipe inventory data, KEEP accounts (destructive)
 ```
 
 ## Routing (SPA, History API)
-`ROUTES` array in App.jsx → `pathForView` / `viewForPath`. Views: receiving,
-rescale, inventory, report, access, nobox, sold, shipped, rescalereq (+ home).
-Refresh restores the view from the URL. Global unsaved-changes guard via
-`useUnsavedGuard(isDirty)` (module-level `unsavedDirty` + beforeunload/popstate).
+`ROUTES` array in `src/lib/constants.js` → `pathForView` / `viewForPath`. Views:
+receiving, rescale, inventory, report, access, nobox, sold, shipped, rescalereq
+(+ home). Refresh restores the view from the URL. Global unsaved-changes guard via
+`useUnsavedGuard(isDirty)` in `src/hooks.js` (module-level dirty flag exposed to
+App as `isUnsavedDirty()` + beforeunload/popstate).
 PH-team users route separately under `/ph/*` inside `PHTeamApp` (its own
 `PH_PATHS` map + `phPageForPath`/`phPathForPage` + pushState/popstate), since
 `ph_team` short-circuits before the warehouse/admin `view` routing. `onAuthed`
 skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
 
-## Top-level App.jsx components (entry points)
-- `Home` / `PHTeamApp` — role-based home screens (cards).
-- `Receiving`, `BatchList` — intake. `Inventory` — stock browse.
-- `PHGrid` — the SKU-merged report/grid (kind: null | receiving | rescale).
-- `NoBoxReport`, `StatusScanPage` (sold/shipped), `RescaleRequestForm`,
-  `RescaleRequestsReport`, `RescaleCompare`.
-- Shared: `TopBar`, `StatusPill`, `SyncBadges`, `CardBadges`, `DateRangeBar`,
-  `SizesQty`, `YesNo`, `Modal`, `LabelSheet`, `Barcode`, `EstClock`.
+## Screens (entry points; `src/screens/*`)
+- `Home` / `PHTeam` (`PHTeamApp`) — role-based home screens (cards).
+- `Receiving` (+ `BatchList`) — intake. `Inventory` — stock browse.
+- `PHTeam` (`PHGrid`) — the per-size report/grid (kind: null | receiving | rescale);
+  `PHGrid` is also App's admin/warehouse Report view.
+- `NoBoxReport`, `StatusScanPage` (sold/shipped), `RescaleRequests`
+  (`RescaleRequestForm` + `RescaleRequestsReport`).
+- Shared (`src/components/common.jsx`): `TopBar`, `StatusPill`, `SyncBadges`,
+  `CardBadges`, `DateRangeBar`, `SizesQty`, `YesNo`, `Modal`, `HistoryModal`,
+  `LabelSheet`, `Barcode`, `PreferencesModal`, `RescaleCompare`, `EstClock`.
 
 ## Conventions
 - Every endpoint: `applySecurity` → `requireAuth`/`requireRole`/`requireAdmin`

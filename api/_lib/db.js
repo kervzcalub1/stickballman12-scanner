@@ -692,12 +692,6 @@ export async function phUpdateItems(vins, fields, by, baseEditedAt = undefined) 
   `;
 }
 
-// Single-VIN convenience wrapper (kept for callers that edit one item).
-export async function phUpdateItem(vin, fields, by) {
-  const rows = await phUpdateItems([vin], fields, by);
-  return rows[0] || null;
-}
-
 /* --------------------- PH edit locks (presence, B2) -------------------- */
 // A lock is "active" while its heartbeat is within EDIT_LOCK_TTL_SEC. The
 // client pings heartbeat ~every 10s; a stale lock (closed tab / crash) is

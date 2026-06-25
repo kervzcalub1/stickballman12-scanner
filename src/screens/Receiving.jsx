@@ -31,7 +31,19 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
     ? (String(header.originOther || '').trim() || 'Other')
     : header.origin;
   const setH = (k, v) => setHeader((h) => ({ ...h, [k]: v }));
-  const [customSupplier, setCustomSupplier] = useState(false);
+  // Add-new-supplier modal (Feature 1): type a vendor → it's appended to the
+  // dropdown and selected for this session (persisted to the DB on commit).
+  const [showAddSupplier, setShowAddSupplier] = useState(false);
+  const [newSupplier, setNewSupplier] = useState('');
+  function saveNewSupplier() {
+    const name = newSupplier.trim();
+    if (!name) return;
+    const existing = supplierOptions.find((s) => s.toLowerCase() === name.toLowerCase());
+    if (existing) setH('supplier', existing); // already in the list — just select it
+    else { setSupplierOptions((opts) => [...opts, name].sort((a, b) => a.localeCompare(b))); setH('supplier', name); }
+    setShowAddSupplier(false);
+    setNewSupplier('');
+  }
   // Supplier dropdown options: seeded list + auto-saved custom names (Feature 1).
   // Falls back to the static SUPPLIERS constant if the fetch fails.
   const [supplierOptions, setSupplierOptions] = useState(SUPPLIERS);
@@ -110,6 +122,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   useEffect(() => {
     if (!navBack) return undefined;
     navBack.current = () => {
+      if (showAddSupplier) { setShowAddSupplier(false); return true; }
       if (pendingSwitch) { setPendingSwitch(null); return true; }
       if (showAdd) { closeAddItem(); return true; }
       if (scanTracking) { setScanTracking(false); return true; }
@@ -122,7 +135,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
       return false;
     };
     return () => { if (navBack) navBack.current = null; };
-  }, [navBack, pendingSwitch, showAdd, scanTracking, showPrefs, showConfirm, result, printLabels, tab, step]);
+  }, [navBack, showAddSupplier, pendingSwitch, showAdd, scanTracking, showPrefs, showConfirm, result, printLabels, tab, step]);
 
   // Short audible + haptic confirmation that a box registered.
   function scanFeedback(kind) {
@@ -200,17 +213,23 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
         gender: p.gender || null, colorway: p.colorway || '',
       };
       const d = draftRef.current;
+      // The catalog (StockX, or Alias fallback) didn't return a size for this
+      // code — tell the user to pick it manually rather than the misleading
+      // "already loaded". Happens on first scan or a later size of a loaded shoe.
+      const noSize = !incoming.scannedSize;
       if (!d) {
         const rows = incoming.scannedSize ? [{ key: cartKey++, size: incoming.scannedSize, qty: 1 }] : [];
         setDraft({ ...incoming, withBox: true, rows });
-        setFlash({ type: 'added', text: `✓ ${incoming.name || c}` }); scanFeedback('added');
+        if (noSize) setFlash({ type: 'warn', text: `Scanned ${incoming.name || c} — no size from the catalog. Pick the size manually below.` });
+        else setFlash({ type: 'added', text: `✓ ${incoming.name || c}` });
+        scanFeedback('added');
       } else if (!sameSku(d.sku, incoming.sku)) {
         setPendingSwitch(incoming); scanFeedback('dup'); // different shoe → confirm switch
       } else if (incoming.scannedSize) {
         setDraft({ ...d, rows: bumpSize(d.rows, incoming.scannedSize) });
         setFlash({ type: 'added', text: `+1 · size ${incoming.scannedSize}` }); scanFeedback('added');
       } else {
-        setFlash({ type: 'dup', text: 'Already loaded — add sizes below.' }); scanFeedback('dup');
+        setFlash({ type: 'warn', text: 'Scanned, but no size from the catalog for this code. Pick the size manually below.' }); scanFeedback('dup');
       }
     } catch (err) {
       if (err.unauthorized) return onSignOut();
@@ -455,21 +474,18 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                   {!isRescale && (
                     <label>Supplier *
                       <select
-                        value={customSupplier ? '__custom__' : header.supplier}
+                        value={header.supplier}
                         onChange={(e) => {
                           const v = e.target.value;
-                          if (v === '__custom__') { setCustomSupplier(true); setH('supplier', ''); }
-                          else { setCustomSupplier(false); setH('supplier', v); }
+                          if (v === '__add__') { setNewSupplier(''); setShowAddSupplier(true); } // open the add-supplier modal
+                          else setH('supplier', v);
                         }}
                       >
                         <option value="">Select supplier…</option>
                         {supplierOptions.map((s) => <option key={s} value={s}>{s}</option>)}
-                        <option value="__custom__">Custom…</option>
+                        <option value="__add__">+ Add new supplier name</option>
                       </select>
                     </label>
-                  )}
-                  {!isRescale && customSupplier && (
-                    <label>Custom supplier<input autoFocus value={header.supplier} onChange={(e) => setH('supplier', e.target.value)} placeholder="Type supplier name" /></label>
                   )}
                   {!isRescale && (
                     <label>Tracking #
@@ -803,6 +819,25 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                 zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
             </Suspense>
             <div className="modal-actions"><button className="btn ghost" onClick={() => setScanTracking(false)}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+
+      {showAddSupplier && (
+        <div className="modal-overlay" onClick={() => setShowAddSupplier(false)}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Add new supplier</h3>
+            <form onSubmit={(e) => { e.preventDefault(); saveNewSupplier(); }}>
+              <label>Supplier name
+                <input autoFocus value={newSupplier} maxLength={80} placeholder="e.g. JD Sports"
+                  onChange={(e) => setNewSupplier(e.target.value)} />
+              </label>
+              <p className="muted sm mt">Added to the list and selected for this batch — saved for next time when you commit.</p>
+              <div className="modal-actions">
+                <button type="button" className="btn ghost" onClick={() => setShowAddSupplier(false)}>Cancel</button>
+                <button type="submit" className="btn primary" disabled={!newSupplier.trim()}>Add supplier</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

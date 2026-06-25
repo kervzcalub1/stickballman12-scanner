@@ -67,6 +67,21 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
     const reader = new BrowserMultiFormatReader(hints);
     let cancelled = false;
 
+    // Fully release the camera: stop the zxing scan loop AND every live track,
+    // then detach the stream. controls.stop() alone doesn't reliably free the
+    // device on all browsers, so the OS "camera in use" indicator can linger —
+    // stopping the tracks directly is what actually turns the camera off.
+    const stopCamera = () => {
+      try { controlsRef.current?.stop(); } catch { /* noop */ }
+      controlsRef.current = null;
+      const stream = videoRef.current?.srcObject;
+      if (stream && typeof stream.getTracks === 'function') {
+        for (const t of stream.getTracks()) { try { t.stop(); } catch { /* noop */ } }
+      }
+      if (videoRef.current) videoRef.current.srcObject = null;
+      trackRef.current = null;
+    };
+
     (async () => {
       try {
         const cams = await BrowserMultiFormatReader.listVideoInputDevices();
@@ -108,12 +123,17 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
           }
         );
 
+        // The modal may have closed while the camera was still starting up — if
+        // so, tear down the stream we just opened (it started after unmount, so
+        // the cleanup below already ran and missed it).
+        if (cancelled) { stopCamera(); return; }
+
         // Grab the live video track so we can drive zoom, then apply the
         // current preference.
         const stream = videoRef.current?.srcObject;
         const track = stream?.getVideoTracks?.()[0] || null;
         trackRef.current = track;
-        if (!cancelled) setHwZoom(applyZoom(track, zoom));
+        setHwZoom(applyZoom(track, zoom));
       } catch (e) {
         if (!cancelled) {
           setError(
@@ -127,8 +147,7 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
 
     return () => {
       cancelled = true;
-      trackRef.current = null;
-      try { controlsRef.current?.stop(); } catch { /* noop */ }
+      stopCamera();
     };
     // Re-run when the selected device changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -179,6 +179,7 @@ body {
 }
 .scan-flash.added { background: rgba(46, 204, 113, 0.18); color: var(--ok); border: 1px solid var(--ok); }
 .scan-flash.dup { background: rgba(255, 193, 7, 0.15); color: #ffca3a; border: 1px solid #ffca3a; }
+.scan-flash.warn { background: rgba(224, 168, 120, 0.18); color: #e0a878; border: 1px solid #e0a878; }
 
 .track-field { display: flex; gap: 6px; }
 .track-field input { flex: 1; min-width: 0; }

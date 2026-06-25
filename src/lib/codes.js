@@ -48,3 +48,17 @@ export function upcFormat(u) {
 
 // Numeric value of a size string ("9.5W" -> 9.5) for sorting; NaN if none.
 export const sizeNum = (s) => { const m = String(s).match(/[\d.]+/); return m ? parseFloat(m[0]) : NaN; };
+
+// Order sizes smallest→largest for display. Numeric value drives the order
+// (handles "8.5W" / "10Y"); non-numeric / not-yet-typed custom sizes sort last.
+export function compareSizes(a, b) {
+  const na = sizeNum(a?.size ?? a);
+  const nb = sizeNum(b?.size ?? b);
+  const aNaN = Number.isNaN(na);
+  const bNaN = Number.isNaN(nb);
+  if (aNaN && bNaN) return String(a?.size ?? a).localeCompare(String(b?.size ?? b));
+  if (aNaN) return 1;
+  if (bNaN) return -1;
+  if (na !== nb) return na - nb;
+  return String(a?.size ?? a).localeCompare(String(b?.size ?? b));
+}

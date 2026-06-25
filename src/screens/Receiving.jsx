@@ -7,7 +7,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal } from '../components/common.jsx';
 import { useUnsavedGuard } from '../hooks.js';
-import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart } from '../lib/codes.js';
+import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES } from '../lib/constants.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
@@ -32,6 +32,35 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
     : header.origin;
   const setH = (k, v) => setHeader((h) => ({ ...h, [k]: v }));
   const [customSupplier, setCustomSupplier] = useState(false);
+  // Supplier dropdown options: seeded list + auto-saved custom names (Feature 1).
+  // Falls back to the static SUPPLIERS constant if the fetch fails.
+  const [supplierOptions, setSupplierOptions] = useState(SUPPLIERS);
+  // Duplicate-tracking alert (Feature 8): the batch_code/id a typed tracking #
+  // already belongs to. Non-blocking — proceeding flags the new batch.
+  const [dupBatch, setDupBatch] = useState(null);  // { code, id } | null
+
+  useEffect(() => {
+    if (isRescale) return undefined;
+    let cancelled = false;
+    api.suppliers()
+      .then(({ suppliers }) => { if (!cancelled && suppliers?.length) setSupplierOptions(suppliers); })
+      .catch(() => { /* keep the static fallback */ });
+    return () => { cancelled = true; };
+  }, [isRescale]);
+
+  // Debounced duplicate-tracking check as the tracking number is typed/scanned.
+  useEffect(() => {
+    if (isRescale) { setDupBatch(null); return undefined; }
+    const t = String(header.tracking || '').trim();
+    if (!t) { setDupBatch(null); return undefined; }
+    let cancelled = false;
+    const id = setTimeout(() => {
+      api.checkTracking(t)
+        .then(({ exists, batchCode, batchId }) => { if (!cancelled) setDupBatch(exists ? { code: batchCode, id: batchId } : null); })
+        .catch(() => { /* ignore — warning is best-effort */ });
+    }, 500);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [header.tracking, isRescale]);
 
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showPrefs, setShowPrefs] = useState(false);
@@ -218,14 +247,17 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   function addOrMergeItem(item) {
     setItems((arr) => {
       const i = arr.findIndex((x) => x.withBox === item.withBox && sameSku(x.sku, item.sku));
-      if (i === -1) return [...arr, item];
+      // Newest scanned shoe shows on top (Feature 3) — prepend new lines.
+      if (i === -1) return [item, ...arr];
       const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
       for (const s of item.sizes) {
         const j = sizes.findIndex((z) => z.size === s.size);
         if (j === -1) sizes.push({ key: cartKey++, size: s.size, qty: s.qty, vins: s.vins || [] });
         else { sizes[j].qty += s.qty; sizes[j].vins = [...sizes[j].vins, ...(s.vins || [])]; }
       }
-      const copy = [...arr]; copy[i] = { ...arr[i], sizes }; return copy;
+      // Float the just-touched shoe to the top too (most recently scanned).
+      const updated = { ...arr[i], sizes };
+      return [updated, ...arr.filter((_, idx) => idx !== i)];
     });
   }
   async function completeItem() {
@@ -338,7 +370,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
         }
         const payload = {
           kind: mode,
-          batch: { ...header, origin: effectiveOrigin, defaultCost: defaultCostNum },
+          batch: { ...header, origin: effectiveOrigin, defaultCost: defaultCostNum, duplicateOf: dupBatch?.id ?? null },
           items: out,
           issues: isRescale ? [] : [
             ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
@@ -431,7 +463,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                         }}
                       >
                         <option value="">Select supplier…</option>
-                        {SUPPLIERS.map((s) => <option key={s} value={s}>{s}</option>)}
+                        {supplierOptions.map((s) => <option key={s} value={s}>{s}</option>)}
                         <option value="__custom__">Custom…</option>
                       </select>
                     </label>
@@ -447,6 +479,11 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                         <button type="button" className="btn sm ghost" title="Upload / snap a label photo" onClick={() => fileRef.current?.click()} disabled={ocrBusy}>{ocrBusy ? '…' : '🖼'}</button>
                       </span>
                     </label>
+                  )}
+                  {!isRescale && dupBatch && (
+                    <div className="batch-form-wide dup-warn">
+                      ⚠ This tracking number was already received in <b>{dupBatch.code}</b>. You can still proceed — this batch will be flagged as a duplicate.
+                    </div>
                   )}
                   {isRescale && (
                     <label>Reason / origin *
@@ -499,7 +536,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                         </div>
                         <div className="recv-sizes">
                           <div className="recv-sizes-head"><span>Size</span><span>Qty · tap to see units</span></div>
-                          {it.sizes.map((s) => {
+                          {[...it.sizes].sort(compareSizes).map((s) => {
                             const k = `${it.key}:${s.key}`;
                             const open = openSizes.has(k);
                             return (
@@ -676,7 +713,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                     ))}
                     <button type="button" className="size-chip custom" onClick={addCustomSize}>+ Custom</button>
                   </div>
-                  {draft.rows.map((r) => (
+                  {[...draft.rows].sort(compareSizes).map((r) => (
                     <div className="size-line" key={r.key}>
                       <input className={`sz ${!String(r.size).trim() ? 'need' : ''}`} placeholder="Size" value={r.size} onChange={(e) => setRowSize(r.key, e.target.value)} autoFocus={!String(r.size).trim()} />
                       <div className="qty-stepper">

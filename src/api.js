@@ -71,6 +71,8 @@ export const api = {
   searchUpc: (upc) => post('/api/upc-search', { upc }),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // v4 — receiving / batches
+  suppliers: () => get('/api/suppliers'),
+  checkTracking: (tracking) => get(`/api/batches/check-tracking?tracking=${encodeURIComponent(tracking)}`),
   batchCommit: (payload) => post('/api/batches/commit', payload),
   reserveVins: (count, dateReceived) => post('/api/vins/reserve', { count, dateReceived }),
   batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),

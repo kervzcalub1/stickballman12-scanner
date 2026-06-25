@@ -14,7 +14,8 @@ import {
 } from '../_lib/util.js';
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues,
-  setItemGlobalIndicators, upsertProduct, getProductByUpc, getCatalogIdBySku, dbConfigured,
+  setItemGlobalIndicators, upsertProduct, getProductByUpc, getCatalogIdBySku,
+  addSupplier, dbConfigured,
 } from '../_lib/db.js';
 import { aliasProductByUpc, aliasCatalogBySku, aliasGlobalIndicator } from '../_lib/alias.js';
 
@@ -141,10 +142,15 @@ export default async function handler(req, res) {
     specialRules: String(header.specialRules ?? '').trim().slice(0, 2000) || null,
     kind,
     origin: kind === 'rescale' ? (String(header.origin ?? '').trim().slice(0, 80) || null) : null,
+    // Set by the client when staff proceed past the duplicate-tracking warning.
+    duplicateOf: kind === 'rescale' ? null : (Number.isInteger(header.duplicateOf) ? header.duplicateOf : null),
   };
 
   try {
     const batch = await createBatch(bh, createdBy);
+    // Auto-save the supplier name so custom vendors (e.g. "JD Sports") show up in
+    // the dropdown next time. Best-effort — never fail the commit over this.
+    if (kind === 'receiving' && bh.supplier) addSupplier(bh.supplier, createdBy).catch(() => {});
     const created = await insertItems(batch.id, items, createdBy, bh.dateReceived);
     // First history per item: "Scanned by <user>" then received / rescaled.
     await insertIntakeEvents(created.map((r) => r.id), createdBy, kind);

@@ -264,6 +264,72 @@ await sql(`
   )
 `);
 
+/* ---- V6: custom suppliers, multi-box batches, listing photos ---- */
+
+// Feature 1 — auto-saved supplier names. Seeded with the built-in list + new
+// vendors; the receiving commit upserts any custom name typed by staff.
+await sql(`
+  CREATE TABLE IF NOT EXISTS suppliers (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name       TEXT UNIQUE NOT NULL,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`
+  INSERT INTO suppliers (name) VALUES
+    ('Sunny'),('Nike'),('Foot Locker'),('DTLR'),('Snipes'),
+    ('Champs'),('Finish Line'),('Shoe Palace'),('JD Sports')
+  ON CONFLICT (name) DO NOTHING
+`);
+
+// Feature 7 — a batch can be several boxes arriving over days. It stays 'open'
+// while boxes trickle in, then 'committed'/'done' (auto when received==expected,
+// or a manual mark-done; status is changeable anytime). batch_tag is the
+// handwritten code on the shipping label (free text). expected_boxes is the
+// "X OF N" printed on the label. duplicate_of flags a re-used tracking number.
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS batch_tag      TEXT`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS expected_boxes INT`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS duplicate_of   BIGINT REFERENCES batches(id)`);
+await sql(`CREATE INDEX IF NOT EXISTS batches_tracking_idx ON batches (tracking_number)`);
+
+// One row per physical box in a batch; each box carries its own tracking number.
+await sql(`
+  CREATE TABLE IF NOT EXISTS batch_boxes (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    batch_id        BIGINT REFERENCES batches(id) ON DELETE CASCADE,
+    box_number      INT,
+    tracking_number TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'received'
+    received_by     TEXT,
+    received_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS batch_boxes_batch_idx    ON batch_boxes (batch_id)`);
+await sql(`CREATE INDEX IF NOT EXISTS batch_boxes_tracking_idx ON batch_boxes (tracking_number)`);
+
+// Link each unit to the box it came in (and thus that box's tracking number).
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS box_id BIGINT REFERENCES batch_boxes(id)`);
+await sql(`CREATE INDEX IF NOT EXISTS items_box_idx ON items (box_id)`);
+
+// Feature 5 — listing photos keyed by SKU (shared across same-SKU units), shot
+// by warehouse during scanning. Up to 5 named angles; re-capturing an angle
+// replaces it (unique per sku+angle). Defect photos are NOT here — they ride the
+// per-unit item_events(type='issue') record. Files live in Cloudflare R2.
+await sql(`
+  CREATE TABLE IF NOT EXISTS product_photos (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    sku        TEXT NOT NULL,
+    angle      TEXT,            -- 'side' | 'diagonal' | 'outsole' | 'top' | 'rear'
+    url        TEXT NOT NULL,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS product_photos_sku_idx ON product_photos (sku)`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS product_photos_sku_angle_idx ON product_photos (sku, angle)`);
+
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);
 console.log(`✓ Tables ready. users: ${count}, batches: ${b}`);

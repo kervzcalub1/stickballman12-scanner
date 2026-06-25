@@ -1,66 +1,71 @@
 // Shoe-angle line icons for the listing-photo slots (Feature 5). White line-art
-// sneakers (currentColor stroke, no fill) matching the five capture angles:
-// side · diagonal pair · outsole · top-down · rear/heel. Stylized but distinct.
+// sneakers (currentColor stroke, no fill) for the five capture angles:
+// side · diagonal pair · outsole · top-down · rear/heel. A single clean side
+// glyph is reused (scaled) for Side and the Diagonal pair so the set stays
+// visually consistent.
 import React from 'react';
 
 const base = {
   width: '100%', height: '100%', viewBox: '0 0 48 48', fill: 'none',
-  stroke: 'currentColor', strokeWidth: 2.2, strokeLinecap: 'round', strokeLinejoin: 'round',
+  stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
 };
 
-// Side profile — a low-top sneaker seen from the side.
-function Side(props) {
+// One side-profile sneaker (upper · sole · laces · heel collar).
+function ShoeGlyph() {
   return (
-    <svg {...base} {...props} aria-hidden="true">
-      <path d="M3 31c0-2.4 1.8-3.6 4-4.4l8-2.8 6.4-6.6c2-2 5-2 6.9.1l4.6 5.2c3 1 6.4 1.6 8.1 4.6" />
-      <path d="M3 31h39c1.1 0 2 .9 2 2v1c0 1.1-.9 2-2 2H7c-2.2 0-4-1.8-4-4z" />
-      <path d="M18 20.5l3 4M22.5 18l3.2 4.2M27 17.5l3 4" />
-    </svg>
+    <g>
+      <path d="M6 28.5c0-3 2.4-4.6 5.3-5.3l6.4-1.5 5.2-5.8c1.8-2 4.9-2.1 6.8-.1l3.7 4.1c.7.8 1.7 1.3 2.7 1.5l3.3.6c2.5.5 4.3 2.6 4.4 5.1" />
+      <path d="M5 28.5h37c1.3 0 2.4 1 2.5 2.3.1 2.2-1.7 4.1-3.9 4.1H10.5C7.5 34.9 5 32.5 5 29.5z" />
+      <path d="M19.5 22.2l2.4 3.4M23.4 19.8l2.7 3.8M27.6 18.9l2.5 3.6" />
+      <path d="M11.3 23.2c-.6-2.3-.2-3.9 1.2-4.6" />
+    </g>
   );
 }
 
-// Diagonal — a pair, one shoe behind and one in front at an angle.
+function Side(props) {
+  return <svg {...base} {...props} aria-hidden="true"><ShoeGlyph /></svg>;
+}
+
 function Diagonal(props) {
   return (
     <svg {...base} {...props} aria-hidden="true">
-      <path d="M6 22c0-1.8 1.4-2.7 3-3.3l5.6-2 4.5-4.6c1.4-1.4 3.5-1.4 4.8.1l3.2 3.6c2.1.7 4.5 1.1 5.7 3.2" />
-      <path d="M6 22h26c.9 0 1.6.7 1.6 1.6v.8c0 .9-.7 1.6-1.6 1.6H9c-1.7 0-3-1.3-3-3z" />
-      <path d="M16 32c0-1.8 1.4-2.7 3-3.3l5.6-2 4.5-4.6c1.4-1.4 3.5-1.4 4.8.1l3.2 3.6c2.1.7 4.5 1.1 5.7 3.2" />
-      <path d="M16 32h26c.9 0 1.6.7 1.6 1.6v.8c0 .9-.7 1.6-1.6 1.6H19c-1.7 0-3-1.3-3-3z" />
+      <g transform="translate(12.5,2.5) scale(0.58)"><ShoeGlyph /></g>
+      <g transform="translate(1,16.5) scale(0.58)"><ShoeGlyph /></g>
     </svg>
   );
 }
 
-// Outsole — the bottom of the shoe with tread lines.
+// Outsole — bottom of the shoe with a waisted sole and tread lines.
 function Outsole(props) {
   return (
     <svg {...base} {...props} aria-hidden="true">
-      <path d="M24 4c6 0 10 5 10 12 0 5-1 9-1 14s1 8-2 11c-2 2-12 2-14 0-3-3-2-6-2-11s-1-9-1-14C14 9 18 4 24 4z" />
-      <path d="M24 8v32" />
-      <path d="M16 14h16M15 20h18M15 27h18M16 34h16" />
+      <path d="M24 3.5c5.2 0 8.4 3.6 8.9 9 .3 3.6-.5 6.3-.7 9.4-.1 1.6-.1 2.6 0 4.2.2 3.1.9 5.7.5 9-.5 4-3.6 5.9-8.7 5.9s-8.2-1.9-8.7-5.9c-.4-3.3.3-5.9.5-9 .1-1.6.1-2.6 0-4.2-.2-3.1-1-5.8-.7-9.4.5-5.4 3.7-9 8.9-9z" />
+      <path d="M24 8.5v31" />
+      <path d="M16.5 13.5h15M15.5 19h17M15.5 25.5h17M16.5 32h15" />
     </svg>
   );
 }
 
-// Top-down — looking straight down at the opening + laces.
+// Top-down — the opening, collar and laces seen from straight above.
 function TopView(props) {
   return (
     <svg {...base} {...props} aria-hidden="true">
-      <path d="M24 4c6 0 10 5 10 12 0 5-1 9-1 14s1 8-2 11c-2 2-12 2-14 0-3-3-2-6-2-11s-1-9-1-14C14 9 18 4 24 4z" />
-      <ellipse cx="24" cy="18" rx="6.5" ry="9" />
-      <path d="M20.5 14h7M20.5 18h7M20.5 22h7" />
+      <path d="M24 3.5c5.2 0 8.4 3.6 8.9 9 .3 3.6-.5 6.3-.7 9.4-.1 1.6-.1 2.6 0 4.2.2 3.1.9 5.7.5 9-.5 4-3.6 5.9-8.7 5.9s-8.2-1.9-8.7-5.9c-.4-3.3.3-5.9.5-9 .1-1.6.1-2.6 0-4.2-.2-3.1-1-5.8-.7-9.4.5-5.4 3.7-9 8.9-9z" />
+      <path d="M19 11.5c1.4-1.4 8.6-1.4 10 0v9c0 3-2 5-5 5s-5-2-5-5z" />
+      <path d="M20.5 14h7M20.5 17.5h7M20.5 21h7" />
     </svg>
   );
 }
 
-// Rear / heel — the back of the shoe with collar and center seam.
+// Rear / heel — heel counter, collar curve and heel tab.
 function Rear(props) {
   return (
     <svg {...base} {...props} aria-hidden="true">
-      <path d="M11 37V24c0-7.2 5.4-12 13-12s13 4.8 13 12v13z" />
-      <path d="M9 37h30" />
-      <path d="M16 16c2.6-3 13.4-3 16 0" />
-      <path d="M24 12.5V22" />
+      <path d="M11 38V25c0-7.7 5.4-13 13-13s13 5.3 13 13v13" />
+      <path d="M8.5 38h31" />
+      <path d="M16.5 17.5c2.4-3.2 14.6-3.2 17 0" />
+      <path d="M24 12.5v9.5" />
+      <path d="M22 12.2h4l-.5 2.4h-3z" />
     </svg>
   );
 }

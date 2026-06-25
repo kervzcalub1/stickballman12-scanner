@@ -75,12 +75,15 @@ test.describe('V6 · listing photos (Feature 5)', () => {
 });
 
 test.describe('V6 · defect issue photos (Feature 4)', () => {
-  test('sign-issue is auth-gated and validates the VIN', async ({ request }) => {
+  test('sign-issue is auth-gated and rejects a bad VIN', async ({ request }) => {
     const noauth = await request.post('/api/photos/sign-issue', { data: { vin: 'SBM-260626-000001' } });
     expect(noauth.status()).toBe(401);
 
+    // A bad VIN is never signed: 400 when R2 is configured, or 503 first when it
+    // isn't (the endpoint checks storage availability before body validation,
+    // matching sign.js). Either way it must not succeed.
     const bad = await request.post('/api/photos/sign-issue', { headers: authHeaders(), data: { vin: 'not-a-vin' } });
-    expect(bad.status()).toBe(400);
+    expect([400, 503]).toContain(bad.status());
   });
 
   test('sign-issue returns a presigned URL keyed by VIN (or 503 if R2 unset)', async ({ request }) => {

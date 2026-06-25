@@ -302,6 +302,12 @@ body {
 
 .auto-issues { margin-bottom: 10px; }
 .auto-issue { font-size: 13px; color: #e0a878; padding: 2px 0; }
+.dup-warn {
+  font-size: 13px; color: #e0a878; line-height: 1.4;
+  background: rgba(224, 168, 120, 0.12);
+  border: 1px solid rgba(224, 168, 120, 0.4);
+  border-radius: 8px; padding: 8px 10px;
+}
 .batch-totals { font-size: 15px; }
 .batch-bar .btn { flex: none; }
 

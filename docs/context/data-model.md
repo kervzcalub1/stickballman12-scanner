@@ -10,15 +10,29 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
 - **login_attempts** — brute-force throttle (per-username + per-IP, 15-min window).
 - **locks** — `acquireLock('sheet:write')` style distributed lock (`locked_until`).
 - **batches** — `id, batch_code (B-<seq>), buyer_name, supplier_name,
-  tracking_number, date_received, default_cost, notes, special_rules, kind`.
-  kind ∈ receiving | rescale.
+  tracking_number, date_received, default_cost, notes, special_rules, kind,
+  batch_tag, expected_boxes, duplicate_of`.
+  kind ∈ receiving | rescale. **V6:** `batch_tag` (handwritten label code),
+  `expected_boxes` (the "X OF N" on the label), `duplicate_of` → another batch
+  when a tracking number repeats.
+- **batch_boxes** (V6) — one row per physical box in a multi-box batch:
+  `id, batch_id, box_number, tracking_number, status (pending|received),
+  received_by, received_at`. Each box carries its own tracking number.
+- **suppliers** (V6) — vendor names for the receiving dropdown: `name UNIQUE,
+  created_by, created_at`. Seeded list + auto-saved custom names (the commit
+  upserts whatever supplier was typed). Listed by `GET /api/suppliers`.
+- **product_photos** (V6) — per-SKU listing photos (files in Cloudflare R2):
+  `sku, angle (side|diagonal|outsole|top|rear), url, created_by`. Unique per
+  (sku, angle) so re-capturing an angle replaces it. (Defect photos are NOT
+  here — they ride per-unit `item_events(type='issue')`.)
 - **items** — one row per physical unit. Key columns:
-  `id, vin UNIQUE NOT NULL, batch_id, name, sku, size, status, cost, price,
+  `id, vin UNIQUE NOT NULL, batch_id, box_id, name, sku, size, status, cost, price,
   global_indicator, with_box, upc, gender, colorway, restock_pending,
   added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
   ph_note, first_edit_by, first_edit_at, last_edit_by, last_edit_at,
   created_by, created_at, updated_at`. (`first_edit_*` set once = "Added by";
-  `last_edit_*` = most recent edit = "Last edited by".)
+  `last_edit_*` = most recent edit = "Last edited by". `box_id` → which
+  `batch_boxes` row the unit arrived in, V6.)
 - **products** — catalog cache keyed by `upc UNIQUE`: `sku, size, name, colorway,
   gender, brand, image_url, catalog_id, source`. Sourced from **Alias** (only API
   returning a `catalog_id` + full colorway). Powers **Box Labels** and stores the
@@ -44,7 +58,8 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   deleteUser, recordLoginAttempt, countRecentFailures`.
 - Locks: `acquireLock, releaseLock`.
 - Receiving: `createBatch, reserveVins, insertItems, insertIntakeEvents,
-  insertIssues, listBatches, getBatch`.
+  insertIssues, listBatches, getBatch`. V6: `listSuppliers, addSupplier,
+  findBatchByTracking`.
 - Inventory/items: `queryItems, getItemByVin, getEventsForVins, addItemEvent,
   bulkSetStatus, rescaleItem, markBoxFound, markRestocked, pendingCounts,
   setItemGlobalIndicators`.

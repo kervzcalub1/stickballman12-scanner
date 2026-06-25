@@ -6,12 +6,20 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
 
 ## 3-step wizard
 1. **Shipment details** — buyer defaults to `stickballman12`; supplier + date
-   required. Tracking typed / camera-scanned / OCR'd from a label photo
-   (`src/trackingOcr.js`: zxing → Tesseract.js, lazy-loaded).
+   required. The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
+   list + auto-saved custom names); picking "Custom…" and typing a new vendor
+   auto-saves it on commit (`addSupplier`, V6 Feature 1). Tracking typed /
+   camera-scanned / OCR'd from a label photo (`src/trackingOcr.js`: zxing →
+   Tesseract.js, lazy-loaded). As the tracking # is entered it's checked against
+   past batches/boxes (`GET /api/batches/check-tracking`, debounced); a repeat
+   shows a **non-blocking duplicate warning** and, if committed, sets
+   `batches.duplicate_of` (V6 Feature 8).
 2. **Items** — `+ Add Item` opens the scanning modal. Field auto-focuses so a
    **HID scanner gun types straight in**. Auto-detects UPC vs SKU. Re-scanning a
    shoe's boxes **auto-increments qty by size**. A **With Box** checkbox sets
    `with_box` (off → status `no_box`). "Complete item" adds it to the cart.
+   **Newest scanned shoe shows on top** of the cart; **sizes sort smallest→largest**
+   in both the cart and the scanning modal (`compareSizes`, V6 Features 3 & 6).
    ⚠️ Scan **no-box pairs separately** so their VINs/labels don't get mixed with
    with-box pairs (see SOP-WAREHOUSE.md).
 3. **Issues** — no-box pairs auto-listed; manual issues addable. Finish commits.

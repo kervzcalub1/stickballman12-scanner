@@ -201,18 +201,53 @@ export async function releaseLock(key) {
   try { await db()`DELETE FROM locks WHERE key = ${key}`; } catch { /* lease will expire */ }
 }
 
+/* ------------------------ v6: suppliers ------------------------------- */
+
+// Vendor names for the receiving dropdown — seeded list + any custom names
+// staff have typed (auto-saved on commit). Returned alphabetically.
+export async function listSuppliers() {
+  const rows = await db()`SELECT name FROM suppliers ORDER BY name`;
+  return rows.map((r) => r.name);
+}
+
+// Auto-save a typed supplier name for reuse (no-op if blank or already known).
+export async function addSupplier(name, createdBy) {
+  const n = String(name || '').trim();
+  if (!n) return;
+  await db()`
+    INSERT INTO suppliers (name, created_by) VALUES (${n}, ${createdBy || null})
+    ON CONFLICT (name) DO NOTHING
+  `;
+}
+
+// Has this tracking number already been received (on a batch OR one of its
+// boxes)? Returns the first matching batch or null — drives the duplicate alert.
+export async function findBatchByTracking(tracking) {
+  const t = String(tracking || '').trim();
+  if (!t) return null;
+  const rows = await db()`
+    SELECT b.id, b.batch_code
+    FROM batches b
+    WHERE b.tracking_number = ${t}
+       OR EXISTS (SELECT 1 FROM batch_boxes bx WHERE bx.batch_id = b.id AND bx.tracking_number = ${t})
+    ORDER BY b.id
+    LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
 /* ------------------------ v4: batches & items ------------------------- */
 
 export async function createBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, tracking_number, date_received,
-       default_cost, notes, special_rules, kind, origin, status, created_by, committed_at)
+       default_cost, notes, special_rules, kind, origin, duplicate_of, status, created_by, committed_at)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
        ${h.specialRules || null}, ${h.kind === 'rescale' ? 'rescale' : 'receiving'},
-       ${h.origin || null}, 'committed', ${createdBy || null}, now())
+       ${h.origin || null}, ${h.duplicateOf ?? null}, 'committed', ${createdBy || null}, now())
     RETURNING id, batch_code
   `;
   return rows[0];

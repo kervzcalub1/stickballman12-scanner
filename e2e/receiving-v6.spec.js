@@ -5,6 +5,7 @@ import { test, expect } from '@playwright/test';
 import { signToken } from '../api/_lib/util.js';
 import { loadEnv } from './helpers/auth.js';
 import { compareSizes } from '../src/lib/codes.js';
+import { presignPutUrl } from '../api/_lib/r2.js';
 
 loadEnv();
 const authHeaders = () => ({
@@ -35,6 +36,41 @@ test.describe('V6 · duplicate-tracking check (Feature 8)', () => {
     expect(body.ok).toBe(true);
     expect(body.exists).toBe(false);
     expect(body.batchCode).toBeNull();
+  });
+});
+
+test.describe('V6 · listing photos (Feature 5)', () => {
+  test('photo list is auth-gated and reports R2 config state', async ({ request }) => {
+    const noauth = await request.get('/api/photos/list?sku=TEST-SKU');
+    expect(noauth.status()).toBe(401);
+
+    const res = await request.get('/api/photos/list?sku=TEST-SKU', { headers: authHeaders() });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(Array.isArray(body.photos)).toBe(true);
+    expect(typeof body.configured).toBe('boolean');
+  });
+
+  test('sign returns 503 when R2 is not configured', async ({ request }) => {
+    test.skip(!!process.env.R2_ACCOUNT_ID, 'R2 is configured in this env');
+    const res = await request.post('/api/photos/sign', {
+      headers: authHeaders(), data: { sku: 'TEST-SKU', angle: 'side', contentType: 'image/jpeg' },
+    });
+    expect(res.status()).toBe(503);
+  });
+
+  test('presignPutUrl builds a well-formed signed URL', () => {
+    const prev = { ...process.env };
+    Object.assign(process.env, {
+      R2_ACCOUNT_ID: 'acct123', R2_ACCESS_KEY_ID: 'AKIDEXAMPLE',
+      R2_SECRET_ACCESS_KEY: 'secret', R2_BUCKET: 'photos',
+    });
+    const url = presignPutUrl({ key: 'listings/AB-12/side-1.jpg' });
+    Object.assign(process.env, prev);
+    expect(url).toContain('https://acct123.r2.cloudflarestorage.com/photos/listings/AB-12/side-1.jpg?');
+    expect(url).toContain('X-Amz-Algorithm=AWS4-HMAC-SHA256');
+    expect(url).toMatch(/X-Amz-Signature=[0-9a-f]{64}/);
   });
 });
 

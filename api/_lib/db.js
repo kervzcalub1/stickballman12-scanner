@@ -236,6 +236,30 @@ export async function findBatchByTracking(tracking) {
   return rows[0] || null;
 }
 
+/* ------------------------ v6: listing photos ------------------------- */
+
+// Listing photos for a SKU (shared across same-SKU units). Returned in capture
+// order. Drives the dedupe check (skip the photo prompt when a SKU already has
+// them) and the angle slots in the receiving scan modal.
+export async function listProductPhotos(sku) {
+  const s = String(sku || '').trim();
+  if (!s) return [];
+  return db()`SELECT angle, url, created_by, created_at FROM product_photos WHERE sku = ${s} ORDER BY created_at`;
+}
+
+// Upsert one angle's photo for a SKU (re-capturing an angle replaces it).
+export async function setProductPhoto({ sku, angle, url, createdBy }) {
+  await db()`
+    INSERT INTO product_photos (sku, angle, url, created_by)
+    VALUES (${sku}, ${angle}, ${url}, ${createdBy || null})
+    ON CONFLICT (sku, angle) DO UPDATE SET url = EXCLUDED.url, created_by = EXCLUDED.created_by, created_at = now()
+  `;
+}
+
+export async function removeProductPhoto(sku, angle) {
+  await db()`DELETE FROM product_photos WHERE sku = ${sku} AND angle = ${angle}`;
+}
+
 /* ------------------------ v4: batches & items ------------------------- */
 
 export async function createBatch(h, createdBy) {

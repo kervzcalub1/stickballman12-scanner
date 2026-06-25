@@ -309,6 +309,31 @@ body {
   border: 1px solid rgba(224, 168, 120, 0.4);
   border-radius: 8px; padding: 8px 10px;
 }
+
+/* Listing photos (V6 Feature 5) — five angle slots in the Add Item modal. */
+.listing-photos { margin-top: 14px; border-top: 1px solid var(--line, #2a2a2a); padding-top: 12px; }
+.lp-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.lp-title { font-size: 14px; font-weight: 600; }
+.lp-count { font-size: 12px; color: #e0a878; }
+.lp-count.ok { color: var(--ok, #2ecc71); }
+.lp-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+@media (max-width: 420px) { .lp-grid { grid-template-columns: repeat(3, 1fr); } }
+.lp-slot { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.lp-slot-btn {
+  width: 100%; aspect-ratio: 1; border-radius: 10px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.04); border: 1px dashed rgba(255, 255, 255, 0.25);
+  color: #cfcfcf; display: flex; align-items: center; justify-content: center; padding: 10px; overflow: hidden;
+}
+.lp-slot.filled .lp-slot-btn { border-style: solid; border-color: var(--ok, #2ecc71); padding: 0; }
+.lp-slot-btn:disabled { opacity: 0.6; cursor: default; }
+.lp-icon { width: 70%; height: 70%; display: block; }
+.lp-thumb { width: 100%; height: 100%; object-fit: cover; }
+.lp-spin { font-size: 20px; }
+.lp-label { font-size: 11px; color: var(--muted, #8a8a8a); }
+.lp-remove {
+  position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%;
+  border: none; background: #c0392b; color: #fff; font-size: 13px; line-height: 1; cursor: pointer;
+}
 .batch-totals { font-size: 15px; }
 .batch-bar .btn { flex: none; }
 

@@ -408,6 +408,20 @@ export async function getCatalogIdBySku(sku) {
 // First two history events per item: "scanned" (Scanned by <user>) then the
 // intake event — "received" for a shipment, "rescaled" for re-scaled stock.
 // Inserted in order so the timeline reads scanned → received/rescaled.
+// Per-unit defect issues flagged on the review screen (V6 Feature 4). One
+// 'issue' event per unit, carrying the note + R2 photo URLs in details.
+export async function insertIssueEvents(entries, createdBy) {
+  if (!entries.length) return;
+  const sql = db();
+  const queries = entries.map((e) => sql`
+    INSERT INTO item_events (item_id, type, details, created_by)
+    VALUES (${e.itemId}, 'issue',
+      ${JSON.stringify({ note: e.note || '', photos: Array.isArray(e.photos) ? e.photos : [] })}::jsonb,
+      ${createdBy || null})
+  `);
+  await sql.transaction(queries);
+}
+
 export async function insertIntakeEvents(itemIds, createdBy, kind = 'receiving') {
   if (!itemIds.length) return;
   const sql = db();

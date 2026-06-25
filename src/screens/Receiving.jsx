@@ -7,6 +7,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal } from '../components/common.jsx';
 import { ListingPhotos } from '../components/ListingPhotos.jsx';
+import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES } from '../lib/constants.js';
@@ -85,6 +86,20 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   const [rescanned, setRescanned] = useState([]);
   const [openSizes, setOpenSizes] = useState(() => new Set()); // expanded size rows (item:size keys)
   const [issues, setIssues] = useState([]);   // manual shipment issues
+  // Per-unit (VIN) defect issues flagged on the review (V6 Feature 4):
+  // vin -> { note, photos:[url] }. Sent with commit → 'issue' item_events.
+  const [unitIssues, setUnitIssues] = useState({});
+  const [issueEditorVin, setIssueEditorVin] = useState(null);
+  const getIssue = (vin) => unitIssues[vin] || { note: '', photos: [] };
+  const hasIssue = (vin) => { const u = unitIssues[vin]; return Boolean(u && (u.note?.trim() || u.photos?.length)); };
+  const setIssue = (vin, patch) => setUnitIssues((m) => ({ ...m, [vin]: { ...getIssue(vin), ...patch } }));
+  const clearIssue = (vin) => setUnitIssues((m) => { const n = { ...m }; delete n[vin]; return n; });
+  const closeIssueEditor = () => {
+    const vin = issueEditorVin;
+    if (vin) { const u = unitIssues[vin]; if (u && !u.note?.trim() && !u.photos?.length) clearIssue(vin); }
+    setIssueEditorVin(null);
+  };
+  const flaggedCount = Object.keys(unitIssues).filter(hasIssue).length;
   const toggleSize = (k) => setOpenSizes((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const [error, setError] = useState('');
   const [committing, setCommitting] = useState(false);
@@ -102,7 +117,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   const [draft, setDraft] = useState(null);
   const draftRef = useRef(null); draftRef.current = draft;
   const rescannedRef = useRef([]); rescannedRef.current = rescanned; // mirror so the camera callback dedupes against fresh state
-  useUnsavedGuard(items.length > 0 || !!draft || rescanned.length > 0 || issues.length > 0); // guard the cart against Back/refresh
+  useUnsavedGuard(items.length > 0 || !!draft || rescanned.length > 0 || issues.length > 0 || flaggedCount > 0); // guard the cart against Back/refresh
   const [mInput, setMInput] = useState('');
   const [mBusy, setMBusy] = useState(false);
   const [mError, setMError] = useState('');
@@ -123,6 +138,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   useEffect(() => {
     if (!navBack) return undefined;
     navBack.current = () => {
+      if (issueEditorVin) { closeIssueEditor(); return true; }
       if (showAddSupplier) { setShowAddSupplier(false); return true; }
       if (pendingSwitch) { setPendingSwitch(null); return true; }
       if (showAdd) { closeAddItem(); return true; }
@@ -136,7 +152,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
       return false;
     };
     return () => { if (navBack) navBack.current = null; };
-  }, [navBack, showAddSupplier, pendingSwitch, showAdd, scanTracking, showPrefs, showConfirm, result, printLabels, tab, step]);
+  }, [navBack, issueEditorVin, unitIssues, showAddSupplier, pendingSwitch, showAdd, scanTracking, showPrefs, showConfirm, result, printLabels, tab, step]);
 
   // Short audible + haptic confirmation that a box registered.
   function scanFeedback(kind) {
@@ -392,6 +408,9 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
           kind: mode,
           batch: { ...header, origin: effectiveOrigin, defaultCost: defaultCostNum, duplicateOf: dupBatch?.id ?? null },
           items: out,
+          unitIssues: Object.entries(unitIssues)
+            .map(([vin, v]) => ({ vin, note: v.note, photos: v.photos }))
+            .filter((v) => v.note?.trim() || v.photos?.length),
           issues: isRescale ? [] : [
             ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
             ...issues.map((i) => ({
@@ -429,7 +448,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
         vins: batchRes?.vins || [],
         printItems,
       });
-      setItems([]); setIssues([]); setRescanned([]); setStep(1);
+      setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); setStep(1);
       setHeader((h) => ({ ...h, tracking: '', notes: '', specialRules: '' })); // keep buyer/supplier/date/cost
     } catch (err) {
       setShowConfirm(false);
@@ -572,6 +591,16 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                                           ? <span className="vin">{s.vins[i]}</span>
                                           : <span className="vin pending">VIN on submit</span>}
                                         {!it.withBox && <span className="recv-unit-nobox">no box — sticker carefully</span>}
+                                        {s.vins?.[i] && (
+                                          <button type="button"
+                                            className={`recv-unit-issue ${hasIssue(s.vins[i]) ? 'flagged' : ''}`}
+                                            onClick={() => setIssueEditorVin(s.vins[i])}
+                                            title={hasIssue(s.vins[i]) ? 'Edit defect issue' : 'Flag a defect / add photos'}>
+                                            {hasIssue(s.vins[i])
+                                              ? `⚠ Issue${getIssue(s.vins[i]).photos?.length ? ` · ${getIssue(s.vins[i]).photos.length}📷` : ''}`
+                                              : '＋ Issue'}
+                                          </button>
+                                        )}
                                       </div>
                                     ))}
                                   </div>
@@ -782,6 +811,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                     <div className="muted">Supplier: {header.supplier || '—'} · Buyer: {header.buyer || '—'}</div>
                     <div className="muted">Tracking: {header.tracking || '—'} · {header.dateReceived}</div>
                     {(autoIssues.length + issues.length) > 0 && <div className="muted">{autoIssues.length + issues.length} issue(s) recorded</div>}
+                    {flaggedCount > 0 && <div className="muted">{flaggedCount} unit(s) flagged with a defect</div>}
                     <p className="muted sm">Each unit gets its own VIN. History starts “Scanned by you”.</p>
                   </>)}
             </div>
@@ -821,6 +851,35 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                 zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
             </Suspense>
             <div className="modal-actions"><button className="btn ghost" onClick={() => setScanTracking(false)}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+
+      {issueEditorVin && (
+        <div className="modal-overlay" onClick={closeIssueEditor}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3 className="modal-title">Flag defect · <span className="vin">{issueEditorVin}</span></h3>
+              <button type="button" className="btn icon ghost" onClick={closeIssueEditor}>×</button>
+            </div>
+            <label className="issue-note-label">Issue note
+              <textarea className="issue-note" rows={3} maxLength={500}
+                placeholder="e.g. crease on left toe, dirty midsole, missing insole…"
+                value={getIssue(issueEditorVin).note}
+                onChange={(e) => setIssue(issueEditorVin, { note: e.target.value })} />
+            </label>
+            <div className="muted sm">Defect photos (optional)</div>
+            <DefectPhotos
+              vin={issueEditorVin}
+              photos={getIssue(issueEditorVin).photos}
+              onChange={(photos) => setIssue(issueEditorVin, { photos })}
+              onSignOut={onSignOut} />
+            <div className="modal-actions">
+              {hasIssue(issueEditorVin) && (
+                <button type="button" className="btn ghost danger" onClick={() => { clearIssue(issueEditorVin); setIssueEditorVin(null); }}>Remove issue</button>
+              )}
+              <button type="button" className="btn primary" onClick={closeIssueEditor}>Done</button>
+            </div>
           </div>
         </div>
       )}

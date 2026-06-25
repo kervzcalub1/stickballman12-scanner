@@ -334,6 +334,29 @@ body {
   position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%;
   border: none; background: #c0392b; color: #fff; font-size: 13px; line-height: 1; cursor: pointer;
 }
+
+/* Per-unit defect issue (V6 Feature 4) */
+.recv-unit-issue {
+  margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  background: transparent; border: 1px solid rgba(255, 255, 255, 0.2); color: var(--muted, #8a8a8a);
+}
+.recv-unit-issue:hover { border-color: rgba(255, 255, 255, 0.4); color: #cfcfcf; }
+.recv-unit-issue.flagged { border-color: #e0a878; color: #e0a878; background: rgba(224, 168, 120, 0.12); }
+.issue-note-label { display: block; font-size: 13px; color: var(--muted, #8a8a8a); margin-bottom: 10px; }
+.issue-note {
+  width: 100%; margin-top: 4px; resize: vertical; border-radius: 8px; padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.15); color: inherit; font: inherit;
+}
+.btn.ghost.danger { color: #e06a6a; }
+.defect-photos { margin: 8px 0 4px; }
+.dp-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.dp-thumb-wrap { position: relative; width: 72px; height: 72px; }
+.dp-thumb { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; border: 1px solid var(--ok, #2ecc71); }
+.dp-add {
+  width: 72px; height: 72px; border-radius: 8px; cursor: pointer; font-size: 12px;
+  background: rgba(255, 255, 255, 0.04); border: 1px dashed rgba(255, 255, 255, 0.25); color: #cfcfcf;
+}
+.dp-add:disabled { opacity: 0.6; }
 .batch-totals { font-size: 15px; }
 .batch-bar .btn { flex: none; }
 

@@ -74,6 +74,28 @@ test.describe('V6 · listing photos (Feature 5)', () => {
   });
 });
 
+test.describe('V6 · defect issue photos (Feature 4)', () => {
+  test('sign-issue is auth-gated and validates the VIN', async ({ request }) => {
+    const noauth = await request.post('/api/photos/sign-issue', { data: { vin: 'SBM-260626-000001' } });
+    expect(noauth.status()).toBe(401);
+
+    const bad = await request.post('/api/photos/sign-issue', { headers: authHeaders(), data: { vin: 'not-a-vin' } });
+    expect(bad.status()).toBe(400);
+  });
+
+  test('sign-issue returns a presigned URL keyed by VIN (or 503 if R2 unset)', async ({ request }) => {
+    const vin = 'SBM-260626-000001';
+    const res = await request.post('/api/photos/sign-issue', { headers: authHeaders(), data: { vin, contentType: 'image/jpeg' } });
+    if (!process.env.R2_ACCOUNT_ID) { expect(res.status()).toBe(503); return; }
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.uploadUrl).toContain(`/issues/${vin}/`);
+    expect(body.uploadUrl).toMatch(/X-Amz-Signature=[0-9a-f]{64}/);
+    expect(body.publicUrl).toContain(`/issues/${vin}/`);
+  });
+});
+
 test.describe('V6 · size comparator (Feature 6)', () => {
   test('sorts numeric sizes smallest→largest regardless of input order', () => {
     expect(['8', '5', '9', '7'].sort(compareSizes)).toEqual(['5', '7', '8', '9']);

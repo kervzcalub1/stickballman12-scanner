@@ -77,6 +77,7 @@ export const api = {
   // v6 — listing photos (per SKU, stored in Cloudflare R2)
   photoList: (sku) => get(`/api/photos/list?sku=${encodeURIComponent(sku)}`),
   photoSign: (sku, angle, contentType) => post('/api/photos/sign', { sku, angle, contentType }),
+  photoSignIssue: (vin, contentType) => post('/api/photos/sign-issue', { vin, contentType }),
   photoAttach: (sku, angle, url) => post('/api/photos/attach', { sku, angle, url }),
   photoRemove: (sku, angle) => post('/api/photos/remove', { sku, angle }),
   reserveVins: (count, dateReceived) => post('/api/vins/reserve', { count, dateReceived }),

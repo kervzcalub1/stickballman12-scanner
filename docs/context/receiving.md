@@ -41,5 +41,17 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
   (+ seeds `price` = GI×1.2). Never blocks the commit; failure leaves GI null for
   PH to fill. See `integrations.md` / `ph-report.md`.
 
+## Listing photos (V6 Feature 5)
+In the Add Item modal, a per-**SKU** photo block (`src/components/ListingPhotos.jsx`)
+captures up to 5 named angles (side · diagonal · outsole · top · rear; icons in
+`ShoeAngleIcons.jsx`). Already-photographed SKUs load their photos in (dedupe — no
+re-shoot). Each capture is compressed client-side (`src/lib/image.js`) and uploaded
+straight to **Cloudflare R2** via a presigned PUT (`api/_lib/r2.js`, dependency-free
+SigV4), then recorded in `product_photos`. Endpoints: `api/photos/{list,sign,attach,
+remove}.js`. Config via `R2_*` env (see `.env.example`); unset → block hidden +
+endpoints return "not configured". Bucket needs a CORS policy allowing PUT from the
+app origin, and `R2_PUBLIC_BASE_URL` for reads. Defect photos (Feature 4) are
+separate (per-VIN), not here.
+
 ## Product lookup (fills name/sku/image/sizes/gender/colorway)
 `searchUpc` / `searchSku` — see `integrations.md`.

@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal } from '../components/common.jsx';
+import { ListingPhotos } from '../components/ListingPhotos.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES } from '../lib/constants.js';
@@ -741,6 +742,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                     </div>
                   ))}
                 </div>
+                {!isRescale && draft.sku && <ListingPhotos sku={draft.sku} onSignOut={onSignOut} />}
                 <div className="modal-actions">
                   <button type="button" className="btn primary wide" onClick={completeItem}>Complete item ✓</button>
                 </div>

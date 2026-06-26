@@ -91,8 +91,10 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
         );
         if (cancelled) { stopCamera(); return; }
 
-        // Some browsers don't auto-play the attached stream — force it.
-        try { await videoRef.current?.play?.(); } catch { /* autoplay policy / interrupted */ }
+        // Some browsers don't auto-play the attached stream — force it. zxing may
+        // start playback before React attaches onPlaying, so the event can be
+        // missed; mark live as soon as play() resolves (the deterministic signal).
+        try { await videoRef.current?.play?.(); if (!cancelled) setLive(true); } catch { /* autoplay policy / interrupted */ }
 
         const stream = videoRef.current?.srcObject;
         const track = stream?.getVideoTracks?.()[0] || null;
@@ -131,7 +133,7 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
         <>
           <div className="scanner-frame">
             <video ref={videoRef} className="scanner-video" style={videoStyle} muted playsInline autoPlay
-              onPlaying={() => { setLive(true); setSlow(false); }} />
+              onPlaying={() => { setLive(true); setSlow(false); }} onCanPlay={() => setLive(true)} onLoadedData={() => setLive(true)} />
             <div className="scanner-reticle" />
             {!live && (
               <div className="scanner-loading">

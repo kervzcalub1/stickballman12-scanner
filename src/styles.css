@@ -341,7 +341,8 @@ body {
 .pc-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; color: #fff; }
 .pc-title { font-size: 14px; font-weight: 600; }
 .pc-stage { position: relative; flex: 1; min-height: 0; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-.pc-video { width: 100%; height: 100%; object-fit: cover; }
+/* contain (not cover) so the preview matches the full frame that gets captured */
+.pc-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .pc-loading { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; color: #cfcfcf; font-size: 13px; }
 .pc-error { color: #e06a6a; display: flex; flex-direction: column; gap: 10px; align-items: center; padding: 24px; text-align: center; }
 .pc-current { position: absolute; right: 12px; top: 12px; width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 2px solid rgba(255, 255, 255, 0.7); }

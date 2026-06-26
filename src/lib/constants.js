@@ -36,8 +36,8 @@ export const ISSUE_TYPES = [
 
 // Per-unit defect types flagged on the receiving Review screen (V6 Feature 4).
 // Each flagged issue picks one of these; stored on the unit's 'issue' event.
-// NOTE: "no box" is NOT here — box presence is the per-shoe box-status toggle
-// (📦/🚫) which drives the no_box STATUS + No-Box queue; a defect tag wouldn't.
+// Flagging 'no_box' also forces the unit's STATUS to no_box on commit (same end
+// state as the per-shoe box-status toggle) — see api/batches/commit.js.
 export const DEFECT_TYPES = [
   ['crease', 'Crease'],
   ['dirty', 'Dirty / stained'],
@@ -45,6 +45,7 @@ export const DEFECT_TYPES = [
   ['glue', 'Glue / factory defect'],
   ['missing_insole', 'Missing insole'],
   ['damaged_box', 'Damaged box'],
+  ['no_box', 'No box'],
   ['wrong_item', 'Wrong item / mismatch'],
   ['other', 'Other'],
 ];

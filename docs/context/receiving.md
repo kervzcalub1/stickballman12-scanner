@@ -26,7 +26,8 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
    Per shoe: toggle **box status**, **±qty per size** (＋ reserves a VIN, − drops the
    trailing one), remove a size, or delete the whole line. Expand a size to see its
    units; **"＋ Issue" per VIN** opens a defect editor — add one or more defects, each
-   a **type** (`DEFECT_TYPES` dropdown) + optional note + photos
+   a **type** (`DEFECT_TYPES` dropdown — flagging **`no_box` also forces the unit's
+   status to `no_box`** on commit, same as the box toggle) + optional note + photos
    (`src/components/DefectPhotos.jsx`, uploaded to R2 keyed by VIN via
    `api/photos/sign-issue`). Flagged units show "⚠ N issues". On commit each defect
    becomes an `item_events(type='issue')` with `{defectType, note, photos}` (see

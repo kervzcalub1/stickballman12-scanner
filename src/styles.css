@@ -360,6 +360,15 @@ body {
 .pc-shutter:disabled { opacity: 0.5; cursor: default; }
 .pc-side-spacer { width: 84px; }
 
+/* History defect-photo viewer */
+.tl-photos { margin-left: 8px; vertical-align: middle; }
+.btn.xs { padding: 1px 8px; font-size: 11px; min-height: 0; line-height: 1.6; }
+.lightbox-overlay { position: fixed; inset: 0; z-index: 250; background: rgba(0, 0, 0, 0.88); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.lightbox { position: relative; max-width: 100%; max-height: 100%; overflow: auto; }
+.lightbox-close { position: fixed; top: 12px; right: 14px; z-index: 251; color: #fff; font-size: 26px; }
+.lightbox-imgs { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.lightbox-imgs img { max-width: 90vw; max-height: 85vh; object-fit: contain; border-radius: 8px; }
+
 /* Per-unit defect issue (V6 Feature 4) */
 .recv-unit-issue {
   margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 999px; cursor: pointer;

@@ -8,7 +8,7 @@ import { api } from '../api.js';
 import { STATUS_MAP, statusLabel } from '../statuses.js';
 import { EST_FMT, PH_DATETIME, periodLabel, shiftAnchor } from '../lib/format.js';
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
-import { eventLabel, dedupeEvents } from '../lib/history.js';
+import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { upcDigits, upcFormat, sizeNum } from '../lib/codes.js';
 
 // Live clock, always rendered in US Eastern with a literal "EST" suffix so the
@@ -41,10 +41,45 @@ export function SyncBadges({ item, compact }) {
   );
 }
 
+// Full-screen viewer for one or more photos (defect-issue photos in history).
+export function PhotoLightbox({ photos, onClose }) {
+  if (!photos?.length) return null;
+  return createPortal(
+    <div className="lightbox-overlay" onClick={onClose}>
+      <div className="lightbox" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="btn icon ghost lightbox-close" onClick={onClose} aria-label="Close">×</button>
+        <div className="lightbox-imgs">
+          {photos.map((url, i) => <img key={`${url}-${i}`} src={url} alt={`photo ${i + 1}`} />)}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// A history timeline line + a "view photos" button when the event has photos.
+// Shared by the History modal and the Inventory detail view.
+export function HistoryLine({ event, onViewPhotos }) {
+  const photos = eventPhotos(event);
+  return (
+    <>
+      <div>
+        {eventLabel(event)}
+        {photos.length > 0 && (
+          <button type="button" className="btn xs ghost tl-photos" onClick={() => onViewPhotos(photos)}>
+            📷 {photos.length} photo{photos.length === 1 ? '' : 's'}
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
 // Read-only change history for a PH grid line (its VINs) — who changed what, when.
 // Visible to PH team, warehouse, and admin.
 export function HistoryModal({ vins, title, onClose }) {
   const [state, setState] = useState({ loading: true, events: [], error: '' });
+  const [lightbox, setLightbox] = useState(null);
   useEffect(() => {
     let cancelled = false;
     api.itemHistory(vins)
@@ -65,7 +100,7 @@ export function HistoryModal({ vins, title, onClose }) {
                     <div className="tl-item" key={e.id}>
                       <div className="tl-dot" />
                       <div className="tl-body">
-                        <div>{eventLabel(e)}</div>
+                        <HistoryLine event={e} onViewPhotos={setLightbox} />
                         <div className="muted sm">{PH_DATETIME.format(new Date(e.created_at))} EST{e.vin ? ` · ${e.vin}` : ''}</div>
                       </div>
                     </div>
@@ -73,6 +108,7 @@ export function HistoryModal({ vins, title, onClose }) {
                 </div>
               )}
         <div className="modal-actions"><button className="btn ghost" onClick={onClose}>Close</button></div>
+        <PhotoLightbox photos={lightbox} onClose={() => setLightbox(null)} />
       </div>
     </div>,
     document.body,

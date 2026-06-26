@@ -5,10 +5,9 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
-import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal } from '../components/common.jsx';
+import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox } from '../components/common.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
-import { eventLabel } from '../lib/history.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
 import { ymd, periodRange, periodLabel, shiftAnchor } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
@@ -34,6 +33,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   const [error, setError] = useState('');
   const [sel, setSel] = useState(() => new Set());
   const [labels, setLabels] = useState(null);
+  const [lightbox, setLightbox] = useState(null);  // defect-issue photos viewer
   const [expanded, setExpanded] = useState(() => new Set()); // vins with the accordion open
   const [hist, setHist] = useState({}); // vin -> { loading, events, error } (lazily loaded)
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -275,7 +275,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                   <div className="tl-item" key={e.id}>
                     <div className="tl-dot" />
                     <div className="tl-body">
-                      <div>{eventLabel(e)}</div>
+                      <HistoryLine event={e} onViewPhotos={setLightbox} />
                       <div className="muted sm">{new Date(e.created_at).toLocaleString()}</div>
                     </div>
                   </div>
@@ -285,6 +285,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           </>
         )}
         {labels && <LabelSheet items={labels} onClose={() => setLabels(null)} />}
+        <PhotoLightbox photos={lightbox} onClose={() => setLightbox(null)} />
         {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
       </div>
     );

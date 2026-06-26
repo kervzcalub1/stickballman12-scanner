@@ -37,7 +37,7 @@ export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, o
         });
         if (cancelled) { started.getTracks().forEach((t) => t.stop()); return; }
         const v = videoRef.current;
-        if (v) { v.srcObject = started; try { await v.play(); } catch { /* autoplay */ } }
+        if (v) { v.srcObject = started; try { await v.play(); if (!cancelled) setLive(true); } catch { /* autoplay */ } }
       } catch (e) {
         if (!cancelled) setError(e?.name === 'NotAllowedError'
           ? 'Camera permission denied — allow access, or use Gallery.'
@@ -90,13 +90,14 @@ export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, o
     <div className="pc-overlay" role="dialog" aria-modal="true">
       <div className="pc-top">
         <span className="pc-title">Listing photos · {filled}/{SHOE_ANGLES.length}</span>
-        <button type="button" className="btn icon ghost" onClick={onClose} aria-label="Close">×</button>
+        <button type="button" className="btn primary sm pc-done" onClick={onClose}>Done</button>
       </div>
 
       <div className="pc-stage">
         {error
           ? <div className="pc-error">{error}<button type="button" className="btn sm ghost" onClick={() => setRestartKey((k) => k + 1)}>Retry camera</button></div>
-          : <video ref={videoRef} className="pc-video" muted playsInline autoPlay onPlaying={() => { setLive(true); setSlow(false); }} />}
+          : <video ref={videoRef} className="pc-video" muted playsInline autoPlay
+              onPlaying={() => { setLive(true); setSlow(false); }} onCanPlay={() => setLive(true)} onLoadedData={() => setLive(true)} />}
         {!error && !live && (
           <div className="pc-loading"><span>Starting camera…</span>{slow && <button type="button" className="btn sm ghost" onClick={() => setRestartKey((k) => k + 1)}>Camera blank? Retry</button>}</div>
         )}

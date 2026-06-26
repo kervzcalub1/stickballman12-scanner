@@ -12,7 +12,8 @@ const MAX = 4;
 export function DefectPhotos({ vin, photos = [], onChange, onSignOut }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const fileRef = useRef(null);
+  const cameraRef = useRef(null);   // capture=environment → opens the device camera
+  const galleryRef = useRef(null);  // no capture → opens the photo library / file picker
 
   async function onFile(e) {
     const file = e.target.files?.[0];
@@ -42,14 +43,20 @@ export function DefectPhotos({ vin, photos = [], onChange, onSignOut }) {
             <button type="button" className="lp-remove" title="Remove photo" onClick={() => remove(i)}>×</button>
           </div>
         ))}
-        {photos.length < MAX && (
-          <button type="button" className="dp-add" onClick={() => fileRef.current?.click()} disabled={busy}>
-            {busy ? '…' : '＋ Photo'}
-          </button>
-        )}
       </div>
+      {photos.length < MAX && (
+        <div className="dp-add-actions">
+          <button type="button" className="btn primary sm" onClick={() => cameraRef.current?.click()} disabled={busy}>
+            {busy ? '…' : '📷 Take photo'}
+          </button>
+          <button type="button" className="btn ghost sm" onClick={() => galleryRef.current?.click()} disabled={busy}>
+            🖼 Gallery
+          </button>
+        </div>
+      )}
       {error && <div className="error sm mt">{error}</div>}
-      <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
+      <input ref={galleryRef} type="file" accept="image/*" hidden onChange={onFile} />
     </div>
   );
 }

@@ -401,6 +401,7 @@ body {
   background: rgba(255, 255, 255, 0.04); border: 1px dashed rgba(255, 255, 255, 0.25); color: #cfcfcf;
 }
 .dp-add:disabled { opacity: 0.6; }
+.dp-add-actions { display: flex; gap: 8px; margin-top: 8px; }
 .batch-totals { font-size: 15px; }
 .batch-bar .btn { flex: none; }
 

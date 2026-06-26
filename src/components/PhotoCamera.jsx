@@ -46,9 +46,11 @@ export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, o
     })();
     return () => {
       cancelled = true; clearTimeout(slowTimer);
-      const s = videoRef.current?.srcObject || started;
-      if (s?.getTracks) s.getTracks().forEach((t) => { try { t.stop(); } catch { /* noop */ } });
-      if (videoRef.current) videoRef.current.srcObject = null;
+      // Only stop THIS run's stream; under StrictMode the shared <video> may
+      // already hold the next run's stream — don't kill it (caused black/zoom).
+      if (started?.getTracks) started.getTracks().forEach((t) => { try { t.stop(); } catch { /* noop */ } });
+      const v = videoRef.current;
+      if (v && v.srcObject === started) v.srcObject = null;
     };
   }, [restartKey]);
 

@@ -52,16 +52,17 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
     const reader = new BrowserMultiFormatReader(hints);
     let cancelled = false;
 
-    // Fully release the camera: stop the scan loop AND every track, detach stream.
-    const stopCamera = () => {
-      try { controlsRef.current?.stop(); } catch { /* noop */ }
-      controlsRef.current = null;
-      const stream = videoRef.current?.srcObject;
-      if (stream && typeof stream.getTracks === 'function') {
-        for (const t of stream.getTracks()) { try { t.stop(); } catch { /* noop */ } }
-      }
-      if (videoRef.current) videoRef.current.srcObject = null;
-      trackRef.current = null;
+    // Per-run handles so teardown only ever stops the stream THIS run created —
+    // under React StrictMode (dev) the effect mounts→unmounts→remounts, and a
+    // shared-element teardown would kill the *next* run's live stream (black).
+    let myControls = null;
+    let myStream = null;
+    const stopMine = () => {
+      try { myControls?.stop(); } catch { /* noop */ }
+      if (myStream?.getTracks) { for (const t of myStream.getTracks()) { try { t.stop(); } catch { /* noop */ } } }
+      const v = videoRef.current;
+      if (v && v.srcObject === myStream) v.srcObject = null; // only detach if still ours
+      if (controlsRef.current === myControls) controlsRef.current = null;
     };
 
     setLive(false); setSlow(false); setError('');
@@ -77,27 +78,28 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
         };
 
         lastTextRef.current = null;
-        controlsRef.current = await reader.decodeFromConstraints(
+        myControls = await reader.decodeFromConstraints(
           { video: videoConstraints }, videoRef.current,
-          (result) => {
+          (result, _err, controls) => {
             if (result && !doneRef.current) {
               const raw = result.getText();
               const text = rawMode ? raw.trim() : (raw.replace(/\D/g, '') || raw);
               if (rawMode && lastTextRef.current !== text) { lastTextRef.current = text; return; }
-              if (!continuous) { doneRef.current = true; try { controlsRef.current?.stop(); } catch { /* noop */ } }
+              if (!continuous) { doneRef.current = true; try { controls.stop(); } catch { /* noop */ } }
               onDetected(text);
             }
           },
         );
-        if (cancelled) { stopCamera(); return; }
+        myStream = videoRef.current?.srcObject || null;
+        if (cancelled) { stopMine(); return; }
+        controlsRef.current = myControls;
 
         // Some browsers don't auto-play the attached stream — force it. zxing may
         // start playback before React attaches onPlaying, so the event can be
         // missed; mark live as soon as play() resolves (the deterministic signal).
         try { await videoRef.current?.play?.(); if (!cancelled) setLive(true); } catch { /* autoplay policy / interrupted */ }
 
-        const stream = videoRef.current?.srcObject;
-        const track = stream?.getVideoTracks?.()[0] || null;
+        const track = myStream?.getVideoTracks?.()[0] || null;
         trackRef.current = track;
         setSelDevice(track?.getSettings?.().deviceId || '');
         setHwZoom(applyZoom(track, zoom));
@@ -113,7 +115,7 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
       }
     })();
 
-    return () => { cancelled = true; clearTimeout(slowTimer); stopCamera(); };
+    return () => { cancelled = true; clearTimeout(slowTimer); stopMine(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId, restartKey]);
 

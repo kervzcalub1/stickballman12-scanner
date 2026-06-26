@@ -54,15 +54,24 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
 
 ## Listing photos (V6 Feature 5)
 In the Add Item modal, a per-**SKU** photo block (`src/components/ListingPhotos.jsx`)
-captures up to 5 named angles (side · diagonal · outsole · top · rear; icons in
-`ShoeAngleIcons.jsx`). Already-photographed SKUs load their photos in (dedupe — no
-re-shoot). Each capture is compressed client-side (`src/lib/image.js`) and uploaded
-straight to **Cloudflare R2** via a presigned PUT (`api/_lib/r2.js`, dependency-free
-SigV4), then recorded in `product_photos`. Endpoints: `api/photos/{list,sign,attach,
-remove}.js`. Config via `R2_*` env (see `.env.example`); unset → block hidden +
-endpoints return "not configured". Bucket needs a CORS policy allowing PUT from the
-app origin, and `R2_PUBLIC_BASE_URL` for reads. Defect photos (Feature 4) are
-separate (per-VIN), not here.
+shows the 5 angle slots (side · diagonal · outsole · top · rear; icons in
+`ShoeAngleIcons.jsx`) as an at-a-glance review and opens a **full-screen custom
+camera** (`src/components/PhotoCamera.jsx`): live preview + a bottom **angle strip**
+(tap an angle, hit the shutter) + a **Gallery** picker fallback; already-shot angles
+show their thumbnail and can be replaced/removed. Already-photographed SKUs load
+their photos in (dedupe — no re-shoot). The button reads "Add listing photos" when
+empty, "View / replace photos" when the SKU already has some. Each capture is
+compressed client-side (`src/lib/image.js`) and uploaded straight to **Cloudflare
+R2** via a presigned PUT (`api/_lib/r2.js`, dependency-free SigV4), then recorded in
+`product_photos`. Endpoints: `api/photos/{list,sign,attach,remove}.js`. Config via
+`R2_*` env (see `.env.example`); unset → block hidden + endpoints return "not
+configured". Bucket needs a CORS policy allowing PUT, and `R2_PUBLIC_BASE_URL` for
+reads. Defect photos (Feature 4) are separate (per-VIN), not here.
+
+`PhotoCamera` and the barcode `CameraScanner` both acquire the camera once with an
+explicit `play()` + a loading/Retry overlay and stop **every** MediaStreamTrack on
+close — `CameraScanner` no longer calls `setDeviceId` mid-effect (that double-start
+race caused the black/stalled preview).
 
 ## Product lookup (fills name/sku/image/sizes/gender/colorway)
 `searchUpc` / `searchSku` — see `integrations.md`.

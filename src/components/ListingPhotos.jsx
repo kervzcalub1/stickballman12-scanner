@@ -1,12 +1,11 @@
-// Per-SKU listing photos captured during receiving (V6 Feature 5). Five angle
-// slots (side · diagonal · outsole · top · rear); the warehouse fills any of
-// them, in any order. If the SKU already has photos they load in as filled —
-// no re-shooting (dedupe). Each capture is compressed client-side, uploaded
-// straight to Cloudflare R2 via a presigned PUT, then recorded against the SKU.
-import React, { useEffect, useRef, useState } from 'react';
+// Per-SKU listing photos captured during receiving (V6 Feature 5). Shows the
+// five angle slots as an at-a-glance "photo listing" (review) and opens a
+// full-screen custom camera (PhotoCamera) to shoot/replace them. Already-shot
+// SKUs load their photos in (dedupe — no re-shooting). Uploads go straight to R2.
+import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { compressImage } from '../lib/image.js';
-import { SHOE_ANGLES } from './ShoeAngleIcons.jsx';
+import { SHOE_ANGLES, ShoeAngleIcon } from './ShoeAngleIcons.jsx';
+import { PhotoCamera } from './PhotoCamera.jsx';
 
 const MIN_PHOTOS = 3;
 
@@ -14,10 +13,8 @@ export function ListingPhotos({ sku, onSignOut }) {
   const [photos, setPhotos] = useState({});   // angle -> url
   const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(null);      // angle currently uploading
   const [error, setError] = useState('');
-  const fileRef = useRef(null);
-  const angleRef = useRef(null);               // which slot the file picker is for
+  const [camera, setCamera] = useState(null);  // { angle } when open, else null
 
   useEffect(() => {
     let cancelled = false;
@@ -35,41 +32,15 @@ export function ListingPhotos({ sku, onSignOut }) {
     return () => { cancelled = true; };
   }, [sku]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function pick(angle) {
-    if (busy || !configured) return;
-    angleRef.current = angle;
-    fileRef.current?.click();
-  }
-
-  async function onFile(e) {
-    const file = e.target.files?.[0];
-    if (e.target) e.target.value = '';
-    const angle = angleRef.current;
-    if (!file || !angle) return;
-    setBusy(angle); setError('');
-    try {
-      const { blob, type } = await compressImage(file);
-      const { uploadUrl, publicUrl } = await api.photoSign(sku, angle, type);
-      const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
-      if (!put.ok) throw new Error(`Upload failed (${put.status}). Check the R2 bucket CORS policy.`);
-      await api.photoAttach(sku, angle, publicUrl);
-      setPhotos((p) => ({ ...p, [angle]: publicUrl }));
-    } catch (err) {
-      if (err.unauthorized) return onSignOut?.();
-      setError(err.message || 'Could not upload the photo.');
-    } finally { setBusy(null); }
-  }
-
   async function remove(angle) {
-    if (busy) return;
-    setBusy(angle); setError('');
+    setError('');
     try {
       await api.photoRemove(sku, angle);
       setPhotos((p) => { const n = { ...p }; delete n[angle]; return n; });
     } catch (err) {
       if (err.unauthorized) return onSignOut?.();
       setError(err.message);
-    } finally { setBusy(null); }
+    }
   }
 
   const count = Object.keys(photos).length;
@@ -91,30 +62,39 @@ export function ListingPhotos({ sku, onSignOut }) {
         <p className="muted sm">Loading photos…</p>
       ) : (
         <>
-          {count > 0 && count >= 1 && <p className="muted sm">This SKU already has photos — only fill the missing angles.</p>}
+          {count > 0 && <p className="muted sm">This SKU already has photos — review them, replace any, or fill the missing angles.</p>}
           <div className="lp-grid">
-            {SHOE_ANGLES.map(([angle, label, Icon]) => {
+            {SHOE_ANGLES.map(([angle, label]) => {
               const url = photos[angle];
-              const isBusy = busy === angle;
               return (
                 <div key={angle} className={`lp-slot ${url ? 'filled' : ''}`}>
-                  <button type="button" className="lp-slot-btn" onClick={() => pick(angle)} disabled={isBusy} title={url ? `Replace ${label}` : `Add ${label}`}>
-                    {isBusy ? <span className="lp-spin">…</span>
-                      : url ? <img src={url} alt={label} className="lp-thumb" />
-                        : <span className="lp-icon"><Icon /></span>}
+                  <button type="button" className="lp-slot-btn" onClick={() => setCamera({ angle })} title={url ? `Replace ${label}` : `Add ${label}`}>
+                    {url ? <img src={url} alt={label} className="lp-thumb" /> : <span className="lp-icon"><ShoeAngleIcon angle={angle} /></span>}
                   </button>
                   <span className="lp-label">{label}</span>
-                  {url && !isBusy && (
-                    <button type="button" className="lp-remove" title={`Remove ${label}`} onClick={() => remove(angle)}>×</button>
-                  )}
+                  {url && <button type="button" className="lp-remove" title={`Remove ${label}`} onClick={() => remove(angle)}>×</button>}
                 </div>
               );
             })}
           </div>
+          <button type="button" className="btn primary wide lp-open" onClick={() => setCamera({})}>
+            {count === 0 ? '📷 Add listing photos' : '🖼 View / replace photos'}
+          </button>
         </>
       )}
       {error && <div className="error sm mt">{error}</div>}
-      <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
+
+      {camera && (
+        <PhotoCamera
+          sku={sku}
+          photos={photos}
+          initialAngle={camera.angle}
+          onUploaded={(angle, url) => setPhotos((p) => ({ ...p, [angle]: url }))}
+          onRemove={remove}
+          onClose={() => setCamera(null)}
+          onSignOut={onSignOut}
+        />
+      )}
     </div>
   );
 }

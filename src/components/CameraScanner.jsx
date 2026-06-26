@@ -58,10 +58,13 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
     let myControls = null;
     let myStream = null;
     const stopMine = () => {
+      // Let zxing release its own stream via controls.stop(). We deliberately do
+      // NOT stop tracks / clear srcObject ourselves: that raced with StrictMode
+      // (dev) and HMR remounts and blanked the *live* stream (black scanner that
+      // still "worked once"). The original camera-stays-on bug was the
+      // double-start (two streams, one orphaned), already fixed by not calling
+      // setDeviceId mid-effect — so a single controls.stop() now fully releases it.
       try { myControls?.stop(); } catch { /* noop */ }
-      if (myStream?.getTracks) { for (const t of myStream.getTracks()) { try { t.stop(); } catch { /* noop */ } } }
-      const v = videoRef.current;
-      if (v && v.srcObject === myStream) v.srcObject = null; // only detach if still ours
       if (controlsRef.current === myControls) controlsRef.current = null;
     };
 

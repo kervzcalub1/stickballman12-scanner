@@ -4,7 +4,7 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
 `mode`). List of past batches: `BatchList`. Endpoints under `api/batches/*`,
 `api/vins/reserve.js`, `api/items/lookup.js`.
 
-## 3-step wizard
+## 4-step wizard (receiving) / 2-step (rescale)
 1. **Shipment details** — buyer defaults to `stickballman12`; supplier + date
    required. The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
    list + auto-saved custom names); picking "Custom…" and typing a new vendor
@@ -20,16 +20,20 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
    `with_box` (off → status `no_box`). "Complete item" adds it to the cart.
    **Newest scanned shoe shows on top** of the cart; **sizes sort smallest→largest**
    in both the cart and the scanning modal (`compareSizes`, V6 Features 3 & 6).
-   This cart doubles as the **review screen** (V6 Feature 4): expand a size to see
-   its units and **flag a defect per VIN** — "＋ Issue" opens an editor for a note +
-   defect photos (`src/components/DefectPhotos.jsx`, uploaded to R2 keyed by VIN via
-   `api/photos/sign-issue`). Flagged units carry a "⚠ Issue" badge; on commit each
-   becomes an `item_events(type='issue')` with `{note, photos}` (see `commit.js`
-   `unitIssues` → `insertIssueEvents`). Defect photos are per-VIN, separate from the
-   per-SKU listing photos.
    ⚠️ Scan **no-box pairs separately** so their VINs/labels don't get mixed with
    with-box pairs (see SOP-WAREHOUSE.md).
-3. **Issues** — no-box pairs auto-listed; manual issues addable. Finish commits.
+3. **Review** (V6 Feature 4) — the dedicated review-before-submit screen, size-sorted.
+   Per shoe: toggle **box status**, **±qty per size** (＋ reserves a VIN, − drops the
+   trailing one), remove a size, or delete the whole line. Expand a size to see its
+   units; **"＋ Issue" per VIN** opens a defect editor — add one or more defects, each
+   a **type** (`DEFECT_TYPES` dropdown) + optional note + photos
+   (`src/components/DefectPhotos.jsx`, uploaded to R2 keyed by VIN via
+   `api/photos/sign-issue`). Flagged units show "⚠ N issues". On commit each defect
+   becomes an `item_events(type='issue')` with `{defectType, note, photos}` (see
+   `commit.js` `unitIssues` → `insertIssueEvents`). Defect photos are per-VIN,
+   separate from the per-SKU listing photos.
+4. **Issues** — shipment-level: no-box pairs auto-listed; manual issues addable.
+   Finish commits.
 
 ## VINs & commit
 - On commit (`api/batches/commit.js`): `createBatch` → `reserveVins` (atomic

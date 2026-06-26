@@ -416,7 +416,7 @@ export async function insertIssueEvents(entries, createdBy) {
   const queries = entries.map((e) => sql`
     INSERT INTO item_events (item_id, type, details, created_by)
     VALUES (${e.itemId}, 'issue',
-      ${JSON.stringify({ note: e.note || '', photos: Array.isArray(e.photos) ? e.photos : [] })}::jsonb,
+      ${JSON.stringify({ defectType: e.type || 'other', note: e.note || '', photos: Array.isArray(e.photos) ? e.photos : [] })}::jsonb,
       ${createdBy || null})
   `);
   await sql.transaction(queries);

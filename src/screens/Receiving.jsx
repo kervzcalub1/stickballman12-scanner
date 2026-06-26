@@ -10,7 +10,7 @@ import { ListingPhotos } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes } from '../lib/codes.js';
-import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES } from '../lib/constants.js';
+import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -86,20 +86,50 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   const [rescanned, setRescanned] = useState([]);
   const [openSizes, setOpenSizes] = useState(() => new Set()); // expanded size rows (item:size keys)
   const [issues, setIssues] = useState([]);   // manual shipment issues
-  // Per-unit (VIN) defect issues flagged on the review (V6 Feature 4):
-  // vin -> { note, photos:[url] }. Sent with commit → 'issue' item_events.
+  // Per-unit (VIN) defect issues flagged on the Review step (V6 Feature 4):
+  // vin -> [{ key, type, note, photos:[url] }]. Sent with commit → 'issue' events.
   const [unitIssues, setUnitIssues] = useState({});
   const [issueEditorVin, setIssueEditorVin] = useState(null);
-  const getIssue = (vin) => unitIssues[vin] || { note: '', photos: [] };
-  const hasIssue = (vin) => { const u = unitIssues[vin]; return Boolean(u && (u.note?.trim() || u.photos?.length)); };
-  const setIssue = (vin, patch) => setUnitIssues((m) => ({ ...m, [vin]: { ...getIssue(vin), ...patch } }));
-  const clearIssue = (vin) => setUnitIssues((m) => { const n = { ...m }; delete n[vin]; return n; });
-  const closeIssueEditor = () => {
-    const vin = issueEditorVin;
-    if (vin) { const u = unitIssues[vin]; if (u && !u.note?.trim() && !u.photos?.length) clearIssue(vin); }
-    setIssueEditorVin(null);
-  };
+  const getIssues = (vin) => unitIssues[vin] || [];
+  const issueCount = (vin) => (unitIssues[vin] || []).length;
+  const hasIssue = (vin) => issueCount(vin) > 0;
+  const addUnitIssue = (vin) => setUnitIssues((m) => ({ ...m, [vin]: [...(m[vin] || []), { key: cartKey++, type: DEFECT_TYPES[0][0], note: '', photos: [] }] }));
+  const updateUnitIssue = (vin, key, patch) => setUnitIssues((m) => ({ ...m, [vin]: (m[vin] || []).map((x) => (x.key === key ? { ...x, ...patch } : x)) }));
+  const removeUnitIssue = (vin, key) => setUnitIssues((m) => {
+    const arr = (m[vin] || []).filter((x) => x.key !== key);
+    const n = { ...m }; if (arr.length) n[vin] = arr; else delete n[vin]; return n;
+  });
+  const closeIssueEditor = () => setIssueEditorVin(null);
   const flaggedCount = Object.keys(unitIssues).filter(hasIssue).length;
+
+  // ---- Review-step item edits (box status, qty, delete) ----
+  async function reserveMoreVins(n) {
+    try { const res = await api.reserveVins(n, header.dateReceived); return res.vins || []; }
+    catch (err) { if (err.unauthorized) onSignOut(); return []; }
+  }
+  const setItemBox = (itemKey, withBox) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, withBox } : it)));
+  async function bumpSizeQty(itemKey, sizeKey, delta) {
+    if (delta > 0) {
+      const vins = await reserveMoreVins(1);
+      setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
+        ...it, sizes: it.sizes.map((s) => (s.key !== sizeKey ? s : { ...s, qty: s.qty + 1, vins: [...(s.vins || []), ...vins] })),
+      })));
+    } else {
+      setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
+        ...it,
+        sizes: it.sizes.flatMap((s) => {
+          if (s.key !== sizeKey) return [s];
+          const q = Math.max(0, (Number(s.qty) || 1) - 1);
+          return q === 0 ? [] : [{ ...s, qty: q, vins: (s.vins || []).slice(0, q) }];
+        }),
+      })));
+    }
+  }
+  const removeSizeRow = (itemKey, sizeKey) => setItems((arr) => arr.flatMap((it) => {
+    if (it.key !== itemKey) return [it];
+    const sizes = it.sizes.filter((s) => s.key !== sizeKey);
+    return sizes.length ? [{ ...it, sizes }] : []; // drop the line if no sizes remain
+  }));
   const toggleSize = (k) => setOpenSizes((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const [error, setError] = useState('');
   const [committing, setCommitting] = useState(false);
@@ -386,8 +416,9 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   function goStep3() {
     setError('');
     if (!items.length) { setError('Add at least one item first.'); return; }
-    setStep(3);
+    setStep(3);  // Review
   }
+  function goStep4() { setError(''); setStep(4); } // Issues (shipment-level)
 
   async function doCommit() {
     setCommitting(true);
@@ -409,8 +440,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
           batch: { ...header, origin: effectiveOrigin, defaultCost: defaultCostNum, duplicateOf: dupBatch?.id ?? null },
           items: out,
           unitIssues: Object.entries(unitIssues)
-            .map(([vin, v]) => ({ vin, note: v.note, photos: v.photos }))
-            .filter((v) => v.note?.trim() || v.photos?.length),
+            .flatMap(([vin, arr]) => arr.map((x) => ({ vin, type: x.type, note: x.note, photos: x.photos }))),
           issues: isRescale ? [] : [
             ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
             ...issues.map((i) => ({
@@ -477,7 +507,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
         <>
           {/* Stepper */}
           <div className="wizard-steps">
-            {(isRescale ? [[1, 'Details'], [2, 'Items']] : [[1, 'Shipment'], [2, 'Items'], [3, 'Issues']]).map(([n, label]) => (
+            {(isRescale ? [[1, 'Details'], [2, 'Items']] : [[1, 'Shipment'], [2, 'Items'], [3, 'Review'], [4, 'Issues']]).map(([n, label]) => (
               <button key={n} type="button" className={`wstep ${step === n ? 'active' : ''} ${step > n ? 'done' : ''}`}
                 onClick={() => { if (n < step) setStep(n); }}>
                 <span className="wstep-num">{step > n ? '✓' : n}</span>{label}
@@ -591,16 +621,6 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                                           ? <span className="vin">{s.vins[i]}</span>
                                           : <span className="vin pending">VIN on submit</span>}
                                         {!it.withBox && <span className="recv-unit-nobox">no box — sticker carefully</span>}
-                                        {s.vins?.[i] && (
-                                          <button type="button"
-                                            className={`recv-unit-issue ${hasIssue(s.vins[i]) ? 'flagged' : ''}`}
-                                            onClick={() => setIssueEditorVin(s.vins[i])}
-                                            title={hasIssue(s.vins[i]) ? 'Edit defect issue' : 'Flag a defect / add photos'}>
-                                            {hasIssue(s.vins[i])
-                                              ? `⚠ Issue${getIssue(s.vins[i]).photos?.length ? ` · ${getIssue(s.vins[i]).photos.length}📷` : ''}`
-                                              : '＋ Issue'}
-                                          </button>
-                                        )}
                                       </div>
                                     ))}
                                   </div>
@@ -651,12 +671,90 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                 <div className="batch-totals"><b>{totalItems}</b> new{isRescale ? <> · <b>{rescaledCount}</b> rescanned</> : <> units · <b>${totalCost.toFixed(2)}</b></>}</div>
                 {isRescale
                   ? <button className="btn primary" onClick={startRescaleFinish} disabled={committing}>Finish rescale</button>
-                  : <button className="btn primary" onClick={goStep3}>Next →</button>}
+                  : <button className="btn primary" onClick={goStep3}>Review →</button>}
               </div>
             </>
           )}
 
           {step === 3 && !isRescale && (
+            <>
+              <div className="card">
+                <div className="step-head">
+                  <h3 className="rows-title">Review <span className="muted">({totalItems} unit{totalItems === 1 ? '' : 's'} · {items.length} shoe{items.length === 1 ? '' : 's'})</span></h3>
+                  {flaggedCount > 0 && <span className="review-flagged">⚠ {flaggedCount} flagged</span>}
+                </div>
+                <p className="muted sm">Check counts, fix box status, and flag any defects before submitting. Sizes are sorted smallest→largest.</p>
+                {!items.length ? <p className="muted">Nothing to review — go back and add items.</p> : (
+                  <div className="recv-items review">
+                    {items.map((it) => (
+                      <div className={`recv-item ${it.withBox ? '' : 'nobox'}`} key={it.key}>
+                        <div className="recv-item-head">
+                          {it.image ? <img className="cart-thumb" src={it.image} alt="" /> : <div className="cart-thumb placeholder">—</div>}
+                          <div className="recv-item-info">
+                            <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
+                            <div className="seg sm" role="group" aria-label="Box status">
+                              <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}>📦 Box</button>
+                              <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}>🚫 No box</button>
+                            </div>
+                          </div>
+                          <button type="button" className="btn icon ghost remove" title="Delete shoe" onClick={() => removeItem(it.key)}>×</button>
+                        </div>
+                        <div className="recv-sizes">
+                          {[...it.sizes].sort(compareSizes).map((s) => {
+                            const k = `${it.key}:${s.key}`;
+                            const open = openSizes.has(k);
+                            return (
+                              <div className="recv-size review" key={s.key}>
+                                <div className="review-size-row">
+                                  <button type="button" className="recv-caret-btn" onClick={() => toggleSize(k)} aria-expanded={open} title="Show units">{open ? '▾' : '▸'}</button>
+                                  <span className="recv-size-name">{s.size}</span>
+                                  <div className="qty-stepper sm">
+                                    <button type="button" className="btn icon ghost step" onClick={() => bumpSizeQty(it.key, s.key, -1)}>−</button>
+                                    <span className="qty-val">{s.qty}</span>
+                                    <button type="button" className="btn icon ghost step" onClick={() => bumpSizeQty(it.key, s.key, 1)}>+</button>
+                                  </div>
+                                  <button type="button" className="btn icon ghost remove sm" title="Remove size" onClick={() => removeSizeRow(it.key, s.key)}>×</button>
+                                </div>
+                                {open && (
+                                  <div className="recv-units">
+                                    {Array.from({ length: Math.max(1, Number(s.qty) || 1) }, (_, i) => {
+                                      const vin = s.vins?.[i];
+                                      return (
+                                        <div className="recv-unit" key={i}>
+                                          <span className="recv-unit-n">{i + 1}.</span>
+                                          {vin ? <span className="vin">{vin}</span> : <span className="vin pending">VIN on submit</span>}
+                                          {!it.withBox && <span className="recv-unit-nobox">no box</span>}
+                                          {vin && (
+                                            <button type="button" className={`recv-unit-issue ${hasIssue(vin) ? 'flagged' : ''}`}
+                                              onClick={() => setIssueEditorVin(vin)}
+                                              title={hasIssue(vin) ? 'Edit defects' : 'Flag a defect'}>
+                                              {hasIssue(vin) ? `⚠ ${issueCount(vin)} issue${issueCount(vin) === 1 ? '' : 's'}` : '＋ Issue'}
+                                            </button>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {error && <div className="error mt">{error}</div>}
+              <div className="batch-bar">
+                <button className="btn ghost" onClick={() => setStep(2)}>← Back</button>
+                <div className="batch-totals"><b>{totalItems}</b> units · <b>${totalCost.toFixed(2)}</b>{flaggedCount ? <> · <b>{flaggedCount}</b> flagged</> : null}</div>
+                <button className="btn primary" onClick={goStep4}>Next →</button>
+              </div>
+            </>
+          )}
+
+          {step === 4 && !isRescale && (
             <>
               <div className="card">
                 <h3 className="rows-title">Shipment issues <span className="muted">(optional)</span></h3>
@@ -685,7 +783,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
               </div>
               {error && <div className="error mt">{error}</div>}
               <div className="batch-bar">
-                <button className="btn ghost" onClick={() => setStep(2)}>← Back</button>
+                <button className="btn ghost" onClick={() => setStep(3)}>← Back</button>
                 <div className="batch-totals"><b>{totalItems}</b> units · <b>${totalCost.toFixed(2)}</b></div>
                 <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } setShowConfirm(true); }} disabled={committing}>
                   Finish batch
@@ -857,28 +955,34 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
 
       {issueEditorVin && (
         <div className="modal-overlay" onClick={closeIssueEditor}>
-          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+          <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h3 className="modal-title">Flag defect · <span className="vin">{issueEditorVin}</span></h3>
+              <h3 className="modal-title">Defects · <span className="vin">{issueEditorVin}</span></h3>
               <button type="button" className="btn icon ghost" onClick={closeIssueEditor}>×</button>
             </div>
-            <label className="issue-note-label">Issue note
-              <textarea className="issue-note" rows={3} maxLength={500}
-                placeholder="e.g. crease on left toe, dirty midsole, missing insole…"
-                value={getIssue(issueEditorVin).note}
-                onChange={(e) => setIssue(issueEditorVin, { note: e.target.value })} />
-            </label>
-            <div className="muted sm">Defect photos (optional)</div>
-            <DefectPhotos
-              vin={issueEditorVin}
-              photos={getIssue(issueEditorVin).photos}
-              onChange={(photos) => setIssue(issueEditorVin, { photos })}
-              onSignOut={onSignOut} />
+            {getIssues(issueEditorVin).length === 0 && (
+              <p className="muted sm">No defects yet. Add one — pick a type, add a note and photos if useful.</p>
+            )}
+            {getIssues(issueEditorVin).map((iss) => (
+              <div className="defect-issue" key={iss.key}>
+                <div className="defect-issue-head">
+                  <select value={iss.type} onChange={(e) => updateUnitIssue(issueEditorVin, iss.key, { type: e.target.value })}>
+                    {DEFECT_TYPES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                  </select>
+                  <button type="button" className="btn icon ghost remove" title="Remove defect" onClick={() => removeUnitIssue(issueEditorVin, iss.key)}>×</button>
+                </div>
+                <input className="defect-note" maxLength={500} placeholder="Note (optional) — e.g. crease on left toe"
+                  value={iss.note} onChange={(e) => updateUnitIssue(issueEditorVin, iss.key, { note: e.target.value })} />
+                <DefectPhotos
+                  vin={issueEditorVin}
+                  photos={iss.photos}
+                  onChange={(photos) => updateUnitIssue(issueEditorVin, iss.key, { photos })}
+                  onSignOut={onSignOut} />
+              </div>
+            ))}
+            <button type="button" className="btn add-size" onClick={() => addUnitIssue(issueEditorVin)}>+ Add defect</button>
             <div className="modal-actions">
-              {hasIssue(issueEditorVin) && (
-                <button type="button" className="btn ghost danger" onClick={() => { clearIssue(issueEditorVin); setIssueEditorVin(null); }}>Remove issue</button>
-              )}
-              <button type="button" className="btn primary" onClick={closeIssueEditor}>Done</button>
+              <button type="button" className="btn primary wide" onClick={closeIssueEditor}>Done</button>
             </div>
           </div>
         </div>

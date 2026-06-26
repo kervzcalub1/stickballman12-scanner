@@ -20,7 +20,7 @@ export function eventLabel(e) {
   if (e.type === 'note') return `Note: ${e.details?.text || ''} (by ${by})`;
   if (e.type === 'issue') {
     const t = e.details?.defectType;
-    const label = t ? (DEFECT_LABEL[t] || t) : '';
+    const label = t ? (DEFECT_LABEL[t] || t.replace(/_/g, ' ')) : '';
     const note = e.details?.note || e.details?.text || '';
     const desc = [label, note].filter(Boolean).join(' — ');
     return `Issue${desc ? `: ${desc}` : ''} (by ${by})`;

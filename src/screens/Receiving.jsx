@@ -832,7 +832,10 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
             )}
 
             {draft && (
-              <>
+              // Any interaction with the draft (size chips, qty, box toggle, photos,
+              // complete) closes the live barcode scanner — so it can't keep
+              // detecting in the background or fight the listing-photo camera.
+              <div className="additem-draft" onPointerDownCapture={() => { if (mCam) setMCam(false); }}>
                 <div className="additem-product">
                   {draft.image ? <img className="cart-thumb" src={draft.image} alt="" /> : <div className="cart-thumb placeholder">—</div>}
                   <div className="cart-fields">
@@ -873,7 +876,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                 <div className="modal-actions">
                   <button type="button" className="btn primary wide" onClick={completeItem}>Complete item ✓</button>
                 </div>
-              </>
+              </div>
             )}
           </div>
         </div>

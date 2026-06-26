@@ -3,7 +3,7 @@
 // as helpers/auth.js) and hit the routes directly — data-independent.
 import { test, expect } from '@playwright/test';
 import { signToken } from '../api/_lib/util.js';
-import { loadEnv } from './helpers/auth.js';
+import { loadEnv, loginAs } from './helpers/auth.js';
 import { compareSizes } from '../src/lib/codes.js';
 import { presignPutUrl } from '../api/_lib/r2.js';
 
@@ -71,6 +71,17 @@ test.describe('V6 · listing photos (Feature 5)', () => {
     expect(url).toContain('https://acct123.r2.cloudflarestorage.com/photos/listings/AB-12/side-1.jpg?');
     expect(url).toContain('X-Amz-Algorithm=AWS4-HMAC-SHA256');
     expect(url).toMatch(/X-Amz-Signature=[0-9a-f]{64}/);
+  });
+});
+
+test.describe('V6 · batch review screen (Feature 4)', () => {
+  test('receiving wizard has a dedicated Review step', async ({ page }) => {
+    await loginAs(page, 'admin');
+    await page.goto('/receiving');
+    await expect(page.getByText('Shipment details')).toBeVisible();
+    const steps = page.locator('.wizard-steps');
+    await expect(steps).toContainText('Review');
+    await expect(steps).toContainText('Issues');
   });
 });
 

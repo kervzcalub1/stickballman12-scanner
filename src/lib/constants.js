@@ -34,6 +34,20 @@ export const ISSUE_TYPES = [
   ['other', 'Other'],
 ];
 
+// Per-unit defect types flagged on the receiving Review screen (V6 Feature 4).
+// Each flagged issue picks one of these; stored on the unit's 'issue' event.
+export const DEFECT_TYPES = [
+  ['crease', 'Crease'],
+  ['dirty', 'Dirty / stained'],
+  ['yellowing', 'Yellowing'],
+  ['glue', 'Glue / factory defect'],
+  ['missing_insole', 'Missing insole'],
+  ['damaged_box', 'Damaged box'],
+  ['no_box', 'No box'],
+  ['wrong_item', 'Wrong item / mismatch'],
+  ['other', 'Other'],
+];
+
 // Reasons PH flags a SKU for the warehouse to recount / rescan.
 export const REQUEST_REASONS = [['mismatch', 'Mismatch'], ['quantity', 'Quantity mismatch'], ['recount', 'Recount'], ['returned', 'Returned'], ['relisting', 'Re-listing'], ['other', 'Other']];
 

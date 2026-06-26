@@ -101,17 +101,18 @@ export default async function handler(req, res) {
   const kind = body.kind === 'rescale' ? 'rescale' : 'receiving';
   // Rescale has no shipment, so it carries no shipment issues.
   const issues = kind === 'rescale' ? [] : (Array.isArray(body.issues) ? body.issues : []);
-  // Per-unit defect issues flagged on the review screen (V6 Feature 4):
-  // [{ vin, note, photos:[https…] }]. Mapped to item ids after insert.
+  // Per-unit defect issues flagged on the Review screen (V6 Feature 4):
+  // [{ vin, type, note, photos:[https…] }]. Mapped to item ids after insert.
   const VIN_RE = /^SBM-\d{6}-\d{6}$/;
   const unitIssues = (Array.isArray(body.unitIssues) ? body.unitIssues : [])
     .map((u) => ({
       vin: String(u?.vin || '').trim().toUpperCase(),
+      type: String(u?.type ?? '').trim().slice(0, 40) || 'other',
       note: String(u?.note ?? '').trim().slice(0, 500),
       photos: (Array.isArray(u?.photos) ? u.photos : [])
         .filter((p) => /^https:\/\//.test(String(p))).map((p) => String(p).slice(0, 500)).slice(0, 6),
     }))
-    .filter((u) => VIN_RE.test(u.vin) && (u.note || u.photos.length));
+    .filter((u) => VIN_RE.test(u.vin));
 
   if (!rawItems.length)
     return send(res, 400, { ok: false, error: 'Add at least one item before committing the batch.' });
@@ -172,7 +173,7 @@ export default async function handler(req, res) {
       const idByVin = new Map(created.map((r) => [r.vin, r.id]));
       const entries = unitIssues
         .filter((u) => idByVin.has(u.vin))
-        .map((u) => ({ itemId: idByVin.get(u.vin), note: u.note, photos: u.photos }));
+        .map((u) => ({ itemId: idByVin.get(u.vin), type: u.type, note: u.note, photos: u.photos }));
       if (entries.length) await insertIssueEvents(entries, createdBy);
     }
 

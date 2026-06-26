@@ -122,9 +122,14 @@ export default async function handler(req, res) {
   const createdBy = user.name || user.username || '';
   const defaultCost = toCost(header.defaultCost);
 
-  // Normalize items. "With Box" unchecked → status 'no_box' + with_box=false.
+  // A unit flagged with a 'no_box' defect follows the no-box rules too (status
+  // no_box / No-Box queue), same end state as the per-shoe box-status toggle.
+  const noBoxVins = new Set(unitIssues.filter((u) => u.type === 'no_box').map((u) => u.vin));
+
+  // Normalize items. "With Box" unchecked (toggle) OR a 'no_box' defect → no_box.
   const items = rawItems.map((it) => {
-    const withBox = it.withBox !== false;
+    const vin = /^SBM-\d{6}-\d{6}$/.test(String(it.vin || '')) ? it.vin : null;
+    const withBox = (it.withBox !== false) && !(vin && noBoxVins.has(vin.toUpperCase()));
     return {
       name: cleanName(it.name) || 'Unknown',
       sku: normSku(it.sku),
@@ -139,7 +144,7 @@ export default async function handler(req, res) {
       withBox,
       status: withBox ? 'needs_shelf' : 'no_box',
       // Reserved VIN (assigned during receiving). Validated; else server generates.
-      vin: /^SBM-\d{6}-\d{6}$/.test(String(it.vin || '')) ? it.vin : null,
+      vin,
     };
   });
 

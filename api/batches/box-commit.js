@@ -5,7 +5,7 @@
 // the batch when received == expected. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import {
-  getBatchWithBoxes, commitBoxItems, insertIssueEvents, dbConfigured,
+  getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues, dbConfigured,
 } from '../_lib/db.js';
 import { normalizeItems, parseUnitIssues, enrichGlobalIndicators } from '../_lib/intake.js';
 
@@ -54,6 +54,9 @@ export default async function handler(req, res) {
         .map((u) => ({ itemId: idByVin.get(u.vin), type: u.type, note: u.note, photos: u.photos }));
       if (entries.length) await insertIssueEvents(entries, createdBy);
     }
+    // Batch-level shipment issues (no-box auto-list + manual) — recorded on the batch.
+    const issues = Array.isArray(body.issues) ? body.issues : [];
+    if (issues.length) await insertIssues(batchId, issues, createdBy);
 
     send(res, 200, { ok: true, count: created.length, vins, autoCompleted });
     enrichGlobalIndicators(created, items).catch((e) => console.warn('[box-commit] GI enrichment failed:', e.message));

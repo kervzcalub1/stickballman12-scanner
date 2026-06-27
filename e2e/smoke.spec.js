@@ -44,6 +44,7 @@ test.describe('admin screens render', () => {
     ['/', 'Receive New'],
     ['/receiving', 'Shipment details'],
     ['/rescale', 'Rescale details'],
+    ['/batches', 'Open batches'],
     ['/inventory', 'Apply filters'],
     ['/report', 'view only'],
     ['/access', 'Check Access'],

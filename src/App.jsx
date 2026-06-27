@@ -11,6 +11,7 @@ import { Auth } from './screens/Auth.jsx';
 import { Home } from './screens/Home.jsx';
 import { CheckAccess } from './screens/CheckAccess.jsx';
 import { Receiving } from './screens/Receiving.jsx';
+import { BatchPage } from './screens/BatchPage.jsx';
 import { Inventory } from './screens/Inventory.jsx';
 import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { NoBoxReport } from './screens/NoBoxReport.jsx';
@@ -22,6 +23,9 @@ export default function App() {
   // Initial page comes from the URL (so refreshing /inventory stays on Inventory).
   const [view, setView] = useState(() => viewForPath(window.location.pathname));
   const [openVin, setOpenVin] = useState(null); // VIN to open in Inventory detail (cross-nav)
+  // Multi-box: when set, Receiving runs in "add a box to this open batch" mode.
+  const [batchContext, setBatchContext] = useState(null);
+  const [batchReturnId, setBatchReturnId] = useState(null); // reopen this batch on return to Batches
   const navBack = useRef(null);              // current page sets its internal back handler here
   const appRef = useRef({ view, user });
   appRef.current = { view, user };
@@ -73,8 +77,9 @@ export default function App() {
     if (window.location.pathname !== pathForView(v)) window.history.pushState(null, '', pathForView(v));
   };
   const openItem = (vin) => { setOpenVin(vin); go('inventory'); };
-  if (view === 'receiving') return <Receiving user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'receiving') return <Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />;
   if (view === 'rescale') return <Receiving mode="rescale" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'batches') return <BatchPage initialBatchId={batchReturnId} onAddBox={(batch) => { setBatchContext(batch); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'inventory') return <Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'report') return <PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;
@@ -82,5 +87,5 @@ export default function App() {
   if (view === 'sold') return <StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'shipped') return <StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'rescalereq') return <RescaleRequestsReport canAudit onHome={() => go('home')} onSignOut={signOut} />;
-  return <Home user={user} onPick={go} onSignOut={signOut} />;
+  return <Home user={user} onPick={(v) => { setBatchContext(null); go(v); }} onSignOut={signOut} />;
 }

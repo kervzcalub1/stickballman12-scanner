@@ -18,15 +18,19 @@ const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 // Monotonic key source for the cart's React lists (unique among siblings).
 let cartKey = 1;
 
-export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onSignOut }) {
+export function Receiving({ mode = 'receiving', navBack, batchContext = null, onBatchDone, onOpenItem, onHome, onSignOut }) {
   const isRescale = mode === 'rescale';
+  // "Box mode": adding a box to an existing OPEN multi-box batch (from Batch Page).
+  // Step 1 collects only the box tracking #; finish commits the box (boxCommit).
+  const isBoxMode = !isRescale && !!batchContext;
   const today = new Date().toISOString().slice(0, 10);
   const [tab, setTab] = useState('intake');   // 'intake' | 'recent'
-  const [step, setStep] = useState(1);         // receiving: 1 shipment·2 items·3 issues | rescale: 1 details·2 items
+  const [step, setStep] = useState(1);         // receiving: 1 shipment·2 items·3 review·4 issues | rescale: 1 details·2 items
 
   const [header, setHeader] = useState({
     buyer: 'stickballman12', supplier: '', tracking: '', dateReceived: today,
     defaultCost: '', notes: '', specialRules: '', origin: 'returned', originOther: '',
+    batchTag: '', expectedBoxes: '1', // V6 Feature 7: >1 → open multi-box batch
   });
   // The reason stored on the batch: the custom text when "Other" is picked.
   const effectiveOrigin = header.origin === 'other'
@@ -388,6 +392,10 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   const removeIssue = (key) => setIssues((is) => is.filter((i) => i.key !== key));
 
   const defaultCostNum = header.defaultCost === '' ? null : Number(header.defaultCost);
+  // V6 Feature 7: expected boxes > 1 starts an OPEN multi-box batch (box #1 here;
+  // the rest are added from the Batch Page). Box-mode adds a box to an existing one.
+  const expectedBoxesNum = Math.max(1, parseInt(header.expectedBoxes, 10) || 1);
+  const isMultiBoxNew = !isRescale && !isBoxMode && expectedBoxesNum > 1;
   const itemUnits = (i) => i.sizes.reduce((a, r) => a + Math.max(1, Number(r.qty) || 1), 0);
   const totalItems = items.reduce((s, i) => s + itemUnits(i), 0);
   const totalCost = (defaultCostNum || 0) * totalItems;
@@ -407,9 +415,10 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
 
   function goStep2() {
     setError('');
-    if (!isRescale && !String(header.supplier).trim()) { setError('Select a supplier.'); return; }
-    if (!isRescale && !String(header.buyer).trim()) { setError('Enter the buyer.'); return; }
-    if (!String(header.dateReceived).trim()) { setError('Enter the date.'); return; }
+    // Box-mode inherits supplier/buyer/date from the batch — only the box tracking matters.
+    if (!isRescale && !isBoxMode && !String(header.supplier).trim()) { setError('Select a supplier.'); return; }
+    if (!isRescale && !isBoxMode && !String(header.buyer).trim()) { setError('Enter the buyer.'); return; }
+    if (!isRescale && !isBoxMode && !String(header.dateReceived).trim()) { setError('Enter the date.'); return; }
     if (isRescale && header.origin === 'other' && !String(header.originOther).trim()) { setError('Enter a custom reason.'); return; }
     setStep(2);
   }
@@ -424,23 +433,57 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
     setCommitting(true);
     try {
       let batchRes = null;
-      let out = [];
-      // New / unlabeled stock (scanned by UPC/SKU) → batch commit, minting VINs.
-      if (items.length) {
-        // Expand each shoe's size rows into individual physical items (qty N → N VINs).
-        for (const it of items) {
-          for (const r of it.sizes) {
-            for (let n = 0; n < Math.max(1, Number(r.qty) || 1); n++) {
-              out.push({ name: it.name, sku: it.sku, size: r.size, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, vin: r.vins?.[n] || null });
-            }
+      // Expand each shoe's size rows into individual physical items (qty N → N VINs).
+      const out = [];
+      for (const it of items) {
+        for (const r of it.sizes) {
+          for (let n = 0; n < Math.max(1, Number(r.qty) || 1); n++) {
+            out.push({ name: it.name, sku: it.sku, size: r.size, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, vin: r.vins?.[n] || null });
           }
         }
+      }
+      const flatUnitIssues = Object.entries(unitIssues)
+        .flatMap(([vin, arr]) => arr.map((x) => ({ vin, type: x.type, note: x.note, photos: x.photos })));
+
+      // --- Multi-box (V6 Feature 7): commit a BOX, not a whole batch ---------
+      if (isBoxMode || isMultiBoxNew) {
+        let batchId = batchContext?.id;
+        let batchCode = batchContext?.batch_code;
+        if (!isBoxMode) {
+          const createdBatch = await api.createOpenBatch({
+            ...header, defaultCost: defaultCostNum, batchTag: header.batchTag, expectedBoxes: expectedBoxesNum,
+          });
+          batchId = createdBatch.id; batchCode = createdBatch.batchCode;
+        }
+        const { box } = await api.batchAddBox(batchId, header.tracking || null);
+        const res = await api.boxCommit({
+          batchId, boxId: box.id, items: out, unitIssues: flatUnitIssues,
+          issues: [
+            ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
+            ...issues.map((i) => ({
+              type: i.type, description: i.description,
+              expectedCount: i.expectedCount === '' ? null : Number(i.expectedCount),
+              receivedCount: i.receivedCount === '' ? null : Number(i.receivedCount),
+            })),
+          ],
+        });
+        setShowConfirm(false);
+        const printItems = (res.vins || []).map((vin, i) => ({
+          vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
+          upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
+        }));
+        setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); setStep(1);
+        setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, autoCompleted: res.autoCompleted });
+        return;
+      }
+
+      // --- Single batch (existing flow): commit a whole batch ---------------
+      if (items.length) {
         const payload = {
           kind: mode,
           batch: { ...header, origin: effectiveOrigin, defaultCost: defaultCostNum, duplicateOf: dupBatch?.id ?? null },
           items: out,
-          unitIssues: Object.entries(unitIssues)
-            .flatMap(([vin, arr]) => arr.map((x) => ({ vin, type: x.type, note: x.note, photos: x.photos }))),
+          unitIssues: flatUnitIssues,
           issues: isRescale ? [] : [
             ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
             ...issues.map((i) => ({
@@ -492,7 +535,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
   return (
     <div className="app">
       <TopBar
-        title={isRescale ? 'Rescale Stock' : 'Receiving'}
+        title={isRescale ? 'Rescale Stock' : isBoxMode ? 'Add box' : 'Receiving'}
         onHome={onHome}
         onSignOut={onSignOut}
         right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences">⚙</button>}
@@ -518,10 +561,15 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
           {step === 1 && (
             <>
               <div className="card">
-                <h3 className="rows-title">{isRescale ? 'Rescale details' : 'Shipment details'}</h3>
+                <h3 className="rows-title">{isRescale ? 'Rescale details' : isBoxMode ? 'Add a box' : 'Shipment details'}</h3>
+                {isBoxMode && (
+                  <div className="box-context">
+                    Adding a box to <b>{batchContext.batch_code}</b>{batchContext.batch_tag ? ` · 🏷 ${batchContext.batch_tag}` : ''} · {batchContext.supplier_name || '—'}
+                  </div>
+                )}
                 <div className="batch-form">
-                  {!isRescale && <label>Buyer *<input value={header.buyer} onChange={(e) => setH('buyer', e.target.value)} /></label>}
-                  {!isRescale && (
+                  {!isRescale && !isBoxMode && <label>Buyer *<input value={header.buyer} onChange={(e) => setH('buyer', e.target.value)} /></label>}
+                  {!isRescale && !isBoxMode && (
                     <label>Supplier *
                       <select
                         value={header.supplier}
@@ -564,15 +612,28 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                         maxLength={80} onChange={(e) => setH('originOther', e.target.value)} />
                     </label>
                   )}
-                  <label>{isRescale ? 'Date *' : 'Date received *'}<input type="date" value={header.dateReceived} onChange={(e) => setH('dateReceived', e.target.value)} /></label>
-                  <label>Default cost ($)<input type="number" min="0" step="0.01" value={header.defaultCost} onChange={(e) => setH('defaultCost', e.target.value)} /></label>
-                  {!isRescale && <label className="batch-form-wide">Special rules<input value={header.specialRules} onChange={(e) => setH('specialRules', e.target.value)} /></label>}
-                  <label className="batch-form-wide">Notes<input value={header.notes} onChange={(e) => setH('notes', e.target.value)} /></label>
+                  {!isBoxMode && <label>{isRescale ? 'Date *' : 'Date received *'}<input type="date" value={header.dateReceived} onChange={(e) => setH('dateReceived', e.target.value)} /></label>}
+                  {!isBoxMode && <label>Default cost ($)<input type="number" min="0" step="0.01" value={header.defaultCost} onChange={(e) => setH('defaultCost', e.target.value)} /></label>}
+                  {!isRescale && !isBoxMode && (
+                    <label>Boxes expected
+                      <input type="number" min="1" step="1" value={header.expectedBoxes}
+                        onChange={(e) => setH('expectedBoxes', e.target.value)} title="More than 1 starts a multi-box batch you add boxes to from the Batch Page" />
+                    </label>
+                  )}
+                  {!isRescale && !isBoxMode && expectedBoxesNum > 1 && (
+                    <label className="batch-form-wide">Batch tag<input value={header.batchTag} maxLength={120}
+                      placeholder="Code on the shipping label (e.g. Joey JP23 AJ40)" onChange={(e) => setH('batchTag', e.target.value)} /></label>
+                  )}
+                  {!isRescale && !isBoxMode && <label className="batch-form-wide">Special rules<input value={header.specialRules} onChange={(e) => setH('specialRules', e.target.value)} /></label>}
+                  {!isBoxMode && <label className="batch-form-wide">Notes<input value={header.notes} onChange={(e) => setH('notes', e.target.value)} /></label>}
                 </div>
+                {!isRescale && !isBoxMode && expectedBoxesNum > 1 && (
+                  <p className="muted sm">This starts an <b>open multi-box batch</b> — you'll scan box 1 now, then add the rest from the <b>Batches</b> page.</p>
+                )}
               </div>
               {error && <div className="error mt">{error}</div>}
               <div className="batch-bar">
-                <span className="muted sm">Step 1 of {isRescale ? 2 : 3}</span>
+                <span className="muted sm">Step 1 of {isRescale ? 2 : 4}</span>
                 <button className="btn primary" onClick={goStep2}>Next →</button>
               </div>
             </>
@@ -786,7 +847,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
                 <button className="btn ghost" onClick={() => setStep(3)}>← Back</button>
                 <div className="batch-totals"><b>{totalItems}</b> units · <b>${totalCost.toFixed(2)}</b></div>
                 <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } setShowConfirm(true); }} disabled={committing}>
-                  Finish batch
+                  {isBoxMode || isMultiBoxNew ? 'Submit box' : 'Finish batch'}
                 </button>
               </div>
             </>
@@ -899,7 +960,7 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
       {showConfirm && (
         <div className="modal-overlay">
           <div className="modal confirm" role="dialog" aria-modal="true">
-            <h3 className="modal-title">{isRescale ? 'Commit this rescale?' : 'Commit this batch?'}</h3>
+            <h3 className="modal-title">{isRescale ? 'Commit this rescale?' : (isBoxMode || isMultiBoxNew) ? 'Submit this box?' : 'Commit this batch?'}</h3>
             <div className="confirm-summary">
               {isRescale
                 ? (<>
@@ -926,16 +987,21 @@ export function Receiving({ mode = 'receiving', navBack, onOpenItem, onHome, onS
 
       {result && (
         <Modal type="success"
-          title={result.batchCode ? `Batch ${result.batchCode} saved` : 'Rescale saved'}
+          title={result.boxCommit
+            ? (result.autoCompleted ? `Box saved · ${result.batchCode} complete ✓` : `Box saved to ${result.batchCode}`)
+            : (result.batchCode ? `Batch ${result.batchCode} saved` : 'Rescale saved')}
           message={[
             result.rescaledCount ? `${result.rescaledCount} existing unit(s) rescanned & updated.` : '',
             result.newCount ? `${result.newCount} new item(s) recorded — VINs ${result.vins?.[0]}…${result.vins?.[result.vins.length - 1]}.` : '',
+            result.boxCommit && !result.autoCompleted ? 'Add the next box from the Batches page.' : '',
           ].filter(Boolean).join(' ')}
-          onClose={() => setResult(null)}>
+          onClose={() => { if (result.boxCommit) onBatchDone?.(); else setResult(null); }}>
           {result.printItems?.length > 0 && (
             <button className="btn primary" onClick={() => setPrintLabels({ batchCode: result.batchCode, items: result.printItems })}>🖨 Print labels</button>
           )}
-          <button className="btn ghost" onClick={() => setResult(null)}>Start another</button>
+          {result.boxCommit
+            ? <button className="btn ghost" onClick={() => onBatchDone?.()}>← Back to Batches</button>
+            : <button className="btn ghost" onClick={() => setResult(null)}>Start another</button>}
         </Modal>
       )}
 

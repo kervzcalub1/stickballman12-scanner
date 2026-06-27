@@ -110,6 +110,33 @@ test.describe('V6 · defect issue photos (Feature 4)', () => {
   });
 });
 
+// NOTE: the in-memory rate limiter is per-IP and shared across endpoints, so in
+// a full suite run the max:30 endpoints (create-open/box-commit) can return 429.
+// That's an environment condition, not a product failure — accept it like the
+// login smoke test does.
+test.describe('V6 · multi-box batches (Feature 7)', () => {
+  test('open-list is auth-gated and returns batches', async ({ request }) => {
+    expect((await request.get('/api/batches/open-list')).status()).toBe(401);
+    const res = await request.get('/api/batches/open-list', { headers: authHeaders() });
+    test.skip(res.status() === 429, 'rate-limited in full suite');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(Array.isArray(body.batches)).toBe(true);
+  });
+
+  test('create-open requires a supplier', async ({ request }) => {
+    const res = await request.post('/api/batches/create-open', { headers: authHeaders(), data: { batch: {} } });
+    expect([400, 429]).toContain(res.status()); // bad request, or rate-limited
+  });
+
+  test('add-box / box-commit / set-status reject a bad batchId', async ({ request }) => {
+    expect([400, 429]).toContain((await request.post('/api/batches/add-box', { headers: authHeaders(), data: {} })).status());
+    expect([400, 429]).toContain((await request.post('/api/batches/box-commit', { headers: authHeaders(), data: { items: [{}] } })).status());
+    expect([400, 429]).toContain((await request.post('/api/batches/set-status', { headers: authHeaders(), data: {} })).status());
+  });
+});
+
 test.describe('V6 · size comparator (Feature 6)', () => {
   test('sorts numeric sizes smallest→largest regardless of input order', () => {
     expect(['8', '5', '9', '7'].sort(compareSizes)).toEqual(['5', '7', '8', '9']);

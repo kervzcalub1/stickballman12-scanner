@@ -128,7 +128,7 @@ body {
 .home-card:hover { border-color: var(--primary); box-shadow: 0 8px 22px rgba(79, 124, 255, 0.12); transform: translateY(-2px); }
 .home-card:active { transform: translateY(0); }
 .home-card-icon {
-  font-size: 22px; width: 44px; height: 44px; margin-bottom: 4px;
+  width: 44px; height: 44px; margin-bottom: 4px; padding: 11px; color: var(--primary);
   display: flex; align-items: center; justify-content: center;
   border-radius: 12px; background: rgba(79, 124, 255, 0.1); border: 1px solid rgba(79, 124, 255, 0.2);
 }

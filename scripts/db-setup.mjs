@@ -303,9 +303,12 @@ await sql(`
     status          TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'received'
     received_by     TEXT,
     received_at     TIMESTAMPTZ,
+    created_by      TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+// `created_by` (who added the box) — idempotent for DBs created before it existed.
+await sql(`ALTER TABLE batch_boxes ADD COLUMN IF NOT EXISTS created_by TEXT`);
 await sql(`CREATE INDEX IF NOT EXISTS batch_boxes_batch_idx    ON batch_boxes (batch_id)`);
 await sql(`CREATE INDEX IF NOT EXISTS batch_boxes_tracking_idx ON batch_boxes (tracking_number)`);
 

@@ -14,67 +14,11 @@ import {
 } from '../_lib/util.js';
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
-  setItemGlobalIndicators, upsertProduct, getProductByUpc, getCatalogIdBySku,
   addSupplier, dbConfigured,
 } from '../_lib/db.js';
-import { aliasProductByUpc, aliasCatalogBySku, aliasGlobalIndicator } from '../_lib/alias.js';
+import { enrichGlobalIndicators } from '../_lib/intake.js';
 
 const MAX_ITEMS = 2000;
-const GI_MARKUP = 1.2; // Final price = global indicator + 20%
-
-// Resolve an item's Alias catalog_id (needed for GI). Prefers the UPC (Alias UPC
-// search), falls back to the SKU (official catalog search) for SKU-scanned units
-// that carry no UPC. Uses the products-table cache first; caches per UPC|SKU key.
-async function resolveCatalogId(it, cache) {
-  const key = it.upc ? `upc:${it.upc}` : (it.sku ? `sku:${it.sku}` : null);
-  if (!key) return null;
-  if (cache.has(key)) return cache.get(key);
-  let catalogId = null;
-  try {
-    if (it.upc) {
-      const cached = await getProductByUpc(it.upc);
-      if (cached?.catalog_id) catalogId = cached.catalog_id;
-      else {
-        const p = await aliasProductByUpc(it.upc);
-        if (p) { await upsertProduct({ ...p, size: it.size }); catalogId = p.catalogId; }
-      }
-    } else if (it.sku) {
-      catalogId = await getCatalogIdBySku(it.sku);
-      if (!catalogId) {
-        const p = await aliasCatalogBySku(it.sku);
-        if (p) { await upsertProduct({ ...p, upc: null, sku: it.sku, size: it.size }); catalogId = p.catalogId; }
-      }
-    }
-  } catch { /* best-effort */ }
-  cache.set(key, catalogId);
-  return catalogId;
-}
-
-// Best-effort: fetch the Alias global indicator price for each received unit and
-// store it (seeding the final price). catalog_id comes from UPC (preferred) or
-// SKU; GI is one official api.alias.org call per (catalog_id, size), memoized per
-// batch. Any failure is swallowed — GI just stays null and PH fills it by hand.
-async function enrichGlobalIndicators(created, items) {
-  if (!process.env.ALIAS_API_KEY) return; // GI needs the official pricing key
-  const catalogCache = new Map();   // upc:/sku: key -> catalog_id | null
-  const giByKey = new Map();        // `${catalogId}|${size}` -> dollars | null
-  const updates = [];
-  for (let i = 0; i < created.length; i++) {
-    const it = items[i];
-    const id = created[i]?.id;
-    if (!id || !it?.size || (!it?.upc && !it?.sku)) continue;
-    try {
-      const catalogId = await resolveCatalogId(it, catalogCache);
-      if (!catalogId) continue;
-      const key = `${catalogId}|${it.size}`;
-      if (!giByKey.has(key)) giByKey.set(key, await aliasGlobalIndicator({ catalogId, size: it.size }));
-      const gi = giByKey.get(key);
-      if (gi == null) continue;
-      updates.push({ id, global_indicator: gi, price: Math.round(gi * GI_MARKUP * 100) / 100 });
-    } catch { /* best-effort — skip this unit */ }
-  }
-  if (updates.length) await setItemGlobalIndicators(updates);
-}
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
 const toCost = (v) => {

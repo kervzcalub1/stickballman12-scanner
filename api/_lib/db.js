@@ -298,12 +298,12 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   const sql = db();
   const queries = items.map((it) => sql`
     INSERT INTO items
-      (vin, batch_id, name, sku, size, upc, image_url, cost, source, status, with_box, gender, colorway, notes, created_by)
+      (vin, batch_id, box_id, name, sku, size, upc, image_url, cost, source, status, with_box, gender, colorway, notes, created_by)
     VALUES
       (coalesce(${it.vin || null},
         'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
               || '-' || lpad(nextval('vin_seq')::text, 6, '0')),
-       ${batchId}, ${it.name || null}, ${it.sku || null}, ${it.size || null},
+       ${batchId}, ${it.boxId ?? null}, ${it.name || null}, ${it.sku || null}, ${it.size || null},
        ${it.upc || null}, ${it.image || null}, ${it.cost ?? null},
        ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false},
        ${it.gender || null}, ${it.colorway || null}, ${it.notes || null}, ${createdBy || null})
@@ -480,6 +480,102 @@ export async function getBatch(id) {
     FROM shipment_issues WHERE batch_id = ${id} ORDER BY id
   `;
   return { batch: b[0], items, issues };
+}
+
+/* ------------------ v6: multi-box batches (Feature 7) ------------------ */
+
+// Create an OPEN multi-box receiving batch (no items yet). status='open' until
+// all boxes are received (auto) or staff finish it manually.
+export async function createOpenBatch(h, createdBy) {
+  const rows = await db()`
+    INSERT INTO batches
+      (buyer_name, supplier_name, date_received, default_cost, notes, special_rules,
+       kind, batch_tag, expected_boxes, status, created_by)
+    VALUES
+      (${h.buyer || null}, ${h.supplier || null}, ${h.dateReceived || null},
+       ${h.defaultCost ?? null}, ${h.notes || null}, ${h.specialRules || null},
+       'receiving', ${h.batchTag || null}, ${h.expectedBoxes ?? null}, 'open', ${createdBy || null})
+    RETURNING id, batch_code
+  `;
+  return rows[0];
+}
+
+// Boxes of a batch with their received item counts (ordered by box number).
+export async function listBatchBoxes(batchId) {
+  return await db()`
+    SELECT bx.id, bx.box_number, bx.tracking_number, bx.status, bx.received_by, bx.received_at, bx.created_at,
+           (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count
+    FROM batch_boxes bx WHERE bx.batch_id = ${batchId}
+    ORDER BY bx.box_number NULLS LAST, bx.id
+  `;
+}
+
+// Add a box (its own tracking #). Next box_number is max+1 within the batch.
+export async function addBatchBox(batchId, { trackingNumber }, createdBy) {
+  const rows = await db()`
+    INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
+    VALUES (
+      ${batchId},
+      (SELECT coalesce(max(box_number), 0) + 1 FROM batch_boxes WHERE batch_id = ${batchId}),
+      ${trackingNumber || null}, 'pending', ${createdBy || null})
+    RETURNING id, box_number, tracking_number, status
+  `;
+  return rows[0];
+}
+
+// Full batch view for the Batch Page: batch row + boxes (+counts).
+export async function getBatchWithBoxes(id) {
+  const b = await db()`SELECT * FROM batches WHERE id = ${id}`;
+  if (!b[0]) return null;
+  const boxes = await listBatchBoxes(id);
+  return { batch: b[0], boxes };
+}
+
+// Open (resumable) multi-box batches, newest first, with progress counts.
+export async function listOpenBatches() {
+  return await db()`
+    SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes,
+           b.date_received, b.created_by, b.created_at,
+           (SELECT count(*)::int FROM batch_boxes bx WHERE bx.batch_id = b.id AND bx.status = 'received') AS received_boxes,
+           (SELECT count(*)::int FROM batch_boxes bx WHERE bx.batch_id = b.id) AS total_boxes,
+           (SELECT count(*)::int FROM items i WHERE i.batch_id = b.id) AS item_count
+    FROM batches b
+    WHERE b.kind = 'receiving' AND b.status = 'open'
+    ORDER BY b.created_at DESC
+  `;
+}
+
+// Commit one box's items: insert them (with box_id + intake events), mark the
+// box received, then auto-complete the batch when received == expected.
+// Returns { vins, created, autoCompleted }.
+export async function commitBoxItems({ batchId, boxId, items, createdBy, dateReceived }) {
+  const withBox = items.map((it) => ({ ...it, boxId }));
+  const created = await insertItems(batchId, withBox, createdBy, dateReceived);
+  await insertIntakeEvents(created.map((r) => r.id), createdBy, 'receiving');
+  await db()`
+    UPDATE batch_boxes SET status = 'received', received_by = ${createdBy || null}, received_at = now()
+    WHERE id = ${boxId} AND batch_id = ${batchId}
+  `;
+  // Auto-complete: every box received AND we've reached the expected count.
+  const rows = await db()`
+    SELECT b.expected_boxes,
+           (SELECT count(*)::int FROM batch_boxes bx WHERE bx.batch_id = b.id) AS total_boxes,
+           (SELECT count(*)::int FROM batch_boxes bx WHERE bx.batch_id = b.id AND bx.status = 'received') AS received_boxes
+    FROM batches b WHERE b.id = ${batchId}
+  `;
+  const r = rows[0] || {};
+  const autoCompleted = r.expected_boxes != null && r.received_boxes >= r.expected_boxes && r.received_boxes === r.total_boxes;
+  if (autoCompleted) await db()`UPDATE batches SET status = 'committed', committed_at = now() WHERE id = ${batchId} AND status = 'open'`;
+  return { created, vins: created.map((c) => c.vin), autoCompleted };
+}
+
+// Manually finish or reopen a batch (staff override of auto-complete).
+export async function setBatchStatus(id, status) {
+  if (status === 'open') {
+    await db()`UPDATE batches SET status = 'open', committed_at = NULL WHERE id = ${id}`;
+  } else {
+    await db()`UPDATE batches SET status = 'committed', committed_at = now() WHERE id = ${id}`;
+  }
 }
 
 // Unified inventory query — powers the merged Inventory page (browse + report).

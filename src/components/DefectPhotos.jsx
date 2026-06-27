@@ -6,6 +6,7 @@
 import React, { useRef, useState } from 'react';
 import { api } from '../api.js';
 import { compressImage } from '../lib/image.js';
+import { Icon } from './NavIcons.jsx';
 
 const MAX = 4;
 
@@ -47,10 +48,10 @@ export function DefectPhotos({ vin, photos = [], onChange, onSignOut }) {
       {photos.length < MAX && (
         <div className="dp-add-actions">
           <button type="button" className="btn primary sm" onClick={() => cameraRef.current?.click()} disabled={busy}>
-            {busy ? '…' : '📷 Take photo'}
+            {busy ? '…' : <><Icon name="camera" /> Take photo</>}
           </button>
           <button type="button" className="btn ghost sm" onClick={() => galleryRef.current?.click()} disabled={busy}>
-            🖼 Gallery
+            <Icon name="image" /> Gallery
           </button>
         </div>
       )}

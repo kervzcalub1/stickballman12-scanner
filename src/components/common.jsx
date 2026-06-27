@@ -9,6 +9,7 @@ import { STATUS_MAP, statusLabel } from '../statuses.js';
 import { EST_FMT, PH_DATETIME, periodLabel, shiftAnchor } from '../lib/format.js';
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
+import { Icon } from './NavIcons.jsx';
 import { upcDigits, upcFormat, sizeNum } from '../lib/codes.js';
 
 // Live clock, always rendered in US Eastern with a literal "EST" suffix so the
@@ -67,7 +68,7 @@ export function HistoryLine({ event, onViewPhotos }) {
         {eventLabel(event)}
         {photos.length > 0 && (
           <button type="button" className="btn xs ghost tl-photos" onClick={() => onViewPhotos(photos)}>
-            📷 {photos.length} photo{photos.length === 1 ? '' : 's'}
+            <Icon name="camera" /> {photos.length} photo{photos.length === 1 ? '' : 's'}
           </button>
         )}
       </div>
@@ -262,7 +263,7 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
             {Object.entries(LABEL_SIZES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           <button className="btn ghost sm" onClick={onClose}>Close</button>
-          <button className="btn primary sm" onClick={() => window.print()}>🖨 Print</button>
+          <button className="btn primary sm" onClick={() => window.print()}><Icon name="print" /> Print</button>
         </span>
       </div>
       <div className="label-roll">

@@ -69,3 +69,45 @@ const PATHS = {
 export function NavIcon({ name, ...props }) {
   return <svg {...base} {...props} aria-hidden="true">{PATHS[name] || PATHS.inventory}</svg>;
 }
+
+// Inline icons used inside buttons / text in place of emoji. Sized in `em` so
+// they scale with the surrounding text and sit on the baseline like a glyph.
+const INLINE = {
+  camera: (<>
+    <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+    <circle cx="12" cy="13" r="3.4" />
+  </>),
+  print: (<>
+    <path d="M6 9V3h12v6" />
+    <path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" />
+    <rect x="6" y="14" width="12" height="7" rx="1" />
+  </>),
+  image: (<>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <path d="M21 15l-5-5L5 21" />
+  </>),
+  tag: (<>
+    <path d="M3 11.5V4a1 1 0 0 1 1-1h7.5a1 1 0 0 1 .7.3l8.5 8.5a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-8.5-8.5a1 1 0 0 1-.3-.7z" />
+    <circle cx="7.5" cy="7.5" r="1.2" />
+  </>),
+  gear: (<>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
+  </>),
+  box: (<>
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+    <path d="M3.3 7 12 12l8.7-5M12 12v9" />
+  </>),
+  nobox: PATHS.nobox,
+};
+
+export function Icon({ name, size = '1.05em', ...props }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+      style={{ width: size, height: size, verticalAlign: '-0.15em', flex: 'none' }} {...props}>
+      {INLINE[name] || INLINE.box}
+    </svg>
+  );
+}

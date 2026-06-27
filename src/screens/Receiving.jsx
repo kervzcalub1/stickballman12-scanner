@@ -163,7 +163,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
   // Keep the scan field focused so a HID scanner gun types straight into it.
   useEffect(() => {
-    if (showAdd && !mCam && !pendingSwitch) { const t = setTimeout(() => mInputRef.current?.focus(), 60); return () => clearTimeout(t); }
+    if (showAdd && !mCam && !pendingSwitch) { const t = setTimeout(() => mInputRef.current?.focus({ preventScroll: true }), 60); return () => clearTimeout(t); }
   }, [showAdd, mCam, pendingSwitch, draft]);
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 1800); return () => clearTimeout(t); }, [flash]);
 
@@ -861,7 +861,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       {/* Add Item modal */}
       {showAdd && (
         <div className="modal-overlay" onClick={closeAddItem}>
-          <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => { e.stopPropagation(); if (!mCam) mInputRef.current?.focus(); }}>
+          <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => { e.stopPropagation(); if (!mCam) mInputRef.current?.focus({ preventScroll: true }); }}>
             <div className="modal-head">
               <h3 className="modal-title">Add item</h3>
               <button type="button" className="btn icon ghost" onClick={closeAddItem}>×</button>

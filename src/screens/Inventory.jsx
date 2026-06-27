@@ -363,7 +363,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           <input ref={searchRef} placeholder="Scan a VIN, or search VIN / SKU / name…" value={q}
             onChange={(e) => setQ(e.target.value)} autoCapitalize="characters" />
           <button className="btn primary" disabled={loading}>Go</button>
-          <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">📷</button>
+          <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">{showCam ? '📷 Close camera' : '📷 Scan with camera'}</button>
         </form>
         {showCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>

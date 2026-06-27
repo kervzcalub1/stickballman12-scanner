@@ -12,6 +12,8 @@
 }
 
 * { box-sizing: border-box; }
+button { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
 body {
   margin: 0;
@@ -87,6 +89,7 @@ body {
   border-radius: 14px;
   padding: 16px;
   margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 .login { width: 340px; text-align: center; }
 .login h1 { margin: 0 0 4px; }
@@ -218,7 +221,7 @@ body {
 .issue-counts { display: flex; gap: 6px; }
 .issue-counts input { width: 60px; flex: none; }
 
-.batch-bar { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px; margin-top: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+.batch-bar { position: sticky; bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px; margin-top: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35); }
 
 /* Receiving wizard (V5) */
 .wizard-steps { display: flex; gap: 8px; margin-bottom: 14px; }
@@ -752,21 +755,24 @@ body {
 }
 
 /* Tabs */
-.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+/* Segmented control */
+.tabs { display: flex; gap: 4px; margin-bottom: 14px; padding: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
 .tab {
   flex: 1;
-  padding: 12px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--text);
+  padding: 10px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
-.tab.active { background: var(--primary); border-color: var(--primary); }
+.tab:hover:not(.active) { color: var(--text); }
+.tab.active { background: var(--primary); color: #fff; }
 
 /* Inputs */
-input, select {
+input, select, textarea {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
@@ -774,8 +780,10 @@ input, select {
   padding: 12px;
   font-size: 16px;
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-input:focus, select:focus { border-color: var(--primary); }
+input::placeholder, textarea::placeholder { color: #6b7280; }
+input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79, 124, 255, 0.18); }
 
 .searchrow { display: flex; gap: 8px; flex-wrap: wrap; }
 .searchrow input { flex: 1; min-width: 0; }
@@ -793,11 +801,15 @@ input:focus, select:focus { border-color: var(--primary); }
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.06s ease;
 }
+.btn:hover:not(:disabled) { border-color: #3a4150; }
+.btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--primary-d); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+.btn.primary:hover:not(:disabled) { background: var(--primary-d); border-color: var(--primary-d); }
 .btn.ghost { background: transparent; }
+.btn.ghost:hover:not(:disabled) { background: rgba(255, 255, 255, 0.05); }
 .btn.danger { background: transparent; border-color: rgba(224,143,143,0.5); color: #e08f8f; }
 .btn.danger:hover:not(:disabled) { background: rgba(224,143,143,0.12); }
 .btn.sm { padding: 8px 12px; font-size: 13px; }
@@ -956,9 +968,8 @@ input:focus, select:focus { border-color: var(--primary); }
   .app { padding: 12px; }
   .card { padding: 14px; border-radius: 12px; }
 
-  /* Stack the mode tabs and search row so controls stay full-width & tappable */
-  .tabs { flex-direction: column; }
-  .tab { padding: 14px; }
+  /* Keep the segmented tabs side-by-side (short labels); stack the search row. */
+  .tab { padding: 12px; }
   .searchrow { flex-direction: column; }
   .searchrow .btn { width: 100%; }
 

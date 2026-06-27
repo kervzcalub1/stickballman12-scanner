@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
+import { Icon } from '../components/NavIcons.jsx';
 
 const shortDate = (s) => String(s || '').slice(0, 10);
 
@@ -56,7 +57,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           <div className="batch-page-head">
             <div>
               <div className="batch-page-code">{b.batch_code} {isOpen ? <span className="badge open">Open</span> : <span className="badge done">Done</span>}</div>
-              <div className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}{b.batch_tag ? ` · 🏷 ${b.batch_tag}` : ''}</div>
+              <div className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}</div>
             </div>
             <div className="batch-progress">
               <b>{received}{expected ? `/${expected}` : ''}</b><span className="muted sm"> boxes</span>
@@ -115,7 +116,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                 <button className="batch-nav-row" key={b.id} onClick={() => setSelId(b.id)}>
                   <div className="batch-nav-main">
                     <span className="batch-code">{b.batch_code}</span>
-                    <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? ` · 🏷 ${b.batch_tag}` : ''}</span>
+                    <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}</span>
                   </div>
                   <span className="batch-nav-prog"><b>{b.received_boxes}{b.expected_boxes ? `/${b.expected_boxes}` : ''}</b> boxes · {b.item_count} items</span>
                   <span className="batch-caret">▸</span>

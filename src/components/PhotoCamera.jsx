@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { compressImage } from '../lib/image.js';
 import { SHOE_ANGLES } from './ShoeAngleIcons.jsx';
+import { Icon } from './NavIcons.jsx';
 
 export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, onClose, onSignOut }) {
   const videoRef = useRef(null);
@@ -116,7 +117,7 @@ export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, o
           ))}
         </div>
         <div className="pc-actions">
-          <button type="button" className="btn ghost" onClick={() => galleryRef.current?.click()} disabled={busy}>🖼 Gallery</button>
+          <button type="button" className="btn ghost" onClick={() => galleryRef.current?.click()} disabled={busy}><Icon name="image" /> Gallery</button>
           <button type="button" className="pc-shutter" onClick={capture} disabled={busy || !live} aria-label={`Capture ${angle}`}>{busy ? '…' : ''}</button>
           {photos[angle]
             ? <button type="button" className="btn ghost danger" onClick={() => onRemove(angle)} disabled={busy}>Remove</button>

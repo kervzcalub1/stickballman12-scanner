@@ -5,6 +5,7 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { TopBar, StatusPill, Modal } from '../components/common.jsx';
+import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { isVinCode } from '../lib/codes.js';
 
@@ -76,7 +77,7 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
           <input ref={inputRef} autoFocus autoCapitalize="characters" autoCorrect="off"
             placeholder="Scan a VIN (SBM-…)" value={input} onChange={(e) => setInput(e.target.value)} disabled={busy} />
           <button className="btn primary" disabled={busy}>Add</button>
-          <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">{showCam ? '📷 Close camera' : '📷 Scan with camera'}</button>
+          <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera"><Icon name="camera" /> {showCam ? 'Close camera' : 'Scan with camera'}</button>
         </form>
         {showCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>

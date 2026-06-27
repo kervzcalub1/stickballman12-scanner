@@ -5,6 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, StatusPill, DateRangeBar, LabelSheet } from '../components/common.jsx';
+import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { rangeOf } from '../lib/format.js';
 import { upcDigits } from '../lib/codes.js';
@@ -54,7 +55,7 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
   const resolveCtl = (r) => (canEdit ? (
     <span className="nobox-resolve">
       <button className="btn sm primary" disabled={savingVin === r.vin} onClick={() => boxFound(r.vin)}>
-        {savingVin === r.vin ? '…' : '📦 Box found → With Box'}
+        {savingVin === r.vin ? '…' : <><Icon name="box" /> Box found → With Box</>}
       </button>
       <select value={drafts[r.vin] ?? ''} onChange={(e) => setDraft(r.vin, e.target.value)}>
         <option value="">Other status…</option>
@@ -64,7 +65,7 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
     </span>
   ) : <StatusPill status={r.status} />);
   const boxBtn = (r) => (
-    <button className="btn sm ghost" title={upcDigits(r.upc) ? 'Print box label' : 'No UPC on file'} onClick={() => setLabels([r])}>🖨 Box label</button>
+    <button className="btn sm ghost" title={upcDigits(r.upc) ? 'Print box label' : 'No UPC on file'} onClick={() => setLabels([r])}><Icon name="print" /> Box label</button>
   );
 
   return (
@@ -81,7 +82,7 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
           right={<span className="muted sm">{rows ? `${rows.length} unit${rows.length === 1 ? '' : 's'}` : ''}</span>} />
         {canEdit && rows?.length > 0 && (
           <div className="nobox-actions">
-            <button className="btn sm primary" onClick={() => setLabels(rows)}>🖨 Print box labels (all {rows.length})</button>
+            <button className="btn sm primary" onClick={() => setLabels(rows)}><Icon name="print" /> Print box labels (all {rows.length})</button>
             <span className="muted sm">Box-style UPC labels for no-box shoes — recreate the original box label so it scans normally.</span>
           </div>
         )}

@@ -6,6 +6,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { SHOE_ANGLES, ShoeAngleIcon } from './ShoeAngleIcons.jsx';
 import { PhotoCamera } from './PhotoCamera.jsx';
+import { Icon } from './NavIcons.jsx';
 
 const MIN_PHOTOS = 3;
 
@@ -78,7 +79,7 @@ export function ListingPhotos({ sku, onSignOut }) {
             })}
           </div>
           <button type="button" className="btn primary wide lp-open" onClick={() => setCamera({})}>
-            {count === 0 ? '📷 Add listing photos' : '🖼 View / replace photos'}
+            {count === 0 ? <><Icon name="camera" /> Add listing photos</> : <><Icon name="image" /> View / replace photos</>}
           </button>
         </>
       )}

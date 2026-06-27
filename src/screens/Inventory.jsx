@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
 import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox } from '../components/common.jsx';
+import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
@@ -265,7 +266,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                 <button className="btn primary" disabled={busy || !note.trim()}>Add</button>
               </form>
 
-              <div className="send"><button className="btn ghost wide" onClick={() => setLabels([{ vin: it.vin, sku: it.sku, size: it.size, name: it.name, upc: it.upc, colorway: it.colorway, gender: it.gender, withBox: it.with_box }])}>🖨 Print this label</button></div>
+              <div className="send"><button className="btn ghost wide" onClick={() => setLabels([{ vin: it.vin, sku: it.sku, size: it.size, name: it.name, upc: it.upc, colorway: it.colorway, gender: it.gender, withBox: it.with_box }])}><Icon name="print" /> Print this label</button></div>
             </div>
 
             <div className="card">
@@ -337,7 +338,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
         <button className="btn sm primary" disabled={(statusDrafts[g.key] ?? g.status) === g.status || savingStatusVin === g.key} onClick={() => saveGroupStatus(g)}>
           {savingStatusVin === g.key ? 'Saving…' : 'Save'}
         </button>
-        <button className="btn sm ghost" onClick={() => setLabels(groupItems(g))}>🖨 Print labels ({g.qty})</button>
+        <button className="btn sm ghost" onClick={() => setLabels(groupItems(g))}><Icon name="print" /> Print labels ({g.qty})</button>
       </div>
       <div className="inv-units">
         <div className="inv-history-title">Units</div>
@@ -355,7 +356,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   return (
     <div className="app">
       <TopBar title="Inventory" onHome={onHome} onSignOut={onSignOut}
-        right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences">⚙</button>} />
+        right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences"><Icon name="gear" /></button>} />
 
       <div className="card">
         {/* One box: scan a VIN (gun or camera) to open it, or type to search. */}
@@ -363,7 +364,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           <input ref={searchRef} placeholder="Scan a VIN, or search VIN / SKU / name…" value={q}
             onChange={(e) => setQ(e.target.value)} autoCapitalize="characters" />
           <button className="btn primary" disabled={loading}>Go</button>
-          <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">{showCam ? '📷 Close camera' : '📷 Scan with camera'}</button>
+          <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera"><Icon name="camera" /> {showCam ? 'Close camera' : 'Scan with camera'}</button>
         </form>
         {showCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>
@@ -426,7 +427,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
             </div>
             <span className="report-actions">
               <button className="btn sm ghost" disabled={!sel.size} onClick={() => setBulkOpen(true)}>Edit status{sel.size ? ` (${sel.size})` : ''}</button>
-              <button className="btn sm primary" disabled={!sel.size} onClick={() => setLabels(selectedItems)}>🖨 Print {sel.size || ''} label{sel.size === 1 ? '' : 's'}</button>
+              <button className="btn sm primary" disabled={!sel.size} onClick={() => setLabels(selectedItems)}><Icon name="print" /> Print {sel.size || ''} label{sel.size === 1 ? '' : 's'}</button>
               <button className="btn sm ghost" disabled={!rows.length} onClick={() => downloadCSV(`inventory_${from || 'all'}_${to || ''}.csv`, toCSV(rows))}>Export CSV</button>
             </span>
           </div>

@@ -8,6 +8,7 @@ import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal } from '../components/common.jsx';
 import { ListingPhotos } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
+import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
@@ -538,7 +539,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         title={isRescale ? 'Rescale Stock' : isBoxMode ? 'Add box' : 'Receiving'}
         onHome={onHome}
         onSignOut={onSignOut}
-        right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences">⚙</button>}
+        right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences"><Icon name="gear" /></button>}
       />
 
       <div className="tabs auth-tabs">
@@ -564,7 +565,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 <h3 className="rows-title">{isRescale ? 'Rescale details' : isBoxMode ? 'Add a box' : 'Shipment details'}</h3>
                 {isBoxMode && (
                   <div className="box-context">
-                    Adding a box to <b>{batchContext.batch_code}</b>{batchContext.batch_tag ? ` · 🏷 ${batchContext.batch_tag}` : ''} · {batchContext.supplier_name || '—'}
+                    Adding a box to <b>{batchContext.batch_code}</b>{batchContext.batch_tag ? <> · <Icon name="tag" /> {batchContext.batch_tag}</> : ''} · {batchContext.supplier_name || '—'}
                   </div>
                 )}
                 <div className="batch-form">
@@ -589,8 +590,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     <label>Tracking #
                       <span className="track-field">
                         <input value={header.tracking} onChange={(e) => setH('tracking', e.target.value)} placeholder="Type, scan, or upload a photo" />
-                        <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => setScanTracking(true)}>📷</button>
-                        <button type="button" className="btn sm ghost" title="Upload / snap a label photo" onClick={() => fileRef.current?.click()} disabled={ocrBusy}>{ocrBusy ? '…' : '🖼'}</button>
+                        <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => setScanTracking(true)}><Icon name="camera" /></button>
+                        <button type="button" className="btn sm ghost" title="Upload / snap a label photo" onClick={() => fileRef.current?.click()} disabled={ocrBusy}>{ocrBusy ? '…' : <Icon name="image" />}</button>
                       </span>
                     </label>
                   )}
@@ -655,7 +656,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           <div className="recv-item-info">
                             <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
                             <div className="recv-item-meta">
-                              <span className={`box-badge ${it.withBox ? 'yes' : 'no'}`}>{it.withBox ? '📦 With box' : '🚫 No box'}</span>
+                              <span className={`box-badge ${it.withBox ? 'yes' : 'no'}`}>{it.withBox ? <><Icon name="box" /> With box</> : <><Icon name="nobox" /> No box</>}</span>
                               <span className="muted sm">{isRescale ? 'Rescale' : (header.supplier || '—')} · {defaultCostNum != null ? `$${defaultCostNum.toFixed(2)}` : 'no cost'}</span>
                             </div>
                           </div>
@@ -699,7 +700,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               {isRescale && (
                 <div className="card">
                   <h3 className="rows-title">Rescanned existing stock <span className="muted">({rescaledCount} VIN{rescaledCount === 1 ? '' : 's'})</span></h3>
-                  {!rescanned.length ? <p className="muted">Scan a VIN (gun or 📷 in “Add Item”) to rescan a unit already in inventory. Each keeps its own history — no new VIN.</p> : (
+                  {!rescanned.length ? <p className="muted">Scan a VIN (gun or <Icon name="camera" /> in “Add Item”) to rescan a unit already in inventory. Each keeps its own history — no new VIN.</p> : (
                     <div className="rescan-list">
                       {rescanned.map((r) => (
                         <div className="rescan-row" key={r.key}>
@@ -754,8 +755,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           <div className="recv-item-info">
                             <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
                             <div className="seg sm" role="group" aria-label="Box status">
-                              <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}>📦 Box</button>
-                              <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}>🚫 No box</button>
+                              <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>
+                              <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
                             </div>
                           </div>
                           <button type="button" className="btn icon ghost remove" title="Delete shoe" onClick={() => removeItem(it.key)}>×</button>
@@ -870,7 +871,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               <input ref={mInputRef} autoFocus autoCapitalize="characters" autoCorrect="off"
                 placeholder={isRescale ? 'Scan or type VIN / UPC / SKU' : 'Scan or type UPC / SKU'} value={mInput} onChange={(e) => setMInput(e.target.value)} disabled={mBusy} />
               <button className="btn primary" disabled={mBusy}>{mBusy ? '…' : 'Add'}</button>
-              <button type="button" className={`btn ${mCam ? 'primary' : 'ghost'}`} onClick={() => setMCam((v) => !v)} title="Scan with camera">📷</button>
+              <button type="button" className={`btn ${mCam ? 'primary' : 'ghost'}`} onClick={() => setMCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
             </form>
             {mCam && (
               <Suspense fallback={<p className="muted">Loading camera…</p>}>
@@ -907,8 +908,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 <div className="withbox-field">
                   <span className="withbox-q">Does this shoe have its box?</span>
                   <div className="seg" role="group" aria-label="With box?">
-                    <button type="button" className={`seg-btn ${draft.withBox !== false ? 'on yes' : ''}`} aria-pressed={draft.withBox !== false} onClick={() => setDraft((d) => ({ ...d, withBox: true }))}>📦 With Box</button>
-                    <button type="button" className={`seg-btn ${draft.withBox === false ? 'on no' : ''}`} aria-pressed={draft.withBox === false} onClick={() => setDraft((d) => ({ ...d, withBox: false }))}>🚫 No Box</button>
+                    <button type="button" className={`seg-btn ${draft.withBox !== false ? 'on yes' : ''}`} aria-pressed={draft.withBox !== false} onClick={() => setDraft((d) => ({ ...d, withBox: true }))}><Icon name="box" /> With Box</button>
+                    <button type="button" className={`seg-btn ${draft.withBox === false ? 'on no' : ''}`} aria-pressed={draft.withBox === false} onClick={() => setDraft((d) => ({ ...d, withBox: false }))}><Icon name="nobox" /> No Box</button>
                   </div>
                 </div>
                 <div className="size-rows">
@@ -997,7 +998,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           ].filter(Boolean).join(' ')}
           onClose={() => { if (result.boxCommit) onBatchDone?.(); else setResult(null); }}>
           {result.printItems?.length > 0 && (
-            <button className="btn primary" onClick={() => setPrintLabels({ batchCode: result.batchCode, items: result.printItems })}>🖨 Print labels</button>
+            <button className="btn primary" onClick={() => setPrintLabels({ batchCode: result.batchCode, items: result.printItems })}><Icon name="print" /> Print labels</button>
           )}
           {result.boxCommit
             ? <button className="btn ghost" onClick={() => onBatchDone?.()}>← Back to Batches</button>
@@ -1134,7 +1135,7 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
                     {!detail ? <p className="muted">Loading…</p> : (
                       <>
                         <div className="batch-detail-actions">
-                          <button className="btn sm primary" onClick={() => setLabels({ batchCode: detail.batch.batch_code, items: detail.items })}>🖨 Print labels</button>
+                          <button className="btn sm primary" onClick={() => setLabels({ batchCode: detail.batch.batch_code, items: detail.items })}><Icon name="print" /> Print labels</button>
                         </div>
                         {detail.items.map((it) => (
                           <div className="batch-detail-row" key={it.id}>

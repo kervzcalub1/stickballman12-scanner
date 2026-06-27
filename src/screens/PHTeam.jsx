@@ -5,6 +5,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, HistoryModal, DateRangeBar } from '../components/common.jsx';
+import { NavIcon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES } from '../lib/constants.js';
 import { rangeOf, PH_DATE, PH_DATETIME } from '../lib/format.js';
@@ -43,25 +44,25 @@ export function PHTeamApp({ user, onSignOut }) {
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
       <div className="home-grid">
         <button className="home-card" onClick={() => goPage('receiving')}>
-          <span className="home-card-icon">📥</span>
+          <span className="home-card-icon"><NavIcon name="receiving" /></span>
           <span className="home-card-title">New Inventory</span>
           <span className="home-card-sub">Price &amp; list newly received stock — Intelligent Inventory, Alias, StockX, Shopify</span>
           <CardBadges badges={counts ? SYNC_BADGES(counts) : []} />
         </button>
         <button className="home-card" onClick={() => goPage('rescale')}>
-          <span className="home-card-icon">♻️</span>
+          <span className="home-card-icon"><NavIcon name="rescale" /></span>
           <span className="home-card-title">Rescale Stock</span>
           <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
           <CardBadges badges={counts ? [['Restock', counts.restock_pending]] : []} />
         </button>
         <button className="home-card" onClick={() => goPage('nobox')}>
-          <span className="home-card-icon">🚫</span>
+          <span className="home-card-icon"><NavIcon name="nobox" /></span>
           <span className="home-card-title">No Box / Not Ready</span>
           <span className="home-card-sub">Units bought without a box — not yet postable (view-only; warehouse resolves)</span>
           <CardBadges badges={counts ? [['No box', counts.no_box]] : []} />
         </button>
         <button className="home-card" onClick={() => goPage('request')}>
-          <span className="home-card-icon">📨</span>
+          <span className="home-card-icon"><NavIcon name="rescalereq" /></span>
           <span className="home-card-title">Request Rescale</span>
           <span className="home-card-sub">Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)</span>
           <CardBadges badges={counts ? [['Pending audit', counts.rescale_requests], ['Audited', counts.rescale_requests_audited, 'ok']] : []} />

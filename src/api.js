@@ -76,7 +76,7 @@ export const api = {
   batchCommit: (payload) => post('/api/batches/commit', payload),
   // v6 — multi-box batches (Feature 7)
   createOpenBatch: (batch) => post('/api/batches/create-open', { batch }),
-  batchAddBox: (batchId, trackingNumber) => post('/api/batches/add-box', { batchId, trackingNumber }),
+  batchAddBox: (batchId, trackingNumber, boxNumber = null) => post('/api/batches/add-box', { batchId, trackingNumber, boxNumber }),
   boxCommit: (payload) => post('/api/batches/box-commit', payload),
   openBatches: () => get('/api/batches/open-list'),
   batchFull: (id) => get(`/api/batches/full?id=${encodeURIComponent(id)}`),

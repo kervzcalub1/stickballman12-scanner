@@ -510,16 +510,27 @@ export async function listBatchBoxes(batchId) {
   `;
 }
 
-// Add a box (its own tracking #). Next box_number is max+1 within the batch.
-export async function addBatchBox(batchId, { trackingNumber }, createdBy) {
-  const rows = await db()`
-    INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
-    VALUES (
-      ${batchId},
-      (SELECT coalesce(max(box_number), 0) + 1 FROM batch_boxes WHERE batch_id = ${batchId}),
-      ${trackingNumber || null}, 'pending', ${createdBy || null})
-    RETURNING id, box_number, tracking_number, status
-  `;
+// Add a box (its own tracking #). Uses an explicit boxNumber when given (so
+// boxes scanned out of order keep their slot number); otherwise next = max+1.
+export async function addBatchBox(batchId, { trackingNumber, boxNumber }, createdBy) {
+  // The shim can't nest sql fragments — branch on whether a box number is given.
+  let rows;
+  if (Number.isInteger(boxNumber) && boxNumber > 0) {
+    rows = await db()`
+      INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
+      VALUES (${batchId}, ${boxNumber}, ${trackingNumber || null}, 'pending', ${createdBy || null})
+      RETURNING id, box_number, tracking_number, status
+    `;
+  } else {
+    rows = await db()`
+      INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
+      VALUES (
+        ${batchId},
+        (SELECT coalesce(max(box_number), 0) + 1 FROM batch_boxes WHERE batch_id = ${batchId}),
+        ${trackingNumber || null}, 'pending', ${createdBy || null})
+      RETURNING id, box_number, tracking_number, status
+    `;
+  }
   return rows[0];
 }
 

@@ -16,13 +16,14 @@ export default async function handler(req, res) {
   const body = await getJsonBody(req);
   const batchId = Number(body.batchId);
   const trackingNumber = String(body.trackingNumber ?? '').trim().slice(0, 120) || null;
+  const boxNumber = Number.isInteger(Number(body.boxNumber)) && Number(body.boxNumber) > 0 ? Number(body.boxNumber) : null;
   if (!Number.isInteger(batchId)) return send(res, 400, { ok: false, error: 'A valid batchId is required.' });
 
   try {
     const found = await getBatchWithBoxes(batchId);
     if (!found || found.batch.kind !== 'receiving') return send(res, 404, { ok: false, error: 'Batch not found.' });
     if (found.batch.status !== 'open') return send(res, 409, { ok: false, error: 'This batch is already finished — reopen it to add a box.' });
-    const box = await addBatchBox(batchId, { trackingNumber }, user.name || user.username || '');
+    const box = await addBatchBox(batchId, { trackingNumber, boxNumber }, user.name || user.username || '');
     return send(res, 200, { ok: true, box });
   } catch (e) {
     console.error('[batches/add-box]', e.message);

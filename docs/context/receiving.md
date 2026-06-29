@@ -14,6 +14,17 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
    past batches/boxes (`GET /api/batches/check-tracking`, debounced); a repeat
    shows a **non-blocking duplicate warning** and, if committed, sets
    `batches.duplicate_of` (V6 Feature 8).
+   **Multi-box (Boxes expected > 1):** the single Tracking field is hidden and
+   **"Start batch"** creates the OPEN batch immediately (persisted → resumable
+   from the Batches page), then shows an in-receiving **box list**: one row per
+   expected box with its **own tracking #** (type / camera-scan) + **"Add items"**.
+   Boxes are scanned **in any order**; "Add items" runs that box through
+   Items → Review → Issues → **Submit box** (`batchAddBox` with an explicit
+   `boxNumber` = slot so out-of-order boxes keep their number, then `boxCommit`),
+   then returns to the box list. **Finish batch** closes it (or it auto-completes
+   when received == expected). "Save & exit" leaves it open to resume later.
+   Single-box (=1) keeps the original one-shot `batchCommit`; "Add box" from the
+   Batches page still drives box-mode (`batchContext`).
 2. **Items** — `+ Add Item` opens the scanning modal. Field auto-focuses so a
    **HID scanner gun types straight in**. Auto-detects UPC vs SKU. Re-scanning a
    shoe's boxes **auto-increments qty by size**. A **With Box** checkbox sets

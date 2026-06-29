@@ -405,6 +405,13 @@ body {
 .batch-nav-prog { font-size: 12px; color: var(--muted, #8a8a8a); white-space: nowrap; }
 .box-context { background: rgba(79, 124, 255, 0.1); border: 1px solid rgba(79, 124, 255, 0.3); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; }
 
+/* Multi-box builder: per-box tracking + Add items, scanned in any order */
+.box-build-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.box-build-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--line, #2a2a2a); }
+.box-build-row .box-num { min-width: 56px; }
+.box-build-track { flex: 1; min-width: 160px; }
+.box-build-row.received { opacity: 0.85; }
+
 /* Per-unit defect issue (V6 Feature 4) */
 .recv-unit-issue {
   margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 999px; cursor: pointer;

@@ -60,11 +60,27 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
 - StockX: separate keyless Railway host (no auto-relogin).
 - Alias: the bypass proxy above.
 
+## Object storage — Cloudflare R2 (V6 photos)
+- **S3-compatible** storage for listing photos (per SKU) + defect photos (per VIN).
+  Helper: `api/_lib/r2.js` — dependency-free **SigV4 presigning**, so the phone
+  PUTs image bytes **straight to R2** (the Node server never handles the bytes).
+- Endpoints: `POST /api/photos/sign` (+ `sign-issue`) returns a presigned PUT URL;
+  `POST /api/photos/attach` records the resulting public URL. Reads via `publicUrl()`.
+- **Required env** (all four → `r2Configured()` true): `R2_ACCOUNT_ID`,
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Plus `R2_PUBLIC_BASE_URL`
+  (R2.dev or custom domain) for the images to **display**. Optional `R2_ENDPOINT`
+  overrides the default `<account>.r2.cloudflarestorage.com`.
+- The app does **not** read `R2_API_TOKEN` or `S3_API` (harmless if set in Railway).
+- Unconfigured → photo UI hidden + endpoints return a clear "not configured" 503
+  (rest of the app unaffected). Bucket needs a **CORS policy allowing PUT** from the
+  app origin. **Live in prod + local `.env` as of 2026-06-29.** See `.env.example`,
+  `receiving.md`, `data-model.md`.
+
 ## Env keys (server-side only; see `deploy.md`)
 `ALIAS_EMAIL, ALIAS_PASSWORD, ALIAS_API_KEY` (+ `ADMIN_PASSWORD, SESSION_SECRET,
-DATABASE_URL`). `ALIAS_API_KEY` is the GOAT/Alias key for the official API
-(Global Indicator pricing + SKU catalog search). `KICKSDB_KEY` is **no longer
-used** (SKU search moved to Alias) — safe to remove. Never hardcode; `.env` is
-git-ignored.
+DATABASE_URL`) and the **R2** keys above. `ALIAS_API_KEY` is the GOAT/Alias key for
+the official API (Global Indicator pricing + SKU catalog search). `KICKSDB_KEY` is
+**no longer used** (SKU search moved to Alias) — safe to remove. Never hardcode;
+`.env` is git-ignored.
 Railway: use the single-variable field and alphanumeric passwords (special chars
 get mangled).

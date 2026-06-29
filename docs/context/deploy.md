@@ -16,6 +16,14 @@ add-on. Full guide: `RAILWAY.md`. Hosting overview: `DEPLOYMENT.md`.
   (Global Indicator pricing + SKU catalog search). Without it, GI stays null and
   SKU search fails — see `integrations.md`.
 - `KICKSDB_KEY` is **no longer used** (SKU search moved to Alias) — safe to remove.
+- **Cloudflare R2** (V6 listing/defect photos) — `R2_ACCOUNT_ID`,
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (all four required for
+  `r2Configured()` → photo upload/display) + `R2_PUBLIC_BASE_URL` (the read URL,
+  needed for photos to display). Optional `R2_ENDPOINT` overrides the default
+  `<account>.r2.cloudflarestorage.com`. **Configured in prod** (Railway) and local
+  `.env` as of 2026-06-29. Note: the app does **not** read `R2_API_TOKEN` or
+  `S3_API` even if present — only the keys above. Details: `integrations.md`,
+  `.env.example`, `api/_lib/r2.js`.
 - Railway mangles special chars ($, #, quotes) → use the single-variable field,
   keep passwords alphanumeric, verify with `node -e` JSON.stringify.
 

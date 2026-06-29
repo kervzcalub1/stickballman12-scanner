@@ -348,7 +348,7 @@ body {
 
 /* Full-screen custom camera (PhotoCamera) for listing photos */
 .pc-overlay { position: fixed; inset: 0; z-index: 200; background: #0b0d10; display: flex; flex-direction: column; }
-.pc-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; color: #fff; }
+.pc-top { display: flex; align-items: center; justify-content: space-between; padding: calc(10px + env(safe-area-inset-top)) 14px 10px; color: #fff; }
 .pc-title { font-size: 14px; font-weight: 600; }
 .pc-stage { position: relative; flex: 1; min-height: 0; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 /* Absolutely fill the stage so the box is exact from first paint (independent of

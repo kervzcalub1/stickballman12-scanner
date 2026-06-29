@@ -157,6 +157,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [mBusy, setMBusy] = useState(false);
   const [mError, setMError] = useState('');
   const [mCam, setMCam] = useState(false);
+  const [photoCam, setPhotoCam] = useState(false); // listing-photo camera overlay open
   const [pendingSwitch, setPendingSwitch] = useState(null); // different SKU scanned mid-session
   const [flash, setFlash] = useState(null);
   const mInputRef = useRef(null);
@@ -164,8 +165,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
   // Keep the scan field focused so a HID scanner gun types straight into it.
   useEffect(() => {
-    if (showAdd && !mCam && !pendingSwitch) { const t = setTimeout(() => mInputRef.current?.focus({ preventScroll: true }), 60); return () => clearTimeout(t); }
-  }, [showAdd, mCam, pendingSwitch, draft]);
+    if (showAdd && !mCam && !photoCam && !pendingSwitch) { const t = setTimeout(() => mInputRef.current?.focus({ preventScroll: true }), 60); return () => clearTimeout(t); }
+  }, [showAdd, mCam, photoCam, pendingSwitch, draft]);
+  // While the listing-photo camera is open, drop focus so the mobile keyboard
+  // closes — capturing a photo must never re-summon it via the hidden scan field.
+  useEffect(() => { if (photoCam) document.activeElement?.blur?.(); }, [photoCam]);
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 1800); return () => clearTimeout(t); }, [flash]);
 
   // Device Back button: close any open modal, else step back, else fall through
@@ -227,13 +231,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // Resolve a scanned/typed code (auto-detect UPC vs SKU) and fold it into the
   // current draft: start the shoe, +1 the matching size, or (different SKU)
   // prompt to finish the current shoe and start a new one.
-  async function addCode(code) {
+  async function addCode(code, { showInField = false } = {}) {
     const c = String(code).trim();
     if (!c) return;
     const now = Date.now();
     if (recentRef.current[c] && now - recentRef.current[c] < 1200) return; // gun/camera re-read
     recentRef.current[c] = now;
-    setMInput(''); setMError('');
+    // Show the scanned code in the field (camera path); the gun/typed path types
+    // straight in and clears on submit so the next scan starts fresh.
+    setMInput(showInField ? c : ''); setMError('');
 
     // Rescale: a scanned/typed VIN is an EXISTING unit — look it up and add it
     // to the rescanned list (its own record gets updated on finish; no new VIN).
@@ -862,7 +868,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       {/* Add Item modal */}
       {showAdd && (
         <div className="modal-overlay" onClick={closeAddItem}>
-          <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => { e.stopPropagation(); if (!mCam) mInputRef.current?.focus({ preventScroll: true }); }}>
+          <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => { e.stopPropagation(); if (!mCam && !photoCam) mInputRef.current?.focus({ preventScroll: true }); }}>
             <div className="modal-head">
               <h3 className="modal-title">Add item</h3>
               <button type="button" className="btn icon ghost" onClick={closeAddItem}>×</button>
@@ -875,7 +881,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             </form>
             {mCam && (
               <Suspense fallback={<p className="muted">Loading camera…</p>}>
-                <CameraScanner continuous mode={isRescale ? 'rescale' : 'product'} onDetected={addCode} onClose={() => setMCam(false)}
+                <CameraScanner continuous mode={isRescale ? 'rescale' : 'product'} onDetected={(code) => addCode(code, { showInField: true })} onClose={() => setMCam(false)}
                   zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
               </Suspense>
             )}
@@ -934,7 +940,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     </div>
                   ))}
                 </div>
-                {!isRescale && draft.sku && <ListingPhotos sku={draft.sku} onSignOut={onSignOut} />}
+                {!isRescale && draft.sku && <ListingPhotos sku={draft.sku} onSignOut={onSignOut} onCameraToggle={setPhotoCam} />}
                 <div className="modal-actions">
                   <button type="button" className="btn primary wide" onClick={completeItem}>Complete item ✓</button>
                 </div>

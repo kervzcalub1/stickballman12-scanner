@@ -90,7 +90,7 @@ export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, o
   const filled = SHOE_ANGLES.filter(([a]) => photos[a]).length;
 
   return (
-    <div className="pc-overlay" role="dialog" aria-modal="true">
+    <div className="pc-overlay" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
       <div className="pc-top">
         <span className="pc-title">Listing photos · {filled}/{SHOE_ANGLES.length}</span>
         <button type="button" className="btn primary sm pc-done" onClick={onClose}>Done</button>

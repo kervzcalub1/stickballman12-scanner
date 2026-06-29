@@ -10,7 +10,7 @@ import { Icon } from './NavIcons.jsx';
 
 const MIN_PHOTOS = 3;
 
-export function ListingPhotos({ sku, onSignOut }) {
+export function ListingPhotos({ sku, onSignOut, onCameraToggle }) {
   const [photos, setPhotos] = useState({});   // angle -> url
   const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -32,6 +32,11 @@ export function ListingPhotos({ sku, onSignOut }) {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [sku]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Tell the parent (Receiving) when the full-screen camera is open so it can
+  // stop re-focusing the hidden scan field (which pops the mobile keyboard).
+  useEffect(() => { onCameraToggle?.(!!camera); }, [camera]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onCameraToggle?.(false), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function remove(angle) {
     setError('');

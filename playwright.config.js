@@ -2,6 +2,23 @@
 // Postgres) in headless Chromium. Auth uses a minted session token (see
 // e2e/helpers/auth.js) so tests don't depend on per-user passwords.
 import { defineConfig, devices } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+
+// Load .env into the TEST process so env-gated specs see the same config the dev
+// server does (e.g. ADMIN_PASSWORD for the real-login smoke test, R2_* for the
+// photo paths). Same hand-rolled parser as scripts/db-setup.mjs — no dotenv dep.
+// Existing process env (e.g. CI secrets) always wins.
+const envPath = path.join(process.cwd(), '.env');
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (!m) continue;
+    let v = m[2];
+    if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+    if (process.env[m[1]] === undefined) process.env[m[1]] = v;
+  }
+}
 
 // Fixed port so baseURL is deterministic (strictPort makes Vite fail rather than
 // drift to another port). Override with E2E_PORT if 5189 is taken.

@@ -27,6 +27,6 @@ export default async function handler(req, res) {
     return send(res, 200, { ok: true, box });
   } catch (e) {
     console.error('[batches/add-box]', e.message);
-    return send(res, 500, { ok: false, error: `Could not add the box: ${e.message}` });
+    return send(res, 500, { ok: false, error: 'Could not add the box.' });
   }
 }

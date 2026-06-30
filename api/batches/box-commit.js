@@ -37,7 +37,9 @@ export default async function handler(req, res) {
   try {
     const found = await getBatchWithBoxes(batchId);
     if (!found || found.batch.kind !== 'receiving') return send(res, 404, { ok: false, error: 'Batch not found.' });
-    const box = found.boxes.find((b) => b.id === boxId);
+    // Postgres returns BIGINT ids as strings, so coerce before comparing to the
+    // numeric boxId (strict === on "6" vs 6 would never match → "Box not found").
+    const box = found.boxes.find((b) => Number(b.id) === boxId);
     if (!box) return send(res, 404, { ok: false, error: 'Box not found in this batch.' });
     if (box.status === 'received') return send(res, 409, { ok: false, error: 'This box was already submitted.' });
 
@@ -63,6 +65,6 @@ export default async function handler(req, res) {
     return;
   } catch (e) {
     console.error('[batches/box-commit]', e.message);
-    return send(res, 500, { ok: false, error: `Could not submit the box: ${e.message}` });
+    return send(res, 500, { ok: false, error: 'Could not submit the box. Please try again.' });
   }
 }

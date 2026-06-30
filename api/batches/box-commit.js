@@ -63,6 +63,6 @@ export default async function handler(req, res) {
     return;
   } catch (e) {
     console.error('[batches/box-commit]', e.message);
-    return send(res, 500, { ok: false, error: 'Could not submit the box. Please try again.' });
+    return send(res, 500, { ok: false, error: `Could not submit the box: ${e.message}` });
   }
 }

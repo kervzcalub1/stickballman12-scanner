@@ -82,20 +82,18 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }, [header.tracking, isRescale]);
 
   // --- In-receiving multi-box builder (Feature 7 UX) ------------------------
-  // When "Boxes expected" > 1, "Start batch" creates the OPEN batch up front and
-  // shows a box list: per-box tracking + "Add items". Boxes are scanned in any
-  // order; each commits independently, so progress is always saved/resumable.
+  // When "Boxes expected" > 1, the box list renders INLINE on step 1 (the main
+  // receiving page): one row per box with its own tracking # + "Add items".
+  // The OPEN batch is created lazily on the first box commit, then each box
+  // commits independently — progress is always saved/resumable.
   const [activeBatch, setActiveBatch] = useState(null); // { id, batchCode } once created
   const [boxSlots, setBoxSlots] = useState([]);          // [{ tracking, status, boxNumber, itemCount }]
-  const [activeSlot, setActiveSlot] = useState(null);    // index being scanned; null = box list
-  const [startingBatch, setStartingBatch] = useState(false);
+  const [activeSlot, setActiveSlot] = useState(null);    // index being scanned; null = box list (step 1)
   const [trackingSlot, setTrackingSlot] = useState(null); // which box the tracking scanner targets (null = header)
   const setSlotTracking = (i, v) => setBoxSlots((s) => s.map((x, idx) => (idx === i ? { ...x, tracking: v } : x)));
   // Derived (declared early so the Back-button effect below can depend on them).
   const expectedBoxesNum = Math.max(1, parseInt(header.expectedBoxes, 10) || 1);
   const isMultiBoxNew = !isRescale && !isBoxMode && expectedBoxesNum > 1;
-  // Showing the box list (multi-box batch created, not currently scanning a box).
-  const inBoxList = isMultiBoxNew && !!activeBatch && activeSlot == null;
   const receivedSlots = boxSlots.filter((s) => s.status === 'received').length;
 
   const [prefs, setPrefs] = useState(loadPrefs);
@@ -187,6 +185,17 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // While the listing-photo camera is open, drop focus so the mobile keyboard
   // closes — capturing a photo must never re-summon it via the hidden scan field.
   useEffect(() => { if (photoCam) document.activeElement?.blur?.(); }, [photoCam]);
+  // Keep the box-slot rows in sync with "Boxes expected" (until the batch is
+  // created/locked). Preserves any tracking already typed into existing rows.
+  useEffect(() => {
+    if (!isMultiBoxNew || activeBatch) return;
+    setBoxSlots((prev) => {
+      if (prev.length === expectedBoxesNum) return prev;
+      const next = prev.slice(0, expectedBoxesNum);
+      while (next.length < expectedBoxesNum) next.push({ tracking: '', status: 'pending', boxNumber: null, itemCount: 0 });
+      return next;
+    });
+  }, [expectedBoxesNum, isMultiBoxNew, activeBatch]);
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 1800); return () => clearTimeout(t); }, [flash]);
 
   // Device Back button: close any open modal, else step back, else fall through
@@ -205,13 +214,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (printLabels) { setPrintLabels(null); return true; }
       if (tab === 'recent') { setTab('intake'); return true; }
       // Multi-box: from a box's scan steps, Back returns to the box list.
-      if (isMultiBoxNew && activeBatch && activeSlot != null) { backToBoxList(); return true; }
-      if (inBoxList) return false; // box list → fall through to app (home)
+      if (isMultiBoxNew && activeSlot != null) { backToBoxList(); return true; }
       if (step > 1) { setStep((s) => s - 1); return true; }
       return false;
     };
     return () => { if (navBack) navBack.current = null; };
-  }, [navBack, issueEditorVin, unitIssues, showAddSupplier, pendingSwitch, showAdd, scanTracking, showPrefs, showConfirm, result, printLabels, tab, step, isMultiBoxNew, activeBatch, activeSlot, inBoxList]);
+  }, [navBack, issueEditorVin, unitIssues, showAddSupplier, pendingSwitch, showAdd, scanTracking, showPrefs, showConfirm, result, printLabels, tab, step, isMultiBoxNew, activeBatch, activeSlot]);
 
   // Short audible + haptic confirmation that a box registered.
   function scanFeedback(kind) {
@@ -438,35 +446,35 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const autoIssues = items.filter((i) => !i.withBox)
     .flatMap((i) => i.sizes.map((s) => ({ key: `auto-${i.key}-${s.key}`, description: `${i.sku || '?'} ${s.size} — No box` })));
 
-  // Multi-box: create the OPEN batch and lay out its box slots, then show the
-  // box list. The batch is persisted immediately so it's resumable from Batches.
-  async function startMultiBox() {
-    setError('');
-    if (!String(header.supplier).trim()) { setError('Select a supplier.'); return; }
-    if (!String(header.buyer).trim()) { setError('Enter the buyer.'); return; }
-    if (!String(header.dateReceived).trim()) { setError('Enter the date.'); return; }
-    setStartingBatch(true);
-    try {
-      const created = await api.createOpenBatch({
-        ...header, origin: effectiveOrigin, defaultCost: defaultCostNum,
-        batchTag: header.batchTag, expectedBoxes: expectedBoxesNum,
-      });
-      setActiveBatch({ id: created.id, batchCode: created.batchCode });
-      setBoxSlots(Array.from({ length: expectedBoxesNum }, () => ({ tracking: '', status: 'pending', boxNumber: null, itemCount: 0 })));
-      setActiveSlot(null);
-    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
-    finally { setStartingBatch(false); }
+  // Multi-box: the open batch is created lazily on the first box commit
+  // (see doCommit). Returns the batch { id, batchCode }, creating it if needed.
+  async function ensureBatch() {
+    if (activeBatch) return activeBatch;
+    const created = await api.createOpenBatch({
+      ...header, origin: effectiveOrigin, defaultCost: defaultCostNum,
+      batchTag: header.batchTag, expectedBoxes: expectedBoxesNum,
+    });
+    const b = { id: created.id, batchCode: created.batchCode };
+    setActiveBatch(b);
+    return b;
   }
-  // Start scanning items into box slot i (→ Items step).
+  // Start scanning items into box slot i (→ Items step). Details are validated
+  // here so the batch can be created with them on the first commit.
   function openBoxSlot(i) {
-    setError(''); setActiveSlot(i); setDraft(null);
+    setError('');
+    if (!activeBatch) {
+      if (!String(header.supplier).trim()) { setError('Select a supplier first.'); return; }
+      if (!String(header.buyer).trim()) { setError('Enter the buyer first.'); return; }
+      if (!String(header.dateReceived).trim()) { setError('Enter the date first.'); return; }
+    }
+    setActiveSlot(i); setDraft(null);
     setItems([]); setIssues([]); setUnitIssues({}); setRescanned([]);
     setStep(2);
   }
-  // Leave the current box's scan and go back to the box list (discards the
-  // in-progress, uncommitted draft for that box).
+  // Leave the current box's scan and go back to the box list on step 1 (discards
+  // the in-progress, uncommitted draft for that box).
   function backToBoxList() {
-    setActiveSlot(null); setStep(2);
+    setActiveSlot(null); setStep(1);
     setItems([]); setIssues([]); setUnitIssues({}); setDraft(null);
   }
   async function finishBatchNow() {
@@ -511,11 +519,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
       // --- Multi-box (V6 Feature 7): commit a BOX, not a whole batch ---------
       if (isBoxMode || isMultiBoxNew) {
-        // Box-mode adds to the batch passed in; the in-receiving builder commits
-        // into the batch we already created (activeBatch), using the slot's
-        // tracking + a stable box number so out-of-order boxes keep their slot.
-        const batchId = isBoxMode ? batchContext.id : activeBatch.id;
-        const batchCode = isBoxMode ? batchContext.batch_code : activeBatch.batchCode;
+        // Box-mode adds to the batch passed in; the in-receiving builder creates
+        // the open batch lazily on the first box commit, then commits each box
+        // with the slot's tracking + a stable box number (out-of-order safe).
+        const batch = isBoxMode
+          ? { id: batchContext.id, batchCode: batchContext.batch_code }
+          : await ensureBatch();
+        const batchId = batch.id;
+        const batchCode = batch.batchCode;
         const boxTracking = isBoxMode
           ? (header.tracking || null)
           : (boxSlots[activeSlot]?.tracking?.trim() || null);
@@ -539,10 +550,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         }));
         setItems([]); setIssues([]); setRescanned([]); setUnitIssues({});
         if (isMultiBoxNew) {
-          // Mark the slot received and drop back to the box list to do the next.
+          // Mark the slot received and drop back to the box list (step 1) to do the next.
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
             ? { ...s, status: 'received', boxNumber: box.box_number, itemCount: res.count || 0 } : s)));
-          setActiveSlot(null); setStep(2);
+          setActiveSlot(null); setStep(1);
           setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, inBatchList: true, autoCompleted: res.autoCompleted });
         } else {
           setStep(1);
@@ -622,21 +633,18 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
       {tab === 'recent' ? <BatchList kind={mode} onOpenItem={onOpenItem} onSignOut={onSignOut} /> : (
         <>
-          {/* Stepper — hidden on the multi-box list (no active step there) */}
-          {!inBoxList && (
+          {/* Stepper */}
           <div className="wizard-steps">
             {(isRescale ? [[1, 'Details'], [2, 'Items']]
-              : isMultiBoxNew && activeBatch ? [[2, 'Items'], [3, 'Review'], [4, 'Issues']]
-              : [[1, 'Shipment'], [2, 'Items'], [3, 'Review'], [4, 'Issues']]).map(([n, label]) => (
+              : [[1, isMultiBoxNew ? 'Boxes' : 'Shipment'], [2, 'Items'], [3, 'Review'], [4, 'Issues']]).map(([n, label]) => (
               <button key={n} type="button" className={`wstep ${step === n ? 'active' : ''} ${step > n ? 'done' : ''}`}
-                onClick={() => { if (n < step) { if (n === 1 && isMultiBoxNew && activeBatch) backToBoxList(); else setStep(n); } }}>
+                onClick={() => { if (n < step) { if (n === 1 && isMultiBoxNew && activeSlot != null) backToBoxList(); else setStep(n); } }}>
                 <span className="wstep-num">{step > n ? '✓' : n}</span>{label}
               </button>
             ))}
           </div>
-          )}
 
-          {step === 1 && !inBoxList && (
+          {step === 1 && (
             <>
               <div className="card">
                 <h3 className="rows-title">{isRescale ? 'Rescale details' : isBoxMode ? 'Add a box' : 'Shipment details'}</h3>
@@ -708,68 +716,62 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {!isBoxMode && <label className="batch-form-wide">Notes<input value={header.notes} onChange={(e) => setH('notes', e.target.value)} /></label>}
                 </div>
                 {!isRescale && !isBoxMode && expectedBoxesNum > 1 && (
-                  <p className="muted sm">Starts an <b>open multi-box batch</b>. Next you'll see all <b>{expectedBoxesNum} boxes</b> — enter each one's tracking #, scan its items, and submit them in any order. Progress is saved, so you can finish later from the <b>Batches</b> page.</p>
+                  <p className="muted sm">This is an <b>open multi-box batch</b>. Enter each box's tracking # below and tap <b>Add items</b> — do them in any order. Progress is saved as you submit each box; finish later from the <b>Batches</b> page.</p>
                 )}
               </div>
-              {error && <div className="error mt">{error}</div>}
-              <div className="batch-bar">
-                <span className="muted sm">Step 1 of {isRescale ? 2 : isMultiBoxNew ? '·' : 4}</span>
-                {isMultiBoxNew
-                  ? <button className="btn primary" disabled={startingBatch} onClick={startMultiBox}>{startingBatch ? 'Starting…' : `Start batch · ${expectedBoxesNum} boxes →`}</button>
-                  : <button className="btn primary" onClick={goStep2}>Next →</button>}
-              </div>
-            </>
-          )}
 
-          {/* Multi-box: the box list — per-box tracking + Add items, any order */}
-          {inBoxList && (
-            <>
-              <div className="card">
-                <div className="batch-page-head">
-                  <div>
-                    <div className="batch-page-code">{activeBatch.batchCode} <span className="badge open">Open</span></div>
-                    <div className="muted sm">{header.supplier || '—'}{header.batchTag ? <> · <Icon name="tag" /> {header.batchTag}</> : ''} · {header.dateReceived}</div>
+              {/* Multi-box: per-box tracking + Add items, inline on this page */}
+              {isMultiBoxNew && (
+                <div className="card">
+                  <div className="step-head">
+                    <h3 className="rows-title">Boxes <span className="muted">({receivedSlots}/{boxSlots.length})</span></h3>
+                    {activeBatch && <span className="muted sm">{activeBatch.batchCode} <span className="badge open">Open</span></span>}
                   </div>
-                  <div className="batch-progress"><b>{receivedSlots}/{boxSlots.length}</b><span className="muted sm"> boxes</span></div>
+                  <div className="progress-bar"><span style={{ width: `${Math.round((receivedSlots / Math.max(1, boxSlots.length)) * 100)}%` }} /></div>
+                  <div className="box-build-list">
+                    {boxSlots.map((s, i) => (
+                      <div className={`box-build-row ${s.status}`} key={i}>
+                        <span className="box-num">Box {i + 1}</span>
+                        {s.status === 'received' ? (
+                          <>
+                            <span className="box-track muted sm">{s.tracking || '—'}</span>
+                            <span className="box-count">{s.itemCount} item{s.itemCount === 1 ? '' : 's'}</span>
+                            <span className="box-status received">✓ received</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="track-field box-build-track">
+                              <input value={s.tracking} placeholder="Tracking # (optional)" onChange={(e) => setSlotTracking(i, e.target.value)} />
+                              <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => { setTrackingSlot(i); setScanTracking(true); }}><Icon name="camera" /></button>
+                            </span>
+                            <button className="btn primary sm" onClick={() => openBoxSlot(i)}>Add items</button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="progress-bar"><span style={{ width: `${Math.round((receivedSlots / Math.max(1, boxSlots.length)) * 100)}%` }} /></div>
-              </div>
+              )}
 
-              <div className="card">
-                <h3 className="rows-title">Boxes <span className="muted">({boxSlots.length})</span></h3>
-                <p className="muted sm">Enter each box's tracking #, then <b>Add items</b>. Do them in any order — each box saves on submit.</p>
-                <div className="box-build-list">
-                  {boxSlots.map((s, i) => (
-                    <div className={`box-build-row ${s.status}`} key={i}>
-                      <span className="box-num">Box {i + 1}</span>
-                      {s.status === 'received' ? (
-                        <>
-                          <span className="box-track muted sm">{s.tracking || '—'}</span>
-                          <span className="box-count">{s.itemCount} item{s.itemCount === 1 ? '' : 's'}</span>
-                          <span className="box-status received">✓ received</span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="track-field box-build-track">
-                            <input value={s.tracking} placeholder="Tracking # (optional)" onChange={(e) => setSlotTracking(i, e.target.value)} />
-                            <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => { setTrackingSlot(i); setScanTracking(true); }}><Icon name="camera" /></button>
-                          </span>
-                          <button className="btn primary sm" onClick={() => openBoxSlot(i)}>Add items</button>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
               {error && <div className="error mt">{error}</div>}
               <div className="batch-bar">
-                <button className="btn ghost" onClick={() => (onBatchDone ? onBatchDone() : onHome?.())}>Save &amp; exit</button>
-                <button className="btn primary" disabled={committing} onClick={finishBatchNow}>{committing ? 'Finishing…' : 'Finish batch'}</button>
+                {isMultiBoxNew ? (
+                  <>
+                    <span className="muted sm">{receivedSlots}/{boxSlots.length} boxes received</span>
+                    <button className="btn primary" disabled={committing || !activeBatch} onClick={finishBatchNow}
+                      title={!activeBatch ? 'Submit at least one box first' : ''}>{committing ? 'Finishing…' : 'Finish batch'}</button>
+                  </>
+                ) : (
+                  <>
+                    <span className="muted sm">Step 1 of {isRescale ? 2 : 4}</span>
+                    <button className="btn primary" onClick={goStep2}>Next →</button>
+                  </>
+                )}
               </div>
             </>
           )}
 
-          {step === 2 && !inBoxList && (
+          {step === 2 && (
             <>
               {isMultiBoxNew && activeSlot != null && (
                 <div className="box-context">
@@ -864,7 +866,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
               {error && <div className="error mt">{error}</div>}
               <div className="batch-bar">
-                <button className="btn ghost" onClick={() => (isMultiBoxNew && activeBatch ? backToBoxList() : setStep(1))}>← {isMultiBoxNew && activeBatch ? 'Boxes' : 'Back'}</button>
+                <button className="btn ghost" onClick={() => (isMultiBoxNew && activeSlot != null ? backToBoxList() : setStep(1))}>← {isMultiBoxNew && activeSlot != null ? 'Boxes' : 'Back'}</button>
                 <div className="batch-totals"><b>{totalItems}</b> new{isRescale ? <> · <b>{rescaledCount}</b> rescanned</> : <> units · <b>${totalCost.toFixed(2)}</b></>}</div>
                 {isRescale
                   ? <button className="btn primary" onClick={startRescaleFinish} disabled={committing}>Finish rescale</button>
@@ -873,7 +875,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             </>
           )}
 
-          {step === 3 && !isRescale && !inBoxList && (
+          {step === 3 && !isRescale && (
             <>
               <div className="card">
                 <div className="step-head">
@@ -951,7 +953,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             </>
           )}
 
-          {step === 4 && !isRescale && !inBoxList && (
+          {step === 4 && !isRescale && (
             <>
               <div className="card">
                 <h3 className="rows-title">Shipment issues <span className="muted">(optional)</span></h3>

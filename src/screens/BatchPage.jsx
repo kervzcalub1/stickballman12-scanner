@@ -5,7 +5,7 @@
 // main place to START a batch (expected boxes + tag live there).
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar } from '../components/common.jsx';
+import { TopBar, StatusPill } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 
 const shortDate = (s) => String(s || '').slice(0, 10);
@@ -14,7 +14,8 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const [open, setOpen] = useState(null);     // open batches
   const [recent, setRecent] = useState(null); // recent (all) batches
   const [selId, setSelId] = useState(initialBatchId);
-  const [detail, setDetail] = useState(null); // { batch, boxes }
+  const [detail, setDetail] = useState(null); // { batch, boxes, items }
+  const [openBox, setOpenBox] = useState(null); // box id whose items are expanded
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -33,7 +34,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   }
 
   useEffect(() => { loadLists(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selId) loadDetail(selId); else setDetail(null); }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else setDetail(null); }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function setStatus(id, status) {
     setBusy(true);
@@ -46,6 +47,13 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   if (selId && detail) {
     const b = detail.batch;
     const boxes = detail.boxes || [];
+    // Group every unit under its box so each box row can drill into its shoes.
+    const itemsByBox = new Map();
+    for (const it of (detail.items || [])) {
+      const k = String(it.box_id ?? '');
+      if (!itemsByBox.has(k)) itemsByBox.set(k, []);
+      itemsByBox.get(k).push(it);
+    }
     const received = boxes.filter((x) => x.status === 'received').length;
     const expected = b.expected_boxes;
     const isOpen = b.status === 'open';
@@ -75,14 +83,34 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           </div>
           {!boxes.length ? <p className="muted">No boxes yet{isOpen ? ' — tap “Add box” to scan the first one.' : '.'}</p> : (
             <div className="box-list">
-              {boxes.map((bx) => (
-                <div className="box-row" key={bx.id}>
-                  <span className="box-num">Box {bx.box_number}</span>
-                  <span className="box-track muted sm">{bx.tracking_number || '—'}</span>
-                  <span className="box-count">{bx.item_count} item{bx.item_count === 1 ? '' : 's'}</span>
-                  <span className={`box-status ${bx.status}`}>{bx.status === 'received' ? '✓ received' : 'pending'}</span>
-                </div>
-              ))}
+              {boxes.map((bx) => {
+                const boxItems = itemsByBox.get(String(bx.id)) || [];
+                const isBoxOpen = openBox === bx.id;
+                const empty = bx.item_count === 0;
+                return (
+                  <div className={`box-row-wrap ${isBoxOpen ? 'open' : ''}`} key={bx.id}>
+                    <button className="box-row" onClick={() => setOpenBox(isBoxOpen ? null : bx.id)} title={boxItems.length ? 'Show shoes in this box' : 'No shoes in this box yet'}>
+                      <span className="box-caret">{boxItems.length ? (isBoxOpen ? '▾' : '▸') : '·'}</span>
+                      <span className="box-num">Box {bx.box_number}</span>
+                      <span className="box-track muted sm">{bx.tracking_number || 'no tracking'}</span>
+                      <span className="box-count" style={empty ? { color: '#e08f8f', fontWeight: 600 } : undefined}>{bx.item_count} item{bx.item_count === 1 ? '' : 's'}</span>
+                      <span className={`box-status ${bx.status}`}>{bx.status === 'received' ? '✓ received' : 'pending'}</span>
+                    </button>
+                    {isBoxOpen && (
+                      <div className="box-items">
+                        {!boxItems.length ? <div className="muted sm box-items-empty">No shoes in this box yet.</div> : boxItems.map((it) => (
+                          <div className="batch-detail-row" key={it.id}>
+                            <button className="vin vin-link" onClick={() => onOpenItem?.(it.vin)} title="View full shoe detail + history">{it.vin}</button>
+                            <span className="batch-row-name">{it.name}</span>
+                            <span className="muted sm">{it.sku || '—'} · sz {it.size || '—'}</span>
+                            <StatusPill status={it.status} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

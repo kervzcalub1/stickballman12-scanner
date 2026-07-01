@@ -5,6 +5,7 @@
 import { cleanSku } from './util.js';
 import {
   getProductByUpc, getCatalogIdBySku, upsertProduct, setItemGlobalIndicators,
+  refreshItemGi,
 } from './db.js';
 import { aliasProductByUpc, aliasCatalogBySku, aliasGlobalIndicator } from './alias.js';
 
@@ -100,4 +101,74 @@ export async function enrichGlobalIndicators(created, items) {
     } catch { /* best-effort — skip this unit */ }
   }
   if (updates.length) await setItemGlobalIndicators(updates);
+}
+
+const round2 = (v) => Math.round(v * 100) / 100;
+const near = (a, b) => Math.abs(Number(a) - Number(b)) < 0.005;
+
+// Re-fetch the Alias global indicator for EXISTING items and recompute the final
+// price (GI + 20%). Used by the PH Report / New Inventory "Refresh prices" button.
+// `rows` are existing items: [{ id, upc, sku, size, global_indicator, price }].
+// preserveOverrides (default true): a row whose current price ISN'T the auto
+// GI+20% (a PH hand-typed override) keeps its price — only its GI is refreshed.
+// Skips rows where neither GI nor price actually changes, so no-op refreshes are
+// silent. Returns { updated, checked, configured }.
+export async function refreshGiForItems(rows, { preserveOverrides = true } = {}) {
+  if (!process.env.ALIAS_API_KEY) return { updated: 0, checked: 0, configured: false };
+  const catalogCache = new Map();
+  const giByKey = new Map();
+  const updates = [];
+  const list = Array.isArray(rows) ? rows : [];
+  for (const it of list) {
+    if (!it?.id || !it?.size || (!it?.upc && !it?.sku)) continue;
+    try {
+      const catalogId = await resolveCatalogId(it, catalogCache);
+      if (!catalogId) continue;
+      const key = `${catalogId}|${it.size}`;
+      if (!giByKey.has(key)) giByKey.set(key, await aliasGlobalIndicator({ catalogId, size: it.size }));
+      const gi = giByKey.get(key);
+      if (gi == null) continue;
+
+      const oldGi = it.global_indicator != null ? Number(it.global_indicator) : null;
+      const oldPrice = it.price != null ? Number(it.price) : null;
+      const autoOld = oldGi != null ? round2(oldGi * GI_MARKUP) : null;
+      const isOverride = oldPrice != null && (autoOld == null || !near(oldPrice, autoOld));
+      const keptOverride = preserveOverrides && isOverride;
+      const newPrice = keptOverride ? oldPrice : round2(gi * GI_MARKUP);
+
+      const giChanged = oldGi == null || !near(gi, oldGi);
+      const priceChanged = oldPrice == null || !near(newPrice, oldPrice);
+      if (!giChanged && !priceChanged) continue; // nothing moved — stay quiet
+      updates.push({ id: it.id, global_indicator: gi, price: newPrice, keptOverride: keptOverride && !priceChanged });
+    } catch { /* best-effort — skip this unit */ }
+  }
+  if (updates.length) await refreshItemGi(updates);
+  return { updated: updates.length, checked: list.length, configured: true };
+}
+
+// Fetch the Alias global indicator (+ Final = GI + 20%) for a SKU across a set of
+// sizes. Used by the Rescale Requests listing editor's "Get GI" action (requests
+// carry a SKU + sizes, not VINs). Resolves the SKU's catalog_id once, then prices
+// each size. Returns { configured, results:[{ size, global_indicator, price }] }.
+export async function giForSkuSizes(sku, sizes) {
+  if (!process.env.ALIAS_API_KEY) return { configured: false, results: [] };
+  const s = normSku(sku);
+  const list = [...new Set((Array.isArray(sizes) ? sizes : []).map((x) => String(x).trim()).filter(Boolean))];
+  if (!s || !list.length) return { configured: true, results: [] };
+  let catalogId = await getCatalogIdBySku(s);
+  if (!catalogId) {
+    try {
+      const p = await aliasCatalogBySku(s);
+      if (p) { await upsertProduct({ ...p, upc: null, sku: s }); catalogId = p.catalogId; }
+    } catch { /* best-effort */ }
+  }
+  if (!catalogId) return { configured: true, results: [] };
+  const results = [];
+  for (const size of list) {
+    try {
+      const gi = await aliasGlobalIndicator({ catalogId, size });
+      if (gi != null) results.push({ size, global_indicator: gi, price: round2(gi * GI_MARKUP) });
+    } catch { /* skip this size */ }
+  }
+  return { configured: true, results };
 }

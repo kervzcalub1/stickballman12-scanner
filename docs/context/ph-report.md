@@ -31,6 +31,15 @@ Component: `PHGrid` in `src/App.jsx`. Endpoints: `api/ph/list.js`
 - Nothing is group-level anymore; each size's fields apply to that size's VINs.
 - **GI fetched at receiving** (Alias pricing insights, per unit) seeds these; PH
   reviews/overrides. GI fetched best-effort, so it may be null. See `integrations.md`.
+- **↻ Refresh prices** (grid toolbar, shown when `showPricing` = admin + PH, hidden
+  from warehouse) re-fetches the Global Indicator from Alias for **every item
+  currently shown** and recomputes **Final = GI + 20%**, then reloads. `POST
+  /api/ph/refresh-gi { vins }` → `getItemsForGiRefresh` → `refreshGiForItems`
+  (`api/_lib/intake.js`, Alias calls deduped by catalog+size) → `refreshItemGi`
+  (logs a **system-generated** `ph_update` per changed unit). **Manual price
+  overrides are preserved**: a size whose current price isn't exactly the auto
+  GI+20% keeps its price (only its GI refreshes); no-op refreshes log nothing.
+  Excludes sold/shipped units. Blocked while a row is being edited.
 - **Global indicator + Final price are hidden from the warehouse role**
   (`showPricing = role !== 'warehouse'`); admin sees them read-only.
 - Save: one `phUpdateMany(vins, fields, baseEditedAt)` **per size** (sizes touch

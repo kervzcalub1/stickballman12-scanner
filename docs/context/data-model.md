@@ -47,7 +47,10 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   locked_until`); 30s TTL, claim/heartbeat/release.
 - **rescale_requests** — PH→warehouse audit. `id, sku, name, sizes JSONB
   [{size,qty}], actual_sizes JSONB, audit_note, price, reason, note, status
-  (open|audited), requested_by, resolved_by, resolved_at, created_at`.
+  (open|audited), requested_by, resolved_by, resolved_at, created_at`. Plus PH's
+  post-audit listing decision: `listing JSONB` (`[{size, global_indicator, price,
+  added_to_intel_inv, synced_alias, synced_stockx, synced_shopify}]`), `listed_by`,
+  `listed_at`. Requests aren't tied to VINs → the listing lives on the request.
 
 ## Sequences (never reused → gaps are fine)
 - `vin_seq` → VIN format `SBM-YYMMDD-000001` (zero-padded, atomic `nextval`).
@@ -59,10 +62,13 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
 - Locks: `acquireLock, releaseLock`.
 - Receiving: `createBatch, reserveVins, insertItems, insertIntakeEvents,
   insertIssues, listBatches, getBatch`. V6: `listSuppliers, addSupplier,
-  findBatchByTracking`.
+  findBatchByTracking`. Multi-box: `createOpenBatch, listBatchBoxes, addBatchBox
+  (find-or-create by box number), syncBatchBoxes (persist tracking-only slots),
+  getBatchWithBoxes (batch+boxes+items), listItemsByBatch, commitBoxItems`.
 - Inventory/items: `queryItems, getItemByVin, getEventsForVins, addItemEvent,
   bulkSetStatus, rescaleItem, markBoxFound, markRestocked, pendingCounts,
-  setItemGlobalIndicators`.
+  setItemGlobalIndicators`. GI refresh: `getItemsForGiRefresh, refreshItemGi`
+  (PH "Refresh prices" — re-fetch Alias GI, recompute Final=GI+20%, keep overrides).
 - Catalog: `upsertProduct, getProductByUpc, getCatalogIdBySku`.
 - PH report: `phListItems(from,to,kind), phUpdateItems, phUpdateItem`.
 - Edit locks: `claimEditLocks, heartbeatEditLocks, releaseEditLocks, listActiveEditLocks`.

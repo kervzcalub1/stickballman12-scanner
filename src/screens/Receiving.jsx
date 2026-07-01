@@ -458,6 +458,20 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setActiveBatch(b);
     return b;
   }
+  // Persist box slots that have a tracking # scanned so tracking-only (0-item)
+  // boxes still show on the Batch page — not just committed ones. We only sync
+  // slots that carry a tracking number (blank slots stay unmaterialized so the
+  // "Add box" flow's next-number logic isn't thrown off); committed boxes persist
+  // their own tracking on commit. Best-effort; only meaningful once the batch exists.
+  async function persistBoxSlots(batchId, slots = boxSlots) {
+    if (!batchId) return;
+    const payload = slots
+      .map((s, i) => ({ boxNumber: i + 1, trackingNumber: (s.tracking || '').trim() }))
+      .filter((x) => x.trackingNumber);
+    if (!payload.length) return;
+    try { await api.batchSyncBoxes(batchId, payload); }
+    catch { /* non-blocking — slots also persist on box commit */ }
+  }
   // Start scanning items into box slot i (→ Items step). Details are validated
   // here so the batch can be created with them on the first commit.
   function openBoxSlot(i) {
@@ -480,7 +494,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   async function finishBatchNow() {
     if (!activeBatch) return;
     setCommitting(true);
-    try { await api.batchSetStatus(activeBatch.id, 'done'); onBatchDone ? onBatchDone() : onHome?.(); }
+    try { await persistBoxSlots(activeBatch.id); await api.batchSetStatus(activeBatch.id, 'done'); onBatchDone ? onBatchDone() : onHome?.(); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setCommitting(false); }
   }
@@ -527,6 +541,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           : await ensureBatch();
         const batchId = batch.id;
         const batchCode = batch.batchCode;
+        // Materialize every box slot (incl. empty / tracking-only ones) so they all
+        // show on the Batch page — do this before adding the active box below.
+        if (isMultiBoxNew) await persistBoxSlots(batchId);
         const boxTracking = isBoxMode
           ? (header.tracking || null)
           : (boxSlots[activeSlot]?.tracking?.trim() || null);
@@ -741,7 +758,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                         ) : (
                           <>
                             <span className="track-field box-build-track">
-                              <input value={s.tracking} placeholder="Tracking # (optional)" onChange={(e) => setSlotTracking(i, e.target.value)} />
+                              <input value={s.tracking} placeholder="Tracking # (optional)" onChange={(e) => setSlotTracking(i, e.target.value)}
+                                onBlur={() => { if (activeBatch) persistBoxSlots(activeBatch.id); }} />
                               <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => { setTrackingSlot(i); setScanTracking(true); }}><Icon name="camera" /></button>
                             </span>
                             <button className="btn primary sm" onClick={() => openBoxSlot(i)}>Add items</button>
@@ -1164,7 +1182,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               <CameraScanner mode="tracking"
                 onDetected={(code) => {
                   const t = parseTrackingNumber(code);
-                  if (trackingSlot != null) setSlotTracking(trackingSlot, t); else setH('tracking', t);
+                  if (trackingSlot != null) {
+                    setSlotTracking(trackingSlot, t);
+                    if (activeBatch) persistBoxSlots(activeBatch.id, boxSlots.map((x, idx) => (idx === trackingSlot ? { ...x, tracking: t } : x)));
+                  } else setH('tracking', t);
                   setScanTracking(false); setTrackingSlot(null);
                 }}
                 onClose={() => { setScanTracking(false); setTrackingSlot(null); }}

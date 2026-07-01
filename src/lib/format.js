@@ -11,32 +11,49 @@ export const EST_FMT = new Intl.DateTimeFormat('en-US', {
 export const PH_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit' });
 export const PH_DATETIME = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: 'numeric', minute: '2-digit', hour12: true });
 
-export const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// The Day/Week/Month filters must follow the **EST calendar**, not the viewer's
+// timezone — the server dates/filters everything by EST (`AT TIME ZONE
+// 'America/New_York'`), so a PH user in PH time picking "Today" must get the EST
+// day, not their local one. We normalize any instant to the EST calendar day it
+// falls on, then do all period math on a **noon-UTC "civil date"** (UTC getters,
+// DST- and timezone-immune; noon keeps it on the same calendar day everywhere).
+const EST_YMD = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+
+// Any Date → the EST calendar day it falls on, as a noon-UTC civil Date.
+export function estCivil(date = new Date()) {
+  const [y, m, d] = EST_YMD.format(date).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12));
+}
+
+export const ymd = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 
 export function periodRange(mode, a) {
-  if (mode === 'week') { const s = new Date(a); s.setDate(a.getDate() - a.getDay()); const e = new Date(s); e.setDate(s.getDate() + 6); return [s, e]; }
-  if (mode === 'month') return [new Date(a.getFullYear(), a.getMonth(), 1), new Date(a.getFullYear(), a.getMonth() + 1, 0)];
-  return [new Date(a), new Date(a)]; // day
+  const c = estCivil(a);
+  if (mode === 'week') { const s = new Date(c); s.setUTCDate(c.getUTCDate() - c.getUTCDay()); const e = new Date(s); e.setUTCDate(s.getUTCDate() + 6); return [s, e]; }
+  if (mode === 'month') return [new Date(Date.UTC(c.getUTCFullYear(), c.getUTCMonth(), 1, 12)), new Date(Date.UTC(c.getUTCFullYear(), c.getUTCMonth() + 1, 0, 12))];
+  return [new Date(c), new Date(c)]; // day
 }
 
 export function shiftAnchor(mode, a, dir) {
-  const n = new Date(a);
-  if (mode === 'week') n.setDate(a.getDate() + 7 * dir);
-  else if (mode === 'month') n.setMonth(a.getMonth() + dir);
-  else n.setDate(a.getDate() + dir);
+  const n = estCivil(a);
+  if (mode === 'week') n.setUTCDate(n.getUTCDate() + 7 * dir);
+  else if (mode === 'month') n.setUTCMonth(n.getUTCMonth() + dir);
+  else n.setUTCDate(n.getUTCDate() + dir);
   return n;
 }
 
 export function periodLabel(mode, a) {
-  if (mode === 'month') return a.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const c = estCivil(a);
+  const opt = (o) => ({ timeZone: 'UTC', ...o }); // c is a noon-UTC civil date
+  if (mode === 'month') return c.toLocaleDateString('en-US', opt({ month: 'long', year: 'numeric' }));
   const [s, e] = periodRange(mode, a);
-  if (mode === 'day') return s.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  if (mode === 'day') return s.toLocaleDateString('en-US', opt({ weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }));
   // Week — built explicitly so it reads e.g. "Jun 21 – 27, 2026" (same month),
   // "Jun 28 – Jul 4, 2026" (cross-month), "Dec 29, 2025 – Jan 4, 2026" (cross-year).
-  const mon = (d) => d.toLocaleDateString('en-US', { month: 'short' });
-  if (s.getFullYear() !== e.getFullYear()) return `${mon(s)} ${s.getDate()}, ${s.getFullYear()} – ${mon(e)} ${e.getDate()}, ${e.getFullYear()}`;
-  if (s.getMonth() !== e.getMonth()) return `${mon(s)} ${s.getDate()} – ${mon(e)} ${e.getDate()}, ${e.getFullYear()}`;
-  return `${mon(s)} ${s.getDate()} – ${e.getDate()}, ${e.getFullYear()}`;
+  const mon = (d) => d.toLocaleDateString('en-US', opt({ month: 'short' }));
+  if (s.getUTCFullYear() !== e.getUTCFullYear()) return `${mon(s)} ${s.getUTCDate()}, ${s.getUTCFullYear()} – ${mon(e)} ${e.getUTCDate()}, ${e.getUTCFullYear()}`;
+  if (s.getUTCMonth() !== e.getUTCMonth()) return `${mon(s)} ${s.getUTCDate()} – ${mon(e)} ${e.getUTCDate()}, ${e.getUTCFullYear()}`;
+  return `${mon(s)} ${s.getUTCDate()} – ${e.getUTCDate()}, ${e.getUTCFullYear()}`;
 }
 
 // from/to (YYYY-MM-DD) for the current period.

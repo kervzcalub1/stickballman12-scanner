@@ -77,4 +77,8 @@ skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
 - A 401 from any API → client clears session, returns to login (`err.unauthorized`).
 - 409 → `err.conflict` (optimistic-concurrency / lock conflicts).
 - Times shown in EST; dates filtered by EST calendar day (`AT TIME ZONE 'America/New_York'`).
+  The **client Day/Week/Month picker also computes in EST** (`src/lib/format.js`
+  `estCivil` normalizes any instant to the EST calendar day, then period math runs
+  on a noon-UTC "civil date" — so a PH user in PH time picking "Today" gets the EST
+  day, matching the server filter). `rangeOf`/`periodRange`/`shiftAnchor`/`periodLabel`.
 - See `data-model.md`, and the per-feature files for specifics.

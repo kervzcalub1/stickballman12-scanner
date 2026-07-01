@@ -623,13 +623,21 @@ body {
 .rc-listing-table td:first-child, .rc-listing-table th:first-child { text-align: left; }
 .ph-card-sizes { margin-bottom: 8px; font-size: 13px; }
 .ph-card-sizes .muted { margin-right: 6px; }
-.ph-addedby { font-size: 12px; }
+/* Frozen right columns (Action + Added by) wrap their contents inside the fixed
+   column width instead of expanding it — keeps the two columns' sticky offsets
+   aligned so they stay frozen together. */
+.ph-addedby { font-size: 12px; white-space: normal; word-break: break-word; line-height: 1.35; }
+.ph-rfrozen-first { white-space: normal; }
+.ph-rfrozen-first .ph-edit-actions { flex-wrap: wrap; justify-content: flex-end; }
 
 /* Expandable PH rows */
 .ph-trow { cursor: pointer; }
 .ph-trow.open > td:not(.ph-frozen):not(.ph-rfrozen) { background: rgba(79, 124, 255, 0.08); }
 .ph-caret { color: var(--muted); font-size: 11px; margin-right: 8px; }
-.ph-drow > td { padding: 0 12px 10px; background: rgba(79, 124, 255, 0.04); white-space: normal; }
+/* Expanded per-size detail: pin it to the left so it stays under the frozen
+   columns (doesn't drift with the horizontally-scrolling middle columns). */
+.ph-drow > td { padding: 0 12px 10px; background: rgba(79, 124, 255, 0.04); white-space: normal; position: sticky; left: 0; z-index: 2; }
+.ph-drow .ph-detail { max-width: calc(100vw - 48px); }
 .ph-detail { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: flex-start; padding: 10px 4px 6px; }
 .ph-sizetable { border-collapse: collapse; font-size: 13px; }
 /* Center every column (prices, qty, flags); Size (first) + Note (last) stay left. */
@@ -639,6 +647,8 @@ body {
 .ph-sizetable th:last-child, .ph-sizetable td:last-child { text-align: left; }
 .ph-sizetable td.ph-note-cell { text-align: left; }
 .ph-sizetable .ph-price { text-align: center; }
+.ph-gi-th { display: inline-flex; align-items: center; gap: 6px; }
+.ph-gi-refresh { font-size: 13px; line-height: 1; padding: 2px 5px; min-width: 0; }
 .ph-detail-meta { display: flex; flex-direction: column; gap: 12px; }
 .ph-detail-flags { display: flex; flex-wrap: wrap; gap: 14px; }
 .ph-detail-flag { display: flex; flex-direction: column; gap: 4px; }

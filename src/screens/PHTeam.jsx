@@ -87,7 +87,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [editing, setEditing] = useState(() => new Set()); // group keys in edit mode
   const [drafts, setDrafts] = useState({});                // group key -> edited fields
   const [savingKey, setSavingKey] = useState(null);
-  const [refreshing, setRefreshing] = useState(false); // re-fetching GI from Alias
+  const [refreshing, setRefreshing] = useState(false); // re-fetching GI from Alias (all shown)
+  const [giFillKey, setGiFillKey] = useState(null);    // group whose GI is being pulled into its draft
   const [sortDir, setSortDir] = useState('asc'); // by scan date: asc = oldest first
   const [expanded, setExpanded] = useState(() => new Set()); // group keys showing per-size detail
   const toggleExpand = (key) => setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -310,6 +311,30 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     finally { setRefreshing(false); }
   }
 
+  // Per-group GI refresh (edit mode): pull the current Alias GI for THIS group's
+  // sizes straight into the open draft (Final recomputes as GI + 20%). Beside the
+  // Global-indicator column while editing — a focused alternative to the toolbar's
+  // bulk "Refresh prices".
+  async function fillGroupGi(g) {
+    setGiFillKey(g.key); setError('');
+    try {
+      const { results, configured } = await api.phGiLookup(g.sku, g.sizes.map((s) => s.size));
+      if (configured === false) { setError('Alias pricing isn’t configured, so GI can’t be fetched.'); return; }
+      const bySize = new Map((results || []).map((x) => [String(x.size), x]));
+      setDrafts((d) => {
+        const cur = d[g.key]; if (!cur) return d;
+        const sizes = { ...cur.sizes };
+        for (const s of g.sizes) {
+          const hit = bySize.get(String(s.size));
+          if (hit) sizes[s.size] = { ...sizes[s.size], global_indicator: hit.global_indicator, price: calcFinalPrice(hit.global_indicator) };
+        }
+        return { ...d, [g.key]: { ...cur, sizes } };
+      });
+      if (!results?.length) setError('No Alias prices found for this SKU’s sizes.');
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setGiFillKey(null); }
+  }
+
   const isRescale = kind === 'rescale';
 
   // Consolidate per SKU+status (with per-size detail), then sort by scan date.
@@ -486,7 +511,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                               <table className="ph-sizetable">
                                 <thead><tr>
                                   <th>Size</th><th>Qty</th><th>Cost</th>
-                                  {showPricing && <><th>Global indicator</th><th>Final Price (GI+20%)</th></>}
+                                  {showPricing && <><th><span className="ph-gi-th">Global indicator{ed && <button type="button" className="btn icon ghost ph-gi-refresh" title="Re-fetch GI from Alias for this shoe’s sizes" disabled={giFillKey === g.key} onClick={(e) => { e.stopPropagation(); fillGroupGi(g); }}>{giFillKey === g.key ? '…' : '↻'}</button>}</span></th><th>Final Price (GI+20%)</th></>}
                                   {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
                                   <th>Note</th><th>History</th>
                                 </tr></thead>

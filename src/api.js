@@ -105,7 +105,8 @@ export const api = {
   rescaleRequestList: (status, from, to) => get(`/api/rescale-requests/list?${new URLSearchParams({ ...(status ? { status } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}`),
   rescaleRequestAudit: (id, actualSizes, note) => post('/api/rescale-requests/audit', { id, actualSizes, note }),
   rescaleRequestListUpdate: (id, listing) => post('/api/rescale-requests/list-update', { id, listing }),
-  rescaleRequestFetchGi: (sku, sizes) => post('/api/rescale-requests/fetch-gi', { sku, sizes }),
+  // Generic Alias GI lookup (no save) — used by the PH grid + rescale listing editor.
+  phGiLookup: (sku, sizes) => post('/api/ph/gi-lookup', { sku, sizes }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // v5 — PH Team monthly grid
   phList: (from, to, kind) => get(`/api/ph/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(kind ? { kind } : {}) }).toString()}`),

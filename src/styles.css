@@ -694,6 +694,8 @@ body {
 .loc-pane { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 10px; }
 .loc-pane-row { display: flex; flex-wrap: wrap; gap: 12px; }
 .loc-pane-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.combo { display: inline-flex; gap: 6px; align-items: center; }
+.combo input { min-width: 150px; }
 .loc-bulk-text { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .loc-bulk-text textarea { font-family: inherit; resize: vertical; }
 .loc-list { display: flex; flex-direction: column; gap: 4px; }

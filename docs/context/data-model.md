@@ -41,6 +41,12 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
 - **item_events** — audit trail. `item_id, type, details JSONB, created_by,
   created_at`. types: scanned, received, rescaled, status_change, ph_update,
   note, issue.
+- **locations** (shelf spots) — `id, code UNIQUE (barcode = SITE-AREA-BAY-SHELF,
+  e.g. MNH-WH-A2-04; pods omit shelf → MNH-PD-1), warehouse, area, bay, shelf,
+  label, active, sort_order, created_by`. `items` gains `location_id` (FK) +
+  `location_code` (snapshot). `item_events` type `shelved`. Seeded for Manheim
+  (253) via `npm run db:seed-manheim`; other sites added in the Locations UI.
+  See `locations.md`.
 - **shipment_issues** — per-batch issues (e.g. no-box auto-listed).
 - **sales** — schema present for future profit tracking.
 - **edit_locks** — PH grid presence locks (`vin, holder_id, holder_name,
@@ -69,6 +75,8 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   bulkSetStatus, rescaleItem, markBoxFound, markRestocked, pendingCounts,
   setItemGlobalIndicators`. GI refresh: `getItemsForGiRefresh, refreshItemGi`
   (PH "Refresh prices" — re-fetch Alias GI, recompute Final=GI+20%, keep overrides).
+- Locations: `listLocations, getLocationByCode, createLocation, bulkCreateLocations,
+  updateLocation, listItemsAtLocation, shelveItems` (put-away/transfer). See `locations.md`.
 - Catalog: `upsertProduct, getProductByUpc, getCatalogIdBySku`.
 - PH report: `phListItems(from,to,kind), phUpdateItems, phUpdateItem`.
 - Edit locks: `claimEditLocks, heartbeatEditLocks, releaseEditLocks, listActiveEditLocks`.

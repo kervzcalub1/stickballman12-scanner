@@ -474,7 +474,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <React.Fragment key={g.key}>
                       <tr className={`ph-trow ${ed ? 'ph-editing' : ''} ${open ? 'open' : ''}`} onClick={() => toggleExpand(g.key)}>
                         <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
-                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} /><span className="ph-title-name">{g.name || '—'}</span></td>
+                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} /><span className="ph-title-name">{g.name || '—'}</span></span></td>
                         <td style={frozenStyle(2)} className="ph-frozen">{g.sku || '—'}</td>
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>

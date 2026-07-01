@@ -522,7 +522,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                           <td className="inv-col-check" onClick={(e) => e.stopPropagation()}>
                             <input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} aria-label={`Select ${g.sku}`} />
                           </td>
-                          <td className="inv-name" title={g.name}><span className="inv-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={28} /><span className="inv-name-text">{g.name}</span></td>
+                          <td className="inv-name" title={g.name}><span className="inv-name-inner"><span className="inv-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={28} /><span className="inv-name-text">{g.name}</span></span></td>
                           <td className="inv-col-sku">{g.sku || '—'}</td>
                           <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>

@@ -23,12 +23,23 @@ export function Locations({ onHome, onSignOut }) {
   const [pane, setPane] = useState(null); // 'add' | 'bulk' | null
   const [sel, setSel] = useState(() => new Set()); // selected location ids (for printing)
   const [printLocs, setPrintLocs] = useState(null);
+  const [siteAreas, setSiteAreas] = useState({}); // { warehouse: [areas…] } — accrued from loaded data
 
   async function load() {
     setError('');
     try {
       const { locations: l } = await api.locationList({ warehouse, area, active, q });
       setLocations(l);
+      // Accrue each site's real areas so the Add/Bulk forms can suggest them.
+      setSiteAreas((prev) => {
+        const next = { ...prev };
+        for (const loc of l) {
+          if (!loc.area) continue;
+          const arr = next[loc.warehouse] ? [...next[loc.warehouse]] : [];
+          if (!arr.includes(loc.area)) { arr.push(loc.area); next[loc.warehouse] = arr; }
+        }
+        return next;
+      });
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, [warehouse, area, active]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -75,6 +86,10 @@ export function Locations({ onHome, onSignOut }) {
   const toggleGroupSel = (g) => setSel((s) => { const n = new Set(s); const all = g.rows.every((r) => n.has(r.id)); g.rows.forEach((r) => (all ? n.delete(r.id) : n.add(r.id))); return n; });
   const openPrint = () => setPrintLocs(list.filter((l) => sel.has(l.id)));
 
+  // Filter dropdowns include any custom sites/areas that exist (+ the current pick).
+  const whOptions = [...new Set([...WAREHOUSES, ...list.map((l) => l.warehouse), warehouse].filter(Boolean))];
+  const areaOptions = [...new Set([...LOCATION_AREAS, ...list.map((l) => l.area).filter(Boolean), area].filter(Boolean))];
+
   return (
     <div className="app app-wide">
       <TopBar title="Locations" onHome={onHome} onSignOut={onSignOut} />
@@ -84,13 +99,13 @@ export function Locations({ onHome, onSignOut }) {
           <label>Warehouse
             <select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>
               <option value="">All</option>
-              {WAREHOUSES.map((w) => <option key={w} value={w}>{w}</option>)}
+              {whOptions.map((w) => <option key={w} value={w}>{w}</option>)}
             </select>
           </label>
           <label>Area
             <select value={area} onChange={(e) => setArea(e.target.value)}>
               <option value="">All</option>
-              {LOCATION_AREAS.map((a) => <option key={a} value={a}>{a}</option>)}
+              {areaOptions.map((a) => <option key={a} value={a}>{a}</option>)}
             </select>
           </label>
           <label>Show
@@ -109,8 +124,8 @@ export function Locations({ onHome, onSignOut }) {
             <button className={`btn sm ${pane === 'bulk' ? 'primary' : 'ghost'}`} onClick={() => setPane(pane === 'bulk' ? null : 'bulk')}>Bulk add</button>
           </span>
         </div>
-        {pane === 'add' && <AddShelf onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
-        {pane === 'bulk' && <BulkAdd onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
+        {pane === 'add' && <AddShelf siteAreas={siteAreas} onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
+        {pane === 'bulk' && <BulkAdd siteAreas={siteAreas} onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
         {error && <div className="error mt">{error}</div>}
         {notice && <div className="notice mt">{notice}</div>}
       </div>
@@ -195,19 +210,22 @@ export function Locations({ onHome, onSignOut }) {
 }
 
 // --- Add a single shelf ---------------------------------------------------
-function AddShelf({ onDone, onError, onSignOut }) {
+function AddShelf({ siteAreas = {}, onDone, onError, onSignOut }) {
   const [warehouse, setWarehouse] = useState(WAREHOUSES[0]);
   const [area, setArea] = useState('');
   const [bay, setBay] = useState('');
   const [shelf, setShelf] = useState('');
   const [busy, setBusy] = useState(false);
+  // Suggest this site's own areas first, then the global presets.
+  const areaOptions = [...new Set([...(siteAreas[warehouse] || []), ...LOCATION_AREAS])];
 
   async function submit() {
     onError('');
+    if (!warehouse.trim()) { onError('Enter a warehouse.'); return; }
     if (!bay.trim()) { onError('Enter a bay.'); return; }
     setBusy(true);
     try {
-      const { location } = await api.locationCreate({ warehouse, area: area || null, bay: bay.trim(), shelf: shelf === '' ? null : Number(shelf) });
+      const { location } = await api.locationCreate({ warehouse: warehouse.trim(), area: area.trim() || null, bay: bay.trim(), shelf: shelf === '' ? null : Number(shelf) });
       onDone(`Added ${location.label || location.code} (${location.code}).`);
       setBay(''); setShelf('');
     } catch (err) { if (err.unauthorized) return onSignOut(); onError(err.message); }
@@ -216,8 +234,8 @@ function AddShelf({ onDone, onError, onSignOut }) {
   return (
     <div className="loc-pane">
       <div className="loc-pane-row">
-        <label>Warehouse<select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>{WAREHOUSES.map((w) => <option key={w} value={w}>{w}</option>)}</select></label>
-        <label>Area (optional)<select value={area} onChange={(e) => setArea(e.target.value)}><option value="">— none —</option>{LOCATION_AREAS.map((a) => <option key={a} value={a}>{a}</option>)}</select></label>
+        <label>Warehouse / Site<ComboField value={warehouse} onChange={(w) => { setWarehouse(w); setArea(''); }} options={WAREHOUSES} placeholder="New site name" /></label>
+        <label>Area (optional)<ComboField key={warehouse} value={area} onChange={setArea} options={areaOptions} allowNone placeholder="New area name" /></label>
         <label>Bay<input value={bay} onChange={(e) => setBay(e.target.value)} placeholder="e.g. A2 or Pod 1" autoCapitalize="characters" /></label>
         <label>Shelf #<input type="number" min="1" max="99" value={shelf} onChange={(e) => setShelf(e.target.value)} placeholder="blank = whole bay" /></label>
       </div>
@@ -227,11 +245,12 @@ function AddShelf({ onDone, onError, onSignOut }) {
 }
 
 // --- Bulk add a warehouse's bays ------------------------------------------
-function BulkAdd({ onDone, onError, onSignOut }) {
+function BulkAdd({ siteAreas = {}, onDone, onError, onSignOut }) {
   const [warehouse, setWarehouse] = useState(WAREHOUSES[0]);
   const [area, setArea] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const areaOptions = [...new Set([...(siteAreas[warehouse] || []), ...LOCATION_AREAS])];
 
   function parse(t) {
     return t.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
@@ -241,11 +260,12 @@ function BulkAdd({ onDone, onError, onSignOut }) {
   }
   async function submit() {
     onError('');
+    if (!warehouse.trim()) { onError('Enter a warehouse.'); return; }
     const entries = parse(text);
     if (!entries.length) { onError('Add at least one bay (one per line).'); return; }
     setBusy(true);
     try {
-      const { inserted, total } = await api.locationBulk({ warehouse, area: area || null, entries });
+      const { inserted, total } = await api.locationBulk({ warehouse: warehouse.trim(), area: area.trim() || null, entries });
       onDone(`Added ${inserted} shelf location${inserted === 1 ? '' : 's'} (${total - inserted} already existed).`);
       setText('');
     } catch (err) { if (err.unauthorized) return onSignOut(); onError(err.message); }
@@ -254,13 +274,36 @@ function BulkAdd({ onDone, onError, onSignOut }) {
   return (
     <div className="loc-pane">
       <div className="loc-pane-row">
-        <label>Warehouse<select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>{WAREHOUSES.map((w) => <option key={w} value={w}>{w}</option>)}</select></label>
-        <label>Area (optional)<select value={area} onChange={(e) => setArea(e.target.value)}><option value="">— none —</option>{LOCATION_AREAS.map((a) => <option key={a} value={a}>{a}</option>)}</select></label>
+        <label>Warehouse / Site<ComboField value={warehouse} onChange={(w) => { setWarehouse(w); setArea(''); }} options={WAREHOUSES} placeholder="New site name" /></label>
+        <label>Area (optional)<ComboField key={warehouse} value={area} onChange={setArea} options={areaOptions} allowNone placeholder="New area name" /></label>
       </div>
       <label className="loc-bulk-text">Bays — one per line: <span className="muted">“A1 5” (bay + # shelves), “Pod 1 0” for a whole bay</span>
         <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} placeholder={'A1 5\nA2 5\nA3 3'} />
       </label>
       <div className="ph-edit-actions"><button className="btn sm primary" disabled={busy} onClick={submit}>{busy ? 'Adding…' : 'Add shelves'}</button></div>
     </div>
+  );
+}
+
+// A preset dropdown that can drop into free-text entry ("Custom…") — used to add
+// a brand-new warehouse/site or area not in the presets.
+function ComboField({ value, onChange, options, allowNone = false, placeholder = '' }) {
+  const [custom, setCustom] = useState(!!value && !options.includes(value));
+  if (custom) {
+    return (
+      <span className="combo">
+        <input value={value} placeholder={placeholder} autoFocus autoCapitalize="words" onChange={(e) => onChange(e.target.value)} />
+        <button type="button" className="btn sm ghost" title="Back to list" onClick={() => { setCustom(false); onChange(allowNone ? '' : (options[0] || '')); }}>↩</button>
+      </span>
+    );
+  }
+  return (
+    <select value={options.includes(value) ? value : ''} onChange={(e) => {
+      if (e.target.value === '__custom') { setCustom(true); onChange(''); } else onChange(e.target.value);
+    }}>
+      {allowNone && <option value="">— none —</option>}
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      <option value="__custom">＋ Custom…</option>
+    </select>
   );
 }

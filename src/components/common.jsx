@@ -235,6 +235,26 @@ export function Barcode({ value, format = 'CODE128', displayValue = false, heigh
   return <svg ref={ref} className="barcode-svg" />;
 }
 
+// Small square shoe thumbnail for list rows — the SKU's listing photo (side view
+// preferred, chosen server-side), falling back to the app logo when there are no
+// listing photos (or the image fails to load). When `onOpen` is given AND a photo
+// exists, it renders as a button (opens the photo viewer/download).
+export function ShoeThumb({ url, onOpen, size = 36 }) {
+  const [broken, setBroken] = useState(false);
+  const hasPhoto = !!url && !broken;
+  const img = (
+    <img className={`shoe-thumb${hasPhoto ? '' : ' is-logo'}`} src={hasPhoto ? url : '/logo.png'} alt=""
+      loading="lazy" width={size} height={size} onError={() => setBroken(true)} />
+  );
+  if (hasPhoto && onOpen) {
+    return (
+      <button type="button" className="shoe-thumb-btn" title="View / download listing photos"
+        onClick={(e) => { e.stopPropagation(); onOpen(); }}>{img}</button>
+    );
+  }
+  return <span className="shoe-thumb-wrap">{img}</span>;
+}
+
 // Printable labels for label-printer rolls (Rollo / Dymo). Two types:
 //  • VIN label  — our SBM- barcode (used to track every unit)
 //  • UPC label  — the product's box-style barcode (name / size / colorway / SKU)

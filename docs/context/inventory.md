@@ -20,6 +20,15 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 - **Print labels** → `LabelSheet` (VIN barcodes, `jsbarcode` CODE128).
 - CSV export.
 
+## Listing photos (thumbnails + detail view/delete)
+- Every list row shows a `ShoeThumb` — the SKU's listing photo (side view preferred,
+  from `queryItems.photo_url`), falling back to `logo.png` when there are none.
+- The **item detail** view has a **Listing photos** panel: view each angle (opens
+  full size), **delete** a photo (`api/photos/remove`, warehouse/admin), and
+  **Download** (single image, or a `.zip` for 2+ via `api/photos/download`).
+- Photos are per-SKU (`product_photos`, R2); see `ph-report.md` for the shared
+  `ShoeThumb`/`PhotosModal` and the server-side zip (`api/_lib/zip.js`).
+
 ## Status editing
 - Per-group dropdown + Save → `bulkStatus(vins, status)`.
 - Selling/shipping a unit auto-delists it (clears II/AL/SX/SH) — see `statuses.md`.

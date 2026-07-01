@@ -327,6 +327,49 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
   );
 }
 
+// Shelf-location labels — a big name + a CODE128 barcode of the location code,
+// each an ATM-card (CR80, 3.375 × 2.125") sized card. Cards tile N-up on the
+// chosen paper (Letter/A4/Legal/A5/4×6); the browser paginates on print.
+const SHELF_PAPERS = {
+  letter: { label: 'Letter — 8.5 × 11"', size: '8.5in 11in' },
+  a4: { label: 'A4 — 210 × 297mm', size: '210mm 297mm' },
+  legal: { label: 'US Legal — 8.5 × 14"', size: '8.5in 14in' },
+  a5: { label: 'A5 — 148 × 210mm', size: '148mm 210mm' },
+  label46: { label: '4 × 6" label', size: '4in 6in' },
+};
+
+export function ShelfLabelSheet({ locations, onClose }) {
+  const list = locations || [];
+  const [paper, setPaper] = useState('letter');
+  const p = SHELF_PAPERS[paper];
+  return createPortal(
+    <div className="label-overlay shelf-overlay">
+      <style>{`@media print { @page { size: ${p.size}; margin: 0.2in; } }`}</style>
+      <div className="label-toolbar no-print">
+        <span>{list.length} shelf label{list.length === 1 ? '' : 's'}</span>
+        <span className="label-tools">
+          <select value={paper} onChange={(e) => setPaper(e.target.value)}>
+            {Object.entries(SHELF_PAPERS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <button className="btn ghost sm" onClick={onClose}>Close</button>
+          <button className="btn primary sm" onClick={() => window.print()}><Icon name="print" /> Print</button>
+        </span>
+      </div>
+      <div className="shelf-sheet">
+        {list.map((loc) => (
+          <div className="shelf-label" key={loc.code}>
+            <div className="shelf-label-name">{loc.label || loc.code}</div>
+            <div className="shelf-label-sub">{loc.warehouse}{loc.area ? ` · ${loc.area}` : ''}</div>
+            <div className="shelf-label-bc"><Barcode value={loc.code} format="CODE128" height={48} /></div>
+            <div className="shelf-label-code">{loc.code}</div>
+          </div>
+        ))}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // Preferences — saved automatically (localStorage) as the user toggles.
 export function PreferencesModal({ prefs, onCameraZoom, onClose }) {
   useEffect(() => {

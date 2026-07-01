@@ -4,7 +4,8 @@
 // rename / activate-deactivate. (Label printing lands in Phase 5.)
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, StatusPill } from '../components/common.jsx';
+import { TopBar, StatusPill, ShelfLabelSheet } from '../components/common.jsx';
+import { Icon } from '../components/NavIcons.jsx';
 import { WAREHOUSES, LOCATION_AREAS } from '../lib/constants.js';
 
 export function Locations({ onHome, onSignOut }) {
@@ -20,6 +21,8 @@ export function Locations({ onHome, onSignOut }) {
   const [editLabel, setEditLabel] = useState('');
   const [busyId, setBusyId] = useState(null);
   const [pane, setPane] = useState(null); // 'add' | 'bulk' | null
+  const [sel, setSel] = useState(() => new Set()); // selected location ids (for printing)
+  const [printLocs, setPrintLocs] = useState(null);
 
   async function load() {
     setError('');
@@ -65,6 +68,13 @@ export function Locations({ onHome, onSignOut }) {
     seen.get(key).rows.push(l);
   }
 
+  const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allShown = list.length > 0 && list.every((l) => sel.has(l.id));
+  const toggleAllShown = () => setSel((s) => { const n = new Set(s); if (allShown) list.forEach((l) => n.delete(l.id)); else list.forEach((l) => n.add(l.id)); return n; });
+  const groupAllSel = (g) => g.rows.every((r) => sel.has(r.id));
+  const toggleGroupSel = (g) => setSel((s) => { const n = new Set(s); const all = g.rows.every((r) => n.has(r.id)); g.rows.forEach((r) => (all ? n.delete(r.id) : n.add(r.id))); return n; });
+  const openPrint = () => setPrintLocs(list.filter((l) => sel.has(l.id)));
+
   return (
     <div className="app app-wide">
       <TopBar title="Locations" onHome={onHome} onSignOut={onSignOut} />
@@ -108,16 +118,29 @@ export function Locations({ onHome, onSignOut }) {
       <div className="card">
         {!locations ? <p className="muted">Loading…</p> : !list.length ? <p className="muted">No shelves match. Add one, or clear the filters.</p> : (
           <div className="loc-list">
-            <div className="muted sm">{list.length} shelf location{list.length === 1 ? '' : 's'}</div>
+            <div className="loc-list-bar">
+              <label className="loc-selall"><input type="checkbox" checked={allShown} onChange={toggleAllShown} /> Select all ({list.length})</label>
+              {sel.size > 0 && (
+                <span className="loc-sel-actions">
+                  <b>{sel.size}</b> selected
+                  <button className="btn sm primary" onClick={openPrint}><Icon name="print" /> Print labels</button>
+                  <button className="btn sm ghost" onClick={() => setSel(new Set())}>Clear</button>
+                </span>
+              )}
+            </div>
             {groups.map((g) => (
               <div className="loc-group" key={`${g.warehouse}|${g.area || ''}`}>
-                <div className="loc-group-head">{g.warehouse}{g.area ? ` · ${g.area}` : ''} <span className="muted">({g.rows.length})</span></div>
+                <div className="loc-group-head">
+                  <label className="loc-group-sel"><input type="checkbox" checked={groupAllSel(g)} onChange={() => toggleGroupSel(g)} /></label>
+                  {g.warehouse}{g.area ? ` · ${g.area}` : ''} <span className="muted">({g.rows.length})</span>
+                </div>
                 {g.rows.map((loc) => {
                   const items = contents[loc.id];
                   const open = items !== undefined;
                   return (
                     <div className={`loc-row-wrap ${loc.active ? '' : 'inactive'}`} key={loc.id}>
                       <div className="loc-row">
+                        <input type="checkbox" className="loc-row-check" checked={sel.has(loc.id)} onChange={() => toggleSel(loc.id)} aria-label={`Select ${loc.code}`} />
                         <button className="loc-row-main" onClick={() => toggleContents(loc.id)} title="Show contents">
                           <span className="loc-caret">{open ? '▾' : '▸'}</span>
                           {editId === loc.id ? (
@@ -166,6 +189,7 @@ export function Locations({ onHome, onSignOut }) {
           </div>
         )}
       </div>
+      {printLocs && <ShelfLabelSheet locations={printLocs} onClose={() => setPrintLocs(null)} />}
     </div>
   );
 }

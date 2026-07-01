@@ -697,6 +697,12 @@ body {
 .loc-bulk-text { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .loc-bulk-text textarea { font-family: inherit; resize: vertical; }
 .loc-list { display: flex; flex-direction: column; gap: 4px; }
+.loc-list-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-bottom: 6px; }
+.loc-selall { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.loc-sel-actions { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.loc-group-head { display: flex; align-items: center; gap: 8px; }
+.loc-group-sel { display: inline-flex; align-items: center; }
+.loc-row-check { flex: none; }
 .loc-group { margin-top: 10px; }
 .loc-group-head { font-weight: 700; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .loc-row-wrap { border-bottom: 1px solid var(--line, #2a2a2a); }
@@ -841,6 +847,18 @@ body {
 .blabel-sku { font-weight: 700; font-size: 12pt; }
 .rlabel.boxlabel.missing { flex-direction: column; justify-content: center; text-align: left; }
 
+/* Shelf-location labels — ATM-card (CR80) sized cards tiled on a sheet. */
+.shelf-sheet { display: flex; flex-wrap: wrap; gap: 0.15in; padding: 16px; justify-content: flex-start; align-content: flex-start; }
+.shelf-label { width: 3.375in; height: 2.125in; box-sizing: border-box; background: #fff; color: #000;
+  border: 1px dashed #aaa; border-radius: 10px; padding: 0.12in; text-align: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  break-inside: avoid; page-break-inside: avoid; }
+.shelf-label-name { font-size: 30pt; font-weight: 800; line-height: 1; letter-spacing: 0.01em; }
+.shelf-label-sub { font-size: 8pt; color: #444; text-transform: uppercase; letter-spacing: 0.04em; }
+.shelf-label-bc { margin-top: 2px; }
+.shelf-label-bc .barcode-svg { width: 2.9in; height: 0.5in; }
+.shelf-label-code { font-family: ui-monospace, Menlo, monospace; font-size: 9pt; letter-spacing: 0.06em; }
+
 @media print {
   /* Hide the whole app; only the portal'd label overlay prints. */
   #root { display: none !important; }
@@ -852,6 +870,9 @@ body {
     break-after: page; page-break-after: always;
   }
   .rlabel:last-child { break-after: auto; page-break-after: auto; }
+  /* Shelf labels: tile N-up, cut guides, no page-break inside a card. */
+  .shelf-sheet { gap: 0; padding: 0; }
+  .shelf-label { border: 1px dashed #bbb; border-radius: 0; }
 }
 
 /* Tabs */

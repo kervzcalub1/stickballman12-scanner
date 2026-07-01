@@ -87,6 +87,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [editing, setEditing] = useState(() => new Set()); // group keys in edit mode
   const [drafts, setDrafts] = useState({});                // group key -> edited fields
   const [savingKey, setSavingKey] = useState(null);
+  const [refreshing, setRefreshing] = useState(false); // re-fetching GI from Alias
   const [sortDir, setSortDir] = useState('asc'); // by scan date: asc = oldest first
   const [expanded, setExpanded] = useState(() => new Set()); // group keys showing per-size detail
   const toggleExpand = (key) => setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -285,6 +286,30 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setSavingKey(null); }
   }
+  // Re-fetch the Global Indicator from Alias for every item currently shown and
+  // recompute Final = GI + 20% (manual price overrides are preserved server-side),
+  // then reload so the new prices show. PH Team + admin only (button hidden from
+  // warehouse via showPricing).
+  async function refreshPrices() {
+    if (refreshing) return;
+    if (editing.size > 0) { setNotice('Finish or cancel your current edit before refreshing prices.'); return; }
+    const vins = [...new Set((rows || []).map((r) => r.vin).filter(Boolean))];
+    if (!vins.length) { setNotice('Nothing to refresh in this view.'); return; }
+    setRefreshing(true); setError(''); setNotice('');
+    try {
+      const res = await api.phRefreshGi(vins);
+      if (res.configured === false) {
+        setNotice('Alias pricing isn’t configured, so prices can’t be refreshed.');
+      } else {
+        setNotice(res.updated
+          ? `Refreshed ${res.updated} price${res.updated === 1 ? '' : 's'} from Alias (checked ${res.checked}).`
+          : `Prices are already up to date (checked ${res.checked}).`);
+        await load();
+      }
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setRefreshing(false); }
+  }
+
   const isRescale = kind === 'rescale';
 
   // Consolidate per SKU+status (with per-size detail), then sort by scan date.
@@ -300,6 +325,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
             <span className="muted sm">
               {isRescale ? 'pending restocks · ' : ''}{groups.length} line{groups.length === 1 ? '' : 's'} · {totalUnits} unit{totalUnits === 1 ? '' : 's'}{canEdit ? '' : ' · view only'}
               {!isRescale && <button className="btn ghost sm" type="button" style={{ marginLeft: 8 }} onClick={() => setSortDir((s) => (s === 'asc' ? 'desc' : 'asc'))}>Date {sortDir === 'asc' ? '↑' : '↓'}</button>}
+              {showPricing && <button className="btn ghost sm" type="button" style={{ marginLeft: 8 }} disabled={refreshing || loading} onClick={refreshPrices} title="Re-fetch Global Indicator from Alias and update Final price (GI + 20%)">{refreshing ? 'Refreshing…' : '↻ Refresh prices'}</button>}
             </span>
           )} />
       </div>

@@ -250,6 +250,12 @@ await sql(`CREATE INDEX IF NOT EXISTS rescale_requests_open_idx ON rescale_reque
 // Warehouse audit results: actual qty per size counted on the shelf (+ a note).
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS actual_sizes JSONB`);
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS audit_note   TEXT`);
+// PH per-size listing decision after the warehouse audit: GI + Final price and the
+// II/AL/SX/SH sync flags. Array of { size, global_indicator, price,
+// added_to_intel_inv, synced_alias, synced_stockx, synced_shopify }.
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listing   JSONB`);
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_by TEXT`);
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_at TIMESTAMPTZ`);
 
 // Future — profit tracking. Schema now, UI later.
 await sql(`

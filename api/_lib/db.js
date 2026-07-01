@@ -341,6 +341,48 @@ export async function setItemGlobalIndicators(updates) {
   return list.length;
 }
 
+// Apply a re-fetched Alias global indicator to existing items (the PH "Refresh
+// prices" action). Each update = { id, global_indicator, price, keptOverride }.
+// keptOverride = the GI moved but the row keeps a PH-typed price override; the
+// logged event says so. Logged system-generated (no editor name).
+export async function refreshItemGi(updates) {
+  const list = (updates || []).filter((u) => u && u.id != null && u.global_indicator != null);
+  if (!list.length) return 0;
+  const sql = db();
+  const queries = [];
+  for (const u of list) {
+    queries.push(sql`
+      UPDATE items SET global_indicator = ${u.global_indicator}, price = ${u.price ?? null}, updated_at = now()
+      WHERE id = ${u.id}
+    `);
+    const text = `Global indicator $${Number(u.global_indicator).toFixed(2)}`
+      + (u.price != null
+        ? (u.keptOverride
+          ? ` · Final price kept at $${Number(u.price).toFixed(2)} (manual override)`
+          : ` · Final price $${Number(u.price).toFixed(2)}`)
+        : '')
+      + ' (re-fetched from Alias)';
+    queries.push(sql`
+      INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${u.id}, 'ph_update', ${JSON.stringify({ text, system: true })}::jsonb, NULL)
+    `);
+  }
+  await sql.transaction(queries);
+  return list.length;
+}
+
+// Fetch the fields needed to re-fetch GI for a set of VINs (Refresh prices).
+// Excludes sold/shipped units (no point re-pricing a closed sale).
+export async function getItemsForGiRefresh(vins) {
+  const list = [...new Set((vins || []).filter(Boolean))];
+  if (!list.length) return [];
+  return await db()`
+    SELECT id, upc, sku, size, global_indicator, price
+    FROM items
+    WHERE vin = ANY(${list}) AND status NOT IN ('sold', 'shipped')
+  `;
+}
+
 /* --------------------------- Product catalog --------------------------- */
 // Cache of shoe details keyed by UPC (box-label barcode). Stores the Alias
 // catalog_id used for Global Indicator pricing. Upsert keeps existing non-null
@@ -510,12 +552,36 @@ export async function listBatchBoxes(batchId) {
   `;
 }
 
-// Add a box (its own tracking #). Uses an explicit boxNumber when given (so
-// boxes scanned out of order keep their slot number); otherwise next = max+1.
+// Find a batch's box by its slot number (or null if that slot isn't materialized).
+async function findBatchBoxByNumber(batchId, boxNumber) {
+  const rows = await db()`
+    SELECT id, box_number, tracking_number, status
+    FROM batch_boxes WHERE batch_id = ${batchId} AND box_number = ${boxNumber} LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
+// Add a box (its own tracking #). With an explicit boxNumber, this is
+// find-or-create on that slot: box slots are now materialized up-front (see
+// syncBatchBoxes) so committing a box re-uses its existing pending row instead of
+// creating a duplicate (fills in tracking if newly provided). Without a boxNumber
+// (the "Add box" flow on the Batch page) it appends next = max+1.
 export async function addBatchBox(batchId, { trackingNumber, boxNumber }, createdBy) {
   // The shim can't nest sql fragments — branch on whether a box number is given.
   let rows;
   if (Number.isInteger(boxNumber) && boxNumber > 0) {
+    const existing = await findBatchBoxByNumber(batchId, boxNumber);
+    if (existing) {
+      if (trackingNumber && trackingNumber !== existing.tracking_number) {
+        const upd = await db()`
+          UPDATE batch_boxes SET tracking_number = ${trackingNumber}
+          WHERE id = ${existing.id}
+          RETURNING id, box_number, tracking_number, status
+        `;
+        return upd[0];
+      }
+      return existing;
+    }
     rows = await db()`
       INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
       VALUES (${batchId}, ${boxNumber}, ${trackingNumber || null}, 'pending', ${createdBy || null})
@@ -534,12 +600,48 @@ export async function addBatchBox(batchId, { trackingNumber, boxNumber }, create
   return rows[0];
 }
 
-// Full batch view for the Batch Page: batch row + boxes (+counts).
+// Materialize / update a batch's box slots (box_number + tracking) WITHOUT
+// committing items. Called as staff enter box tracking numbers so every expected
+// box — including empty ones and ones with only a tracking # scanned — is
+// persisted and shows on the Batch page. Never disturbs a box already 'received'.
+export async function syncBatchBoxes(batchId, slots, createdBy) {
+  const list = Array.isArray(slots) ? slots : [];
+  for (const s of list) {
+    const n = Number(s?.boxNumber);
+    if (!Number.isInteger(n) || n < 1) continue;
+    const tracking = String(s?.trackingNumber ?? '').trim().slice(0, 120) || null;
+    const existing = await findBatchBoxByNumber(batchId, n);
+    if (existing) {
+      // Leave received boxes alone; otherwise sync the (possibly cleared) tracking.
+      if (existing.status !== 'received' && tracking !== (existing.tracking_number || null)) {
+        await db()`UPDATE batch_boxes SET tracking_number = ${tracking} WHERE id = ${existing.id}`;
+      }
+    } else {
+      await db()`
+        INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
+        VALUES (${batchId}, ${n}, ${tracking}, 'pending', ${createdBy || null})
+      `;
+    }
+  }
+  return listBatchBoxes(batchId);
+}
+
+// Every unit in a batch with its owning box, so the Batch page can list a box's
+// shoes (VIN → history) under each box row.
+export async function listItemsByBatch(batchId) {
+  return await db()`
+    SELECT id, vin, box_id, name, sku, size, status, with_box, cost
+    FROM items WHERE batch_id = ${batchId} ORDER BY box_id NULLS LAST, id
+  `;
+}
+
+// Full batch view for the Batch Page: batch row + boxes (+counts) + items.
 export async function getBatchWithBoxes(id) {
   const b = await db()`SELECT * FROM batches WHERE id = ${id}`;
   if (!b[0]) return null;
   const boxes = await listBatchBoxes(id);
-  return { batch: b[0], boxes };
+  const items = await listItemsByBatch(id);
+  return { batch: b[0], boxes, items };
 }
 
 // Open (resumable) multi-box batches, newest first, with progress counts.
@@ -719,6 +821,7 @@ export async function createRescaleRequest({ sku, name, sizes, price, reason, no
 export async function listRescaleRequests(status = 'open', from = null, to = null) {
   return await db()`
     SELECT id, sku, name, sizes, actual_sizes, audit_note, price, reason, note, status,
+           listing, listed_by, listed_at,
            requested_by, resolved_by, resolved_at, created_at
     FROM rescale_requests
     WHERE (${status}::text IS NULL OR status = ${status})
@@ -738,6 +841,20 @@ export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
     WHERE id = ${id} AND status = 'open' RETURNING id
   `;
   return rows.length > 0;
+}
+
+// PH listing decision on an AUDITED rescale request: per-size GI + Final price and
+// the II/AL/SX/SH sync flags, stored on the request itself (requests aren't tied
+// to specific VINs). Only allowed once the warehouse has audited it.
+export async function updateRescaleRequestListing(id, listing, by) {
+  const rows = await db()`
+    UPDATE rescale_requests
+    SET listing = ${JSON.stringify(listing || [])}::jsonb, listed_by = ${by || null}, listed_at = now()
+    WHERE id = ${id} AND status = 'audited'
+    RETURNING id, sku, name, sizes, actual_sizes, audit_note, price, reason, note, status,
+              listing, listed_by, listed_at, requested_by, resolved_by, resolved_at, created_at
+  `;
+  return rows[0] || null;
 }
 
 // "Box found": a no-box unit gets a box → becomes sellable. Sets with_box=true +

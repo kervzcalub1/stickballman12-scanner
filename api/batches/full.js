@@ -1,5 +1,6 @@
-// GET /api/batches/full?id=… -> { ok, batch, boxes }
-// Batch Page view: the batch row + its boxes (with received item counts). (Feature 7)
+// GET /api/batches/full?id=… -> { ok, batch, boxes, items }
+// Batch Page view: the batch row + its boxes (with received item counts) + every
+// item (grouped by box on the client, VIN → history). (Feature 7)
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getBatchWithBoxes, dbConfigured } from '../_lib/db.js';
 
@@ -16,7 +17,7 @@ export default async function handler(req, res) {
   try {
     const found = await getBatchWithBoxes(id);
     if (!found) return send(res, 404, { ok: false, error: 'Batch not found.' });
-    return send(res, 200, { ok: true, batch: found.batch, boxes: found.boxes });
+    return send(res, 200, { ok: true, batch: found.batch, boxes: found.boxes, items: found.items });
   } catch (e) {
     console.error('[batches/full]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load the batch.' });

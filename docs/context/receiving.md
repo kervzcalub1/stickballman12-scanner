@@ -26,6 +26,16 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
    resume from the Batches page. Single-box (=1) keeps the original one-shot
    `batchCommit`; "Add box" from the Batches page still drives box-mode
    (`batchContext`).
+   **Box slots with a tracking # persist even before items are added**
+   (`persistBoxSlots` → `POST /api/batches/sync-boxes` → `syncBatchBoxes`, called
+   after the batch is created, on tracking blur/scan, and at Finish). So a box
+   whose tracking was scanned but got **0 items** still shows on the Batch page
+   (with a red 0-item count) instead of disappearing. Only **tracking-bearing**
+   slots are materialized (blank slots are left out so the "Add box" next-number
+   logic isn't thrown off); `addBatchBox` is now **find-or-create by box number**,
+   so committing a pre-materialized slot re-uses its row instead of duplicating.
+   The Batch page (`getBatchWithBoxes` now also returns `items`) lets each box row
+   **expand to its shoes** — VIN → full detail/history via `onOpenItem`.
 2. **Items** — `+ Add Item` opens the scanning modal. Field auto-focuses so a
    **HID scanner gun types straight in**. Auto-detects UPC vs SKU. Re-scanning a
    shoe's boxes **auto-increments qty by size**. A **With Box** checkbox sets

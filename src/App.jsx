@@ -86,6 +86,6 @@ export default function App() {
   if (view === 'nobox') return <NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'sold') return <StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'shipped') return <StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'rescalereq') return <RescaleRequestsReport canAudit onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'rescalereq') return <RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />;
   return <Home user={user} onPick={(v) => { setBatchContext(null); go(v); }} onSignOut={signOut} />;
 }

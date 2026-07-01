@@ -3,10 +3,11 @@
 // + creates).
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, DateRangeBar, RescaleCompare } from '../components/common.jsx';
+import { TopBar, DateRangeBar, RescaleCompare, YesNo } from '../components/common.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { rangeOf } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
+import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
 
 // Monotonic key source for this screen's React lists (unique among siblings).
 let cartKey = 1;
@@ -127,7 +128,7 @@ function RescaleRequestForm({ onHome, onSignOut, backLabel = '← Home' }) {
 
 // Shared report of rescale requests — reported vs actual. Warehouse can audit
 // (enter actual shelf counts); PH can view + create. Both see the comparison.
-export function RescaleRequestsReport({ canAudit, canCreate, onHome, onSignOut }) {
+export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true, onHome, onSignOut }) {
   const [mode, setMode] = useState('list'); // 'list' | 'new'
   const [requests, setRequests] = useState(null);
   const [error, setError] = useState('');
@@ -137,6 +138,11 @@ export function RescaleRequestsReport({ canAudit, canCreate, onHome, onSignOut }
   const [auditRows, setAuditRows] = useState([]);
   const [auditNote, setAuditNote] = useState('');
   const [busyId, setBusyId] = useState(null);
+  // PH listing editor (per-size GI/Final + II/AL/SX/SH) on an audited request.
+  const [listId, setListId] = useState(null);
+  const [listRows, setListRows] = useState([]);
+  const [giBusy, setGiBusy] = useState(false);
+  useUnsavedGuard(listId != null); // guard unsaved listing edits against Back/refresh
 
   async function load() {
     setError('');
@@ -160,6 +166,58 @@ export function RescaleRequestsReport({ canAudit, canCreate, onHome, onSignOut }
     setBusyId(r.id); setError('');
     try { await api.rescaleRequestAudit(r.id, actual, auditNote.trim()); setAuditId(null); load(); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusyId(null); }
+  }
+
+  // ---- PH listing (after the warehouse audit): set GI/Final + II/AL/SX/SH ----
+  // Seed rows from the audited actual counts (fallback to reported sizes), merging
+  // in any already-saved listing values.
+  function buildListRows(r) {
+    const base = (r.actual_sizes && r.actual_sizes.length ? r.actual_sizes : (r.sizes || []));
+    const saved = new Map((r.listing || []).map((l) => [String(l.size), l]));
+    return base.map((s) => {
+      const ex = saved.get(String(s.size)) || {};
+      return {
+        size: String(s.size), qty: s.qty,
+        global_indicator: ex.global_indicator ?? '', price: ex.price ?? '',
+        added_to_intel_inv: !!ex.added_to_intel_inv, synced_alias: !!ex.synced_alias,
+        synced_stockx: !!ex.synced_stockx, synced_shopify: !!ex.synced_shopify,
+      };
+    });
+  }
+  function startList(r) { setError(''); setListId(r.id); setListRows(buildListRows(r)); }
+  const setListRow = (size, patch) => setListRows((rows) => rows.map((x) => (x.size === size ? { ...x, ...patch } : x)));
+  const setListGI = (size, v) => setListRow(size, { global_indicator: v, price: calcFinalPrice(v) });
+
+  async function fetchGi(r) {
+    setGiBusy(true); setError('');
+    try {
+      const { results, configured } = await api.rescaleRequestFetchGi(r.sku, listRows.map((x) => x.size));
+      if (configured === false) { setError('Alias pricing isn’t configured, so GI can’t be fetched.'); return; }
+      const bySize = new Map((results || []).map((x) => [String(x.size), x]));
+      setListRows((rows) => rows.map((x) => {
+        const g = bySize.get(String(x.size));
+        return g ? { ...x, global_indicator: g.global_indicator, price: g.price } : x;
+      }));
+      if (!results?.length) setError('No Alias prices found for this SKU’s sizes.');
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setGiBusy(false); }
+  }
+
+  async function saveList(r) {
+    setBusyId(r.id); setError('');
+    const listing = listRows.map((x) => ({
+      size: x.size,
+      global_indicator: x.global_indicator === '' || x.global_indicator == null ? null : Number(x.global_indicator),
+      price: x.price === '' || x.price == null ? null : Number(x.price),
+      added_to_intel_inv: x.added_to_intel_inv, synced_alias: x.synced_alias,
+      synced_stockx: x.synced_stockx, synced_shopify: x.synced_shopify,
+    }));
+    try {
+      const { request } = await api.rescaleRequestListUpdate(r.id, listing);
+      setRequests((rs) => (rs || []).map((x) => (x.id === request.id ? request : x)));
+      setListId(null);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusyId(null); }
   }
 
@@ -225,6 +283,68 @@ export function RescaleRequestsReport({ canAudit, canCreate, onHome, onSignOut }
                 ) : (
                   <div className="rc-foot"><button className="btn sm primary" onClick={() => startAudit(r)}>🔍 Audit shelf</button></div>
                 ))}
+
+                {/* PH listing — only after the warehouse audit (feedback received). */}
+                {r.status === 'audited' && (listId === r.id ? (
+                  <div className="rc-listing">
+                    <div className="rc-listing-head">
+                      <div className="muted sm">Set price + listing status per size (GI from Alias, Final = GI + 20%):</div>
+                      <button type="button" className="btn sm ghost" disabled={giBusy} onClick={() => fetchGi(r)}>{giBusy ? 'Fetching…' : '↻ Get GI from Alias'}</button>
+                    </div>
+                    <div className="rc-listing-tablewrap">
+                      <table className="rc-listing-table">
+                        <thead><tr>
+                          <th>Size</th><th>Qty</th><th>Global indicator</th><th>Final (GI+20%)</th>
+                          {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
+                        </tr></thead>
+                        <tbody>
+                          {listRows.map((row) => (
+                            <tr key={row.size}>
+                              <td>US {row.size}</td>
+                              <td>×{row.qty}</td>
+                              <td><input className="ph-price" type="number" min="0" step="0.01" value={row.global_indicator} onChange={(e) => setListGI(row.size, e.target.value)} /></td>
+                              <td><input className="ph-price" type="number" min="0" step="0.01" value={row.price} onChange={(e) => setListRow(row.size, { price: e.target.value })} /></td>
+                              {PH_FLAGS.map(([k]) => (
+                                <td key={k}><YesNo value={row[k]} editing onChange={(v) => setListRow(row.size, { [k]: v })} /></td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="ph-edit-actions">
+                      <button className="btn sm primary" disabled={busyId === r.id} onClick={() => saveList(r)}>{busyId === r.id ? '…' : 'Save listing'}</button>
+                      <button className="btn sm ghost" onClick={() => setListId(null)}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (r.listing && r.listing.length ? (
+                  <div className="rc-listing">
+                    <div className="rc-listing-head">
+                      <span className="muted sm">Listing{r.listed_by ? ` · by ${r.listed_by}` : ''}</span>
+                      {canCreate && <button type="button" className="btn sm ghost" onClick={() => startList(r)}>Edit listing</button>}
+                    </div>
+                    <div className="rc-listing-tablewrap">
+                      <table className="rc-listing-table">
+                        <thead><tr>
+                          <th>Size</th>{showPricing && <><th>Global indicator</th><th>Final</th></>}
+                          {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
+                        </tr></thead>
+                        <tbody>
+                          {r.listing.map((l) => (
+                            <tr key={l.size}>
+                              <td>US {l.size}</td>
+                              {showPricing && <><td>{l.global_indicator != null ? `$${Number(l.global_indicator).toFixed(2)}` : '—'}</td>
+                              <td>{l.price != null ? `$${Number(l.price).toFixed(2)}` : '—'}</td></>}
+                              {PH_FLAGS.map(([k]) => <td key={k}><YesNo value={!!l[k]} editing={false} /></td>)}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (canCreate && (
+                  <div className="rc-foot"><button className="btn sm primary" onClick={() => startList(r)}>＋ List for stores</button></div>
+                ))))}
               </div>
             ))}
           </div>

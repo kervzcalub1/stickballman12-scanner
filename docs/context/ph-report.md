@@ -21,6 +21,12 @@ Component: `PHGrid` in `src/App.jsx`. Endpoints: `api/ph/list.js`
   within a size). The collapsed-row `SyncBadges` is the group summary (a flag reads
   "on" only if **all** units have it).
 - The PH-team Inventory browse page still uses the merged `groupPhRows`.
+- **Frozen columns** (`ph.js` `frozenStyle`/`rightStyle`): left = Date/Title/SKU/Qty;
+  right = **Action + Added by** (both sticky, kept together). Their contents **wrap**
+  inside the fixed column width (`.ph-addedby`, `.ph-rfrozen-first`) rather than
+  expanding it, so the two right columns' sticky offsets stay aligned. The **expanded
+  per-size drawer is pinned left** (`.ph-drow > td { position: sticky; left: 0 }`) so
+  it stays under the frozen columns instead of drifting with the middle scroll.
 
 ## Editable fields (one Edit ⇄ Submit per group)
 - **Per size**: Global indicator (number) → **Final price auto-calculates** = GI +
@@ -31,6 +37,11 @@ Component: `PHGrid` in `src/App.jsx`. Endpoints: `api/ph/list.js`
 - Nothing is group-level anymore; each size's fields apply to that size's VINs.
 - **GI fetched at receiving** (Alias pricing insights, per unit) seeds these; PH
   reviews/overrides. GI fetched best-effort, so it may be null. See `integrations.md`.
+- **Per-group GI refresh (edit mode):** a **↻ beside the Global-indicator** header
+  in the size table pulls the current Alias GI for THIS group's sizes straight into
+  the open draft (Final recomputes GI + 20%) — a focused alternative to the toolbar's
+  bulk Refresh prices. Uses the generic `POST /api/ph/gi-lookup` (`giForSkuSizes`, no
+  save; fills the draft). Same endpoint powers the Rescale Requests listing editor.
 - **↻ Refresh prices** (grid toolbar, shown when `showPricing` = admin + PH, hidden
   from warehouse) re-fetches the Global Indicator from Alias for **every item
   currently shown** and recomputes **Final = GI + 20%**, then reloads. `POST

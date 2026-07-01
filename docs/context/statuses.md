@@ -5,7 +5,8 @@ Defined centrally: `src/statuses.js` (labels/colors, client) + `api/_lib/statuse
 
 ## Keys (label)
 - `needs_shelf` — Needs to be Added to Shelf (default on receive w/ box)
-- `in_stock` — In Stock
+- `in_stock` — In Stock (set by **shelving** a boxed unit; carries a `location_id`,
+  shown as "In Stock · A2-04" — see `locations.md`)
 - `pre_sold` — Pre-Sold
 - `no_box` — Bought Without Box (auto when "With Box" unchecked; not sellable)
 - `shipped` — Shipped
@@ -24,6 +25,12 @@ Shown as `SyncBadges`.
   across II + stores) and logs the change as **(system-generated)**.
 - "Listable" / sellable = `with_box = true AND status NOT IN (sold, shipped,
   missing, issue, no_box)` — this drives the pending-count badges.
+
+## Shelving (`needs_shelf`/`no_box` → located)
+- **Shelve / Put-away** (`/shelve`) sets a unit's `location` and — for a boxed unit
+  — flips `needs_shelf → in_stock`. A no-box unit keeps `no_box` but is still
+  located; "has a box now?" makes it `with_box + in_stock`. Transfer = re-shelve.
+  Logs a `shelved` event. Full flow in `locations.md`.
 
 ## Status change paths
 - Inventory: per-group dropdown or bulk **Edit status** → `bulk-status.js`.

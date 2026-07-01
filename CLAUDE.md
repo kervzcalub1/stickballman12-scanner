@@ -37,6 +37,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
 | No Box queue, Box-found, UPC box labels | `docs/context/no-box.md` |
+| Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
 | StockX / Alias / KicksDB, Alias auto-relogin, proxies | `docs/context/integrations.md` |
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |

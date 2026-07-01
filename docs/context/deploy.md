@@ -42,6 +42,9 @@ run the migration after schema changes, on every environment.**
   a laptop use `DATABASE_PUBLIC_URL` (host `*.proxy.rlwy.net`); add
   `?sslmode=require` if SSL errors.
 - Consider auto-running `db:setup` on boot in `server.mjs` to prevent drift.
+- **Shelf locations:** after `db:setup`, seed Manheim's 253 shelves once with
+  `npm run db:seed-manheim` (idempotent). Other sites are added in the Locations
+  UI. See `locations.md`.
 
 ### Reset the DB (wipe inventory, KEEP accounts)
 - `npm run db:reset` (script `scripts/db-reset.mjs`) — truncates

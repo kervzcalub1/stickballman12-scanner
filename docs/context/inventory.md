@@ -13,6 +13,9 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 
 ## Features
 - Search box: scan a VIN (gun/camera) to open it, or type VIN / SKU / name.
+  **A shelf code** (`MNH-WH-A2-04`, typed or scanned) returns that **shelf's
+  contents** (`queryItems` matches `location_code`); rows/detail show a **📍
+  location chip**. See `locations.md`.
 - **Day/Week/Month + Custom** date filter (`DateRangeBar` for day/week/month;
   Inventory also keeps a Custom from/to). Supplier / status / intake filters.
 - Bulk **Edit status** → `api/items/bulk-status.js` (`bulkSetStatus`), one

@@ -906,13 +906,16 @@ export async function bulkCreateLocations(list, createdBy) {
 }
 
 // Edit the mutable bits (rename the display label, activate/deactivate). The
-// structural fields (code/bay/shelf) are fixed at create. Pass null to leave a
-// field unchanged.
+// structural fields (code/bay/shelf) are fixed at create. Only the keys PRESENT
+// in `patch` change — so `label: null` explicitly CLEARS the label (whereas a
+// missing key leaves it as-is; a plain coalesce couldn't tell those apart).
 export async function updateLocation(id, patch) {
+  const hasLabel = Object.prototype.hasOwnProperty.call(patch, 'label');
+  const hasActive = Object.prototype.hasOwnProperty.call(patch, 'active');
   const rows = await db()`
     UPDATE locations SET
-      label      = coalesce(${patch.label ?? null}, label),
-      active     = coalesce(${patch.active ?? null}::bool, active),
+      label      = CASE WHEN ${hasLabel}::bool  THEN ${hasLabel ? (patch.label ?? null) : null}     ELSE label  END,
+      active     = CASE WHEN ${hasActive}::bool THEN ${hasActive ? !!patch.active : null}::bool      ELSE active END,
       updated_at = now()
     WHERE id = ${id}
     RETURNING *

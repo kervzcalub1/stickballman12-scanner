@@ -702,14 +702,22 @@ body {
 .loc-list-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-bottom: 6px; }
 .loc-selall { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .loc-sel-actions { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
-.loc-group-head { display: flex; align-items: center; gap: 8px; }
-.loc-group-sel { display: inline-flex; align-items: center; }
+/* Nested list: Area (14px) → Bay (13px, indented) → Shelves (indented). */
+.loc-group-head { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.loc-group-sel, .loc-bay-sel { display: inline-flex; align-items: center; }
 .loc-row-check { flex: none; }
 .loc-group { margin-top: 10px; }
-.loc-group-head { font-weight: 700; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
-.loc-row-wrap { border-bottom: 1px solid var(--line, #2a2a2a); }
+.loc-list-bar + .loc-group { margin-top: 4px; }
+.loc-toggle { background: none; border: none; color: inherit; font: inherit; cursor: pointer; text-align: left; display: inline-flex; align-items: center; gap: 8px; padding: 0; flex: 1; min-width: 0; }
+.loc-bay { border-top: 1px solid var(--border); }
+.loc-bay-head { display: flex; align-items: center; gap: 8px; padding-left: 12px; }
+.loc-bay-toggle { padding: 7px 0; font-weight: 600; font-size: 13px; }
+.loc-bay-name { min-width: 56px; font-weight: 700; }
+.loc-bay-shelves { padding-left: 22px; border-left: 2px solid var(--border); margin-left: 6px; }
+.loc-row-wrap { border-bottom: 1px solid var(--border); }
 .loc-row-wrap.inactive { opacity: 0.55; }
 .loc-row { display: flex; align-items: center; gap: 10px; }
+@media (max-width: 560px) { .loc-row { flex-wrap: wrap; } .loc-row-actions { width: 100%; justify-content: flex-end; } }
 .loc-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 0; background: none; border: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .loc-caret { width: 14px; color: var(--muted); flex: none; }
 .loc-label { font-weight: 600; min-width: 70px; }

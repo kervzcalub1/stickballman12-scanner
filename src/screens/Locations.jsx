@@ -24,6 +24,8 @@ export function Locations({ onHome, onSignOut }) {
   const [sel, setSel] = useState(() => new Set()); // selected location ids (for printing)
   const [printLocs, setPrintLocs] = useState(null);
   const [siteAreas, setSiteAreas] = useState({}); // { warehouse: [areas…] } — accrued from loaded data
+  const [openBays, setOpenBays] = useState(() => new Set());       // expanded bays (collapsed by default)
+  const [collapsedAreas, setCollapsedAreas] = useState(() => new Set()); // collapsed areas (expanded by default)
 
   async function load() {
     setError('');
@@ -86,6 +88,71 @@ export function Locations({ onHome, onSignOut }) {
   const toggleGroupSel = (g) => setSel((s) => { const n = new Set(s); const all = g.rows.every((r) => n.has(r.id)); g.rows.forEach((r) => (all ? n.delete(r.id) : n.add(r.id))); return n; });
   const openPrint = () => setPrintLocs(list.filter((l) => sel.has(l.id)));
 
+  // Nested nav: Area → Bay → shelves, each collapsible so 250+ shelves stay navigable.
+  const areaKey = (g) => `${g.warehouse}|${g.area || ''}`;
+  const bayKeyOf = (g, bay) => `${areaKey(g)}|${bay}`;
+  const toggleBay = (k) => setOpenBays((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggleArea = (k) => setCollapsedAreas((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const baysOf = (g) => { // g.rows grouped by bay, preserving order (rows come sorted)
+    const m = new Map();
+    for (const loc of g.rows) { if (!m.has(loc.bay)) m.set(loc.bay, []); m.get(loc.bay).push(loc); }
+    return [...m.entries()].map(([bay, shelves]) => ({ bay, shelves }));
+  };
+  const baySelAll = (shelves) => shelves.length > 0 && shelves.every((s) => sel.has(s.id));
+  const toggleBaySel = (shelves) => setSel((s) => { const n = new Set(s); const all = shelves.every((x) => n.has(x.id)); shelves.forEach((x) => (all ? n.delete(x.id) : n.add(x.id))); return n; });
+
+  // One shelf row (checkbox · label/code/count · rename/deactivate · contents drawer).
+  const shelfRow = (loc) => {
+    const items = contents[loc.id];
+    const open = items !== undefined;
+    return (
+      <div className={`loc-row-wrap ${loc.active ? '' : 'inactive'}`} key={loc.id}>
+        <div className="loc-row">
+          <input type="checkbox" className="loc-row-check" checked={sel.has(loc.id)} onChange={() => toggleSel(loc.id)} aria-label={`Select ${loc.code}`} />
+          <button className="loc-row-main" onClick={() => toggleContents(loc.id)} title="Show contents">
+            <span className="loc-caret">{open ? '▾' : '▸'}</span>
+            {editId === loc.id ? (
+              <input className="loc-label-edit" value={editLabel} autoFocus onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setEditLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveLabel(loc); } }} />
+            ) : (
+              <span className="loc-label">{loc.label || loc.code}</span>
+            )}
+            <span className="loc-code muted sm">{loc.code}</span>
+            <span className={`loc-count ${loc.item_count ? '' : 'zero'}`}>{loc.item_count} item{loc.item_count === 1 ? '' : 's'}</span>
+            {!loc.active && <span className="loc-inactive-badge">inactive</span>}
+          </button>
+          <span className="loc-row-actions">
+            {editId === loc.id ? (
+              <>
+                <button className="btn sm primary" disabled={busyId === loc.id} onClick={() => saveLabel(loc)}>Save</button>
+                <button className="btn sm ghost" onClick={() => setEditId(null)}>Cancel</button>
+              </>
+            ) : (
+              <>
+                <button className="btn sm ghost" onClick={() => { setEditId(loc.id); setEditLabel(loc.label || ''); }}>Rename</button>
+                <button className="btn sm ghost" disabled={busyId === loc.id} onClick={() => toggleActive(loc)}>{loc.active ? 'Deactivate' : 'Activate'}</button>
+              </>
+            )}
+          </span>
+        </div>
+        {open && (
+          <div className="loc-contents">
+            {items === 'loading' ? <span className="muted sm">Loading…</span>
+              : !items.length ? <span className="muted sm">Empty — nothing shelved here.</span>
+                : items.map((it) => (
+                  <div className="loc-item" key={it.vin}>
+                    <span className="vin">{it.vin}</span>
+                    <span className="loc-item-name">{it.name || '—'}</span>
+                    <span className="muted sm">{it.sku || '—'} · {it.size ? `US ${it.size}` : '—'}</span>
+                    <StatusPill status={it.status} />
+                  </div>
+                ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Filter dropdowns include any custom sites/areas that exist (+ the current pick).
   const whOptions = [...new Set([...WAREHOUSES, ...list.map((l) => l.warehouse), warehouse].filter(Boolean))];
   const areaOptions = [...new Set([...LOCATION_AREAS, ...list.map((l) => l.area).filter(Boolean), area].filter(Boolean))];
@@ -143,64 +210,41 @@ export function Locations({ onHome, onSignOut }) {
                 </span>
               )}
             </div>
-            {groups.map((g) => (
-              <div className="loc-group" key={`${g.warehouse}|${g.area || ''}`}>
-                <div className="loc-group-head">
-                  <label className="loc-group-sel"><input type="checkbox" checked={groupAllSel(g)} onChange={() => toggleGroupSel(g)} /></label>
-                  {g.warehouse}{g.area ? ` · ${g.area}` : ''} <span className="muted">({g.rows.length})</span>
-                </div>
-                {g.rows.map((loc) => {
-                  const items = contents[loc.id];
-                  const open = items !== undefined;
-                  return (
-                    <div className={`loc-row-wrap ${loc.active ? '' : 'inactive'}`} key={loc.id}>
-                      <div className="loc-row">
-                        <input type="checkbox" className="loc-row-check" checked={sel.has(loc.id)} onChange={() => toggleSel(loc.id)} aria-label={`Select ${loc.code}`} />
-                        <button className="loc-row-main" onClick={() => toggleContents(loc.id)} title="Show contents">
-                          <span className="loc-caret">{open ? '▾' : '▸'}</span>
-                          {editId === loc.id ? (
-                            <input className="loc-label-edit" value={editLabel} autoFocus onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => setEditLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveLabel(loc); } }} />
-                          ) : (
-                            <span className="loc-label">{loc.label || loc.code}</span>
-                          )}
-                          <span className="loc-code muted sm">{loc.code}</span>
-                          <span className={`loc-count ${loc.item_count ? '' : 'zero'}`}>{loc.item_count} item{loc.item_count === 1 ? '' : 's'}</span>
-                          {!loc.active && <span className="loc-inactive-badge">inactive</span>}
-                        </button>
-                        <span className="loc-row-actions">
-                          {editId === loc.id ? (
-                            <>
-                              <button className="btn sm primary" disabled={busyId === loc.id} onClick={() => saveLabel(loc)}>Save</button>
-                              <button className="btn sm ghost" onClick={() => setEditId(null)}>Cancel</button>
-                            </>
-                          ) : (
-                            <>
-                              <button className="btn sm ghost" onClick={() => { setEditId(loc.id); setEditLabel(loc.label || ''); }}>Rename</button>
-                              <button className="btn sm ghost" disabled={busyId === loc.id} onClick={() => toggleActive(loc)}>{loc.active ? 'Deactivate' : 'Activate'}</button>
-                            </>
-                          )}
-                        </span>
-                      </div>
-                      {open && (
-                        <div className="loc-contents">
-                          {items === 'loading' ? <span className="muted sm">Loading…</span>
-                            : !items.length ? <span className="muted sm">Empty — nothing shelved here.</span>
-                              : items.map((it) => (
-                                <div className="loc-item" key={it.vin}>
-                                  <span className="vin">{it.vin}</span>
-                                  <span className="loc-item-name">{it.name || '—'}</span>
-                                  <span className="muted sm">{it.sku || '—'} · {it.size ? `US ${it.size}` : '—'}</span>
-                                  <StatusPill status={it.status} />
-                                </div>
-                              ))}
+            {groups.map((g) => {
+              const aKey = areaKey(g);
+              const areaOpen = !collapsedAreas.has(aKey);
+              const bays = baysOf(g);
+              return (
+                <div className="loc-group" key={aKey}>
+                  <div className="loc-group-head">
+                    <label className="loc-group-sel" title="Select all in this area"><input type="checkbox" checked={groupAllSel(g)} onChange={() => toggleGroupSel(g)} /></label>
+                    <button className="loc-toggle" onClick={() => toggleArea(aKey)} aria-expanded={areaOpen}>
+                      <span className="loc-caret">{areaOpen ? '▾' : '▸'}</span>
+                      {g.warehouse}{g.area ? ` · ${g.area}` : ''} <span className="muted">({g.rows.length} {g.rows.length === 1 ? 'shelf' : 'shelves'} · {bays.length} bay{bays.length === 1 ? '' : 's'})</span>
+                    </button>
+                  </div>
+                  {areaOpen && bays.map((b) => {
+                    const bKey = bayKeyOf(g, b.bay);
+                    const bayOpen = openBays.has(bKey);
+                    const bayItems = b.shelves.reduce((n, s) => n + (s.item_count || 0), 0);
+                    return (
+                      <div className="loc-bay" key={bKey}>
+                        <div className="loc-bay-head">
+                          <label className="loc-bay-sel" title="Select all in this bay"><input type="checkbox" checked={baySelAll(b.shelves)} onChange={() => toggleBaySel(b.shelves)} aria-label={`Select bay ${b.bay}`} /></label>
+                          <button className="loc-toggle loc-bay-toggle" onClick={() => toggleBay(bKey)} aria-expanded={bayOpen}>
+                            <span className="loc-caret">{bayOpen ? '▾' : '▸'}</span>
+                            <span className="loc-bay-name">{b.bay}</span>
+                            <span className="muted sm">{b.shelves.length} {b.shelves.length === 1 ? 'shelf' : 'shelves'}</span>
+                            <span className={`loc-count ${bayItems ? '' : 'zero'}`}>{bayItems} item{bayItems === 1 ? '' : 's'}</span>
+                          </button>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+                        {bayOpen && <div className="loc-bay-shelves">{b.shelves.map(shelfRow)}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

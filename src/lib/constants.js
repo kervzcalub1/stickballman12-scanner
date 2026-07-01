@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'batches', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve'];
+export const ROUTES = ['receiving', 'rescale', 'batches', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -14,6 +14,10 @@ export const ROLE_LABEL = { admin: 'Admin', warehouse: 'Warehouse', ph_team: 'PH
 export const roleLabel = (r) => ROLE_LABEL[r] || r;
 
 export const SUPPLIERS = ['Sunny', 'Nike', 'Foot Locker', 'DTLR', 'Snipes', 'Champs', 'Finish Line', 'Shoe Palace'];
+
+// Shelf-location warehouses + areas (mirrors api/_lib/locations.js prefix maps).
+export const WAREHOUSES = ['Manheim Main Shed', 'Mount Joy', "Kready's Farm"];
+export const LOCATION_AREAS = ['Warehouse Rows', 'Pods', 'Office Space', 'Basement Space'];
 
 // Why in-hand stock is being re-scaled (no shipment). Stored on the batch.
 export const RESCALE_REASONS = [
@@ -93,6 +97,7 @@ export const HOME_SECTIONS = [
   ] },
   { title: 'Reports & Lookup', cards: [
     { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
+    { key: 'locations', icon: '🗺️', title: 'Locations', sub: 'Browse shelves, add & print labels' },
     { key: 'report', icon: '📊', title: 'Report', sub: 'Monthly listing & store sync' },
   ] },
 ];

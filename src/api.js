@@ -110,9 +110,14 @@ export const api = {
   batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
-  // Shelf locations (put-away)
+  // Shelf locations (put-away + management)
   locationLookup: (code) => get(`/api/locations/lookup?code=${encodeURIComponent(code)}`),
   shelveItems: (locationCode, units) => post('/api/items/shelve', { locationCode, units }),
+  locationList: (p = {}) => get(`/api/locations?${new URLSearchParams(Object.fromEntries(Object.entries(p).filter(([, v]) => v != null && v !== ''))).toString()}`),
+  locationItems: (id) => get(`/api/locations/items?id=${encodeURIComponent(id)}`),
+  locationCreate: (payload) => post('/api/locations/create', payload),
+  locationBulk: (payload) => post('/api/locations/bulk', payload),
+  locationUpdate: (id, patch) => post('/api/locations/update', { id, ...patch }),
   itemHistory: (vins) => get(`/api/items/history?vins=${encodeURIComponent((vins || []).join(','))}`),
   itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
   rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),

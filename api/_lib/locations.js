@@ -20,6 +20,14 @@ export const AREAS = Object.keys(AREA_PREFIXES);
 
 export const pad2 = (n) => String(n).padStart(2, '0');
 
+// Derive a short prefix from free text (uppercase alphanumerics) for sites/areas
+// that aren't in the known maps (manually-added warehouses).
+export const derivePrefix = (s, len) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, len) || 'X';
+export const sitePrefixFor = (warehouse) => SITE_PREFIXES[warehouse] || derivePrefix(warehouse, 3);
+export const areaPrefixFor = (area) => (area ? (AREA_PREFIXES[area] || derivePrefix(area, 2)) : null);
+// Bay as a code segment: uppercased, spaces stripped ("Pod 1" → "POD1", "A2" → "A2").
+export const bayCodeFor = (bay) => String(bay || '').toUpperCase().replace(/\s+/g, '');
+
 // Build the canonical code from parts. `bayCode` is the code segment ("A2",
 // "K10", or a pod number "1"); shelf null/'' → whole-bay.
 export function buildLocationCode({ sitePrefix, areaPrefix, bayCode, shelf }) {

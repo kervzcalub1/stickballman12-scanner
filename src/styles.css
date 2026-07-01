@@ -685,6 +685,35 @@ body {
 .loc-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: #7bc99a;
   background: rgba(123, 201, 154, 0.12); border: 1px solid rgba(123, 201, 154, 0.4); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 .loc-chip.sm { font-size: 11px; padding: 0 6px; }
+/* Locations management page */
+.loc-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.loc-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.loc-filters select { min-width: 140px; }
+.loc-search { flex: 1; min-width: 220px; }
+.loc-add-btns { display: inline-flex; gap: 8px; margin-left: auto; }
+.loc-pane { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 10px; }
+.loc-pane-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.loc-pane-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.loc-bulk-text { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.loc-bulk-text textarea { font-family: inherit; resize: vertical; }
+.loc-list { display: flex; flex-direction: column; gap: 4px; }
+.loc-group { margin-top: 10px; }
+.loc-group-head { font-weight: 700; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.loc-row-wrap { border-bottom: 1px solid var(--line, #2a2a2a); }
+.loc-row-wrap.inactive { opacity: 0.55; }
+.loc-row { display: flex; align-items: center; gap: 10px; }
+.loc-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 0; background: none; border: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.loc-caret { width: 14px; color: var(--muted); flex: none; }
+.loc-label { font-weight: 600; min-width: 70px; }
+.loc-code { font-variant-numeric: tabular-nums; }
+.loc-count { font-size: 12px; margin-left: auto; white-space: nowrap; }
+.loc-count.zero { color: var(--muted); }
+.loc-inactive-badge { font-size: 11px; color: #e08f8f; }
+.loc-label-edit { width: 120px; }
+.loc-row-actions { display: inline-flex; gap: 6px; flex: none; }
+.loc-contents { padding: 2px 0 10px 24px; display: flex; flex-direction: column; gap: 4px; }
+.loc-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 13px; }
+.loc-item-name { font-weight: 600; }
 .ph-detail-meta { display: flex; flex-direction: column; gap: 12px; }
 .ph-detail-flags { display: flex; flex-wrap: wrap; gap: 14px; }
 .ph-detail-flag { display: flex; flex-direction: column; gap: 4px; }

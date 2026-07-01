@@ -72,6 +72,11 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
 
 ## Gotchas
 - The shim CANNOT nest `sql` fragments. Build alternate queries with if/else.
+- **`BIGINT` ids come back as STRINGS** (the `pg` driver won't coerce int8 to a JS
+  number). So `rows[].id` is `"6"`, not `6`. Comparing a DB id against a
+  `Number(...)`'d request value with `===` silently fails (`"6" === 6` → false).
+  Coerce first: `Number(row.id) === id`. (This caused box-commit's "Box not found
+  in this batch" — the freshly-added box id never matched.)
 - Date filters compare `(col AT TIME ZONE 'America/New_York')::date` to from/to.
 - Adding a column? Put an `ADD COLUMN IF NOT EXISTS` in db-setup.mjs AND run
   `db:setup` on every environment (see `deploy.md` — prod drift is the #1 trap).

@@ -731,7 +731,8 @@ export async function phListItems(from, to, kind = null) {
              coalesce(ev.created_by, i.created_by) AS created_by, i.name, i.sku, i.size, i.gender,
              i.status, i.cost, i.price, i.global_indicator,
              i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
-             i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at
+             i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
+             (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count
       FROM items i
       LEFT JOIN LATERAL (
         SELECT e.created_at, e.created_by FROM item_events e
@@ -750,7 +751,8 @@ export async function phListItems(from, to, kind = null) {
     SELECT i.vin, i.created_at, i.created_by, i.name, i.sku, i.size, i.gender,
            i.status, i.cost, i.price, i.global_indicator,
            i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
-           i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at
+           i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
+           (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)

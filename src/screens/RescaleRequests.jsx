@@ -4,6 +4,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, DateRangeBar, RescaleCompare, YesNo } from '../components/common.jsx';
+import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { rangeOf } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
@@ -314,7 +315,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                         <table className="rc-listing-table">
                           <thead><tr>
                             <th>Size</th><th>Qty</th>
-                            {showPricing && <><th><span className="ph-gi-th">Global indicator{editable && <button type="button" className="btn icon ghost ph-gi-refresh" title="Re-fetch GI from Alias for these sizes" disabled={giBusyId === r.id} onClick={() => fetchGi(r)}>{giBusyId === r.id ? '…' : '↻'}</button>}</span></th><th>Final (GI+20%)</th></>}
+                            {showPricing && <><th><span className="ph-gi-th">Global indicator{editable && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for these sizes" disabled={giBusyId === r.id} onClick={() => fetchGi(r)}><Icon name="refresh" size="1em" className={giBusyId === r.id ? 'spin' : ''} /></button>}</span></th><th>Final (GI+20%)</th></>}
                             {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
                           </tr></thead>
                           <tbody>

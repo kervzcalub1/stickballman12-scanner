@@ -16,6 +16,7 @@ export function eventLabel(e) {
   if (e.type === 'received') return `Received into inventory (by ${by})`;
   if (e.type === 'rescaled') return `Rescaled${e.details?.reason ? ` (${e.details.reason})` : ''}${e.details?.note ? ` — ${e.details.note}` : ''} (by ${by})`;
   if (e.type === 'status_change') return `Status → ${statusLabel(e.details?.status)}${e.details?.note ? ` — ${e.details.note}` : ''} (marked by: ${by})`;
+  if (e.type === 'shelved') return `Shelved at ${e.details?.label || e.details?.locationCode || '—'}${e.details?.gotBox ? ' (box found → With Box)' : ''} (by ${by})`;
   if (e.type === 'ph_update') return `${e.details?.text || 'Updated'} ${(e.details?.soldCascade || e.details?.system) ? '(system-generated)' : `(by ${by})`}`;
   if (e.type === 'note') return `Note: ${e.details?.text || ''} (by ${by})`;
   if (e.type === 'issue') {

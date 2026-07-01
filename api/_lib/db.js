@@ -701,7 +701,7 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.cost, i.status, i.created_by, i.created_at,
            i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv,
-           i.synced_alias, i.synced_stockx, i.synced_shopify,
+           i.synced_alias, i.synced_stockx, i.synced_shopify, i.location_code,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
            (SELECT p.url FROM product_photos p WHERE p.sku = i.sku
               ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, p.created_at LIMIT 1) AS photo_url,
@@ -713,7 +713,7 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
       AND (${supplier}::text IS NULL OR b.supplier_name = ${supplier})
       AND (${status}::text   IS NULL OR i.status = ${status})
       AND (${kind}::text     IS NULL OR b.kind = ${kind})
-      AND (${like}::text IS NULL OR i.vin ILIKE ${like} OR i.sku ILIKE ${like} OR i.name ILIKE ${like})
+      AND (${like}::text IS NULL OR i.vin ILIKE ${like} OR i.sku ILIKE ${like} OR i.name ILIKE ${like} OR i.location_code ILIKE ${like})
     ORDER BY i.vin
     LIMIT ${lim}
   `;
@@ -918,6 +918,44 @@ export async function updateLocation(id, patch) {
     RETURNING *
   `;
   return rows[0] || null;
+}
+
+// Put-away / transfer: place a set of units on a shelf. Each unit → its
+// location_id/location_code set. Status: a boxed unit (or one that now has a box)
+// becomes `in_stock`; a unit still without a box keeps `no_box` (locatable but not
+// sellable). Logs a `shelved` event per unit. `units`: [{ vin, nowHasBox }].
+export async function shelveItems({ location, units, createdBy }) {
+  const list = (units || []).filter((u) => u && u.vin);
+  if (!list.length) return { updated: 0, gotBox: 0, results: [] };
+  const vins = [...new Set(list.map((u) => u.vin))];
+  const cur = await db()`SELECT id, vin, status, with_box FROM items WHERE vin = ANY(${vins})`;
+  const byVin = new Map(cur.map((r) => [r.vin, r]));
+  const sql = db();
+  const queries = [];
+  const results = [];
+  let gotBox = 0;
+  for (const u of list) {
+    const item = byVin.get(u.vin);
+    if (!item) { results.push({ vin: u.vin, ok: false, reason: 'not_found' }); continue; }
+    const wasNoBox = item.with_box === false;
+    const nowHasBox = wasNoBox && !!u.nowHasBox;
+    const withBox = wasNoBox ? !!u.nowHasBox : true;
+    const newStatus = (wasNoBox && !u.nowHasBox) ? 'no_box' : 'in_stock';
+    if (nowHasBox) gotBox++;
+    const details = JSON.stringify({ locationCode: location.code, label: location.label, from: item.status, gotBox: nowHasBox, shelved: true });
+    queries.push(sql`
+      WITH up AS (
+        UPDATE items SET location_id = ${location.id}, location_code = ${location.code},
+          with_box = ${withBox}, status = ${newStatus}, updated_at = now()
+        WHERE id = ${item.id} RETURNING id
+      )
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT id, 'shelved', ${details}::jsonb, ${createdBy || null} FROM up
+    `);
+    results.push({ vin: u.vin, ok: true, status: newStatus, with_box: withBox });
+  }
+  if (queries.length) await sql.transaction(queries);
+  return { updated: results.filter((r) => r.ok).length, gotBox, results };
 }
 
 // Units currently stored at a location (excl. sold/shipped) — the shelf-contents view.
@@ -1191,8 +1229,11 @@ export async function bulkSetStatus(vins, status, createdBy) {
 export async function getItemByVin(vin) {
   const rows = await db()`
     SELECT i.*, b.batch_code, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.date_received, b.kind, b.origin
-    FROM items i LEFT JOIN batches b ON b.id = i.batch_id
+           b.date_received, b.kind, b.origin,
+           l.label AS location_label, l.warehouse AS location_warehouse, l.area AS location_area
+    FROM items i
+    LEFT JOIN batches b ON b.id = i.batch_id
+    LEFT JOIN locations l ON l.id = i.location_id
     WHERE i.vin = ${vin} LIMIT 1
   `;
   if (!rows[0]) return null;

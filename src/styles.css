@@ -677,6 +677,14 @@ body {
 .photos-del { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 999px; border: none;
   background: rgba(0, 0, 0, 0.6); color: #fff; cursor: pointer; font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center; }
 .photos-del:hover:not(:disabled) { background: rgba(224, 80, 80, 0.9); }
+/* Shelve / Put-away page */
+.shelve-target { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
+.shelve-loc { font-size: 15px; }
+.shelve-box-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #e0a878; cursor: pointer; white-space: nowrap; }
+/* Location chip — where a unit is shelved (📍 A2-04). */
+.loc-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: #7bc99a;
+  background: rgba(123, 201, 154, 0.12); border: 1px solid rgba(123, 201, 154, 0.4); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.loc-chip.sm { font-size: 11px; padding: 0 6px; }
 .ph-detail-meta { display: flex; flex-direction: column; gap: 12px; }
 .ph-detail-flags { display: flex; flex-wrap: wrap; gap: 14px; }
 .ph-detail-flag { display: flex; flex-direction: column; gap: 4px; }

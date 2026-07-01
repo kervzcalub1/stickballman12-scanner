@@ -110,6 +110,9 @@ export const api = {
   batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
+  // Shelf locations (put-away)
+  locationLookup: (code) => get(`/api/locations/lookup?code=${encodeURIComponent(code)}`),
+  shelveItems: (locationCode, units) => post('/api/items/shelve', { locationCode, units }),
   itemHistory: (vins) => get(`/api/items/history?vins=${encodeURIComponent((vins || []).join(','))}`),
   itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
   rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),

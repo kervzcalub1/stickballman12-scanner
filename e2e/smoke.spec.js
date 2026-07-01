@@ -52,6 +52,7 @@ test.describe('admin screens render', () => {
     ['/sold', 'Mark Sold'],
     ['/shipped', 'Mark Shipped'],
     ['/rescalereq', 'Rescale Requests'],
+    ['/shelve', 'Shelve / Put-away'],
   ];
   for (const [route, marker] of ROUTES) {
     test(`admin ${route}`, async ({ page }) => {

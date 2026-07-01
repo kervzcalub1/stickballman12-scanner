@@ -23,12 +23,23 @@ export function Locations({ onHome, onSignOut }) {
   const [pane, setPane] = useState(null); // 'add' | 'bulk' | null
   const [sel, setSel] = useState(() => new Set()); // selected location ids (for printing)
   const [printLocs, setPrintLocs] = useState(null);
+  const [siteAreas, setSiteAreas] = useState({}); // { warehouse: [areas…] } — accrued from loaded data
 
   async function load() {
     setError('');
     try {
       const { locations: l } = await api.locationList({ warehouse, area, active, q });
       setLocations(l);
+      // Accrue each site's real areas so the Add/Bulk forms can suggest them.
+      setSiteAreas((prev) => {
+        const next = { ...prev };
+        for (const loc of l) {
+          if (!loc.area) continue;
+          const arr = next[loc.warehouse] ? [...next[loc.warehouse]] : [];
+          if (!arr.includes(loc.area)) { arr.push(loc.area); next[loc.warehouse] = arr; }
+        }
+        return next;
+      });
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, [warehouse, area, active]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -113,8 +124,8 @@ export function Locations({ onHome, onSignOut }) {
             <button className={`btn sm ${pane === 'bulk' ? 'primary' : 'ghost'}`} onClick={() => setPane(pane === 'bulk' ? null : 'bulk')}>Bulk add</button>
           </span>
         </div>
-        {pane === 'add' && <AddShelf onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
-        {pane === 'bulk' && <BulkAdd onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
+        {pane === 'add' && <AddShelf siteAreas={siteAreas} onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
+        {pane === 'bulk' && <BulkAdd siteAreas={siteAreas} onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
         {error && <div className="error mt">{error}</div>}
         {notice && <div className="notice mt">{notice}</div>}
       </div>
@@ -199,12 +210,14 @@ export function Locations({ onHome, onSignOut }) {
 }
 
 // --- Add a single shelf ---------------------------------------------------
-function AddShelf({ onDone, onError, onSignOut }) {
+function AddShelf({ siteAreas = {}, onDone, onError, onSignOut }) {
   const [warehouse, setWarehouse] = useState(WAREHOUSES[0]);
   const [area, setArea] = useState('');
   const [bay, setBay] = useState('');
   const [shelf, setShelf] = useState('');
   const [busy, setBusy] = useState(false);
+  // Suggest this site's own areas first, then the global presets.
+  const areaOptions = [...new Set([...(siteAreas[warehouse] || []), ...LOCATION_AREAS])];
 
   async function submit() {
     onError('');
@@ -221,8 +234,8 @@ function AddShelf({ onDone, onError, onSignOut }) {
   return (
     <div className="loc-pane">
       <div className="loc-pane-row">
-        <label>Warehouse / Site<ComboField value={warehouse} onChange={setWarehouse} options={WAREHOUSES} placeholder="New site name" /></label>
-        <label>Area (optional)<ComboField value={area} onChange={setArea} options={LOCATION_AREAS} allowNone placeholder="New area name" /></label>
+        <label>Warehouse / Site<ComboField value={warehouse} onChange={(w) => { setWarehouse(w); setArea(''); }} options={WAREHOUSES} placeholder="New site name" /></label>
+        <label>Area (optional)<ComboField key={warehouse} value={area} onChange={setArea} options={areaOptions} allowNone placeholder="New area name" /></label>
         <label>Bay<input value={bay} onChange={(e) => setBay(e.target.value)} placeholder="e.g. A2 or Pod 1" autoCapitalize="characters" /></label>
         <label>Shelf #<input type="number" min="1" max="99" value={shelf} onChange={(e) => setShelf(e.target.value)} placeholder="blank = whole bay" /></label>
       </div>
@@ -232,11 +245,12 @@ function AddShelf({ onDone, onError, onSignOut }) {
 }
 
 // --- Bulk add a warehouse's bays ------------------------------------------
-function BulkAdd({ onDone, onError, onSignOut }) {
+function BulkAdd({ siteAreas = {}, onDone, onError, onSignOut }) {
   const [warehouse, setWarehouse] = useState(WAREHOUSES[0]);
   const [area, setArea] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const areaOptions = [...new Set([...(siteAreas[warehouse] || []), ...LOCATION_AREAS])];
 
   function parse(t) {
     return t.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
@@ -260,8 +274,8 @@ function BulkAdd({ onDone, onError, onSignOut }) {
   return (
     <div className="loc-pane">
       <div className="loc-pane-row">
-        <label>Warehouse / Site<ComboField value={warehouse} onChange={setWarehouse} options={WAREHOUSES} placeholder="New site name" /></label>
-        <label>Area (optional)<ComboField value={area} onChange={setArea} options={LOCATION_AREAS} allowNone placeholder="New area name" /></label>
+        <label>Warehouse / Site<ComboField value={warehouse} onChange={(w) => { setWarehouse(w); setArea(''); }} options={WAREHOUSES} placeholder="New site name" /></label>
+        <label>Area (optional)<ComboField key={warehouse} value={area} onChange={setArea} options={areaOptions} allowNone placeholder="New area name" /></label>
       </div>
       <label className="loc-bulk-text">Bays — one per line: <span className="muted">“A1 5” (bay + # shelves), “Pod 1 0” for a whole bay</span>
         <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} placeholder={'A1 5\nA2 5\nA3 3'} />

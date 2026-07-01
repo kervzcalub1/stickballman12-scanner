@@ -852,6 +852,84 @@ export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
   return rows.length > 0;
 }
 
+/* --------------------------- Shelf locations --------------------------- */
+// Physical put-away spots. `code` is the scannable barcode value (unique). Each
+// row carries a live item_count (units currently stored there, excl. sold/shipped).
+export async function listLocations({ warehouse = null, area = null, active = null, q = null, limit = 5000 } = {}) {
+  const lim = Math.min(10000, Math.max(1, Number(limit) || 5000));
+  const like = q ? `%${q}%` : null;
+  return await db()`
+    SELECT l.id, l.code, l.warehouse, l.area, l.bay, l.shelf, l.label, l.active, l.sort_order,
+           (SELECT count(*)::int FROM items i WHERE i.location_id = l.id AND i.status NOT IN ('sold','shipped')) AS item_count
+    FROM locations l
+    WHERE (${warehouse}::text IS NULL OR l.warehouse = ${warehouse})
+      AND (${area}::text IS NULL OR l.area = ${area})
+      AND (${active}::bool IS NULL OR l.active = ${active})
+      AND (${like}::text IS NULL OR l.code ILIKE ${like} OR l.label ILIKE ${like} OR l.bay ILIKE ${like})
+    ORDER BY l.warehouse, l.sort_order NULLS LAST, l.code
+    LIMIT ${lim}
+  `;
+}
+
+export async function getLocationByCode(code) {
+  const rows = await db()`SELECT * FROM locations WHERE code = ${code} LIMIT 1`;
+  return rows[0] || null;
+}
+
+// Create one location. Returns the row, or null if the code already existed.
+export async function createLocation(loc, createdBy) {
+  const rows = await db()`
+    INSERT INTO locations (code, warehouse, area, bay, shelf, label, active, sort_order, created_by)
+    VALUES (${loc.code}, ${loc.warehouse}, ${loc.area || null}, ${loc.bay}, ${loc.shelf ?? null},
+            ${loc.label || null}, ${loc.active ?? true}, ${loc.sort_order ?? null}, ${createdBy || null})
+    ON CONFLICT (code) DO NOTHING
+    RETURNING *
+  `;
+  return rows[0] || null;
+}
+
+// Bulk insert (manual multi-add + the Manheim seed). Idempotent — existing codes
+// are skipped. Returns { inserted, total }.
+export async function bulkCreateLocations(list, createdBy) {
+  const rows = Array.isArray(list) ? list : [];
+  if (!rows.length) return { inserted: 0, total: 0 };
+  const sql = db();
+  const queries = rows.map((loc) => sql`
+    INSERT INTO locations (code, warehouse, area, bay, shelf, label, active, sort_order, created_by)
+    VALUES (${loc.code}, ${loc.warehouse}, ${loc.area || null}, ${loc.bay}, ${loc.shelf ?? null},
+            ${loc.label || null}, ${loc.active ?? true}, ${loc.sort_order ?? null}, ${createdBy || null})
+    ON CONFLICT (code) DO NOTHING
+    RETURNING id
+  `);
+  const res = await sql.transaction(queries);
+  return { inserted: res.filter((r) => r.length).length, total: rows.length };
+}
+
+// Edit the mutable bits (rename the display label, activate/deactivate). The
+// structural fields (code/bay/shelf) are fixed at create. Pass null to leave a
+// field unchanged.
+export async function updateLocation(id, patch) {
+  const rows = await db()`
+    UPDATE locations SET
+      label      = coalesce(${patch.label ?? null}, label),
+      active     = coalesce(${patch.active ?? null}::bool, active),
+      updated_at = now()
+    WHERE id = ${id}
+    RETURNING *
+  `;
+  return rows[0] || null;
+}
+
+// Units currently stored at a location (excl. sold/shipped) — the shelf-contents view.
+export async function listItemsAtLocation(locationId) {
+  return await db()`
+    SELECT i.vin, i.name, i.sku, i.size, i.status, i.with_box, i.location_code
+    FROM items i
+    WHERE i.location_id = ${locationId} AND i.status NOT IN ('sold','shipped')
+    ORDER BY i.name, i.size, i.vin
+  `;
+}
+
 // PH listing decision on an AUDITED rescale request: per-size GI + Final price and
 // the II/AL/SX/SH sync flags, stored on the request itself (requests aren't tied
 // to specific VINs). Only allowed once the warehouse has audited it.

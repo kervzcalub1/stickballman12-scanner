@@ -64,14 +64,15 @@ Component: `PHGrid` in `src/App.jsx`. Endpoints: `api/ph/list.js`
   shows **"Last edited by: {name} {date} EST"** (`last_edit_by/at`). "Subsequent
   edits exist" = any unit whose `last_edit_at > first_edit_at` (`groupPhSized`
   `_hasSubsequent`). Visible to PH, warehouse, and admin.
-- **Listing photos (view + download), all roles:** each shoe row shows a small
-  photo pill (`ph-photos-btn`, image icon + count) when the SKU has listing photos
-  (`phListItems` now returns `photo_count` per SKU; carried on the group by
-  `groupPhSized`). Click → `PhotosModal`: view every uploaded angle (`api/photos/list`)
-  and **Download** — a single image, or a **.zip** when there's more than one
-  (`GET /api/photos/download?sku=` fetches the R2 URLs server-side and builds a
-  store-only zip via `api/_lib/zip.js`, so the browser needs no bucket CORS/creds).
-  This is how warehouse/admin view the SKU's listing photos too.
+- **Shoe thumbnail (all roles):** each row shows a `ShoeThumb` of the SKU's listing
+  photo — **side view preferred** (chosen server-side), **`logo.png` fallback** when
+  the SKU has none. `phListItems`/`queryItems` return `photo_url` (preferred angle)
+  + `photo_count` per SKU (carried by `groupPhSized`/`groupPhRows`). When photos
+  exist the thumb is a button → `PhotosModal`: view every angle (`api/photos/list`)
+  and **Download** — a single image, or a **.zip** for 2+ (`GET /api/photos/download`
+  fetches the R2 URLs server-side and builds a store-only zip via `api/_lib/zip.js`,
+  so the browser needs no bucket CORS/creds). Same thumbnails render on the
+  warehouse/admin **Inventory** list; **view + delete** live in the item detail.
 - **History** button per size → `HistoryModal` (`api/items/history.js` →
   `getEventsForVins`, allowed for warehouse + ph_team, admin auto). Shows the
   who/what/when timeline (`eventLabel`); identical per-VIN edits are collapsed

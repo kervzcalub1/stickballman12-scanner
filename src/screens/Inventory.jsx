@@ -5,7 +5,7 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
-import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox } from '../components/common.jsx';
+import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
@@ -53,6 +53,9 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
 
   // detail
   const [detail, setDetail] = useState(null); // { item, events }
+  const [detailPhotos, setDetailPhotos] = useState(null); // SKU listing photos (view/delete)
+  const [photoBusy, setPhotoBusy] = useState('');         // angle currently being deleted
+  const [photoDl, setPhotoDl] = useState(false);          // download in flight
   const [note, setNote] = useState('');
   const [statusNote, setStatusNote] = useState(''); // optional reason saved with a status change
   const [detailStatusDraft, setDetailStatusDraft] = useState(null); // staged status/tag — applied only on Save
@@ -125,10 +128,34 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   async function openDetail(vin) {
     const v = String(vin).trim();
     if (!v) return;
-    setMode('detail'); setDetail(null); setError(''); setShowCam(false);
+    setMode('detail'); setDetail(null); setDetailPhotos(null); setError(''); setShowCam(false);
     setDetailStatusDraft(null); setCustomTag(''); setStatusNote(''); // reset staged status for the new item
-    try { setDetail(await api.itemLookup(v)); }
+    try { const d = await api.itemLookup(v); setDetail(d); loadDetailPhotos(d.item?.sku); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  // Listing photos for the open item's SKU (view + delete; warehouse/admin).
+  async function loadDetailPhotos(sku) {
+    setDetailPhotos(null);
+    if (!sku) { setDetailPhotos([]); return; }
+    try { const { photos } = await api.photoList(sku); setDetailPhotos(photos || []); }
+    catch { setDetailPhotos([]); }
+  }
+  async function deleteDetailPhoto(sku, angle) {
+    setPhotoBusy(angle); setError('');
+    try { await api.photoRemove(sku, angle); await loadDetailPhotos(sku); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setPhotoBusy(''); }
+  }
+  async function downloadDetailPhotos(sku) {
+    setPhotoDl(true); setError('');
+    try {
+      const { blob, filename } = await api.photoDownload(sku);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setPhotoDl(false); }
   }
   function backToList() { setMode('list'); setDetail(null); setError(''); load(); }
 
@@ -267,6 +294,24 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
               </form>
 
               <div className="send"><button className="btn ghost wide" onClick={() => setLabels([{ vin: it.vin, sku: it.sku, size: it.size, name: it.name, upc: it.upc, colorway: it.colorway, gender: it.gender, withBox: it.with_box }])}><Icon name="print" /> Print this label</button></div>
+            </div>
+
+            <div className="card">
+              <h3 className="rows-title">Listing photos{detailPhotos?.length ? <span className="muted"> ({detailPhotos.length})</span> : null}</h3>
+              {detailPhotos == null ? <p className="muted">Loading…</p> : !detailPhotos.length ? <p className="muted">No listing photos for this SKU.</p> : (
+                <>
+                  <div className="photos-grid">
+                    {detailPhotos.map((p) => (
+                      <div className="photos-cell" key={p.angle}>
+                        <a href={p.url} target="_blank" rel="noreferrer" title={`Open ${p.angle} full size`}><img src={p.url} alt={p.angle} loading="lazy" /></a>
+                        <span className="photos-angle">{p.angle}</span>
+                        <button type="button" className="photos-del" title="Delete this photo" disabled={photoBusy === p.angle} onClick={() => deleteDetailPhoto(it.sku, p.angle)}>{photoBusy === p.angle ? '…' : '×'}</button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="send"><button className="btn ghost wide" disabled={photoDl} onClick={() => downloadDetailPhotos(it.sku)}><Icon name="download" /> {photoDl ? 'Preparing…' : (detailPhotos.length === 1 ? 'Download photo' : `Download all (${detailPhotos.length}) as ZIP`)}</button></div>
+                </>
+              )}
             </div>
 
             <div className="card">
@@ -440,7 +485,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                   return (
                     <div className={`dcard ${open ? 'open' : ''}`} key={g.key}>
                       <div className="dcard-top">
-                        <label onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} /> <span className="dcard-name">{g.name}</span></label>
+                        <label onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} /> <ShoeThumb url={g.photo_url} size={34} /> <span className="dcard-name">{g.name}</span></label>
                         <button className="btn icon ghost sm" onClick={() => toggleRow(g.key)} aria-expanded={open}>{open ? '▾' : '▸'}</button>
                       </div>
                       <button className="dcard-main" onClick={() => toggleRow(g.key)}>
@@ -477,7 +522,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                           <td className="inv-col-check" onClick={(e) => e.stopPropagation()}>
                             <input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} aria-label={`Select ${g.sku}`} />
                           </td>
-                          <td className="inv-name" title={g.name}><span className="inv-caret">{open ? '▾' : '▸'}</span>{g.name}</td>
+                          <td className="inv-name" title={g.name}><span className="inv-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={28} /><span className="inv-name-text">{g.name}</span></td>
                           <td className="inv-col-sku">{g.sku || '—'}</td>
                           <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>

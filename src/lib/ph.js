@@ -85,6 +85,7 @@ export function groupPhSized(list) {
       g = {
         key, sku: r.sku, name: r.name, status: r.status, gender: r.gender,
         photo_count: r.photo_count || 0, // per-SKU listing-photo count (all rows share it)
+        photo_url: r.photo_url || null,  // preferred (side) listing photo for the thumbnail
         created_at: r.created_at, created_by: r.created_by, _mixedBy: false,
         vins: [], qty: 0,
         first_edit_at: null, first_edit_by: null, _hasSubsequent: false,

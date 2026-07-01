@@ -4,7 +4,7 @@
 // admin/warehouse Report.
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, HistoryModal, DateRangeBar } from '../components/common.jsx';
+import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, HistoryModal, DateRangeBar, ShoeThumb } from '../components/common.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES } from '../lib/constants.js';
@@ -372,8 +372,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <span className="ph-qty-badge">×{g.qty}</span>
                     <span className="muted sm">{PH_DATE.format(new Date(g.created_at))} · {g._mixedBy ? 'multiple' : (g.created_by || '—')}</span>
                   </div>
-                  <div className="ph-card-title">{g.name || '—'} <span className="muted">— {g.sku || '—'}</span>
-                    {g.photo_count > 0 && <button type="button" className="ph-photos-btn" title="View / download listing photos" onClick={() => setPhotosSku(g.sku)}><Icon name="image" size="1em" /> {g.photo_count}</button>}
+                  <div className="ph-card-title">
+                    <ShoeThumb url={g.photo_url} size={40} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} />
+                    <span>{g.name || '—'} <span className="muted">— {g.sku || '—'}</span></span>
                   </div>
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
@@ -473,7 +474,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <React.Fragment key={g.key}>
                       <tr className={`ph-trow ${ed ? 'ph-editing' : ''} ${open ? 'open' : ''}`} onClick={() => toggleExpand(g.key)}>
                         <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
-                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-caret">{open ? '▾' : '▸'}</span>{g.name || '—'}{g.photo_count > 0 && <button type="button" className="ph-photos-btn" title="View / download listing photos" onClick={(e) => { e.stopPropagation(); setPhotosSku(g.sku); }}><Icon name="image" size="1em" /> {g.photo_count}</button>}</td>
+                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} /><span className="ph-title-name">{g.name || '—'}</span></td>
                         <td style={frozenStyle(2)} className="ph-frozen">{g.sku || '—'}</td>
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>

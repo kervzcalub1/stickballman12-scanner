@@ -339,6 +339,31 @@ await sql(`
 await sql(`CREATE INDEX IF NOT EXISTS product_photos_sku_idx ON product_photos (sku)`);
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS product_photos_sku_angle_idx ON product_photos (sku, angle)`);
 
+// Shelf locations — physical put-away spots. code is the scannable barcode value
+// (globally unique: SITE-AREA-BAY-SHELF, e.g. MNH-WH-A2-04). shelf is NULL for
+// whole-bay spots (pods). Items link via items.location_id (+ a location_code
+// snapshot for fast search/print). See docs/shelf-location-system-plan.md.
+await sql(`
+  CREATE TABLE IF NOT EXISTS locations (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code       TEXT UNIQUE NOT NULL,
+    warehouse  TEXT NOT NULL,
+    area       TEXT,
+    bay        TEXT NOT NULL,
+    shelf      INT,
+    label      TEXT,
+    active     BOOLEAN NOT NULL DEFAULT true,
+    sort_order INT,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS locations_warehouse_idx ON locations (warehouse, sort_order)`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS location_id   BIGINT REFERENCES locations(id)`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS location_code TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS items_location_idx ON items (location_id)`);
+
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);
 console.log(`✓ Tables ready. users: ${count}, batches: ${b}`);

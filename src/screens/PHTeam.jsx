@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, HistoryModal, DateRangeBar } from '../components/common.jsx';
-import { NavIcon } from '../components/NavIcons.jsx';
+import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES } from '../lib/constants.js';
 import { rangeOf, PH_DATE, PH_DATETIME } from '../lib/format.js';
@@ -93,6 +93,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [expanded, setExpanded] = useState(() => new Set()); // group keys showing per-size detail
   const toggleExpand = (key) => setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const [historyFor, setHistoryFor] = useState(null); // { vins, title } — open History modal
+  const [photosSku, setPhotosSku] = useState(null);   // SKU whose listing photos are shown
   useUnsavedGuard(editing.size > 0); // unsaved edits → guard Back/refresh
 
   // ---- B2 edit locks / presence ----
@@ -350,7 +351,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
             <span className="muted sm">
               {isRescale ? 'pending restocks · ' : ''}{groups.length} line{groups.length === 1 ? '' : 's'} · {totalUnits} unit{totalUnits === 1 ? '' : 's'}{canEdit ? '' : ' · view only'}
               {!isRescale && <button className="btn ghost sm" type="button" style={{ marginLeft: 8 }} onClick={() => setSortDir((s) => (s === 'asc' ? 'desc' : 'asc'))}>Date {sortDir === 'asc' ? '↑' : '↓'}</button>}
-              {showPricing && <button className="btn ghost sm" type="button" style={{ marginLeft: 8 }} disabled={refreshing || loading} onClick={refreshPrices} title="Re-fetch Global Indicator from Alias and update Final price (GI + 20%)">{refreshing ? 'Refreshing…' : '↻ Refresh prices'}</button>}
+              {showPricing && <button className="btn sm ph-gi-refresh-btn" type="button" style={{ marginLeft: 8 }} disabled={refreshing || loading} onClick={refreshPrices} title="Re-fetch Global Indicator from Alias and update Final price (GI + 20%)"><Icon name="refresh" className={refreshing ? 'spin' : ''} /> {refreshing ? 'Refreshing…' : 'Refresh prices'}</button>}
             </span>
           )} />
       </div>
@@ -371,7 +372,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <span className="ph-qty-badge">×{g.qty}</span>
                     <span className="muted sm">{PH_DATE.format(new Date(g.created_at))} · {g._mixedBy ? 'multiple' : (g.created_by || '—')}</span>
                   </div>
-                  <div className="ph-card-title">{g.name || '—'} <span className="muted">— {g.sku || '—'}</span></div>
+                  <div className="ph-card-title">{g.name || '—'} <span className="muted">— {g.sku || '—'}</span>
+                    {g.photo_count > 0 && <button type="button" className="ph-photos-btn" title="View / download listing photos" onClick={() => setPhotosSku(g.sku)}><Icon name="image" size="1em" /> {g.photo_count}</button>}
+                  </div>
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
                   </div>
@@ -430,7 +433,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                       const locked = !ed && lockHolder(g);
                       if (ed) return (
                         <span className="ph-edit-actions">
-                          <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : `Submit ×${g.qty}`}</button>
+                          <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : 'Submit'}</button>
                           <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
                         </span>
                       );
@@ -470,7 +473,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <React.Fragment key={g.key}>
                       <tr className={`ph-trow ${ed ? 'ph-editing' : ''} ${open ? 'open' : ''}`} onClick={() => toggleExpand(g.key)}>
                         <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
-                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-caret">{open ? '▾' : '▸'}</span>{g.name || '—'}</td>
+                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-caret">{open ? '▾' : '▸'}</span>{g.name || '—'}{g.photo_count > 0 && <button type="button" className="ph-photos-btn" title="View / download listing photos" onClick={(e) => { e.stopPropagation(); setPhotosSku(g.sku); }}><Icon name="image" size="1em" /> {g.photo_count}</button>}</td>
                         <td style={frozenStyle(2)} className="ph-frozen">{g.sku || '—'}</td>
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
@@ -482,7 +485,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                           {!canEdit ? <span className="muted">—</span>
                             : ed
                               ? (<span className="ph-edit-actions">
-                                  <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : `Submit ×${g.qty}`}</button>
+                                  <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : 'Submit'}</button>
                                   <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
                                 </span>)
                               : (lockHolder(g)
@@ -511,7 +514,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                               <table className="ph-sizetable">
                                 <thead><tr>
                                   <th>Size</th><th>Qty</th><th>Cost</th>
-                                  {showPricing && <><th><span className="ph-gi-th">Global indicator{ed && <button type="button" className="btn icon ghost ph-gi-refresh" title="Re-fetch GI from Alias for this shoe’s sizes" disabled={giFillKey === g.key} onClick={(e) => { e.stopPropagation(); fillGroupGi(g); }}>{giFillKey === g.key ? '…' : '↻'}</button>}</span></th><th>Final Price (GI+20%)</th></>}
+                                  {showPricing && <><th><span className="ph-gi-th">Global indicator{ed && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for this shoe’s sizes" disabled={giFillKey === g.key} onClick={(e) => { e.stopPropagation(); fillGroupGi(g); }}><Icon name="refresh" size="1em" className={giFillKey === g.key ? 'spin' : ''} /></button>}</span></th><th>Final Price (GI+20%)</th></>}
                                   {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
                                   <th>Note</th><th>History</th>
                                 </tr></thead>
@@ -563,6 +566,70 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
         )}
       </div>
       {historyFor && <HistoryModal vins={historyFor.vins} title={historyFor.title} onClose={() => setHistoryFor(null)} />}
+      {photosSku && <PhotosModal sku={photosSku} onClose={() => setPhotosSku(null)} onSignOut={onSignOut} />}
+    </div>
+  );
+}
+
+// Listing-photos viewer for a SKU (all roles): shows every uploaded angle and
+// downloads them — a single image, or a .zip when there's more than one.
+function PhotosModal({ sku, onClose, onSignOut }) {
+  const [photos, setPhotos] = useState(null);
+  const [error, setError] = useState('');
+  const [dl, setDl] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.photoList(sku)
+      .then(({ photos: p }) => { if (!cancelled) setPhotos(p || []); })
+      .catch((err) => { if (cancelled) return; if (err.unauthorized) return onSignOut(); setError(err.message); });
+    return () => { cancelled = true; };
+  }, [sku]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  async function download() {
+    setDl(true); setError('');
+    try {
+      const { blob, filename } = await api.photoDownload(sku);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setDl(false); }
+  }
+
+  const count = photos?.length || 0;
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal photos-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">Listing photos <span className="muted">— {sku}</span></h3>
+        {error && <div className="error mt">{error}</div>}
+        {photos == null ? <p className="muted">Loading…</p> : !count ? <p className="muted">No photos on file for this SKU.</p> : (
+          <div className="photos-grid">
+            {photos.map((p) => (
+              <a className="photos-cell" key={p.angle} href={p.url} target="_blank" rel="noreferrer" title={`Open ${p.angle} full size`}>
+                <img src={p.url} alt={p.angle} loading="lazy" />
+                <span className="photos-angle">{p.angle}</span>
+              </a>
+            ))}
+          </div>
+        )}
+        <div className="modal-actions">
+          {count > 0 && (
+            <button className="btn primary" disabled={dl} onClick={download}>
+              <Icon name="download" /> {dl ? 'Preparing…' : (count === 1 ? 'Download photo' : `Download all (${count}) as ZIP`)}
+            </button>
+          )}
+          <button className="btn ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
     </div>
   );
 }

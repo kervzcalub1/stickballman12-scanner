@@ -648,7 +648,25 @@ body {
 .ph-sizetable td.ph-note-cell { text-align: left; }
 .ph-sizetable .ph-price { text-align: center; }
 .ph-gi-th { display: inline-flex; align-items: center; gap: 6px; }
-.ph-gi-refresh { font-size: 13px; line-height: 1; padding: 2px 5px; min-width: 0; }
+/* Refresh / re-fetch buttons — accent-colored so they read clearly as "refresh". */
+.ph-gi-refresh { line-height: 1; padding: 3px 6px; min-width: 0; color: #6b96ff;
+  border: 1px solid rgba(79, 124, 255, 0.55); background: rgba(79, 124, 255, 0.14); }
+.ph-gi-refresh:hover:not(:disabled) { background: rgba(79, 124, 255, 0.26); color: #8fb0ff; }
+.ph-gi-refresh-btn { display: inline-flex; align-items: center; gap: 6px; color: #6b96ff;
+  border: 1px solid rgba(79, 124, 255, 0.55); background: rgba(79, 124, 255, 0.12); }
+.ph-gi-refresh-btn:hover:not(:disabled) { background: rgba(79, 124, 255, 0.22); color: #8fb0ff; }
+@keyframes ph-spin { to { transform: rotate(360deg); } }
+.spin { animation: ph-spin 0.8s linear infinite; transform-origin: center; }
+/* Per-shoe "view / download listing photos" pill (shown when the SKU has photos). */
+.ph-photos-btn { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; padding: 1px 8px;
+  font-size: 11px; font-weight: 600; color: #6b96ff; background: rgba(79, 124, 255, 0.12);
+  border: 1px solid rgba(79, 124, 255, 0.4); border-radius: 999px; cursor: pointer; vertical-align: middle; white-space: nowrap; }
+.ph-photos-btn:hover { background: rgba(79, 124, 255, 0.24); color: #8fb0ff; }
+.photos-modal { max-width: 640px; width: 92vw; }
+.photos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+.photos-cell { position: relative; display: block; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--panel-2); }
+.photos-cell img { width: 100%; height: 120px; object-fit: cover; display: block; }
+.photos-angle { position: absolute; left: 0; right: 0; bottom: 0; font-size: 11px; text-align: center; padding: 2px 0; background: rgba(0, 0, 0, 0.55); color: #fff; text-transform: capitalize; }
 .ph-detail-meta { display: flex; flex-direction: column; gap: 12px; }
 .ph-detail-flags { display: flex; flex-wrap: wrap; gap: 14px; }
 .ph-detail-flag { display: flex; flex-direction: column; gap: 4px; }

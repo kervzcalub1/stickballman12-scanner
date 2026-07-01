@@ -100,6 +100,17 @@ const INLINE = {
     <path d="M3.3 7 12 12l8.7-5M12 12v9" />
   </>),
   nobox: PATHS.nobox,
+  // refresh-cw — two curved arrows, clearly a "refresh/re-fetch"
+  refresh: (<>
+    <path d="M21 2v6h-6" />
+    <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+    <path d="M3 22v-6h6" />
+    <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+  </>),
+  download: (<>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <path d="M12 3v12M7 10l5 5 5-5" />
+  </>),
 };
 
 export function Icon({ name, size = '1.05em', ...props }) {

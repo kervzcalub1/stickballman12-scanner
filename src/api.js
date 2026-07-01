@@ -58,6 +58,23 @@ async function request(method, path, body, { auth = true } = {}) {
 const post = (path, body, opts) => request('POST', path, body ?? {}, opts);
 const get = (path, opts) => request('GET', path, undefined, opts);
 
+// Authenticated binary download → { blob, filename }. Parses the filename from
+// Content-Disposition; falls back to the last path segment.
+async function downloadBlob(path) {
+  const t = getToken();
+  const res = await fetch(path, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+  if (res.status === 401) { clearAuth(); const err = new Error('Session expired. Please sign in again.'); err.unauthorized = true; throw err; }
+  if (!res.ok) {
+    let msg = `Download failed (${res.status})`;
+    try { const d = await res.json(); if (d.error) msg = d.error; } catch { /* not json */ }
+    throw new Error(msg);
+  }
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  const filename = m ? m[1] : path.split('/').pop();
+  return { blob: await res.blob(), filename };
+}
+
 export const api = {
   // Auth
   login: (username, password) => post('/api/auth/login', { username, password }, { auth: false }),
@@ -84,6 +101,7 @@ export const api = {
   batchSetStatus: (id, status) => post('/api/batches/set-status', { id, status }),
   // v6 — listing photos (per SKU, stored in Cloudflare R2)
   photoList: (sku) => get(`/api/photos/list?sku=${encodeURIComponent(sku)}`),
+  photoDownload: (sku) => downloadBlob(`/api/photos/download?sku=${encodeURIComponent(sku)}`),
   photoSign: (sku, angle, contentType) => post('/api/photos/sign', { sku, angle, contentType }),
   photoSignIssue: (vin, contentType) => post('/api/photos/sign-issue', { vin, contentType }),
   photoAttach: (sku, angle, url) => post('/api/photos/attach', { sku, angle, url }),

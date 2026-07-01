@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'batches', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped', 'rescalereq'];
+export const ROUTES = ['receiving', 'rescale', 'batches', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -82,6 +82,7 @@ export const HOME_SECTIONS = [
   { title: 'Receiving & Stock', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
+    { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },
     { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },
     { key: 'rescalereq', icon: '📨', title: 'Rescale Requests', sub: 'PH-flagged SKUs to recount / rescan' },
     { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Resolve units bought without a box' },

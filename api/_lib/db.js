@@ -920,6 +920,44 @@ export async function updateLocation(id, patch) {
   return rows[0] || null;
 }
 
+// Put-away / transfer: place a set of units on a shelf. Each unit → its
+// location_id/location_code set. Status: a boxed unit (or one that now has a box)
+// becomes `in_stock`; a unit still without a box keeps `no_box` (locatable but not
+// sellable). Logs a `shelved` event per unit. `units`: [{ vin, nowHasBox }].
+export async function shelveItems({ location, units, createdBy }) {
+  const list = (units || []).filter((u) => u && u.vin);
+  if (!list.length) return { updated: 0, gotBox: 0, results: [] };
+  const vins = [...new Set(list.map((u) => u.vin))];
+  const cur = await db()`SELECT id, vin, status, with_box FROM items WHERE vin = ANY(${vins})`;
+  const byVin = new Map(cur.map((r) => [r.vin, r]));
+  const sql = db();
+  const queries = [];
+  const results = [];
+  let gotBox = 0;
+  for (const u of list) {
+    const item = byVin.get(u.vin);
+    if (!item) { results.push({ vin: u.vin, ok: false, reason: 'not_found' }); continue; }
+    const wasNoBox = item.with_box === false;
+    const nowHasBox = wasNoBox && !!u.nowHasBox;
+    const withBox = wasNoBox ? !!u.nowHasBox : true;
+    const newStatus = (wasNoBox && !u.nowHasBox) ? 'no_box' : 'in_stock';
+    if (nowHasBox) gotBox++;
+    const details = JSON.stringify({ locationCode: location.code, label: location.label, from: item.status, gotBox: nowHasBox, shelved: true });
+    queries.push(sql`
+      WITH up AS (
+        UPDATE items SET location_id = ${location.id}, location_code = ${location.code},
+          with_box = ${withBox}, status = ${newStatus}, updated_at = now()
+        WHERE id = ${item.id} RETURNING id
+      )
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT id, 'shelved', ${details}::jsonb, ${createdBy || null} FROM up
+    `);
+    results.push({ vin: u.vin, ok: true, status: newStatus, with_box: withBox });
+  }
+  if (queries.length) await sql.transaction(queries);
+  return { updated: results.filter((r) => r.ok).length, gotBox, results };
+}
+
 // Units currently stored at a location (excl. sold/shipped) — the shelf-contents view.
 export async function listItemsAtLocation(locationId) {
   return await db()`

@@ -7,6 +7,14 @@
 export const VIN_RE = /^SBM-\d{6}-\d+$/i;
 export const isVinCode = (s) => VIN_RE.test(String(s || '').trim());
 export const isUpcCode = (s) => /^\d{8,14}$/.test(String(s || '').trim());
+// A shelf-location barcode: LETTERS-… with a dash (e.g. MNH-WH-A2-04), distinct
+// from a VIN (SBM-…) and a UPC (all digits). Mirrors api/_lib/locations.js.
+export const isLocationCode = (s) => {
+  const v = String(s || '').trim().toUpperCase();
+  if (VIN_RE.test(v)) return false;
+  if (/^\d+$/.test(v)) return false;
+  return /^[A-Z]{2,4}-[A-Z0-9-]+$/.test(v);
+};
 
 // Extract a clean carrier tracking number from a scanned shipping barcode.
 // UPS 1Z barcodes encode the tracking directly; FedEx Ground "96…" barcodes

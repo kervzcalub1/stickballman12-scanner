@@ -17,6 +17,7 @@ import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { NoBoxReport } from './screens/NoBoxReport.jsx';
 import { StatusScanPage } from './screens/StatusScanPage.jsx';
 import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
+import { ShelvePage } from './screens/ShelvePage.jsx';
 
 export default function App() {
   const [user, setUserState] = useState(getUser);
@@ -87,5 +88,6 @@ export default function App() {
   if (view === 'sold') return <StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'shipped') return <StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'rescalereq') return <RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'shelve') return <ShelvePage navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   return <Home user={user} onPick={(v) => { setBatchContext(null); go(v); }} onSignOut={signOut} />;
 }

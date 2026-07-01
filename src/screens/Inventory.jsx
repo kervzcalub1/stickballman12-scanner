@@ -9,6 +9,7 @@ import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal,
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
+import { isLocationCode } from '../lib/codes.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
 import { ymd, periodRange, periodLabel, shiftAnchor } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
@@ -107,9 +108,16 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
     const v = q.trim();
     if (!v) return;
     if (/^s[a-z]*-?\d/i.test(v)) { openDetail(v); setQ(''); return; } // looks like a VIN (SBM-…/SB-…)
-    // Text search: clear the date window (so it isn't limited to today) but keep
-    // the query visible in the box so the user can see/refine what they searched.
+    // Text search (incl. a shelf code → shelf contents): clear the date window so
+    // it isn't limited to today, but keep the query visible so it can be refined.
     setFrom(''); setTo(''); load({ q: v, from: '', to: '' });
+  }
+  // Route a camera scan: a VIN opens its detail; a shelf barcode searches that
+  // shelf's contents; anything else falls back to a text search.
+  function routeScan(code) {
+    const c = String(code).trim();
+    if (isLocationCode(c)) { setShowCam(false); setQ(c); setFrom(''); setTo(''); load({ q: c, from: '', to: '' }); return; }
+    openDetail(c);
   }
   function viewToday() {
     setQ(''); setFrom(today); setTo(today); setSupplier(''); setStatus(''); setIntake('');
@@ -255,6 +263,9 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                     <div><dt>Size</dt><dd>{it.size || '—'}</dd></div>
                     <div><dt>Cost</dt><dd>${Number(it.cost || 0).toFixed(2)}</dd></div>
                     <div><dt>Status</dt><dd><StatusPill status={it.status} /></dd></div>
+                    <div><dt>Location</dt><dd>{it.location_code
+                      ? <span className="loc-chip" title={it.location_code}>📍 {it.location_warehouse ? `${it.location_warehouse} · ` : ''}{it.location_label || it.location_code}</span>
+                      : <span className="muted">Not shelved</span>}</dd></div>
                     <div><dt>Batch</dt><dd>{it.batch_code || '—'}</dd></div>
                     <div><dt>Intake</dt><dd>{it.kind === 'rescale' ? `Rescaled${it.origin ? ` (${it.origin})` : ''}` : 'Received'}</dd></div>
                     <div><dt>Supplier</dt><dd>{it.supplier_name || '—'}</dd></div>
@@ -342,6 +353,11 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   // Merge by SKU + status (sizes aggregated), same as the PH report.
   const groups = groupPhRows(rows);
   const groupItems = (g) => rows.filter((r) => g.vins.includes(r.vin));
+  // Compact shelf summary for a merged row: one code, "N shelves", or null.
+  const groupLoc = (g) => {
+    const locs = [...new Set(groupItems(g).map((r) => r.location_code).filter(Boolean))];
+    return locs.length === 0 ? null : locs.length === 1 ? locs[0] : `${locs.length} shelves`;
+  };
   const toggle = (vin) => setSel((s) => { const n = new Set(s); n.has(vin) ? n.delete(vin) : n.add(vin); return n; });
   const toggleAll = () => setSel((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.vin))));
   const groupChecked = (g) => g.vins.every((v) => sel.has(v));
@@ -363,10 +379,14 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
 
   // Expanded detail for a SKU group — metrics, group status change, print all,
   // and a per-VIN units list (drill into any one for its full history).
-  const invDetail = (g) => (
+  const invDetail = (g) => {
+    const locs = [...new Set(groupItems(g).map((r) => r.location_code).filter(Boolean))];
+    const locLabel = locs.length === 0 ? null : locs.length === 1 ? locs[0] : `${locs.length} shelves`;
+    return (
     <div className="inv-detail">
       <dl className="inv-metrics">
         <div><dt>Date received</dt><dd>{(g.date_received || '').slice(0, 10) || '—'}</dd></div>
+        <div><dt>Location</dt><dd>{locLabel ? <span className="loc-chip" title={locs.join(', ')}>📍 {locLabel}</span> : <span className="muted">Not shelved</span>}</dd></div>
         <div><dt>Cost</dt><dd>{g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : '—'}</dd></div>
         <div><dt>Supplier / Buyer</dt><dd>{g.supplier_name || '—'}{g.buyer_name ? ` / ${g.buyer_name}` : ''}</dd></div>
         <div><dt>Total units</dt><dd>{g.qty}</dd></div>
@@ -391,12 +411,14 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           <div className="inv-unit-row" key={r.vin}>
             <span className="vin">{r.vin}</span>
             <span className="muted sm">{r.size ? `US ${r.size}` : '—'}</span>
+            {r.location_code ? <span className="loc-chip sm" title={r.location_code}>📍 {r.location_code}</span> : <span className="muted sm">unshelved</span>}
             <button className="btn sm ghost" onClick={() => openDetail(r.vin)}>Details →</button>
           </div>
         ))}
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="app">
@@ -406,14 +428,14 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
       <div className="card">
         {/* One box: scan a VIN (gun or camera) to open it, or type to search. */}
         <form className="searchrow" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <input ref={searchRef} placeholder="Scan a VIN, or search VIN / SKU / name…" value={q}
+          <input ref={searchRef} placeholder="Scan a VIN or shelf — or search VIN / SKU / name / shelf…" value={q}
             onChange={(e) => setQ(e.target.value)} autoCapitalize="characters" />
           <button className="btn primary" disabled={loading}>Go</button>
           <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera"><Icon name="camera" /> {showCam ? 'Close camera' : 'Scan with camera'}</button>
         </form>
         {showCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>
-            <CameraScanner mode="vin" onDetected={(c) => openDetail(c)} onClose={() => setShowCam(false)}
+            <CameraScanner mode="vin" onDetected={routeScan} onClose={() => setShowCam(false)}
               zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
           </Suspense>
         )}
@@ -491,7 +513,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                       <button className="dcard-main" onClick={() => toggleRow(g.key)}>
                         <div className="dcard-line"><span className="muted">{g.sku || '—'}</span><span>×{g.qty}</span></div>
                         <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} /></span></div>
-                        <div className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} /></div>
+                        <div className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} />{groupLoc(g) && <span className="loc-chip sm" title="Shelf location">📍 {groupLoc(g)}</span>}</div>
                       </button>
                       {open && invDetail(g)}
                     </div>
@@ -526,7 +548,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                           <td className="inv-col-sku">{g.sku || '—'}</td>
                           <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>
-                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} /></span></td>
+                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} />{groupLoc(g) && <span className="loc-chip sm" title="Shelf location">📍 {groupLoc(g)}</span>}</span></td>
                         </tr>
                         {open && (
                           <tr className="inv-drow">

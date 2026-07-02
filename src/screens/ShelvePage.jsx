@@ -106,7 +106,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
         {location ? (
           <div className="shelve-target">
             <span className="muted sm">Shelving to</span>
-            <span className="shelve-loc">📍 {location.warehouse}{location.area ? ` · ${location.area}` : ''} · <b>{location.label || location.code}</b></span>
+            <span className="shelve-loc"><Icon name="pin" /> {location.warehouse}{location.area ? ` · ${location.area}` : ''} · <b>{location.label || location.code}</b></span>
             <button type="button" className="btn ghost sm" onClick={clearShelf}>Change shelf</button>
           </div>
         ) : (

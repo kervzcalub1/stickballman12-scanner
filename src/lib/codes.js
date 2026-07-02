@@ -20,12 +20,26 @@ export const isLocationCode = (s) => {
 // UPS 1Z barcodes encode the tracking directly; FedEx Ground "96…" barcodes
 // encode 34 digits whose last 12 are the tracking number.
 export function parseTrackingNumber(raw) {
-  const s = String(raw || '').toUpperCase().replace(/\s+/g, '');
-  const ups = s.match(/1Z[0-9A-Z]{16}/);            // UPS: 1Z + 16 chars
-  if (ups) return ups[0];
-  if (/^\d{20,40}$/.test(s) && s.startsWith('96')) return s.slice(-12); // FedEx Ground 96-barcode
-  if (/^\d{12}$/.test(s)) return s;                 // FedEx Express
-  return s;                                         // anything else: as scanned
+  const s = String(raw || '').toUpperCase();
+
+  // FedEx 2D (PDF417) labels encode ISO-15434 "[)>" MH10 data, not a bare number.
+  // Its "31Z" element carries the 34-digit Ground "96" barcode whose LAST 12 digits
+  // are the tracking number (e.g. 31Z9632…382167272716 → 382167272716). Do this
+  // FIRST — the field code "3(1Z…)" would otherwise false-match the UPS pattern.
+  if (s.includes('[)>')) {
+    const fx = s.match(/31Z(\d{20,40})/) || s.match(/(96\d{18,38})/);
+    if (fx) return fx[1].slice(-12);
+  }
+
+  const clean = s.replace(/\s+/g, '');
+  // FedEx Ground "96" barcode scanned on its own (all digits, starts with 96).
+  if (/^\d{20,40}$/.test(clean) && clean.startsWith('96')) return clean.slice(-12);
+  // UPS: 1Z + 16 chars, but only as a STANDALONE token so an embedded "…31Z9632…"
+  // inside a FedEx blob can't masquerade as a UPS number.
+  const ups = clean.match(/(?:^|[^0-9A-Z])(1Z[0-9A-Z]{16})(?![0-9A-Z])/);
+  if (ups) return ups[1];
+  if (/^\d{12}$/.test(clean)) return clean;         // FedEx Express / bare 12-digit
+  return clean;                                     // anything else: as scanned
 }
 
 // Standard US shoe-size chart — a last-resort fallback to populate the "add

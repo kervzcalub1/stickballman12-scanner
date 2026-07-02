@@ -7,8 +7,10 @@
 // Pull the most tracking-number-like token out of free OCR text.
 function pickFromText(text) {
   const s = String(text || '').toUpperCase().replace(/[^0-9A-Z]/g, ' ');
-  const ups = s.match(/1Z[0-9A-Z]{16}/);
-  if (ups) return ups[0];
+  const fx96 = s.replace(/\s+/g, '').match(/96\d{18,38}/); // FedEx Ground 96-barcode
+  if (fx96) return fx96[0];
+  const ups = s.match(/(?:^|\s)(1Z[0-9A-Z]{16})(?=\s|$)/); // UPS: standalone 1Z token
+  if (ups) return ups[1];
   const digitRuns = s.match(/\d{12,40}/g);
   if (digitRuns) return digitRuns.sort((a, b) => b.length - a.length)[0];
   const anyRun = s.match(/[0-9A-Z]{10,40}/g);

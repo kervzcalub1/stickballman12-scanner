@@ -7,12 +7,15 @@ import { sizeNum } from './codes.js';
 export const PH_FROZEN_W = [86, 210, 120, 54];
 const PH_LEFTS = PH_FROZEN_W.reduce((a, _w, i) => { a.push(i ? a[i - 1] + PH_FROZEN_W[i - 1] : 0); return a; }, []);
 export const frozenStyle = (i) => ({ position: 'sticky', left: PH_LEFTS[i], minWidth: PH_FROZEN_W[i], width: PH_FROZEN_W[i] });
-// Right-frozen columns: Action then Added by (Added by is rightmost).
+// Right-frozen columns: only Action stays sticky-right. "Added by" used to be
+// frozen too (~254px of combined frozen-right width), which at typical desktop
+// widths painted over the StockX sync badge and the "Scanned by" column. Added
+// by now scrolls with the rest of the row — only Action (the narrower, more
+// frequently-needed column) stays pinned.
 const PH_ACTION_W = 104;
-const PH_ADDEDBY_W = 150;
 export const rightStyle = (which) => (which === 'addedby'
-  ? { position: 'sticky', right: 0, minWidth: PH_ADDEDBY_W, width: PH_ADDEDBY_W }
-  : { position: 'sticky', right: PH_ADDEDBY_W, minWidth: PH_ACTION_W, width: PH_ACTION_W });
+  ? {}
+  : { position: 'sticky', right: 0, minWidth: PH_ACTION_W, width: PH_ACTION_W });
 
 export const PH_FLAGS = [
   ['added_to_intel_inv', 'Intelligent Inv.'], ['synced_alias', 'Alias'],

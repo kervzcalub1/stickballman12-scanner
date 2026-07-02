@@ -352,9 +352,12 @@ export async function refreshItemGi(updates) {
   const queries = [];
   for (const u of list) {
     queries.push(sql`
-      UPDATE items SET global_indicator = ${u.global_indicator}, price = ${u.price ?? null}, updated_at = now()
+      UPDATE items SET global_indicator = ${u.global_indicator}, price = ${u.price ?? null},
+             updated_at = now(), last_edit_at = now(), last_edit_by = 'Alias refresh'
       WHERE id = ${u.id}
     `);
+    // Bump last_edit_at above so this refresh is visible to the optimistic-concurrency
+    // check — else a PH draft opened before the refresh silently reverts the fresh price.
     const text = `Global indicator $${Number(u.global_indicator).toFixed(2)}`
       + (u.price != null
         ? (u.keptOverride
@@ -988,7 +991,20 @@ export async function listItemsAtLocation(locationId) {
 // PH listing decision on an AUDITED rescale request: per-size GI + Final price and
 // the II/AL/SX/SH sync flags, stored on the request itself (requests aren't tied
 // to specific VINs). Only allowed once the warehouse has audited it.
-export async function updateRescaleRequestListing(id, listing, by) {
+export async function updateRescaleRequestListing(id, listing, by, baseListedAt = undefined) {
+  // Optimistic concurrency: refuse if someone saved a newer listing since the
+  // client loaded it (was a blind full-array overwrite → silent clobber).
+  const cur = await db()`SELECT status, listed_at FROM rescale_requests WHERE id = ${id}`;
+  if (!cur.length || cur[0].status !== 'audited') return null; // not found / not audited yet
+  if (baseListedAt !== undefined) {
+    const curMs = cur[0].listed_at ? new Date(cur[0].listed_at).getTime() : 0;
+    const baseMs = baseListedAt ? new Date(baseListedAt).getTime() : 0;
+    if (curMs !== baseMs) {
+      const e = new Error('This listing was just updated by someone else. Reload and re-apply your changes.');
+      e.conflict = true;
+      throw e;
+    }
+  }
   const rows = await db()`
     UPDATE rescale_requests
     SET listing = ${JSON.stringify(listing || [])}::jsonb, listed_by = ${by || null}, listed_at = now()
@@ -1041,19 +1057,41 @@ export async function markRestocked(vins, createdBy) {
 export async function phUpdateItems(vins, fields, by, baseEditedAt = undefined) {
   const list = (Array.isArray(vins) ? vins : [vins]).filter(Boolean);
   if (!list.length) return [];
+  return phUpdateGroup([{ vins: list, fields }], by, baseEditedAt);
+}
+
+// Atomic multi-size save (P1 fix): a PH grid group's "Submit" touches several
+// SIZES at once, each with its OWN fields (GI/price/flags/note can differ per
+// size). `sizeUpdates = [{ vins:[...], fields:{...} }, ...]` — one entry per
+// size. Historically this ran as one `phUpdateItems` call PER SIZE in
+// parallel; if one size's optimistic-concurrency check 409'd, the others could
+// still commit, leaving the group half-saved. Here the whole group is ONE
+// transaction: the conflict check runs ONCE across every vin in every size
+// (using the single worst-case last_edit_at), and if it passes, every size's
+// UPDATE + history INSERT run together in one `sql.transaction(...)` — either
+// the whole group commits or none of it does. Field sanitize/validation stays
+// in the API layer (api/ph/update.js) same as before; this function only
+// trusts already-sanitized `fields` per size.
+export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
+  const groups = (Array.isArray(sizeUpdates) ? sizeUpdates : [])
+    .map((g) => ({ vins: (Array.isArray(g?.vins) ? g.vins : []).filter(Boolean), fields: g?.fields || {} }))
+    .filter((g) => g.vins.length);
+  if (!groups.length) return [];
   const sql = db();
   const num = (v) => (v === '' || v == null ? null : Number(v));
-  const f = fields || {};
 
+  const allVins = [...new Set(groups.flatMap((g) => g.vins))];
   const curRows = await sql`
     SELECT id, vin, price, global_indicator, added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
            ph_note, last_edit_at, last_edit_by
-    FROM items WHERE vin = ANY(${list})
+    FROM items WHERE vin = ANY(${allVins})
   `;
   if (!curRows.length) return [];
+  const curByVin = new Map(curRows.map((r) => [r.vin, r]));
 
-  // Conflict check: if the group's newest last_edit_at is newer than the
-  // baseline the client loaded, someone else saved first — refuse.
+  // Conflict check ONCE for the whole group (every size, every vin): if the
+  // group's newest last_edit_at is newer than the baseline the client loaded,
+  // someone else saved first — refuse and apply NOTHING (all-or-nothing).
   if (baseEditedAt !== undefined) {
     const baseMs = baseEditedAt ? new Date(baseEditedAt).getTime() : 0;
     let curMs = 0; let by2 = null;
@@ -1068,59 +1106,73 @@ export async function phUpdateItems(vins, fields, by, baseEditedAt = undefined) 
     }
   }
 
+  // Compare money numerically — pg returns NUMERIC as a string ("80.00"), so a
+  // raw String() compare would treat an unchanged 80 vs "80.00" as a change and
+  // spuriously re-log on every submit.
+  const numEq = (a, b) => {
+    const x = a == null || a === '' ? null : Number(a);
+    const y = b == null || b === '' ? null : Number(b);
+    if (x == null && y == null) return true;
+    if (x == null || y == null) return false;
+    return Math.abs(x - y) < 0.005;
+  };
+
   const queries = [];
   const ids = [];
-  for (const cur of curRows) {
-    ids.push(cur.id);
-    const next = {
-      price: 'price' in f ? num(f.price) : cur.price,
-      global: 'global_indicator' in f ? num(f.global_indicator) : cur.global_indicator,
-      intel: 'added_to_intel_inv' in f ? !!f.added_to_intel_inv : cur.added_to_intel_inv,
-      alias: 'synced_alias' in f ? !!f.synced_alias : cur.synced_alias,
-      stockx: 'synced_stockx' in f ? !!f.synced_stockx : cur.synced_stockx,
-      shopify: 'synced_shopify' in f ? !!f.synced_shopify : cur.synced_shopify,
-      note: 'ph_note' in f ? (String(f.ph_note || '').slice(0, 2000) || null) : cur.ph_note,
-    };
-    // Final price is auto = GI + 20%. It only counts as a human change (gets a
-    // name) when the user OVERRIDES that calculated value; otherwise it's the
-    // system-derived figure. `descs` carries { text, system } per change.
-    const calcPrice = next.global == null ? null : Math.round(Number(next.global) * 1.2 * 100) / 100;
-    const priceIsCalc = (next.price == null && calcPrice == null)
-      || (next.price != null && calcPrice != null && Math.abs(Number(next.price) - calcPrice) < 0.005);
-    // Compare money numerically — pg returns NUMERIC as a string ("80.00"), so a
-    // raw String() compare would treat an unchanged 80 vs "80.00" as a change and
-    // spuriously re-log on every submit.
-    const numEq = (a, b) => {
-      const x = a == null || a === '' ? null : Number(a);
-      const y = b == null || b === '' ? null : Number(b);
-      if (x == null && y == null) return true;
-      if (x == null || y == null) return false;
-      return Math.abs(x - y) < 0.005;
-    };
-    const descs = [];
-    if (!numEq(next.global, cur.global_indicator)) descs.push({ text: next.global == null ? 'Global indicator cleared' : `Global indicator set to $${Number(next.global).toFixed(2)}`, system: false });
-    if (!numEq(next.price, cur.price)) descs.push({ text: next.price == null ? 'Final price cleared' : `Final price set to $${Number(next.price).toFixed(2)}`, system: priceIsCalc });
-    if (next.intel !== cur.added_to_intel_inv) descs.push({ text: next.intel ? 'Added to Intelligent Inventory' : 'Removed from Intelligent Inventory', system: false });
-    if (next.alias !== cur.synced_alias) descs.push({ text: next.alias ? 'Synced to Alias' : 'Unsynced from Alias', system: false });
-    if (next.stockx !== cur.synced_stockx) descs.push({ text: next.stockx ? 'Synced to StockX' : 'Unsynced from StockX', system: false });
-    if (next.shopify !== cur.synced_shopify) descs.push({ text: next.shopify ? 'Synced to Shopify' : 'Unsynced from Shopify', system: false });
-    if ((next.note || '') !== (cur.ph_note || '')) descs.push({ text: 'Note updated', system: false });
+  for (const grp of groups) {
+    const f = grp.fields;
+    for (const vin of grp.vins) {
+      const cur = curByVin.get(vin);
+      if (!cur) continue; // vin not found (deleted/renamed since load) — skip, don't fail the group
+      ids.push(cur.id);
+      const next = {
+        price: 'price' in f ? num(f.price) : cur.price,
+        global: 'global_indicator' in f ? num(f.global_indicator) : cur.global_indicator,
+        intel: 'added_to_intel_inv' in f ? !!f.added_to_intel_inv : cur.added_to_intel_inv,
+        alias: 'synced_alias' in f ? !!f.synced_alias : cur.synced_alias,
+        stockx: 'synced_stockx' in f ? !!f.synced_stockx : cur.synced_stockx,
+        shopify: 'synced_shopify' in f ? !!f.synced_shopify : cur.synced_shopify,
+        note: 'ph_note' in f ? (String(f.ph_note || '').slice(0, 2000) || null) : cur.ph_note,
+      };
+      // Intelligent Inventory (II) is the MASTER listing: a store can only be
+      // synced if the item is on II. Turning II off clears the store flags — this
+      // prevents the impossible "II off / Alias on" state. (II on + store off is
+      // still valid: the store just hasn't synced yet.)
+      if (!next.intel) { next.alias = false; next.stockx = false; next.shopify = false; }
+      // Final price is auto = GI + 20%. It only counts as a human change (gets a
+      // name) when the user OVERRIDES that calculated value; otherwise it's the
+      // system-derived figure. `descs` carries { text, system } per change.
+      const calcPrice = next.global == null ? null : Math.round(Number(next.global) * 1.2 * 100) / 100;
+      const priceIsCalc = (next.price == null && calcPrice == null)
+        || (next.price != null && calcPrice != null && Math.abs(Number(next.price) - calcPrice) < 0.005);
+      const descs = [];
+      if (!numEq(next.global, cur.global_indicator)) descs.push({ text: next.global == null ? 'Global indicator cleared' : `Global indicator set to $${Number(next.global).toFixed(2)}`, system: false });
+      if (!numEq(next.price, cur.price)) descs.push({ text: next.price == null ? 'Final price cleared' : `Final price set to $${Number(next.price).toFixed(2)}`, system: priceIsCalc });
+      if (next.intel !== cur.added_to_intel_inv) descs.push({ text: next.intel ? 'Added to Intelligent Inventory' : 'Removed from Intelligent Inventory', system: false });
+      if (next.alias !== cur.synced_alias) descs.push({ text: next.alias ? 'Synced to Alias' : 'Unsynced from Alias', system: false });
+      if (next.stockx !== cur.synced_stockx) descs.push({ text: next.stockx ? 'Synced to StockX' : 'Unsynced from StockX', system: false });
+      if (next.shopify !== cur.synced_shopify) descs.push({ text: next.shopify ? 'Synced to Shopify' : 'Unsynced from Shopify', system: false });
+      if ((next.note || '') !== (cur.ph_note || '')) descs.push({ text: 'Note updated', system: false });
 
-    queries.push(sql`
-      UPDATE items SET price = ${next.price}, global_indicator = ${next.global}, added_to_intel_inv = ${next.intel},
-        synced_alias = ${next.alias}, synced_stockx = ${next.stockx}, synced_shopify = ${next.shopify},
-        ph_note = ${next.note},
-        first_edit_by = coalesce(first_edit_by, ${by || null}), first_edit_at = coalesce(first_edit_at, now()),
-        last_edit_by = ${by || null}, last_edit_at = now(), updated_at = now()
-      WHERE id = ${cur.id}
-    `);
-    for (const d of descs) {
       queries.push(sql`
-        INSERT INTO item_events (item_id, type, details, created_by)
-        VALUES (${cur.id}, 'ph_update', ${JSON.stringify(d.system ? { text: d.text, system: true } : { text: d.text })}::jsonb, ${d.system ? null : (by || null)})
+        UPDATE items SET price = ${next.price}, global_indicator = ${next.global}, added_to_intel_inv = ${next.intel},
+          synced_alias = ${next.alias}, synced_stockx = ${next.stockx}, synced_shopify = ${next.shopify},
+          ph_note = ${next.note},
+          first_edit_by = coalesce(first_edit_by, ${by || null}), first_edit_at = coalesce(first_edit_at, now()),
+          last_edit_by = ${by || null}, last_edit_at = now(), updated_at = now()
+        WHERE id = ${cur.id}
       `);
+      for (const d of descs) {
+        queries.push(sql`
+          INSERT INTO item_events (item_id, type, details, created_by)
+          VALUES (${cur.id}, 'ph_update', ${JSON.stringify(d.system ? { text: d.text, system: true } : { text: d.text })}::jsonb, ${d.system ? null : (by || null)})
+        `);
+      }
     }
   }
+  if (!queries.length) return [];
+  // ALL sizes' updates + history events commit in ONE transaction — atomic
+  // across the whole group, not just within a size.
   await sql.transaction(queries);
 
   return await sql`

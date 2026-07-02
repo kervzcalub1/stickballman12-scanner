@@ -39,11 +39,13 @@ export default async function handler(req, res) {
     .filter((e) => e.size)
     .slice(0, 100);
 
+  const baseListedAt = 'baseListedAt' in body ? body.baseListedAt : undefined;
   try {
-    const request = await updateRescaleRequestListing(id, listing, user.name || user.username || '');
+    const request = await updateRescaleRequestListing(id, listing, user.name || user.username || '', baseListedAt);
     if (!request) return send(res, 404, { ok: false, error: 'Request not found or not audited yet.' });
     return send(res, 200, { ok: true, request });
   } catch (e) {
+    if (e.conflict) return send(res, 409, { ok: false, error: e.message, conflict: true });
     console.error('[rescale-requests/list-update]', e.message);
     return send(res, 500, { ok: false, error: 'Could not save the listing.' });
   }

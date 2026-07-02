@@ -16,6 +16,7 @@
     "e2e:ui": "playwright test --ui"
   },
   "dependencies": {
+    "@formkit/auto-animate": "^0.9.0",
     "@zxing/browser": "^0.1.5",
     "@zxing/library": "^0.21.3",
     "express": "^5.2.1",

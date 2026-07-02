@@ -8,6 +8,7 @@ import { TopBar, StatusPill, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { isVinCode } from '../lib/codes.js';
+import { useAutoAnimate } from '@formkit/auto-animate/react';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -22,6 +23,7 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
   const [showCam, setShowCam] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [prefs, setPrefs] = useState(loadPrefs);
+  const [listRef] = useAutoAnimate(); // rows slide in as each VIN is scanned
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const inputRef = useRef(null);
   const recentRef = useRef({});
@@ -115,7 +117,7 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
       {rows.length > 0 && (
         <div className="card">
           {isMobile ? (
-            <div className="dcards">
+            <div className="dcards" ref={listRef}>
               {rows.map((r) => (
                 <div className="dcard" key={r.vin}>
                   <div className="dcard-top">
@@ -131,7 +133,7 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
             <div className="inv-tablewrap">
               <table className="inv-table">
                 <thead><tr><th className="inv-col-vin">VIN</th><th>Shoe</th><th className="inv-col-size">Size</th><th>Current status</th><th aria-label="remove" /></tr></thead>
-                <tbody>
+                <tbody ref={listRef}>
                   {rows.map((r) => (
                     <tr key={r.vin}>
                       <td className="inv-col-vin"><span className="vin">{r.vin}</span></td>

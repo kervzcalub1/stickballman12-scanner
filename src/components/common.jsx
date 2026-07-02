@@ -205,13 +205,35 @@ export function SizesQty({ sizes }) {
   );
 }
 
+// Edit-mode price / global-indicator field. Money inputs used to share the
+// exact background of the panel they sat in (--panel-2 on --panel-2), so a
+// blank "fill me in" field for brand-new inventory read as invisible. A
+// contrasting background + leading "$" + placeholder make it unmistakable.
+export function PriceInput({ value, onChange, className = '', ...rest }) {
+  return (
+    <span className="ph-price-wrap">
+      <span className="ph-price-prefix" aria-hidden="true">$</span>
+      <input
+        className={`ph-price ${className}`.trim()}
+        type="number" min="0" step="0.01" inputMode="decimal" placeholder="0.00"
+        value={value} onChange={onChange} {...rest}
+      />
+    </span>
+  );
+}
+
 export function YesNo({ value, editing, onChange }) {
   if (!editing) return <span className={`ph-yn ${value ? 'yes' : 'no'}`}>{value ? 'Yes' : 'No'}</span>;
-  // Edit mode: a colored checkbox (blue = checked/yes, red = unchecked/no) —
-  // one click to toggle, no dropdown.
+  // Edit mode: a colored checkbox (blue = checked/yes, red = unchecked/no) — a
+  // ✓/✕ glyph marks the state too (color alone isn't enough contrast/signal).
+  // Wrapped in a <label> so the tap target is bigger than the visible control
+  // (native browser behavior — clicking anywhere in the label toggles the
+  // nested checkbox, no JS needed) — mobile-friendly without a huge glyph.
   return (
-    <input type="checkbox" className={`ph-yn-check ${value ? 'yes' : 'no'}`} checked={!!value}
-      onChange={(e) => onChange(e.target.checked)} aria-label={value ? 'Yes' : 'No'} title={value ? 'Yes' : 'No'} />
+    <label className="ph-yn-hit" title={value ? 'Yes' : 'No'}>
+      <input type="checkbox" className={`ph-yn-check ${value ? 'yes' : 'no'}`} checked={!!value}
+        onChange={(e) => onChange(e.target.checked)} aria-label={value ? 'Yes' : 'No'} />
+    </label>
   );
 }
 

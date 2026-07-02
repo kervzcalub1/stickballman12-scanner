@@ -3,7 +3,7 @@
 // + creates).
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, DateRangeBar, RescaleCompare, YesNo } from '../components/common.jsx';
+import { TopBar, DateRangeBar, RescaleCompare, YesNo, PriceInput } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { rangeOf } from '../lib/format.js';
@@ -228,7 +228,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
       synced_stockx: x.synced_stockx, synced_shopify: x.synced_shopify,
     }));
     try {
-      const { request } = await api.rescaleRequestListUpdate(r.id, listing);
+      const { request } = await api.rescaleRequestListUpdate(r.id, listing, r.listed_at || null);
       setRequests((rs) => (rs || []).map((x) => (x.id === request.id ? request : x)));
       setListDrafts((d) => ({ ...d, [request.id]: buildListRows(request) }));
       setListDirty(false);
@@ -308,9 +308,10 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                   return (
                     <div className="rc-listing">
                       <div className="rc-listing-head">
-                        <span className="muted sm">Listing — price + store status per size{r.listed_by ? ` · last by ${r.listed_by}` : ''}</span>
-                        {editable && <button className="btn sm primary" disabled={saveBusyId === r.id} onClick={() => saveList(r)}>{saveBusyId === r.id ? 'Saving…' : 'Save listing'}</button>}
+                        <span className="rc-listing-plan">Listing plan <span className="muted sm">· intended price + store status per size{r.listed_by ? ` · last by ${r.listed_by}` : ''}</span></span>
+                        {editable && <button className="btn sm primary" disabled={saveBusyId === r.id} onClick={() => saveList(r)}>{saveBusyId === r.id ? 'Saving…' : 'Save plan'}</button>}
                       </div>
+                      <p className="rc-listing-note muted sm">Records what to list once these units are restocked — a plan, <b>not</b> a live store sync. Toggling here doesn’t change the actual items; do that in the PH grid after shelving.</p>
                       <div className="rc-listing-tablewrap">
                         <table className="rc-listing-table">
                           <thead><tr>
@@ -325,8 +326,8 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                                 <td>×{row.qty}</td>
                                 {showPricing && (editable ? (
                                   <>
-                                    <td><input className="ph-price" type="number" min="0" step="0.01" value={row.global_indicator} onChange={(e) => setListGI(r.id, row.size, e.target.value)} /></td>
-                                    <td><input className="ph-price" type="number" min="0" step="0.01" value={row.price} onChange={(e) => setListRow(r.id, row.size, { price: e.target.value })} /></td>
+                                    <td><PriceInput value={row.global_indicator} onChange={(e) => setListGI(r.id, row.size, e.target.value)} /></td>
+                                    <td><PriceInput value={row.price} onChange={(e) => setListRow(r.id, row.size, { price: e.target.value })} /></td>
                                   </>
                                 ) : (
                                   <>

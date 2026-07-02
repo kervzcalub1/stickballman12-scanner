@@ -106,7 +106,9 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   account are independent; one can't override the other's locked row.
 - **One row at a time per session** (other Edit buttons disable while editing).
 - claim → heartbeat (10s) → release; 30s TTL; presence poll 2s; **1-hour idle
-  auto-release**. "🔒 being edited by X" shown on locked rows.
+  auto-release**. A **presence** badge "`<name> editing…`" (`.presence-badge`, a live
+  pulsing dot — softened from a padlock since the lock is advisory, not a hard
+  server gate; `baseEditedAt` is the real write guard) shows on rows others hold.
 
 ## Pending badges
 - `api/items/pending-counts.js` → `pendingCounts()`. Home `CardBadges` show

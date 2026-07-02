@@ -10,6 +10,7 @@ import { TopBar, StatusPill, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { isVinCode, isLocationCode } from '../lib/codes.js';
+import { useAutoAnimate } from '@formkit/auto-animate/react';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -26,6 +27,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const inputRef = useRef(null);
   const recentRef = useRef({});
+  const [listRef] = useAutoAnimate(); // shoes slide in as each VIN is scanned onto the shelf
   const isMobile = useMediaQuery('(max-width: 768px)');
   useUnsavedGuard(rows.length > 0);
 
@@ -153,7 +155,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
       {rows.length > 0 && (
         <div className="card">
           {isMobile ? (
-            <div className="dcards">
+            <div className="dcards" ref={listRef}>
               {rows.map((r) => (
                 <div className="dcard" key={r.vin}>
                   <div className="dcard-top">
@@ -172,7 +174,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
             <div className="inv-tablewrap">
               <table className="inv-table">
                 <thead><tr><th className="inv-col-vin">VIN</th><th>Shoe</th><th className="inv-col-size">Size</th><th>Current status</th><th>Box?</th><th aria-label="remove" /></tr></thead>
-                <tbody>
+                <tbody ref={listRef}>
                   {rows.map((r) => (
                     <tr key={r.vin}>
                       <td className="inv-col-vin"><span className="vin">{r.vin}</span></td>

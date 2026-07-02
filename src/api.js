@@ -130,13 +130,15 @@ export const api = {
   rescaleRequestCreate: (payload) => post('/api/rescale-requests/create', payload),
   rescaleRequestList: (status, from, to) => get(`/api/rescale-requests/list?${new URLSearchParams({ ...(status ? { status } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}`),
   rescaleRequestAudit: (id, actualSizes, note) => post('/api/rescale-requests/audit', { id, actualSizes, note }),
-  rescaleRequestListUpdate: (id, listing) => post('/api/rescale-requests/list-update', { id, listing }),
+  rescaleRequestListUpdate: (id, listing, baseListedAt) => post('/api/rescale-requests/list-update', { id, listing, baseListedAt }),
   // Generic Alias GI lookup (no save) — used by the PH grid + rescale listing editor.
   phGiLookup: (sku, sizes) => post('/api/ph/gi-lookup', { sku, sizes }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // v5 — PH Team monthly grid
   phList: (from, to, kind) => get(`/api/ph/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(kind ? { kind } : {}) }).toString()}`),
   phUpdateMany: (vins, fields, baseEditedAt) => post('/api/ph/update', { vins, fields, baseEditedAt }),
+  // Atomic multi-size group save — one entry per size, all-or-nothing (see phUpdateGroup).
+  phUpdateGroup: (sizes, baseEditedAt) => post('/api/ph/update', { sizes, baseEditedAt }),
   phRefreshGi: (vins) => post('/api/ph/refresh-gi', { vins }),
   // PH edit locks (presence)
   lockList: () => get('/api/ph/locks'),

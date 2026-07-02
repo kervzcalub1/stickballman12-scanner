@@ -135,6 +135,16 @@ body {
 .home-card-title { font-size: 17px; font-weight: 700; }
 .home-card-sub { font-size: 12px; color: var(--muted); }
 
+/* Subtle dashboard entrance (respects reduced-motion). */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes rise-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+  .home-section { animation: rise-in 0.32s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+  .home-section:nth-of-type(2) { animation-delay: 0.03s; }
+  .home-section:nth-of-type(3) { animation-delay: 0.06s; }
+  .home-section:nth-of-type(4) { animation-delay: 0.09s; }
+  .home-section:nth-of-type(5) { animation-delay: 0.12s; }
+}
+
 /* "Needs attention" cards — amber accent + big pending count. */
 .home-card.home-attention { border-color: rgba(224, 164, 88, 0.45); background: linear-gradient(180deg, rgba(224, 164, 88, 0.08), transparent 60%); }
 .home-card.home-attention:hover { border-color: #e0a458; box-shadow: 0 8px 22px rgba(224, 164, 88, 0.15); }
@@ -545,6 +555,11 @@ body {
 /* PH edit-lock presence (B2) */
 .notice { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(233,196,106,0.4); background: rgba(233,196,106,0.12); color: #e9c46a; font-size: 13px; }
 .lock-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: #e0a878; background: rgba(224,168,120,0.15); border: 1px solid rgba(224,168,120,0.4); padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+/* Presence indicator (not a hard lock): "<name> editing…" with a live dot. */
+.presence-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+.presence-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #4f7cff; flex: none; }
+@media (prefers-reduced-motion: no-preference) { .presence-badge::before { animation: presence-pulse 1.6s ease-in-out infinite; } }
+@keyframes presence-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .ph-edit-actions { display: inline-flex; gap: 6px; align-items: center; }
 .inv-metrics-wide { grid-column: 1 / -1; }
 .inv-units { margin-top: 12px; }
@@ -581,7 +596,19 @@ body {
 .ph-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .ph-filters input { width: 90px; }
 
+.ph-scrollbox { position: relative; }
 .ph-wrap { max-height: 64vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+/* Subtle horizontal scroll-shadow — a cue that more columns sit off-screen.
+   Sits on a non-scrolling sibling wrapper (not .ph-wrap itself) so it stays
+   visible above the frozen columns' opaque backgrounds; fades in only on the
+   side that still has more to scroll. */
+.ph-scroll-shadow {
+  position: absolute; top: 1px; bottom: 1px; width: 26px; pointer-events: none;
+  z-index: 6; opacity: 0; transition: opacity 0.15s ease;
+}
+.ph-scroll-shadow.left { left: 1px; background: linear-gradient(to right, rgba(0,0,0,0.35), rgba(0,0,0,0)); border-radius: 10px 0 0 10px; }
+.ph-scroll-shadow.right { right: 1px; background: linear-gradient(to left, rgba(0,0,0,0.35), rgba(0,0,0,0)); border-radius: 0 10px 10px 0; }
+.ph-scroll-shadow.show { opacity: 1; }
 .ph-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; white-space: nowrap; }
 .ph-table th, .ph-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
 .ph-table thead th {
@@ -631,6 +658,8 @@ body {
 .rc-auditnote { width: 100%; }
 .rc-listing { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
 .rc-listing-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.rc-listing-plan { font-weight: 700; font-size: 13px; }
+.rc-listing-note { margin: 0; padding: 6px 10px; background: rgba(224, 164, 88, 0.08); border: 1px solid rgba(224, 164, 88, 0.25); border-radius: 8px; color: #e0a458; }
 .rc-listing-tablewrap { overflow-x: auto; }
 .rc-listing-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .rc-listing-table th { text-align: center; font-weight: 600; color: var(--muted); padding: 4px 8px; white-space: nowrap; }
@@ -661,7 +690,6 @@ body {
 .ph-sizetable th:first-child, .ph-sizetable td:first-child,
 .ph-sizetable th:last-child, .ph-sizetable td:last-child { text-align: left; }
 .ph-sizetable td.ph-note-cell { text-align: left; }
-.ph-sizetable .ph-price { text-align: center; }
 .ph-gi-th { display: inline-flex; align-items: center; gap: 6px; }
 /* Refresh / re-fetch buttons — accent-colored so they read clearly as "refresh". */
 .ph-gi-refresh { line-height: 1; padding: 3px 6px; min-width: 0; color: #6b96ff;
@@ -800,7 +828,7 @@ body {
 .ph-sizedetail { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
 .ph-sizedetail-row { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; }
 .ph-sizedetail-size { font-weight: 700; }
-.ph-sizedetail-flags { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.ph-sizedetail-flags { display: flex; flex-wrap: wrap; gap: 12px 16px; width: 100%; }
 .ph-sizedetail-flag { display: inline-flex; align-items: center; gap: 5px; }
 .ph-sizedetail-note { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .ph-sizedetail-hist { width: 100%; }
@@ -813,7 +841,23 @@ body {
 .ph-sizedetail-note .ph-note { width: 100%; }
 .ph-card-synced { margin: 8px 0; font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-.ph-price { width: 80px; }
+/* Price / global-indicator edit fields — contrast the input against its panel
+   (previously same bg as --panel-2, so a blank "fill me in" field for new
+   inventory was near-invisible) with a leading $ and right-aligned tabular
+   figures for easy scanning down a column of numbers. */
+.ph-price-wrap { position: relative; display: inline-flex; align-items: center; }
+.ph-price-prefix {
+  position: absolute; left: 9px; color: var(--muted); font-size: 13px; font-weight: 600;
+  pointer-events: none;
+}
+.ph-price {
+  width: 92px; padding: 8px 8px 8px 20px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+  text-align: right; font-variant-numeric: tabular-nums; font-size: 14px;
+}
+.ph-price:hover { border-color: rgba(134, 179, 230, 0.5); }
+.ph-price:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79, 124, 255, 0.18); }
+.ph-price::placeholder { color: var(--muted); opacity: 0.7; }
 .ph-note { width: 200px; min-height: 34px; resize: vertical; }
 .ph-note-cell { max-width: 220px; }
 .ph-note-view { display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
@@ -823,18 +867,24 @@ body {
 .ph-yn.yes, .ph-yn-sel.yes { color: #86b3e6; background: rgba(134,179,230,0.16); }
 .ph-yn.no, .ph-yn-sel.no { color: #e08f8f; background: rgba(224,143,143,0.16); }
 .ph-yn-sel { padding: 6px 8px; border-radius: 8px; font-weight: 600; }
-/* Edit-mode flag checkbox — blue = checked (yes), red = unchecked (no) */
+/* Edit-mode flag checkbox — blue = checked (yes), red = unchecked (no). A
+   <label> wrapper (.ph-yn-hit) gives a >=40px tap target around the smaller
+   visible control — native label-click-toggles-checkbox behavior, no JS. */
+.ph-yn-hit { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; cursor: pointer; vertical-align: middle; }
 .ph-yn-check {
   appearance: none; -webkit-appearance: none; margin: 0;
-  width: 20px; height: 20px; border-radius: 6px; cursor: pointer;
+  width: 32px; height: 32px; border-radius: 7px; cursor: pointer;
   border: 1.5px solid; display: inline-grid; place-content: center;
   transition: background 0.1s, border-color 0.1s;
   vertical-align: middle;
 }
-.ph-yn-check.no { background: rgba(224,143,143,0.16); border-color: rgba(224,143,143,0.6); }
+/* "No" used to be a near-invisible 16%-opacity tint (~1.3:1 contrast) with no
+   glyph — now a solid, clearly-visible fill (~4.9:1 against --panel-2) with an
+   explicit ✕ so the state never relies on color alone. */
+.ph-yn-check.no { background: rgba(224,143,143,0.85); border-color: rgba(224,143,143,0.95); }
 .ph-yn-check.yes { background: rgba(134,179,230,0.9); border-color: rgba(134,179,230,0.95); }
-.ph-yn-check::after { content: '✓'; font-size: 13px; font-weight: 800; line-height: 1; color: transparent; }
-.ph-yn-check.yes::after { color: #0f1420; }
+.ph-yn-check::after { content: '✕'; font-size: 15px; font-weight: 800; line-height: 1; color: #0f1420; }
+.ph-yn-check.yes::after { content: '✓'; color: #0f1420; }
 .ph-yn-check:focus-visible { outline: 2px solid #86b3e6; outline-offset: 1px; }
 
 /* Report — mobile card layout (replaces the wide grid on phones) */
@@ -845,7 +895,7 @@ body {
 .ph-card-title { font-weight: 600; margin: 4px 0 8px; display: flex; align-items: center; gap: 10px; }
 .ph-card-line { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; font-size: 14px; }
 .ph-card-price { display: flex; align-items: center; gap: 6px; }
-.ph-card-flags { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 8px; }
+.ph-card-flags { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 8px; }
 .ph-card-flag { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ph-card-note { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .ph-card-note .ph-note { width: 100%; min-height: 40px; }

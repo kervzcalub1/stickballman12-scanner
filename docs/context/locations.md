@@ -40,12 +40,43 @@ Scan a **shelf barcode** → scan each shoe's **VIN** → **Shelve here**.
   scan → search vs a VIN → detail.
 
 ## Locations page (`/locations`, `Locations`, warehouse+admin)
-Browse/manage shelves: filter by warehouse/area/active/search; grouped by
-warehouse·area with a **live item_count**; expand a shelf → its contents.
-**Rename** label, **activate/deactivate**. **Add** one shelf or **bulk-add** a
-site's bays (one per line, `A1 5`). Warehouse & Area pickers have a **"＋ Custom…"**
-free-text option (`ComboField`) to add a new site/area; the Area picker **suggests
-the selected site's own areas first** (`siteAreas`). Endpoints (query-param style):
+Browse/manage shelves as a **drill-down tile view** (like a desktop file
+manager): Site → Area → (Row) → Bay → Shelf → shoes. Each level is a full-width
+**responsive tile grid** (`repeat(auto-fill, minmax(160px,1fr))`) that wraps to
+any screen — **no columns, no horizontal scroll** — so it reads the same on a
+warehouse phone as on a wide monitor. Clicking a tile **pushes a real URL
+segment** so every level is deep-linkable and browser/device **Back** drills up:
+`/locations/manheim-main-shed/warehouse-rows/a/a2/4`. The screen owns its
+sub-path (like `PHTeamApp` owns `/ph/*`): `segsFromPath`/`pathFromSegs` +
+`pushState`, a `popstate` listener, and `resolve()` walks the tree by URL slug →
+current position + breadcrumb `trail`. Segments are slugged real names (unique
+per level), so refresh restores the exact tile.
+
+An **adaptive Row/aisle level** sits between Area and Bay only where it subdivides
+a long bay list: the row key is derived from the bay's leading letters
+(`A1,A2 → "A"`, `Pod 1 → "POD"`; `rowKeyOf`), shown when the bays fall into `≥2`
+groups fewer than the bays (`Ar.grouped`) — so Warehouse Rows (44 bays → 10 rows
+A–K) and Basement (18 → A,B) get it, while Pods/Office (one group) skip straight
+to bays. **Whole-bay pods** (single location, `shelf=null`) skip the shelf level —
+the bay tile opens its shoes directly.
+
+The tree is built client-side from one `locationList({ active, q })` fetch; every
+tile shows a **live item_count** (folders aggregate). The last level (a shelf, or
+a whole-bay pod) loads its contents lazily (`locationItems`) and shows the shoes
+as rows with a **thumbnail** + name / `US size` chip / status pill / `vin · sku`,
+plus **Rename** / **activate-deactivate** / print that one **Label**. The thumb
+`photo_url` is `COALESCE(team listing photo ('side' first), items.image_url
+catalog image)` from `listItemsAtLocation` — real pair where we have one (~40%),
+catalog image otherwise (~95% coverage), logo placeholder as last resort
+(`ShoeThumb`); tapping it enlarges the SKU's listing photos or the catalog image
+(`PhotoLightbox`). No schema change — both columns already exist. **Print-selection** checkboxes sit on every tile (folders roll
+up their ids; `Select all` per level); the count + **Print labels** live in the
+crumb bar. A **breadcrumb** tracks the path and jumps to any ancestor. **Search**
+(code/label/bay) re-fetches, narrows the tree, and resets to the root; the
+**Show** filter is active/inactive/all. **Add** one shelf or
+**bulk-add** a site's bays (one per line, `A1 5`). Warehouse & Area pickers have a
+**"＋ Custom…"** free-text option (`ComboField`) to add a new site/area; the Area
+picker **suggests the selected site's own areas first** (`siteAreas`). Endpoints (query-param style):
 `GET /api/locations`, `GET /api/locations/items?id=`, `POST /api/locations/{create,bulk,update}`.
 db: `listLocations, getLocationByCode, createLocation, bulkCreateLocations,
 updateLocation, listItemsAtLocation, shelveItems`.

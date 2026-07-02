@@ -963,8 +963,16 @@ export async function shelveItems({ location, units, createdBy }) {
 
 // Units currently stored at a location (excl. sold/shipped) — the shelf-contents view.
 export async function listItemsAtLocation(locationId) {
+  // photo_url: prefer the team's own listing photo (real pair, 'side' angle first),
+  // fall back to the catalog/API image (near-universal coverage) for a thumbnail.
   return await db()`
-    SELECT i.vin, i.name, i.sku, i.size, i.status, i.with_box, i.location_code
+    SELECT i.vin, i.name, i.sku, i.size, i.status, i.with_box, i.location_code,
+           COALESCE(
+             (SELECT p.url FROM product_photos p WHERE p.sku = i.sku
+                ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2
+                                      WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, p.created_at LIMIT 1),
+             NULLIF(i.image_url, '')
+           ) AS photo_url
     FROM items i
     WHERE i.location_id = ${locationId} AND i.status NOT IN ('sold','shipped')
     ORDER BY i.name, i.size, i.vin

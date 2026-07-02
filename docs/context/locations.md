@@ -71,9 +71,29 @@ catalog image otherwise (~95% coverage), logo placeholder as last resort
 (`ShoeThumb`); tapping it enlarges the SKU's listing photos or the catalog image
 (`PhotoLightbox`). No schema change — both columns already exist. **Print-selection** checkboxes sit on every tile (folders roll
 up their ids; `Select all` per level); the count + **Print labels** live in the
-crumb bar. A **breadcrumb** tracks the path and jumps to any ancestor. **Search**
-(code/label/bay) re-fetches, narrows the tree, and resets to the root; the
-**Show** filter is active/inactive/all. **Add** one shelf or
+crumb bar. A **breadcrumb** tracks the path and jumps to any ancestor.
+
+**Locate Shoe** — the page/card is titled **Locate Shoe** (warehouse ops look for
+a shoe, not a shelf). The search box runs a **shoe search**
+(`api.itemsQuery({ q })` by name / SKU / VIN / **UPC**, `runLocate`; `queryItems`
+matches `i.upc` too). Hits are **grouped by SKU** (`.loc-sku-group`): one header
+(thumbnail + name + `SKU · N shelved · M not shelved` summary) then compact
+per-unit rows with **fixed-width aligned columns** — `VIN | US size | status |
+where`. The `where` column is a **shelf chip** (`loc-locate-chip`, `Icon
+name="pin"`) that resolves `location_code` → the shelf's tile path
+(`segsForLocation`, mirrors `resolve()`) and **jumps to that shelf** on click, or
+an amber **"Not shelved yet"** chip — so you know you *have* the pair, it just
+isn't on a shelf. The redundant `needs_shelf` status pill is suppressed (the amber
+chip already says it), and on ≤480px the empty status column collapses. When every hit shares one SKU (e.g.
+a size-specific UPC scan), a **"↕ Show all sizes of {SKU}"** button re-runs the
+search by SKU to surface all sizes.
+
+**Camera scan** — a **📷 Scan** button opens the lazy `CameraScanner`
+(`mode='rescale'` reads both **CODE-128 VINs and UPC/EAN**); `routeScan` feeds the
+decoded value into the same shoe search, so scanning a VIN label *or* a box UPC
+locates the pair. Browsing the tiles down to a shelf gives the reverse — **what
+shoes are on this shelf**. The **Show** filter is active/inactive/all (browse
+only). **Add** one shelf or
 **bulk-add** a site's bays (one per line, `A1 5`). Warehouse & Area pickers have a
 **"＋ Custom…"** free-text option (`ComboField`) to add a new site/area; the Area
 picker **suggests the selected site's own areas first** (`siteAreas`). Endpoints (query-param style):

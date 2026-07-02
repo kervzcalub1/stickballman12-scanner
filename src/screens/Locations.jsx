@@ -6,11 +6,14 @@
 // work. The final level (a shelf, or a whole-bay pod) shows the shoes stored
 // there. Add / bulk-add, rename, activate-deactivate, and bulk label printing all
 // still live here.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { api } from '../api.js';
 import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { WAREHOUSES, LOCATION_AREAS } from '../lib/constants.js';
+
+// Lazy-loaded so the barcode library only downloads when the camera is opened.
+const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
 const NO_AREA = '(no area)';
 // URL-safe slug of a name/label; unique within a level so it round-trips cleanly.
@@ -74,7 +77,10 @@ function resolve(sites, segs, multiSite) {
 export function Locations({ onHome, onSignOut }) {
   const [active, setActive] = useState('');
   const [q, setQ] = useState('');
-  const [submittedQ, setSubmittedQ] = useState('');
+  const [results, setResults] = useState(null);     // shoe-search hits | null (browse mode)
+  const [searchedFor, setSearchedFor] = useState('');
+  const [showCam, setShowCam] = useState(false);
+  const [camZoom, setCamZoom] = useState(1);
   const [locations, setLocations] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -113,7 +119,7 @@ export function Locations({ onHome, onSignOut }) {
   async function load() {
     setError('');
     try {
-      const { locations: l } = await api.locationList({ active, q: submittedQ });
+      const { locations: l } = await api.locationList({ active });
       setLocations(l);
       setSiteAreas((prev) => {
         const next = { ...prev };
@@ -126,7 +132,23 @@ export function Locations({ onHome, onSignOut }) {
       });
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
-  useEffect(() => { load(); }, [active, submittedQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Locate a shoe: search items by name / SKU / VIN → which shelf each is on.
+  async function runLocate(query) {
+    const term = query.trim();
+    if (!term) { setResults(null); setSearchedFor(''); return; }
+    setError('');
+    try {
+      const { rows } = await api.itemsQuery({ q: term });
+      setResults(rows || []); setSearchedFor(term);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  // A camera scan (VIN CODE128 or UPC/EAN) → locate it. queryItems matches vin/upc.
+  function routeScan(code) {
+    const c = String(code || '').trim();
+    setShowCam(false); setQ(c); runLocate(c);
+  }
 
   const list = locations || [];
 
@@ -158,6 +180,27 @@ export function Locations({ onHome, onSignOut }) {
 
   const multiSite = sites.size > 1;
   const r = resolve(sites, segs, multiSite);
+
+  // Build the tile-view URL path for a shelf location row (mirrors resolve()).
+  function segsForLocation(loc) {
+    const S = sites.get(loc.warehouse); if (!S) return null;
+    const A = S.areas.get(loc.area || ''); if (!A) return null;
+    const out = [];
+    if (multiSite) out.push(slug(loc.warehouse));
+    out.push(slug(A.name));
+    if (A.grouped) out.push(slug(rowKeyOf(loc.bay)));
+    out.push(slug(loc.bay));
+    if (loc.shelf != null) out.push(String(loc.shelf));
+    return out;
+  }
+  // Jump from a search hit to the shelf it's on.
+  function locateOnShelf(it) {
+    const loc = it.location_code ? list.find((l) => l.code === it.location_code) : null;
+    const target = loc && segsForLocation(loc);
+    if (!target) return;
+    setResults(null); setSearchedFor(''); setQ('');
+    navigate(target);
+  }
 
   // Load the open shelf's contents when we land on a shelf.
   useEffect(() => {
@@ -216,36 +259,114 @@ export function Locations({ onHome, onSignOut }) {
 
   return (
     <div className="app app-wide">
-      <TopBar title="Locations" onHome={onHome} onSignOut={onSignOut} />
+      <TopBar title="Locate Shoe" onHome={onHome} onSignOut={onSignOut} />
 
       <div className="card">
         <div className="loc-filters">
-          <label>Show
+          <form className="searchrow loc-search" onSubmit={(e) => { e.preventDefault(); runLocate(q); }}>
+            <input placeholder="Find a shoe — name, SKU, VIN or UPC…" value={q} autoFocus onChange={(e) => setQ(e.target.value)} />
+            <button className="btn primary">Locate</button>
+            <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} title="Scan a VIN or UPC" onClick={() => setShowCam((v) => !v)}><Icon name="camera" /> Scan</button>
+            {results !== null && <button type="button" className="btn ghost" onClick={() => { setQ(''); setResults(null); setSearchedFor(''); }}>Clear</button>}
+          </form>
+          <label className="loc-showfilter">Show
             <select value={active} onChange={(e) => setActive(e.target.value)}>
               <option value="">All</option>
               <option value="true">Active</option>
               <option value="false">Inactive</option>
             </select>
           </label>
-          <form className="searchrow loc-search" onSubmit={(e) => { e.preventDefault(); setSubmittedQ(q.trim()); navigate([]); }}>
-            <input placeholder="Search code / label / bay…" value={q} onChange={(e) => setQ(e.target.value)} />
-            <button className="btn primary">Search</button>
-            {submittedQ && <button type="button" className="btn ghost" onClick={() => { setQ(''); setSubmittedQ(''); navigate([]); }}>Clear</button>}
-          </form>
           <span className="loc-add-btns">
             <button className={`btn sm ${pane === 'add' ? 'primary' : 'ghost'}`} onClick={() => setPane(pane === 'add' ? null : 'add')}>+ Add shelf</button>
             <button className={`btn sm ${pane === 'bulk' ? 'primary' : 'ghost'}`} onClick={() => setPane(pane === 'bulk' ? null : 'bulk')}>Bulk add</button>
           </span>
         </div>
+        {showCam && (
+          <div className="loc-cam mt">
+            <Suspense fallback={<p className="muted">Loading camera…</p>}>
+              <CameraScanner mode="rescale" onDetected={routeScan} onClose={() => setShowCam(false)} zoom={camZoom} onZoomChange={setCamZoom} />
+            </Suspense>
+            <p className="muted sm">Scan a shoe’s <b>VIN</b> label or its box <b>UPC</b> — either one locates the pair.</p>
+          </div>
+        )}
         {pane === 'add' && <AddShelf siteAreas={siteAreas} onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
         {pane === 'bulk' && <BulkAdd siteAreas={siteAreas} onDone={(msg) => { setPane(null); setNotice(msg); load(); }} onError={setError} onSignOut={onSignOut} />}
         {error && <div className="error mt">{error}</div>}
         {notice && <div className="notice mt">{notice}</div>}
       </div>
 
-      <div className="card">
+      {results !== null && (
+        <div className="card">
+          <div className="loc-results-head">
+            <span className="loc-level-title">Results for “{searchedFor}” <span className="muted sm">· {results.length} found</span></span>
+            {(() => {
+              // If every hit is the same SKU (e.g. a UPC scan → one size), offer to
+              // broaden to all sizes of that shoe.
+              const skus = [...new Set(results.map((x) => x.sku).filter(Boolean))];
+              if (skus.length === 1 && searchedFor.toLowerCase() !== skus[0].toLowerCase()) {
+                return <button className="btn sm ghost" onClick={() => { setQ(skus[0]); runLocate(skus[0]); }}>↕ Show all sizes of {skus[0]}</button>;
+              }
+              return null;
+            })()}
+          </div>
+          {!results.length ? <p className="muted">No shoes match “{searchedFor}”. Try a name, SKU, VIN, or UPC.</p> : (
+            <div className="loc-results">
+              {(() => {
+                // Group units by SKU so a shoe shows once (thumb + name + summary),
+                // then compact per-unit rows: VIN | size | status | where it is.
+                const groups = Object.values(results.reduce((acc, it) => {
+                  const key = it.sku || it.name || '(unknown)';
+                  (acc[key] ||= { sample: it, units: [] }).units.push(it);
+                  return acc;
+                }, {})).sort((a, b) => (a.sample.name || '').localeCompare(b.sample.name || ''));
+                groups.forEach((g) => g.units.sort((a, b) => (parseFloat(a.size) || 0) - (parseFloat(b.size) || 0)));
+                return groups.map((g) => {
+                  const shelved = g.units.filter((u) => u.location_code).length;
+                  const unshelved = g.units.length - shelved;
+                  return (
+                    <div className="loc-sku-group" key={g.sample.sku || g.sample.name}>
+                      <div className="loc-group-head">
+                        <ShoeThumb url={g.sample.photo_url} size={46} onOpen={() => openThumb(g.sample)} />
+                        <div className="loc-group-info">
+                          <span className="loc-group-name">{g.sample.name || '—'}</span>
+                          <span className="loc-group-meta">
+                            {g.sample.sku || '—'}
+                            {shelved > 0 && <> · <span className="ok-txt">{shelved} shelved</span></>}
+                            {unshelved > 0 && <> · <span className="warn-txt">{unshelved} not shelved</span></>}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="loc-group-rows">
+                        {g.units.map((u) => {
+                          const loc = u.location_code ? list.find((l) => l.code === u.location_code) : null;
+                          return (
+                            <div className="loc-unit-row" key={u.vin}>
+                              <span className="loc-unit-left"><span className="loc-unit-vin vin">{u.vin}</span></span>
+                              <span className="loc-unit-size">{u.size && <span className="loc-size-chip">US {u.size}</span>}</span>
+                              <span className="loc-unit-status">{u.status !== 'needs_shelf' && <StatusPill status={u.status} />}</span>
+                              <span className="loc-unit-loc">
+                                {u.location_code ? (
+                                  <button className="loc-locate-chip" onClick={() => locateOnShelf(u)} disabled={!loc} title={loc ? `Go to ${u.location_code}` : u.location_code}>
+                                    <Icon name="pin" /> {loc ? (loc.label || u.location_code) : u.location_code}
+                                  </button>
+                                ) : <span className="loc-unshelved" title="In stock but no shelf assigned yet">Not shelved yet</span>}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card" hidden={results !== null}>
         {!locations ? <p className="muted">Loading…</p> : !list.length ? (
-          <p className="muted">No shelves match. {submittedQ ? 'Try another search or clear it.' : 'Add one, or change the filter.'}</p>
+          <p className="muted">No shelves yet. Add one, or change the filter.</p>
         ) : (
           <>
             <div className="loc-selbar">

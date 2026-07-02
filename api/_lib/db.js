@@ -713,7 +713,7 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
       AND (${supplier}::text IS NULL OR b.supplier_name = ${supplier})
       AND (${status}::text   IS NULL OR i.status = ${status})
       AND (${kind}::text     IS NULL OR b.kind = ${kind})
-      AND (${like}::text IS NULL OR i.vin ILIKE ${like} OR i.sku ILIKE ${like} OR i.name ILIKE ${like} OR i.location_code ILIKE ${like})
+      AND (${like}::text IS NULL OR i.vin ILIKE ${like} OR i.sku ILIKE ${like} OR i.name ILIKE ${like} OR i.upc ILIKE ${like} OR i.location_code ILIKE ${like})
     ORDER BY i.vin
     LIMIT ${lim}
   `;

@@ -264,7 +264,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                     <div><dt>Cost</dt><dd>${Number(it.cost || 0).toFixed(2)}</dd></div>
                     <div><dt>Status</dt><dd><StatusPill status={it.status} /></dd></div>
                     <div><dt>Location</dt><dd>{it.location_code
-                      ? <span className="loc-chip" title={it.location_code}>📍 {it.location_warehouse ? `${it.location_warehouse} · ` : ''}{it.location_label || it.location_code}</span>
+                      ? <span className="loc-chip" title={it.location_code}><Icon name="pin" /> {it.location_warehouse ? `${it.location_warehouse} · ` : ''}{it.location_label || it.location_code}</span>
                       : <span className="muted">Not shelved</span>}</dd></div>
                     <div><dt>Batch</dt><dd>{it.batch_code || '—'}</dd></div>
                     <div><dt>Intake</dt><dd>{it.kind === 'rescale' ? `Rescaled${it.origin ? ` (${it.origin})` : ''}` : 'Received'}</dd></div>
@@ -386,7 +386,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
     <div className="inv-detail">
       <dl className="inv-metrics">
         <div><dt>Date received</dt><dd>{(g.date_received || '').slice(0, 10) || '—'}</dd></div>
-        <div><dt>Location</dt><dd>{locLabel ? <span className="loc-chip" title={locs.join(', ')}>📍 {locLabel}</span> : <span className="muted">Not shelved</span>}</dd></div>
+        <div><dt>Location</dt><dd>{locLabel ? <span className="loc-chip" title={locs.join(', ')}><Icon name="pin" /> {locLabel}</span> : <span className="muted">Not shelved</span>}</dd></div>
         <div><dt>Cost</dt><dd>{g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : '—'}</dd></div>
         <div><dt>Supplier / Buyer</dt><dd>{g.supplier_name || '—'}{g.buyer_name ? ` / ${g.buyer_name}` : ''}</dd></div>
         <div><dt>Total units</dt><dd>{g.qty}</dd></div>
@@ -411,7 +411,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           <div className="inv-unit-row" key={r.vin}>
             <span className="vin">{r.vin}</span>
             <span className="muted sm">{r.size ? `US ${r.size}` : '—'}</span>
-            {r.location_code ? <span className="loc-chip sm" title={r.location_code}>📍 {r.location_code}</span> : <span className="muted sm">unshelved</span>}
+            {r.location_code ? <span className="loc-chip sm" title={r.location_code}><Icon name="pin" /> {r.location_code}</span> : <span className="muted sm">unshelved</span>}
             <button className="btn sm ghost" onClick={() => openDetail(r.vin)}>Details →</button>
           </div>
         ))}
@@ -513,7 +513,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                       <button className="dcard-main" onClick={() => toggleRow(g.key)}>
                         <div className="dcard-line"><span className="muted">{g.sku || '—'}</span><span>×{g.qty}</span></div>
                         <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} /></span></div>
-                        <div className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} />{groupLoc(g) && <span className="loc-chip sm" title="Shelf location">📍 {groupLoc(g)}</span>}</div>
+                        <div className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} />{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</div>
                       </button>
                       {open && invDetail(g)}
                     </div>
@@ -548,7 +548,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                           <td className="inv-col-sku">{g.sku || '—'}</td>
                           <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>
-                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} />{groupLoc(g) && <span className="loc-chip sm" title="Shelf location">📍 {groupLoc(g)}</span>}</span></td>
+                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} />{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</span></td>
                         </tr>
                         {open && (
                           <tr className="inv-drow">

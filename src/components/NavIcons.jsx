@@ -59,6 +59,17 @@ const PATHS = {
     <circle cx="11" cy="11" r="7" />
     <path d="M21 21l-4.3-4.3" />
   </>),
+  // Locations — map pin (where a unit lives)
+  locations: (<>
+    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z" />
+    <circle cx="12" cy="10" r="3" />
+  </>),
+  // Shelve / Put-away — a shelving rack (the destination shelf)
+  shelve: (<>
+    <rect x="3" y="3.5" width="18" height="17" rx="1.5" />
+    <path d="M3 9.5h18M3 15h18" />
+    <path d="M7 20.5v1.5M17 20.5v1.5" />
+  </>),
   // Report — bar chart
   report: (<>
     <path d="M3 20h18" />
@@ -100,6 +111,10 @@ const INLINE = {
     <path d="M3.3 7 12 12l8.7-5M12 12v9" />
   </>),
   nobox: PATHS.nobox,
+  pin: (<>
+    <path d="M12 2a7 7 0 0 1 7 7c0 5.25-7 13-7 13S5 14.25 5 9a7 7 0 0 1 7-7z" />
+    <circle cx="12" cy="9" r="2.5" />
+  </>),
   // refresh-cw — two curved arrows, clearly a "refresh/re-fetch"
   refresh: (<>
     <path d="M21 2v6h-6" />

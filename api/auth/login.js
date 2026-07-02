@@ -4,11 +4,15 @@
 
 import crypto from 'node:crypto';
 import {
-  getJsonBody, send, applySecurity, rateLimit, signToken, verifyPassword, clientIp,
+  getJsonBody, send, applySecurity, rateLimit, signToken, verifyPassword, hashPassword, clientIp,
 } from '../_lib/util.js';
 import {
   findUserByUsername, recordLoginAttempt, countRecentFailures, dbConfigured,
 } from '../_lib/db.js';
+
+// A real hash to verify against when the username doesn't exist, so login costs
+// the same scrypt time either way (defeats username enumeration by timing).
+const DUMMY_HASH = hashPassword('decoy-never-matches');
 
 const MAX_FAILS_PER_USER = 5;   // per window, then locked
 const MAX_FAILS_PER_IP = 30;    // per window, across usernames
@@ -76,7 +80,10 @@ export default async function handler(req, res) {
     return send(res, 500, { ok: false, error: 'Login is temporarily unavailable.' });
   }
 
-  if (!row || !verifyPassword(password, row.pass_hash)) return fail();
+  // Always run the (slow) verify — against a dummy hash when the user is unknown —
+  // so timing can't distinguish a valid username from an invalid one.
+  const passOk = verifyPassword(password, row ? row.pass_hash : DUMMY_HASH);
+  if (!row || !passOk) return fail();
 
   // Correct password — now gate on approval status.
   if (row.status === 'pending')

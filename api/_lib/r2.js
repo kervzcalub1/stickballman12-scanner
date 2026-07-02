@@ -78,3 +78,18 @@ export function publicUrl(key) {
   if (base) return `${base.replace(/\/+$/, '')}/${encodeKey(key)}`;
   return `https://${endpointHost()}/${process.env.R2_BUCKET}/${encodeKey(key)}`;
 }
+
+// SSRF guard: listing photos are uploaded to R2 and read back only from
+// R2_PUBLIC_BASE_URL. The server must NEVER fetch (or store) an arbitrary
+// client-supplied URL — that's a server-side request forgery primitive. Only
+// https URLs on the exact R2 public host are allowed.
+export function isAllowedPhotoUrl(url) {
+  try {
+    const base = process.env.R2_PUBLIC_BASE_URL;
+    if (!base) return false;
+    const u = new URL(String(url));
+    if (u.protocol !== 'https:') return false;
+    const b = new URL(base.includes('://') ? base : `https://${base}`);
+    return u.hostname.toLowerCase() === b.hostname.toLowerCase();
+  } catch { return false; }
+}

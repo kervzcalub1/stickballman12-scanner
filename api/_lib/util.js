@@ -59,14 +59,15 @@ export function applySecurity(req, res) {
 const buckets = new Map();
 
 export function rateLimit(req, { windowMs = 60_000, max = 30 } = {}) {
-  const ip =
-    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-    req.socket?.remoteAddress ||
-    'unknown';
+  const ip = clientIp(req); // spoof-resistant (see clientIp) — not raw X-Forwarded-For
+  // Scope the bucket per (ip, route) — a shared IP-only bucket let unrelated
+  // endpoint traffic exhaust a strict per-route budget (e.g. ph/refresh-gi).
+  const route = String(req.url || '').split('?')[0];
+  const key = `${ip}|${route}`;
   const now = Date.now();
-  const hits = (buckets.get(ip) || []).filter((t) => now - t < windowMs);
+  const hits = (buckets.get(key) || []).filter((t) => now - t < windowMs);
   hits.push(now);
-  buckets.set(ip, hits);
+  buckets.set(key, hits);
   // opportunistic cleanup
   if (buckets.size > 5000) buckets.clear();
   return hits.length <= max;
@@ -182,12 +183,22 @@ export function verifyPassword(plain, stored) {
 }
 
 // Best-effort client IP (Vercel sets x-forwarded-for).
+// The client IP used for rate-limiting / login throttling. `X-Forwarded-For` is
+// CLIENT-CONTROLLED and must NOT be trusted unless a known proxy sits in front:
+// otherwise an attacker rotates the header to reset every per-IP limit. Set
+// TRUST_PROXY_HOPS to the number of trusted proxies in prod (Railway = 1); when
+// 0 (default, dev / direct exposure) we ignore the header and use the socket IP,
+// which can't be spoofed.
 export function clientIp(req) {
-  return (
-    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-    req.socket?.remoteAddress ||
-    'unknown'
-  );
+  const socketIp = req.socket?.remoteAddress || 'unknown';
+  const hops = Number(process.env.TRUST_PROXY_HOPS || 0);
+  if (hops <= 0) return socketIp;
+  const chain = String(req.headers['x-forwarded-for'] || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  // Our trusted proxy layer appends the real peer as the outermost entries; the
+  // client is `hops` from the right. Any entries the client itself injected sit
+  // to the LEFT of that and are ignored.
+  return chain[chain.length - hops] || socketIp;
 }
 
 /* ------------------------------------------------------------------ */

@@ -156,7 +156,13 @@ export function Locations({ onHome, onSignOut }) {
   const list = locations || [];
 
   // --- Build Site → Area → (Row) → Bay → Shelf tree (list arrives pre-sorted) --
+  // Seed every official site first so the view always starts at the Site level
+  // (Site → Area → Bay → Shelf) and each site shows as a tile even before it has
+  // any shelves — so a new/empty site (Mount Joy, Kready's Farm) is visible and
+  // you can drill in to add to it. DB rows merge in below; a custom site that
+  // only exists in data (not in WAREHOUSES) still appears via the row loop.
   const sites = new Map();
+  for (const w of WAREHOUSES) sites.set(w, { name: w, count: 0, ids: [], areas: new Map() });
   for (const l of list) {
     if (!sites.has(l.warehouse)) sites.set(l.warehouse, { name: l.warehouse, count: 0, ids: [], areas: new Map() });
     const S = sites.get(l.warehouse); S.count += l.item_count || 0; S.ids.push(l.id);
@@ -458,7 +464,9 @@ export function Locations({ onHome, onSignOut }) {
                     <label className="loc-selall"><input type="checkbox" checked={allSel(allTileIds)} onChange={() => toggleIds(allTileIds)} /> Select all</label>
                   )}
                 </div>
-                {!tiles.length ? <p className="muted">Nothing here yet.</p> : (
+                {!tiles.length ? (
+                  <p className="muted">Nothing here yet — use <b>+ Add shelf</b> or <b>Bulk add</b> to set up {r.site || 'this site'}.</p>
+                ) : (
                   <div className="loc-tiles" ref={tilesRef}>
                     {tiles.map((t) => (
                       <div className={`loc-tile ${t.inactive ? 'inactive' : ''}`} key={t.key}>

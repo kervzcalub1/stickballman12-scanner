@@ -98,7 +98,8 @@ violation. No new columns needed — `kind` and `origin` already exist.
   only honors section-level `adminOnly`; add per-card support:
   - In the Home render (line ~339), also filter cards:
     `section.cards.filter((c) => !c.adminOnly || isAdmin)`.
-  - Add to the "Receiving & Stock" section:
+  - Add to the "Intake" section (Home is now grouped by lifecycle: Intake →
+    Put-away → Rescale → Sell & Ship → Browse & Reports → Administration):
     `{ key: 'instore', adminOnly: true, icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' }`.
 - **`Receiving` component** — add an `isInstore = mode === 'instore'` flag
   alongside `isRescale`:

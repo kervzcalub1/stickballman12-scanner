@@ -78,28 +78,43 @@ export function homeCardBadges(key, c) {
   return [];
 }
 
-// Home is grouped into categories. `adminOnly` cards/sections show for admin only.
+// Home is grouped by the shoe's lifecycle through the warehouse: Intake →
+// Put-away → Rescale → Sell & Ship → Browse & Reports, with Admin last.
+// `adminOnly` cards/sections show for admin only.
 export const HOME_SECTIONS = [
-  { title: 'Administration', adminOnly: true, cards: [
-    { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, or remove accounts' },
-  ] },
-  { title: 'Receiving & Stock', cards: [
+  { title: 'Intake', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
+  ] },
+  { title: 'Put-away', cards: [
     { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },
-    { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },
-    { key: 'rescalereq', icon: '📨', title: 'Rescale Requests', sub: 'PH-flagged SKUs to recount / rescan' },
     { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Resolve units bought without a box' },
   ] },
-  { title: 'Sales & Shipment', cards: [
+  { title: 'Rescale', cards: [
+    { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },
+    { key: 'rescalereq', icon: '📨', title: 'Rescale Requests', sub: 'PH-flagged SKUs to recount / rescan' },
+  ] },
+  { title: 'Sell & Ship', cards: [
     { key: 'sold', icon: '💰', title: 'Mark Sold', sub: 'Scan VINs to mark sold (delists from all stores)' },
     { key: 'shipped', icon: '📦', title: 'Mark Shipped', sub: 'Scan VINs to mark shipped' },
   ] },
-  { title: 'Reports & Lookup', cards: [
+  { title: 'Browse & Listings', cards: [
     { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
-    { key: 'locations', icon: '🗺️', title: 'Locations', sub: 'Browse shelves, add & print labels' },
-    { key: 'report', icon: '📊', title: 'Report', sub: 'Monthly listing & store sync' },
+    { key: 'locations', icon: '🗺️', title: 'Locate Shoe', sub: 'Find which shelf a shoe is on' },
+    { key: 'report', icon: '📊', title: 'Listings & Sync', sub: 'Store listings & sync status' },
   ] },
+  { title: 'Administration', adminOnly: true, cards: [
+    { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, or remove accounts' },
+  ] },
+];
+
+// "Needs attention" strip on Home — a card only appears when its pending count is
+// >0, linking to the screen that clears that queue. (from usePendingCounts)
+export const HOME_ATTENTION = [
+  { key: 'nobox', label: 'No box', count: 'no_box' },
+  { key: 'shelve', label: 'Needs shelf', count: 'needs_shelf' },
+  { key: 'rescalereq', label: 'Rescale requests', count: 'rescale_requests' },
+  { key: 'rescale', label: 'Restock', count: 'restock_pending' },
 ];
 
 // Total quantity across a [{qty}] size array (rescale reported vs actual).

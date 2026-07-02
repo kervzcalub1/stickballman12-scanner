@@ -72,11 +72,12 @@ export function PHTeamApp({ user, onSignOut }) {
   );
 }
 
-// `kind`: 'receiving' (New Inventory) · 'rescale' (Rescale Stock) · null (all — admin Report).
+// `kind`: 'receiving' (New Inventory) · 'rescale' (Rescale Stock) · null (all — the
+// admin/warehouse "Listings & Sync" page).
 export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const canEdit = user?.role === 'ph_team'; // admin + warehouse are read-only
   const showPricing = user?.role !== 'warehouse'; // GI + Final price hidden from warehouse
-  const title = kind === 'rescale' ? 'Rescale Stock' : kind === 'receiving' ? 'New Inventory' : 'Report';
+  const title = kind === 'rescale' ? 'Rescale Stock' : kind === 'receiving' ? 'New Inventory' : 'Listings & Sync';
   const emptyKind = kind === 'rescale' ? 'rescaled' : kind === 'receiving' ? 'received' : 'scanned';
   const isMobile = useMediaQuery('(max-width: 768px)'); // phones get cards, not the wide grid
   // Date range: Report (kind null/receiving) defaults to Month; Rescale to Day.

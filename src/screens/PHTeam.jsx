@@ -2,9 +2,11 @@
 // Request) and the editable PHGrid (per-size pricing + cross-store sync flags,
 // edit locks, live refresh, history). PHGrid is also used read-only as the
 // admin/warehouse Report.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useAutoAnimate } from '@formkit/auto-animate/react';
+import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
-import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, HistoryModal, DateRangeBar, ShoeThumb } from '../components/common.jsx';
+import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, HistoryModal, DateRangeBar, ShoeThumb } from '../components/common.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES } from '../lib/constants.js';
@@ -42,32 +44,40 @@ export function PHTeamApp({ user, onSignOut }) {
     <div className="app">
       <TopBar onSignOut={onSignOut} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
-      <div className="home-grid">
-        <button className="home-card" onClick={() => goPage('receiving')}>
-          <span className="home-card-icon"><NavIcon name="receiving" /></span>
-          <span className="home-card-title">New Inventory</span>
-          <span className="home-card-sub">Price &amp; list newly received stock — Intelligent Inventory, Alias, StockX, Shopify</span>
-          <CardBadges badges={counts ? SYNC_BADGES(counts) : []} />
-        </button>
-        <button className="home-card" onClick={() => goPage('rescale')}>
-          <span className="home-card-icon"><NavIcon name="rescale" /></span>
-          <span className="home-card-title">Rescale Stock</span>
-          <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
-          <CardBadges badges={counts ? [['Restock', counts.restock_pending]] : []} />
-        </button>
-        <button className="home-card" onClick={() => goPage('nobox')}>
-          <span className="home-card-icon"><NavIcon name="nobox" /></span>
-          <span className="home-card-title">No Box / Not Ready</span>
-          <span className="home-card-sub">Units bought without a box — not yet postable (view-only; warehouse resolves)</span>
-          <CardBadges badges={counts ? [['No box', counts.no_box]] : []} />
-        </button>
-        <button className="home-card" onClick={() => goPage('request')}>
-          <span className="home-card-icon"><NavIcon name="rescalereq" /></span>
-          <span className="home-card-title">Request Rescale</span>
-          <span className="home-card-sub">Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)</span>
-          <CardBadges badges={counts ? [['Pending audit', counts.rescale_requests], ['Audited', counts.rescale_requests_audited, 'ok']] : []} />
-        </button>
-      </div>
+      <section className="home-section">
+        <h2 className="home-section-title">Work</h2>
+        <div className="home-grid">
+          <button className="home-card" onClick={() => goPage('receiving')}>
+            <span className="home-card-icon"><NavIcon name="receiving" /></span>
+            <span className="home-card-title">New Inventory</span>
+            <span className="home-card-sub">Price &amp; list newly received stock — Intelligent Inventory, Alias, StockX, Shopify</span>
+            <CardBadges badges={counts ? SYNC_BADGES(counts) : []} />
+          </button>
+          <button className="home-card" onClick={() => goPage('rescale')}>
+            <span className="home-card-icon"><NavIcon name="rescale" /></span>
+            <span className="home-card-title">Rescale Stock</span>
+            <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
+            <CardBadges badges={counts ? [['Restock', counts.restock_pending]] : []} />
+          </button>
+        </div>
+      </section>
+      <section className="home-section">
+        <h2 className="home-section-title">Track</h2>
+        <div className="home-grid">
+          <button className="home-card" onClick={() => goPage('nobox')}>
+            <span className="home-card-icon"><NavIcon name="nobox" /></span>
+            <span className="home-card-title">No Box / Not Ready</span>
+            <span className="home-card-sub">Units bought without a box — not yet postable (view-only; warehouse resolves)</span>
+            <CardBadges badges={counts ? [['No box', counts.no_box]] : []} />
+          </button>
+          <button className="home-card" onClick={() => goPage('request')}>
+            <span className="home-card-icon"><NavIcon name="rescalereq" /></span>
+            <span className="home-card-title">Request Rescale</span>
+            <span className="home-card-sub">Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)</span>
+            <CardBadges badges={counts ? [['Pending audit', counts.rescale_requests], ['Audited', counts.rescale_requests_audited, 'ok']] : []} />
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -96,6 +106,36 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [historyFor, setHistoryFor] = useState(null); // { vins, title } — open History modal
   const [photosSku, setPhotosSku] = useState(null);   // SKU whose listing photos are shown
   useUnsavedGuard(editing.size > 0); // unsaved edits → guard Back/refresh
+
+  // Subtle motion (auto-animate, respects reduced-motion): rows/cards ease in as
+  // quietRefresh adds new ones, and the per-size drawer eases open/closed. Turned
+  // off while a row is being edited/saved — nothing should visually shift under
+  // an in-progress draft.
+  const [tbodyAnimRef, setTbodyAnimEnabled] = useAutoAnimate({ duration: 180 });
+  const [cardsAnimRef, setCardsAnimEnabled] = useAutoAnimate({ duration: 180 });
+  useEffect(() => {
+    const on = editing.size === 0 && savingKey == null;
+    setTbodyAnimEnabled(on);
+    setCardsAnimEnabled(on);
+  }, [editing.size, savingKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Per-size drawer (desktop + mobile) — a stable ref callback (not a hook) so it
+  // can be attached inside a .map() without breaking the rules of hooks.
+  const drawerAnimRef = useCallback((el) => { if (el) autoAnimate(el, { duration: 160 }); }, []);
+
+  // Horizontal scroll-shadow on the wide desktop table (.ph-wrap): a subtle cue
+  // that there are more columns off-screen. Overlaid via a sibling wrapper
+  // (not the scrolling element itself) so it stays visible above the frozen
+  // sticky columns' opaque backgrounds.
+  const scrollWrapRef = useRef(null);
+  const [scrollShadow, setScrollShadow] = useState({ left: false, right: false });
+  const updateScrollShadow = () => {
+    const el = scrollWrapRef.current; if (!el) return;
+    setScrollShadow({
+      left: el.scrollLeft > 2,
+      right: el.scrollLeft < el.scrollWidth - el.clientWidth - 2,
+    });
+  };
+  useEffect(() => { updateScrollShadow(); }); // re-check after every render (rows/cols can change width)
 
   // ---- B2 edit locks / presence ----
   const [locks, setLocks] = useState({});    // vin -> { holder, holder_id } (active locks)
@@ -219,7 +259,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       if (err.unauthorized) return onSignOut();
       if (err.conflict) {
         const who = err.data?.blockers?.[0]?.holder;
-        setError(`🔒 ${who || 'Another PH user'} is editing this item right now. Try again in a moment.`);
+        setError(`${who || 'Another PH user'} is editing this right now — give them a moment, then try again.`);
         refreshLocks();
         return;
       }
@@ -253,23 +293,28 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const setSizeFlag = (key, size, flagKey, v) => setSizeField(key, size, { [flagKey]: v });
   const setSizeNote = (key, size, v) => setSizeField(key, size, { ph_note: v });
   // Save a group: every field is per-size now (GI, final price, II/AL/SX/SH, Note).
-  // Sizes touch disjoint VINs, so the per-size updates run in parallel; each uses
-  // the group's last_edit_at as the optimistic-concurrency base.
+  // ONE atomic request covers every size — the server applies all sizes' updates
+  // in a single transaction after ONE optimistic-concurrency check (see
+  // phUpdateGroup in db.js), so a conflict on any size aborts the WHOLE group
+  // instead of leaving it half-saved.
   async function submitGroup(g) {
     setSavingKey(g.key); setError('');
     const d = drafts[g.key] || {};
     try {
-      const results = await Promise.all(g.sizes.map((s) => {
+      const sizes = g.sizes.map((s) => {
         const sd = d.sizes?.[s.size] || {};
-        return api.phUpdateMany(s.vins, {
-          global_indicator: sd.global_indicator, price: sd.price,
-          added_to_intel_inv: sd.added_to_intel_inv, synced_alias: sd.synced_alias,
-          synced_stockx: sd.synced_stockx, synced_shopify: sd.synced_shopify,
-          ph_note: sd.ph_note,
-        }, g.last_edit_at || null);
-      }));
-      const byVin = new Map();
-      for (const r of results) for (const u of (r.rows || [])) byVin.set(u.vin, u);
+        return {
+          vins: s.vins,
+          fields: {
+            global_indicator: sd.global_indicator, price: sd.price,
+            added_to_intel_inv: sd.added_to_intel_inv, synced_alias: sd.synced_alias,
+            synced_stockx: sd.synced_stockx, synced_shopify: sd.synced_shopify,
+            ph_note: sd.ph_note,
+          },
+        };
+      });
+      const result = await api.phUpdateGroup(sizes, g.last_edit_at || null);
+      const byVin = new Map((result.rows || []).map((u) => [u.vin, u]));
       setRows((rs) => rs.map((x) => byVin.get(x.vin) || x));
       closeEdit(g.key, { release: true });
       refreshLocks();
@@ -362,7 +407,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
 
       <div className="card">
         {!rows ? <p className="muted">Loading…</p> : !groups.length ? <p className="muted">No {emptyKind} items in this range.</p> : isMobile ? (
-          <div className="ph-cards">
+          <div className="ph-cards" ref={cardsAnimRef}>
             {groups.map((g) => {
               const ed = editing.has(g.key);
               const d = drafts[g.key] || {};
@@ -384,7 +429,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <span className="ph-caret">{open ? '▾' : '▸'}</span><SizesQty sizes={g.sizes} />
                   </button>
                   {open && (
-                    <div className="ph-sizedetail">
+                    <div className="ph-sizedetail" ref={drawerAnimRef}>
                       {g.sizes.map((s) => {
                         const sd = ed ? (d.sizes?.[s.size] || {}) : null;
                         return (
@@ -392,10 +437,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                             <span className="ph-sizedetail-size">US {s.size} <span className="muted">×{s.qty}</span></span>
                             <span className="muted sm">Cost {s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</span>
                             {showPricing && <span className="ph-card-price">GI {ed
-                              ? <input className="ph-price" type="number" min="0" step="0.01" value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} />
+                              ? <PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} />
                               : <b>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}</b>}</span>}
                             {showPricing && <span className="ph-card-price">Final {ed
-                              ? <input className="ph-price" type="number" min="0" step="0.01" value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
+                              ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
                               : <b>{s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—'}</b>}</span>}
                             <span className="ph-sizedetail-flags">
                               {PH_FLAGS.map(([k, label]) => (
@@ -419,7 +464,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                       })}
                     </div>
                   )}
-                  <div className="ph-card-synced"><span className="muted sm">Listed / synced (all sizes)</span> <SyncBadges item={g} /></div>
+                  {/* Saved-state badges — while editing, the live draft checkboxes below are
+                      the source of truth, so this is captioned "Last saved" instead of
+                      "Listed / synced" to avoid reading as contradicting the open draft. */}
+                  <div className="ph-card-synced"><span className="muted sm">{ed ? 'Last saved (all sizes)' : 'Listed / synced (all sizes)'}</span> <SyncBadges item={g} /></div>
                   <div className="ph-card-foot">
                     <span className="muted sm ph-card-credit">
                       {g.first_edit_by ? (
@@ -439,7 +487,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                           <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
                         </span>
                       );
-                      if (locked) return <span className="lock-badge" title={`Being edited by ${locked}`}>🔒 {locked}</span>;
+                      if (locked) return <span className="presence-badge" title={`${locked} is editing this right now`}>{locked} editing…</span>;
                       return (
                         <span className="ph-edit-actions">
                           <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>
@@ -453,7 +501,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
             })}
           </div>
         ) : (
-          <div className="ph-wrap">
+          <div className="ph-scrollbox">
+            <div className={`ph-scroll-shadow left ${scrollShadow.left ? 'show' : ''}`} />
+            <div className={`ph-scroll-shadow right ${scrollShadow.right ? 'show' : ''}`} />
+            <div className="ph-wrap" ref={scrollWrapRef} onScroll={updateScrollShadow}>
             <table className="ph-table">
               <thead>
                 <tr>
@@ -463,10 +514,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   <th style={frozenStyle(3)} className="ph-frozen ph-frozen-last">Qty</th>
                   <th>Sizes (qty)</th><th>Gender</th><th>Status</th><th>Listed / synced</th><th>Scanned by</th>
                   <th style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first">Action</th>
-                  <th style={rightStyle('addedby')} className="ph-rfrozen">Added by</th>
+                  <th style={rightStyle('addedby')}>Added by</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody ref={tbodyAnimRef}>
                 {groups.map((g) => {
                   const ed = editing.has(g.key);
                   const d = drafts[g.key] || {};
@@ -491,13 +542,13 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                   <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
                                 </span>)
                               : (lockHolder(g)
-                                  ? <span className="lock-badge" title={`Being edited by ${lockHolder(g)}`}>🔒 {lockHolder(g)}</span>
+                                  ? <span className="presence-badge" title={`${lockHolder(g)} is editing this right now`}>{lockHolder(g)} editing…</span>
                                   : (<span className="ph-edit-actions">
                                       <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>
                                       {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
                                     </span>))}
                         </td>
-                        <td style={rightStyle('addedby')} className="ph-rfrozen ph-addedby">
+                        <td style={rightStyle('addedby')} className="ph-addedby">
                           {g.first_edit_by ? (
                             <>
                               {g.first_edit_by}
@@ -512,7 +563,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                       {open && (
                         <tr className="ph-drow">
                           <td colSpan={11}>
-                            <div className="ph-detail">
+                            <div className="ph-detail" ref={drawerAnimRef}>
                               <table className="ph-sizetable">
                                 <thead><tr>
                                   <th>Size</th><th>Qty</th><th>Cost</th>
@@ -530,12 +581,12 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                         <td>{s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</td>
                                         {showPricing && (
                                           <td>{ed
-                                            ? <input className="ph-price" type="number" min="0" step="0.01" value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} />
+                                            ? <PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} />
                                             : (s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—')}</td>
                                         )}
                                         {showPricing && (
                                           <td>{ed
-                                            ? <input className="ph-price" type="number" min="0" step="0.01" value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
+                                            ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
                                             : (s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—')}</td>
                                         )}
                                         {PH_FLAGS.map(([k]) => (
@@ -564,6 +615,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>

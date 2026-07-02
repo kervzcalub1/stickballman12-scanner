@@ -11,6 +11,7 @@ import { api } from '../api.js';
 import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { WAREHOUSES, LOCATION_AREAS } from '../lib/constants.js';
+import { useAutoAnimate } from '@formkit/auto-animate/react';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -89,6 +90,8 @@ export function Locations({ onHome, onSignOut }) {
   const [printLocs, setPrintLocs] = useState(null);
   const [siteAreas, setSiteAreas] = useState({});
   const [segs, setSegs] = useState(segsFromPath);   // current drill path (URL truth)
+  const [resultsRef] = useAutoAnimate(); // search hits ease in
+  const [tilesRef] = useAutoAnimate();   // tiles reflow as you drill in/out
   const [contents, setContents] = useState(null);   // shoes on the open shelf | 'loading' | null
   const [editing, setEditing] = useState(false);
   const [editLabel, setEditLabel] = useState('');
@@ -310,7 +313,7 @@ export function Locations({ onHome, onSignOut }) {
             })()}
           </div>
           {!results.length ? <p className="muted">No shoes match “{searchedFor}”. Try a name, SKU, VIN, or UPC.</p> : (
-            <div className="loc-results">
+            <div className="loc-results" ref={resultsRef}>
               {(() => {
                 // Group units by SKU so a shoe shows once (thumb + name + summary),
                 // then compact per-unit rows: VIN | size | status | where it is.
@@ -456,7 +459,7 @@ export function Locations({ onHome, onSignOut }) {
                   )}
                 </div>
                 {!tiles.length ? <p className="muted">Nothing here yet.</p> : (
-                  <div className="loc-tiles">
+                  <div className="loc-tiles" ref={tilesRef}>
                     {tiles.map((t) => (
                       <div className={`loc-tile ${t.inactive ? 'inactive' : ''}`} key={t.key}>
                         <input type="checkbox" className="loc-tile-check" checked={allSel(t.ids)} onChange={() => toggleIds(t.ids)} aria-label={`Select ${t.name}`} />

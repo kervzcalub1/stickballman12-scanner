@@ -1,38 +1,120 @@
-// Locations — browse/manage shelf locations (warehouse + admin). Filter by
-// warehouse / area / active / search; each shelf shows its live item count and
-// expands to its contents. Add a single shelf, bulk-add a warehouse's bays, and
-// rename / activate-deactivate. (Label printing lands in Phase 5.)
+// Locations — browse/manage shelf locations (warehouse + admin) as a drill-down
+// tile view, like a desktop file manager. Each level (Site → Area → Row → Bay →
+// Shelf) is a full-width grid of tiles that wraps to fit any screen (no columns,
+// no horizontal scroll); clicking a tile drills in and pushes a real URL segment
+// (/locations/manheim-main-shed/warehouse-rows/a/a2/4), so refresh + browser Back
+// work. The final level (a shelf, or a whole-bay pod) shows the shoes stored
+// there. Add / bulk-add, rename, activate-deactivate, and bulk label printing all
+// still live here.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, StatusPill, ShelfLabelSheet } from '../components/common.jsx';
+import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { WAREHOUSES, LOCATION_AREAS } from '../lib/constants.js';
 
+const NO_AREA = '(no area)';
+// URL-safe slug of a name/label; unique within a level so it round-trips cleanly.
+const slug = (s) => String(s ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
+const segsFromPath = () => window.location.pathname.replace(/^\/locations\/?/, '').split('/').map(decodeURIComponent).filter(Boolean).map((s) => s.toLowerCase());
+const pathFromSegs = (segs) => '/locations' + segs.map((s) => `/${s}`).join('');
+
+// Small line-glyphs for the tiles, matching the app's Feather-style icon set.
+function TileGlyph({ kind }) {
+  const p = { width: 26, height: 26, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  if (kind === 'site') return <svg {...p}><path d="M3 21V8l9-5 9 5v13" /><path d="M9 21v-6h6v6" /></svg>;
+  if (kind === 'bay') return <svg {...p}><rect x="3" y="4" width="18" height="4" rx="1" /><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></svg>;
+  if (kind === 'shelf') return <svg {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M3 14h18" /></svg>;
+  return <svg {...p}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>; // folder (area / row)
+}
+
+// Walk the tree by URL slugs → the resolved position + a breadcrumb trail.
+function resolve(sites, segs, multiSite) {
+  const siteList = [...sites.keys()];
+  const r = { level: 'sites', trail: [], base: [], site: null, S: null, area: null, A: null, grouped: false, row: null, R: null, bay: null, B: null, wholeBay: false, shelfId: null, shelfObj: null };
+  const push = (label, s) => r.trail.push({ label, segs: [...s] });
+  push(multiSite ? 'All sites' : (siteList[0] || 'Locations'), []);
+  let i = 0; let acc = [];
+
+  if (multiSite) {
+    const site = segs[i] != null ? siteList.find((s) => slug(s) === segs[i]) : null;
+    if (!site) { r.base = acc; return r; }
+    r.site = site; r.S = sites.get(site); acc = [slug(site)]; i++; push(site, acc);
+  } else {
+    if (!siteList.length) return r;
+    r.site = siteList[0]; r.S = sites.get(r.site);
+  }
+
+  const areaVals = [...r.S.areas.values()];
+  const A = segs[i] != null ? areaVals.find((a) => slug(a.name) === segs[i]) : null;
+  if (!A) { r.level = 'areas'; r.base = acc; return r; }
+  r.area = A.key; r.A = A; r.grouped = !!A.grouped; acc = [...acc, slug(A.name)]; i++; push(A.name, acc);
+
+  let bayVals;
+  if (r.grouped) {
+    const R = segs[i] != null ? [...A.rows.values()].find((x) => slug(x.name) === segs[i]) : null;
+    if (!R) { r.level = 'rows'; r.base = acc; return r; }
+    r.row = R.name; r.R = R; acc = [...acc, slug(R.name)]; i++; push(`Row ${R.name}`, acc);
+    bayVals = R.bays;
+  } else bayVals = [...A.bays.values()];
+
+  const B = segs[i] != null ? bayVals.find((b) => slug(b.name) === segs[i]) : null;
+  if (!B) { r.level = 'bays'; r.base = acc; return r; }
+  r.bay = B.name; r.B = B; acc = [...acc, slug(B.name)]; i++; push(B.name, acc);
+
+  // A whole-bay pod is a single location with no shelf → its tile holds the shoes.
+  if (B.shelves.length === 1 && B.shelves[0].shelf == null) {
+    r.level = 'shelf'; r.wholeBay = true; r.shelfId = B.shelves[0].id; r.shelfObj = B.shelves[0]; r.base = acc; return r;
+  }
+  const sh = segs[i] != null ? B.shelves.find((x) => String(x.shelf) === segs[i] || slug(x.label || x.code) === segs[i]) : null;
+  if (!sh) { r.level = 'shelves'; r.base = acc; return r; }
+  acc = [...acc, String(sh.shelf)]; push(sh.label || sh.code, acc);
+  r.level = 'shelf'; r.shelfId = sh.id; r.shelfObj = sh; r.base = acc; return r;
+}
+
 export function Locations({ onHome, onSignOut }) {
-  const [warehouse, setWarehouse] = useState('');
-  const [area, setArea] = useState('');
   const [active, setActive] = useState('');
   const [q, setQ] = useState('');
+  const [submittedQ, setSubmittedQ] = useState('');
   const [locations, setLocations] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [contents, setContents] = useState({}); // id -> items | 'loading'
-  const [editId, setEditId] = useState(null);
-  const [editLabel, setEditLabel] = useState('');
-  const [busyId, setBusyId] = useState(null);
-  const [pane, setPane] = useState(null); // 'add' | 'bulk' | null
-  const [sel, setSel] = useState(() => new Set()); // selected location ids (for printing)
+  const [pane, setPane] = useState(null);          // 'add' | 'bulk' | null
+  const [sel, setSel] = useState(() => new Set());  // selected shelf ids (for printing)
   const [printLocs, setPrintLocs] = useState(null);
-  const [siteAreas, setSiteAreas] = useState({}); // { warehouse: [areas…] } — accrued from loaded data
-  const [openBays, setOpenBays] = useState(() => new Set());       // expanded bays (collapsed by default)
-  const [collapsedAreas, setCollapsedAreas] = useState(() => new Set()); // collapsed areas (expanded by default)
+  const [siteAreas, setSiteAreas] = useState({});
+  const [segs, setSegs] = useState(segsFromPath);   // current drill path (URL truth)
+  const [contents, setContents] = useState(null);   // shoes on the open shelf | 'loading' | null
+  const [editing, setEditing] = useState(false);
+  const [editLabel, setEditLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [lightbox, setLightbox] = useState(null); // urls[] to enlarge, or null
+
+  // Tap a thumbnail → enlarge: the SKU's listing photos if any, else the catalog image.
+  async function openThumb(it) {
+    try {
+      const { photos } = await api.photoList(it.sku);
+      const urls = (photos || []).map((p) => p.url).filter(Boolean);
+      setLightbox(urls.length ? urls : (it.photo_url ? [it.photo_url] : null));
+    } catch { setLightbox(it.photo_url ? [it.photo_url] : null); }
+  }
+
+  // Navigate to a level: update state + push a real URL so Back/refresh work.
+  const navigate = (newSegs, { replace = false } = {}) => {
+    setSegs(newSegs); setEditing(false);
+    const path = pathFromSegs(newSegs);
+    if (window.location.pathname !== path) window.history[replace ? 'replaceState' : 'pushState'](null, '', path);
+  };
+  useEffect(() => {
+    const onPop = () => setSegs(segsFromPath());
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   async function load() {
     setError('');
     try {
-      const { locations: l } = await api.locationList({ warehouse, area, active, q });
+      const { locations: l } = await api.locationList({ active, q: submittedQ });
       setLocations(l);
-      // Accrue each site's real areas so the Add/Bulk forms can suggest them.
       setSiteAreas((prev) => {
         const next = { ...prev };
         for (const loc of l) {
@@ -44,118 +126,93 @@ export function Locations({ onHome, onSignOut }) {
       });
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
-  useEffect(() => { load(); }, [warehouse, area, active]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function toggleContents(id) {
-    if (contents[id]) { setContents((c) => { const n = { ...c }; delete n[id]; return n; }); return; }
-    setContents((c) => ({ ...c, [id]: 'loading' }));
-    try { const { items } = await api.locationItems(id); setContents((c) => ({ ...c, [id]: items || [] })); }
-    catch (err) { if (err.unauthorized) return onSignOut(); setContents((c) => { const n = { ...c }; delete n[id]; return n; }); setError(err.message); }
-  }
-  async function saveLabel(loc) {
-    const label = editLabel.trim();
-    setBusyId(loc.id); setError('');
-    try {
-      const { location } = await api.locationUpdate(loc.id, { label });
-      setLocations((ls) => ls.map((x) => (x.id === location.id ? { ...x, ...location } : x)));
-      setEditId(null);
-    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
-    finally { setBusyId(null); }
-  }
-  async function toggleActive(loc) {
-    setBusyId(loc.id); setError('');
-    try {
-      const { location } = await api.locationUpdate(loc.id, { active: !loc.active });
-      setLocations((ls) => ls.map((x) => (x.id === location.id ? { ...x, ...location } : x)));
-    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
-    finally { setBusyId(null); }
-  }
+  useEffect(() => { load(); }, [active, submittedQ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const list = locations || [];
-  // Group by area (in listing order) for section headers.
-  const groups = [];
-  const seen = new Map();
+
+  // --- Build Site → Area → (Row) → Bay → Shelf tree (list arrives pre-sorted) --
+  const sites = new Map();
   for (const l of list) {
-    const key = `${l.warehouse}|${l.area || ''}`;
-    if (!seen.has(key)) { const g = { warehouse: l.warehouse, area: l.area, rows: [] }; seen.set(key, g); groups.push(g); }
-    seen.get(key).rows.push(l);
+    if (!sites.has(l.warehouse)) sites.set(l.warehouse, { name: l.warehouse, count: 0, ids: [], areas: new Map() });
+    const S = sites.get(l.warehouse); S.count += l.item_count || 0; S.ids.push(l.id);
+    const ak = l.area || '';
+    if (!S.areas.has(ak)) S.areas.set(ak, { key: ak, name: ak || NO_AREA, count: 0, ids: [], bays: new Map() });
+    const A = S.areas.get(ak); A.count += l.item_count || 0; A.ids.push(l.id);
+    if (!A.bays.has(l.bay)) A.bays.set(l.bay, { name: l.bay, count: 0, ids: [], shelves: [] });
+    const B = A.bays.get(l.bay); B.count += l.item_count || 0; B.ids.push(l.id); B.shelves.push(l);
+  }
+  // Adaptive Row/aisle grouping, derived from the bay's leading letters (A1 → "A").
+  const rowKeyOf = (bay) => { const m = String(bay).match(/^\s*([A-Za-z]+)/); return m ? m[1].toUpperCase() : String(bay); };
+  for (const St of sites.values()) {
+    for (const Ar of St.areas.values()) {
+      const rows = new Map();
+      for (const By of Ar.bays.values()) {
+        const rk = rowKeyOf(By.name);
+        if (!rows.has(rk)) rows.set(rk, { name: rk, count: 0, ids: [], bays: [] });
+        const R = rows.get(rk); R.count += By.count; R.ids.push(...By.ids); R.bays.push(By);
+      }
+      Ar.rows = rows;
+      Ar.grouped = rows.size >= 2 && rows.size < Ar.bays.size;
+    }
   }
 
-  const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const allShown = list.length > 0 && list.every((l) => sel.has(l.id));
-  const toggleAllShown = () => setSel((s) => { const n = new Set(s); if (allShown) list.forEach((l) => n.delete(l.id)); else list.forEach((l) => n.add(l.id)); return n; });
-  const groupAllSel = (g) => g.rows.every((r) => sel.has(r.id));
-  const toggleGroupSel = (g) => setSel((s) => { const n = new Set(s); const all = g.rows.every((r) => n.has(r.id)); g.rows.forEach((r) => (all ? n.delete(r.id) : n.add(r.id))); return n; });
+  const multiSite = sites.size > 1;
+  const r = resolve(sites, segs, multiSite);
+
+  // Load the open shelf's contents when we land on a shelf.
+  useEffect(() => {
+    const id = r.shelfId;
+    if (id == null) { setContents(null); return; }
+    let cancelled = false;
+    setContents('loading');
+    api.locationItems(id)
+      .then(({ items }) => { if (!cancelled) setContents(items || []); })
+      .catch((err) => { if (err.unauthorized) return onSignOut(); if (!cancelled) { setContents([]); setError(err.message); } });
+    return () => { cancelled = true; };
+  }, [r.shelfId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Print selection (checkboxes on any tile / folder rolls up its ids) -----
+  const allSel = (ids) => ids.length > 0 && ids.every((id) => sel.has(id));
+  const toggleIds = (ids) => setSel((s) => {
+    const n = new Set(s); const on = ids.every((id) => n.has(id));
+    ids.forEach((id) => (on ? n.delete(id) : n.add(id))); return n;
+  });
   const openPrint = () => setPrintLocs(list.filter((l) => sel.has(l.id)));
 
-  // Nested nav: Area → Bay → shelves, each collapsible so 250+ shelves stay navigable.
-  const areaKey = (g) => `${g.warehouse}|${g.area || ''}`;
-  const bayKeyOf = (g, bay) => `${areaKey(g)}|${bay}`;
-  const toggleBay = (k) => setOpenBays((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  const toggleArea = (k) => setCollapsedAreas((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  const baysOf = (g) => { // g.rows grouped by bay, preserving order (rows come sorted)
-    const m = new Map();
-    for (const loc of g.rows) { if (!m.has(loc.bay)) m.set(loc.bay, []); m.get(loc.bay).push(loc); }
-    return [...m.entries()].map(([bay, shelves]) => ({ bay, shelves }));
-  };
-  const baySelAll = (shelves) => shelves.length > 0 && shelves.every((s) => sel.has(s.id));
-  const toggleBaySel = (shelves) => setSel((s) => { const n = new Set(s); const all = shelves.every((x) => n.has(x.id)); shelves.forEach((x) => (all ? n.delete(x.id) : n.add(x.id))); return n; });
+  // --- Shelf mutations -------------------------------------------------------
+  async function saveLabel() {
+    setBusy(true); setError('');
+    try {
+      const { location } = await api.locationUpdate(r.shelfObj.id, { label: editLabel.trim() });
+      setLocations((ls) => ls.map((x) => (x.id === location.id ? { ...x, ...location } : x)));
+      setEditing(false);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(false); }
+  }
+  async function toggleActive() {
+    setBusy(true); setError('');
+    try {
+      const { location } = await api.locationUpdate(r.shelfObj.id, { active: !r.shelfObj.active });
+      setLocations((ls) => ls.map((x) => (x.id === location.id ? { ...x, ...location } : x)));
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(false); }
+  }
 
-  // One shelf row (checkbox · label/code/count · rename/deactivate · contents drawer).
-  const shelfRow = (loc) => {
-    const items = contents[loc.id];
-    const open = items !== undefined;
-    return (
-      <div className={`loc-row-wrap ${loc.active ? '' : 'inactive'}`} key={loc.id}>
-        <div className="loc-row">
-          <input type="checkbox" className="loc-row-check" checked={sel.has(loc.id)} onChange={() => toggleSel(loc.id)} aria-label={`Select ${loc.code}`} />
-          <button className="loc-row-main" onClick={() => toggleContents(loc.id)} title="Show contents">
-            <span className="loc-caret">{open ? '▾' : '▸'}</span>
-            {editId === loc.id ? (
-              <input className="loc-label-edit" value={editLabel} autoFocus onClick={(e) => e.stopPropagation()}
-                onChange={(e) => setEditLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveLabel(loc); } }} />
-            ) : (
-              <span className="loc-label">{loc.label || loc.code}</span>
-            )}
-            <span className="loc-code muted sm">{loc.code}</span>
-            <span className={`loc-count ${loc.item_count ? '' : 'zero'}`}>{loc.item_count} item{loc.item_count === 1 ? '' : 's'}</span>
-            {!loc.active && <span className="loc-inactive-badge">inactive</span>}
-          </button>
-          <span className="loc-row-actions">
-            {editId === loc.id ? (
-              <>
-                <button className="btn sm primary" disabled={busyId === loc.id} onClick={() => saveLabel(loc)}>Save</button>
-                <button className="btn sm ghost" onClick={() => setEditId(null)}>Cancel</button>
-              </>
-            ) : (
-              <>
-                <button className="btn sm ghost" onClick={() => { setEditId(loc.id); setEditLabel(loc.label || ''); }}>Rename</button>
-                <button className="btn sm ghost" disabled={busyId === loc.id} onClick={() => toggleActive(loc)}>{loc.active ? 'Deactivate' : 'Activate'}</button>
-              </>
-            )}
-          </span>
-        </div>
-        {open && (
-          <div className="loc-contents">
-            {items === 'loading' ? <span className="muted sm">Loading…</span>
-              : !items.length ? <span className="muted sm">Empty — nothing shelved here.</span>
-                : items.map((it) => (
-                  <div className="loc-item" key={it.vin}>
-                    <span className="vin">{it.vin}</span>
-                    <span className="loc-item-name">{it.name || '—'}</span>
-                    <span className="muted sm">{it.sku || '—'} · {it.size ? `US ${it.size}` : '—'}</span>
-                    <StatusPill status={it.status} />
-                  </div>
-                ))}
-          </div>
-        )}
-      </div>
-    );
-  };
+  // Tiles for the current level.
+  const bayVals = r.grouped ? (r.R ? r.R.bays : []) : (r.A ? [...r.A.bays.values()] : []);
+  let tiles = [];
+  if (r.level === 'sites') tiles = [...sites.values()].map((s) => ({ key: s.name, slug: slug(s.name), name: s.name, sub: `${s.areas.size} area${s.areas.size === 1 ? '' : 's'}`, count: s.count, ids: s.ids, kind: 'site' }));
+  else if (r.level === 'areas') tiles = [...r.S.areas.values()].map((a) => ({ key: a.key, slug: slug(a.name), name: a.name, sub: `${a.bays.size} bay${a.bays.size === 1 ? '' : 's'}`, count: a.count, ids: a.ids, kind: 'area' }));
+  else if (r.level === 'rows') tiles = [...r.A.rows.values()].map((x) => ({ key: x.name, slug: slug(x.name), name: `Row ${x.name}`, sub: `${x.bays.length} bay${x.bays.length === 1 ? '' : 's'}`, count: x.count, ids: x.ids, kind: 'row' }));
+  else if (r.level === 'bays') tiles = bayVals.map((b) => {
+    const whole = b.shelves.length === 1 && b.shelves[0].shelf == null;
+    return { key: b.name, slug: slug(b.name), name: b.name, sub: whole ? 'whole bay' : `${b.shelves.length} ${b.shelves.length === 1 ? 'shelf' : 'shelves'}`, count: b.count, ids: b.ids, kind: 'bay' };
+  });
+  else if (r.level === 'shelves') tiles = r.B.shelves.map((sh) => ({ key: sh.id, slug: String(sh.shelf), name: sh.label || sh.code, sub: sh.code, count: sh.item_count, ids: [sh.id], kind: 'shelf', inactive: !sh.active }));
 
-  // Filter dropdowns include any custom sites/areas that exist (+ the current pick).
-  const whOptions = [...new Set([...WAREHOUSES, ...list.map((l) => l.warehouse), warehouse].filter(Boolean))];
-  const areaOptions = [...new Set([...LOCATION_AREAS, ...list.map((l) => l.area).filter(Boolean), area].filter(Boolean))];
+  const onShelf = r.level === 'shelf';
+  const levelTitle = { sites: 'Sites', areas: 'Areas', rows: 'Rows', bays: 'Bays', shelves: 'Shelves' }[r.level];
+  const allTileIds = tiles.flatMap((t) => t.ids);
 
   return (
     <div className="app app-wide">
@@ -163,18 +220,6 @@ export function Locations({ onHome, onSignOut }) {
 
       <div className="card">
         <div className="loc-filters">
-          <label>Warehouse
-            <select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>
-              <option value="">All</option>
-              {whOptions.map((w) => <option key={w} value={w}>{w}</option>)}
-            </select>
-          </label>
-          <label>Area
-            <select value={area} onChange={(e) => setArea(e.target.value)}>
-              <option value="">All</option>
-              {areaOptions.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </label>
           <label>Show
             <select value={active} onChange={(e) => setActive(e.target.value)}>
               <option value="">All</option>
@@ -182,9 +227,10 @@ export function Locations({ onHome, onSignOut }) {
               <option value="false">Inactive</option>
             </select>
           </label>
-          <form className="searchrow loc-search" onSubmit={(e) => { e.preventDefault(); load(); }}>
+          <form className="searchrow loc-search" onSubmit={(e) => { e.preventDefault(); setSubmittedQ(q.trim()); navigate([]); }}>
             <input placeholder="Search code / label / bay…" value={q} onChange={(e) => setQ(e.target.value)} />
             <button className="btn primary">Search</button>
+            {submittedQ && <button type="button" className="btn ghost" onClick={() => { setQ(''); setSubmittedQ(''); navigate([]); }}>Clear</button>}
           </form>
           <span className="loc-add-btns">
             <button className={`btn sm ${pane === 'add' ? 'primary' : 'ghost'}`} onClick={() => setPane(pane === 'add' ? null : 'add')}>+ Add shelf</button>
@@ -198,10 +244,23 @@ export function Locations({ onHome, onSignOut }) {
       </div>
 
       <div className="card">
-        {!locations ? <p className="muted">Loading…</p> : !list.length ? <p className="muted">No shelves match. Add one, or clear the filters.</p> : (
-          <div className="loc-list">
-            <div className="loc-list-bar">
-              <label className="loc-selall"><input type="checkbox" checked={allShown} onChange={toggleAllShown} /> Select all ({list.length})</label>
+        {!locations ? <p className="muted">Loading…</p> : !list.length ? (
+          <p className="muted">No shelves match. {submittedQ ? 'Try another search or clear it.' : 'Add one, or change the filter.'}</p>
+        ) : (
+          <>
+            <div className="loc-selbar">
+              <nav className="loc-crumbs" aria-label="Location path">
+                {r.trail.map((c, i) => {
+                  const last = i === r.trail.length - 1;
+                  return (
+                    <React.Fragment key={i}>
+                      {i > 0 && <span className="loc-crumb-sep">›</span>}
+                      {last ? <span className="loc-crumb here">{c.label}</span>
+                        : <button className="loc-crumb" onClick={() => navigate(c.segs)}>{c.label}</button>}
+                    </React.Fragment>
+                  );
+                })}
+              </nav>
               {sel.size > 0 && (
                 <span className="loc-sel-actions">
                   <b>{sel.size}</b> selected
@@ -210,45 +269,93 @@ export function Locations({ onHome, onSignOut }) {
                 </span>
               )}
             </div>
-            {groups.map((g) => {
-              const aKey = areaKey(g);
-              const areaOpen = !collapsedAreas.has(aKey);
-              const bays = baysOf(g);
-              return (
-                <div className="loc-group" key={aKey}>
-                  <div className="loc-group-head">
-                    <label className="loc-group-sel" title="Select all in this area"><input type="checkbox" checked={groupAllSel(g)} onChange={() => toggleGroupSel(g)} /></label>
-                    <button className="loc-toggle" onClick={() => toggleArea(aKey)} aria-expanded={areaOpen}>
-                      <span className="loc-caret">{areaOpen ? '▾' : '▸'}</span>
-                      {g.warehouse}{g.area ? ` · ${g.area}` : ''} <span className="muted">({g.rows.length} {g.rows.length === 1 ? 'shelf' : 'shelves'} · {bays.length} bay{bays.length === 1 ? '' : 's'})</span>
-                    </button>
+
+            {onShelf ? (
+              /* --- Shelf contents ------------------------------------------ */
+              <div className="loc-shelf">
+                <div className="loc-detail-head">
+                  <div className="loc-detail-title">
+                    {editing ? (
+                      <input className="loc-label-edit" value={editLabel} autoFocus
+                        onChange={(e) => setEditLabel(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveLabel(); } if (e.key === 'Escape') setEditing(false); }} />
+                    ) : (
+                      <span className="loc-detail-name">{r.shelfObj.label || r.shelfObj.code}</span>
+                    )}
+                    <span className="loc-code muted sm">{r.shelfObj.code}</span>
+                    {Array.isArray(contents) && contents.length > 0 && (
+                      <span className="loc-pair-count muted sm">· {contents.length} pair{contents.length === 1 ? '' : 's'}</span>
+                    )}
                   </div>
-                  {areaOpen && bays.map((b) => {
-                    const bKey = bayKeyOf(g, b.bay);
-                    const bayOpen = openBays.has(bKey);
-                    const bayItems = b.shelves.reduce((n, s) => n + (s.item_count || 0), 0);
-                    return (
-                      <div className="loc-bay" key={bKey}>
-                        <div className="loc-bay-head">
-                          <label className="loc-bay-sel" title="Select all in this bay"><input type="checkbox" checked={baySelAll(b.shelves)} onChange={() => toggleBaySel(b.shelves)} aria-label={`Select bay ${b.bay}`} /></label>
-                          <button className="loc-toggle loc-bay-toggle" onClick={() => toggleBay(bKey)} aria-expanded={bayOpen}>
-                            <span className="loc-caret">{bayOpen ? '▾' : '▸'}</span>
-                            <span className="loc-bay-name">{b.bay}</span>
-                            <span className="muted sm">{b.shelves.length} {b.shelves.length === 1 ? 'shelf' : 'shelves'}</span>
-                            <span className={`loc-count ${bayItems ? '' : 'zero'}`}>{bayItems} item{bayItems === 1 ? '' : 's'}</span>
-                          </button>
-                        </div>
-                        {bayOpen && <div className="loc-bay-shelves">{b.shelves.map(shelfRow)}</div>}
-                      </div>
-                    );
-                  })}
+                  <div className="loc-detail-actions">
+                    {editing ? (
+                      <>
+                        <button className="btn sm primary" disabled={busy} onClick={saveLabel}>Save</button>
+                        <button className="btn sm ghost" onClick={() => setEditing(false)}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn sm ghost" onClick={() => { setEditing(true); setEditLabel(r.shelfObj.label || ''); }}>Rename</button>
+                        <button className="btn sm ghost" disabled={busy} onClick={toggleActive}>{r.shelfObj.active ? 'Deactivate' : 'Activate'}</button>
+                        <button className="btn sm ghost" onClick={() => setPrintLocs([r.shelfObj])}><Icon name="print" /> Label</button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              );
-            })}
-          </div>
+                {!r.shelfObj.active && <div className="loc-detail-flag">This shelf is inactive — hidden from put-away.</div>}
+                <div className="loc-shelf-items">
+                  {contents === 'loading' ? <span className="muted sm">Loading…</span>
+                    : !contents || !contents.length ? <span className="muted sm">Empty — nothing shelved here.</span>
+                      : contents.map((it) => (
+                        <div className="loc-item" key={it.vin}>
+                          <ShoeThumb url={it.photo_url} size={46} onOpen={() => openThumb(it)} />
+                          <div className="loc-item-main">
+                            <div className="loc-item-top">
+                              <span className="loc-item-name">{it.name || '—'}</span>
+                              {it.size && <span className="loc-size-chip">US {it.size}</span>}
+                              <StatusPill status={it.status} />
+                            </div>
+                            <div className="loc-item-meta muted sm">
+                              <span className="vin">{it.vin}</span>
+                              <span className="loc-item-dot">·</span>
+                              <span>{it.sku || '—'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                </div>
+              </div>
+            ) : (
+              /* --- Tile grid for the current level ------------------------- */
+              <>
+                <div className="loc-level-head">
+                  <span className="loc-level-title">{levelTitle} <span className="muted sm">· {tiles.length}</span></span>
+                  {allTileIds.length > 0 && (
+                    <label className="loc-selall"><input type="checkbox" checked={allSel(allTileIds)} onChange={() => toggleIds(allTileIds)} /> Select all</label>
+                  )}
+                </div>
+                {!tiles.length ? <p className="muted">Nothing here yet.</p> : (
+                  <div className="loc-tiles">
+                    {tiles.map((t) => (
+                      <div className={`loc-tile ${t.inactive ? 'inactive' : ''}`} key={t.key}>
+                        <input type="checkbox" className="loc-tile-check" checked={allSel(t.ids)} onChange={() => toggleIds(t.ids)} aria-label={`Select ${t.name}`} />
+                        <button className="loc-tile-body" onClick={() => navigate([...r.base, t.slug])}>
+                          <span className="loc-tile-icon"><TileGlyph kind={t.kind} /></span>
+                          <span className="loc-tile-name">{t.name}{t.inactive && <span className="loc-inactive-badge"> inactive</span>}</span>
+                          <span className="loc-tile-sub">{t.sub}</span>
+                          <span className={`loc-tile-count ${t.count ? '' : 'zero'}`}>{t.count} item{t.count === 1 ? '' : 's'}</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </>
         )}
       </div>
       {printLocs && <ShelfLabelSheet locations={printLocs} onClose={() => setPrintLocs(null)} />}
+      {lightbox && <PhotoLightbox photos={lightbox} onClose={() => setLightbox(null)} />}
     </div>
   );
 }
@@ -260,7 +367,6 @@ function AddShelf({ siteAreas = {}, onDone, onError, onSignOut }) {
   const [bay, setBay] = useState('');
   const [shelf, setShelf] = useState('');
   const [busy, setBusy] = useState(false);
-  // Suggest this site's own areas first, then the global presets.
   const areaOptions = [...new Set([...(siteAreas[warehouse] || []), ...LOCATION_AREAS])];
 
   async function submit() {

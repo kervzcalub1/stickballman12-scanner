@@ -15,6 +15,12 @@ export const STATUS_KEYS = [
   'needs_shelf', 'in_stock', 'pre_sold', 'no_box', 'shipped', 'sold', 'returned', 'missing', 'issue',
 ];
 
+// Terminal states: a unit here has left active inventory. Reactivating one into a
+// sellable status is the "double-sell" loophole — guard rescale + bulk-status
+// against it. (sold→shipped and shipped→sold stay allowed; both are terminal.)
+export const TERMINAL_STATUSES = ['sold', 'shipped'];
+export const isTerminalStatus = (s) => TERMINAL_STATUSES.includes(s);
+
 // Normalize a status/tag for storage. Returns a preset key as-is, or a sanitized
 // CUSTOM tag (free text the warehouse types in the item detail view): trimmed,
 // ≤40 chars, limited to safe printable characters. Returns null if invalid.

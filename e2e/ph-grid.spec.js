@@ -31,7 +31,8 @@ test('Edit reveals the per-size editor (inputs + flag checkboxes)', async ({ pag
   await page.getByRole('button', { name: 'Edit' }).first().click();
   await expect(page.locator('input.ph-price').first()).toBeVisible();
   await expect(page.locator('.ph-yn-check').first()).toBeVisible();
-  await expect(page.getByRole('button', { name: /Submit ×/ })).toBeVisible();
+  // Button text is "Submit" — the "×{qty}" is a sibling badge span, not part of the button label.
+  await expect(page.getByRole('button', { name: 'Submit' }).first()).toBeVisible();
 });
 
 test('Global Indicator drives Final Price = GI + 20%', async ({ page }) => {

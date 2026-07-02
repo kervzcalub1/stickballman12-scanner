@@ -45,8 +45,12 @@ export default async function handler(req, res) {
   for (const k of BOOL_FIELDS) if (k in raw) fields[k] = Boolean(raw[k]);
   if ('ph_note' in raw) fields.ph_note = String(raw.ph_note ?? '').slice(0, 2000);
 
-  // Optimistic concurrency baseline (the latest last_edit_at the client saw).
-  const baseEditedAt = 'baseEditedAt' in body ? body.baseEditedAt : undefined;
+  // Optimistic concurrency baseline (the latest last_edit_at the client saw). It is
+  // REQUIRED — omitting it used to bypass the conflict check and let a stale client
+  // silently overwrite a concurrent edit. The grid always sends it (null or a ts).
+  if (!('baseEditedAt' in body))
+    return send(res, 400, { ok: false, error: 'Stale edit — reload the grid and try again.' });
+  const baseEditedAt = body.baseEditedAt;
 
   try {
     const rows = await phUpdateItems(vins, fields, user.name || user.username || '', baseEditedAt);

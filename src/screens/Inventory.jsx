@@ -23,12 +23,12 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
 
   // list / filters
   const [q, setQ] = useState('');
-  const [from, setFrom] = useState(today);
-  const [to, setTo] = useState(today);
+  const [from, setFrom] = useState(() => ymd(periodRange('week', new Date())[0]));
+  const [to, setTo] = useState(() => ymd(periodRange('week', new Date())[1]));
   const [supplier, setSupplier] = useState('');
   const [status, setStatus] = useState('');
   const [intake, setIntake] = useState(''); // '' | 'receiving' | 'rescale'
-  const [periodMode, setPeriodMode] = useState('day'); // 'day' | 'week' | 'month' | 'custom'
+  const [periodMode, setPeriodMode] = useState('week'); // 'day' | 'week' | 'month' | 'custom'
   const [anchor, setAnchor] = useState(() => new Date()); // reference date for the current period
   const [data, setData] = useState(null); // { rows, totals }
   const [loading, setLoading] = useState(false);
@@ -499,7 +499,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
             </span>
           </div>
           <div className="card">
-            {!rows.length ? <p className="muted">No items.</p> : isMobile ? (
+            {!rows.length ? (
+              <p className="muted inv-empty">No items in this range.{' '}
+                {periodMode !== 'month' && <button className="btn ghost sm" onClick={() => setPeriodMode('month')}>Try this month</button>}{' '}
+                <button className="btn ghost sm" onClick={() => { setPeriodMode('custom'); setFrom(''); setTo(''); }}>Show all dates</button>
+                {' '}— or search a VIN / SKU above.
+              </p>
+            ) : isMobile ? (
               <div className="dcards">
                 <label className="dcard-selectall"><input type="checkbox" checked={sel.size === rows.length && rows.length > 0} onChange={toggleAll} /> Select all ({rows.length} units)</label>
                 {groups.map((g) => {

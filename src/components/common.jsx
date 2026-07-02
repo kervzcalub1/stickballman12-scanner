@@ -133,7 +133,7 @@ export function Modal({ type, title, message, onClose, children }) {
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className={`modal-icon ${type}`}>{type === 'success' ? '✓' : '✕'}</div>
+        <div className={`modal-icon ${type}`}>{type === 'success' ? '✓' : type === 'warn' ? '!' : '✕'}</div>
         <h3 className="modal-title">{title}</h3>
         <p className="modal-msg">{message}</p>
         <div className="modal-actions">{children}</div>

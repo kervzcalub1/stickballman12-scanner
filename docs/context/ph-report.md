@@ -4,8 +4,11 @@ Component: `PHGrid` in `src/App.jsx`. Endpoints: `api/ph/list.js`
 (`phListItems(from,to,kind)`), `api/ph/update.js` (`phUpdateItems`),
 `api/ph/locks.js` (edit-lock presence).
 
+The admin/warehouse Home card + page title for this grid is **"Listings & Sync"**
+(the old "Report" name); the code route/key is still `report`.
+
 ## kinds
-- `kind=null` — admin Report: everything in range (incl no_box), by scan date.
+- `kind=null` — admin/warehouse **Listings & Sync**: everything in range (incl no_box), by scan date.
 - `kind='receiving'` — PH "New Inventory": newly received (excludes rescale
   batches + no_box), by scan date.
 - `kind='rescale'` — PH "Rescale Stock": `restock_pending` units, by rescale-event
@@ -55,7 +58,10 @@ Component: `PHGrid` in `src/App.jsx`. Endpoints: `api/ph/list.js`
   (`showPricing = role !== 'warehouse'`); admin sees them read-only.
 - Save: one `phUpdateMany(vins, fields, baseEditedAt)` **per size** (sizes touch
   disjoint VINs → run in parallel), each using the group's `last_edit_at` as the
-  optimistic-concurrency baseline (409 → reload fresh). Every changed field → one
+  optimistic-concurrency baseline (409 → reload fresh). **`baseEditedAt` is now
+  REQUIRED server-side** (`ph/update.js` 400s if the key is absent) — omitting it
+  used to bypass the conflict check and silently overwrite a concurrent edit; the
+  grid always sends it (`g.last_edit_at || null`). Every changed field → one
   `ph_update` event.
 
 ## Added by / Last edited by / History (all roles)

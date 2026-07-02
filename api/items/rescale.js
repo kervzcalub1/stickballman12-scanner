@@ -6,7 +6,7 @@
 // commit. Warehouse/admin only.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getItemByVin, rescaleItem, dbConfigured } from '../_lib/db.js';
-import { normalizeStatus } from '../_lib/statuses.js';
+import { normalizeStatus, isTerminalStatus } from '../_lib/statuses.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -30,6 +30,10 @@ export default async function handler(req, res) {
   try {
     const found = await getItemByVin(vin);
     if (!found) return send(res, 404, { ok: false, error: `No item found for ${vin}.` });
+    // Guard: a sold/shipped unit has left inventory — don't rescan it back into
+    // stock (double-sell risk). Requires a deliberate status change, not a rescale.
+    if (isTerminalStatus(found.item.status))
+      return send(res, 409, { ok: false, error: `${vin} is marked ${found.item.status} — a ${found.item.status} unit can't be rescaled back into stock.` });
     await rescaleItem({ itemId: found.item.id, status, note, reason, createdBy: user.name || user.username || '' });
 
     const updated = await getItemByVin(vin);

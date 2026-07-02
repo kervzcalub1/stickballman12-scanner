@@ -87,7 +87,7 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
           </div>
         )}
         {error && <div className="error mt">{error}</div>}
-        {!rows ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">No “Bought Without Box” items. 🎉</p> : isMobile ? (
+        {!rows ? <p className="muted">Loading…</p> : !rows.length ? <p className="ok">All clear — no “Bought Without Box” items.</p> : isMobile ? (
           <div className="dcards">
             {rows.map((r) => (
               <div className="dcard" key={r.vin}>

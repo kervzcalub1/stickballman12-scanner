@@ -6,11 +6,20 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
 
 ## 4-step wizard (receiving) / 2-step (rescale)
 1. **Shipment details** — buyer defaults to `stickballman12`; supplier + date
-   required. The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
+   required. **`api/batches/commit` now enforces supplier AND tracking # server-side**
+   for a receiving batch (400 if either is blank) — a batch must be traceable to its
+   shipment; rescale is exempt. **A negative cost is rejected** (400, not silently
+   nulled). The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
    list + auto-saved custom names); picking "Custom…" and typing a new vendor
    auto-saves it on commit (`addSupplier`, V6 Feature 1). Tracking typed /
    camera-scanned / OCR'd from a label photo (`src/trackingOcr.js`: zxing →
-   Tesseract.js, lazy-loaded). As the tracking # is entered it's checked against
+   Tesseract.js, lazy-loaded). The decoded string is normalized by
+   `parseTrackingNumber` (`src/lib/codes.js`): **UPS** = a *standalone* `1Z`+16
+   token; **FedEx 2D** labels decode to ISO-15434 `[)>` MH10 data whose `31Z`
+   element holds the 34-digit Ground "96" barcode → **last 12 digits = tracking**
+   (a bare `96…` Code-128 works too). The UPS match must be standalone so the
+   field code in `…3(1Z9632…)` inside a FedEx blob can't false-match as UPS.
+   As the tracking # is entered it's checked against
    past batches/boxes (`GET /api/batches/check-tracking`, debounced); a repeat
    shows a **non-blocking duplicate warning** and, if committed, sets
    `batches.duplicate_of` (V6 Feature 8).
@@ -21,7 +30,10 @@ Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
    Items → Review → Issues → **Submit box**, then returns here. The OPEN batch is
    created **lazily on the first box commit** (`ensureBatch` → `createOpenBatch`),
    then each box is `batchAddBox` (explicit `boxNumber` = slot, so out-of-order
-   boxes keep their number) + `boxCommit`. **Finish batch** closes it (or it
+   boxes keep their number) + `boxCommit`. **`commitBoxItems` claims the box with an
+   atomic compare-and-swap** (`UPDATE … WHERE status <> 'received' RETURNING id`)
+   **before** inserting items, so two concurrent commits can't both insert →
+   duplicates (TOCTOU); the loser 409s ("already submitted"). **Finish batch** closes it (or it
    auto-completes when received == expected); leaving via Home keeps it open to
    resume from the Batches page. Single-box (=1) keeps the original one-shot
    `batchCommit`; "Add box" from the Batches page still drives box-mode

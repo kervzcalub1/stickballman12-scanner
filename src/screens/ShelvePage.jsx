@@ -21,6 +21,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
   const [showCam, setShowCam] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [prefs, setPrefs] = useState(loadPrefs);
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const inputRef = useRef(null);
@@ -86,6 +87,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
 
   async function save() {
     if (!location || !rows.length) return;
+    setShowConfirm(false);
     setBusy(true); setError('');
     try {
       const units = rows.map((r) => ({ vin: r.vin, nowHasBox: r.with_box === false ? !!r.nowHasBox : false }));
@@ -132,8 +134,21 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
       <div className="batch-bar">
         <button className="btn ghost" onClick={onHome}>← Home</button>
         <div className="batch-totals"><b>{rows.length}</b> to shelve{noBoxCount ? ` · ${noBoxCount} still no-box` : ''}</div>
-        <button className="btn primary" disabled={busy || !location || !rows.length} onClick={save}>{busy ? 'Saving…' : 'Shelve here'}</button>
+        <button className="btn primary" disabled={busy || !location || !rows.length} onClick={() => setShowConfirm(true)}>{busy ? 'Saving…' : 'Shelve here'}</button>
       </div>
+
+      {showConfirm && location && (
+        <Modal type="warn" title={`Shelve ${rows.length} pair${rows.length === 1 ? '' : 's'} to ${location.label || location.code}?`}
+          message={`Confirm the shelf is correct — everything below goes to ${location.warehouse}${location.area ? ` · ${location.area}` : ''} · ${location.label || location.code}.`}
+          onClose={() => setShowConfirm(false)}>
+          <div className="confirm-list">
+            {rows.slice(0, 5).map((r) => <div key={r.vin} className="confirm-line"><span className="vin">{r.vin}</span> <span className="muted sm">{r.name || '—'}{r.size ? ` · US ${r.size}` : ''}</span></div>)}
+            {rows.length > 5 && <div className="muted sm">+ {rows.length - 5} more</div>}
+          </div>
+          <button className="btn primary" onClick={save}>Confirm — Shelve here</button>
+          <button className="btn ghost" onClick={() => setShowConfirm(false)}>Cancel</button>
+        </Modal>
+      )}
 
       {rows.length > 0 && (
         <div className="card">

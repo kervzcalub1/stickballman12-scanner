@@ -5,7 +5,7 @@
 // main place to START a batch (expected boxes + tag live there).
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, StatusPill } from '../components/common.jsx';
+import { TopBar, StatusPill, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 
 const shortDate = (s) => String(s || '').slice(0, 10);
@@ -18,6 +18,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const [openBox, setOpenBox] = useState(null); // box id whose items are expanded
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [reopenId, setReopenId] = useState(null);
 
   async function loadLists() {
     setError('');
@@ -120,9 +121,17 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           <button className="btn ghost" onClick={() => setSelId(null)}>← Back</button>
           {isOpen
             ? <button className="btn ghost" disabled={busy} onClick={() => setStatus(b.id, 'done')}>Finish batch</button>
-            : <button className="btn ghost" disabled={busy} onClick={() => setStatus(b.id, 'open')}>Reopen</button>}
+            : <button className="btn ghost" disabled={busy} onClick={() => setReopenId(b.id)}>Reopen</button>}
           {isOpen && <button className="btn primary" onClick={() => onAddBox(b)}>+ Add box</button>}
         </div>
+        {reopenId != null && (
+          <Modal type="warn" title={`Reopen ${b.batch_code}?`}
+            message="This puts a finalized batch back to open so boxes/items can be added. Only reopen if you need to correct it."
+            onClose={() => setReopenId(null)}>
+            <button className="btn primary" onClick={() => { const id = reopenId; setReopenId(null); setStatus(id, 'open'); }}>Reopen batch</button>
+            <button className="btn ghost" onClick={() => setReopenId(null)}>Cancel</button>
+          </Modal>
+        )}
       </div>
     );
   }
@@ -143,8 +152,8 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
               {openList.map((b) => (
                 <button className="batch-nav-row" key={b.id} onClick={() => setSelId(b.id)}>
                   <div className="batch-nav-main">
-                    <span className="batch-code">{b.batch_code}</span>
-                    <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}</span>
+                    <span className="batch-code">{b.batch_code} {b.item_count === 0 && <span className="badge warn">Empty</span>}</span>
+                    <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.date_received ? ` · ${b.date_received}` : ''}</span>
                   </div>
                   <span className="batch-nav-prog"><b>{b.received_boxes}{b.expected_boxes ? `/${b.expected_boxes}` : ''}</b> boxes · {b.item_count} items</span>
                   <span className="batch-caret">▸</span>

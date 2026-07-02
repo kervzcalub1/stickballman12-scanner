@@ -61,7 +61,14 @@ PH-team users route separately under `/ph/*` inside `PHTeamApp` (its own
 skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
 
 ## Screens (entry points; `src/screens/*`)
-- `Home` / `PHTeam` (`PHTeamApp`) — role-based home screens (cards).
+- `Home` / `PHTeam` (`PHTeamApp`) — role-based home screens (cards). The
+  admin/warehouse `Home` is grouped **by lifecycle** (Intake → Stock/Locate →
+  Listings → Fulfilment → Admin) rather than a flat card wall, with a
+  **"needs attention" strip** at top surfacing counts that need action (e.g.
+  items needing a shelf, no-box queue). Page/label renames: **"Report" →
+  "Listings & Sync"** (the PH grid, `ph-report.md`); `Inventory`, `Locate Shoe`
+  (formerly "Locations"), and `Shelve` each have a **unique nav icon**
+  (`NavIcons.jsx`).
 - `Receiving` (+ `BatchList`) — intake. `Inventory` — stock browse.
 - `PHTeam` (`PHGrid`) — the per-size report/grid (kind: null | receiving | rescale);
   `PHGrid` is also App's admin/warehouse Report view.

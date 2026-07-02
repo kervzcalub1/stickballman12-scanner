@@ -12,6 +12,12 @@ add-on. Full guide: `RAILWAY.md`. Hosting overview: `DEPLOYMENT.md`.
 ## Env vars (Railway → service → Variables)
 `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` (internal). `SESSION_SECRET` (≥16),
 `ADMIN_PASSWORD`, `ALIAS_EMAIL`, `ALIAS_PASSWORD`, **`ALIAS_API_KEY`**.
+- **`TRUST_PROXY_HOPS=1`** (required in prod): number of trusted proxies in front
+  of the app. `clientIp()` ignores the client-spoofable `X-Forwarded-For` unless
+  this is set — Railway fronts the app with **1** proxy, so `1`. If unset in prod
+  every request looks like it comes from the proxy IP → all traffic shares one
+  rate-limit bucket and per-IP login throttling stops isolating attackers. Leave
+  **unset** (0) in local dev. See `api/_lib/util.js`.
 - `ALIAS_API_KEY` = the GOAT/Alias key for the **official `api.alias.org`** API
   (Global Indicator pricing + SKU catalog search). Without it, GI stays null and
   SKU search fails — see `integrations.md`.

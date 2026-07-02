@@ -49,6 +49,18 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showPrefs, setShowPrefs] = useState(false);
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
+
+  // "Move to shelf" (put-away) — place selected units on a scanned shelf, which
+  // is the only way a unit becomes In Stock (invariant: in_stock ⟺ shelved).
+  const [shelveFor, setShelveFor] = useState(null); // { title, units:[{vin,size}] } | null
+  const [shelfCode, setShelfCode] = useState('');
+  const [shelfInfo, setShelfInfo] = useState(null); // resolved location | { error } | null
+  const [shelveBusy, setShelveBusy] = useState(false);
+  const [shelveCam, setShelveCam] = useState(false);
+  // A finalized (sold/shipped) unit can't be shelved/reactivated (anti double-sell,
+  // mirrors TERMINAL_STATUSES on the server); exclude it from put-away.
+  const isTerminal = (s) => s === 'sold' || s === 'shipped';
+  const shelvable = (r) => !r.location_code && !isTerminal(r.status);
   const searchRef = useRef(null);
   const isMobile = useMediaQuery('(max-width: 768px)');
 
@@ -92,6 +104,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   useEffect(() => {
     if (!navBack) return undefined;
     navBack.current = () => {
+      if (shelveFor) { if (!shelveBusy) closeShelve(); return true; }
       if (bulkOpen) { setBulkOpen(false); return true; }
       if (showPrefs) { setShowPrefs(false); return true; }
       if (labels) { setLabels(null); return true; }
@@ -100,7 +113,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
       return false;
     };
     return () => { if (navBack) navBack.current = null; };
-  }, [navBack, bulkOpen, showPrefs, labels, showCam, mode]);
+  }, [navBack, bulkOpen, showPrefs, labels, showCam, mode, shelveFor, shelveBusy]);
 
   // One box for everything: a scanned/typed VIN opens its detail; anything else
   // searches the whole inventory (dates cleared so search isn't limited to today).
@@ -193,9 +206,61 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   // Report: bulk status change over the selected VINs.
   async function applyBulkStatus() {
     setBulkBusy(true); setError('');
+    // Picking "In Stock" for unshelved units isn't a status change — it's a
+    // put-away. Route to the shelf scanner instead of a doomed bulk-status call.
+    if (bulkStatusSel === 'in_stock') {
+      const items = selectedItems.filter(shelvable);
+      if (items.length) { setBulkBusy(false); setBulkOpen(false); openShelve(items, `${items.length} selected unit${items.length === 1 ? '' : 's'}`); return; }
+    }
     try { await api.bulkStatus([...sel], bulkStatusSel); setBulkOpen(false); load(); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBulkBusy(false); }
+  }
+
+  /* ----- Move to shelf (put-away) ----- */
+  function openShelve(items, title) {
+    const units = items.map((r) => ({ vin: r.vin, size: r.size }));
+    if (!units.length) return;
+    setShelveFor({ title, units });
+    setShelfCode(''); setShelfInfo(null); setShelveCam(false);
+  }
+  function closeShelve() {
+    setShelveFor(null); setShelfCode(''); setShelfInfo(null); setShelveBusy(false); setShelveCam(false);
+  }
+  // Resolve a scanned/typed shelf code so we can show its name before committing.
+  async function lookupShelf(code) {
+    const c = String(code || '').trim().toUpperCase();
+    setShelfCode(c); setShelfInfo(null);
+    if (!isLocationCode(c)) return;
+    try { const { location } = await api.locationLookup(c); setShelfInfo(location); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setShelfInfo({ error: err.message || 'Unknown shelf.' }); }
+  }
+  function shelfScan(raw) {
+    setShelveCam(false);
+    const c = String(raw || '').trim().toUpperCase();
+    if (isLocationCode(c)) lookupShelf(c);
+    else setShelfInfo({ error: `“${c}” isn’t a shelf barcode.` });
+  }
+  async function doShelve() {
+    if (!shelveFor) return;
+    const code = shelfCode.trim().toUpperCase();
+    if (!isLocationCode(code)) { setShelfInfo({ error: 'Scan or enter a valid shelf code.' }); return; }
+    setShelveBusy(true); setError('');
+    try {
+      const res = await api.shelveItems(code, shelveFor.units.map((u) => ({ vin: u.vin })));
+      // Guard against a race (a unit finalized between load and shelve → skipped
+      // server-side). If nothing landed, keep the modal open and explain.
+      if (!res.updated) { setShelfInfo({ error: 'Nothing was shelved — those units may have just been sold/shipped. Refresh and retry.' }); return; }
+      const skipped = shelveFor.units.length - res.updated;
+      closeShelve(); setSel(new Set());
+      if (skipped > 0) setError(`Shelved ${res.updated} — skipped ${skipped} (already sold/shipped).`);
+      // Refresh so the moved units show their shelf + flip to In Stock.
+      if (mode === 'detail' && detail?.item?.vin) await openDetail(detail.item.vin);
+      else load();
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setShelfInfo({ error: err.message || 'Could not shelve these units.' });
+    } finally { setShelveBusy(false); }
   }
 
   // Accordion: toggle a row open/closed; the first time it opens, lazily fetch
@@ -216,7 +281,14 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   // The currently-staged status/tag for the open item (defaults to its real
   // status until the user picks a preset or types a custom tag).
   const draftStatus = detailStatusDraft ?? detail?.item?.status ?? null;
-  const stageStatus = (s) => { setDetailStatusDraft(s); setCustomTag(''); };
+  const stageStatus = (s) => {
+    // "In Stock" isn't a manual status — it means shelved. Route to put-away
+    // (unless the unit is finalized, which can't be shelved/reactivated).
+    if (s === 'in_stock' && detail?.item && !detail.item.location_id && !isTerminal(detail.item.status)) {
+      openShelve([{ vin: detail.item.vin, size: detail.item.size }], detail.item.name); return;
+    }
+    setDetailStatusDraft(s); setCustomTag('');
+  };
   const stageCustomTag = () => { const v = customTag.trim(); if (v) setDetailStatusDraft(v); };
   const clearStatusDraft = () => { setDetailStatusDraft(null); setCustomTag(''); };
   // Persist the staged status/tag — only runs when the user hits Save.
@@ -241,6 +313,48 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusy(false); }
   }
+
+  // Shared "Move to shelf" modal — used from the list (group/bulk) and the
+  // item detail view, so it's rendered in both returns below.
+  const shelveModal = shelveFor && (
+    <div className="modal-overlay" onClick={() => !shelveBusy && closeShelve()}>
+      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">Move to shelf — {shelveFor.units.length} unit{shelveFor.units.length === 1 ? '' : 's'}</h3>
+        {shelveFor.title && <p className="muted sm" style={{ marginTop: '-4px' }}>{shelveFor.title}</p>}
+        <div className="searchrow mt">
+          <input autoFocus placeholder="Scan or type shelf barcode (e.g. MNH-WH-A2-04)…" value={shelfCode}
+            autoCapitalize="characters" disabled={shelveBusy}
+            onChange={(e) => setShelfCode(e.target.value.toUpperCase())}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookupShelf(shelfCode); } }} />
+          <button type="button" className={`btn ${shelveCam ? 'primary' : 'ghost'}`} onClick={() => setShelveCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
+        </div>
+        {shelveCam && (
+          <Suspense fallback={<p className="muted">Loading camera…</p>}>
+            <CameraScanner mode="vin" onDetected={shelfScan} onClose={() => setShelveCam(false)}
+              zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+          </Suspense>
+        )}
+        {shelfInfo && (shelfInfo.error
+          ? <div className="error sm mt">{shelfInfo.error}</div>
+          : <div className="shelve-resolved mt"><Icon name="pin" /> {shelfInfo.warehouse ? `${shelfInfo.warehouse} · ` : ''}{shelfInfo.label || shelfInfo.code}{shelfInfo.active === false ? ' — inactive' : ''}</div>)}
+        <div className="inv-units mt">
+          <div className="inv-history-title">Placing these units</div>
+          {shelveFor.units.map((u) => (
+            <div className="inv-unit-row" key={u.vin}>
+              <span className="vin">{u.vin}</span>
+              <span className="muted sm">{u.size ? `US ${u.size}` : '—'}</span>
+            </div>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={closeShelve} disabled={shelveBusy}>Cancel</button>
+          <button className="btn primary" onClick={doShelve} disabled={shelveBusy || !isLocationCode(shelfCode)}>
+            {shelveBusy ? 'Shelving…' : `Shelve ${shelveFor.units.length} here`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   /* ----- detail view ----- */
   if (mode === 'detail') {
@@ -342,6 +456,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           </>
         )}
         {labels && <LabelSheet items={labels} onClose={() => setLabels(null)} />}
+        {shelveModal}
         <PhotoLightbox photos={lightbox} onClose={() => setLightbox(null)} />
         {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
       </div>
@@ -368,6 +483,14 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   async function saveGroupStatus(g) {
     const status = statusDrafts[g.key];
     if (!status || status === g.status) return;
+    // In Stock requires a shelf — route unshelved units to put-away instead.
+    if (status === 'in_stock') {
+      const items = groupItems(g).filter(shelvable);
+      if (items.length) {
+        setStatusDrafts((d) => { const n = { ...d }; delete n[g.key]; return n; });
+        openShelve(items, g.name); return;
+      }
+    }
     setSavingStatusVin(g.key); setError('');
     try {
       await api.bulkStatus(g.vins, status);
@@ -380,8 +503,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   // Expanded detail for a SKU group — metrics, group status change, print all,
   // and a per-VIN units list (drill into any one for its full history).
   const invDetail = (g) => {
-    const locs = [...new Set(groupItems(g).map((r) => r.location_code).filter(Boolean))];
+    const gItems = groupItems(g);
+    const locs = [...new Set(gItems.map((r) => r.location_code).filter(Boolean))];
     const locLabel = locs.length === 0 ? null : locs.length === 1 ? locs[0] : `${locs.length} shelves`;
+    const unshelved = gItems.filter(shelvable);
     return (
     <div className="inv-detail">
       <dl className="inv-metrics">
@@ -403,15 +528,21 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
         <button className="btn sm primary" disabled={(statusDrafts[g.key] ?? g.status) === g.status || savingStatusVin === g.key} onClick={() => saveGroupStatus(g)}>
           {savingStatusVin === g.key ? 'Saving…' : 'Save'}
         </button>
-        <button className="btn sm ghost" onClick={() => setLabels(groupItems(g))}><Icon name="print" /> Print labels ({g.qty})</button>
+        {unshelved.length > 0 && (
+          <button className="btn sm ghost" onClick={() => openShelve(unshelved, g.name)}>
+            <Icon name="pin" /> Move to shelf ({unshelved.length})
+          </button>
+        )}
+        <button className="btn sm ghost" onClick={() => setLabels(gItems)}><Icon name="print" /> Print labels ({g.qty})</button>
       </div>
       <div className="inv-units">
         <div className="inv-history-title">Units</div>
-        {groupItems(g).map((r) => (
+        {gItems.map((r) => (
           <div className="inv-unit-row" key={r.vin}>
             <span className="vin">{r.vin}</span>
             <span className="muted sm">{r.size ? `US ${r.size}` : '—'}</span>
             {r.location_code ? <span className="loc-chip sm" title={r.location_code}><Icon name="pin" /> {r.location_code}</span> : <span className="muted sm">unshelved</span>}
+            {shelvable(r) && <button className="btn sm ghost" onClick={() => openShelve([r], r.name || g.name)} title="Place this unit on a shelf"><Icon name="pin" /> Shelve</button>}
             <button className="btn sm ghost" onClick={() => openDetail(r.vin)}>Details →</button>
           </div>
         ))}
@@ -494,6 +625,12 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
             </div>
             <span className="report-actions">
               <button className="btn sm ghost" disabled={!sel.size} onClick={() => setBulkOpen(true)}>Edit status{sel.size ? ` (${sel.size})` : ''}</button>
+              {(() => { const u = selectedItems.filter(shelvable); return (
+                <button className="btn sm ghost" disabled={!u.length} title="Place selected units on a shelf (marks them In Stock)"
+                  onClick={() => openShelve(u, `${u.length} selected unit${u.length === 1 ? '' : 's'}`)}>
+                  <Icon name="pin" /> Move to shelf{u.length ? ` (${u.length})` : ''}
+                </button>
+              ); })()}
               <button className="btn sm primary" disabled={!sel.size} onClick={() => setLabels(selectedItems)}><Icon name="print" /> Print {sel.size || ''} label{sel.size === 1 ? '' : 's'}</button>
               <button className="btn sm ghost" disabled={!rows.length} onClick={() => downloadCSV(`inventory_${from || 'all'}_${to || ''}.csv`, toCSV(rows))}>Export CSV</button>
             </span>
@@ -593,6 +730,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
       )}
 
       {labels && <LabelSheet items={labels} onClose={() => setLabels(null)} />}
+      {shelveModal}
       {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
     </div>
   );

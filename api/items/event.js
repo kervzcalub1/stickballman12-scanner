@@ -34,6 +34,10 @@ export default async function handler(req, res) {
   try {
     const found = await getItemByVin(vin);
     if (!found) return send(res, 404, { ok: false, error: `No item found for ${vin}.` });
+    // Invariant: "In Stock" means physically on a shelf. Setting it manually on an
+    // unshelved unit is rejected — "Move to shelf" is the path (it sets in_stock).
+    if (type === 'status_change' && details.status === 'in_stock' && !found.item.location_id)
+      return send(res, 409, { ok: false, error: "This unit isn't on a shelf yet — use “Move to shelf” to place it, which also marks it In Stock." });
     await addItemEvent({ itemId: found.item.id, type, details, createdBy: user.name || user.username || '' });
 
     const updated = await getItemByVin(vin);

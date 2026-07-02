@@ -35,3 +35,17 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 ## Status editing
 - Per-group dropdown + Save → `bulkStatus(vins, status)`.
 - Selling/shipping a unit auto-delists it (clears II/AL/SX/SH) — see `statuses.md`.
+- **In Stock ⟺ shelved:** picking "In Stock" for an unshelved unit doesn't write
+  a status — it opens **Move to shelf** (server also 409s the raw path). See the
+  in-stock invariant in `statuses.md`.
+
+## Move to shelf (put-away from Inventory)
+- Places selected units on a scanned shelf **without leaving Inventory** — the
+  same op as `/shelve`, reusing `POST /api/items/shelve` (`shelveItems`), so a
+  boxed unit flips to **In Stock** at that location (no-box stays no_box but is
+  located). Available three ways: a **group** button (all unshelved units of a
+  SKU), the **bulk bar** button (all unshelved selected VINs — pick individual
+  units via their checkboxes), and the **item detail** view (one VIN).
+- The modal scans/types a shelf barcode (camera or gun), resolves it via
+  `locationLookup` to confirm the shelf name, lists the units, then **Shelve N
+  here**. On success the list refreshes so moved units show their shelf chip.

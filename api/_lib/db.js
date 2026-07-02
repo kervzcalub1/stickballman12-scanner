@@ -949,6 +949,13 @@ export async function shelveItems({ location, units, createdBy }) {
   for (const u of list) {
     const item = byVin.get(u.vin);
     if (!item) { results.push({ vin: u.vin, ok: false, reason: 'not_found' }); continue; }
+    // Anti double-sell: never reactivate a finalized unit by shelving it. Mirrors
+    // TERMINAL_STATUSES (_lib/statuses.js) — shelving would otherwise flip it to
+    // in_stock. This backstops every caller (ShelvePage + Inventory put-away).
+    if (item.status === 'sold' || item.status === 'shipped') {
+      results.push({ vin: u.vin, ok: false, reason: 'terminal', status: item.status });
+      continue;
+    }
     const wasNoBox = item.with_box === false;
     const nowHasBox = wasNoBox && !!u.nowHasBox;
     const withBox = wasNoBox ? !!u.nowHasBox : true;
@@ -1265,10 +1272,13 @@ const clearsSyncFlags = (status) => status === 'sold' || status === 'shipped';
 
 // Current status for each VIN → { vin: status }. Used to guard status changes
 // (e.g. block reactivating a sold/shipped unit).
-export async function getStatusesByVins(vins) {
+// Returns each unit's current status + whether it's on a shelf, keyed by VIN.
+// Drives the anti-double-sell terminal guard AND the invariant
+// "in_stock ⟺ has a location" (see api/items/bulk-status.js).
+export async function getItemStatesByVins(vins) {
   if (!vins?.length) return {};
-  const rows = await db()`SELECT vin, status FROM items WHERE vin = ANY(${vins})`;
-  return Object.fromEntries(rows.map((r) => [r.vin, r.status]));
+  const rows = await db()`SELECT vin, status, location_id FROM items WHERE vin = ANY(${vins})`;
+  return Object.fromEntries(rows.map((r) => [r.vin, { status: r.status, locationId: r.location_id }]));
 }
 
 // Bulk status change (Report page) — update each item AND log a status_change

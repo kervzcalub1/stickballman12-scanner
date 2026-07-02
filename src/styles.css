@@ -722,6 +722,10 @@ body {
 .loc-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: #7bc99a;
   background: rgba(123, 201, 154, 0.12); border: 1px solid rgba(123, 201, 154, 0.4); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 .loc-chip.sm { font-size: 11px; padding: 0 6px; }
+/* Resolved shelf confirmation inside the "Move to shelf" modal */
+.shelve-resolved { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
+  color: #7bc99a; background: rgba(123, 201, 154, 0.12); border: 1px solid rgba(123, 201, 154, 0.4);
+  border-radius: 8px; padding: 6px 10px; }
 /* Locations management page */
 .loc-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .loc-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }

@@ -22,7 +22,13 @@ Shown as `SyncBadges`.
 
 ## Cascades (in db.js: `bulkSetStatus` / `addItemEvent`)
 - Marking a unit **sold** or **shipped** **clears all sync flags** (auto-delist
-  across II + stores) and logs the change as **(system-generated)**.
+  across II + stores) and logs the change as **(system-generated)**. `clearsSyncFlags`
+  drives both paths; `cascadeTextFor` picks the Sold/Shipped audit text.
+- **Terminal-status guard (anti double-sell):** `sold`/`shipped` = `TERMINAL_STATUSES`
+  (`_lib/statuses.js`). A terminal unit **can't be reactivated** into an active status —
+  `api/items/rescale.js` rejects rescanning one (409), and `api/items/bulk-status.js`
+  rejects a bulk change of a terminal unit to any active status (409, lists blocked
+  VINs). `sold→shipped` / `shipped→sold` stay allowed (both terminal).
 - "Listable" / sellable = `with_box = true AND status NOT IN (sold, shipped,
   missing, issue, no_box)` — this drives the pending-count badges.
 

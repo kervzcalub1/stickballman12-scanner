@@ -62,6 +62,16 @@ export default async function handler(req, res) {
     return send(res, 400, { ok: false, error: 'Add at least one item before committing the batch.' });
   if (rawItems.length > MAX_ITEMS)
     return send(res, 400, { ok: false, error: `Too many items (max ${MAX_ITEMS}).` });
+  // A receiving batch must be traceable to its shipment — require supplier + tracking.
+  // (Rescale carries no shipment, so it's exempt.)
+  if (kind !== 'rescale') {
+    if (!cleanName(header.supplier)) return send(res, 400, { ok: false, error: 'Supplier is required.' });
+    if (!String(header.tracking ?? '').trim()) return send(res, 400, { ok: false, error: 'Tracking # is required.' });
+  }
+  // Reject a negative cost outright (a typo like "-5") rather than silently nulling it.
+  const isNegCost = (v) => v !== '' && v != null && Number.isFinite(Number(v)) && Number(v) < 0;
+  if (isNegCost(header.defaultCost) || rawItems.some((it) => isNegCost(it?.cost)))
+    return send(res, 400, { ok: false, error: 'Cost can’t be negative.' });
 
   const createdBy = user.name || user.username || '';
   const defaultCost = toCost(header.defaultCost);

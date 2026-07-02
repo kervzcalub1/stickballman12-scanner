@@ -2,8 +2,8 @@
 // Report-page bulk status change. Updates each item and logs a status_change
 // event to its history. Auth required.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { bulkSetStatus, dbConfigured } from '../_lib/db.js';
-import { STATUS_KEYS } from '../_lib/statuses.js';
+import { bulkSetStatus, getStatusesByVins, dbConfigured } from '../_lib/db.js';
+import { STATUS_KEYS, isTerminalStatus } from '../_lib/statuses.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -23,6 +23,17 @@ export default async function handler(req, res) {
   if (!STATUS_KEYS.includes(status)) return send(res, 400, { ok: false, error: 'Invalid status.' });
 
   try {
+    // Guard: don't let a sold/shipped unit be reactivated into an active status
+    // (double-sell risk). sold→shipped / shipped→sold stay allowed (both terminal).
+    if (!isTerminalStatus(status)) {
+      const cur = await getStatusesByVins(vins);
+      const blocked = vins.filter((v) => isTerminalStatus(cur[v]));
+      if (blocked.length) return send(res, 409, {
+        ok: false,
+        blocked,
+        error: `Can't reactivate ${blocked.length} already-finalized item${blocked.length === 1 ? '' : 's'} (sold/shipped) as "${status}". Deselect: ${blocked.slice(0, 5).join(', ')}${blocked.length > 5 ? '…' : ''}`,
+      });
+    }
     const updated = await bulkSetStatus(vins, status, user.name || user.username || '');
     return send(res, 200, { ok: true, updated });
   } catch (e) {

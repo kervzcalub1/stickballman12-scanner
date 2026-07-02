@@ -20,6 +20,7 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
   const [showCam, setShowCam] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [prefs, setPrefs] = useState(loadPrefs);
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const inputRef = useRef(null);
@@ -60,6 +61,7 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
 
   async function save() {
     if (!rows.length) return;
+    setShowConfirm(false);
     setBusy(true); setError('');
     try {
       await api.bulkStatus(rows.map((r) => r.vin), target);
@@ -92,8 +94,23 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
       <div className="batch-bar">
         <button className="btn ghost" onClick={onHome}>← Home</button>
         <div className="batch-totals"><b>{rows.length}</b> to mark {label}</div>
-        <button className="btn primary" disabled={busy || !rows.length} onClick={save}>{busy ? 'Saving…' : `Save → ${label}`}</button>
+        <button className={`btn ${target === 'sold' ? 'ok' : 'primary'}`} disabled={busy || !rows.length} onClick={() => setShowConfirm(true)}>{busy ? 'Saving…' : `Save → ${label}`}</button>
       </div>
+
+      {showConfirm && (
+        <Modal type="warn" title={`Mark ${rows.length} item${rows.length === 1 ? '' : 's'} ${label}?`}
+          message={target === 'sold'
+            ? 'This delists them from Intelligent Inventory and all stores. This can’t be undone from here.'
+            : 'Confirm these VINs are correct before marking them shipped.'}
+          onClose={() => setShowConfirm(false)}>
+          <div className="confirm-list">
+            {rows.slice(0, 5).map((r) => <div key={r.vin} className="confirm-line"><span className="vin">{r.vin}</span> <span className="muted sm">{r.name || '—'}{r.size ? ` · US ${r.size}` : ''}</span></div>)}
+            {rows.length > 5 && <div className="muted sm">+ {rows.length - 5} more</div>}
+          </div>
+          <button className={`btn ${target === 'sold' ? 'ok' : 'primary'}`} onClick={save}>Confirm — Mark {label}</button>
+          <button className="btn ghost" onClick={() => setShowConfirm(false)}>Cancel</button>
+        </Modal>
+      )}
 
       {rows.length > 0 && (
         <div className="card">

@@ -662,13 +662,19 @@ export async function listOpenBatches() {
 // box received, then auto-complete the batch when received == expected.
 // Returns { vins, created, autoCompleted }.
 export async function commitBoxItems({ batchId, boxId, items, createdBy, dateReceived }) {
+  // Atomically CLAIM the box (compare-and-swap) BEFORE inserting items. Two
+  // concurrent commits for the same box would otherwise both pass the handler's
+  // status pre-check and both insert → duplicate items (TOCTOU). Only the request
+  // that flips status pending→received proceeds; the loser gets 0 rows and aborts.
+  const claim = await db()`
+    UPDATE batch_boxes SET status = 'received', received_by = ${createdBy || null}, received_at = now()
+    WHERE id = ${boxId} AND batch_id = ${batchId} AND status <> 'received'
+    RETURNING id
+  `;
+  if (!claim.length) { const e = new Error('This box was already submitted.'); e.conflict = true; throw e; }
   const withBox = items.map((it) => ({ ...it, boxId }));
   const created = await insertItems(batchId, withBox, createdBy, dateReceived);
   await insertIntakeEvents(created.map((r) => r.id), createdBy, 'receiving');
-  await db()`
-    UPDATE batch_boxes SET status = 'received', received_by = ${createdBy || null}, received_at = now()
-    WHERE id = ${boxId} AND batch_id = ${batchId}
-  `;
   // Auto-complete: every box received AND we've reached the expected count.
   const rows = await db()`
     SELECT b.expected_boxes,
@@ -1200,6 +1206,18 @@ export async function listActiveEditLocks() {
 // delist to every store (II → stores). So marking an item 'sold' clears all
 // four sync flags. This text is logged so the audit trail explains the change.
 const SOLD_CASCADE_TEXT = 'Sold — removed from Intelligent Inventory & all stores';
+const SHIPPED_CASCADE_TEXT = 'Shipped — removed from Intelligent Inventory & all stores';
+// A terminal status (sold/shipped) has left inventory → clear all four sync flags.
+const cascadeTextFor = (status) => (status === 'shipped' ? SHIPPED_CASCADE_TEXT : SOLD_CASCADE_TEXT);
+const clearsSyncFlags = (status) => status === 'sold' || status === 'shipped';
+
+// Current status for each VIN → { vin: status }. Used to guard status changes
+// (e.g. block reactivating a sold/shipped unit).
+export async function getStatusesByVins(vins) {
+  if (!vins?.length) return {};
+  const rows = await db()`SELECT vin, status FROM items WHERE vin = ANY(${vins})`;
+  return Object.fromEntries(rows.map((r) => [r.vin, r.status]));
+}
 
 // Bulk status change (Report page) — update each item AND log a status_change
 // event, atomically per VIN, in one transaction. When the new status is 'sold',
@@ -1209,8 +1227,8 @@ export async function bulkSetStatus(vins, status, createdBy) {
   if (!vins.length) return 0;
   const sql = db();
   const details = JSON.stringify({ status, bulk: true });
-  const cascade = JSON.stringify({ text: SOLD_CASCADE_TEXT, soldCascade: true });
-  const queries = vins.map((vin) => (status === 'sold'
+  const cascade = JSON.stringify({ text: cascadeTextFor(status), soldCascade: true });
+  const queries = vins.map((vin) => (clearsSyncFlags(status)
     ? sql`
       WITH up AS (
         UPDATE items SET status = ${status}, updated_at = now(),
@@ -1303,7 +1321,7 @@ export async function addItemEvent({ itemId, type, details, createdBy }) {
     VALUES (${itemId}, ${type}, ${JSON.stringify(details || {})}::jsonb, ${createdBy || null})
   `];
   if (type === 'status_change' && details?.status) {
-    if (details.status === 'sold') {
+    if (clearsSyncFlags(details.status)) {
       queries.push(sql`
         UPDATE items SET status = ${details.status},
           added_to_intel_inv = false, synced_alias = false,
@@ -1312,7 +1330,7 @@ export async function addItemEvent({ itemId, type, details, createdBy }) {
       `);
       queries.push(sql`
         INSERT INTO item_events (item_id, type, details, created_by)
-        VALUES (${itemId}, 'ph_update', ${JSON.stringify({ text: SOLD_CASCADE_TEXT, soldCascade: true })}::jsonb, ${createdBy || null})
+        VALUES (${itemId}, 'ph_update', ${JSON.stringify({ text: cascadeTextFor(details.status), soldCascade: true })}::jsonb, ${createdBy || null})
       `);
     } else {
       queries.push(sql`UPDATE items SET status = ${details.status}, updated_at = now() WHERE id = ${itemId}`);

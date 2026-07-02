@@ -64,6 +64,7 @@ export default async function handler(req, res) {
     enrichGlobalIndicators(created, items).catch((e) => console.warn('[box-commit] GI enrichment failed:', e.message));
     return;
   } catch (e) {
+    if (e.conflict) return send(res, 409, { ok: false, error: e.message });
     console.error('[batches/box-commit]', e.message);
     return send(res, 500, { ok: false, error: 'Could not submit the box. Please try again.' });
   }

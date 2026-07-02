@@ -3,6 +3,7 @@
 // uploaded the bytes to R2 via the presigned URL.
 import { send, applySecurity, rateLimit, requireRole, getJsonBody, cleanSku } from '../_lib/util.js';
 import { setProductPhoto, dbConfigured } from '../_lib/db.js';
+import { isAllowedPhotoUrl } from '../_lib/r2.js';
 
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
 const ANGLES = ['side', 'diagonal', 'outsole', 'top', 'rear'];
@@ -20,8 +21,10 @@ export default async function handler(req, res) {
   const sku = normSku(body.sku);
   const angle = ANGLES.includes(body.angle) ? body.angle : null;
   const url = String(body.url || '').trim().slice(0, 500);
-  if (!sku || !angle || !/^https:\/\//.test(url))
-    return send(res, 400, { ok: false, error: 'sku, angle and a valid https url are required.' });
+  // SSRF guard: only accept a URL on our own R2 host (not any https URL) —
+  // download.js later fetches this server-side.
+  if (!sku || !angle || !isAllowedPhotoUrl(url))
+    return send(res, 400, { ok: false, error: 'sku, angle and a photo URL on the configured R2 host are required.' });
   try {
     await setProductPhoto({ sku, angle, url, createdBy: user.name || user.username || '' });
     return send(res, 200, { ok: true });

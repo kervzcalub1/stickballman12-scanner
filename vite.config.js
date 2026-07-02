@@ -46,6 +46,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), ''); // load all vars (no VITE_ prefix filter)
   return {
     plugins: [react(), devApi(env)],
+    // NOTE (security): the Vite DEV server can serve project source (e.g.
+    // /api/../server.mjs) via path traversal — dev-only, dotfiles/.env are blocked,
+    // and prod (server.mjs) has its own traversal guard. Mitigation: never bind the
+    // dev server to a non-localhost interface / expose it publicly.
     server: { port: 5173, allowedHosts: true },
   };
 });

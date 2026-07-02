@@ -2,8 +2,9 @@
 // Downloads a SKU's listing photos: a single image if there's only one, otherwise
 // a .zip of all angles. Fetches the (public R2) photo URLs server-side so the
 // browser never needs CORS/credentials on the bucket. Warehouse + PH + admin.
-import { applySecurity, rateLimit, requireRole, cleanSku, send } from '../_lib/util.js';
+import { applySecurity, rateLimit, requireRole, cleanSku, send, fetchWithTimeout } from '../_lib/util.js';
 import { listProductPhotos, dbConfigured } from '../_lib/db.js';
+import { isAllowedPhotoUrl } from '../_lib/r2.js';
 import { makeZip } from '../_lib/zip.js';
 
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
@@ -28,8 +29,11 @@ export default async function handler(req, res) {
 
     const fetched = [];
     for (const p of photos) {
+      // SSRF guard: only ever fetch from our own R2 host, with a timeout — never
+      // an arbitrary URL (even if a stale row somehow holds one).
+      if (!isAllowedPhotoUrl(p.url)) continue;
       try {
-        const r = await fetch(p.url);
+        const r = await fetchWithTimeout(p.url, {}, 8000);
         if (!r.ok) continue;
         const buf = Buffer.from(await r.arrayBuffer());
         const ext = extFor(r.headers.get('content-type'), p.url);

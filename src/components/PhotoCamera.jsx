@@ -1,9 +1,14 @@
 // Full-screen custom camera for listing photos (V6 Feature 5). Live preview with
 // a bottom angle strip (side · diagonal · outsole · top · rear) — pick an angle,
-// tap the shutter, and it captures → compresses → uploads to R2 for that angle,
-// then advances to the next empty angle. "Gallery" picks an existing file
-// instead. Already-shot angles show their thumbnail in the strip and can be
-// replaced/removed (this is the "view photo listing" review too).
+// tap the shutter, and it captures the frame INSTANTLY (shutter never blocks),
+// then compresses + uploads to R2 for that angle in the background while you line
+// up the next shot. Already-shot angles show their thumbnail in the strip.
+// "Gallery" picks an existing file instead.
+//
+// Why background upload: the sign → PUT-to-R2 → attach round-trip is ~1–3s on a
+// warehouse phone. Blocking the shutter on it made every shot feel frozen. Now
+// each photo shows immediately from a local object URL and uploads on its own, so
+// by the time all angles are shot the uploads are already done.
 //
 // Uses getUserMedia directly (no barcode decoding) with explicit play() + a
 // loading/retry state, so it doesn't hit the black/stalled-preview issues.
@@ -16,11 +21,16 @@ import { Icon } from './NavIcons.jsx';
 export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, onClose, onSignOut }) {
   const videoRef = useRef(null);
   const galleryRef = useRef(null);
+  const urlsRef = useRef([]); // local object URLs to revoke on unmount
   const [live, setLive] = useState(false);
   const [slow, setSlow] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState('');       // camera-start error (replaces preview)
+  const [notice, setNotice] = useState('');      // non-blocking upload notice
   const [restartKey, setRestartKey] = useState(0);
-  const [busy, setBusy] = useState(false);
+  // Optimistic per-angle upload state: angle -> { url, status, blob, type }.
+  // Kept even after success (status 'done') so the freshly shot image keeps
+  // showing without a network reload flash; all object URLs are revoked on close.
+  const [pending, setPending] = useState({});
   const firstEmpty = useMemo(() => SHOE_ANGLES.find(([a]) => !photos[a])?.[0] || SHOE_ANGLES[0][0], []); // eslint-disable-line react-hooks/exhaustive-deps
   const [angle, setAngle] = useState(initialAngle || firstEmpty);
 
@@ -65,39 +75,88 @@ export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, o
     };
   }, [restartKey]);
 
-  async function upload(fileOrBlob, type) {
-    setBusy(true); setError('');
-    try {
-      const { blob, type: t } = await compressImage(fileOrBlob, { type: type || 'image/jpeg' });
-      const { uploadUrl, publicUrl } = await api.photoSign(sku, angle, t);
-      const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': t }, body: blob });
-      if (!put.ok) throw new Error(`Upload failed (${put.status}). Check the R2 bucket CORS policy.`);
-      await api.photoAttach(sku, angle, publicUrl);
-      onUploaded(angle, publicUrl);
-      const next = SHOE_ANGLES.find(([a]) => a !== angle && !photos[a]); // jump to a still-empty angle
-      if (next) setAngle(next[0]);
-    } catch (err) {
-      if (err.unauthorized) return onSignOut?.();
-      setError(err.message || 'Could not upload the photo.');
-    } finally { setBusy(false); }
+  // Revoke all local object URLs when the camera closes.
+  useEffect(() => () => { urlsRef.current.forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* noop */ } }); }, []);
+
+  // Background upload of one angle's blob. Never blocks the UI; updates just the
+  // one slot's status (uploading → done | error) so other shots keep flowing.
+  function uploadOne(a, blob, type) {
+    (async () => {
+      try {
+        const { uploadUrl, publicUrl } = await api.photoSign(sku, a, type);
+        const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
+        if (!put.ok) throw new Error(`Upload failed (${put.status}). Check the R2 bucket CORS policy.`);
+        await api.photoAttach(sku, a, publicUrl);
+        onUploaded(a, publicUrl);
+        setPending((p) => (p[a] ? { ...p, [a]: { ...p[a], status: 'done' } } : p));
+      } catch (err) {
+        if (err.unauthorized) return onSignOut?.();
+        setNotice('A photo didn’t upload — tap the slot and Retry.');
+        setPending((p) => (p[a] ? { ...p, [a]: { ...p[a], status: 'error' } } : p));
+      }
+    })();
   }
 
-  async function capture() {
+  // Advance to the next angle that has neither a saved nor a just-shot photo.
+  const advanceFrom = (a) => {
+    const next = SHOE_ANGLES.find(([x]) => x !== a && !photos[x] && !pending[x]);
+    if (next) setAngle(next[0]);
+  };
+
+  function capture() {
     const v = videoRef.current;
-    if (!v || !v.videoWidth || busy) return;
+    if (!v || !v.videoWidth) return;
     const canvas = document.createElement('canvas');
     canvas.width = v.videoWidth; canvas.height = v.videoHeight;
     canvas.getContext('2d').drawImage(v, 0, 0);
-    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.9));
-    if (blob) await upload(blob, 'image/jpeg');
+    // Single JPEG encode — the stream is already capped at ~1600px, so no
+    // compressImage re-decode/re-encode pass is needed for camera shots.
+    canvas.toBlob((blob) => {
+      if (!blob) { setNotice('Could not capture the frame — try again.'); return; }
+      const a = angle;
+      const url = URL.createObjectURL(blob);
+      urlsRef.current.push(url);
+      setNotice('');
+      setPending((p) => ({ ...p, [a]: { url, status: 'uploading', blob, type: 'image/jpeg' } }));
+      uploadOne(a, blob, 'image/jpeg');
+      advanceFrom(a);
+    }, 'image/jpeg', 0.82);
   }
 
   function onGallery(e) {
     const f = e.target.files?.[0]; if (e.target) e.target.value = '';
-    if (f) upload(f, f.type);
+    if (!f) return;
+    const a = angle;
+    // Preview the picked file immediately; compress + upload in the background.
+    const url = URL.createObjectURL(f);
+    urlsRef.current.push(url);
+    setNotice('');
+    setPending((p) => ({ ...p, [a]: { url, status: 'uploading', blob: f, type: f.type || 'image/jpeg' } }));
+    advanceFrom(a);
+    compressImage(f, { type: f.type || 'image/jpeg' })
+      .then(({ blob, type }) => uploadOne(a, blob, type))
+      .catch(() => uploadOne(a, f, f.type || 'image/jpeg'));
   }
 
-  const filled = SHOE_ANGLES.filter(([a]) => photos[a]).length;
+  function retry(a) {
+    const item = pending[a];
+    if (!item || item.status === 'uploading') return;
+    setNotice('');
+    setPending((p) => ({ ...p, [a]: { ...p[a], status: 'uploading' } }));
+    uploadOne(a, item.blob, item.type);
+  }
+  const retryAll = () => { setNotice(''); SHOE_ANGLES.forEach(([a]) => { if (pending[a]?.status === 'error') retry(a); }); };
+
+  function removeAngle(a) {
+    setPending((p) => { if (!p[a]) return p; const n = { ...p }; delete n[a]; return n; });
+    if (photos[a]) onRemove(a); // only the saved (attached) copy needs a server delete
+  }
+
+  const shownUrl = (a) => pending[a]?.url || photos[a];
+  const filled = SHOE_ANGLES.filter(([a]) => shownUrl(a)).length;
+  const curUrl = shownUrl(angle);
+  const curStatus = pending[angle]?.status;
+  const hasFailed = SHOE_ANGLES.some(([a]) => pending[a]?.status === 'error');
 
   return (
     <div className="pc-overlay" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
@@ -114,23 +173,39 @@ export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, o
         {!error && !live && (
           <div className="pc-loading"><span>Starting camera…</span>{slow && <button type="button" className="btn sm ghost" onClick={() => setRestartKey((k) => k + 1)}>Camera blank? Retry</button>}</div>
         )}
-        {photos[angle] && <img className="pc-current" src={photos[angle]} alt="current angle" title="Current photo — capture to replace" />}
+        {curUrl && (
+          <div className={`pc-current ${curStatus === 'uploading' ? 'uploading' : ''} ${curStatus === 'error' ? 'error' : ''}`}>
+            <img src={curUrl} alt="current angle" title="Current photo — capture to replace" />
+          </div>
+        )}
+        {notice && (
+          <div className="pc-notice">
+            <span>{notice}</span>
+            {hasFailed
+              ? <button type="button" className="btn sm ghost" onClick={retryAll}>Retry</button>
+              : <button type="button" className="pc-notice-x" aria-label="Dismiss" onClick={() => setNotice('')}>×</button>}
+          </div>
+        )}
       </div>
 
       <div className="pc-bottom">
         <div className="pc-angles">
-          {SHOE_ANGLES.map(([a, label, Icon]) => (
-            <button key={a} type="button" className={`pc-angle ${angle === a ? 'sel' : ''} ${photos[a] ? 'filled' : ''}`} onClick={() => setAngle(a)}>
-              <span className="pc-angle-ic">{photos[a] ? <img src={photos[a]} alt="" /> : <Icon />}</span>
-              <span className="pc-angle-lbl">{label}{photos[a] ? ' ✓' : ''}</span>
-            </button>
-          ))}
+          {SHOE_ANGLES.map(([a, label, AngleIcon]) => {
+            const url = shownUrl(a);
+            const st = pending[a]?.status;
+            return (
+              <button key={a} type="button" className={`pc-angle ${angle === a ? 'sel' : ''} ${url ? 'filled' : ''} ${st === 'error' ? 'err' : ''}`} onClick={() => setAngle(a)}>
+                <span className="pc-angle-ic">{url ? <img src={url} alt="" /> : <AngleIcon />}</span>
+                <span className="pc-angle-lbl">{label}{st === 'uploading' ? ' …' : st === 'error' ? ' !' : url ? ' ✓' : ''}</span>
+              </button>
+            );
+          })}
         </div>
         <div className="pc-actions">
-          <button type="button" className="btn ghost" onClick={() => galleryRef.current?.click()} disabled={busy}><Icon name="image" /> Gallery</button>
-          <button type="button" className="pc-shutter" onClick={capture} disabled={busy || !live} aria-label={`Capture ${angle}`}>{busy ? '…' : ''}</button>
-          {photos[angle]
-            ? <button type="button" className="btn ghost danger" onClick={() => onRemove(angle)} disabled={busy}>Remove</button>
+          <button type="button" className="btn ghost" onClick={() => galleryRef.current?.click()}><Icon name="image" /> Gallery</button>
+          <button type="button" className="pc-shutter" onClick={capture} disabled={!live} aria-label={`Capture ${angle}`} />
+          {curUrl
+            ? <button type="button" className="btn ghost danger" onClick={() => removeAngle(angle)}>Remove</button>
             : <span className="pc-side-spacer" />}
         </div>
       </div>

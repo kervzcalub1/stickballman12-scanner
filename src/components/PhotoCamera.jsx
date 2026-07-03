@@ -32,8 +32,18 @@ export function PhotoCamera({ sku, photos, initialAngle, onUploaded, onRemove, o
     const slowTimer = setTimeout(() => { if (!cancelled) setSlow(true); }, 4500);
     (async () => {
       try {
+        // We only keep ~1600px after compressImage, so there's no reason to run
+        // the live preview at full 1080p — on warehouse phones that heavier sensor
+        // mode makes the preview stutter. Ask for a 1600×1200 (4:3) stream capped
+        // at 30fps: the capture still meets the 1600px target, but the preview is
+        // lighter and smoother. `max` caps it so a device can't hand back 1080p60.
         started = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1600, max: 1600 },
+            height: { ideal: 1200, max: 1200 },
+            frameRate: { ideal: 30, max: 30 },
+          },
           audio: false,
         });
         if (cancelled) { started.getTracks().forEach((t) => t.stop()); return; }

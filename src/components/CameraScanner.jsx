@@ -73,10 +73,16 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
 
     (async () => {
       try {
-        const want = rawMode ? { w: 1920, h: 1080 } : { w: 1280, h: 720 };
+        // Capture at 720p (not 1080p) with a capped frame rate. zxing decodes a
+        // full frame on the main thread every ~500ms; 1080p frames make each pass
+        // long enough to hitch the live preview. 720p halves the per-decode cost
+        // while still reading close-range Code128/UPC cleanly, so the preview stays
+        // smooth. `resizeMode` avoids the browser upscaling a smaller sensor mode.
         const videoConstraints = {
-          width: { ideal: want.w },
-          height: { ideal: want.h },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 },
+          resizeMode: 'crop-and-scale',
           ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }),
         };
 

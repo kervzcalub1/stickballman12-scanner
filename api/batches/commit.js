@@ -42,8 +42,12 @@ export default async function handler(req, res) {
   const body = await getJsonBody(req);
   const header = body.batch || {};
   const rawItems = Array.isArray(body.items) ? body.items : [];
-  const kind = body.kind === 'rescale' ? 'rescale' : 'receiving';
-  // Rescale has no shipment, so it carries no shipment issues.
+  // 'instore' = pairs bought at a retail store: no shipment (like rescale), but
+  // it keeps `origin` (store name) and, unlike rescale, lands as fresh received
+  // stock. admin/warehouse only — ph_team is already blocked by requireRole below.
+  const kind = body.kind === 'rescale' ? 'rescale' : body.kind === 'instore' ? 'instore' : 'receiving';
+  // Rescale carries no issues; receiving and in-store both can (in-store reuses the
+  // full Review + Issues flow, e.g. no-box auto-issues and per-unit defect flags).
   const issues = kind === 'rescale' ? [] : (Array.isArray(body.issues) ? body.issues : []);
   // Per-unit defect issues flagged on the Review screen (V6 Feature 4):
   // [{ vin, type, note, photos:[https…] }]. Mapped to item ids after insert.
@@ -63,8 +67,8 @@ export default async function handler(req, res) {
   if (rawItems.length > MAX_ITEMS)
     return send(res, 400, { ok: false, error: `Too many items (max ${MAX_ITEMS}).` });
   // A receiving batch must be traceable to its shipment — require supplier + tracking.
-  // (Rescale carries no shipment, so it's exempt.)
-  if (kind !== 'rescale') {
+  // (Rescale and in-store carry no shipment, so they're exempt.)
+  if (kind === 'receiving') {
     if (!cleanName(header.supplier)) return send(res, 400, { ok: false, error: 'Supplier is required.' });
     if (!String(header.tracking ?? '').trim()) return send(res, 400, { ok: false, error: 'Tracking # is required.' });
   }
@@ -102,19 +106,20 @@ export default async function handler(req, res) {
     };
   });
 
-  // Rescale carries no shipment — buyer/supplier/tracking are dropped.
+  // Only a real shipment (receiving) carries buyer/supplier/tracking. Rescale and
+  // in-store drop those; in-store keeps `origin` (the store name) like rescale.
   const bh = {
-    buyer: kind === 'rescale' ? null : cleanName(header.buyer),
-    supplier: kind === 'rescale' ? null : cleanName(header.supplier),
-    tracking: kind === 'rescale' ? null : (String(header.tracking ?? '').trim().slice(0, 120) || null),
+    buyer: kind !== 'receiving' ? null : cleanName(header.buyer),
+    supplier: kind !== 'receiving' ? null : cleanName(header.supplier),
+    tracking: kind !== 'receiving' ? null : (String(header.tracking ?? '').trim().slice(0, 120) || null),
     dateReceived: header.dateReceived || null,
     defaultCost,
     notes: String(header.notes ?? '').trim().slice(0, 2000) || null,
     specialRules: String(header.specialRules ?? '').trim().slice(0, 2000) || null,
     kind,
-    origin: kind === 'rescale' ? (String(header.origin ?? '').trim().slice(0, 80) || null) : null,
+    origin: kind !== 'receiving' ? (String(header.origin ?? '').trim().slice(0, 80) || null) : null,
     // Set by the client when staff proceed past the duplicate-tracking warning.
-    duplicateOf: kind === 'rescale' ? null : (Number.isInteger(header.duplicateOf) ? header.duplicateOf : null),
+    duplicateOf: kind !== 'receiving' ? null : (Number.isInteger(header.duplicateOf) ? header.duplicateOf : null),
   };
 
   try {
@@ -145,9 +150,12 @@ export default async function handler(req, res) {
 
     // Best-effort, AFTER responding (slow/flaky Alias must never delay the
     // commit): pull each unit's global indicator price and seed the final price.
-    // A failure just leaves GI null for PH to fill in by hand.
-    enrichGlobalIndicators(created, items)
-      .catch((e) => console.warn('[batches/commit] GI enrichment failed:', e.message));
+    // A failure just leaves GI null for PH to fill in by hand. Skipped for
+    // in-store — those bypass PH entirely and are listed to Alias by hand.
+    if (kind !== 'instore') {
+      enrichGlobalIndicators(created, items)
+        .catch((e) => console.warn('[batches/commit] GI enrichment failed:', e.message));
+    }
     return;
   } catch (e) {
     console.error('[batches/commit]', e.message);

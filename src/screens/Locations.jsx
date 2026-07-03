@@ -470,7 +470,9 @@ export function Locations({ onHome, onSignOut }) {
                   <div className="loc-tiles" ref={tilesRef}>
                     {tiles.map((t) => (
                       <div className={`loc-tile ${t.inactive ? 'inactive' : ''}`} key={t.key}>
-                        <input type="checkbox" className="loc-tile-check" checked={allSel(t.ids)} onChange={() => toggleIds(t.ids)} aria-label={`Select ${t.name}`} />
+                        <label className="loc-tile-check" onClick={(e) => e.stopPropagation()}>
+                          <input type="checkbox" checked={allSel(t.ids)} onChange={() => toggleIds(t.ids)} aria-label={`Select ${t.name}`} />
+                        </label>
                         <button className="loc-tile-body" onClick={() => navigate([...r.base, t.slug])}>
                           <span className="loc-tile-icon"><TileGlyph kind={t.kind} /></span>
                           <span className="loc-tile-name">{t.name}{t.inactive && <span className="loc-inactive-badge"> inactive</span>}</span>

@@ -36,7 +36,10 @@ export default async function handler(req, res) {
 
     const createdBy = user.name || user.username || '';
     const { updated, gotBox, results } = await shelveItems({ location, units, createdBy });
-    return send(res, 200, { ok: true, updated, gotBox, location: { code: location.code, label: location.label, warehouse: location.warehouse, area: location.area }, results });
+    // No-box units are refused (a boxless shoe can't be shelved) — surface the count
+    // so the client can tell the user to resolve the box first.
+    const noBoxBlocked = results.filter((r) => r.reason === 'no_box').length;
+    return send(res, 200, { ok: true, updated, gotBox, noBoxBlocked, location: { code: location.code, label: location.label, warehouse: location.warehouse, area: location.area }, results });
   } catch (e) {
     console.error('[items/shelve]', e.message);
     return send(res, 500, { ok: false, error: 'Could not shelve the items. Please try again.' });

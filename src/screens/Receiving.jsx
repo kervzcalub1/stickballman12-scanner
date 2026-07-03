@@ -12,6 +12,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
+import { estToday } from '../lib/format.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -21,16 +22,21 @@ let cartKey = 1;
 
 export function Receiving({ mode = 'receiving', navBack, batchContext = null, onBatchDone, onOpenItem, onHome, onSignOut }) {
   const isRescale = mode === 'rescale';
+  const isInstore = mode === 'instore';
+  // No-shipment intake (rescale OR in-store buying): no supplier/buyer/tracking and
+  // no Review/Issues steps — a 2-step Details → Items flow. `isRescale` alone still
+  // gates the VIN-rescan behaviour; in-store is fresh stock, scanned like receiving.
+  const noShipment = isRescale || isInstore;
   // "Box mode": adding a box to an existing OPEN multi-box batch (from Batch Page).
   // Step 1 collects only the box tracking #; finish commits the box (boxCommit).
-  const isBoxMode = !isRescale && !!batchContext;
-  const today = new Date().toISOString().slice(0, 10);
+  const isBoxMode = !noShipment && !!batchContext;
+  const today = estToday();
   const [tab, setTab] = useState('intake');   // 'intake' | 'recent'
   const [step, setStep] = useState(1);         // receiving: 1 shipment·2 items·3 review·4 issues | rescale: 1 details·2 items
 
   const [header, setHeader] = useState({
     buyer: 'stickballman12', supplier: '', tracking: '', dateReceived: today,
-    defaultCost: '', notes: '', specialRules: '', origin: 'returned', originOther: '',
+    defaultCost: '', notes: '', specialRules: '', origin: isInstore ? '' : 'returned', originOther: '',
     batchTag: '', expectedBoxes: '1', // V6 Feature 7: >1 → open multi-box batch
   });
   // The reason stored on the batch: the custom text when "Other" is picked.
@@ -59,7 +65,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [dupBatch, setDupBatch] = useState(null);  // { code, id } | null
 
   useEffect(() => {
-    if (isRescale) return undefined;
+    if (noShipment) return undefined;
     let cancelled = false;
     api.suppliers()
       .then(({ suppliers }) => { if (!cancelled && suppliers?.length) setSupplierOptions(suppliers); })
@@ -69,7 +75,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
   // Debounced duplicate-tracking check as the tracking number is typed/scanned.
   useEffect(() => {
-    if (isRescale) { setDupBatch(null); return undefined; }
+    if (noShipment) { setDupBatch(null); return undefined; }
     const t = String(header.tracking || '').trim();
     if (!t) { setDupBatch(null); return undefined; }
     let cancelled = false;
@@ -93,7 +99,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const setSlotTracking = (i, v) => setBoxSlots((s) => s.map((x, idx) => (idx === i ? { ...x, tracking: v } : x)));
   // Derived (declared early so the Back-button effect below can depend on them).
   const expectedBoxesNum = Math.max(1, parseInt(header.expectedBoxes, 10) || 1);
-  const isMultiBoxNew = !isRescale && !isBoxMode && expectedBoxesNum > 1;
+  const isMultiBoxNew = !noShipment && !isBoxMode && expectedBoxesNum > 1;
   const receivedSlots = boxSlots.filter((s) => s.status === 'received').length;
 
   const [prefs, setPrefs] = useState(loadPrefs);
@@ -502,9 +508,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   function goStep2() {
     setError('');
     // Box-mode inherits supplier/buyer/date from the batch — only the box tracking matters.
-    if (!isRescale && !isBoxMode && !String(header.supplier).trim()) { setError('Select a supplier.'); return; }
-    if (!isRescale && !isBoxMode && !String(header.buyer).trim()) { setError('Enter the buyer.'); return; }
-    if (!isRescale && !isBoxMode && !String(header.dateReceived).trim()) { setError('Enter the date.'); return; }
+    if (!noShipment && !isBoxMode && !String(header.supplier).trim()) { setError('Select a supplier.'); return; }
+    if (!noShipment && !isBoxMode && !String(header.buyer).trim()) { setError('Enter the buyer.'); return; }
+    if (!noShipment && !isBoxMode && !String(header.dateReceived).trim()) { setError('Enter the date.'); return; }
     if (isRescale && header.origin === 'other' && !String(header.originOther).trim()) { setError('Enter a custom reason.'); return; }
     setStep(2);
   }
@@ -637,14 +643,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   return (
     <div className="app">
       <TopBar
-        title={isRescale ? 'Rescale Stock' : isBoxMode ? 'Add box' : 'Receiving'}
+        title={isRescale ? 'Rescale Stock' : isInstore ? 'In-Store Buying' : isBoxMode ? 'Add box' : 'Receiving'}
         onHome={onHome}
         onSignOut={onSignOut}
         right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences"><Icon name="gear" /></button>}
       />
 
       <div className="tabs auth-tabs">
-        <button className={`tab ${tab === 'intake' ? 'active' : ''}`} onClick={() => setTab('intake')}>{isRescale ? 'New Rescale' : 'New Batch'}</button>
+        <button className={`tab ${tab === 'intake' ? 'active' : ''}`} onClick={() => setTab('intake')}>{isRescale ? 'New Rescale' : isInstore ? 'New Trip' : 'New Batch'}</button>
         <button className={`tab ${tab === 'recent' ? 'active' : ''}`} onClick={() => setTab('recent')}>Recent</button>
       </div>
 
@@ -653,10 +659,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           {/* Stepper */}
           <div className="wizard-steps">
             {(isRescale ? [[1, 'Details'], [2, 'Items']]
-              : [[1, isMultiBoxNew ? 'Boxes' : 'Shipment'], [2, 'Items'], [3, 'Review'], [4, 'Issues']]).map(([n, label]) => (
+              : [[1, isInstore ? 'Store' : isMultiBoxNew ? 'Boxes' : 'Shipment'], [2, 'Items'], [3, 'Review'], [4, 'Issues']]).map(([n, label]) => (
               <button key={n} type="button" className={`wstep ${step === n ? 'active' : ''} ${step > n ? 'done' : ''}`}
                 onClick={() => { if (n < step) { if (n === 1 && isMultiBoxNew && activeSlot != null) backToBoxList(); else setStep(n); } }}>
-                <span className="wstep-num">{step > n ? '✓' : n}</span>{label}
+                <span className="wstep-num">{step > n ? '✓' : n}</span><span className="wstep-label">{label}</span>
               </button>
             ))}
           </div>
@@ -664,15 +670,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           {step === 1 && (
             <>
               <div className="card">
-                <h3 className="rows-title">{isRescale ? 'Rescale details' : isBoxMode ? 'Add a box' : 'Shipment details'}</h3>
+                <h3 className="rows-title">{isRescale ? 'Rescale details' : isInstore ? 'In-store trip' : isBoxMode ? 'Add a box' : 'Shipment details'}</h3>
                 {isBoxMode && (
                   <div className="box-context">
                     Adding a box to <b>{batchContext.batch_code}</b>{batchContext.batch_tag ? <> · <Icon name="tag" /> {batchContext.batch_tag}</> : ''} · {batchContext.supplier_name || '—'}
                   </div>
                 )}
                 <div className="batch-form">
-                  {!isRescale && !isBoxMode && <label>Buyer *<input value={header.buyer} onChange={(e) => setH('buyer', e.target.value)} /></label>}
-                  {!isRescale && !isBoxMode && (
+                  {!noShipment && !isBoxMode && <label>Buyer *<input value={header.buyer} onChange={(e) => setH('buyer', e.target.value)} /></label>}
+                  {!noShipment && !isBoxMode && (
                     <label>Supplier *
                       <select
                         value={header.supplier}
@@ -690,7 +696,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   )}
                   {/* Single-box / box-mode: one tracking # here. Multi-box enters
                       a tracking # per box on the box list (next screen). */}
-                  {!isRescale && !isMultiBoxNew && (
+                  {!noShipment && !isMultiBoxNew && (
                     <label>Tracking #
                       <span className="track-field">
                         <input value={header.tracking} onChange={(e) => setH('tracking', e.target.value)} placeholder="Type, scan, or upload a photo" />
@@ -699,7 +705,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       </span>
                     </label>
                   )}
-                  {!isRescale && !isMultiBoxNew && dupBatch && (
+                  {!noShipment && !isMultiBoxNew && dupBatch && (
                     <div className="batch-form-wide dup-warn">
                       ⚠ This tracking number was already received in <b>{dupBatch.code}</b>. You can still proceed — this batch will be flagged as a duplicate.
                     </div>
@@ -717,22 +723,28 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                         maxLength={80} onChange={(e) => setH('originOther', e.target.value)} />
                     </label>
                   )}
-                  {!isBoxMode && <label>{isRescale ? 'Date *' : 'Date received *'}<input type="date" value={header.dateReceived} onChange={(e) => setH('dateReceived', e.target.value)} /></label>}
+                  {isInstore && (
+                    <label>Store / location
+                      <input value={header.origin} maxLength={80} placeholder="e.g. Nike Outlet — Lancaster"
+                        onChange={(e) => setH('origin', e.target.value)} />
+                    </label>
+                  )}
+                  {!isBoxMode && <label>{isInstore ? 'Date' : isRescale ? 'Date *' : 'Date received *'}<input type="date" value={header.dateReceived} onChange={(e) => setH('dateReceived', e.target.value)} /></label>}
                   {!isBoxMode && <label>Default cost ($)<input type="number" min="0" step="0.01" value={header.defaultCost} onChange={(e) => setH('defaultCost', e.target.value)} /></label>}
-                  {!isRescale && !isBoxMode && (
+                  {!noShipment && !isBoxMode && (
                     <label>Boxes expected
                       <input type="number" min="1" step="1" value={header.expectedBoxes}
                         onChange={(e) => setH('expectedBoxes', e.target.value)} title="More than 1 starts a multi-box batch you add boxes to from the Batch Page" />
                     </label>
                   )}
-                  {!isRescale && !isBoxMode && expectedBoxesNum > 1 && (
+                  {!noShipment && !isBoxMode && expectedBoxesNum > 1 && (
                     <label className="batch-form-wide">Batch tag<input value={header.batchTag} maxLength={120}
                       placeholder="Code on the shipping label (e.g. Joey JP23 AJ40)" onChange={(e) => setH('batchTag', e.target.value)} /></label>
                   )}
-                  {!isRescale && !isBoxMode && <label className="batch-form-wide">Special rules<input value={header.specialRules} onChange={(e) => setH('specialRules', e.target.value)} /></label>}
+                  {!noShipment && !isBoxMode && <label className="batch-form-wide">Special rules<input value={header.specialRules} onChange={(e) => setH('specialRules', e.target.value)} /></label>}
                   {!isBoxMode && <label className="batch-form-wide">Notes<input value={header.notes} onChange={(e) => setH('notes', e.target.value)} /></label>}
                 </div>
-                {!isRescale && !isBoxMode && expectedBoxesNum > 1 && (
+                {!noShipment && !isBoxMode && expectedBoxesNum > 1 && (
                   <p className="muted sm">This is an <b>open multi-box batch</b>. Enter each box's tracking # below and tap <b>Add items</b> — do them in any order. Progress is saved as you submit each box; finish later from the <b>Batches</b> page.</p>
                 )}
               </div>
@@ -812,7 +824,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
                             <div className="recv-item-meta">
                               <span className={`box-badge ${it.withBox ? 'yes' : 'no'}`}>{it.withBox ? <><Icon name="box" /> With box</> : <><Icon name="nobox" /> No box</>}</span>
-                              <span className="muted sm">{isRescale ? 'Rescale' : (header.supplier || '—')} · {defaultCostNum != null ? `$${defaultCostNum.toFixed(2)}` : 'no cost'}</span>
+                              <span className="muted sm">{isRescale ? 'Rescale' : isInstore ? (header.origin?.trim() || 'In-store') : (header.supplier || '—')} · {defaultCostNum != null ? `$${defaultCostNum.toFixed(2)}` : 'no cost'}</span>
                             </div>
                           </div>
                           <button type="button" className="btn icon ghost remove" title="Remove item" onClick={() => removeItem(it.key)}>×</button>
@@ -974,7 +986,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           {step === 4 && !isRescale && (
             <>
               <div className="card">
-                <h3 className="rows-title">Shipment issues <span className="muted">(optional)</span></h3>
+                <h3 className="rows-title">{isInstore ? 'Issues' : 'Shipment issues'} <span className="muted">(optional)</span></h3>
                 {autoIssues.length > 0 && (
                   <div className="auto-issues">
                     <div className="muted sm">Auto-added — shoes received without a box:</div>
@@ -1003,7 +1015,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 <button className="btn ghost" onClick={() => setStep(3)}>← Back</button>
                 <div className="batch-totals"><b>{totalItems}</b> units · <b>${totalCost.toFixed(2)}</b></div>
                 <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } setShowConfirm(true); }} disabled={committing}>
-                  {isBoxMode || isMultiBoxNew ? 'Submit box' : 'Finish batch'}
+                  {isBoxMode || isMultiBoxNew ? 'Submit box' : isInstore ? 'Save trip' : 'Finish batch'}
                 </button>
               </div>
             </>
@@ -1089,7 +1101,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     </div>
                   ))}
                 </div>
-                {!isRescale && draft.sku && <ListingPhotos sku={draft.sku} onSignOut={onSignOut} onCameraToggle={setPhotoCam} />}
+                {!noShipment && draft.sku && <ListingPhotos sku={draft.sku} onSignOut={onSignOut} onCameraToggle={setPhotoCam} />}
                 <div className="modal-actions">
                   <button type="button" className="btn primary wide" onClick={completeItem}>Complete item ✓</button>
                 </div>
@@ -1116,13 +1128,21 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       {showConfirm && (
         <div className="modal-overlay">
           <div className="modal confirm" role="dialog" aria-modal="true">
-            <h3 className="modal-title">{isRescale ? 'Commit this rescale?' : (isBoxMode || isMultiBoxNew) ? 'Submit this box?' : 'Commit this batch?'}</h3>
+            <h3 className="modal-title">{isRescale ? 'Commit this rescale?' : isInstore ? 'Save this trip?' : (isBoxMode || isMultiBoxNew) ? 'Submit this box?' : 'Commit this batch?'}</h3>
             <div className="confirm-summary">
               {isRescale
                 ? (<>
                     <div><b>{rescaledCount}</b> existing VIN{rescaledCount === 1 ? '' : 's'} rescanned{totalItems ? <> · <b>{totalItems}</b> new unit{totalItems === 1 ? '' : 's'}</> : ''}</div>
                     <div className="muted">Rescale · {header.origin === 'other' ? effectiveOrigin : (RESCALE_REASONS.find(([v]) => v === header.origin)?.[1] || effectiveOrigin)} · {header.dateReceived}</div>
                     <p className="muted sm">Rescanned units keep their VIN &amp; history (a “Rescaled” event + your chosen status is added). New stock gets a fresh VIN.</p>
+                  </>)
+                : isInstore
+                ? (<>
+                    <div><b>{totalItems}</b> pair{totalItems === 1 ? '' : 's'} ({items.length} shoe{items.length === 1 ? '' : 's'}) · total <b>${totalCost.toFixed(2)}</b></div>
+                    <div className="muted">In-store{header.origin?.trim() ? ` · ${header.origin.trim()}` : ''} · {header.dateReceived}</div>
+                    {(autoIssues.length + issues.length) > 0 && <div className="muted">{autoIssues.length + issues.length} issue(s) recorded</div>}
+                    {flaggedCount > 0 && <div className="muted">{flaggedCount} unit(s) flagged with a defect</div>}
+                    <p className="muted sm">Each pair gets its own VIN and lands in inventory to shelve. In-store buys skip the PH team — list them to Alias by hand.</p>
                   </>)
                 : (<>
                     <div><b>{totalItems}</b> units ({items.length} shoe{items.length === 1 ? '' : 's'}) · total <b>${totalCost.toFixed(2)}</b></div>

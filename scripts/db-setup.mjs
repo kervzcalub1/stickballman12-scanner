@@ -98,11 +98,13 @@ await sql(`
     committed_at    TIMESTAMPTZ
   )
 `);
-// Intake type: 'receiving' (a shipment) or 'rescale' (already-in-hand stock).
+// Intake type: 'receiving' (a shipment), 'rescale' (already-in-hand stock), or
+// 'instore' (pairs bought at a retail store — no shipment; admin/warehouse only,
+// never enters the PH-team / Intelligent-Inventory flow; `origin` = store name).
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS kind   TEXT NOT NULL DEFAULT 'receiving'`);
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS origin TEXT`);
 await sql(`ALTER TABLE batches DROP CONSTRAINT IF EXISTS batches_kind_check`);
-await sql(`ALTER TABLE batches ADD CONSTRAINT batches_kind_check CHECK (kind IN ('receiving','rescale'))`);
+await sql(`ALTER TABLE batches ADD CONSTRAINT batches_kind_check CHECK (kind IN ('receiving','rescale','instore'))`);
 
 await sql(`
   CREATE TABLE IF NOT EXISTS items (
@@ -133,6 +135,14 @@ await sql(`ALTER TABLE items ALTER COLUMN status SET DEFAULT 'needs_shelf'`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS with_box           BOOLEAN NOT NULL DEFAULT true`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS price              NUMERIC(12,2)`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS global_indicator   NUMERIC(12,2)`);
+// Snapshot of the Final price at the moment the shoe was listed (II turned on / a
+// manual PH save while on II). A GI "Refresh prices" updates `price` but NOT this, so
+// a later divergence (price <> listed_price while on II) surfaces the ⚠ "Price changed"
+// drift chip on the PH grid — the live store listing is now at a stale price. See ph-report.md.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS listed_price       NUMERIC(12,2)`);
+// One-time baseline for shoes already on II before this column existed (only fills
+// nulls, so it never masks a drift that's already been recorded).
+await sql(`UPDATE items SET listed_price = price WHERE added_to_intel_inv AND listed_price IS NULL AND price IS NOT NULL`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS added_to_intel_inv BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_alias       BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_stockx      BOOLEAN NOT NULL DEFAULT false`);
@@ -154,6 +164,16 @@ await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS colorway           TEXT`);
 // marks it restocked (it then drops off the Rescale list into normal inventory).
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS restock_pending    BOOLEAN NOT NULL DEFAULT false`);
 await sql(`CREATE INDEX IF NOT EXISTS items_restock_idx ON items (restock_pending) WHERE restock_pending`);
+// In-store buys are listed to the stores MANUALLY by admin/warehouse (they skip the
+// PH team / Intelligent-Inventory cascade). Separate per-store flags — NOT the PH
+// synced_* columns — so the two workflows never conflate. The In-Store Listing page
+// toggles these; a pair is "fully listed" when all three are true. `instore_listed_at`
+// /_by record the last listing action (audit). Only meaningful for kind='instore'.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS instore_listed_alias   BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS instore_listed_stockx  BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS instore_listed_shopify BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS instore_listed_at  TIMESTAMPTZ`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS instore_listed_by  TEXT`);
 // Align the VIN column default to the real format (SBM-YYMMDD-######). This
 // default is only a fallback — every insert supplies a VIN — but keeping it
 // consistent avoids ever minting a stray "SB-…" id. Idempotent.
@@ -330,14 +350,21 @@ await sql(`
   CREATE TABLE IF NOT EXISTS product_photos (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     sku        TEXT NOT NULL,
-    angle      TEXT,            -- 'side' | 'diagonal' | 'outsole' | 'top' | 'rear'
+    angle      TEXT,            -- 'side' | 'diagonal' | 'outsole' | 'top' | 'rear' | 'extra1' | 'extra2'
     url        TEXT NOT NULL,
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
 await sql(`CREATE INDEX IF NOT EXISTS product_photos_sku_idx ON product_photos (sku)`);
-await sql(`CREATE UNIQUE INDEX IF NOT EXISTS product_photos_sku_angle_idx ON product_photos (sku, angle)`);
+// PH edited photos live alongside the warehouse's raw shots for the same SKU/angle:
+// `source` ∈ 'warehouse' | 'ph_edited'. Display prefers ph_edited (see db.js photo_url
+// subqueries). Widen the unique key from (sku,angle) → (sku,angle,source) so both can
+// coexist. 'extra1'/'extra2' are PH-only extra images (viewer + download, never a
+// thumbnail/angle). See docs/context/ph-report.md.
+await sql(`ALTER TABLE product_photos ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'warehouse'`);
+await sql(`DROP INDEX IF EXISTS product_photos_sku_angle_idx`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS product_photos_sku_angle_source_idx ON product_photos (sku, angle, source)`);
 
 // Shelf locations — physical put-away spots. code is the scannable barcode value
 // (globally unique: SITE-AREA-BAY-SHELF, e.g. MNH-WH-A2-04). shelf is NULL for

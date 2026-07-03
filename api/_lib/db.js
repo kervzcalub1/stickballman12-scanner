@@ -244,20 +244,24 @@ export async function findBatchByTracking(tracking) {
 export async function listProductPhotos(sku) {
   const s = String(sku || '').trim();
   if (!s) return [];
-  return db()`SELECT angle, url, created_by, created_at FROM product_photos WHERE sku = ${s} ORDER BY created_at`;
+  return db()`SELECT angle, url, source, created_by, created_at FROM product_photos WHERE sku = ${s} ORDER BY source, created_at`;
 }
 
-// Upsert one angle's photo for a SKU (re-capturing an angle replaces it).
-export async function setProductPhoto({ sku, angle, url, createdBy }) {
+// Upsert one angle's photo for a SKU + source (re-capturing an angle for the SAME
+// source replaces it). `source` ∈ 'warehouse' | 'ph_edited' — the two coexist, so a
+// PH upload never overwrites the warehouse original (in-store.md/ph-report.md).
+export async function setProductPhoto({ sku, angle, url, source = 'warehouse', createdBy }) {
+  const src = source === 'ph_edited' ? 'ph_edited' : 'warehouse';
   await db()`
-    INSERT INTO product_photos (sku, angle, url, created_by)
-    VALUES (${sku}, ${angle}, ${url}, ${createdBy || null})
-    ON CONFLICT (sku, angle) DO UPDATE SET url = EXCLUDED.url, created_by = EXCLUDED.created_by, created_at = now()
+    INSERT INTO product_photos (sku, angle, url, source, created_by)
+    VALUES (${sku}, ${angle}, ${url}, ${src}, ${createdBy || null})
+    ON CONFLICT (sku, angle, source) DO UPDATE SET url = EXCLUDED.url, created_by = EXCLUDED.created_by, created_at = now()
   `;
 }
 
-export async function removeProductPhoto(sku, angle) {
-  await db()`DELETE FROM product_photos WHERE sku = ${sku} AND angle = ${angle}`;
+export async function removeProductPhoto(sku, angle, source = 'warehouse') {
+  const src = source === 'ph_edited' ? 'ph_edited' : 'warehouse';
+  await db()`DELETE FROM product_photos WHERE sku = ${sku} AND angle = ${angle} AND source = ${src}`;
 }
 
 /* ------------------------ v4: batches & items ------------------------- */
@@ -270,7 +274,7 @@ export async function createBatch(h, createdBy) {
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
-       ${h.specialRules || null}, ${h.kind === 'rescale' ? 'rescale' : 'receiving'},
+       ${h.specialRules || null}, ${['receiving', 'rescale', 'instore'].includes(h.kind) ? h.kind : 'receiving'},
        ${h.origin || null}, ${h.duplicateOf ?? null}, 'committed', ${createdBy || null}, now())
     RETURNING id, batch_code
   `;
@@ -380,9 +384,11 @@ export async function getItemsForGiRefresh(vins) {
   const list = [...new Set((vins || []).filter(Boolean))];
   if (!list.length) return [];
   return await db()`
-    SELECT id, upc, sku, size, global_indicator, price
-    FROM items
-    WHERE vin = ANY(${list}) AND status NOT IN ('sold', 'shipped')
+    SELECT i.id, i.upc, i.sku, i.size, i.global_indicator, i.price
+    FROM items i
+    LEFT JOIN batches b ON b.id = i.batch_id
+    WHERE i.vin = ANY(${list}) AND i.status NOT IN ('sold', 'shipped')
+      AND (b.kind IS DISTINCT FROM 'instore')  -- in-store bypasses PH/GI pricing
   `;
 }
 
@@ -712,8 +718,8 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
            i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv,
            i.synced_alias, i.synced_stockx, i.synced_shopify, i.location_code,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
-           (SELECT p.url FROM product_photos p WHERE p.sku = i.sku
-              ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, p.created_at LIMIT 1) AS photo_url,
+           (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
+              ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url,
            b.batch_code, b.supplier_name, b.buyer_name, b.date_received, b.kind
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
@@ -742,12 +748,13 @@ export async function phListItems(from, to, kind = null) {
       SELECT i.vin, coalesce(ev.created_at, i.updated_at) AS created_at,
              coalesce(ev.created_by, i.created_by) AS created_by, i.name, i.sku, i.size, i.gender,
              i.status, i.cost, i.price, i.global_indicator,
-             i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
+             i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
              i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
              (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
-             (SELECT p.url FROM product_photos p WHERE p.sku = i.sku
-                ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, p.created_at LIMIT 1) AS photo_url
+             (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
+                ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
       FROM items i
+      LEFT JOIN batches b ON b.id = i.batch_id
       LEFT JOIN LATERAL (
         SELECT e.created_at, e.created_by FROM item_events e
         WHERE e.item_id = i.id AND e.type = 'rescaled'
@@ -755,6 +762,7 @@ export async function phListItems(from, to, kind = null) {
       ) ev ON true
       WHERE i.restock_pending = true  -- pending worklist; cleared on "Mark restocked"
         AND i.status <> 'no_box'      -- no-box units aren't postable; PH never lists them
+        AND (b.kind IS DISTINCT FROM 'instore')  -- in-store bypasses PH entirely
         AND (${from}::date IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
         AND (${to}::date   IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
       ORDER BY created_at DESC, i.id
@@ -764,15 +772,18 @@ export async function phListItems(from, to, kind = null) {
   return await db()`
     SELECT i.vin, i.created_at, i.created_by, i.name, i.sku, i.size, i.gender,
            i.status, i.cost, i.price, i.global_indicator,
-           i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
+           i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
            i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
-           (SELECT p.url FROM product_photos p WHERE p.sku = i.sku
-              ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, p.created_at LIMIT 1) AS photo_url
+           (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
+              ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
       AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+      -- In-store buys never enter the PH team's world (New Inventory OR the admin
+      -- Report): they're listed to Alias by hand off the In-Store Listing page.
+      AND (b.kind IS DISTINCT FROM 'instore')
       AND (${kind}::text IS NULL OR b.kind = 'receiving' OR b.kind IS NULL)
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
       -- Report (kind IS NULL) for oversight.
@@ -801,24 +812,84 @@ export async function listNoBoxItems(from = null, to = null) {
   `;
 }
 
+// The In-Store Listing worklist: sellable in-store pairs with their per-store
+// listing flags (Alias/StockX/Shopify), so admin/warehouse can track which have
+// been listed BY HAND (in-store bypasses the PH team / II cascade). Excludes gone
+// units (sold/shipped/missing/issue) and no-box (not sellable yet).
+export async function listInstoreItems(from = null, to = null) {
+  return await db()`
+    SELECT i.vin, i.name, i.sku, i.size, i.gender, i.status, i.created_at, i.created_by, i.cost,
+           i.instore_listed_alias, i.instore_listed_stockx, i.instore_listed_shopify,
+           i.instore_listed_at, i.instore_listed_by,
+           b.origin, b.batch_code,
+           (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
+              ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
+    FROM items i
+    JOIN batches b ON b.id = i.batch_id
+    WHERE b.kind = 'instore'
+      AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue', 'no_box')
+      AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+    ORDER BY i.created_at DESC, i.id DESC
+    LIMIT 5000
+  `;
+}
+
+// Set the per-store listing flags on in-store units (the whole desired triple is
+// sent, so a toggle is race-free). Guarded to kind='instore' so these flags can
+// never land on receiving/rescale stock. Records who/when + a history event.
+export async function setInstoreListed(vins, flags, by) {
+  const list = [...new Set((vins || []).filter(Boolean))];
+  if (!list.length) return [];
+  const sql = db();
+  const alias = !!flags.alias; const stockx = !!flags.stockx; const shopify = !!flags.shopify;
+  const rows = await sql`
+    UPDATE items SET
+      instore_listed_alias   = ${alias},
+      instore_listed_stockx  = ${stockx},
+      instore_listed_shopify = ${shopify},
+      instore_listed_at = now(),
+      instore_listed_by = ${by || null}
+    WHERE vin = ANY(${list})
+      AND batch_id IN (SELECT id FROM batches WHERE kind = 'instore')
+    RETURNING id, vin, instore_listed_alias, instore_listed_stockx, instore_listed_shopify
+  `;
+  // Audit: one history event per updated unit describing the resulting state.
+  const label = [alias && 'Alias', stockx && 'StockX', shopify && 'Shopify'].filter(Boolean).join(', ') || 'none';
+  for (const r of rows) {
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${r.id}, 'note', ${JSON.stringify({ text: `In-store listing → ${label}` })}::jsonb, ${by || null})`;
+  }
+  return rows;
+}
+
 // Pending-work counts for the home-screen badges. "Listable" = a sellable unit
 // (has a box, not already sold/shipped/missing/issue/no-box) — those are what PH
 // still needs to push to each store.
 export async function pendingCounts() {
   const rows = await db()`
     SELECT
-      count(*) FILTER (WHERE listable AND NOT added_to_intel_inv)::int AS not_ii,
-      count(*) FILTER (WHERE listable AND NOT synced_alias)::int       AS not_alias,
-      count(*) FILTER (WHERE listable AND NOT synced_stockx)::int      AS not_stockx,
-      count(*) FILTER (WHERE listable AND NOT synced_shopify)::int     AS not_shopify,
+      count(*) FILTER (WHERE listable AND not_instore AND NOT added_to_intel_inv)::int AS not_ii,
+      count(*) FILTER (WHERE listable AND not_instore AND NOT synced_alias)::int       AS not_alias,
+      count(*) FILTER (WHERE listable AND not_instore AND NOT synced_stockx)::int      AS not_stockx,
+      count(*) FILTER (WHERE listable AND not_instore AND NOT synced_shopify)::int     AS not_shopify,
       count(*) FILTER (WHERE status = 'needs_shelf')::int              AS needs_shelf,
       count(*) FILTER (WHERE status = 'no_box')::int                   AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
+      -- In-store pairs still needing manual store listing (sellable, not fully ticked).
+      count(*) FILTER (WHERE NOT not_instore AND status NOT IN ('sold','shipped','missing','issue','no_box')
+        AND NOT (instore_listed_alias AND instore_listed_stockx AND instore_listed_shopify))::int AS instore_unlisted,
       (SELECT count(*) FROM rescale_requests WHERE status = 'open')::int     AS rescale_requests,
       (SELECT count(*) FROM rescale_requests WHERE status = 'audited')::int  AS rescale_requests_audited
     FROM (
-      SELECT *, (with_box AND status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable
-      FROM items
+      -- not_instore gates the PH store-sync badges only: in-store buys bypass
+      -- PH, so they must NOT inflate not_ii/alias/stockx/shopify. needs_shelf /
+      -- no_box still include them — warehouse shelves & resolves in-store pairs.
+      SELECT it.*,
+             (it.with_box AND it.status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable,
+             (b.kind IS DISTINCT FROM 'instore') AS not_instore
+      FROM items it
+      LEFT JOIN batches b ON b.id = it.batch_id
     ) i
   `;
   return rows[0] || {};
@@ -957,9 +1028,16 @@ export async function shelveItems({ location, units, createdBy }) {
       continue;
     }
     const wasNoBox = item.with_box === false;
-    const nowHasBox = wasNoBox && !!u.nowHasBox;
-    const withBox = wasNoBox ? !!u.nowHasBox : true;
-    const newStatus = (wasNoBox && !u.nowHasBox) ? 'no_box' : 'in_stock';
+    // A no-box shoe must NOT go on a shelf until it has a box — it isn't sellable.
+    // Block it unless the caller confirmed a box was found now (nowHasBox); the
+    // client then routes them to resolve the box (No-Box queue) first.
+    if (wasNoBox && !u.nowHasBox) {
+      results.push({ vin: u.vin, ok: false, reason: 'no_box' });
+      continue;
+    }
+    const nowHasBox = wasNoBox; // reached here only if it now has a box
+    const withBox = true;
+    const newStatus = 'in_stock';
     if (nowHasBox) gotBox++;
     const details = JSON.stringify({ locationCode: location.code, label: location.label, from: item.status, gotBox: nowHasBox, shelved: true });
     queries.push(sql`
@@ -984,9 +1062,9 @@ export async function listItemsAtLocation(locationId) {
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.status, i.with_box, i.location_code,
            COALESCE(
-             (SELECT p.url FROM product_photos p WHERE p.sku = i.sku
+             (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
                 ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2
-                                      WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, p.created_at LIMIT 1),
+                                      WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1),
              NULLIF(i.image_url, '')
            ) AS photo_url
     FROM items i
@@ -1088,10 +1166,14 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
   const num = (v) => (v === '' || v == null ? null : Number(v));
 
   const allVins = [...new Set(groups.flatMap((g) => g.vins))];
+  // Exclude in-store units: they bypass the PH team, so a PH write must never
+  // land on one (they're skipped below since they won't be in curByVin).
   const curRows = await sql`
-    SELECT id, vin, price, global_indicator, added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
-           ph_note, last_edit_at, last_edit_by
-    FROM items WHERE vin = ANY(${allVins})
+    SELECT i.id, i.vin, i.price, i.global_indicator, i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
+           i.ph_note, i.last_edit_at, i.last_edit_by
+    FROM items i
+    LEFT JOIN batches b ON b.id = i.batch_id
+    WHERE i.vin = ANY(${allVins}) AND (b.kind IS DISTINCT FROM 'instore')
   `;
   if (!curRows.length) return [];
   const curByVin = new Map(curRows.map((r) => [r.vin, r]));
@@ -1161,10 +1243,15 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       if (next.shopify !== cur.synced_shopify) descs.push({ text: next.shopify ? 'Synced to Shopify' : 'Unsynced from Shopify', system: false });
       if ((next.note || '') !== (cur.ph_note || '')) descs.push({ text: 'Note updated', system: false });
 
+      // Re-baseline the listed-price snapshot on a manual PH save: when the item is
+      // on II, it's now "listed at" this price (clears any prior drift); when II is
+      // off it isn't listed, so no baseline. A GI refresh (refreshItemGi) deliberately
+      // does NOT touch listed_price — that's what surfaces the ⚠ "Price changed" chip.
+      const listedPrice = next.intel ? next.price : null;
       queries.push(sql`
         UPDATE items SET price = ${next.price}, global_indicator = ${next.global}, added_to_intel_inv = ${next.intel},
           synced_alias = ${next.alias}, synced_stockx = ${next.stockx}, synced_shopify = ${next.shopify},
-          ph_note = ${next.note},
+          ph_note = ${next.note}, listed_price = ${listedPrice},
           first_edit_by = coalesce(first_edit_by, ${by || null}), first_edit_at = coalesce(first_edit_at, now()),
           last_edit_by = ${by || null}, last_edit_at = now(), updated_at = now()
         WHERE id = ${cur.id}
@@ -1183,7 +1270,7 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
   await sql.transaction(queries);
 
   return await sql`
-    SELECT vin, created_at, created_by, name, sku, size, gender, status, cost, price, global_indicator,
+    SELECT vin, created_at, created_by, name, sku, size, gender, status, cost, price, global_indicator, listed_price,
            added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
            ph_note, first_edit_by, first_edit_at, last_edit_by, last_edit_at
     FROM items WHERE id = ANY(${ids}) ORDER BY created_at, id

@@ -20,11 +20,15 @@ export default async function handler(req, res) {
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
-  const sku = normSku(new URL(req.url, 'http://x').searchParams.get('sku'));
+  const params = new URL(req.url, 'http://x').searchParams;
+  const sku = normSku(params.get('sku'));
   if (!sku) return send(res, 400, { ok: false, error: 'A SKU is required.' });
+  // Optional filter: download only the warehouse originals or only the PH edits.
+  const sourceFilter = ['warehouse', 'ph_edited'].includes(params.get('source')) ? params.get('source') : null;
 
   try {
-    const photos = await listProductPhotos(sku); // [{ angle, url }]
+    let photos = await listProductPhotos(sku); // [{ angle, url, source }]
+    if (sourceFilter) photos = photos.filter((p) => p.source === sourceFilter);
     if (!photos.length) return send(res, 404, { ok: false, error: 'No photos for this SKU.' });
 
     const fetched = [];
@@ -37,7 +41,7 @@ export default async function handler(req, res) {
         if (!r.ok) continue;
         const buf = Buffer.from(await r.arrayBuffer());
         const ext = extFor(r.headers.get('content-type'), p.url);
-        fetched.push({ angle: p.angle, buf, ext, ct: r.headers.get('content-type') || 'application/octet-stream' });
+        fetched.push({ angle: p.angle, source: p.source, buf, ext, ct: r.headers.get('content-type') || 'application/octet-stream' });
       } catch { /* skip a photo that won't fetch */ }
     }
     if (!fetched.length) return send(res, 502, { ok: false, error: 'Could not fetch the photos.' });
@@ -46,12 +50,12 @@ export default async function handler(req, res) {
       const f = fetched[0];
       res.statusCode = 200;
       res.setHeader('Content-Type', f.ct);
-      res.setHeader('Content-Disposition', `attachment; filename="${safe(sku)}-${safe(f.angle)}${f.ext}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${safe(sku)}-${safe(f.source)}-${safe(f.angle)}${f.ext}"`);
       res.setHeader('Content-Length', f.buf.length);
       return res.end(f.buf);
     }
 
-    const zip = makeZip(fetched.map((f) => ({ name: `${safe(sku)}-${safe(f.angle)}${f.ext}`, data: f.buf })));
+    const zip = makeZip(fetched.map((f) => ({ name: `${safe(sku)}-${safe(f.source)}-${safe(f.angle)}${f.ext}`, data: f.buf })));
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${safe(sku)}-photos.zip"`);

@@ -91,7 +91,7 @@ export function groupPhSized(list) {
         photo_url: r.photo_url || null,  // preferred (side) listing photo for the thumbnail
         created_at: r.created_at, created_by: r.created_by, _mixedBy: false,
         vins: [], qty: 0,
-        first_edit_at: null, first_edit_by: null, _hasSubsequent: false,
+        first_edit_at: null, first_edit_by: null, _hasSubsequent: false, _drift: false,
         last_edit_at: r.last_edit_at, last_edit_by: r.last_edit_by,
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
         _sizes: new Map(),
@@ -111,7 +111,7 @@ export function groupPhSized(list) {
     const sz = r.size || '—';
     let s = g._sizes.get(sz);
     if (!s) {
-      s = { size: sz, vins: [], qty: 0, cost: null, global_indicator: null, price: null, note: null, _costs: new Set(), _globals: new Set(), _prices: new Set(),
+      s = { size: sz, vins: [], qty: 0, cost: null, global_indicator: null, price: null, listed_price: null, note: null, _drift: false, _costs: new Set(), _globals: new Set(), _prices: new Set(),
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true } };
       g._sizes.set(sz, s);
     }
@@ -123,10 +123,15 @@ export function groupPhSized(list) {
     if (s.global_indicator == null && r.global_indicator != null) s.global_indicator = r.global_indicator;
     if (s.price == null && r.price != null) s.price = r.price;
     if (!(s.note || '') && (r.ph_note || '')) s.note = r.ph_note; // per-size note (first non-empty)
+    if (s.listed_price == null && r.listed_price != null) s.listed_price = r.listed_price; // price it was listed at
+    // Price drift: a unit that's on II whose current Final price no longer matches the
+    // price it was listed at (a GI "Refresh prices" moved it) → ⚠ "Price changed".
+    if (r.added_to_intel_inv && r.price != null && r.listed_price != null
+        && Math.abs(Number(r.price) - Number(r.listed_price)) >= 0.005) { s._drift = true; g._drift = true; }
     for (const f of FLAG_KEYS) s._flags[f] = s._flags[f] && !!r[f]; // per-size flag = all units of that size true
   }
   return [...map.values()].map((g) => ({
-    ...g, ...g._flags,
+    ...g, ...g._flags, priceChanged: g._drift,
     sizes: [...g._sizes.values()]
       .sort((a, b) => (sizeNum(a.size) - sizeNum(b.size)) || String(a.size).localeCompare(b.size))
       .map((s) => ({
@@ -134,6 +139,7 @@ export function groupPhSized(list) {
         cost: s.cost, costMixed: s._costs.size > 1,
         global_indicator: s.global_indicator, globalMixed: s._globals.size > 1,
         price: s.price, priceMixed: s._prices.size > 1,
+        listed_price: s.listed_price, priceChanged: s._drift,
         note: s.note,
         ...s._flags,
       })),
@@ -142,7 +148,7 @@ export function groupPhSized(list) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', request: '/ph/request' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', request: '/ph/request', photos: '/ph/edited-photos' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';

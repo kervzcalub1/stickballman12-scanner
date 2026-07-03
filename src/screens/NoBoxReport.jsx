@@ -17,7 +17,9 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
   const [drafts, setDrafts] = useState({}); // vin -> chosen status
   const [savingVin, setSavingVin] = useState(null);
   const [labels, setLabels] = useState(null); // box-style UPC labels to print
-  const [dr, setDr] = useState(() => ({ mode: 'day', anchor: new Date() }));
+  // Default to Month, not Day — this is a pending backlog queue, so a Day filter
+  // lands on "all clear" while Home shows real no-box units. Month surfaces the backlog.
+  const [dr, setDr] = useState(() => ({ mode: 'month', anchor: new Date() }));
   const isMobile = useMediaQuery('(max-width: 768px)');
   useUnsavedGuard(Object.keys(drafts).length > 0); // guard staged no-box resolutions
 

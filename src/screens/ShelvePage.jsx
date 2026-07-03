@@ -11,6 +11,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { isVinCode, isLocationCode } from '../lib/codes.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
+import { ShelfPicker } from '../components/ShelfPicker.jsx';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -95,17 +96,65 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
       const units = rows.map((r) => ({ vin: r.vin, nowHasBox: r.with_box === false ? !!r.nowHasBox : false }));
       const res = await api.shelveItems(location.code, units);
       const boxNote = res.gotBox ? ` · ${res.gotBox} marked With Box` : '';
-      setResult(`${res.updated} item${res.updated === 1 ? '' : 's'} shelved to ${location.label || location.code}${boxNote}.`);
-      setRows([]);
+      const blockNote = res.noBoxBlocked ? ` · ${res.noBoxBlocked} refused (still no box)` : '';
+      setResult(`${res.updated} item${res.updated === 1 ? '' : 's'} shelved to ${location.label || location.code}${boxNote}${blockNote}.`);
+      setRows((rs) => rs.filter((r) => r.with_box === false && !r.nowHasBox)); // keep the refused no-box rows so they're not lost
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusy(false); }
   }
 
   const noBoxCount = rows.filter((r) => r.with_box === false && !r.nowHasBox).length;
 
+  // ---- "Pick from list" put-away: select pending-shelf shoes, assign a shelf ----
+  const [mode, setMode] = useState('scan'); // 'scan' (classic) | 'list'
+  const [pending, setPending] = useState(null);
+  const [pendSel, setPendSel] = useState(() => new Set());
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [listCam, setListCam] = useState(false);
+  const [assignBusy, setAssignBusy] = useState(false);
+
+  async function loadPending() {
+    try { const { rows: r } = await api.itemsQuery({ status: 'needs_shelf' }); setPending(r || []); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  useEffect(() => { if (mode === 'list' && pending == null) loadPending(); }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pendGroups = React.useMemo(() => {
+    const m = new Map();
+    for (const r of pending || []) {
+      let g = m.get(r.sku || r.vin);
+      if (!g) { g = { key: r.sku || r.vin, sku: r.sku, name: r.name, vins: [], _sizes: {} }; m.set(g.key, g); }
+      g.vins.push(r.vin); g._sizes[r.size || '—'] = (g._sizes[r.size || '—'] || 0) + 1;
+    }
+    return [...m.values()].map((g) => ({ ...g, qty: g.vins.length,
+      sizes: Object.entries(g._sizes).sort((a, b) => String(a[0]).localeCompare(b[0], undefined, { numeric: true })) }));
+  }, [pending]);
+  const groupSel = (g) => g.vins.length > 0 && g.vins.every((v) => pendSel.has(v));
+  const toggleGroup = (g) => setPendSel((s) => { const n = new Set(s); const all = groupSel(g); g.vins.forEach((v) => (all ? n.delete(v) : n.add(v))); return n; });
+  const allVins = React.useMemo(() => (pending || []).map((r) => r.vin), [pending]);
+  const toggleAllPending = () => setPendSel((s) => (s.size === allVins.length && allVins.length ? new Set() : new Set(allVins)));
+
+  async function assignShelf(code) {
+    const c = String(code || '').trim().toUpperCase();
+    if (!isLocationCode(c) || !pendSel.size) return;
+    setPickerOpen(false); setListCam(false); setAssignBusy(true); setError('');
+    try {
+      const res = await api.shelveItems(c, [...pendSel].map((v) => ({ vin: v })));
+      setResult(`${res.updated} item${res.updated === 1 ? '' : 's'} shelved to ${res.location?.label || c}.`);
+      setPendSel(new Set()); await loadPending();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setAssignBusy(false); }
+  }
+
   return (
     <div className="app">
       <TopBar title="Shelve / Put-away" onHome={onHome} onSignOut={onSignOut} />
+      <div className="tabs shelve-tabs">
+        <button className={`tab ${mode === 'scan' ? 'active' : ''}`} onClick={() => setMode('scan')}>Scan shelf → shoes</button>
+        <button className={`tab ${mode === 'list' ? 'active' : ''}`} onClick={() => setMode('list')}>Pick from pending list</button>
+      </div>
+
+      {mode === 'scan' && (<>
       <div className="card">
         {location ? (
           <div className="shelve-target">
@@ -130,7 +179,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
           </Suspense>
         )}
         {error && <div className="error mt">{error}</div>}
-        <p className="muted sm mt">Boxed pairs become <b>In Stock</b> at this shelf. For a pair with <b>no box</b>, tick “has a box now?” to make it sellable — otherwise it’s still recorded here but stays no-box.</p>
+        <p className="muted sm mt">Boxed pairs become <b>In Stock</b> at this shelf. A pair bought with <b>no box</b> can’t go on a shelf — tick “has a box now?” once you’ve found one; otherwise resolve it in the No Box queue first.</p>
       </div>
 
       <div className="batch-bar">
@@ -165,7 +214,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
                   <div className="dcard-name">{r.name || '—'}</div>
                   <div className="dcard-line"><span>Size {r.size ? `US ${r.size}` : '—'}</span><StatusPill status={r.status} /></div>
                   {r.with_box === false && (
-                    <label className="shelve-box-toggle"><input type="checkbox" checked={r.nowHasBox} onChange={(e) => setNowHasBox(r.vin, e.target.checked)} /> Has a box now?</label>
+                    <label className="check-pill shelve-box-toggle"><input type="checkbox" checked={r.nowHasBox} onChange={(e) => setNowHasBox(r.vin, e.target.checked)} /> Has a box now?</label>
                   )}
                 </div>
               ))}
@@ -182,7 +231,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
                       <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>
                       <td><StatusPill status={r.status} /></td>
                       <td>{r.with_box === false
-                        ? <label className="shelve-box-toggle"><input type="checkbox" checked={r.nowHasBox} onChange={(e) => setNowHasBox(r.vin, e.target.checked)} /> has box now</label>
+                        ? <label className="check-pill shelve-box-toggle"><input type="checkbox" checked={r.nowHasBox} onChange={(e) => setNowHasBox(r.vin, e.target.checked)} /> has box now</label>
                         : <span className="muted sm">✓ boxed</span>}</td>
                       <td><button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeRow(r.vin)}>×</button></td>
                     </tr>
@@ -193,6 +242,49 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
           )}
         </div>
       )}
+      </>)}
+
+      {mode === 'list' && (<>
+        <div className="card">
+          <div className="shelve-list-head">
+            <span className="muted sm">{pending == null ? 'Loading…' : `${allVins.length} pair${allVins.length === 1 ? '' : 's'} pending a shelf`}</span>
+            {allVins.length > 0 && <label className="check-pill sm"><input type="checkbox" checked={pendSel.size === allVins.length} onChange={toggleAllPending} /> Select all</label>}
+          </div>
+          <p className="muted sm">Select the shoes to put away, then pick a shelf (browse or scan) — a fast alternative to scanning each VIN.</p>
+          {error && <div className="error mt">{error}</div>}
+          {pending == null ? <p className="muted mt">Loading…</p>
+            : !pendGroups.length ? <p className="ok mt">Nothing pending — every boxed shoe is on a shelf ✓</p>
+              : (
+                <div className="shelve-plist">
+                  {pendGroups.map((g) => (
+                    <label className={`shelve-prow ${groupSel(g) ? 'sel' : ''}`} key={g.key}>
+                      <input type="checkbox" checked={groupSel(g)} onChange={() => toggleGroup(g)} />
+                      <span className="shelve-prow-main">
+                        <span className="shelve-prow-name">{g.name || '—'} <span className="muted sm">{g.sku || '—'} · ×{g.qty}</span></span>
+                        <span className="shelve-prow-sizes">{g.sizes.map(([sz, n]) => <span className="istore-size" key={sz}>{sz}<span className="muted">×{n}</span></span>)}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+        </div>
+        <div className="batch-bar">
+          <button className="btn ghost" onClick={onHome}>← Home</button>
+          <div className="batch-totals"><b>{pendSel.size}</b> selected</div>
+          <span className="shelve-assign">
+            <button className="btn ghost" disabled={!pendSel.size || assignBusy} onClick={() => setListCam(true)}><Icon name="camera" /> Scan shelf</button>
+            <button className="btn primary" disabled={!pendSel.size || assignBusy} onClick={() => setPickerOpen(true)}><Icon name="pin" /> {assignBusy ? 'Shelving…' : 'Pick shelf'}</button>
+          </span>
+        </div>
+        {listCam && (
+          <Suspense fallback={<p className="muted">Loading camera…</p>}>
+            <CameraScanner mode="vin" onDetected={(c) => assignShelf(c)} onClose={() => setListCam(false)}
+              zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+          </Suspense>
+        )}
+      </>)}
+
+      {pickerOpen && <ShelfPicker onPick={assignShelf} onClose={() => setPickerOpen(false)} />}
 
       {result && (
         <Modal type="success" title="Shelved" message={result} onClose={() => setResult('')}>

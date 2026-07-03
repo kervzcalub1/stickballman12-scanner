@@ -101,11 +101,12 @@ export const api = {
   batchSetStatus: (id, status) => post('/api/batches/set-status', { id, status }),
   // v6 — listing photos (per SKU, stored in Cloudflare R2)
   photoList: (sku) => get(`/api/photos/list?sku=${encodeURIComponent(sku)}`),
-  photoDownload: (sku) => downloadBlob(`/api/photos/download?sku=${encodeURIComponent(sku)}`),
-  photoSign: (sku, angle, contentType) => post('/api/photos/sign', { sku, angle, contentType }),
+  // `source` (optional) = 'warehouse' (default) | 'ph_edited'. Omit for warehouse capture.
+  photoDownload: (sku, source) => downloadBlob(`/api/photos/download?sku=${encodeURIComponent(sku)}${source ? `&source=${source}` : ''}`),
+  photoSign: (sku, angle, contentType, source) => post('/api/photos/sign', { sku, angle, contentType, source }),
   photoSignIssue: (vin, contentType) => post('/api/photos/sign-issue', { vin, contentType }),
-  photoAttach: (sku, angle, url) => post('/api/photos/attach', { sku, angle, url }),
-  photoRemove: (sku, angle) => post('/api/photos/remove', { sku, angle }),
+  photoAttach: (sku, angle, url, source) => post('/api/photos/attach', { sku, angle, url, source }),
+  photoRemove: (sku, angle, source) => post('/api/photos/remove', { sku, angle, source }),
   reserveVins: (count, dateReceived) => post('/api/vins/reserve', { count, dateReceived }),
   batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
@@ -123,6 +124,9 @@ export const api = {
   rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),
   itemsQuery: (params) => get(`/api/items/query?${new URLSearchParams(params).toString()}`),
   noBoxList: (from, to) => get(`/api/items/no-box?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}`),
+  // In-Store Listing worklist + per-store (Alias/StockX/Shopify) flag updates.
+  instoreList: (from, to) => get(`/api/items/instore-list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}`),
+  instoreListed: (vins, flags) => post('/api/items/instore-listed', { vins, ...flags }),
   pendingCounts: () => get('/api/items/pending-counts'),
   boxFound: (vin) => post('/api/items/box-found', { vin }),
   restockDone: (vins) => post('/api/items/restock-done', { vins }),

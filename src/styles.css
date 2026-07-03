@@ -966,7 +966,10 @@ body {
   transform: translate(-50%, -50%) rotate(90deg);
 }
 .blabel-text { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 0.04in; text-align: left; }
-.blabel-name { font-weight: 800; font-size: 11pt; line-height: 1.05; overflow: hidden; }
+/* Shoe name — clamp to 2 lines so long names stay readable and never push the
+   size/SKU off the fixed-height box label. */
+.blabel-name { font-weight: 800; font-size: 11pt; line-height: 1.1;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .blabel-size { font-weight: 800; font-size: 20pt; line-height: 1; }
 .blabel-cw { font-size: 8pt; color: #222; }
 .blabel-sku { font-weight: 700; font-size: 12pt; }

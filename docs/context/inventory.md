@@ -17,7 +17,11 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
   contents** (`queryItems` matches `location_code`); rows/detail show a **📍
   location chip**. See `locations.md`.
 - **Day/Week/Month + Custom** date filter (`DateRangeBar` for day/week/month;
-  Inventory also keeps a Custom from/to). Supplier / status / intake filters.
+  Inventory also keeps a Custom from/to). Supplier / status / **intake** filters
+  (intake = receiving | rescale | **in-store**, passed as `kind` to `queryItems`).
+- **In-store** units (`b.kind='instore'`) show an **"In-store" chip** in place of
+  the PH sync badges (they bypass PH); detail shows "Intake: In-store (store)".
+  See `in-store.md`.
 - Bulk **Edit status** → `api/items/bulk-status.js` (`bulkSetStatus`), one
   `status_change` event per VIN; sold/shipped cascades clear sync flags.
 - **Print labels** → `LabelSheet` (VIN barcodes, `jsbarcode` CODE128).

@@ -7,7 +7,7 @@ session — don't read the whole codebase up front.
 ## What it is
 React (Vite) SPA + Express + PostgreSQL for a shoe-inventory team. Sign in
 (admin-approved accounts), scan a barcode (UPC) / enter a SKU / scan a VIN, then
-receive, shelve, rescale, list to stores, and mark sold/shipped. **V5 reality:
+receive, buy in-store, shelve, rescale, list to stores, and mark sold/shipped. **V5 reality:
 local/managed Postgres via `pg` (no Google Sheets), runs on Express (`npm start`),
 deployed on Railway.** Older notes in `version-4.md`/`DEPLOYMENT.md` may predate this.
 
@@ -33,6 +33,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | DB tables/columns, db.js functions, shim gotchas | `docs/context/data-model.md` |
 | Login/signup, roles, sessions, security/throttling | `docs/context/auth-roles.md` |
 | Receiving wizard, VINs, batches, intake | `docs/context/receiving.md` |
+| In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
 | Inventory browse, SKU-merge, bulk status, labels | `docs/context/inventory.md` |
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
@@ -56,6 +57,9 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
 - Alias has **auto-relogin on 401; StockX does NOT**.
 - VINs (`SBM-YYMMDD-######`) are never reused; numbering gaps are fine.
 - Times/filters are EST (`AT TIME ZONE 'America/New_York'`).
+- **In-store (`kind='instore'`) must NEVER touch the PH team** — guard every PH path
+  (phListItems both branches, pendingCounts badges, rescaleItem, phUpdateGroup,
+  getItemsForGiRefresh), not just the New Inventory query (`docs/context/in-store.md`).
 - After a rebuild, hard-refresh the browser (stale cached bundle).
 
 ## Working agreements

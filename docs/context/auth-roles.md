@@ -13,10 +13,13 @@
 ## Roles
 - **admin** — full access; manages accounts; sees everything.
 - **warehouse** — Receiving, Inventory, No Box, Rescale, Mark Sold/Shipped,
-  Reports, Rescale Requests (audits them).
+  Reports, Rescale Requests (audits them), **In-Store Buying + In-Store Listing**.
 - **ph_team** — Report (New Inventory), Rescale Stock, No Box (view), Request
-  Rescale (creates + views audit). Logs into a card home (`PHTeamApp`); its
-  pages are URL-routed under `/ph/*` (refresh/Back/deep-link work).
+  Rescale (creates + views audit), **Edited Photos** (upload edited listing images
+  per SKU — `source='ph_edited'` only; see `ph-report.md`). Logs into a card home
+  (`PHTeamApp`); its pages are URL-routed under `/ph/*` (refresh/Back/deep-link work).
+  **Cannot touch in-store** — the intake commit, `instore-list`/`instore-listed`, and
+  every PH surface exclude `kind='instore'` (`in-store.md`).
 - `requireRole(req,res,[...])` returns the user or sends 401/403; **admin is
   auto-allowed**. `sku-search` allows `warehouse` + `ph_team`.
 

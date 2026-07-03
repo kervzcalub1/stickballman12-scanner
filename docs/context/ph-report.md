@@ -13,6 +13,9 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   batches + no_box), by scan date.
 - `kind='rescale'` — PH "Rescale Stock": `restock_pending` units, by rescale-event
   date (see `rescale.md`).
+- **`kind='instore'` is excluded from ALL of the above** (both `phListItems`
+  branches) — in-store buys bypass PH entirely; they're listed to stores by hand on
+  the In-Store Listing page. See `in-store.md` for every guard.
 
 ## SKU-merge — expandable per-size rows (`groupPhSized`)
 - One **collapsed row per SKU + status**: Date · Shoe · SKU · size×qty chips ·
@@ -115,4 +118,28 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   per-unit pending: II/AL/SX/SH, needs_shelf, no_box, restock_pending, and
   rescale_requests (open) / rescale_requests_audited (done, green variant).
 - Counts are **per pending unit**, not per merged row.
+- The II/AL/SX/SH badges **exclude `kind='instore'`** (a `not_instore` flag in the
+  `pendingCounts` CTE); `needs_shelf`/`no_box` still include in-store. A separate
+  `instore_unlisted` count feeds the In-Store Listing card (`in-store.md`).
 - Sync flags (`II/AL/SX/SH`) cascade to stores; selling clears them (`statuses.md`).
+
+## PH Edited Photos (V7 — `PhEditedPhotos`, `/ph/edited-photos`)
+The warehouse shoots raw listing photos on intake (`source='warehouse'`). PH can upload
+their own **edited** images per SKU on a separate page (PH-home card "Edited Photos";
+ph_team + admin). Both sets coexist in `product_photos` (keyed by `(sku, angle, source)`)
+— a PH upload never overwrites the warehouse original.
+- **Precedence:** per angle — `ph_edited` wins within an angle, warehouse fills any
+  angle PH hasn't edited. The `photo_url` thumbnail sub-queries in `db.js` order
+  **angle-first** (side→diagonal→top→outsole→rear), THEN `(source='ph_edited') DESC` —
+  so the thumbnail is the best angle (side) with PH's edit preferred, and PH editing a
+  non-side angle first doesn't hijack the thumbnail away from a good warehouse side shot.
+  `extra*` are excluded from thumbnails.
+- **Slots:** 1–5 are the standard angles; **6–7 (`extra1`/`extra2`) are PH-only extra
+  images** that never appear as a thumbnail — they show in the photo viewer (click a
+  thumbnail) and are downloadable.
+- **Roles (`api/_lib/photos.js` `photoSourceForRole`):** warehouse→`warehouse` only,
+  ph_team→`ph_edited` only, admin→both. Enforced in `photos/sign|attach|remove`.
+- The page shows the warehouse originals as read-only reference + "Download originals"
+  (`photoDownload(sku,'warehouse')`). The warehouse capture screen (`ListingPhotos`)
+  shows a "PH edited on file" banner when edits exist. The viewer (`PhotosModal`) groups
+  **PH edited** vs **Warehouse originals**.

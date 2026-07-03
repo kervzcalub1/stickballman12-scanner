@@ -12,9 +12,11 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
 - **batches** — `id, batch_code (B-<seq>), buyer_name, supplier_name,
   tracking_number, date_received, default_cost, notes, special_rules, kind,
   batch_tag, expected_boxes, duplicate_of`.
-  kind ∈ receiving | rescale. **V6:** `batch_tag` (handwritten label code),
-  `expected_boxes` (the "X OF N" on the label), `duplicate_of` → another batch
-  when a tracking number repeats.
+  kind ∈ receiving | rescale | **instore** (pairs bought at a store; no shipment,
+  `origin` = store name; admin/warehouse only, never PH — see `in-store.md`).
+  `batches_kind_check` CHECK enforces the three values. **V6:** `batch_tag`
+  (handwritten label code), `expected_boxes` (the "X OF N" on the label),
+  `duplicate_of` → another batch when a tracking number repeats.
 - **batch_boxes** (V6) — one row per physical box in a multi-box batch:
   `id, batch_id, box_number, tracking_number, status (pending|received),
   received_by, received_at`. Each box carries its own tracking number.
@@ -22,15 +24,24 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   created_by, created_at`. Seeded list + auto-saved custom names (the commit
   upserts whatever supplier was typed). Listed by `GET /api/suppliers`.
 - **product_photos** (V6) — per-SKU listing photos (files in Cloudflare R2):
-  `sku, angle (side|diagonal|outsole|top|rear), url, created_by`. Unique per
-  (sku, angle) so re-capturing an angle replaces it. (Defect photos are NOT
-  here — they ride per-unit `item_events(type='issue')`.)
+  `sku, angle, url, source, created_by`. `angle ∈ side|diagonal|outsole|top|rear`
+  (+ `extra1|extra2` for PH-only extra images). **`source ∈ 'warehouse'|'ph_edited'`**
+  (V7): warehouse raw shots and PH‑uploaded edits coexist for the same angle — unique
+  per **(sku, angle, source)**. Display prefers `ph_edited` per angle (the `photo_url`
+  sub‑queries order angle‑first then `(source='ph_edited') DESC`, and exclude `extra*`).
+  PH manages `ph_edited`, warehouse manages `warehouse`, admin both — see `ph-report.md`.
+  (Defect photos are NOT here — they ride per-unit `item_events(type='issue')`.)
 - **items** — one row per physical unit. Key columns:
   `id, vin UNIQUE NOT NULL, batch_id, box_id, name, sku, size, status, cost, price,
   global_indicator, with_box, upc, gender, colorway, restock_pending,
   added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
   ph_note, first_edit_by, first_edit_at, last_edit_by, last_edit_at,
-  created_by, created_at, updated_at`. (`first_edit_*` set once = "Added by";
+  instore_listed_alias, instore_listed_stockx, instore_listed_shopify,
+  instore_listed_at, instore_listed_by,
+  created_by, created_at, updated_at`. (The `instore_listed_*` per-store flags are
+  set ONLY by the In-Store Listing page, guarded to `kind='instore'` — separate from
+  the PH `synced_*` flags so the two workflows never conflate; see `in-store.md`.
+  `first_edit_*` set once = "Added by";
   `last_edit_*` = most recent edit = "Last edited by". `box_id` → which
   `batch_boxes` row the unit arrived in, V6.)
 - **products** — catalog cache keyed by `upc UNIQUE`: `sku, size, name, colorway,
@@ -75,6 +86,10 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   bulkSetStatus, rescaleItem, markBoxFound, markRestocked, pendingCounts,
   setItemGlobalIndicators`. GI refresh: `getItemsForGiRefresh, refreshItemGi`
   (PH "Refresh prices" — re-fetch Alias GI, recompute Final=GI+20%, keep overrides).
+- In-store: `listInstoreItems(from,to)` (In-Store Listing worklist), `setInstoreListed
+  (vins,flags,by)` (per-store Alias/StockX/Shopify flags, guarded to `kind='instore'`).
+  `queryItems`/`phListItems`/`pendingCounts`/`getItemsForGiRefresh`/`rescaleItem` all
+  exclude or reject `kind='instore'` from PH surfaces — see `in-store.md`.
 - Locations: `listLocations, getLocationByCode, createLocation, bulkCreateLocations,
   updateLocation, listItemsAtLocation, shelveItems` (put-away/transfer). See `locations.md`.
 - Catalog: `upsertProduct, getProductByUpc, getCatalogIdBySku`.

@@ -51,8 +51,10 @@ npm run e2e        # Playwright E2E (auto-starts dev on :5189); npm run e2e:ui f
 
 ## Routing (SPA, History API)
 `ROUTES` array in `src/lib/constants.js` → `pathForView` / `viewForPath`. Views:
-receiving, rescale, inventory, report, access, nobox, sold, shipped, rescalereq
-(+ home). Refresh restores the view from the URL. Global unsaved-changes guard via
+receiving, rescale, instore, instore-listing, batches, inventory, report, access,
+nobox, sold, shipped, rescalereq, shelve, locations (+ home). Refresh restores the
+view from the URL. (`instore`/`instore-listing` are admin/warehouse; `ph_team` can't
+reach them — it short-circuits to `PHTeamApp` before this router.) Global unsaved-changes guard via
 `useUnsavedGuard(isDirty)` in `src/hooks.js` (module-level dirty flag exposed to
 App as `isUnsavedDirty()` + beforeunload/popstate).
 PH-team users route separately under `/ph/*` inside `PHTeamApp` (its own
@@ -69,11 +71,15 @@ skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
   "Listings & Sync"** (the PH grid, `ph-report.md`); `Inventory`, `Locate Shoe`
   (formerly "Locations"), and `Shelve` each have a **unique nav icon**
   (`NavIcons.jsx`).
-- `Receiving` (+ `BatchList`) — intake. `Inventory` — stock browse.
+- `Receiving` (+ `BatchList`) — intake (also `mode="rescale"` / `mode="instore"`).
+  `Inventory` — stock browse. `InstoreListing` — the In-Store Listing worklist
+  (per-store manual-listing toggles; admin/warehouse; `in-store.md`).
 - `PHTeam` (`PHGrid`) — the per-size report/grid (kind: null | receiving | rescale);
   `PHGrid` is also App's admin/warehouse Report view.
 - `NoBoxReport`, `StatusScanPage` (sold/shipped), `RescaleRequests`
   (`RescaleRequestForm` + `RescaleRequestsReport`).
+- `PhEditedPhotos` (`/ph/edited-photos`, PH+admin) — PH uploads edited listing
+  images per SKU (`source='ph_edited'`, precedence over warehouse; `ph-report.md`).
 - Shared (`src/components/common.jsx`): `TopBar`, `StatusPill`, `SyncBadges`,
   `CardBadges`, `DateRangeBar`, `SizesQty`, `YesNo`, `Modal`, `HistoryModal`,
   `LabelSheet`, `Barcode`, `PreferencesModal`, `RescaleCompare`, `EstClock`.
@@ -88,4 +94,8 @@ skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
   `estCivil` normalizes any instant to the EST calendar day, then period math runs
   on a noon-UTC "civil date" — so a PH user in PH time picking "Today" gets the EST
   day, matching the server filter). `rangeOf`/`periodRange`/`shiftAnchor`/`periodLabel`.
+- **Checkboxes**: bare native checkboxes are invisible on the dark theme, so a global
+  `input[type="checkbox"]` style (`styles.css`) renders every one as a bright bordered
+  box → accent-fill + check when ticked (the PH grid's `.ph-yn-check` is excluded).
+  Essential filter/status toggles use the `.check-pill` class (a highlighted pill).
 - See `data-model.md`, and the per-feature files for specifics.

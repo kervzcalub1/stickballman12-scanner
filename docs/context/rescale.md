@@ -40,6 +40,9 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
   returns `rescale_requests` (open) and `rescale_requests_audited`.
 
 ## Notes
+- **`api/items/rescale.js` rejects an in-store VIN (409)** — rescaling sets
+  `restock_pending`, which would leak an in-store pair onto the PH Rescale grid;
+  in-store bypasses PH entirely (`in-store.md`).
 - The two halves loop: PH request → warehouse audits/rescans → restock worklist
   → PH re-lists. Reasons may be revised after team confirmation.
 - `db:reset` clears `rescale_requests` along with inventory.

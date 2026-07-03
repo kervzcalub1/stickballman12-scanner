@@ -22,13 +22,19 @@ Where each unit is physically stored. Full design/rationale:
 tied to its warehouse — sites can have entirely different areas (or none).**
 
 ## Shelve / Put-away (`/shelve`, `ShelvePage`, warehouse+admin)
-Scan a **shelf barcode** → scan each shoe's **VIN** → **Shelve here**.
+Two modes (tabs): **Scan shelf → shoes** (classic: scan a shelf barcode → scan each
+VIN → Shelve here) and **Pick from pending list** — a selectable list of `needs_shelf`
+shoes (grouped by SKU) → assign a shelf by **scanning** OR the hierarchical
+**`ShelfPicker`** (search + Site→Area→Bay→Shelf drill, `src/components/ShelfPicker.jsx`).
 `POST /api/items/shelve { locationCode, units:[{vin, nowHasBox}] }` → `shelveItems`:
-- Boxed unit (or one flagged "has a box now?") → `status='in_stock'` at the shelf.
-- A unit still **without a box** keeps `no_box` but its **location is still recorded**
-  (locatable, not sellable). "Box now?" → `with_box=true` + `in_stock` (logged as
-  box-found). Re-shelving an in-stock unit is a **transfer** (just moves it).
-- `GET /api/locations/lookup?code=` resolves a scanned shelf for the page.
+- Boxed unit (or a no-box one flagged "box found now") → `status='in_stock'` at the shelf.
+- **A no-box unit without a confirmed box is REFUSED** (`results[].reason='no_box'`,
+  `noBoxBlocked` count) — a boxless shoe can't go on a shelf. "Box found now?" →
+  `with_box=true` + `in_stock` (logged as box-found). Re-shelving an in-stock unit is a
+  **transfer**. Inventory's "In Stock" put-away shows a per-unit **"Box found now"**
+  toggle for no-box units; unticked → refused, pointing to the No-Box queue.
+- `GET /api/locations/lookup?code=` resolves a scanned shelf; `GET /api/locations`
+  (active) feeds the `ShelfPicker`.
 - Status stays a preset key (`in_stock`) + a separate location — the "listable"
   rule, filters, and sync badges keep working (see `statuses.md`).
 

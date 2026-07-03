@@ -101,6 +101,17 @@ body {
 .auth-form { display: flex; flex-direction: column; gap: 10px; text-align: left; }
 .auth-form input { width: 100%; }
 .auth-form .btn { margin-top: 4px; }
+/* Password field with show/hide eye toggle. The wrapper carries the same margin
+   the bare input had so vertical rhythm is unchanged; the input reserves room on
+   the right for the toggle. */
+.password-field { position: relative; width: 100%; margin: 16px 0 4px; }
+.password-field input { width: 100%; margin: 0; padding-right: 42px; }
+.password-toggle {
+  position: absolute; top: 0; right: 0; height: 100%; width: 42px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; border: none; background: none; color: var(--muted); cursor: pointer;
+}
+.password-toggle:hover { color: var(--text); }
 .auth-done { text-align: center; }
 .auth-done .modal-icon { margin: 4px auto 12px; }
 

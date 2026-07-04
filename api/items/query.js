@@ -18,9 +18,11 @@ export default async function handler(req, res) {
   const to = isDate(p.get('to')) ? p.get('to') : null;
   const supplier = p.get('supplier') || null;
   const status = p.get('status') || null;
+  const kindParam = p.get('kind');
+  const kind = ['receiving', 'rescale', 'instore'].includes(kindParam) ? kindParam : null;
 
   try {
-    const rows = await queryItems({ q, from, to, supplier, status });
+    const rows = await queryItems({ q, from, to, supplier, status, kind });
     const totals = { count: rows.length, totalCost: 0, byStatus: {} };
     for (const r of rows) {
       totals.totalCost += Number(r.cost) || 0;

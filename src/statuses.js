@@ -2,7 +2,7 @@
 // api/_lib/statuses.js). Soft, low-contrast colors so the pills/dropdowns are
 // easy on the eyes. `fg` = text color, `bg` = pill background.
 export const STATUSES = [
-  { key: 'needs_shelf', label: 'Needs to be Added to Shelf', fg: '#e9c46a', bg: 'rgba(233,196,106,0.14)' },
+  { key: 'needs_shelf', label: 'Needs Shelf', fg: '#e9c46a', bg: 'rgba(233,196,106,0.14)' },
   { key: 'in_stock',    label: 'In Stock',                   fg: '#7bc99a', bg: 'rgba(123,201,154,0.14)' },
   { key: 'pre_sold',    label: 'Pre-Sold',                   fg: '#b9a3e8', bg: 'rgba(185,163,232,0.16)' },
   { key: 'no_box',      label: 'Bought Without Box',         fg: '#e0a878', bg: 'rgba(224,168,120,0.15)' },

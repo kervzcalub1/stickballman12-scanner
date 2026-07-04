@@ -90,6 +90,8 @@ export function isAllowedPhotoUrl(url) {
     const u = new URL(String(url));
     if (u.protocol !== 'https:') return false;
     const b = new URL(base.includes('://') ? base : `https://${base}`);
-    return u.hostname.toLowerCase() === b.hostname.toLowerCase();
+    // Pin host AND port — otherwise a different service on a non-443 port of the
+    // same host (e.g. an internal panel behind the same edge) could be reached.
+    return u.hostname.toLowerCase() === b.hostname.toLowerCase() && u.port === b.port;
   } catch { return false; }
 }

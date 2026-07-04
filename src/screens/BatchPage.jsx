@@ -153,7 +153,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                 <button className="batch-nav-row" key={b.id} onClick={() => setSelId(b.id)}>
                   <div className="batch-nav-main">
                     <span className="batch-code">{b.batch_code} {b.item_count === 0 && <span className="badge warn">Empty</span>}</span>
-                    <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.date_received ? ` · ${b.date_received}` : ''}</span>
+                    <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.date_received ? ` · ${shortDate(b.date_received)}` : ''}</span>
                   </div>
                   <span className="batch-nav-prog"><b>{b.received_boxes}{b.expected_boxes ? `/${b.expected_boxes}` : ''}</b> boxes · {b.item_count} items</span>
                   <span className="batch-caret">▸</span>

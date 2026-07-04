@@ -11,14 +11,14 @@ import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
 import { isLocationCode } from '../lib/codes.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
-import { ymd, periodRange, periodLabel, shiftAnchor } from '../lib/format.js';
+import { ymd, periodRange, periodLabel, shiftAnchor, estToday } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
 export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = estToday();
   const [mode, setMode] = useState('list'); // 'list' | 'detail'
 
   // list / filters
@@ -52,11 +52,12 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
 
   // "Move to shelf" (put-away) — place selected units on a scanned shelf, which
   // is the only way a unit becomes In Stock (invariant: in_stock ⟺ shelved).
-  const [shelveFor, setShelveFor] = useState(null); // { title, units:[{vin,size}] } | null
+  const [shelveFor, setShelveFor] = useState(null); // { title, units:[{vin,size,noBox}] } | null
   const [shelfCode, setShelfCode] = useState('');
   const [shelfInfo, setShelfInfo] = useState(null); // resolved location | { error } | null
   const [shelveBusy, setShelveBusy] = useState(false);
   const [shelveCam, setShelveCam] = useState(false);
+  const [boxFound, setBoxFound] = useState(() => new Set()); // no-box VINs the user confirmed now have a box
   // A finalized (sold/shipped) unit can't be shelved/reactivated (anti double-sell,
   // mirrors TERMINAL_STATUSES on the server); exclude it from put-away.
   const isTerminal = (s) => s === 'sold' || s === 'shipped';
@@ -219,14 +220,15 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
 
   /* ----- Move to shelf (put-away) ----- */
   function openShelve(items, title) {
-    const units = items.map((r) => ({ vin: r.vin, size: r.size }));
+    const units = items.map((r) => ({ vin: r.vin, size: r.size, noBox: r.status === 'no_box' || r.with_box === false }));
     if (!units.length) return;
     setShelveFor({ title, units });
-    setShelfCode(''); setShelfInfo(null); setShelveCam(false);
+    setShelfCode(''); setShelfInfo(null); setShelveCam(false); setBoxFound(new Set());
   }
   function closeShelve() {
-    setShelveFor(null); setShelfCode(''); setShelfInfo(null); setShelveBusy(false); setShelveCam(false);
+    setShelveFor(null); setShelfCode(''); setShelfInfo(null); setShelveBusy(false); setShelveCam(false); setBoxFound(new Set());
   }
+  const toggleBoxFound = (vin) => setBoxFound((s) => { const n = new Set(s); n.has(vin) ? n.delete(vin) : n.add(vin); return n; });
   // Resolve a scanned/typed shelf code so we can show its name before committing.
   async function lookupShelf(code) {
     const c = String(code || '').trim().toUpperCase();
@@ -247,13 +249,19 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
     if (!isLocationCode(code)) { setShelfInfo({ error: 'Scan or enter a valid shelf code.' }); return; }
     setShelveBusy(true); setError('');
     try {
-      const res = await api.shelveItems(code, shelveFor.units.map((u) => ({ vin: u.vin })));
-      // Guard against a race (a unit finalized between load and shelve → skipped
-      // server-side). If nothing landed, keep the modal open and explain.
-      if (!res.updated) { setShelfInfo({ error: 'Nothing was shelved — those units may have just been sold/shipped. Refresh and retry.' }); return; }
+      const res = await api.shelveItems(code, shelveFor.units.map((u) => ({ vin: u.vin, nowHasBox: u.noBox ? boxFound.has(u.vin) : true })));
+      // A no-box unit whose box wasn't confirmed is refused (can't shelve a boxless
+      // shoe). If ANYTHING landed we close; otherwise keep the modal open to explain.
+      if (!res.updated) {
+        setShelfInfo({ error: res.noBoxBlocked
+          ? `A no-box shoe can’t go on a shelf. Tick “Box found now” for any that now have a box, or resolve them in the No Box queue first.`
+          : 'Nothing was shelved — those units may have just been sold/shipped. Refresh and retry.' });
+        return;
+      }
       const skipped = shelveFor.units.length - res.updated;
       closeShelve(); setSel(new Set());
-      if (skipped > 0) setError(`Shelved ${res.updated} — skipped ${skipped} (already sold/shipped).`);
+      if (res.noBoxBlocked > 0) setError(`Shelved ${res.updated} · ${res.noBoxBlocked} refused — still no box (resolve in the No Box queue).`);
+      else if (skipped > 0) setError(`Shelved ${res.updated} — skipped ${skipped} (already sold/shipped).`);
       // Refresh so the moved units show their shelf + flip to In Stock.
       if (mode === 'detail' && detail?.item?.vin) await openDetail(detail.item.vin);
       else load();
@@ -337,12 +345,18 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
         {shelfInfo && (shelfInfo.error
           ? <div className="error sm mt">{shelfInfo.error}</div>
           : <div className="shelve-resolved mt"><Icon name="pin" /> {shelfInfo.warehouse ? `${shelfInfo.warehouse} · ` : ''}{shelfInfo.label || shelfInfo.code}{shelfInfo.active === false ? ' — inactive' : ''}</div>)}
+        {shelveFor.units.some((u) => u.noBox) && (
+          <div className="shelve-nobox-note mt"><Icon name="nobox" /> Some of these were bought <b>without a box</b>. A no-box shoe can’t go on a shelf — tick <b>Box found now</b> for any that now have one, or resolve the rest in the No Box queue.</div>
+        )}
         <div className="inv-units mt">
           <div className="inv-history-title">Placing these units</div>
           {shelveFor.units.map((u) => (
-            <div className="inv-unit-row" key={u.vin}>
+            <div className={`inv-unit-row ${u.noBox && !boxFound.has(u.vin) ? 'blocked' : ''}`} key={u.vin}>
               <span className="vin">{u.vin}</span>
               <span className="muted sm">{u.size ? `US ${u.size}` : '—'}</span>
+              {u.noBox && (
+                <label className="check-pill sm shelve-boxfound"><input type="checkbox" checked={boxFound.has(u.vin)} onChange={() => toggleBoxFound(u.vin)} /> Box found now</label>
+              )}
             </div>
           ))}
         </div>
@@ -381,7 +395,8 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                       ? <span className="loc-chip" title={it.location_code}><Icon name="pin" /> {it.location_warehouse ? `${it.location_warehouse} · ` : ''}{it.location_label || it.location_code}</span>
                       : <span className="muted">Not shelved</span>}</dd></div>
                     <div><dt>Batch</dt><dd>{it.batch_code || '—'}</dd></div>
-                    <div><dt>Intake</dt><dd>{it.kind === 'rescale' ? `Rescaled${it.origin ? ` (${it.origin})` : ''}` : 'Received'}</dd></div>
+                    <div><dt>Intake</dt><dd>{it.kind === 'rescale' ? `Rescaled${it.origin ? ` (${it.origin})` : ''}`
+                      : it.kind === 'instore' ? `In-store${it.origin ? ` (${it.origin})` : ''}` : 'Received'}</dd></div>
                     <div><dt>Supplier</dt><dd>{it.supplier_name || '—'}</dd></div>
                     <div><dt>Received</dt><dd>{(it.date_received || '').slice(0, 10) || '—'}</dd></div>
                     <div><dt>Price</dt><dd>{it.price != null ? `$${Number(it.price).toFixed(2)}` : '—'}</dd></div>
@@ -608,6 +623,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
               <option value="">All</option>
               <option value="receiving">Received</option>
               <option value="rescale">Rescaled</option>
+              <option value="instore">In-store</option>
             </select>
           </label>
           <button className="btn primary" onClick={() => load()} disabled={loading}>{loading ? '…' : 'Apply filters'}</button>
@@ -656,7 +672,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                       <button className="dcard-main" onClick={() => toggleRow(g.key)}>
                         <div className="dcard-line"><span className="muted">{g.sku || '—'}</span><span>×{g.qty}</span></div>
                         <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} /></span></div>
-                        <div className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} />{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</div>
+                        <div className="inv-status"><StatusPill status={g.status} />{g.kind === 'instore' ? <span className="inv-instore-chip" title="Bought in-store — listed to Alias by hand">In-store</span> : <SyncBadges item={g} />}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</div>
                       </button>
                       {open && invDetail(g)}
                     </div>
@@ -691,7 +707,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                           <td className="inv-col-sku">{g.sku || '—'}</td>
                           <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>
-                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} /><SyncBadges item={g} />{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</span></td>
+                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} />{g.kind === 'instore' ? <span className="inv-instore-chip" title="Bought in-store — listed to Alias by hand">In-store</span> : <SyncBadges item={g} />}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</span></td>
                         </tr>
                         {open && (
                           <tr className="inv-drow">

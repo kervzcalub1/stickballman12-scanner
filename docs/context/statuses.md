@@ -34,11 +34,12 @@ Shown as `SyncBadges`.
 - "Listable" / sellable = `with_box = true AND status NOT IN (sold, shipped,
   missing, issue, no_box)` — this drives the pending-count badges.
 
-## Shelving (`needs_shelf`/`no_box` → located)
-- **Shelve / Put-away** (`/shelve`) sets a unit's `location` and — for a boxed unit
-  — flips `needs_shelf → in_stock`. A no-box unit keeps `no_box` but is still
-  located; "has a box now?" makes it `with_box + in_stock`. Transfer = re-shelve.
-  Logs a `shelved` event. Full flow in `locations.md`.
+## Shelving (`needs_shelf` → located)
+- **Shelve / Put-away** (`/shelve`) sets a boxed unit's `location` and flips
+  `needs_shelf → in_stock`. **A no-box unit can NOT be shelved** — it's refused unless
+  "box found now?" is confirmed (→ `with_box + in_stock`); otherwise it stays `no_box`
+  (resolve via the No-Box queue). Inventory's "In Stock" put-away enforces the same box
+  prompt. Transfer = re-shelve an in-stock unit. Logs a `shelved` event. See `locations.md`.
 
 ## In-stock invariant (in_stock ⟺ shelved)
 A unit is only **In Stock** once it's physically on a shelf (`location_id` set).
@@ -51,6 +52,10 @@ Move-to-shelf scanner** instead of a doomed status write. `getItemStatesByVins`
 (status + `location_id`) backs the server guard.
 
 ## Status change paths
+- **In-store** (`kind='instore'`) units use the same status keys + paths as any
+  stock (land at `needs_shelf`/`no_box`; shelve → `in_stock`; sold/shipped, etc.).
+  The ONE difference: `POST /api/items/rescale` **rejects** an in-store VIN (409) so
+  it can never enter `restock_pending` / the PH Rescale grid (`in-store.md`).
 - Inventory: per-group dropdown or bulk **Edit status** → `bulk-status.js`.
 - Inventory **Move to shelf** (per SKU-group or per selected VINs) → `shelve.js`.
 - No Box: "Box found → With Box" (`box-found.js`) or other status (`event.js`).

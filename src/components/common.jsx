@@ -268,7 +268,10 @@ export function ShoeThumb({ url, onOpen, size = 36 }) {
     <img className={`shoe-thumb${hasPhoto ? '' : ' is-logo'}`} src={hasPhoto ? url : '/logo.png'} alt=""
       loading="lazy" width={size} height={size} onError={() => setBroken(true)} />
   );
-  if (hasPhoto && onOpen) {
+  // Clickable whenever the caller offers a viewer (it gates onOpen on photo_count>0),
+  // even if there's no representative `url` — e.g. a SKU with only extra1/extra2
+  // photos has photo_count>0 but photo_url=null, and must still be openable.
+  if (onOpen) {
     return (
       <button type="button" className="shoe-thumb-btn" title="View / download listing photos"
         onClick={(e) => { e.stopPropagation(); onOpen(); }}>{img}</button>

@@ -11,7 +11,8 @@ import { Icon } from './NavIcons.jsx';
 const MIN_PHOTOS = 3;
 
 export function ListingPhotos({ sku, onSignOut, onCameraToggle }) {
-  const [photos, setPhotos] = useState({});   // angle -> url
+  const [photos, setPhotos] = useState({});   // angle -> url (warehouse's own shots)
+  const [hasPhEdited, setHasPhEdited] = useState(false); // PH already uploaded edits for this SKU
   const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -24,9 +25,12 @@ export function ListingPhotos({ sku, onSignOut, onCameraToggle }) {
       .then(({ photos: rows, configured: cfg }) => {
         if (cancelled) return;
         setConfigured(cfg);
+        // Warehouse manages only its own ('warehouse') shots here; PH edits are a
+        // separate layer that wins the listing/thumbnail (flagged by the banner).
         const map = {};
-        for (const r of rows || []) map[r.angle] = r.url;
+        for (const r of rows || []) if (r.source !== 'ph_edited') map[r.angle] = r.url;
         setPhotos(map);
+        setHasPhEdited((rows || []).some((r) => r.source === 'ph_edited'));
       })
       .catch((err) => { if (err.unauthorized) return onSignOut?.(); if (!cancelled) setError(err.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -68,6 +72,9 @@ export function ListingPhotos({ sku, onSignOut, onCameraToggle }) {
         <p className="muted sm">Loading photos…</p>
       ) : (
         <>
+          {hasPhEdited && (
+            <p className="lp-phedited"><Icon name="image" /> <span><b>PH edited photos are on file for this SKU.</b> They’ll be used as the listing images &amp; thumbnail. You can still take warehouse shots — they’re kept as reference.</span></p>
+          )}
           {count > 0 && <p className="muted sm">This SKU already has photos — review them, replace any, or fill the missing angles.</p>}
           <div className="lp-grid">
             {SHOE_ANGLES.map(([angle, label]) => {

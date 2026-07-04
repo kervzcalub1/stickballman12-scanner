@@ -19,6 +19,7 @@ import { StatusScanPage } from './screens/StatusScanPage.jsx';
 import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
 import { ShelvePage } from './screens/ShelvePage.jsx';
 import { Locations } from './screens/Locations.jsx';
+import { InstoreListing } from './screens/InstoreListing.jsx';
 
 export default function App() {
   const [user, setUserState] = useState(getUser);
@@ -81,6 +82,10 @@ export default function App() {
   const openItem = (vin) => { setOpenVin(vin); go('inventory'); };
   if (view === 'receiving') return <Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />;
   if (view === 'rescale') return <Receiving mode="rescale" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
+  // In-store buying: admin/warehouse only. ph_team never reaches here (they short-
+  // circuit to PHTeamApp above), so the normal Home/router already gates it.
+  if (view === 'instore') return <Receiving mode="instore" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'instore-listing') return <InstoreListing onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'batches') return <BatchPage initialBatchId={batchReturnId} onAddBox={(batch) => { setBatchContext(batch); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'inventory') return <Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'report') return <PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />;

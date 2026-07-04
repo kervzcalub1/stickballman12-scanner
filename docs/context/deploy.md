@@ -38,6 +38,13 @@ The code and the DB schema can diverge — deploying code that uses a new column
 before migrating the DB throws `column "…" does not exist` at runtime. **Always
 run the migration after schema changes, on every environment.**
 
+> **Pending (in-store + PH photos):** `batches_kind_check` now allows `'instore'`;
+> `items` gained `instore_listed_alias/_stockx/_shopify/_at/_by`; `product_photos`
+> gained `source` (default `'warehouse'`) with the unique index widened to
+> `(sku, angle, source)`. **Run `db:setup` on Railway BEFORE deploying** this code, or
+> in-store commits fail the CHECK and PH edited-photo uploads collide on the old
+> unique. (Applied to local already.)
+
 ### Migrate the Railway DB (idempotent, keeps data)
 - **Data tab**: paste the `ALTER TABLE … ADD COLUMN IF NOT EXISTS …` block
   (mirror of `scripts/db-setup.mjs`), or

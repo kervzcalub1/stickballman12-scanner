@@ -75,6 +75,17 @@ const PATHS = {
     <path d="M3 20h18" />
     <path d="M6 20v-6M12 20V8M18 20v-9" />
   </>),
+  // In-Store Listing — a price tag with a check
+  'instore-listing': (<>
+    <path d="M3 11.5V4a1 1 0 0 1 1-1h7.5a1 1 0 0 1 .7.3l8.5 8.5a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-8.5-8.5a1 1 0 0 1-.3-.7z" />
+    <circle cx="7.5" cy="7.5" r="1.2" />
+    <path d="M10.5 13.5l2 2 4-4" />
+  </>),
+  // In-Store Buying — a shopping bag
+  instore: (<>
+    <path d="M6 8h12l1 12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
+    <path d="M9 8V6a3 3 0 0 1 6 0v2" />
+  </>),
 };
 
 export function NavIcon({ name, ...props }) {

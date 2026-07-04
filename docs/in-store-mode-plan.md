@@ -5,12 +5,28 @@
 > pair as it's bought** to build a running log — instead of dumping everything
 > in the car and rescaling the whole pile at the warehouse at end of day.
 
-## Constraints (from the user)
-1. **Admin-only.** The feature is visible/usable by the `admin` role only
-   (not warehouse, not ph_team).
-2. **PH still lists to II.** In-store buys must flow into the PH Team's
-   **New Inventory** worklist so PH sets `added_to_intel_inv` (II), which
-   cascades to Alias / StockX / Shopify. We do **not** auto-list to stores.
+## Constraints (REVISED 2026-07-03 — supersedes the original voice note)
+1. **Admin + warehouse.** Usable by `admin` and `warehouse` (not `ph_team`).
+2. **PH team is OUT.** In-store buys must **never** enter the PH Team's world —
+   not New Inventory, not the admin PH Report, not the II/Alias/StockX/Shopify
+   cascade, and they must not inflate the PH store-sync badges. They are listed
+   to **Alias by hand** by admin/warehouse (tracked via `items.instore_listed_at`).
+   > Original note said "PH still lists to II" — the user reversed this: in-store
+   > pairs are entered into Alias manually, skipping Intelligent Inventory.
+3. **All other functions apply.** In-store pairs still shelve (needs_shelf),
+   locate, print labels, resolve No-Box, and go sold/shipped like any stock.
+   They are the same `items`/`batches` rows tagged `kind='instore'` — no separate
+   table (a split would force re-implementing every one of those features).
+
+## Status — Step 1 SHIPPED & verified (2026-07-03)
+Schema (`kind='instore'` + `instore_listed_at/_by`), server (`commit`/`createBatch`
+accept instore; excluded from `phListItems` and the PH badge counts; GI enrichment
+skipped), and client (In-Store Home card + `/instore` route + `Receiving` `isInstore`
+mode; in-store chip + intake filter in Inventory) are done. Verified end-to-end via
+HTTP: an in-store commit lands in Inventory (chip, `kind=instore`), is absent from
+PH New Inventory + admin Report, counts for `needs_shelf`, and doesn't touch the PH
+sync badges. **Step 2 (still TODO):** the admin/warehouse **In-Store Listing** page
+(worklist toggling `instore_listed_at`) + running day-session persistence.
 
 ## Core design decision — reuse Receiving, add `kind='instore'`
 In-store buying is a receiving flow **without a shipment** — exactly the shape

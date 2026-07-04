@@ -17,6 +17,7 @@ import {
 } from '../lib/ph.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
+import { PhEditedPhotos } from './PhEditedPhotos.jsx';
 
 // PH Team home: pick which report to work — New Inventory (newly received stock)
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
@@ -39,6 +40,7 @@ export function PHTeamApp({ user, onSignOut }) {
   }, []);
   if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'photos') return <PhEditedPhotos onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -58,6 +60,11 @@ export function PHTeamApp({ user, onSignOut }) {
             <span className="home-card-title">Rescale Stock</span>
             <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
             <CardBadges badges={counts ? [['Restock', counts.restock_pending]] : []} />
+          </button>
+          <button className="home-card" onClick={() => goPage('photos')}>
+            <span className="home-card-icon"><NavIcon name="instore-listing" /></span>
+            <span className="home-card-title">Edited Photos</span>
+            <span className="home-card-sub">Upload your edited listing images per SKU — used as the listing photos &amp; thumbnail</span>
           </button>
         </div>
       </section>
@@ -130,10 +137,12 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [scrollShadow, setScrollShadow] = useState({ left: false, right: false });
   const updateScrollShadow = () => {
     const el = scrollWrapRef.current; if (!el) return;
-    setScrollShadow({
-      left: el.scrollLeft > 2,
-      right: el.scrollLeft < el.scrollWidth - el.clientWidth - 2,
-    });
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft < el.scrollWidth - el.clientWidth - 2;
+    // Only update on an actual change — the effect below runs after EVERY render,
+    // so setting a fresh {left,right} object unconditionally re-triggered it forever
+    // ("Maximum update depth exceeded" + constant CPU burn). Same-value → same ref.
+    setScrollShadow((s) => (s.left === left && s.right === right ? s : { left, right }));
   };
   useEffect(() => { updateScrollShadow(); }); // re-check after every render (rows/cols can change width)
 
@@ -424,6 +433,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   </div>
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
+                    {g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}
                   </div>
                   <button type="button" className="ph-card-sizes ph-card-sizes-btn" onClick={() => toggleExpand(g.key)} aria-expanded={open}>
                     <span className="ph-caret">{open ? '▾' : '▸'}</span><SizesQty sizes={g.sizes} />
@@ -441,7 +451,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                               : <b>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}</b>}</span>}
                             {showPricing && <span className="ph-card-price">Final {ed
                               ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
-                              : <b>{s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—'}</b>}</span>}
+                              : <><b>{s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—'}</b>{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${Number(s.listed_price).toFixed(2)}</span>}</>}</span>}
                             <span className="ph-sizedetail-flags">
                               {PH_FLAGS.map(([k, label]) => (
                                 <span className="ph-sizedetail-flag" key={k}>
@@ -526,7 +536,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <React.Fragment key={g.key}>
                       <tr className={`ph-trow ${ed ? 'ph-editing' : ''} ${open ? 'open' : ''}`} onClick={() => toggleExpand(g.key)}>
                         <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
-                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} /><span className="ph-title-name">{g.name || '—'}</span></span></td>
+                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} /><span className="ph-title-name">{g.name || '—'}</span>{g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}</span></td>
                         <td style={frozenStyle(2)} className="ph-frozen">{g.sku || '—'}</td>
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
@@ -587,7 +597,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                         {showPricing && (
                                           <td>{ed
                                             ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
-                                            : (s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—')}</td>
+                                            : (s.price != null
+                                              ? <>{s.priceMixed ? '~' : ''}${Number(s.price).toFixed(2)}{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${Number(s.listed_price).toFixed(2)}</span>}</>
+                                              : '—')}</td>
                                         )}
                                         {PH_FLAGS.map(([k]) => (
                                           <td key={k}><YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} /></td>
@@ -660,20 +672,30 @@ function PhotosModal({ sku, onClose, onSignOut }) {
   }
 
   const count = photos?.length || 0;
+  // Two sources can coexist per angle — show the PH edited set (what the listing
+  // uses) first, then the warehouse originals. Grouped so it's clear which is which.
+  const edited = (photos || []).filter((p) => p.source === 'ph_edited');
+  const original = (photos || []).filter((p) => p.source !== 'ph_edited');
+  const groups = [['PH edited · used for the listing', edited], ['Warehouse originals', original]].filter(([, arr]) => arr.length);
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal photos-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">Listing photos <span className="muted">— {sku}</span></h3>
         {error && <div className="error mt">{error}</div>}
         {photos == null ? <p className="muted">Loading…</p> : !count ? <p className="muted">No photos on file for this SKU.</p> : (
-          <div className="photos-grid">
-            {photos.map((p) => (
-              <a className="photos-cell" key={p.angle} href={p.url} target="_blank" rel="noreferrer" title={`Open ${p.angle} full size`}>
-                <img src={p.url} alt={p.angle} loading="lazy" />
-                <span className="photos-angle">{p.angle}</span>
-              </a>
-            ))}
-          </div>
+          groups.map(([label, arr]) => (
+            <div className="photos-group" key={label}>
+              <div className="photos-group-lbl">{label} <span className="muted">({arr.length})</span></div>
+              <div className="photos-grid">
+                {arr.map((p) => (
+                  <a className="photos-cell" key={`${p.source}-${p.angle}`} href={p.url} target="_blank" rel="noreferrer" title={`Open ${p.angle} full size`}>
+                    <img src={p.url} alt={p.angle} loading="lazy" />
+                    <span className="photos-angle">{p.angle}</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          ))
         )}
         <div className="modal-actions">
           {count > 0 && (

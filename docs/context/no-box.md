@@ -7,7 +7,9 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
 ## What it is
 - A worklist of units received **without a box** (status `no_box`). They are
   **not postable** → hidden from the PH report. PH sees it view-only;
-  warehouse/admin resolve.
+  warehouse/admin resolve. **In-store** no-box units (`kind='instore'`) appear
+  here too — the queue is kind-agnostic; warehouse resolves them the same way
+  (`in-store.md`).
 - Day/Week/Month date filter (`DateRangeBar`).
 
 ## Resolve (warehouse/admin)

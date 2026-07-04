@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'batches', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'batches', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -74,6 +74,7 @@ export function homeCardBadges(key, c) {
   if (key === 'inventory') return [['Needs shelf', c.needs_shelf]];
   if (key === 'nobox') return [['No box', c.no_box]];
   if (key === 'rescale') return [['Restock', c.restock_pending]];
+  if (key === 'instore-listing') return [['Not listed', c.instore_unlisted]];
   if (key === 'rescalereq') return [['Pending', c.rescale_requests], ['Done', c.rescale_requests_audited, 'ok']];
   return [];
 }
@@ -82,9 +83,13 @@ export function homeCardBadges(key, c) {
 // Put-away → Rescale → Sell & Ship → Browse & Reports, with Admin last.
 // `adminOnly` cards/sections show for admin only.
 export const HOME_SECTIONS = [
-  { title: 'Intake', cards: [
+  { title: 'Receiving Shipment Orders', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
+  ] },
+  { title: 'In-Store Mode', cards: [
+    { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },
+    { key: 'instore-listing', icon: '🏷️', title: 'In-Store Listing', sub: 'Mark in-store buys listed to Alias/StockX/Shopify' },
   ] },
   { title: 'Put-away', cards: [
     { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },

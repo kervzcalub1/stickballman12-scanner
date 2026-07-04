@@ -27,6 +27,11 @@ export function estCivil(date = new Date()) {
 
 export const ymd = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 
+// Today's date as YYYY-MM-DD in EST — NOT `new Date().toISOString().slice(0,10)`,
+// which is UTC and rolls over ~4-5h early (evening EST → tomorrow), mis-dating a
+// batch/VIN and showing the wrong "Today" in Inventory. Server filters are EST too.
+export const estToday = () => ymd(estCivil());
+
 export function periodRange(mode, a) {
   const c = estCivil(a);
   if (mode === 'week') { const s = new Date(c); s.setUTCDate(c.getUTCDate() - c.getUTCDay()); const e = new Date(s); e.setUTCDate(s.getUTCDate() + 6); return [s, e]; }

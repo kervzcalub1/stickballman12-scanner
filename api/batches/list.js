@@ -9,7 +9,7 @@ export default async function handler(req, res) {
   if (!requireRole(req, res, ['warehouse'])) return;
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
   const kindParam = new URL(req.url, 'http://x').searchParams.get('kind');
-  const kind = kindParam === 'rescale' || kindParam === 'receiving' ? kindParam : null;
+  const kind = ['rescale', 'receiving', 'instore'].includes(kindParam) ? kindParam : null;
   try {
     return send(res, 200, { ok: true, batches: await listBatches(100, kind) });
   } catch (e) {

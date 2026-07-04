@@ -15,6 +15,37 @@
 button { -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
+/* Checkboxes render nearly invisible on this dark theme (tiny, dark-on-dark), so
+   essential toggles get missed. Give EVERY checkbox a clearly-visible custom
+   control: a bright border when unchecked, an accent fill + white check when
+   checked. The PH grid's .ph-yn-check keeps its own yes/no styling (excluded). */
+input[type="checkbox"]:not(.ph-yn-check) {
+  appearance: none; -webkit-appearance: none; margin: 0; flex: none;
+  width: 20px; height: 20px; border-radius: 6px; cursor: pointer;
+  border: 2px solid #6b7280; background: var(--panel-2);
+  display: inline-grid; place-content: center; vertical-align: middle;
+  transition: background 0.12s, border-color 0.12s;
+}
+input[type="checkbox"]:not(.ph-yn-check):hover { border-color: var(--primary); }
+input[type="checkbox"]:not(.ph-yn-check)::after {
+  content: '✓'; color: #fff; font-size: 14px; font-weight: 800; line-height: 1;
+  transform: scale(0); transition: transform 0.12s;
+}
+input[type="checkbox"]:not(.ph-yn-check):checked { background: var(--primary); border-color: var(--primary); }
+input[type="checkbox"]:not(.ph-yn-check):checked::after { transform: scale(1); }
+
+/* Essential filter / status toggles — rendered as a clearly-interactive PILL that
+   visibly highlights when active, so they can't be overlooked like a bare label. */
+.check-pill {
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+  padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  border: 1.5px solid var(--border); background: var(--panel-2);
+  transition: background 0.12s, border-color 0.12s;
+}
+.check-pill:hover { border-color: var(--primary); }
+.check-pill:has(input:checked) { border-color: var(--primary); background: rgba(79,124,255,0.16); }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -172,7 +203,9 @@ body {
 }
 
 /* Check Access table */
-.access-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+/* Cap width so the 5 columns don't sprawl across a wide desktop with huge gaps —
+   keeps a row's fields close enough to read across. */
+.access-table { width: 100%; max-width: 760px; border-collapse: collapse; font-size: 14px; }
 .access-table th {
   text-align: left; color: var(--muted); font-size: 12px; text-transform: uppercase;
   letter-spacing: 0.5px; padding: 0 8px 8px 0;
@@ -259,9 +292,15 @@ body {
 /* Receiving wizard (V5) */
 .wizard-steps { display: flex; gap: 8px; margin-bottom: 14px; }
 .wstep {
-  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 6px;
   padding: 10px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--panel); color: var(--muted); font-weight: 600; font-size: 13px; cursor: default;
+}
+.wstep-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Small phones: shrink the wizard tabs so all 4 fit without pushing off-screen. */
+@media (max-width: 400px) {
+  .wstep { padding: 9px 6px; gap: 4px; font-size: 12px; }
+  .wstep-num { width: 18px; height: 18px; font-size: 11px; }
 }
 .wstep.active { color: var(--text); border-color: var(--primary); }
 .wstep.done { color: var(--text); cursor: pointer; }
@@ -306,7 +345,9 @@ body {
 .modal.additem { max-width: 460px; text-align: left; }
 /* Give the Complete button room so it isn't crowding the size dropdown (mobile). */
 .modal.additem .size-rows { margin-bottom: 8px; }
-.modal.additem .modal-actions { margin-top: 18px; }
+/* Keep "Complete item" visible: the modal body scrolls (size chips + photo grid can
+   run past the fold), so pin the actions to the bottom of the scroll area. */
+.modal.additem .modal-actions { margin-top: 18px; position: sticky; bottom: 0; background: var(--panel); padding-top: 12px; border-top: 1px solid var(--border); }
 .modal-head { display: flex; align-items: center; justify-content: space-between; }
 .modal.additem .modal-title { margin: 0; }
 .additem-product { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; }
@@ -316,7 +357,7 @@ body {
 .withbox-q { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 .seg { display: flex; gap: 8px; }
 .seg-btn {
-  flex: 1; padding: 12px; border-radius: 10px; cursor: pointer; font-weight: 700;
+  flex: 1; padding: 12px; border-radius: 10px; cursor: pointer; font-weight: 700; white-space: nowrap;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
@@ -353,6 +394,9 @@ body {
 .lp-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
 .lp-title { font-size: 14px; font-weight: 600; }
 .lp-count { font-size: 12px; color: #e0a878; }
+.lp-phedited { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; margin: 0 0 10px; padding: 10px 12px;
+  border-radius: 10px; background: rgba(79,124,255,0.12); border: 1px solid rgba(79,124,255,0.4); color: var(--text); }
+.lp-phedited svg { flex: none; margin-top: 2px; color: var(--primary); }
 .lp-count.ok { color: var(--ok, #2ecc71); }
 .lp-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 @media (max-width: 420px) { .lp-grid { grid-template-columns: repeat(3, 1fr); } }
@@ -503,6 +547,10 @@ body {
 .dp-add-actions { display: flex; gap: 8px; margin-top: 8px; }
 .batch-totals { font-size: 15px; }
 .batch-bar .btn { flex: none; }
+/* The sticky footer floats at bottom:8px; when a step's content is only slightly
+   taller than the viewport it can overlap the tail of the card above. Give the
+   preceding card clearance so the bar never covers the last field. */
+.card:has(+ .batch-bar) { margin-bottom: 64px; }
 
 .batch-item { border-top: 1px solid var(--border); }
 .batch-item:first-child { border-top: none; }
@@ -530,7 +578,7 @@ body {
 /* Reports / inventory filters + actions */
 .report-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
 .report-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.report-actions { display: flex; gap: 8px; }
+.report-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* Inventory accordion list — vital info per row, expand for details + history.
    Avoids the horizontal scroll of a wide table. */
@@ -590,6 +638,14 @@ body {
 .inv-unit-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
 .inv-unit-row .vin { flex: none; }
 .inv-unit-row .muted { flex: 1; }
+.inv-unit-row.blocked { opacity: 0.7; }
+.inv-unit-row.blocked .vin { color: #e08f8f; }
+.shelve-boxfound { flex: none; margin-left: auto; }
+.check-pill.sm { padding: 4px 9px; font-size: 12px; gap: 6px; }
+.check-pill.sm input[type="checkbox"] { width: 16px; height: 16px; border-width: 1.5px; }
+.shelve-nobox-note { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(224,168,120,0.12); border: 1px solid rgba(224,168,120,0.4); }
+.shelve-nobox-note svg { flex: none; margin-top: 2px; color: #e0a878; }
 
 /* PH-Team sync indicators (Intelligent Inventory / Alias / StockX / Shopify). */
 .sync-badges { display: inline-flex; gap: 4px; flex-wrap: wrap; }
@@ -599,6 +655,40 @@ body {
   color: var(--muted); background: var(--panel-2);
 }
 .sync-badge.on { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
+/* In-store chip — shown in place of the store-sync badges (in-store buys bypass
+   the PH team and are listed to Alias by hand). */
+.inv-instore-chip {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 5px;
+  color: #c9a24f; border: 1px solid rgba(201,162,79,0.5); background: rgba(201,162,79,0.12);
+}
+
+/* In-Store Listing worklist */
+.istore-filterbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; }
+.istore-list { display: flex; flex-direction: column; gap: 8px; }
+.istore-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2);
+}
+.istore-row.done { opacity: 0.6; }
+.istore-main { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 240px; }
+.istore-info { min-width: 0; }
+.istore-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.istore-sub { display: flex; gap: 2px; flex-wrap: wrap; }
+.istore-sku { font-family: ui-monospace, Menlo, monospace; }
+.istore-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 5px; }
+.istore-size { font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--panel); border: 1px solid var(--border); }
+.istore-size .muted { margin-left: 2px; }
+.istore-toggles { display: flex; gap: 8px; flex: 0 0 auto; }
+.istore-toggle {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 40px;
+  font-size: 12.5px; font-weight: 700; padding: 9px 14px; border-radius: 9px; cursor: pointer;
+  color: var(--muted); border: 1px solid var(--border); background: var(--panel);
+}
+.istore-toggle:hover { border-color: var(--muted); }
+.istore-toggle.on { color: #7bc99a; border-color: rgba(123,201,154,0.55); background: rgba(123,201,154,0.14); }
+.istore-toggle:disabled { opacity: 0.5; cursor: default; }
+.istore-toggle svg { width: 0.85em; height: 0.85em; }
 .inv-detail { padding: 2px 0 14px 28px; }
 .inv-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin: 0 0 14px; }
 .inv-metrics > div { display: flex; gap: 8px; font-size: 13px; }
@@ -657,6 +747,14 @@ body {
 .ph-title-inner { display: flex; align-items: center; gap: 8px; }
 .ph-title-inner .ph-caret { margin-right: 0; flex: none; }
 .ph-title-name { flex: 1; min-width: 0; }
+/* Price-drift chip — Final price changed since the shoe was listed (a GI refresh
+   moved it, so the live store price is stale). Amber = attention, not an error. */
+.ph-drift { flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap;
+  padding: 1px 7px; border-radius: 999px; color: #e0a878;
+  border: 1px solid rgba(224,168,120,0.55); background: rgba(224,168,120,0.14); }
+/* "was $X" old-price note shown next to the current Final price in the drawer. */
+.ph-drift-was { margin-left: 7px; font-size: 11px; font-weight: 600; color: #e0a878; white-space: nowrap; }
+.ph-drift-was::before { content: '↧ '; }
 .ph-size { font-weight: 700; }
 .ph-sizes { white-space: normal; min-width: 170px; }
 .szq { display: inline-flex; flex-wrap: wrap; gap: 4px; }
@@ -694,7 +792,11 @@ body {
 /* Frozen right columns (Action + Added by) wrap their contents inside the fixed
    column width instead of expanding it — keeps the two columns' sticky offsets
    aligned so they stay frozen together. */
-.ph-addedby { font-size: 12px; white-space: normal; word-break: break-word; line-height: 1.35; }
+/* Each line stays on ONE row (ellipsised) so a long name/"last edited by" can't
+   balloon the shared table-row height (was 182px vs 56px neighbours). Full detail
+   is in the row's History modal. */
+.ph-addedby { font-size: 12px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph-addedby > div { overflow: hidden; text-overflow: ellipsis; }
 .ph-rfrozen-first { white-space: normal; }
 .ph-rfrozen-first .ph-edit-actions { flex-wrap: wrap; justify-content: flex-end; }
 
@@ -738,15 +840,86 @@ body {
 .photos-del { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 999px; border: none;
   background: rgba(0, 0, 0, 0.6); color: #fff; cursor: pointer; font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center; }
 .photos-del:hover:not(:disabled) { background: rgba(224, 80, 80, 0.9); }
+.photos-group + .photos-group { margin-top: 6px; }
+.photos-group-lbl { font-size: 12px; font-weight: 650; color: var(--text); margin-top: 6px; }
+
+/* PH Edited Photos page */
+.pe-skubar { display: flex; gap: 10px; margin: 14px 0 4px; }
+.pe-sku-input { flex: 1; font-family: ui-monospace, Menlo, monospace; text-transform: uppercase; }
+.pe-sku-input::placeholder { text-transform: none; font-family: var(--font, inherit); color: var(--muted); }
+.pe-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 10px; }
+.pe-title { font-weight: 650; }
+.pe-title .mono { font-family: ui-monospace, Menlo, monospace; }
+.pe-count { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 10px; }
+.pe-count.ok { color: #7bc99a; border-color: rgba(123,201,154,0.5); }
+.pe-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+.pe-slot { position: relative; }
+.pe-slot-btn { display: block; width: 100%; aspect-ratio: 1; padding: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
+  border: 1.5px dashed var(--border); background: var(--panel-2); color: var(--muted); }
+.pe-slot.filled .pe-slot-btn { border-style: solid; border-color: var(--primary); }
+.pe-slot.extra .pe-slot-btn { border-color: var(--border); }
+.pe-slot.extra.filled .pe-slot-btn { border-color: #c9a24f; }
+.pe-slot-btn:hover { border-color: var(--primary); }
+.pe-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pe-slot-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; height: 100%; font-size: 12px; }
+.pe-slot-lbl { display: block; text-align: center; font-size: 12px; margin-top: 5px; color: var(--muted); }
+.pe-slot-x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 999px; border: none;
+  background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; font-size: 15px; line-height: 1; }
+.pe-slot-x:hover:not(:disabled) { background: rgba(224,80,80,0.9); }
+.pe-hint { margin: 10px 0 0; }
+.pe-originals { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 16px; }
+.pe-orig-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.pe-orig-lbl { font-weight: 650; font-size: 14px; }
+.tag-ref { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+  color: #c9a24f; border: 1px solid rgba(201,162,79,0.5); background: rgba(201,162,79,0.12); padding: 1px 6px; border-radius: 5px; margin-left: 6px; }
+.pe-orig-strip { display: flex; flex-wrap: wrap; gap: 10px; }
+.pe-orig-cell { position: relative; width: 84px; height: 84px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); display: block; }
+.pe-orig-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pe-orig-angle { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; text-align: center; padding: 1px 0;
+  background: rgba(0,0,0,0.55); color: #fff; text-transform: capitalize; }
 /* Shelve / Put-away page */
 .shelve-target { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
 .shelve-loc { font-size: 15px; }
-.shelve-box-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #e0a878; cursor: pointer; white-space: nowrap; }
+/* Box-status toggle keeps its amber accent; the .check-pill class gives it the
+   visible pill shape/border so it reads clearly as an essential control. */
+.shelve-box-toggle { color: #e0a878; }
+/* Shelve page — mode tabs + "pick from list" put-away */
+.shelve-tabs { margin-bottom: 12px; }
+.shelve-list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.shelve-plist { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.shelve-prow { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--panel-2); cursor: pointer; }
+.shelve-prow:hover { border-color: var(--muted); }
+.shelve-prow.sel { border-color: var(--primary); background: rgba(79,124,255,0.10); }
+.shelve-prow-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.shelve-prow-name { font-weight: 650; }
+.shelve-prow-sizes { display: flex; flex-wrap: wrap; gap: 5px; }
+.shelve-assign { display: flex; gap: 8px; flex: 0 0 auto; }
 /* Location chip — where a unit is shelved (pin icon + e.g. A2-04). */
 .loc-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: #7bc99a;
   background: rgba(123, 201, 154, 0.12); border: 1px solid rgba(123, 201, 154, 0.4); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 .loc-chip.sm { font-size: 11px; padding: 0 6px; }
 /* Resolved shelf confirmation inside the "Move to shelf" modal */
+/* Hierarchical shelf picker (ShelfPicker) — search + Site→Area→Bay→Shelf drill. */
+.sp-modal { max-width: 480px; width: 92vw; text-align: left; display: flex; flex-direction: column; max-height: calc(100dvh - 24px); }
+.sp-head { display: flex; align-items: center; justify-content: space-between; }
+.sp-search { width: 100%; margin: 10px 0 6px; }
+.sp-crumbs { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.sp-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; margin-top: 8px; }
+.sp-tile { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; cursor: pointer;
+  padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
+.sp-tile:hover { border-color: var(--primary); }
+.sp-tile.shelf { border-color: rgba(79,124,255,0.35); }
+.sp-tile-ic { flex: none; width: 34px; height: 34px; border-radius: 8px; display: grid; place-content: center;
+  background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+.sp-tile-ic svg { width: 18px; height: 18px; }
+.sp-tile-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sp-tile-name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-tile-sub { font-size: 12px; color: var(--muted); }
+.sp-tile-sub.mono { font-family: ui-monospace, Menlo, monospace; }
+.sp-tile-count { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sp-caret { flex: none; color: var(--muted); }
 .shelve-resolved { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
   color: #7bc99a; background: rgba(123, 201, 154, 0.12); border: 1px solid rgba(123, 201, 154, 0.4);
   border-radius: 8px; padding: 6px 10px; }
@@ -799,7 +972,9 @@ body {
 .loc-tile { position: relative; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); transition: border-color 0.12s, background 0.12s; }
 .loc-tile:hover { border-color: var(--primary); background: var(--panel-2); }
 .loc-tile.inactive { opacity: 0.55; }
-.loc-tile-check { position: absolute; top: 9px; right: 9px; z-index: 1; }
+/* Padded label = a ≥40px tap area in the corner, so selecting doesn't mis-fire the
+   full-tile navigate button beneath it. */
+.loc-tile-check { position: absolute; top: 0; right: 0; z-index: 2; padding: 10px; display: inline-flex; cursor: pointer; }
 .loc-tile-body { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 15px 14px; background: none; border: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .loc-tile-icon { color: var(--primary); width: 26px; height: 26px; display: inline-flex; margin-bottom: 2px; }
 .loc-tile-name { font-weight: 700; font-size: 15px; line-height: 1.2; word-break: break-word; padding-right: 18px; }
@@ -852,7 +1027,7 @@ body {
 .ph-detail-flag { display: flex; flex-direction: column; gap: 4px; }
 .ph-detail-note { display: flex; flex-direction: column; gap: 4px; max-width: 320px; }
 /* Mobile per-size detail */
-.ph-card-sizes-btn { display: flex; align-items: center; gap: 4px; width: 100%; background: none; border: none; color: inherit; text-align: left; cursor: pointer; padding: 0; }
+.ph-card-sizes-btn { display: flex; align-items: center; gap: 4px; width: 100%; background: none; border: none; color: inherit; text-align: left; cursor: pointer; padding: 10px 0; }
 .ph-sizedetail { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
 .ph-sizedetail-row { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; }
 .ph-sizedetail-size { font-weight: 700; }
@@ -1089,7 +1264,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .btn.danger:hover:not(:disabled) { background: rgba(224,143,143,0.12); }
 .btn.sm { padding: 8px 12px; font-size: 13px; }
 .btn.wide { width: 100%; }
-.btn.icon { width: 46px; padding: 0; font-size: 22px; line-height: 1; }
+.btn.icon { width: 46px; min-height: 40px; padding: 0; font-size: 22px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
 
 /* Messages */
 .error { color: var(--err); font-size: 14px; }

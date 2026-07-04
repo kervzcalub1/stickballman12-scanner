@@ -1,10 +1,16 @@
 # Receiving (intake)
 
-Component: `Receiving` in `src/App.jsx` (also reused for rescale intake via
-`mode`). List of past batches: `BatchList`. Endpoints under `api/batches/*`,
+Component: `Receiving` in `src/App.jsx` (also reused for **rescale** and **in-store**
+intake via `mode`). List of past batches: `BatchList`. Endpoints under `api/batches/*`,
 `api/vins/reserve.js`, `api/items/lookup.js`.
 
-## 4-step wizard (receiving) / 2-step (rescale)
+**In-store buying** (`mode="instore"`) is a full 4-step wizard like receiving but with a
+shipment-less header (Store/location only). Flag split: `noShipment = isRescale ||
+isInstore` gates the header; the Review + Issues steps are gated on `isRescale` alone so
+in-store keeps all 4. In-store is fresh stock scanned like receiving (NOT VIN-rescan).
+Full detail: `in-store.md`.
+
+## 4-step wizard (receiving / in-store) / 2-step (rescale)
 1. **Shipment details** — buyer defaults to `stickballman12`; supplier + date
    required. **`api/batches/commit` now enforces supplier AND tracking # server-side**
    for a receiving batch (400 if either is blank) — a batch must be traceable to its

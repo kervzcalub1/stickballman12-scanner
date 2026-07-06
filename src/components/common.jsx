@@ -280,6 +280,49 @@ export function ShoeThumb({ url, onOpen, size = 36 }) {
   return <span className="shoe-thumb-wrap">{img}</span>;
 }
 
+// Full-screen single-image preview with zoom in/out/reset. Works for both remote
+// URLs and local object: URLs. Zoom widens the image inside a scrollable viewport
+// (so panning is native scroll/touch on every device); double-click toggles 1x↔2x.
+// Esc / +/- are wired; click the backdrop to close.
+export function ImageZoomModal({ url, label, onClose }) {
+  const [scale, setScale] = useState(1);
+  const MIN = 1; const MAX = 4; const STEP = 0.5;
+  const zoomIn = () => setScale((s) => Math.min(MAX, +(s + STEP).toFixed(2)));
+  const zoomOut = () => setScale((s) => Math.max(MIN, +(s - STEP).toFixed(2)));
+  const reset = () => setScale(1);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === '+' || e.key === '=') zoomIn();
+      else if (e.key === '-' || e.key === '_') zoomOut();
+      else if (e.key === '0') reset();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  if (!url) return null;
+  return createPortal(
+    <div className="modal-overlay izm-overlay" onClick={onClose}>
+      <div className="izm" role="dialog" aria-modal="true" aria-label={label || 'Image preview'} onClick={(e) => e.stopPropagation()}>
+        <div className="izm-bar">
+          <span className="izm-label">{label || ''}</span>
+          <div className="izm-tools">
+            <button type="button" className="btn icon ghost" onClick={zoomOut} disabled={scale <= MIN} title="Zoom out" aria-label="Zoom out">−</button>
+            <span className="izm-scale">{Math.round(scale * 100)}%</span>
+            <button type="button" className="btn icon ghost" onClick={zoomIn} disabled={scale >= MAX} title="Zoom in" aria-label="Zoom in">+</button>
+            <button type="button" className="btn icon ghost" onClick={reset} disabled={scale === 1} title="Reset zoom" aria-label="Reset zoom">⤢</button>
+            <button type="button" className="btn icon ghost" onClick={onClose} title="Close" aria-label="Close">×</button>
+          </div>
+        </div>
+        <div className={`izm-viewport ${scale > 1 ? 'zoomed' : ''}`} onDoubleClick={() => setScale((s) => (s > 1 ? 1 : 2))}>
+          <img src={url} alt={label || ''} className="izm-img" style={{ width: `${scale * 100}%` }} draggable={false} />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // Copy `text` to the clipboard; falls back to a hidden <textarea> + execCommand
 // when the async Clipboard API is unavailable (older browser / insecure origin).
 export async function copyToClipboard(text) {

@@ -164,6 +164,26 @@ ph_team + admin). Both sets coexist in `product_photos` (keyed by `(sku, angle, 
 - **Slots:** 1–5 are the standard angles; **6–7 (`extra1`/`extra2`) are PH-only extra
   images** that never appear as a thumbnail — they show in the photo viewer (click a
   thumbnail) and are downloadable.
+- **Bulk upload + reorder:** a drop-zone (drag or tap-to-select, `multiple`) stages up
+  to 7 images mapped **positionally** to the fixed angle slots (Side→Extra 2). The
+  **angles never move** — the user rearranges the *photos* onto the right angle by drag
+  or ◀/▶ (`reorder`), then `uploadStaged` pushes them to R2 in order (each via the
+  shared `putPhoto` = compress → `photoSign` → PUT → `photoAttach`). Previews use object
+  URLs (revoked on clear/unmount). The per-slot single upload/replace still works.
+  Reordering is live-animated (`@formkit/auto-animate` on the stage grid): dragging a
+  photo shifts the others like a placeholder opening up, and the position-based angle
+  labels stay correct.
+- **Shoe name on load:** loading a SKU also does a best-effort `searchSku` (Alias
+  catalog) to show the **product name** next to the SKU (race-guarded via `skuRef`;
+  never blocks/errors the page).
+- **Download all** (prominent primary button in a `pe-actionbar`): grabs **every**
+  image for the SKU — edited + warehouse originals — as a zip via `photoDownload(sku)`
+  with **no source filter** (`GET /api/photos/download?sku=` returns all sources; files
+  named `<sku>-<source>-<angle>`).
+- **Replace-gate:** when a SKU **already has edited images** the bulk drop-zone is
+  hidden behind a **"Replace listing images"** button (`showBulk = !hasEdited ||
+  replacing || staged.length`); this only rewrites the `ph_edited` set — **warehouse
+  originals are never touched** (kept for future reference, the hard invariant).
 - **Roles (`api/_lib/photos.js` `photoSourceForRole`):** warehouse→`warehouse` only,
   ph_team→`ph_edited` only, admin→both. Enforced in `photos/sign|attach|remove`.
 - The page shows the warehouse originals as read-only reference + "Download originals"

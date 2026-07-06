@@ -847,7 +847,8 @@ body {
 .pe-skubar { display: flex; gap: 10px; margin: 14px 0 4px; }
 .pe-sku-input { flex: 1; font-family: ui-monospace, Menlo, monospace; text-transform: uppercase; }
 .pe-sku-input::placeholder { text-transform: none; font-family: var(--font, inherit); color: var(--muted); }
-.pe-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 10px; }
+.pe-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 18px 0 10px; }
+.pe-head-right { display: flex; align-items: center; gap: 10px; }
 .pe-title { font-weight: 650; }
 .pe-title .mono { font-family: ui-monospace, Menlo, monospace; }
 .pe-count { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--muted); border: 1px solid var(--border);
@@ -864,6 +865,11 @@ body {
 .pe-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pe-slot-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; height: 100%; font-size: 12px; }
 .pe-slot-lbl { display: block; text-align: center; font-size: 12px; margin-top: 5px; color: var(--muted); }
+.pe-thumb { cursor: zoom-in; }
+/* Replace-this-slot button (filled slots) — sits opposite the remove ×. */
+.pe-slot-change { position: absolute; top: 6px; left: 6px; width: 24px; height: 24px; border-radius: 999px; border: none;
+  background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+.pe-slot-change:hover:not(:disabled) { background: var(--primary); }
 .pe-slot-x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 999px; border: none;
   background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; font-size: 15px; line-height: 1; }
 .pe-slot-x:hover:not(:disabled) { background: rgba(224,80,80,0.9); }
@@ -878,6 +884,85 @@ body {
 .pe-orig-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pe-orig-angle { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; text-align: center; padding: 1px 0;
   background: rgba(0,0,0,0.55); color: #fff; text-transform: capitalize; }
+
+/* PH edited photos — shoe name, download-all, replace gate, bulk upload + reorder */
+.pe-name { font-weight: 700; }
+.pe-actionbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.pe-download-all { flex: 1; min-width: 200px; justify-content: center; }
+
+.pe-replace {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); margin: 0 0 18px;
+}
+.pe-replace-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pe-replace-lbl { font-weight: 600; }
+.pe-replace .btn { flex: none; }
+
+.pe-bulk { margin: 0 0 18px; }
+.pe-dz-cancel { position: absolute; top: 10px; right: 12px; }
+.pe-dropzone {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  padding: 24px 16px; border: 1.5px dashed var(--border); border-radius: 12px; background: var(--panel-2);
+  text-align: center; cursor: pointer; color: var(--muted); transition: border-color 0.12s, background 0.12s;
+}
+.pe-dropzone:hover, .pe-dropzone:focus-visible { border-color: var(--primary); outline: none; }
+.pe-dropzone.over { border-color: var(--primary); background: rgba(79,124,255,0.1); color: var(--text); }
+.pe-dz-main { font-weight: 600; color: var(--text); }
+.pe-dz-sub { max-width: 40ch; }
+
+.pe-stage { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--panel-2); }
+.pe-stage-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.pe-stage-lbl { font-size: 13px; color: var(--muted); }
+.pe-stage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+.pe-stage-card { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); cursor: grab; }
+.pe-stage-card:active { cursor: grabbing; }
+.pe-stage-card.extra { border-color: #c9a24f; }
+.pe-stage-card.uploading { border-color: var(--primary); }
+.pe-stage-card.done { opacity: 0.55; }
+/* The card being dragged — lifted, so the animated shift of the others reads as
+   a placeholder opening up for it. */
+.pe-stage-card.dragging { opacity: 0.65; border-color: var(--primary); box-shadow: 0 8px 20px rgba(0,0,0,0.35); }
+.pe-stage-img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.pe-stage-slotno {
+  position: absolute; top: 6px; left: 6px; min-width: 20px; height: 20px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 999px;
+  background: rgba(0,0,0,0.6); color: #fff; font-size: 11px; font-weight: 700;
+}
+.pe-stage-status { position: absolute; top: 6px; right: 34px; font-size: 11px; font-weight: 600; color: #fff; background: rgba(79,124,255,0.9); padding: 2px 7px; border-radius: 999px; }
+.pe-stage-status.ok { background: rgba(123,201,154,0.9); }
+.pe-stage-img { cursor: zoom-in; }
+.pe-stage-ctl { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 5px 6px; background: var(--panel); }
+.pe-stage-angle { font-size: 12px; font-weight: 600; color: var(--text); text-align: center; flex: 1; }
+.pe-move {
+  width: 30px; height: 30px; flex: none; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); font-size: 12px; cursor: pointer; line-height: 1;
+}
+.pe-move:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.pe-move:disabled { opacity: 0.35; cursor: default; }
+.pe-stage-x {
+  position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 999px; border: none;
+  background: rgba(0,0,0,0.6); color: #fff; font-size: 16px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.pe-stage-x:hover:not(:disabled) { background: rgba(224,80,80,0.9); }
+.pe-stage-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.pe-stage-note { margin: 8px 0 0; }
+
+/* Image zoom preview modal (ImageZoomModal) — used for edited slots + staged photos */
+.izm-overlay { padding: 0; }
+.izm {
+  display: flex; flex-direction: column; width: min(96vw, 1100px); height: min(92vh, 900px);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+}
+.izm-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--border); }
+.izm-label { font-weight: 600; font-size: 14px; text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.izm-tools { display: flex; align-items: center; gap: 6px; flex: none; }
+.izm-scale { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 42px; text-align: center; }
+.izm-tools .btn.icon { width: 34px; height: 34px; font-size: 18px; line-height: 1; }
+.izm-viewport { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; background: #0b0d12; -webkit-overflow-scrolling: touch; }
+.izm-viewport.zoomed { align-items: flex-start; justify-content: flex-start; cursor: grab; }
+.izm-img { display: block; height: auto; max-width: none; user-select: none; }
+
 /* Shelve / Put-away page */
 .shelve-target { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
 .shelve-loc { font-size: 15px; }

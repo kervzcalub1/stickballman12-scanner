@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
-import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, HistoryModal, DateRangeBar, ShoeThumb } from '../components/common.jsx';
+import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, HistoryModal, DateRangeBar, ShoeThumb, CopyText } from '../components/common.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES } from '../lib/constants.js';
@@ -18,13 +18,15 @@ import {
 import { NoBoxReport } from './NoBoxReport.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { PhEditedPhotos } from './PhEditedPhotos.jsx';
+import { PriceInquiry } from './PriceInquiry.jsx';
 
 // PH Team home: pick which report to work — New Inventory (newly received stock)
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
 // + sync to Intelligent Inventory / Alias / StockX / Shopify. PH pages are
 // URL-routed under /ph/* (their own namespace) so a refresh restores the page.
 export function PHTeamApp({ user, onSignOut }) {
-  // page <-> URL: null = home chooser | 'receiving' | 'rescale' | 'nobox' | 'request'
+  // page <-> URL: null = home chooser | 'receiving' | 'rescale' | 'nobox' |
+  //               'request' | 'photos' | 'inquiry'
   const [page, setPage] = useState(() => phPageForPath(window.location.pathname));
   const counts = usePendingCounts();
   // Navigate + push the matching /ph/* URL; Back/Forward + refresh restore it.
@@ -41,6 +43,7 @@ export function PHTeamApp({ user, onSignOut }) {
   if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'photos') return <PhEditedPhotos onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -65,6 +68,11 @@ export function PHTeamApp({ user, onSignOut }) {
             <span className="home-card-icon"><NavIcon name="instore-listing" /></span>
             <span className="home-card-title">Edited Photos</span>
             <span className="home-card-sub">Upload your edited listing images per SKU — used as the listing photos &amp; thumbnail</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('inquiry')}>
+            <span className="home-card-icon"><NavIcon name="inventory" /></span>
+            <span className="home-card-title">Price Inquiry</span>
+            <span className="home-card-sub">Look up live Alias prices for any SKU — lowest ask, highest offer, last sold &amp; Global Indicator</span>
           </button>
         </div>
       </section>
@@ -392,6 +400,12 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   }
 
   const isRescale = kind === 'rescale';
+  // Click-to-copy the shoe name / SKU on the PH work pages (New Inventory +
+  // Rescale) only — not the admin/warehouse "Listings & Sync" (kind=null).
+  const canCopy = kind === 'receiving' || kind === 'rescale';
+  const copyable = (text, node, cls) => (canCopy
+    ? <CopyText text={text} className={cls}>{node}</CopyText>
+    : (cls ? <span className={cls}>{node}</span> : node));
 
   // Consolidate per SKU+status (with per-size detail), then sort by scan date.
   const groups = groupPhSized(rows || []);
@@ -429,7 +443,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   </div>
                   <div className="ph-card-title">
                     <ShoeThumb url={g.photo_url} size={40} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} />
-                    <span>{g.name || '—'} <span className="muted">— {g.sku || '—'}</span></span>
+                    <span>{copyable(g.name, g.name || '—')} <span className="muted">— {copyable(g.sku, g.sku || '—')}</span></span>
                   </div>
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
@@ -536,8 +550,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <React.Fragment key={g.key}>
                       <tr className={`ph-trow ${ed ? 'ph-editing' : ''} ${open ? 'open' : ''}`} onClick={() => toggleExpand(g.key)}>
                         <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
-                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} /><span className="ph-title-name">{g.name || '—'}</span>{g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}</span></td>
-                        <td style={frozenStyle(2)} className="ph-frozen">{g.sku || '—'}</td>
+                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} />{copyable(g.name, g.name || '—', 'ph-title-name')}{g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}</span></td>
+                        <td style={frozenStyle(2)} className="ph-frozen">{copyable(g.sku, g.sku || '—')}</td>
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                         <td>{g.gender || '—'}</td>

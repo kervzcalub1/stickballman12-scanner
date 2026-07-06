@@ -7,7 +7,7 @@ import {
   getProductByUpc, getCatalogIdBySku, upsertProduct, setItemGlobalIndicators,
   refreshItemGi,
 } from './db.js';
-import { aliasProductByUpc, aliasCatalogBySku, aliasGlobalIndicator } from './alias.js';
+import { aliasProductByUpc, aliasCatalogBySku, aliasGlobalIndicator, aliasPriceInsights } from './alias.js';
 
 export const GI_MARKUP = 1.2; // Final price = global indicator + 20%
 const VIN_RE = /^SBM-\d{6}-\d{6}$/;
@@ -155,19 +155,48 @@ export async function giForSkuSizes(sku, sizes) {
   const s = normSku(sku);
   const list = [...new Set((Array.isArray(sizes) ? sizes : []).map((x) => String(x).trim()).filter(Boolean))];
   if (!s || !list.length) return { configured: true, results: [] };
-  let catalogId = await getCatalogIdBySku(s);
-  if (!catalogId) {
-    try {
-      const p = await aliasCatalogBySku(s);
-      if (p) { await upsertProduct({ ...p, upc: null, sku: s }); catalogId = p.catalogId; }
-    } catch { /* best-effort */ }
-  }
+  const catalogId = await resolveCatalogId({ sku: s }, new Map());
   if (!catalogId) return { configured: true, results: [] };
   const results = [];
   for (const size of list) {
     try {
       const gi = await aliasGlobalIndicator({ catalogId, size });
       if (gi != null) results.push({ size, global_indicator: gi, price: round2(gi * GI_MARKUP) });
+    } catch { /* skip this size */ }
+  }
+  return { configured: true, results };
+}
+
+// Full price inquiry for a SKU across sizes — GI (+ Final = GI + 20%) PLUS the
+// lowest listing / highest offer / last sold from Alias pricing insights. Powers
+// the PH "Price Inquiry" page (a read-only lookup; nothing is saved). Resolves the
+// catalog_id once, then prices each size. Returns { configured, results:[{ size,
+// global_indicator, price, lowest_listing, highest_offer, last_sold }] } — a size
+// is included whenever ANY of its fields came back (so a size with only a last
+// sale, no GI, still shows).
+export async function priceInquiryForSkuSizes(sku, sizes) {
+  if (!process.env.ALIAS_API_KEY) return { configured: false, results: [] };
+  const s = normSku(sku);
+  const list = [...new Set((Array.isArray(sizes) ? sizes : []).map((x) => String(x).trim()).filter(Boolean))];
+  if (!s || !list.length) return { configured: true, results: [] };
+  const catalogId = await resolveCatalogId({ sku: s }, new Map());
+  if (!catalogId) return { configured: true, results: [] };
+  const results = [];
+  for (const size of list) {
+    try {
+      const p = await aliasPriceInsights({ catalogId, size });
+      if (!p) continue;
+      const gi = p.globalIndicator;
+      const anyValue = gi != null || p.lowestListing != null || p.highestOffer != null || p.lastSold != null;
+      if (!anyValue) continue;
+      results.push({
+        size,
+        global_indicator: gi,
+        price: gi != null ? round2(gi * GI_MARKUP) : null,
+        lowest_listing: p.lowestListing,
+        highest_offer: p.highestOffer,
+        last_sold: p.lastSold,
+      });
     } catch { /* skip this size */ }
   }
   return { configured: true, results };

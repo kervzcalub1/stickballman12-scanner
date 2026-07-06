@@ -27,6 +27,11 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   within a size). The collapsed-row `SyncBadges` is the group summary (a flag reads
   "on" only if **all** units have it).
 - The PH-team Inventory browse page still uses the merged `groupPhRows`.
+- **Click-to-copy (PH work pages only):** on **New Inventory** (`kind='receiving'`)
+  and **Rescale** (`kind='rescale'`), the shoe **name** and **SKU** are wrapped in
+  `CopyText` (`common.jsx`) — clicking either copies it to the clipboard (brief
+  "Copied ✓" cue) and `stopPropagation`s so the row doesn't expand. Gated by
+  `canCopy` (excludes the admin/warehouse `kind=null` "Listings & Sync" grid).
 - **Frozen columns** (`ph.js` `frozenStyle`/`rightStyle`): left = Date/Title/SKU/Qty;
   right = **Action + Added by** (both sticky, kept together). Their contents **wrap**
   inside the fixed column width (`.ph-addedby`, `.ph-rfrozen-first`) rather than
@@ -122,6 +127,28 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   `pendingCounts` CTE); `needs_shelf`/`no_box` still include in-store. A separate
   `instore_unlisted` count feeds the In-Store Listing card (`in-store.md`).
 - Sync flags (`II/AL/SX/SH`) cascade to stores; selling clears them (`statuses.md`).
+
+## Price Inquiry (`PriceInquiry`, `/ph/price-inquiry`)
+A **read-only** "what's this worth right now?" lookup — PH-home *Work* card "Price
+Inquiry" (ph_team + admin; nothing is saved, no inventory touched). Flow:
+1. Enter/paste a SKU → `POST /api/sku-search` (`aliasCatalogBySku`) resolves the
+   canonical title + full size run + catalog_id.
+2. **Tap a size chip → fetches that size on the spot** (`POST /api/ph/price-inquiry
+   { sku, sizes:[one] }` → `priceInquiryForSkuSizes`, `api/_lib/intake.js`, which
+   resolves the catalog_id once then calls `aliasPriceInsights` per size). Tapping a
+   priced chip again removes it; **"Price all"** fetches the whole size run in one
+   request. A chip shows a spinner while loading and a muted "empty" state when Alias
+   returned nothing for that size.
+- Result table per size: **Lowest ask · Highest offer · Last sold · Global
+  indicator · Final (GI + 20%)**. All five come from the ONE Alias
+  `pricing_insights/availability` call (`lowest_listing_price_cents`,
+  `highest_offer_price_cents`, `last_sold_listing_price_cents`,
+  `global_indicator_price_cents`); Final = `GI × PRICE_MARKUP`. See `integrations.md`.
+- `aliasPriceInsights` returns dollars (0/absent → null); the UI shows `—` for any
+  value ≤ 0 (Alias reports `"0"` when a size has no current listing/offer/sale).
+- Endpoint is `requireRole(['ph_team'])` (admin auto), rate-limited 30/min (one
+  upstream call per size). `aliasGlobalIndicator` is now a thin wrapper over
+  `aliasPriceInsights`.
 
 ## PH Edited Photos (V7 — `PhEditedPhotos`, `/ph/edited-photos`)
 The warehouse shoots raw listing photos on intake (`source='warehouse'`). PH can upload

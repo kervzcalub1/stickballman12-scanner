@@ -183,6 +183,19 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [flash, setFlash] = useState(null);
   const mInputRef = useRef(null);
   const recentRef = useRef({}); // code -> last scan time (cooldown vs gun/camera re-reads)
+  const reselectRef = useRef(false); // after a typed/gun submit, re-select the code once the lookup finishes
+
+  // After a typed/gun submit the field keeps the searched code (so the manual
+  // typist still sees it); re-select it once the lookup finishes and the input is
+  // re-enabled, so a barcode gun's next scan REPLACES the text instead of
+  // appending to it. Runs when mBusy clears — the input is disabled mid-lookup, so
+  // selecting earlier would be a no-op.
+  useEffect(() => {
+    if (mBusy || !reselectRef.current) return;
+    reselectRef.current = false;
+    const el = mInputRef.current;
+    if (el && !el.disabled) { el.focus({ preventScroll: true }); el.select(); }
+  }, [mBusy]);
 
   // Keep the scan field focused so a HID scanner gun types straight into it.
   useEffect(() => {
@@ -271,8 +284,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const now = Date.now();
     if (recentRef.current[c] && now - recentRef.current[c] < 1200) return; // gun/camera re-read
     recentRef.current[c] = now;
-    // Show the scanned code in the field (camera path); the gun/typed path types
-    // straight in and clears on submit so the next scan starts fresh.
+    // Keep the scanned/typed code visible in the field after a lookup (so the
+    // manual typist can still see what they searched). The typed/gun submit path
+    // (form onSubmit) re-selects the text afterwards, so a barcode gun's next
+    // scan replaces the selection instead of appending to it. Only the legacy
+    // showInField=false callers clear the field outright.
     setMInput(showInField ? c : ''); setMError('');
 
     // Rescale: a scanned/typed VIN is an EXISTING unit — look it up and add it
@@ -1034,7 +1050,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               <h3 className="modal-title">Add item</h3>
               <button type="button" className="btn icon ghost" onClick={closeAddItem}>×</button>
             </div>
-            <form className="searchrow" onSubmit={(e) => { e.preventDefault(); addCode(mInput); }}>
+            <form className="searchrow" onSubmit={(e) => { e.preventDefault(); reselectRef.current = true; addCode(mInput, { showInField: true }); }}>
               <input ref={mInputRef} autoFocus autoCapitalize="characters" autoCorrect="off"
                 placeholder={isRescale ? 'Scan or type VIN / UPC / SKU' : 'Scan or type UPC / SKU'} value={mInput} onChange={(e) => setMInput(e.target.value)} disabled={mBusy} />
               <button className="btn primary" disabled={mBusy}>{mBusy ? '…' : 'Add'}</button>

@@ -32,11 +32,18 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
   `/alias-upc-search`).
 
 ## Alias pricing insights → Global indicator
-- `aliasApiGet, aliasProductByUpc(upc), aliasCatalogId(upc), aliasGlobalIndicator({catalogId,size,...})`.
-- `aliasGlobalIndicator` GETs the **official host ONLY** (`api.alias.org`, hardcoded
+- `aliasApiGet, aliasProductByUpc(upc), aliasCatalogId(upc), aliasPriceInsights({catalogId,size,...}), aliasGlobalIndicator({catalogId,size,...})`.
+- `aliasPriceInsights` GETs the **official host ONLY** (`api.alias.org`, hardcoded
   `ALIAS_API_BASE` — never the bypass proxy or any other host, by request):
   `/api/v1/pricing_insights/availability?catalog_id&size&product_condition&
-  packaging_condition` → `availability.global_indicator_price_cents` ÷ 100 ($), or null.
+  packaging_condition&region_id=3`. The `availability` object carries **four**
+  price fields (all `_cents` strings, ÷ 100 → $, `"0"`/absent → null):
+  `global_indicator_price_cents`, `lowest_listing_price_cents` (lowest ask),
+  `highest_offer_price_cents` (highest bid), `last_sold_listing_price_cents`.
+  Returns `{ globalIndicator, lowestListing, highestOffer, lastSold }`.
+- `aliasGlobalIndicator` is a thin wrapper → `aliasPriceInsights(...).globalIndicator`.
+  The lowest/highest/last-sold fields feed the PH **Price Inquiry** page
+  (`priceInquiryForSkuSizes`, `ph-report.md`); receiving/GI-refresh use only the GI.
 - ⚠️ **Auth is the static GOAT/Alias API key `ALIAS_API_KEY` as a Bearer token** —
   the bypass-login `access_token` is **rejected here (401)**. Verified live: key →
   200 with real pricing; GI is `"0"` for low-demand products (a genuine value).

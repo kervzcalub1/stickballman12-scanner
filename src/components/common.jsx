@@ -280,6 +280,57 @@ export function ShoeThumb({ url, onOpen, size = 36 }) {
   return <span className="shoe-thumb-wrap">{img}</span>;
 }
 
+// Copy `text` to the clipboard; falls back to a hidden <textarea> + execCommand
+// when the async Clipboard API is unavailable (older browser / insecure origin).
+export async function copyToClipboard(text) {
+  const s = String(text ?? '');
+  if (!s) return false;
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(s); return true; }
+  } catch { /* fall through to legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = s; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
+
+// Inline click-to-copy text. Clicking copies `text` (defaults to the rendered
+// children) and briefly shows a "Copied" cue. Stops propagation so it never
+// triggers a parent row's expand/select. Renders plain (non-interactive) when
+// there's nothing to copy — e.g. a "—" placeholder.
+export function CopyText({ text, children, className = '', title }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const value = text ?? (typeof children === 'string' ? children : '');
+  if (!value) return <span className={className}>{children}</span>;
+  const onCopy = async (e) => {
+    e.stopPropagation();
+    if (await copyToClipboard(value)) {
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1200);
+    }
+  };
+  return (
+    <span
+      role="button" tabIndex={0}
+      className={`copytext ${copied ? 'copied' : ''} ${className}`.trim()}
+      title={title || `Copy “${value}”`}
+      aria-label={`Copy ${value}`}
+      onClick={onCopy}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCopy(e); } }}
+    >
+      {children ?? value}
+      <span className="copytext-cue" aria-hidden="true">{copied ? 'Copied ✓' : 'Copy'}</span>
+    </span>
+  );
+}
+
 // Printable labels for label-printer rolls (Rollo / Dymo). Two types:
 //  • VIN label  — our SBM- barcode (used to track every unit)
 //  • UPC label  — the product's box-style barcode (name / size / colorway / SKU)

@@ -1440,3 +1440,73 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   .btn.icon.remove { width: 44px; height: 44px; }
   .modal-actions { flex-direction: column; }
 }
+
+/* ── PH Price Inquiry ─────────────────────────────────────────────── */
+/* Small text-only "link" button (also used elsewhere). */
+.linklike { background: none; border: none; padding: 0; color: var(--primary); cursor: pointer; font: inherit; }
+.linklike:hover { text-decoration: underline; }
+.linklike.sm { font-size: 12px; }
+
+.pi-lookup { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.pi-sku-input { flex: 1; min-width: 0; text-transform: uppercase; }
+.pi-lookup .btn { flex: none; }
+
+.pi-product { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); }
+.pi-product-info { min-width: 0; }
+.pi-product-name { font-weight: 600; }
+.pi-product-sku { font-variant-numeric: tabular-nums; }
+
+.pi-sizes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.pi-sizes-label { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+.pi-sizes-count { font-size: 11px; font-weight: 600; color: var(--primary); background: rgba(79, 124, 255, 0.14); border-radius: 999px; padding: 2px 9px; }
+
+/* Uniform, thumb-friendly size picker — a wrapping grid of equal tiles. Default
+   is nothing selected; tapping a tile toggles it into the picked (filled) state. */
+.pi-sizegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 8px; margin: 4px 0 12px; }
+.pi-chip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-height: 44px; padding: 6px 8px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  font-size: 15px; font-weight: 600; cursor: pointer; transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.pi-chip:hover { border-color: var(--primary); color: var(--primary); }
+.pi-chip.on { border-color: var(--primary); background: var(--primary); color: #fff; }
+.pi-chip.on:hover { color: #fff; }
+/* Priced but Alias had no data for this size — reads as "fetched, nothing found". */
+.pi-chip.on.empty { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
+.pi-chip.on.empty:hover { color: var(--muted); border-color: var(--primary); }
+/* Fetching this size — dim + a spinner in place of the check. */
+.pi-chip.loading { color: var(--muted); border-color: var(--primary); cursor: progress; }
+.pi-chip-check { font-size: 12px; line-height: 1; opacity: 0.9; }
+.pi-chip-spin {
+  width: 13px; height: 13px; border-radius: 50%; flex: none;
+  border: 2px solid var(--border); border-top-color: var(--primary);
+  animation: pi-spin 0.6s linear infinite;
+}
+@keyframes pi-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pi-chip-spin { animation-duration: 1.5s; } }
+.pi-hint { margin: -4px 0 4px; }
+
+/* Right-align the money columns; tabular figures keep them aligned. */
+.pi-table th:not(:first-child), .pi-table td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pi-table .pi-final { font-weight: 600; color: var(--primary); }
+
+@media (max-width: 480px) {
+  .pi-lookup { flex-wrap: wrap; }
+  .pi-lookup .btn { width: 100%; justify-content: center; }
+}
+
+/* ── Click-to-copy text (CopyText) ────────────────────────────────── */
+.copytext { position: relative; cursor: pointer; border-radius: 4px; transition: color 0.12s; }
+.copytext:hover { color: var(--primary); text-decoration: underline dotted; text-underline-offset: 2px; }
+.copytext:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.copytext.copied { color: var(--primary); }
+/* Floating confirmation bubble — only visible right after a copy (no layout shift). */
+.copytext-cue {
+  position: absolute; left: 50%; bottom: calc(100% + 4px); transform: translateX(-50%) translateY(2px);
+  font-size: 11px; font-weight: 600; line-height: 1; white-space: nowrap; pointer-events: none;
+  background: var(--primary); color: #fff; padding: 3px 8px; border-radius: 6px;
+  opacity: 0; transition: opacity 0.12s, transform 0.12s; z-index: 20;
+}
+.copytext.copied .copytext-cue { opacity: 1; transform: translateX(-50%) translateY(0); }
+@media (prefers-reduced-motion: reduce) { .copytext-cue { transition: opacity 0.12s; } }

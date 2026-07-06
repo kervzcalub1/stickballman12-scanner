@@ -166,12 +166,19 @@ export async function aliasCatalogBySku(query) {
   };
 }
 
-// Global indicator price (in dollars) for one catalog_id + size, or null.
-// Conditions default to New / Good box (the Alias UI defaults); region_id 3 is
-// the pricing region we sell in. Auth is the static GOAT/Alias API key
-// (ALIAS_API_KEY) as a Bearer token — the login access_token is NOT accepted here.
+// Pricing_insights `availability` for one catalog_id + size, normalized to
+// dollars. Returns { globalIndicator, lowestListing, highestOffer, lastSold } —
+// each a number ≥ 0 or null when the field is missing/invalid. Conditions default
+// to New / Good box (the Alias UI defaults); region_id 3 is the pricing region we
+// sell in. Auth is the static GOAT/Alias API key (ALIAS_API_KEY) as a Bearer
+// token — the login access_token is NOT accepted here. null (the whole object)
+// when the key/catalog/size is missing or the request fails (best-effort callers).
 const GI_REGION_ID = '3';
-export async function aliasGlobalIndicator({ catalogId, size, productCondition = DEFAULT_PRODUCT_CONDITION, packagingCondition = DEFAULT_PACKAGING_CONDITION }) {
+const centsToDollars = (c) => {
+  const n = c == null || c === '' ? NaN : Number(c);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) / 100 : null;
+};
+export async function aliasPriceInsights({ catalogId, size, productCondition = DEFAULT_PRODUCT_CONDITION, packagingCondition = DEFAULT_PACKAGING_CONDITION }) {
   const apiKey = process.env.ALIAS_API_KEY;
   // The API's `size` is a number (TYPE_DOUBLE) — strip any gender/age suffix
   // ("9W", "5.5Y" → "9", "5.5"). Alias women's/youth sizes are plain US numbers.
@@ -188,8 +195,18 @@ export async function aliasGlobalIndicator({ catalogId, size, productCondition =
     },
   });
   if (!r.ok) return null;
-  const cents = r.data?.availability?.global_indicator_price_cents;
-  const n = cents == null || cents === '' ? NaN : Number(cents);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(n) / 100; // cents -> dollars
+  const a = r.data?.availability || {};
+  return {
+    globalIndicator: centsToDollars(a.global_indicator_price_cents),
+    lowestListing: centsToDollars(a.lowest_listing_price_cents),
+    highestOffer: centsToDollars(a.highest_offer_price_cents),
+    lastSold: centsToDollars(a.last_sold_listing_price_cents),
+  };
+}
+
+// Global indicator price (in dollars) for one catalog_id + size, or null. Thin
+// wrapper over aliasPriceInsights (kept as the widely-used GI-only accessor).
+export async function aliasGlobalIndicator(opts) {
+  const p = await aliasPriceInsights(opts);
+  return p?.globalIndicator ?? null;
 }

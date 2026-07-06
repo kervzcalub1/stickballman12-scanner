@@ -137,6 +137,8 @@ export const api = {
   rescaleRequestListUpdate: (id, listing, baseListedAt) => post('/api/rescale-requests/list-update', { id, listing, baseListedAt }),
   // Generic Alias GI lookup (no save) — used by the PH grid + rescale listing editor.
   phGiLookup: (sku, sizes) => post('/api/ph/gi-lookup', { sku, sizes }),
+  // Read-only price inquiry (no save) — GI + Final + lowest/highest/last-sold, PH Price Inquiry page.
+  phPriceInquiry: (sku, sizes) => post('/api/ph/price-inquiry', { sku, sizes }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // v5 — PH Team monthly grid
   phList: (from, to, kind) => get(`/api/ph/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(kind ? { kind } : {}) }).toString()}`),

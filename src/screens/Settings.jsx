@@ -13,6 +13,7 @@ export function Settings({ onHome, onSignOut }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [repriced, setRepriced] = useState(null); // # unlisted items re-priced on the last save
 
   useEffect(() => {
     api.getSettings()
@@ -25,12 +26,13 @@ export function Settings({ onHome, onSignOut }) {
     e.preventDefault();
     const n = Number(pct);
     if (!Number.isFinite(n) || n < 0 || n > 200) { setError('Enter a margin between 0 and 200%.'); return; }
-    setBusy(true); setError(''); setSaved(false);
+    setBusy(true); setError(''); setSaved(false); setRepriced(null);
     try {
       const r = await api.setPriceMarkup(n);
       setMarkupPct(r.priceMarkupPct);
       setPct(String(r.priceMarkupPct));
       setSaved(true);
+      setRepriced(r.repriced ?? null);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusy(false); }
   }
@@ -45,8 +47,9 @@ export function Settings({ onHome, onSignOut }) {
         <h3 className="settings-h">Price margin</h3>
         <p className="muted sm">
           The markup applied to the Global Indicator to get the Final price
-          (Final = GI + margin). Applies going forward — existing prices update when
-          their SKU is next refreshed or re-priced.
+          (Final = GI + margin). Changing it immediately re-prices items that aren’t
+          listed yet (off Intelligent Inventory and every store), preserving manual
+          price overrides. Already-listed items keep their price until re-priced.
         </p>
         <form onSubmit={save} className="settings-form">
           <label className="settings-field">
@@ -60,7 +63,7 @@ export function Settings({ onHome, onSignOut }) {
           <p className="muted sm">Preview: GI $100 → Final <b>${preview}</b> (GI + {Number.isFinite(Number(pct)) ? Number(pct) : '—'}%)</p>
           <div className="settings-actions">
             <button className="btn primary" disabled={!loaded || busy}>{busy ? 'Saving…' : 'Save margin'}</button>
-            {saved && <span className="settings-saved">✓ Saved</span>}
+            {saved && <span className="settings-saved">✓ Saved{repriced != null ? ` — re-priced ${repriced} unlisted item${repriced === 1 ? '' : 's'}` : ''}</span>}
           </div>
         </form>
       </div>

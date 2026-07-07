@@ -22,8 +22,13 @@
   `POST /api/settings` (admin/superadmin, 0–200). Server: `getPriceMarkupPct()` /
   `getPriceMarkupMult()` in db.js (30s cache, busted on write). Client: `src/lib/config.js`
   holds it (fetched in App.jsx after auth); `calcFinalPrice` + labels read from there.
-  Edited on the **Settings** screen (Admin section). **Forward-only** — changing it
-  affects new pricing; existing Final prices update when a SKU is next refreshed/edited.
+  Edited on the **Settings** screen (Admin section).
+- **On change, unlisted items are re-priced immediately** (`recomputeUnlistedPrices`,
+  called from the settings POST): `price = GI × newMult` for items that are **off
+  Intelligent Inventory AND off every store** (alias/stockx/shopify), excluding
+  in-store and sold/shipped, and **preserving manual overrides** (only rows whose
+  price is null or still equals `GI × oldMult`). Already-listed items keep their price
+  until re-priced. The Settings screen reports the re-priced count.
 
 ## Roles
 - **admin** — full access; manages accounts; sees everything.

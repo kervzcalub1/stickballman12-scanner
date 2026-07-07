@@ -76,6 +76,18 @@ await sql(`
   )
 `);
 
+// App-wide settings (key/value). Currently holds `price_markup_pct` — the GI→Final
+// markup percent, editable in-app by admin/superadmin (default 20 = +20%).
+await sql(`
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT        NOT NULL,
+    updated_by TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`INSERT INTO app_settings (key, value) VALUES ('price_markup_pct', '20') ON CONFLICT (key) DO NOTHING`);
+
 /* ---- inventory (batches, items, history, issues) ---- */
 
 await sql(`CREATE SEQUENCE IF NOT EXISTS batch_seq START 100001`);

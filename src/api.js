@@ -84,6 +84,10 @@ export const api = {
   adminReview: (userId, decision) => post('/api/admin/review', { userId, decision }),
   adminSetRole: (userId, role) => post('/api/admin/review', { userId, decision: 'role', role }),
   adminDeleteUser: (userId) => post('/api/admin/review', { userId, decision: 'delete' }),
+  adminResetPassword: (userId) => post('/api/admin/reset-password', { userId }),
+  // App settings (price margin, …). GET is any authed user; POST is admin/superadmin.
+  getSettings: () => get('/api/settings'),
+  setPriceMarkup: (priceMarkupPct) => post('/api/settings', { priceMarkupPct }),
   // Product search + sheet
   searchUpc: (upc) => post('/api/upc-search', { upc }),
   searchSku: (sku) => post('/api/sku-search', { sku }),

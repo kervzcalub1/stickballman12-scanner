@@ -9,9 +9,32 @@
   (warehouse | ph_team — never admin). Can't log in until approved.
 - Approval: admin **Check Access** screen → `api/admin/users.js` (list),
   `api/admin/review.js` (approve/reject, change role, delete). Gated by `requireAdmin`.
+- **Temp-password reset** (admin/superadmin): Check Access → "Reset password" →
+  `api/admin/reset-password.js` generates a random 12-char temp password, stores only
+  its hash (`setUserPassword` in db.js), and returns the plaintext ONCE (shown in a
+  modal, copyable). Plain reset — the user keeps using it; no forced change. Env
+  admin/superadmin accounts have no DB row and can't be reset.
+
+## App settings (price margin)
+- `app_settings` table (key/value). `price_markup_pct` = the GI→Final markup percent
+  (default 20 = +20%), the single source of truth for pricing math + "GI + N%" labels.
+- Read: `GET /api/settings` (any authed user) → `{ priceMarkupPct }`. Write:
+  `POST /api/settings` (admin/superadmin, 0–200). Server: `getPriceMarkupPct()` /
+  `getPriceMarkupMult()` in db.js (30s cache, busted on write). Client: `src/lib/config.js`
+  holds it (fetched in App.jsx after auth); `calcFinalPrice` + labels read from there.
+  Edited on the **Settings** screen (Admin section). **Forward-only** — changing it
+  affects new pricing; existing Final prices update when a SKU is next refreshed/edited.
 
 ## Roles
 - **admin** — full access; manages accounts; sees everything.
+- **superadmin** — env account like admin (`SUPERADMIN_USERNAME` / `SUPERADMIN_PASSWORD`
+  in `.env`, name "Super Admin"). Same server privileges as admin (`isPrivileged()`
+  in `util.js` treats both as admin in `requireAdmin`/`requireRole`), PLUS the
+  **PH-team pages**: the Home shows a "PH Team Workspace" card that opens the reused
+  `PHTeamApp` (superadmin toggles in/out via `phMode` in `App.jsx`; ph_team lives in
+  it). Superadmin can EDIT the PH grid / refresh GI (client `canEdit`, and the
+  `ph/update` + `ph/refresh-gi` role gates include it). Not a DB role — never written
+  to `users`, not offered in the Check Access role picker.
 - **warehouse** — Receiving, Inventory, No Box, Rescale, Mark Sold/Shipped,
   Reports, Rescale Requests (audits them), **In-Store Buying + In-Store Listing**.
 - **ph_team** — Report (New Inventory), Rescale Stock, No Box (view), Request

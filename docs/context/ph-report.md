@@ -40,9 +40,12 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   it stays under the frozen columns instead of drifting with the middle scroll.
 
 ## Editable fields (one Edit ⇄ Submit per group)
-- **Per size**: Global indicator (number) → **Final price auto-calculates** = GI +
-  20% (`calcFinalPrice`, `PRICE_MARKUP = 1.2`); Final price stays editable so it
-  can be overridden. Plus **II / AL / SX / SH** Yes/No toggles per size (soft blue =
+- **Per size**: Global indicator (number) → **Final price auto-calculates** = GI ×
+  markup (`calcFinalPrice`). The markup is the **configurable price margin** (default
+  +20%), NOT a hard-coded constant: client reads it from `src/lib/config.js`, server
+  from `getPriceMarkupMult()` (db.js, `app_settings.price_markup_pct`); admin/superadmin
+  edit it on the Settings screen. All "GI + N%" labels render `markupSuffix()`. Final
+  price stays editable so it can be overridden. Plus **II / AL / SX / SH** Yes/No toggles per size (soft blue =
   yes, soft red = no — rendered as a colored **checkbox** in edit mode) plus a
   per-size **Note**. Persist to `items` (`global_indicator`, `price`, sync flags, `ph_note`).
 - Nothing is group-level anymore; each size's fields apply to that size's VINs.

@@ -11,7 +11,7 @@ import { rangeOf } from '../lib/format.js';
 import { upcDigits } from '../lib/codes.js';
 
 export function NoBoxReport({ user, onHome, onSignOut }) {
-  const canEdit = user.role === 'admin' || user.role === 'warehouse';
+  const canEdit = user.role === 'admin' || user.role === 'superadmin' || user.role === 'warehouse';
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
   const [drafts, setDrafts] = useState({}); // vin -> chosen status

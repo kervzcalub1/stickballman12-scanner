@@ -71,6 +71,18 @@ export default async function handler(req, res) {
     return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });
   }
 
+  // Superadmin account also lives in env (username + password both configurable).
+  // Same privileges as admin server-side, plus the PH-team pages client-side.
+  const superUser = String(process.env.SUPERADMIN_USERNAME || '').trim().toLowerCase();
+  if (superUser && username === superUser) {
+    const superPass = process.env.SUPERADMIN_PASSWORD;
+    if (!superPass) return send(res, 500, { ok: false, error: 'Superadmin login is not configured.' });
+    if (!constantTimeEqual(password, superPass)) return fail();
+    await recordLoginAttempt({ username, ip, success: true });
+    const user = { uid: 'superadmin', username: superUser, name: 'Super Admin', role: 'superadmin' };
+    return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });
+  }
+
   // Employees from the DB.
   let row;
   try {

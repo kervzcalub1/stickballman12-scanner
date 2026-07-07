@@ -86,6 +86,16 @@ const PATHS = {
     <path d="M6 8h12l1 12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
     <path d="M9 8V6a3 3 0 0 1 6 0v2" />
   </>),
+  // PH Team Workspace — a receipt / document
+  ph: (<>
+    <path d="M6 3h9l3 3v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+    <path d="M8 9h6M8 13h8M8 17h5" />
+  </>),
+  // Settings — a gear
+  settings: (<>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1l2.1-2.1M17 7l2.1-2.1" />
+  </>),
 };
 
 export function NavIcon({ name, ...props }) {

@@ -3,15 +3,18 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'batches', 'inventory', 'report', 'access', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
   return ROUTES.includes(seg) ? seg : 'home';
 };
 
-export const ROLE_LABEL = { admin: 'Admin', warehouse: 'Warehouse', ph_team: 'PH Team' };
+export const ROLE_LABEL = { admin: 'Admin', superadmin: 'Super Admin', warehouse: 'Warehouse', ph_team: 'PH Team' };
 export const roleLabel = (r) => ROLE_LABEL[r] || r;
+// Admin-level roles: the env `admin` and env `superadmin` accounts. Superadmin
+// additionally sees the PH-team workspace (see App.jsx / Home.jsx).
+export const isAdminRole = (r) => r === 'admin' || r === 'superadmin';
 
 export const SUPPLIERS = ['Sunny', 'Nike', 'Foot Locker', 'DTLR', 'Snipes', 'Champs', 'Finish Line', 'Shoe Palace'];
 
@@ -81,7 +84,7 @@ export function homeCardBadges(key, c) {
 
 // Home is grouped by the shoe's lifecycle through the warehouse: Intake →
 // Put-away → Rescale → Sell & Ship → Browse & Reports, with Admin last.
-// `adminOnly` cards/sections show for admin only.
+// `adminOnly` sections show for admin + superadmin; `superOnly` for superadmin only.
 export const HOME_SECTIONS = [
   { title: 'Receiving Shipment Orders', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
@@ -108,8 +111,12 @@ export const HOME_SECTIONS = [
     { key: 'locations', icon: '🗺️', title: 'Locate Shoe', sub: 'Find which shelf a shoe is on' },
     { key: 'report', icon: '📊', title: 'Listings & Sync', sub: 'Store listings & sync status' },
   ] },
+  { title: 'PH Team', superOnly: true, cards: [
+    { key: 'ph', icon: '🧾', title: 'PH Team Workspace', sub: 'Open the PH pricing / listing pages (New Inventory, Rescale, Photos…)' },
+  ] },
   { title: 'Administration', adminOnly: true, cards: [
-    { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, or remove accounts' },
+    { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },
+    { key: 'settings', icon: '⚙️', title: 'Settings', sub: 'Price margin % and other app-wide settings' },
   ] },
 ];
 

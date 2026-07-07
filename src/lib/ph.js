@@ -1,6 +1,7 @@
 // PH grid domain logic: SKU+status grouping (flat + per-size), pricing,
 // frozen-column geometry, /ph/* routing, and edit-lock timings.
 import { sizeNum } from './codes.js';
+import { getMarkupMult } from './config.js';
 
 // Frozen columns and their fixed widths (px): Date, Title, SKU, Qty.
 // Rows are merged per SKU+status; the size breakdown is a scrolling column.
@@ -23,14 +24,14 @@ export const PH_FLAGS = [
 ];
 export const FLAG_KEYS = ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify'];
 
-// Final price auto-derives from the global indicator: entered amount + 20%.
+// Final price auto-derives from the global indicator: entered amount × markup
+// (the configurable price margin, default +20%; see src/lib/config.js).
 // Empty/non-numeric global indicator clears the final price.
-export const PRICE_MARKUP = 1.2;
 export function calcFinalPrice(globalIndicator) {
   if (globalIndicator === '' || globalIndicator == null) return '';
   const n = Number(globalIndicator);
   if (!Number.isFinite(n)) return '';
-  return (Math.round(n * PRICE_MARKUP * 100) / 100).toFixed(2);
+  return (Math.round(n * getMarkupMult() * 100) / 100).toFixed(2);
 }
 
 // Merge into ONE row per SKU + status (regardless of size), because the PH team

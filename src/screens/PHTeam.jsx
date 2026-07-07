@@ -10,6 +10,7 @@ import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES } from '../lib/constants.js';
+import { markupSuffix } from '../lib/config.js';
 import { rangeOf, PH_DATE, PH_DATETIME } from '../lib/format.js';
 import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized,
@@ -24,7 +25,7 @@ import { PriceInquiry } from './PriceInquiry.jsx';
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
 // + sync to Intelligent Inventory / Alias / StockX / Shopify. PH pages are
 // URL-routed under /ph/* (their own namespace) so a refresh restores the page.
-export function PHTeamApp({ user, onSignOut }) {
+export function PHTeamApp({ user, onSignOut, onExit }) {
   // page <-> URL: null = home chooser | 'receiving' | 'rescale' | 'nobox' |
   //               'request' | 'photos' | 'inquiry'
   const [page, setPage] = useState(() => phPageForPath(window.location.pathname));
@@ -47,7 +48,7 @@ export function PHTeamApp({ user, onSignOut }) {
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
-      <TopBar onSignOut={onSignOut} />
+      <TopBar onSignOut={onSignOut} onHome={onExit} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
       <section className="home-section">
         <h2 className="home-section-title">Work</h2>
@@ -100,7 +101,7 @@ export function PHTeamApp({ user, onSignOut }) {
 // `kind`: 'receiving' (New Inventory) · 'rescale' (Rescale Stock) · null (all — the
 // admin/warehouse "Listings & Sync" page).
 export function PHGrid({ user, kind = null, onHome, onSignOut }) {
-  const canEdit = user?.role === 'ph_team'; // admin + warehouse are read-only
+  const canEdit = user?.role === 'ph_team' || user?.role === 'superadmin'; // admin + warehouse are read-only
   const showPricing = user?.role !== 'warehouse'; // GI + Final price hidden from warehouse
   const title = kind === 'rescale' ? 'Rescale Stock' : kind === 'receiving' ? 'New Inventory' : 'Listings & Sync';
   const emptyKind = kind === 'rescale' ? 'rescaled' : kind === 'receiving' ? 'received' : 'scanned';
@@ -420,7 +421,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
             <span className="muted sm">
               {isRescale ? 'pending restocks · ' : ''}{groups.length} line{groups.length === 1 ? '' : 's'} · {totalUnits} unit{totalUnits === 1 ? '' : 's'}{canEdit ? '' : ' · view only'}
               {!isRescale && <button className="btn ghost sm" type="button" style={{ marginLeft: 8 }} onClick={() => setSortDir((s) => (s === 'asc' ? 'desc' : 'asc'))}>Date {sortDir === 'asc' ? '↑' : '↓'}</button>}
-              {showPricing && <button className="btn sm ph-gi-refresh-btn" type="button" style={{ marginLeft: 8 }} disabled={refreshing || loading} onClick={refreshPrices} title="Re-fetch Global Indicator from Alias and update Final price (GI + 20%)"><Icon name="refresh" className={refreshing ? 'spin' : ''} /> {refreshing ? 'Refreshing…' : 'Refresh prices'}</button>}
+              {showPricing && <button className="btn sm ph-gi-refresh-btn" type="button" style={{ marginLeft: 8 }} disabled={refreshing || loading} onClick={refreshPrices} title={`Re-fetch Global Indicator from Alias and update Final price (GI + ${markupSuffix()})`}><Icon name="refresh" className={refreshing ? 'spin' : ''} /> {refreshing ? 'Refreshing…' : 'Refresh prices'}</button>}
             </span>
           )} />
       </div>
@@ -591,7 +592,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                               <table className="ph-sizetable">
                                 <thead><tr>
                                   <th>Size</th><th>Qty</th><th>Cost</th>
-                                  {showPricing && <><th><span className="ph-gi-th">Global indicator{ed && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for this shoe’s sizes" disabled={giFillKey === g.key} onClick={(e) => { e.stopPropagation(); fillGroupGi(g); }}><Icon name="refresh" size="1em" className={giFillKey === g.key ? 'spin' : ''} /></button>}</span></th><th>Final Price (GI+20%)</th></>}
+                                  {showPricing && <><th><span className="ph-gi-th">Global indicator{ed && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for this shoe’s sizes" disabled={giFillKey === g.key} onClick={(e) => { e.stopPropagation(); fillGroupGi(g); }}><Icon name="refresh" size="1em" className={giFillKey === g.key ? 'spin' : ''} /></button>}</span></th><th>Final Price (GI+{markupSuffix()})</th></>}
                                   {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
                                   <th>Note</th><th>History</th>
                                 </tr></thead>

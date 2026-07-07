@@ -192,6 +192,7 @@ export async function aliasPriceInsights({ catalogId, size, productCondition = D
       product_condition: productCondition,
       packaging_condition: packagingCondition,
       region_id: GI_REGION_ID,
+      consigned: true,
     },
   });
   if (!r.ok) return null;

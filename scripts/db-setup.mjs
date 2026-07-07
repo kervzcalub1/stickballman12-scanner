@@ -147,6 +147,10 @@ await sql(`ALTER TABLE items ALTER COLUMN status SET DEFAULT 'needs_shelf'`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS with_box           BOOLEAN NOT NULL DEFAULT true`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS price              NUMERIC(12,2)`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS global_indicator   NUMERIC(12,2)`);
+// Which Alias pricing basis the GI came from: 'consigned' (daily-ops default) or
+// 'with_you' (fallback when consigned was empty). null = manual/unknown/legacy.
+// Drives the "WY" chip on the PH New-Inventory grid. See docs/context/ph-report.md.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS gi_basis           TEXT`);
 // Snapshot of the Final price at the moment the shoe was listed (II turned on / a
 // manual PH save while on II). A GI "Refresh prices" updates `price` but NOT this, so
 // a later divergence (price <> listed_price while on II) surfaces the ⚠ "Price changed"

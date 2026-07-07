@@ -7,7 +7,7 @@ import {
   getProductByUpc, getCatalogIdBySku, upsertProduct, setItemGlobalIndicators,
   refreshItemGi, getPriceMarkupMult,
 } from './db.js';
-import { aliasProductByUpc, aliasCatalogBySku, aliasGlobalIndicator, aliasPriceInsights } from './alias.js';
+import { aliasProductByUpc, aliasCatalogBySku, aliasGiWithBasis, aliasPriceInsights } from './alias.js';
 
 // Final price = global indicator × markup. The markup is the configurable price
 // margin (default 1.2 = +20%), fetched per call via getPriceMarkupMult().
@@ -96,10 +96,10 @@ export async function enrichGlobalIndicators(created, items) {
       const catalogId = await resolveCatalogId(it, catalogCache);
       if (!catalogId) continue;
       const key = `${catalogId}|${it.size}`;
-      if (!giByKey.has(key)) giByKey.set(key, await aliasGlobalIndicator({ catalogId, size: it.size }));
-      const gi = giByKey.get(key);
+      if (!giByKey.has(key)) giByKey.set(key, await aliasGiWithBasis({ catalogId, size: it.size }));
+      const { globalIndicator: gi, basis } = giByKey.get(key);
       if (gi == null) continue;
-      updates.push({ id, global_indicator: gi, price: Math.round(gi * mult * 100) / 100 });
+      updates.push({ id, global_indicator: gi, gi_basis: basis, price: Math.round(gi * mult * 100) / 100 });
     } catch { /* best-effort — skip this unit */ }
   }
   if (updates.length) await setItemGlobalIndicators(updates);
@@ -128,8 +128,8 @@ export async function refreshGiForItems(rows, { preserveOverrides = true } = {})
       const catalogId = await resolveCatalogId(it, catalogCache);
       if (!catalogId) continue;
       const key = `${catalogId}|${it.size}`;
-      if (!giByKey.has(key)) giByKey.set(key, await aliasGlobalIndicator({ catalogId, size: it.size }));
-      const gi = giByKey.get(key);
+      if (!giByKey.has(key)) giByKey.set(key, await aliasGiWithBasis({ catalogId, size: it.size }));
+      const { globalIndicator: gi, basis } = giByKey.get(key);
       if (gi == null) continue;
 
       const oldGi = it.global_indicator != null ? Number(it.global_indicator) : null;
@@ -141,18 +141,21 @@ export async function refreshGiForItems(rows, { preserveOverrides = true } = {})
 
       const giChanged = oldGi == null || !near(gi, oldGi);
       const priceChanged = oldPrice == null || !near(newPrice, oldPrice);
-      if (!giChanged && !priceChanged) continue; // nothing moved — stay quiet
-      updates.push({ id: it.id, global_indicator: gi, price: newPrice, keptOverride: keptOverride && !priceChanged });
+      const basisChanged = (it.gi_basis || null) !== (basis || null);
+      if (!giChanged && !priceChanged && !basisChanged) continue; // nothing moved — stay quiet
+      updates.push({ id: it.id, global_indicator: gi, gi_basis: basis, price: newPrice, keptOverride: keptOverride && !priceChanged });
     } catch { /* best-effort — skip this unit */ }
   }
   if (updates.length) await refreshItemGi(updates);
-  return { updated: updates.length, checked: list.length, configured: true };
+  const withYou = updates.filter((u) => u.gi_basis === 'with_you').length;
+  return { updated: updates.length, checked: list.length, configured: true, withYou };
 }
 
 // Fetch the Alias global indicator (+ Final = GI + 20%) for a SKU across a set of
-// sizes. Used by the Rescale Requests listing editor's "Get GI" action (requests
-// carry a SKU + sizes, not VINs). Resolves the SKU's catalog_id once, then prices
-// each size. Returns { configured, results:[{ size, global_indicator, price }] }.
+// sizes. Used by the New-Inventory per-group "Get GI" fill and the Rescale Requests
+// listing editor (requests carry a SKU + sizes, not VINs). Resolves the SKU's
+// catalog_id once, then prices each size consigned-first with a With-You fallback.
+// Returns { configured, results:[{ size, global_indicator, price, basis }] }.
 export async function giForSkuSizes(sku, sizes) {
   if (!process.env.ALIAS_API_KEY) return { configured: false, results: [] };
   const s = normSku(sku);
@@ -164,8 +167,8 @@ export async function giForSkuSizes(sku, sizes) {
   const results = [];
   for (const size of list) {
     try {
-      const gi = await aliasGlobalIndicator({ catalogId, size });
-      if (gi != null) results.push({ size, global_indicator: gi, price: round2(gi * mult) });
+      const { globalIndicator: gi, basis } = await aliasGiWithBasis({ catalogId, size });
+      if (gi != null) results.push({ size, global_indicator: gi, price: round2(gi * mult), basis });
     } catch { /* skip this size */ }
   }
   return { configured: true, results };
@@ -177,8 +180,9 @@ export async function giForSkuSizes(sku, sizes) {
 // catalog_id once, then prices each size. Returns { configured, results:[{ size,
 // global_indicator, price, lowest_listing, highest_offer, last_sold }] } — a size
 // is included whenever ANY of its fields came back (so a size with only a last
-// sale, no GI, still shows).
-export async function priceInquiryForSkuSizes(sku, sizes) {
+// sale, no GI, still shows). `consigned` picks the basis explicitly (the Price
+// Inquiry toggle) — no auto-fallback here; the caller chooses.
+export async function priceInquiryForSkuSizes(sku, sizes, { consigned = true } = {}) {
   if (!process.env.ALIAS_API_KEY) return { configured: false, results: [] };
   const s = normSku(sku);
   const list = [...new Set((Array.isArray(sizes) ? sizes : []).map((x) => String(x).trim()).filter(Boolean))];
@@ -189,7 +193,7 @@ export async function priceInquiryForSkuSizes(sku, sizes) {
   const results = [];
   for (const size of list) {
     try {
-      const p = await aliasPriceInsights({ catalogId, size });
+      const p = await aliasPriceInsights({ catalogId, size, consigned });
       if (!p) continue;
       const gi = p.globalIndicator;
       const anyValue = gi != null || p.lowestListing != null || p.highestOffer != null || p.lastSold != null;

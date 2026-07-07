@@ -33,6 +33,7 @@ export function PriceInquiry({ onHome, onSignOut }) {
   const [notConfigured, setNotConfigured] = useState(false);
   const [looking, setLooking] = useState(false);       // SKU catalog lookup in flight
   const [error, setError] = useState('');
+  const [basis, setBasis] = useState('consigned');     // 'consigned' (daily ops) | 'with_you'
 
   // Step 1 — resolve the SKU on the Alias catalog (title + size run + catalog_id).
   async function lookUp(e) {
@@ -56,11 +57,11 @@ export function PriceInquiry({ onHome, onSignOut }) {
   // Fetch one or more sizes from Alias in a single request, then merge the results
   // in (an asked-for size with no data is stored as an _empty marker so its chip
   // still reads "fetched" and it gets a dashed row). Read-only; nothing is saved.
-  async function fetchSizes(sizes) {
+  async function fetchSizes(sizes, useBasis = basis) {
     if (!product || !sizes.length) return;
     setLoad(sizes, true); setError('');
     try {
-      const { configured, results: r } = await api.phPriceInquiry(product.sku, sizes);
+      const { configured, results: r } = await api.phPriceInquiry(product.sku, sizes, useBasis === 'consigned');
       if (!configured) { setNotConfigured(true); return; }
       const bySize = new Map((r || []).map((row) => [String(row.size), row]));
       setPriced((prev) => {
@@ -79,6 +80,15 @@ export function PriceInquiry({ onHome, onSignOut }) {
     if (loading.has(sz)) return;
     if (priced[sz]) { setPriced((p) => { const n = { ...p }; delete n[sz]; return n; }); return; }
     fetchSizes([sz]);
+  }
+
+  // Flip the pricing basis: re-fetch any already-priced sizes on the new basis so
+  // the table reflects the switch (Consigned ↔ With You). Read-only, nothing saved.
+  function changeBasis(next) {
+    if (next === basis) return;
+    setBasis(next);
+    const pricedSizes = Object.keys(priced);
+    if (pricedSizes.length) fetchSizes(pricedSizes, next);
   }
 
   const sizes = product?.sizes || [];
@@ -136,6 +146,14 @@ export function PriceInquiry({ onHome, onSignOut }) {
             <div className="pi-sizes-head">
               <span className="pi-sizes-label">Tap a size to fetch its price {pricedCount > 0 ? <span className="pi-sizes-count">{pricedCount} priced</span> : null}</span>
               <button type="button" className="linklike sm" onClick={toggleAll}>{allPriced ? 'Clear all' : 'Price all'}</button>
+            </div>
+            <div className="pi-basis" role="group" aria-label="Pricing basis">
+              <span className="pi-basis-label muted sm">Basis</span>
+              <div className="seg sm">
+                <button type="button" className={`seg-btn ${basis === 'consigned' ? 'on' : ''}`} aria-pressed={basis === 'consigned'} onClick={() => changeBasis('consigned')}>Consigned</button>
+                <button type="button" className={`seg-btn ${basis === 'with_you' ? 'on' : ''}`} aria-pressed={basis === 'with_you'} onClick={() => changeBasis('with_you')}>With You</button>
+              </div>
+              <span className="muted sm">{basis === 'consigned' ? 'Daily-ops pricing (consigned)' : 'Seller “With You” pricing (non-consigned)'}</span>
             </div>
             <div className="pi-sizegrid">
               {sizes.map((sz) => {

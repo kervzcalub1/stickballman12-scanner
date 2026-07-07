@@ -28,6 +28,10 @@ export default async function handler(req, res) {
   const body = req.method === 'POST' ? await getJsonBody(req) : {};
   const sku = cleanSku(url.searchParams.get('sku') ?? body.sku);
   const sizeParam = url.searchParams.get('size') ?? body.size ?? null;
+  // Pricing basis: consigned (default) vs With You. `?consigned=false` (or body false)
+  // switches to the non-consigned "With You" prices for bulk accuracy testing.
+  const rawConsigned = url.searchParams.get('consigned') ?? body.consigned;
+  const consigned = !(rawConsigned === 'false' || rawConsigned === false);
   if (!sku) return send(res, 400, { ok: false, error: 'Missing/invalid `sku`.' });
 
   try {
@@ -41,7 +45,7 @@ export default async function handler(req, res) {
     if (!sizes.length) return send(res, 404, { ok: false, error: 'No sizes available for that SKU.' });
 
     const results = await Promise.all(sizes.map(async (size) => {
-      const p = await aliasPriceInsights({ catalogId: c.catalogId, size });
+      const p = await aliasPriceInsights({ catalogId: c.catalogId, size, consigned });
       return {
         size,
         globalIndicator: p?.globalIndicator ?? null,
@@ -56,6 +60,7 @@ export default async function handler(req, res) {
       sku: c.sku || sku,
       name: c.name || null,
       catalogId: c.catalogId,
+      consigned,
       results,
     });
   } catch (e) {

@@ -30,6 +30,8 @@ function sanitizeFields(raw) {
     if (n != null && (!Number.isFinite(n) || n < 0 || n > 1_000_000)) return { error: 'Invalid global indicator.' };
     fields.global_indicator = n;
   }
+  // Pricing basis marker ('consigned' | 'with_you'); anything else → null (manual).
+  if ('gi_basis' in src) fields.gi_basis = (src.gi_basis === 'consigned' || src.gi_basis === 'with_you') ? src.gi_basis : null;
   for (const k of BOOL_FIELDS) if (k in src) fields[k] = Boolean(src[k]);
   if ('ph_note' in src) fields.ph_note = String(src.ph_note ?? '').slice(0, 2000);
   return { fields };

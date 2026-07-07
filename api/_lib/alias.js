@@ -178,7 +178,11 @@ const centsToDollars = (c) => {
   const n = c == null || c === '' ? NaN : Number(c);
   return Number.isFinite(n) && n >= 0 ? Math.round(n) / 100 : null;
 };
-export async function aliasPriceInsights({ catalogId, size, productCondition = DEFAULT_PRODUCT_CONDITION, packagingCondition = DEFAULT_PACKAGING_CONDITION }) {
+// `consigned` picks the pricing BASIS: true = consigned (matches our daily-ops
+// pricing on sell.alias.org, the default); false = "With You" (the seller-side
+// non-consigned basis). Some SKUs return an empty/0 consigned GI while With You
+// has a real price — see aliasGiWithBasis for the consigned-first fallback.
+export async function aliasPriceInsights({ catalogId, size, productCondition = DEFAULT_PRODUCT_CONDITION, packagingCondition = DEFAULT_PACKAGING_CONDITION, consigned = true }) {
   const apiKey = process.env.ALIAS_API_KEY;
   // The API's `size` is a number (TYPE_DOUBLE) — strip any gender/age suffix
   // ("9W", "5.5Y" → "9", "5.5"). Alias women's/youth sizes are plain US numbers.
@@ -192,7 +196,7 @@ export async function aliasPriceInsights({ catalogId, size, productCondition = D
       product_condition: productCondition,
       packaging_condition: packagingCondition,
       region_id: GI_REGION_ID,
-      consigned: true,
+      consigned: consigned ? true : false,
     },
   });
   if (!r.ok) return null;
@@ -203,6 +207,22 @@ export async function aliasPriceInsights({ catalogId, size, productCondition = D
     highestOffer: centsToDollars(a.highest_offer_price_cents),
     lastSold: centsToDollars(a.last_sold_listing_price_cents),
   };
+}
+
+// A usable GI value = a positive number. Alias reports 0 cents (→ 0 here) for a
+// size with no consigned demand, which reads as "no price" — treat 0 as empty.
+const hasGi = (v) => v != null && Number(v) > 0;
+
+// Consigned-first GI with an automatic "With You" fallback, for the New-Inventory
+// pricing paths. Tries consigned; if its GI is empty/0, refetches With You. Returns
+// { globalIndicator, basis } where basis ∈ 'consigned' | 'with_you' | null (neither
+// had a value). The 2nd call only fires on the empty-consigned minority.
+export async function aliasGiWithBasis({ catalogId, size }) {
+  const consignedP = await aliasPriceInsights({ catalogId, size, consigned: true });
+  if (hasGi(consignedP?.globalIndicator)) return { globalIndicator: consignedP.globalIndicator, basis: 'consigned' };
+  const withYouP = await aliasPriceInsights({ catalogId, size, consigned: false });
+  if (hasGi(withYouP?.globalIndicator)) return { globalIndicator: withYouP.globalIndicator, basis: 'with_you' };
+  return { globalIndicator: null, basis: null };
 }
 
 // Global indicator price (in dollars) for one catalog_id + size, or null. Thin

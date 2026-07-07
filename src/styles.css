@@ -834,6 +834,19 @@ body {
 .ph-sizetable th:last-child, .ph-sizetable td:last-child { text-align: left; }
 .ph-sizetable td.ph-note-cell { text-align: left; }
 .ph-gi-th { display: inline-flex; align-items: center; gap: 6px; }
+/* Price Inquiry — Consigned / With You basis toggle */
+.pi-basis { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 4px; }
+.pi-basis-label { font-weight: 600; }
+
+/* "With You" basis chip beside a GI that fell back from an empty consigned price. */
+.ph-wy-chip {
+  display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 700; line-height: 16px; vertical-align: middle;
+  letter-spacing: 0.3px; color: #92400e; background: #fef3c7; border: 1px solid #fcd34d;
+}
+@media (prefers-color-scheme: dark) {
+  .ph-wy-chip { color: #fde68a; background: rgba(180, 130, 20, 0.22); border-color: rgba(252, 211, 77, 0.5); }
+}
 /* Refresh / re-fetch buttons — accent-colored so they read clearly as "refresh". */
 .ph-gi-refresh { line-height: 1; padding: 3px 6px; min-width: 0; color: #6b96ff;
   border: 1px solid rgba(79, 124, 255, 0.55); background: rgba(79, 124, 255, 0.14); }

@@ -380,11 +380,13 @@ export async function setItemGlobalIndicators(updates) {
   const queries = [];
   for (const u of list) {
     queries.push(sql`
-      UPDATE items SET global_indicator = ${u.global_indicator}, price = ${u.price ?? null}, updated_at = now()
+      UPDATE items SET global_indicator = ${u.global_indicator}, price = ${u.price ?? null},
+             gi_basis = ${u.gi_basis ?? null}, updated_at = now()
       WHERE id = ${u.id}
     `);
     const text = `Global indicator $${Number(u.global_indicator).toFixed(2)}`
       + (u.price != null ? ` · Final price $${Number(u.price).toFixed(2)}` : '')
+      + (u.gi_basis === 'with_you' ? ' (With You)' : '')
       + ' (auto from Alias)';
     queries.push(sql`
       INSERT INTO item_events (item_id, type, details, created_by)
@@ -407,6 +409,7 @@ export async function refreshItemGi(updates) {
   for (const u of list) {
     queries.push(sql`
       UPDATE items SET global_indicator = ${u.global_indicator}, price = ${u.price ?? null},
+             gi_basis = ${u.gi_basis ?? null},
              updated_at = now(), last_edit_at = now(), last_edit_by = 'Alias refresh'
       WHERE id = ${u.id}
     `);
@@ -418,6 +421,7 @@ export async function refreshItemGi(updates) {
           ? ` · Final price kept at $${Number(u.price).toFixed(2)} (manual override)`
           : ` · Final price $${Number(u.price).toFixed(2)}`)
         : '')
+      + (u.gi_basis === 'with_you' ? ' (With You)' : '')
       + ' (re-fetched from Alias)';
     queries.push(sql`
       INSERT INTO item_events (item_id, type, details, created_by)
@@ -797,7 +801,7 @@ export async function phListItems(from, to, kind = null) {
     return await db()`
       SELECT i.vin, coalesce(ev.created_at, i.updated_at) AS created_at,
              coalesce(ev.created_by, i.created_by) AS created_by, i.name, i.sku, i.size, i.gender,
-             i.status, i.cost, i.price, i.global_indicator,
+             i.status, i.cost, i.price, i.global_indicator, i.gi_basis,
              i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
              i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
              (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
@@ -821,7 +825,7 @@ export async function phListItems(from, to, kind = null) {
   }
   return await db()`
     SELECT i.vin, i.created_at, i.created_by, i.name, i.sku, i.size, i.gender,
-           i.status, i.cost, i.price, i.global_indicator,
+           i.status, i.cost, i.price, i.global_indicator, i.gi_basis,
            i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
            i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
@@ -1268,6 +1272,9 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       const next = {
         price: 'price' in f ? num(f.price) : cur.price,
         global: 'global_indicator' in f ? num(f.global_indicator) : cur.global_indicator,
+        // Pricing basis: 'consigned' | 'with_you' | null (manual/unknown). Follows the
+        // GI — a hand-typed GI has no basis (client sends null); cleared GI clears it.
+        giBasis: 'gi_basis' in f ? (f.gi_basis || null) : cur.gi_basis,
         intel: 'added_to_intel_inv' in f ? !!f.added_to_intel_inv : cur.added_to_intel_inv,
         alias: 'synced_alias' in f ? !!f.synced_alias : cur.synced_alias,
         stockx: 'synced_stockx' in f ? !!f.synced_stockx : cur.synced_stockx,
@@ -1279,6 +1286,7 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       // prevents the impossible "II off / Alias on" state. (II on + store off is
       // still valid: the store just hasn't synced yet.)
       if (!next.intel) { next.alias = false; next.stockx = false; next.shopify = false; }
+      if (next.global == null) next.giBasis = null; // no GI → no basis
       // Final price is auto = GI × markup (the configurable price margin). It only
       // counts as a human change (gets a name) when the user OVERRIDES that
       // calculated value; otherwise it's the system-derived figure. `descs`
@@ -1301,7 +1309,7 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       // does NOT touch listed_price — that's what surfaces the ⚠ "Price changed" chip.
       const listedPrice = next.intel ? next.price : null;
       queries.push(sql`
-        UPDATE items SET price = ${next.price}, global_indicator = ${next.global}, added_to_intel_inv = ${next.intel},
+        UPDATE items SET price = ${next.price}, global_indicator = ${next.global}, gi_basis = ${next.giBasis}, added_to_intel_inv = ${next.intel},
           synced_alias = ${next.alias}, synced_stockx = ${next.stockx}, synced_shopify = ${next.shopify},
           ph_note = ${next.note}, listed_price = ${listedPrice},
           first_edit_by = coalesce(first_edit_by, ${by || null}), first_edit_at = coalesce(first_edit_at, now()),
@@ -1322,7 +1330,7 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
   await sql.transaction(queries);
 
   return await sql`
-    SELECT vin, created_at, created_by, name, sku, size, gender, status, cost, price, global_indicator, listed_price,
+    SELECT vin, created_at, created_by, name, sku, size, gender, status, cost, price, global_indicator, gi_basis, listed_price,
            added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
            ph_note, first_edit_by, first_edit_at, last_edit_by, last_edit_at
     FROM items WHERE id = ANY(${ids}) ORDER BY created_at, id

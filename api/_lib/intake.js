@@ -5,11 +5,12 @@
 import { cleanSku } from './util.js';
 import {
   getProductByUpc, getCatalogIdBySku, upsertProduct, setItemGlobalIndicators,
-  refreshItemGi,
+  refreshItemGi, getPriceMarkupMult,
 } from './db.js';
 import { aliasProductByUpc, aliasCatalogBySku, aliasGlobalIndicator, aliasPriceInsights } from './alias.js';
 
-export const GI_MARKUP = 1.2; // Final price = global indicator + 20%
+// Final price = global indicator × markup. The markup is the configurable price
+// margin (default 1.2 = +20%), fetched per call via getPriceMarkupMult().
 const VIN_RE = /^SBM-\d{6}-\d{6}$/;
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -83,6 +84,7 @@ async function resolveCatalogId(it, cache) {
 // `created` are the inserted [{id}] rows aligned with normalized `items`.
 export async function enrichGlobalIndicators(created, items) {
   if (!process.env.ALIAS_API_KEY) return;
+  const mult = await getPriceMarkupMult();
   const catalogCache = new Map();
   const giByKey = new Map();
   const updates = [];
@@ -97,7 +99,7 @@ export async function enrichGlobalIndicators(created, items) {
       if (!giByKey.has(key)) giByKey.set(key, await aliasGlobalIndicator({ catalogId, size: it.size }));
       const gi = giByKey.get(key);
       if (gi == null) continue;
-      updates.push({ id, global_indicator: gi, price: Math.round(gi * GI_MARKUP * 100) / 100 });
+      updates.push({ id, global_indicator: gi, price: Math.round(gi * mult * 100) / 100 });
     } catch { /* best-effort — skip this unit */ }
   }
   if (updates.length) await setItemGlobalIndicators(updates);
@@ -115,6 +117,7 @@ const near = (a, b) => Math.abs(Number(a) - Number(b)) < 0.005;
 // silent. Returns { updated, checked, configured }.
 export async function refreshGiForItems(rows, { preserveOverrides = true } = {}) {
   if (!process.env.ALIAS_API_KEY) return { updated: 0, checked: 0, configured: false };
+  const mult = await getPriceMarkupMult();
   const catalogCache = new Map();
   const giByKey = new Map();
   const updates = [];
@@ -131,10 +134,10 @@ export async function refreshGiForItems(rows, { preserveOverrides = true } = {})
 
       const oldGi = it.global_indicator != null ? Number(it.global_indicator) : null;
       const oldPrice = it.price != null ? Number(it.price) : null;
-      const autoOld = oldGi != null ? round2(oldGi * GI_MARKUP) : null;
+      const autoOld = oldGi != null ? round2(oldGi * mult) : null;
       const isOverride = oldPrice != null && (autoOld == null || !near(oldPrice, autoOld));
       const keptOverride = preserveOverrides && isOverride;
-      const newPrice = keptOverride ? oldPrice : round2(gi * GI_MARKUP);
+      const newPrice = keptOverride ? oldPrice : round2(gi * mult);
 
       const giChanged = oldGi == null || !near(gi, oldGi);
       const priceChanged = oldPrice == null || !near(newPrice, oldPrice);
@@ -157,11 +160,12 @@ export async function giForSkuSizes(sku, sizes) {
   if (!s || !list.length) return { configured: true, results: [] };
   const catalogId = await resolveCatalogId({ sku: s }, new Map());
   if (!catalogId) return { configured: true, results: [] };
+  const mult = await getPriceMarkupMult();
   const results = [];
   for (const size of list) {
     try {
       const gi = await aliasGlobalIndicator({ catalogId, size });
-      if (gi != null) results.push({ size, global_indicator: gi, price: round2(gi * GI_MARKUP) });
+      if (gi != null) results.push({ size, global_indicator: gi, price: round2(gi * mult) });
     } catch { /* skip this size */ }
   }
   return { configured: true, results };
@@ -181,6 +185,7 @@ export async function priceInquiryForSkuSizes(sku, sizes) {
   if (!s || !list.length) return { configured: true, results: [] };
   const catalogId = await resolveCatalogId({ sku: s }, new Map());
   if (!catalogId) return { configured: true, results: [] };
+  const mult = await getPriceMarkupMult();
   const results = [];
   for (const size of list) {
     try {
@@ -192,7 +197,7 @@ export async function priceInquiryForSkuSizes(sku, sizes) {
       results.push({
         size,
         global_indicator: gi,
-        price: gi != null ? round2(gi * GI_MARKUP) : null,
+        price: gi != null ? round2(gi * mult) : null,
         lowest_listing: p.lowestListing,
         highest_offer: p.highestOffer,
         last_sold: p.lastSold,

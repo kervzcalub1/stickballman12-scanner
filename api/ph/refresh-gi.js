@@ -12,8 +12,8 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const user = requireAuth(req, res);
   if (!user) return;
-  // Pricing is hidden from warehouse — only PH Team and admin can re-price.
-  if (user.role !== 'ph_team' && user.role !== 'admin')
+  // Pricing is hidden from warehouse — only PH Team, admin, and superadmin can re-price.
+  if (user.role !== 'ph_team' && user.role !== 'admin' && user.role !== 'superadmin')
     return send(res, 403, { ok: false, error: 'Not allowed to refresh prices.' });
   // Alias-heavy — keep this well throttled.
   if (!rateLimit(req, { windowMs: 60_000, max: 6 }))

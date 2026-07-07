@@ -214,6 +214,23 @@ body {
 .access-actions { white-space: nowrap; text-align: right; }
 .access-actions .btn + .btn { margin-left: 6px; }
 .role-select { padding: 7px 8px; font-size: 13px; }
+
+/* Settings page (price margin) */
+.settings-card { max-width: 460px; }
+.settings-h { margin: 0 0 6px; }
+.settings-form { margin-top: 14px; }
+.settings-field { display: flex; flex-direction: column; gap: 6px; max-width: 160px; }
+.settings-field span { font-weight: 600; font-size: 13px; }
+.settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.settings-saved { color: var(--primary); font-weight: 600; }
+
+/* Temp-password reveal (Check Access → Reset password) */
+.temp-pw-box { display: flex; justify-content: center; margin: 4px 0 14px; }
+.temp-pw-value code {
+  font-size: 20px; font-weight: 700; letter-spacing: 1px;
+  padding: 10px 16px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.08)); user-select: all;
+}
 .signup-role { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); text-align: left; }
 .signup-role select { font-size: 15px; }
 .status-pill {

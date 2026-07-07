@@ -8,6 +8,7 @@ import React, { useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, ShoeThumb } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import { markupSuffix } from '../lib/config.js';
 
 // $1,234.56 — or an em dash when the value is missing/zero (Alias reports "0"
 // for a size with no current listing/offer/sale). GI 0 is a genuine low-demand
@@ -21,7 +22,7 @@ const PRICE_COLS = [
   ['highest_offer', 'Highest offer'],
   ['last_sold', 'Last sold'],
   ['global_indicator', 'Global indicator'],
-  ['price', 'Final (GI + 20%)'],
+  ['price', 'Final'], // label rendered dynamically as "Final (GI + N%)" — see below
 ];
 
 export function PriceInquiry({ onHome, onSignOut }) {
@@ -100,7 +101,7 @@ export function PriceInquiry({ onHome, onSignOut }) {
       <div className="card">
         <p className="muted sm">
           Look up live Alias market prices for any SKU — lowest ask, highest offer, last sold, the Global Indicator, and
-          our Final price (GI&nbsp;+&nbsp;20%). This is a read-only lookup; nothing is saved to inventory.
+          our Final price (GI&nbsp;+&nbsp;{markupSuffix()}). This is a read-only lookup; nothing is saved to inventory.
         </p>
 
         <form className="pi-lookup" onSubmit={lookUp}>
@@ -167,7 +168,7 @@ export function PriceInquiry({ onHome, onSignOut }) {
               <thead>
                 <tr>
                   <th>Size</th>
-                  {PRICE_COLS.map(([k, label]) => <th key={k}>{label}</th>)}
+                  {PRICE_COLS.map(([k, label]) => <th key={k}>{k === 'price' ? `Final (GI + ${markupSuffix()})` : label}</th>)}
                 </tr>
               </thead>
               <tbody>

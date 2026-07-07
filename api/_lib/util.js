@@ -136,23 +136,28 @@ export function requireAuth(req, res) {
   return data;
 }
 
-// Like requireAuth but also requires the admin role. Returns the user or null.
+// Privileged roles auto-allowed wherever admin is: the env `admin` account and the
+// env `superadmin` account (which additionally reaches the PH-team pages, client-side).
+export const isPrivileged = (role) => role === 'admin' || role === 'superadmin';
+
+// Like requireAuth but also requires an admin-level role (admin or superadmin).
+// Returns the user or null.
 export function requireAdmin(req, res) {
   const user = requireAuth(req, res);
   if (!user) return null;
-  if (user.role !== 'admin') {
+  if (!isPrivileged(user.role)) {
     send(res, 403, { ok: false, error: 'Admin access required.' });
     return null;
   }
   return user;
 }
 
-// Like requireAuth but restricts to a set of roles (admin always allowed).
+// Like requireAuth but restricts to a set of roles (admin/superadmin always allowed).
 // Returns the user or null (after sending 401/403). Use for page-scoped access.
 export function requireRole(req, res, roles) {
   const user = requireAuth(req, res);
   if (!user) return null;
-  if (user.role !== 'admin' && !roles.includes(user.role)) {
+  if (!isPrivileged(user.role) && !roles.includes(user.role)) {
     send(res, 403, { ok: false, error: 'You do not have access to this feature.' });
     return null;
   }

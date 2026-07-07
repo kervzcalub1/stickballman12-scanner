@@ -40,8 +40,8 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const user = requireAuth(req, res);
   if (!user) return;
-  // Editing the report is PH Team only — admin and warehouse are read-only.
-  if (user.role !== 'ph_team')
+  // Editing the report is PH Team (or superadmin) only — admin and warehouse are read-only.
+  if (user.role !== 'ph_team' && user.role !== 'superadmin')
     return send(res, 403, { ok: false, error: 'Only PH Team can edit the report.' });
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

@@ -139,6 +139,17 @@ export async function setUserRole(id, role, reviewer) {
   return rows[0] || null;
 }
 
+// Admin/superadmin: reset an account's password to a freshly-hashed value (a
+// temporary password generated + shown once server-side). Returns the user row.
+export async function setUserPassword(id, passHash) {
+  const rows = await db()`
+    UPDATE users SET pass_hash = ${passHash}
+    WHERE id = ${id}
+    RETURNING id, name, username, role, status
+  `;
+  return rows[0] || null;
+}
+
 // Admin: permanently delete an account.
 export async function deleteUser(id) {
   const rows = await db()`DELETE FROM users WHERE id = ${id} RETURNING id`;
@@ -170,6 +181,45 @@ export async function countRecentFailures({ username, ip, windowMins = 15 }) {
       AND created_at > now() - (${windowMins} * interval '1 minute')
   `;
   return rows[0] || { by_user: 0, by_ip: 0 };
+}
+
+/* ---------------------------- App settings ---------------------------- */
+// Small key/value store (app_settings). Reads of the price markup are cached
+// briefly so per-item price math doesn't hit the DB each call; writes bust it.
+
+export async function getSetting(key) {
+  const rows = await db()`SELECT value FROM app_settings WHERE key = ${key} LIMIT 1`;
+  return rows[0]?.value ?? null;
+}
+
+export async function setSetting(key, value, updatedBy) {
+  const rows = await db()`
+    INSERT INTO app_settings (key, value, updated_by, updated_at)
+    VALUES (${key}, ${String(value)}, ${updatedBy || null}, now())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+    RETURNING key, value
+  `;
+  if (key === 'price_markup_pct') markupCache = { pct: null, expires: 0 }; // bust
+  return rows[0] || null;
+}
+
+// Price markup percent (GI → Final). Default 20 (= +20%). Cached ~30s.
+const DEFAULT_MARKUP_PCT = 20;
+let markupCache = { pct: null, expires: 0 };
+export async function getPriceMarkupPct() {
+  if (markupCache.pct != null && Date.now() < markupCache.expires) return markupCache.pct;
+  let pct = DEFAULT_MARKUP_PCT;
+  try {
+    const raw = await getSetting('price_markup_pct');
+    const n = raw == null ? NaN : Number(raw);
+    if (Number.isFinite(n) && n >= 0) pct = n;
+  } catch { /* fall back to default */ }
+  markupCache = { pct, expires: Date.now() + 30_000 };
+  return pct;
+}
+// Multiplier form: 1 + pct/100 (e.g. 20 → 1.2).
+export async function getPriceMarkupMult() {
+  return 1 + (await getPriceMarkupPct()) / 100;
 }
 
 /* ---------------------- Distributed lock (mutex) ---------------------- */
@@ -1164,6 +1214,7 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
   if (!groups.length) return [];
   const sql = db();
   const num = (v) => (v === '' || v == null ? null : Number(v));
+  const markupMult = await getPriceMarkupMult(); // GI → Final multiplier (configurable)
 
   const allVins = [...new Set(groups.flatMap((g) => g.vins))];
   // Exclude in-store units: they bypass the PH team, so a PH write must never
@@ -1228,10 +1279,11 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       // prevents the impossible "II off / Alias on" state. (II on + store off is
       // still valid: the store just hasn't synced yet.)
       if (!next.intel) { next.alias = false; next.stockx = false; next.shopify = false; }
-      // Final price is auto = GI + 20%. It only counts as a human change (gets a
-      // name) when the user OVERRIDES that calculated value; otherwise it's the
-      // system-derived figure. `descs` carries { text, system } per change.
-      const calcPrice = next.global == null ? null : Math.round(Number(next.global) * 1.2 * 100) / 100;
+      // Final price is auto = GI × markup (the configurable price margin). It only
+      // counts as a human change (gets a name) when the user OVERRIDES that
+      // calculated value; otherwise it's the system-derived figure. `descs`
+      // carries { text, system } per change.
+      const calcPrice = next.global == null ? null : Math.round(Number(next.global) * markupMult * 100) / 100;
       const priceIsCalc = (next.price == null && calcPrice == null)
         || (next.price != null && calcPrice != null && Math.abs(Number(next.price) - calcPrice) < 0.005);
       const descs = [];

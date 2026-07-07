@@ -3,10 +3,11 @@ import React from 'react';
 import { TopBar, CardBadges } from '../components/common.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
 import { usePendingCounts } from '../hooks.js';
-import { roleLabel, HOME_SECTIONS, HOME_ATTENTION, homeCardBadges } from '../lib/constants.js';
+import { roleLabel, HOME_SECTIONS, HOME_ATTENTION, homeCardBadges, isAdminRole } from '../lib/constants.js';
 
 export function Home({ user, onPick, onSignOut }) {
-  const isAdmin = user.role === 'admin';
+  const isAdmin = isAdminRole(user.role);
+  const isSuper = user.role === 'superadmin';
   const counts = usePendingCounts();
   const attention = counts ? HOME_ATTENTION.filter((a) => (counts[a.count] || 0) > 0) : [];
   return (
@@ -29,7 +30,7 @@ export function Home({ user, onPick, onSignOut }) {
           </div>
         </section>
       )}
-      {HOME_SECTIONS.filter((s) => !s.adminOnly || isAdmin).map((section) => (
+      {HOME_SECTIONS.filter((s) => (!s.adminOnly || isAdmin) && (!s.superOnly || isSuper)).map((section) => (
         <section className="home-section" key={section.title}>
           <h2 className="home-section-title">{section.title}</h2>
           <div className="home-grid">

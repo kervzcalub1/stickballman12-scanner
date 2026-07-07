@@ -4,12 +4,14 @@
 // stays in memory. A page may claim the device Back button via `navBack` (close a
 // modal / step back) before the app navigates away.
 import React, { useEffect, useRef, useState } from 'react';
-import { getUser, clearAuth } from './api.js';
+import { getUser, clearAuth, api } from './api.js';
 import { isUnsavedDirty } from './hooks.js';
 import { pathForView, viewForPath } from './lib/constants.js';
+import { setMarkupPct } from './lib/config.js';
 import { Auth } from './screens/Auth.jsx';
 import { Home } from './screens/Home.jsx';
 import { CheckAccess } from './screens/CheckAccess.jsx';
+import { Settings } from './screens/Settings.jsx';
 import { Receiving } from './screens/Receiving.jsx';
 import { BatchPage } from './screens/BatchPage.jsx';
 import { Inventory } from './screens/Inventory.jsx';
@@ -25,6 +27,9 @@ export default function App() {
   const [user, setUserState] = useState(getUser);
   // Initial page comes from the URL (so refreshing /inventory stays on Inventory).
   const [view, setView] = useState(() => viewForPath(window.location.pathname));
+  // Superadmin only: when true we render the PH-team workspace (PHTeamApp, which
+  // owns the /ph/* routes). ph_team is always in it; superadmin toggles in/out.
+  const [phMode, setPhMode] = useState(() => window.location.pathname.startsWith('/ph'));
   const [openVin, setOpenVin] = useState(null); // VIN to open in Inventory detail (cross-nav)
   // Multi-box: when set, Receiving runs in "add a box to this open batch" mode.
   const [batchContext, setBatchContext] = useState(null);
@@ -35,15 +40,28 @@ export default function App() {
 
   function onAuthed(u) {
     setUserState(u);
-    // PH users route under /ph/* inside PHTeamApp, which reads the URL itself —
-    // don't rewrite it here or we'd clobber a /ph/... deep link.
+    // PH users (and superadmin deep-linking into /ph/*) route under /ph/* inside
+    // PHTeamApp, which reads the URL itself — don't rewrite it or we'd clobber the link.
     if (u.role === 'ph_team') return;
+    if (u.role === 'superadmin' && window.location.pathname.startsWith('/ph')) { setPhMode(true); return; }
     // Honor a deep link the user landed on before signing in (e.g. /inventory).
     const v = viewForPath(window.location.pathname);
     setView(v);
     window.history.replaceState(null, '', pathForView(v));
   }
   function signOut() { clearAuth(); setUserState(null); setView('home'); window.history.replaceState(null, '', '/'); }
+
+  // Load app-wide settings (price margin) once signed in, so "GI + N%" labels and
+  // Final-price math use the real configured value. Bump state to re-render after.
+  const [, setCfgTick] = useState(0);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    api.getSettings()
+      .then((r) => { if (!cancelled && r?.priceMarkupPct != null) { setMarkupPct(r.priceMarkupPct); setCfgTick((t) => t + 1); } })
+      .catch(() => { /* keep default 20% */ });
+    return () => { cancelled = true; };
+  }, [user]);
 
   // Keep the URL in sync with the page so refresh restores it and the browser
   // Back/Forward buttons move between pages. A modal or wizard step still
@@ -63,6 +81,9 @@ export default function App() {
         window.history.pushState(null, '', pathForView(appRef.current.view));
         return;
       }
+      // Keep superadmin's PH-workspace flag in sync with the URL (PHTeamApp handles
+      // its own /ph/* subpages; here we only toggle in/out of the workspace).
+      setPhMode(window.location.pathname.startsWith('/ph'));
       setView(viewForPath(window.location.pathname));
     };
     window.addEventListener('popstate', onPop);
@@ -71,9 +92,14 @@ export default function App() {
 
   if (!user) return <Auth onAuthed={onAuthed} />;
 
-  // PH Team users get their own home: choose the New Inventory report or the
-  // Rescale Stock report (same listing/sync job, split by workflow).
+  const enterPh = () => { setPhMode(true); if (window.location.pathname !== '/ph') window.history.pushState(null, '', '/ph'); };
+  const exitPh = () => { setPhMode(false); window.history.pushState(null, '', pathForView('home')); setView('home'); };
+
+  // PH Team users get their own home (New Inventory / Rescale Stock reports, etc.).
+  // Superadmin reuses the same workspace when they've entered PH mode; exitPh takes
+  // them back to the main admin home.
   if (user.role === 'ph_team') return <PHTeamApp user={user} onSignOut={signOut} />;
+  if (user.role === 'superadmin' && phMode) return <PHTeamApp user={user} onSignOut={signOut} onExit={exitPh} />;
 
   const go = (v) => {
     setView(v);
@@ -90,11 +116,12 @@ export default function App() {
   if (view === 'inventory') return <Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'report') return <PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'settings') return <Settings onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'nobox') return <NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'sold') return <StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'shipped') return <StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'rescalereq') return <RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'shelve') return <ShelvePage navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'locations') return <Locations onHome={() => go('home')} onSignOut={signOut} />;
-  return <Home user={user} onPick={(v) => { setBatchContext(null); go(v); }} onSignOut={signOut} />;
+  return <Home user={user} onPick={(v) => { setBatchContext(null); if (v === 'ph') return enterPh(); go(v); }} onSignOut={signOut} />;
 }

@@ -1,7 +1,7 @@
 // Admin account management: approve / reject, change role, delete.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, Modal } from '../components/common.jsx';
+import { TopBar, Modal, CopyText } from '../components/common.jsx';
 import { useMediaQuery } from '../hooks.js';
 
 export function CheckAccess({ onHome, onSignOut }) {
@@ -9,6 +9,7 @@ export function CheckAccess({ onHome, onSignOut }) {
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState(null);
   const [confirm, setConfirm] = useState(null); // { u, action: 'reject' | 'delete' } | null
+  const [tempPw, setTempPw] = useState(null);    // { u, password } — shown once after a reset
   const isMobile = useMediaQuery('(max-width: 600px)');
 
   async function load() {
@@ -36,6 +37,12 @@ export function CheckAccess({ onHome, onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusyId(null); }
   }
+  async function resetPassword(u) {
+    setBusyId(u.id); setError('');
+    try { const { tempPassword } = await api.adminResetPassword(u.id); setTempPw({ u, password: tempPassword }); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusyId(null); }
+  }
 
   const RoleSelect = ({ u }) => (
     <select className="role-select" value={u.role} disabled={busyId === u.id} onChange={(e) => changeRole(u.id, e.target.value)}>
@@ -48,6 +55,7 @@ export function CheckAccess({ onHome, onSignOut }) {
     <>
       {u.status !== 'approved' && <button className="btn sm primary" disabled={busyId === u.id} onClick={() => review(u.id, 'approve')}>Approve</button>}
       {u.status !== 'rejected' && <button className="btn sm ghost" disabled={busyId === u.id} onClick={() => setConfirm({ u, action: 'reject' })}>Reject</button>}
+      <button className="btn sm ghost" disabled={busyId === u.id} onClick={() => setConfirm({ u, action: 'reset' })}>Reset password</button>
       <button className="btn sm danger" disabled={busyId === u.id} onClick={() => setConfirm({ u, action: 'delete' })}>Delete</button>
     </>
   );
@@ -95,15 +103,36 @@ export function CheckAccess({ onHome, onSignOut }) {
       {confirm && (
         <Modal
           type={confirm.action === 'delete' ? 'error' : 'warn'}
-          title={confirm.action === 'delete' ? `Delete "${confirm.u.username}"?` : `Reject "${confirm.u.username}"?`}
+          title={confirm.action === 'delete' ? `Delete "${confirm.u.username}"?`
+            : confirm.action === 'reset' ? `Reset password for "${confirm.u.username}"?`
+            : `Reject "${confirm.u.username}"?`}
           message={confirm.action === 'delete'
             ? 'This permanently removes the account and cannot be undone.'
+            : confirm.action === 'reset'
+            ? 'Generates a new temporary password and replaces the current one. The new password is shown once — copy it and relay it to the user.'
             : 'This blocks the account from signing in until you approve it.'}
           onClose={() => setConfirm(null)}>
           {confirm.action === 'delete'
             ? <button className="btn danger" onClick={() => remove(confirm.u.id)}>Delete account</button>
+            : confirm.action === 'reset'
+            ? <button className="btn primary" onClick={() => { const u = confirm.u; setConfirm(null); resetPassword(u); }}>Reset password</button>
             : <button className="btn primary" onClick={() => review(confirm.u.id, 'reject')}>Reject</button>}
           <button className="btn ghost" onClick={() => setConfirm(null)}>Cancel</button>
+        </Modal>
+      )}
+
+      {tempPw && (
+        <Modal
+          type="success"
+          title={`Temporary password for "${tempPw.u.username}"`}
+          message="Shown only once. Copy it now and relay it to the user — they sign in with it and can keep using it."
+          onClose={() => setTempPw(null)}>
+          <div className="temp-pw-box">
+            <CopyText text={tempPw.password} className="temp-pw-value" title="Copy password">
+              <code>{tempPw.password}</code>
+            </CopyText>
+          </div>
+          <button className="btn primary" onClick={() => setTempPw(null)}>Done</button>
         </Modal>
       )}
     </div>

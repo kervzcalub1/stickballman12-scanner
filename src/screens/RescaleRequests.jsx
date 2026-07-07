@@ -8,6 +8,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { rangeOf } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
+import { markupSuffix } from '../lib/config.js';
 import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
 
 // Monotonic key source for this screen's React lists (unique among siblings).
@@ -316,7 +317,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                         <table className="rc-listing-table">
                           <thead><tr>
                             <th>Size</th><th>Qty</th>
-                            {showPricing && <><th><span className="ph-gi-th">Global indicator{editable && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for these sizes" disabled={giBusyId === r.id} onClick={() => fetchGi(r)}><Icon name="refresh" size="1em" className={giBusyId === r.id ? 'spin' : ''} /></button>}</span></th><th>Final (GI+20%)</th></>}
+                            {showPricing && <><th><span className="ph-gi-th">Global indicator{editable && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for these sizes" disabled={giBusyId === r.id} onClick={() => fetchGi(r)}><Icon name="refresh" size="1em" className={giBusyId === r.id ? 'spin' : ''} /></button>}</span></th><th>Final (GI+{markupSuffix()})</th></>}
                             {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
                           </tr></thead>
                           <tbody>

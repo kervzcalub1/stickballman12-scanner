@@ -69,9 +69,13 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   /api/ph/refresh-gi { vins }` → `getItemsForGiRefresh` → `refreshGiForItems`
   (`api/_lib/intake.js`, Alias calls deduped by catalog+size) → `refreshItemGi`
   (logs a **system-generated** `ph_update` per changed unit). **Manual price
-  overrides are preserved**: a size whose current price isn't exactly the auto
-  GI+20% keeps its price (only its GI refreshes); no-op refreshes log nothing.
-  Excludes sold/shipped units. Blocked while a row is being edited.
+  overrides are preserved ONLY for listed units** (on II or synced to any store) —
+  a listed size whose price isn't exactly the auto GI×margin keeps it, so a live
+  listing isn't disturbed. **UNLISTED units always take the fresh Final = GI ×
+  current margin** (`isListed` check in `refreshGiForItems`), so a margin change
+  actually lands on Refresh prices (an old-margin auto price would otherwise look
+  like an override). No-op refreshes log nothing. Excludes sold/shipped units.
+  Blocked while a row is being edited.
 - **Global indicator + Final price are hidden from the warehouse role**
   (`showPricing = role !== 'warehouse'`); admin sees them read-only.
 - Save: one `phUpdateMany(vins, fields, baseEditedAt)` **per size** (sizes touch

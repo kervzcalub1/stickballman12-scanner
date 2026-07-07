@@ -136,7 +136,12 @@ export async function refreshGiForItems(rows, { preserveOverrides = true } = {})
       const oldPrice = it.price != null ? Number(it.price) : null;
       const autoOld = oldGi != null ? round2(oldGi * mult) : null;
       const isOverride = oldPrice != null && (autoOld == null || !near(oldPrice, autoOld));
-      const keptOverride = preserveOverrides && isOverride;
+      // Preserve a manual price override only for LISTED units (on II or synced to any
+      // store) — don't disturb a live listing's price. UNLISTED units always take the
+      // freshly-computed Final = GI × current margin, so a margin change actually lands
+      // on "Refresh prices" (an old-margin auto price otherwise looks like an override).
+      const isListed = !!(it.added_to_intel_inv || it.synced_alias || it.synced_stockx || it.synced_shopify);
+      const keptOverride = preserveOverrides && isListed && isOverride;
       const newPrice = keptOverride ? oldPrice : round2(gi * mult);
 
       const giChanged = oldGi == null || !near(gi, oldGi);

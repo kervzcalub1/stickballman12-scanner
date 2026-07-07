@@ -41,11 +41,14 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
 
 ## Editable fields (one Edit ⇄ Submit per group)
 - **Per size**: Global indicator (number) → **Final price auto-calculates** = GI ×
-  markup (`calcFinalPrice`). The markup is the **configurable price margin** (default
-  +20%), NOT a hard-coded constant: client reads it from `src/lib/config.js`, server
-  from `getPriceMarkupMult()` (db.js, `app_settings.price_markup_pct`); admin/superadmin
-  edit it on the Settings screen. All "GI + N%" labels render `markupSuffix()`. Final
-  price stays editable so it can be overridden.
+  markup, **rounded to the nearest whole dollar** (`calcFinalPrice`; server
+  `roundFinal` in intake.js, `round()` in db.js). The markup is the **configurable
+  price margin** (default +20%), NOT a hard-coded constant: client reads it from
+  `src/lib/config.js`, server from `getPriceMarkupMult()` (db.js,
+  `app_settings.price_markup_pct`); admin/superadmin edit it on the Settings screen.
+  All "GI + N%" labels render `markupSuffix()`. Final price stays editable so it can
+  be overridden (a manual override may carry cents; `fmtPrice` in format.js shows
+  whole dollars without a trailing `.00` and keeps real cents).
 - **GI basis (Consigned vs "With You") + "WY" chip**: GI fetches are consigned-first
   with an automatic With-You fallback when consigned is empty/0 (`aliasGiWithBasis`,
   `integrations.md`). The basis is persisted on `items.gi_basis` and surfaced beside

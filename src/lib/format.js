@@ -27,6 +27,14 @@ export function estCivil(date = new Date()) {
 
 export const ymd = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 
+// Format a dollar amount, dropping a trailing ".00" (Final prices round to whole
+// dollars) but keeping real cents on a manual override. 94 → "94", 94.5 → "94.50".
+export const fmtPrice = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+};
+
 // Today's date as YYYY-MM-DD in EST — NOT `new Date().toISOString().slice(0,10)`,
 // which is UTC and rolls over ~4-5h early (evening EST → tomorrow), mis-dating a
 // batch/VIN and showing the wrong "Today" in Inventory. Server filters are EST too.

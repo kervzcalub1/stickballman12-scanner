@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { TopBar, DateRangeBar, RescaleCompare, YesNo, PriceInput } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
-import { rangeOf } from '../lib/format.js';
+import { rangeOf, fmtPrice } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
 import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
@@ -264,7 +264,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                 <div className="rc-head">
                   <div>
                     <div className="rc-title">{r.name || r.sku}</div>
-                    <div className="muted sm">{r.sku} · {r.reason}{r.price != null ? ` · $${Number(r.price).toFixed(2)}` : ''}</div>
+                    <div className="muted sm">{r.sku} · {r.reason}{r.price != null ? ` · $${fmtPrice(r.price)}` : ''}</div>
                   </div>
                   <span className={`rc-pill ${r.status}`}>{r.status === 'audited' ? 'Audited' : 'Open'}</span>
                 </div>
@@ -333,7 +333,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                                 ) : (
                                   <>
                                     <td>{row.global_indicator !== '' && row.global_indicator != null ? `$${Number(row.global_indicator).toFixed(2)}` : '—'}</td>
-                                    <td>{row.price !== '' && row.price != null ? `$${Number(row.price).toFixed(2)}` : '—'}</td>
+                                    <td>{row.price !== '' && row.price != null ? `$${fmtPrice(row.price)}` : '—'}</td>
                                   </>
                                 ))}
                                 {PH_FLAGS.map(([k]) => (

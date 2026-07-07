@@ -231,12 +231,12 @@ export async function recomputeUnlistedPrices(oldMult, newMult) {
   const om = Number(oldMult); const nm = Number(newMult);
   if (!Number.isFinite(om) || !Number.isFinite(nm) || Math.abs(om - nm) < 1e-9) return 0;
   const rows = await db()`
-    UPDATE items SET price = round(global_indicator * ${nm}, 2), updated_at = now()
+    UPDATE items SET price = round(global_indicator * ${nm}), updated_at = now()
     WHERE global_indicator IS NOT NULL
       AND added_to_intel_inv = false
       AND synced_alias = false AND synced_stockx = false AND synced_shopify = false
       AND status NOT IN ('sold', 'shipped')
-      AND (price IS NULL OR abs(price - round(global_indicator * ${om}, 2)) < 0.005)
+      AND (price IS NULL OR abs(price - round(global_indicator * ${om})) < 0.51)
       AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.id = items.batch_id AND b.kind = 'instore')
     RETURNING id
   `;
@@ -1313,7 +1313,7 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       // counts as a human change (gets a name) when the user OVERRIDES that
       // calculated value; otherwise it's the system-derived figure. `descs`
       // carries { text, system } per change.
-      const calcPrice = next.global == null ? null : Math.round(Number(next.global) * markupMult * 100) / 100;
+      const calcPrice = next.global == null ? null : Math.round(Number(next.global) * markupMult); // nearest whole dollar
       const priceIsCalc = (next.price == null && calcPrice == null)
         || (next.price != null && calcPrice != null && Math.abs(Number(next.price) - calcPrice) < 0.005);
       const descs = [];

@@ -222,6 +222,27 @@ export async function getPriceMarkupMult() {
   return 1 + (await getPriceMarkupPct()) / 100;
 }
 
+// When the price margin changes, recompute Final = GI × newMult for items that are
+// NOT yet listed — off Intelligent Inventory AND off every store (Alias/StockX/
+// Shopify). Preserves manual price overrides: only rows whose price is null or still
+// equals the auto GI × oldMult are re-priced (rows a PH person hand-typed differ, so
+// they're left alone). Skips in-store units and sold/shipped. Returns the row count.
+export async function recomputeUnlistedPrices(oldMult, newMult) {
+  const om = Number(oldMult); const nm = Number(newMult);
+  if (!Number.isFinite(om) || !Number.isFinite(nm) || Math.abs(om - nm) < 1e-9) return 0;
+  const rows = await db()`
+    UPDATE items SET price = round(global_indicator * ${nm}, 2), updated_at = now()
+    WHERE global_indicator IS NOT NULL
+      AND added_to_intel_inv = false
+      AND synced_alias = false AND synced_stockx = false AND synced_shopify = false
+      AND status NOT IN ('sold', 'shipped')
+      AND (price IS NULL OR abs(price - round(global_indicator * ${om}, 2)) < 0.005)
+      AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.id = items.batch_id AND b.kind = 'instore')
+    RETURNING id
+  `;
+  return rows.length;
+}
+
 /* ---------------------- Distributed lock (mutex) ---------------------- */
 // Atomic acquire: insert the key, or steal it if the prior holder's lease
 // expired. Returns true if acquired. One round trip, safe over the HTTP driver.

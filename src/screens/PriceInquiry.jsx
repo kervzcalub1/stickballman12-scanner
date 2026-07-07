@@ -9,6 +9,7 @@ import { api } from '../api.js';
 import { TopBar, ShoeThumb } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { markupSuffix } from '../lib/config.js';
+import { fmtPrice } from '../lib/format.js';
 
 // $1,234.56 — or an em dash when the value is missing/zero (Alias reports "0"
 // for a size with no current listing/offer/sale). GI 0 is a genuine low-demand
@@ -16,6 +17,8 @@ import { markupSuffix } from '../lib/config.js';
 const money = (v) => (v == null || Number(v) <= 0
   ? '—'
   : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+// Final price is a whole dollar (rounded) — drop the trailing ".00".
+const moneyFinal = (v) => (v == null || Number(v) <= 0 ? '—' : `$${fmtPrice(v)}`);
 
 const PRICE_COLS = [
   ['lowest_listing', 'Lowest ask'],
@@ -204,7 +207,7 @@ export function PriceInquiry({ onHome, onSignOut }) {
                   <tr key={r.size}>
                     <td className="inv-col-size">{r.size}</td>
                     {PRICE_COLS.map(([k]) => (
-                      <td key={k} className={k === 'price' ? 'pi-final' : ''}>{money(r[k])}</td>
+                      <td key={k} className={k === 'price' ? 'pi-final' : ''}>{k === 'price' ? moneyFinal(r[k]) : money(r[k])}</td>
                     ))}
                   </tr>
                 ))}

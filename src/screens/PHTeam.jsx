@@ -11,7 +11,7 @@ import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
-import { rangeOf, PH_DATE, PH_DATETIME } from '../lib/format.js';
+import { rangeOf, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
 import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized,
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
@@ -476,7 +476,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                               : <><b>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}</b><WyChip basis={s.gi_basis} /></>}</span>}
                             {showPricing && <span className="ph-card-price">Final {ed
                               ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
-                              : <><b>{s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—'}</b>{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${Number(s.listed_price).toFixed(2)}</span>}</>}</span>}
+                              : <><b>{s.price != null ? `${s.priceMixed ? '~' : ''}$${fmtPrice(s.price)}` : '—'}</b>{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${fmtPrice(s.listed_price)}</span>}</>}</span>}
                             <span className="ph-sizedetail-flags">
                               {PH_FLAGS.map(([k, label]) => (
                                 <span className="ph-sizedetail-flag" key={k}>
@@ -623,7 +623,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                           <td>{ed
                                             ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
                                             : (s.price != null
-                                              ? <>{s.priceMixed ? '~' : ''}${Number(s.price).toFixed(2)}{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${Number(s.listed_price).toFixed(2)}</span>}</>
+                                              ? <>{s.priceMixed ? '~' : ''}${fmtPrice(s.price)}{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${fmtPrice(s.listed_price)}</span>}</>
                                               : '—')}</td>
                                         )}
                                         {PH_FLAGS.map(([k]) => (

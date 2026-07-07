@@ -15,6 +15,8 @@ const VIN_RE = /^SBM-\d{6}-\d{6}$/;
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
 const toCost = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
+// Final price rounds to the nearest whole dollar (GI × margin → e.g. 94.30 → 94).
+const roundFinal = (v) => Math.round(v);
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
 
 // Normalize raw client items. A unit whose VIN is in `noBoxVins` (flagged with a
@@ -99,13 +101,12 @@ export async function enrichGlobalIndicators(created, items) {
       if (!giByKey.has(key)) giByKey.set(key, await aliasGiWithBasis({ catalogId, size: it.size }));
       const { globalIndicator: gi, basis } = giByKey.get(key);
       if (gi == null) continue;
-      updates.push({ id, global_indicator: gi, gi_basis: basis, price: Math.round(gi * mult * 100) / 100 });
+      updates.push({ id, global_indicator: gi, gi_basis: basis, price: roundFinal(gi * mult) });
     } catch { /* best-effort — skip this unit */ }
   }
   if (updates.length) await setItemGlobalIndicators(updates);
 }
 
-const round2 = (v) => Math.round(v * 100) / 100;
 const near = (a, b) => Math.abs(Number(a) - Number(b)) < 0.005;
 
 // Re-fetch the Alias global indicator for EXISTING items and recompute the final
@@ -134,7 +135,7 @@ export async function refreshGiForItems(rows, { preserveOverrides = true } = {})
 
       const oldGi = it.global_indicator != null ? Number(it.global_indicator) : null;
       const oldPrice = it.price != null ? Number(it.price) : null;
-      const autoOld = oldGi != null ? round2(oldGi * mult) : null;
+      const autoOld = oldGi != null ? roundFinal(oldGi * mult) : null;
       const isOverride = oldPrice != null && (autoOld == null || !near(oldPrice, autoOld));
       // Preserve a manual price override only for LISTED units (on II or synced to any
       // store) — don't disturb a live listing's price. UNLISTED units always take the
@@ -142,7 +143,7 @@ export async function refreshGiForItems(rows, { preserveOverrides = true } = {})
       // on "Refresh prices" (an old-margin auto price otherwise looks like an override).
       const isListed = !!(it.added_to_intel_inv || it.synced_alias || it.synced_stockx || it.synced_shopify);
       const keptOverride = preserveOverrides && isListed && isOverride;
-      const newPrice = keptOverride ? oldPrice : round2(gi * mult);
+      const newPrice = keptOverride ? oldPrice : roundFinal(gi * mult);
 
       const giChanged = oldGi == null || !near(gi, oldGi);
       const priceChanged = oldPrice == null || !near(newPrice, oldPrice);
@@ -173,7 +174,7 @@ export async function giForSkuSizes(sku, sizes) {
   for (const size of list) {
     try {
       const { globalIndicator: gi, basis } = await aliasGiWithBasis({ catalogId, size });
-      if (gi != null) results.push({ size, global_indicator: gi, price: round2(gi * mult), basis });
+      if (gi != null) results.push({ size, global_indicator: gi, price: roundFinal(gi * mult), basis });
     } catch { /* skip this size */ }
   }
   return { configured: true, results };
@@ -206,7 +207,7 @@ export async function priceInquiryForSkuSizes(sku, sizes, { consigned = true } =
       results.push({
         size,
         global_indicator: gi,
-        price: gi != null ? round2(gi * mult) : null,
+        price: gi != null ? roundFinal(gi * mult) : null,
         lowest_listing: p.lowestListing,
         highest_offer: p.highestOffer,
         last_sold: p.lastSold,

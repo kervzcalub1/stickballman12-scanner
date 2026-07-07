@@ -35,9 +35,17 @@ test('Edit reveals the per-size editor (inputs + flag checkboxes)', async ({ pag
   await expect(page.getByRole('button', { name: 'Submit' }).first()).toBeVisible();
 });
 
-test('Global Indicator drives Final Price = GI + 20%', async ({ page }) => {
+test('Global Indicator drives Final Price = GI × margin (whole dollar)', async ({ page }) => {
   const rows = await openGrid(page);
   test.skip(rows === 0, 'no rows in range (empty DB)');
+  // Final = GI × the configured margin, rounded to the nearest whole dollar. Read
+  // the current margin so the test stays correct whatever it's set to.
+  const pct = await page.evaluate(async () => {
+    const t = sessionStorage.getItem('sb_session_token');
+    const r = await fetch('/api/settings', { headers: { Authorization: `Bearer ${t}` } });
+    return (await r.json()).priceMarkupPct;
+  });
+  const mult = 1 + Number(pct) / 100;
   await page.getByRole('button', { name: 'Edit' }).first().click();
   const inputs = page.locator('input.ph-price');
   await expect(inputs.first()).toBeVisible();
@@ -45,9 +53,9 @@ test('Global Indicator drives Final Price = GI + 20%', async ({ page }) => {
   const gi = inputs.nth(0);
   const final = inputs.nth(1);
   await gi.fill('100');
-  await expect(final).toHaveValue('120.00');
+  await expect(final).toHaveValue(String(Math.round(100 * mult)));
   await gi.fill('250');
-  await expect(final).toHaveValue('300.00');
+  await expect(final).toHaveValue(String(Math.round(250 * mult)));
 });
 
 test('flag checkbox toggles', async ({ page }) => {

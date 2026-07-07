@@ -25,13 +25,13 @@ export const PH_FLAGS = [
 export const FLAG_KEYS = ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify'];
 
 // Final price auto-derives from the global indicator: entered amount × markup
-// (the configurable price margin, default +20%; see src/lib/config.js).
-// Empty/non-numeric global indicator clears the final price.
+// (the configurable price margin, default +20%; see src/lib/config.js), rounded
+// to the nearest whole dollar. Empty/non-numeric global indicator clears it.
 export function calcFinalPrice(globalIndicator) {
   if (globalIndicator === '' || globalIndicator == null) return '';
   const n = Number(globalIndicator);
   if (!Number.isFinite(n)) return '';
-  return (Math.round(n * getMarkupMult() * 100) / 100).toFixed(2);
+  return String(Math.round(n * getMarkupMult()));
 }
 
 // Merge into ONE row per SKU + status (regardless of size), because the PH team

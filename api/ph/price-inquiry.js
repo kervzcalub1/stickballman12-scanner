@@ -23,12 +23,14 @@ export default async function handler(req, res) {
   const sku = String(body.sku ?? '').trim();
   const sizes = (Array.isArray(body.sizes) ? body.sizes : [])
     .map((s) => String(s ?? '').trim()).filter(Boolean).slice(0, 100);
+  // Pricing basis: consigned (default, daily-ops) vs "With You" (consigned:false).
+  const consigned = body.consigned === false ? false : true;
   if (!sku) return send(res, 400, { ok: false, error: 'Missing SKU.' });
   if (!sizes.length) return send(res, 400, { ok: false, error: 'No sizes to price.' });
 
   try {
-    const { configured, results } = await priceInquiryForSkuSizes(sku, sizes);
-    return send(res, 200, { ok: true, configured, results });
+    const { configured, results } = await priceInquiryForSkuSizes(sku, sizes, { consigned });
+    return send(res, 200, { ok: true, configured, results, consigned });
   } catch (e) {
     console.error('[ph/price-inquiry]', e.message);
     return send(res, 500, { ok: false, error: 'Could not fetch prices.' });

@@ -21,6 +21,14 @@ import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { PhEditedPhotos } from './PhEditedPhotos.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
 
+// Small "WY" chip shown beside a GI that came from the Alias "With You" basis
+// (the consigned GI was empty/0, so we fell back). Nothing renders for consigned
+// or manual (null) values. See docs/context/ph-report.md.
+function WyChip({ basis }) {
+  if (basis !== 'with_you') return null;
+  return <span className="ph-wy-chip" title="Consigned GI was empty — showing the With You price">WY</span>;
+}
+
 // PH Team home: pick which report to work — New Inventory (newly received stock)
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
 // + sync to Intelligent Inventory / Alias / StockX / Shopify. PH pages are
@@ -290,7 +298,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     // sync / be noted independently of the others).
     const sizes = {};
     for (const s of g.sizes) sizes[s.size] = {
-      global_indicator: s.global_indicator ?? '', price: s.price ?? '',
+      global_indicator: s.global_indicator ?? '', price: s.price ?? '', gi_basis: s.gi_basis ?? null,
       added_to_intel_inv: !!s.added_to_intel_inv, synced_alias: !!s.synced_alias,
       synced_stockx: !!s.synced_stockx, synced_shopify: !!s.synced_shopify,
       ph_note: s.note || '',
@@ -305,8 +313,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     setDrafts((d) => ({ ...d, [key]: { ...d[key], sizes: { ...d[key].sizes, [size]: { ...d[key].sizes[size], ...patch } } } }));
     resetIdle();
   };
-  // Per-size Global indicator drives that size's Final price (entered amount + 20%).
-  const setSizeGI = (key, size, v) => setSizeField(key, size, { global_indicator: v, price: calcFinalPrice(v) });
+  // Per-size Global indicator drives that size's Final price. A hand-typed GI has no
+  // Alias basis, so clear gi_basis (removes the "WY" chip on save).
+  const setSizeGI = (key, size, v) => setSizeField(key, size, { global_indicator: v, price: calcFinalPrice(v), gi_basis: null });
   const setSizePrice = (key, size, v) => setSizeField(key, size, { price: v });
   const setSizeFlag = (key, size, flagKey, v) => setSizeField(key, size, { [flagKey]: v });
   const setSizeNote = (key, size, v) => setSizeField(key, size, { ph_note: v });
@@ -324,7 +333,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
         return {
           vins: s.vins,
           fields: {
-            global_indicator: sd.global_indicator, price: sd.price,
+            global_indicator: sd.global_indicator, price: sd.price, gi_basis: sd.gi_basis ?? null,
             added_to_intel_inv: sd.added_to_intel_inv, synced_alias: sd.synced_alias,
             synced_stockx: sd.synced_stockx, synced_shopify: sd.synced_shopify,
             ph_note: sd.ph_note,
@@ -367,8 +376,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       if (res.configured === false) {
         setNotice('Alias pricing isn’t configured, so prices can’t be refreshed.');
       } else {
+        const wy = res.withYou ? ` — ${res.withYou} used With You (Consigned was empty)` : '';
         setNotice(res.updated
-          ? `Refreshed ${res.updated} price${res.updated === 1 ? '' : 's'} from Alias (checked ${res.checked}).`
+          ? `Refreshed ${res.updated} price${res.updated === 1 ? '' : 's'} from Alias (checked ${res.checked})${wy}.`
           : `Prices are already up to date (checked ${res.checked}).`);
         await load();
       }
@@ -391,7 +401,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
         const sizes = { ...cur.sizes };
         for (const s of g.sizes) {
           const hit = bySize.get(String(s.size));
-          if (hit) sizes[s.size] = { ...sizes[s.size], global_indicator: hit.global_indicator, price: calcFinalPrice(hit.global_indicator) };
+          if (hit) sizes[s.size] = { ...sizes[s.size], global_indicator: hit.global_indicator, price: calcFinalPrice(hit.global_indicator), gi_basis: hit.basis ?? null };
         }
         return { ...d, [g.key]: { ...cur, sizes } };
       });
@@ -462,8 +472,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                             <span className="ph-sizedetail-size">US {s.size} <span className="muted">×{s.qty}</span></span>
                             <span className="muted sm">Cost {s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</span>
                             {showPricing && <span className="ph-card-price">GI {ed
-                              ? <PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} />
-                              : <b>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}</b>}</span>}
+                              ? <><PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} /><WyChip basis={sd.gi_basis} /></>
+                              : <><b>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}</b><WyChip basis={s.gi_basis} /></>}</span>}
                             {showPricing && <span className="ph-card-price">Final {ed
                               ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
                               : <><b>{s.price != null ? `${s.priceMixed ? '~' : ''}$${Number(s.price).toFixed(2)}` : '—'}</b>{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${Number(s.listed_price).toFixed(2)}</span>}</>}</span>}
@@ -606,8 +616,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                         <td>{s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</td>
                                         {showPricing && (
                                           <td>{ed
-                                            ? <PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} />
-                                            : (s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—')}</td>
+                                            ? <><PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} /><WyChip basis={sd.gi_basis} /></>
+                                            : <>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}<WyChip basis={s.gi_basis} /></>}</td>
                                         )}
                                         {showPricing && (
                                           <td>{ed

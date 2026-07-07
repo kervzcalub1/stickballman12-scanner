@@ -36,11 +36,20 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
 - `aliasPriceInsights` GETs the **official host ONLY** (`api.alias.org`, hardcoded
   `ALIAS_API_BASE` — never the bypass proxy or any other host, by request):
   `/api/v1/pricing_insights/availability?catalog_id&size&product_condition&
-  packaging_condition&region_id=3`. The `availability` object carries **four**
+  packaging_condition&region_id=3&consigned`. The `availability` object carries **four**
   price fields (all `_cents` strings, ÷ 100 → $, `"0"`/absent → null):
   `global_indicator_price_cents`, `lowest_listing_price_cents` (lowest ask),
   `highest_offer_price_cents` (highest bid), `last_sold_listing_price_cents`.
   Returns `{ globalIndicator, lowestListing, highestOffer, lastSold }`.
+- **Pricing BASIS — `consigned`** (param on `aliasPriceInsights`, default `true`):
+  `true` = **consigned** (matches our daily-ops pricing on sell.alias.org);
+  `false` = **"With You"** (seller-side non-consigned). Some SKUs return an empty/0
+  consigned GI while With You has a real price (e.g. `FN6931-100`). `aliasGiWithBasis`
+  tries consigned first and falls back to With You when the GI is empty/0, returning
+  `{ globalIndicator, basis }` (`'consigned'|'with_you'|null`). Used by all New-Inventory
+  GI paths (`enrichGlobalIndicators`, `refreshGiForItems`, `giForSkuSizes`); the basis
+  is persisted on `items.gi_basis` and shown as a "WY" chip on the PH grid. **Price
+  Inquiry** uses an EXPLICIT basis (its Consigned/With You toggle) — no fallback.
 - `aliasGlobalIndicator` is a thin wrapper → `aliasPriceInsights(...).globalIndicator`.
   The lowest/highest/last-sold fields feed the PH **Price Inquiry** page
   (`priceInquiryForSkuSizes`, `ph-report.md`); receiving/GI-refresh use only the GI.

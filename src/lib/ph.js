@@ -112,7 +112,7 @@ export function groupPhSized(list) {
     const sz = r.size || '—';
     let s = g._sizes.get(sz);
     if (!s) {
-      s = { size: sz, vins: [], qty: 0, cost: null, global_indicator: null, price: null, listed_price: null, note: null, _drift: false, _costs: new Set(), _globals: new Set(), _prices: new Set(),
+      s = { size: sz, vins: [], qty: 0, cost: null, global_indicator: null, gi_basis: null, price: null, listed_price: null, note: null, _drift: false, _costs: new Set(), _globals: new Set(), _prices: new Set(),
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true } };
       g._sizes.set(sz, s);
     }
@@ -122,6 +122,7 @@ export function groupPhSized(list) {
     s._prices.add(r.price == null ? '' : String(r.price));
     if (s.cost == null && r.cost != null) s.cost = r.cost;
     if (s.global_indicator == null && r.global_indicator != null) s.global_indicator = r.global_indicator;
+    if (s.gi_basis == null && r.gi_basis != null) s.gi_basis = r.gi_basis; // basis follows the GI
     if (s.price == null && r.price != null) s.price = r.price;
     if (!(s.note || '') && (r.ph_note || '')) s.note = r.ph_note; // per-size note (first non-empty)
     if (s.listed_price == null && r.listed_price != null) s.listed_price = r.listed_price; // price it was listed at
@@ -138,7 +139,7 @@ export function groupPhSized(list) {
       .map((s) => ({
         size: s.size, vins: s.vins, qty: s.qty,
         cost: s.cost, costMixed: s._costs.size > 1,
-        global_indicator: s.global_indicator, globalMixed: s._globals.size > 1,
+        global_indicator: s.global_indicator, globalMixed: s._globals.size > 1, gi_basis: s.gi_basis,
         price: s.price, priceMixed: s._prices.size > 1,
         listed_price: s.listed_price, priceChanged: s._drift,
         note: s.note,

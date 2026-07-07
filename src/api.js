@@ -142,7 +142,7 @@ export const api = {
   // Generic Alias GI lookup (no save) — used by the PH grid + rescale listing editor.
   phGiLookup: (sku, sizes) => post('/api/ph/gi-lookup', { sku, sizes }),
   // Read-only price inquiry (no save) — GI + Final + lowest/highest/last-sold, PH Price Inquiry page.
-  phPriceInquiry: (sku, sizes) => post('/api/ph/price-inquiry', { sku, sizes }),
+  phPriceInquiry: (sku, sizes, consigned = true) => post('/api/ph/price-inquiry', { sku, sizes, consigned }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // v5 — PH Team monthly grid
   phList: (from, to, kind) => get(`/api/ph/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(kind ? { kind } : {}) }).toString()}`),

@@ -834,6 +834,32 @@ body {
 .ph-sizetable th:last-child, .ph-sizetable td:last-child { text-align: left; }
 .ph-sizetable td.ph-note-cell { text-align: left; }
 .ph-gi-th { display: inline-flex; align-items: center; gap: 6px; }
+/* Price Inquiry — Consigned / With You basis toggle (prominent bar) */
+.pi-basis {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 4px 0 14px; padding: 10px 14px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: rgba(79, 124, 255, 0.06);
+}
+.pi-basis-label { font-weight: 700; font-size: 14px; letter-spacing: 0.2px; }
+.pi-basis-hint { color: var(--muted); font-size: 13px; margin-left: auto; }
+/* Bigger, higher-contrast segmented buttons than the default .seg */
+.pi-basis-seg .seg-btn { padding: 8px 18px; font-size: 14px; font-weight: 600; }
+.pi-basis-seg .seg-btn.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+@media (max-width: 600px) { .pi-basis-hint { margin-left: 0; width: 100%; } }
+
+/* Price Inquiry — "Price all" button (prominent) */
+.pi-priceall { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+
+/* "With You" basis chip beside a GI that fell back from an empty consigned price. */
+.ph-wy-chip {
+  display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 700; line-height: 16px; vertical-align: middle;
+  letter-spacing: 0.3px; color: #92400e; background: #fef3c7; border: 1px solid #fcd34d;
+}
+@media (prefers-color-scheme: dark) {
+  .ph-wy-chip { color: #fde68a; background: rgba(180, 130, 20, 0.22); border-color: rgba(252, 211, 77, 0.5); }
+}
 /* Refresh / re-fetch buttons — accent-colored so they read clearly as "refresh". */
 .ph-gi-refresh { line-height: 1; padding: 3px 6px; min-width: 0; color: #6b96ff;
   border: 1px solid rgba(79, 124, 255, 0.55); background: rgba(79, 124, 255, 0.14); }

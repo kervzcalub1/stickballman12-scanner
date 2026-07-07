@@ -54,25 +54,33 @@ export function PriceInquiry({ onHome, onSignOut }) {
     const n = new Set(s); for (const sz of sizes) (on ? n.add(sz) : n.delete(sz)); return n;
   });
 
-  // Fetch one or more sizes from Alias in a single request, then merge the results
-  // in (an asked-for size with no data is stored as an _empty marker so its chip
-  // still reads "fetched" and it gets a dashed row). Read-only; nothing is saved.
+  // Fetch sizes from Alias in small chunks, rendering each chunk as it lands so
+  // rows appear PROGRESSIVELY (size by size) instead of all at once at the end.
+  // An asked-for size with no data is stored as an _empty marker so its chip still
+  // reads "fetched" and it gets a dashed row. Read-only; nothing is saved.
+  const CHUNK = 3; // sizes per request — small enough to reveal gradually, few enough requests
   async function fetchSizes(sizes, useBasis = basis) {
     if (!product || !sizes.length) return;
-    setLoad(sizes, true); setError('');
-    try {
-      const { configured, results: r } = await api.phPriceInquiry(product.sku, sizes, useBasis === 'consigned');
-      if (!configured) { setNotConfigured(true); return; }
-      const bySize = new Map((r || []).map((row) => [String(row.size), row]));
-      setPriced((prev) => {
-        const next = { ...prev };
-        for (const sz of sizes) next[sz] = bySize.get(String(sz)) || { size: sz, _empty: true };
-        return next;
-      });
-    } catch (err) {
-      if (err.unauthorized) return onSignOut();
-      setError(err.message);
-    } finally { setLoad(sizes, false); }
+    for (let i = 0; i < sizes.length; i += CHUNK) {
+      const chunk = sizes.slice(i, i + CHUNK);
+      setLoad(chunk, true); setError('');
+      try {
+        const { configured, results: r } = await api.phPriceInquiry(product.sku, chunk, useBasis === 'consigned');
+        if (!configured) { setNotConfigured(true); setLoad(chunk, false); return; }
+        const bySize = new Map((r || []).map((row) => [String(row.size), row]));
+        setPriced((prev) => {
+          const next = { ...prev };
+          for (const sz of chunk) next[sz] = bySize.get(String(sz)) || { size: sz, _empty: true };
+          return next;
+        });
+      } catch (err) {
+        if (err.unauthorized) return onSignOut();
+        setError(err.message);
+        setLoad(chunk, false);
+        return;
+      }
+      setLoad(chunk, false);
+    }
   }
 
   // Tap a chip: idle → fetch it · already priced → remove it · loading → ignore.
@@ -143,17 +151,19 @@ export function PriceInquiry({ onHome, onSignOut }) {
 
         {product && sizes.length > 0 && (
           <div className="pi-sizes mt">
-            <div className="pi-sizes-head">
-              <span className="pi-sizes-label">Tap a size to fetch its price {pricedCount > 0 ? <span className="pi-sizes-count">{pricedCount} priced</span> : null}</span>
-              <button type="button" className="linklike sm" onClick={toggleAll}>{allPriced ? 'Clear all' : 'Price all'}</button>
-            </div>
             <div className="pi-basis" role="group" aria-label="Pricing basis">
-              <span className="pi-basis-label muted sm">Basis</span>
-              <div className="seg sm">
+              <span className="pi-basis-label">Pricing basis</span>
+              <div className="seg pi-basis-seg">
                 <button type="button" className={`seg-btn ${basis === 'consigned' ? 'on' : ''}`} aria-pressed={basis === 'consigned'} onClick={() => changeBasis('consigned')}>Consigned</button>
                 <button type="button" className={`seg-btn ${basis === 'with_you' ? 'on' : ''}`} aria-pressed={basis === 'with_you'} onClick={() => changeBasis('with_you')}>With You</button>
               </div>
-              <span className="muted sm">{basis === 'consigned' ? 'Daily-ops pricing (consigned)' : 'Seller “With You” pricing (non-consigned)'}</span>
+              <span className="pi-basis-hint">{basis === 'consigned' ? 'Daily-ops pricing (consigned)' : 'Seller “With You” pricing (non-consigned)'}</span>
+            </div>
+            <div className="pi-sizes-head">
+              <span className="pi-sizes-label">Tap a size to fetch its price {pricedCount > 0 ? <span className="pi-sizes-count">{pricedCount} priced</span> : null}</span>
+              <button type="button" className={`btn sm pi-priceall ${allPriced ? 'ghost' : 'primary'}`} onClick={toggleAll}>
+                {allPriced ? 'Clear all' : <><Icon name="eye" /> Price all</>}
+              </button>
             </div>
             <div className="pi-sizegrid">
               {sizes.map((sz) => {

@@ -1276,6 +1276,10 @@ body {
   padding: 0.08in 0.1in; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 0.02in; overflow: hidden;
 }
+/* Shoe name on the VIN label — clamp to 2 lines so it never pushes the
+   barcode off the small Rollo/Dymo stock. */
+.rlabel-name { font-weight: 700; font-size: 8.5pt; line-height: 1.05; text-align: center;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .rlabel-top { font-weight: 800; font-size: 13pt; display: flex; gap: 8px; align-items: baseline; }
 .rlabel-sep { font-weight: 400; color: #666; }
 .rlabel-size { font-weight: 800; }

@@ -430,6 +430,7 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
           )
         ) : (
           <div className="rlabel" key={it.vin}>
+            {it.name ? <div className="rlabel-name">{String(it.name).toUpperCase()}</div> : null}
             <div className="rlabel-top">
               <span className="rlabel-sku">{it.sku || '—'}</span>
               <span className="rlabel-sep">|</span>

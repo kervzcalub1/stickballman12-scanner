@@ -459,7 +459,8 @@ export async function getItemsForGiRefresh(vins) {
   const list = [...new Set((vins || []).filter(Boolean))];
   if (!list.length) return [];
   return await db()`
-    SELECT i.id, i.upc, i.sku, i.size, i.global_indicator, i.price
+    SELECT i.id, i.upc, i.sku, i.size, i.global_indicator, i.price,
+           i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE i.vin = ANY(${list}) AND i.status NOT IN ('sold', 'shipped')

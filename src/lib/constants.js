@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -89,6 +89,7 @@ export const HOME_SECTIONS = [
   { title: 'Receiving Shipment Orders', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
+    { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
   ] },
   { title: 'In-Store Mode', cards: [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },

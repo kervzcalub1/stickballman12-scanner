@@ -1767,3 +1767,84 @@ export async function getOpenBatchForPo(poId) {
   const rows = await sql`SELECT id, batch_code FROM batches WHERE po_id = ${poId} AND status = 'open' ORDER BY id LIMIT 1`;
   return rows[0] || null;
 }
+
+/* ---- Phase 3: reconciliation (received-vs-expected) -------------------------
+   Compares the supplier's declared manifest (po_lines, expected) against what the
+   warehouse actually received (items under the PO's received_batch_id), grouped by
+   (sku, size), and flags each: match / shortage / overage / wrong-size / wrong-sku. */
+
+const rcSku = (s) => String(s || '').trim().toUpperCase();
+const rcSize = (s) => String(s || '').trim();
+
+// Compute the reconciliation table + summary on demand (does not persist).
+export async function getPoReconciliation(poId) {
+  const sql = db();
+  const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return null;
+  const expected = await sql`
+    SELECT sku, size, sum(qty_expected)::int AS qty, max(name) AS name
+    FROM po_lines WHERE po_id = ${poId} GROUP BY sku, size`;
+  const received = po.received_batch_id
+    ? await sql`
+        SELECT sku, size, count(*)::int AS qty, max(name) AS name
+        FROM items WHERE batch_id = ${po.received_batch_id} GROUP BY sku, size`
+    : [];
+
+  const key = (s, z) => `${rcSku(s)}|${rcSize(z)}`;
+  const expMap = new Map(); const expSkus = new Set();
+  for (const e of expected) { expMap.set(key(e.sku, e.size), e); expSkus.add(rcSku(e.sku)); }
+  const recMap = new Map();
+  for (const r of received) recMap.set(key(r.sku, r.size), r);
+
+  const rows = [];
+  for (const k of new Set([...expMap.keys(), ...recMap.keys()])) {
+    const e = expMap.get(k); const r = recMap.get(k);
+    const exp = e?.qty || 0; const rec = r?.qty || 0;
+    const sku = (e || r).sku; const size = (e || r).size; const name = e?.name || r?.name || sku;
+    let flag;
+    if (exp > 0 && rec === exp) flag = 'match';
+    else if (exp > 0 && rec < exp) flag = 'shortage';
+    else if (exp > 0 && rec > exp) flag = 'overage';
+    else if (exp === 0 && expSkus.has(rcSku(sku))) flag = 'wrong_size'; // SKU expected, this size wasn't
+    else flag = 'wrong_sku';                                            // SKU not on the PO at all
+    rows.push({ sku, size, name, expected: exp, received: rec, delta: rec - exp, flag });
+  }
+  rows.sort((a, b) => (a.sku || '').localeCompare(b.sku || '') || rcSize(a.size).localeCompare(rcSize(b.size)));
+
+  const summary = {
+    expected_units: rows.reduce((n, x) => n + x.expected, 0),
+    received_units: rows.reduce((n, x) => n + x.received, 0),
+    match: rows.filter((x) => x.flag === 'match').length,
+    shortage: rows.filter((x) => x.flag === 'shortage').length,
+    overage: rows.filter((x) => x.flag === 'overage').length,
+    wrong_size: rows.filter((x) => x.flag === 'wrong_size').length,
+    wrong_sku: rows.filter((x) => x.flag === 'wrong_sku').length,
+  };
+  summary.clean = summary.shortage + summary.overage + summary.wrong_size + summary.wrong_sku === 0;
+  return { po, rows, summary };
+}
+
+// Freeze the current reconciliation onto the PO + close it out.
+export async function snapshotReconciliation(poId) {
+  const data = await getPoReconciliation(poId);
+  if (!data) return null;
+  const sql = db();
+  const snap = { rows: data.rows, summary: data.summary, at: new Date().toISOString() };
+  await sql`
+    UPDATE purchase_orders
+    SET reconciliation = ${JSON.stringify(snap)}::jsonb, reconciled_at = now(), status = 'reconciled'
+    WHERE id = ${poId}`;
+  return { ...data, po: { ...data.po, status: 'reconciled' } };
+}
+
+// POs that have been received and are awaiting / have a reconciliation.
+export async function listReconcilePos() {
+  const sql = db();
+  return sql`
+    SELECT p.*,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
+      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+    FROM purchase_orders p
+    WHERE p.status IN ('receiving', 'reconciled')
+    ORDER BY (p.status = 'receiving') DESC, p.reconciled_at DESC NULLS LAST, p.created_at DESC`;
+}

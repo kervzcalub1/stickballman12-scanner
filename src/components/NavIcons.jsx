@@ -8,6 +8,12 @@ const base = {
 };
 
 const PATHS = {
+  // Reconcile — clipboard with a check
+  reconcile: (<>
+    <rect x="5" y="4" width="14" height="17" rx="2" />
+    <path d="M9 4V3h6v1" />
+    <path d="M8.5 13l2.5 2.5L16 10" />
+  </>),
   // Check Access — a key
   access: (<>
     <circle cx="8" cy="16" r="5" />

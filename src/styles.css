@@ -1719,3 +1719,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-flag { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .po-flag.short { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }
 .po-flag.over { color: #c6871a; background: rgba(198,135,26,0.14); border: 1px solid rgba(198,135,26,0.35); }
+
+/* ---- PO Phase 3: reconciliation report ---- */
+.rc-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.po-flag.ok { color: var(--ok); background: rgba(26,157,99,0.14); border: 1px solid rgba(26,157,99,0.35); }
+.rc-table { display: flex; flex-direction: column; }
+.rc-row { display: grid; grid-template-columns: 1fr 44px 44px auto; gap: 8px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; }
+.rc-row.rc-head { border-top: 0; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.rc-item { min-width: 0; }
+.rc-name { font-weight: 400; }
+.rc-n { text-align: center; font-variant-numeric: tabular-nums; }
+.rc-flag { text-align: right; }
+.rc-row.shortage, .rc-row.wrong_sku { background: rgba(213,69,63,0.05); }
+.rc-row.overage, .rc-row.wrong_size { background: rgba(198,135,26,0.05); }
+.rc-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding-bottom: 24px; }
+.rc-actions .btn { flex: 1; min-width: 160px; }

@@ -23,6 +23,7 @@ import { ShelvePage } from './screens/ShelvePage.jsx';
 import { Locations } from './screens/Locations.jsx';
 import { InstoreListing } from './screens/InstoreListing.jsx';
 import { SupplierApp } from './screens/SupplierApp.jsx';
+import { Reconciliation } from './screens/Reconciliation.jsx';
 
 // The supplier scan-out portal is served on the `supplier.` subdomain. This is a
 // UX/branding branch only — the real boundary is server-side (every /api/po/*
@@ -144,5 +145,6 @@ export default function App() {
   if (view === 'rescalereq') return <RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'shelve') return <ShelvePage navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'locations') return <Locations onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'reconcile') return <Reconciliation canReconcile={user.role === 'warehouse' || isPrivilegedRole(user.role)} onHome={() => go('home')} onSignOut={signOut} />;
   return <Home user={user} onPick={(v) => { setBatchContext(null); if (v === 'ph') return enterPh(); go(v); }} onSignOut={signOut} />;
 }

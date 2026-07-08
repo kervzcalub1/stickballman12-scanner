@@ -30,7 +30,17 @@ labels** (one tracking number each); it closes only when every label is shipped.
   `items[]` + `unitIssues[]` the scan flow produces and reuses **box-commit** (mints VINs).
   Reconciliation (received-vs-expected per SKU+size: shortage/overage/wrong-SKU) falls out of
   this at receipt; the full PO-level snapshot + PO→`reconciled` is Phase 3.
-- Phases 3–5 (not started): reconciliation report/snapshot → 17TRACK tracking → polish.
+- **Phase 3 (built, on branch `feat/po-phase3-reconcile` — not deployed):** reconciliation.
+  `GET /api/po/reconciliation?poId=` computes expected (po_lines) vs received (items under
+  `received_batch_id`) grouped by (sku,size), flagging **match / shortage / overage /
+  wrong_size (SKU expected, size not) / wrong_sku (SKU not on PO)**. `GET /api/po/reconcile-list`
+  lists received/reconciled POs. `POST /api/po/reconcile` snapshots the table to
+  `purchase_orders.reconciliation` (JSONB) + `reconciled_at` and flips status → `reconciled`
+  (only from `receiving`; 409 otherwise). UI: `Reconciliation.jsx` screen (list → report table
+  + summary + **Copy discrepancy report** for the group chat + **Reconcile & close**). Reachable
+  from the main Home ("PO Reconciliation", warehouse/admin — full) and PHTeamApp
+  (`/ph/reconciliation`, PH — view + copy only, `canReconcile={false}`).
+- Phases 4–5 (not started): 17TRACK shipment tracking → polish.
 
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`

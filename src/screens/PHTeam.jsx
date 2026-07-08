@@ -21,6 +21,7 @@ import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { PhEditedPhotos } from './PhEditedPhotos.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
 import { CreatePO } from './CreatePO.jsx';
+import { Reconciliation } from './Reconciliation.jsx';
 
 // Small "WY" chip shown beside a GI that came from the Alias "With You" basis
 // (the consigned GI was empty/0, so we fell back). Nothing renders for consigned
@@ -55,6 +56,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'photos') return <PhEditedPhotos onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'reconcile') return <Reconciliation canReconcile={false} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -89,6 +91,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="receiving" /></span>
             <span className="home-card-title">New Batch (Purchase Order)</span>
             <span className="home-card-sub">Open a supplier batch — labels + tracking numbers — for a supplier to scan out</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('reconcile')}>
+            <span className="home-card-icon"><NavIcon name="reconcile" /></span>
+            <span className="home-card-title">PO Reconciliation</span>
+            <span className="home-card-sub">Received vs. supplier manifest — copy a discrepancy report to send the supplier</span>
           </button>
         </div>
       </section>

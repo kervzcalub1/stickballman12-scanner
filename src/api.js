@@ -162,6 +162,10 @@ export const api = {
   // Phase 2 — receive a shipment against a PO (warehouse side).
   poOpen: () => get('/api/po/open'),
   poLookup: (q) => get(`/api/po/lookup?q=${encodeURIComponent(q)}`),
+  // Phase 3 — reconciliation (received vs expected).
+  poReconcileList: () => get('/api/po/reconcile-list'),
+  poReconciliation: (poId) => get(`/api/po/reconciliation?poId=${encodeURIComponent(poId)}`),
+  poReconcile: (poId) => post('/api/po/reconcile', { poId }),
   // PH edit locks (presence)
   lockList: () => get('/api/ph/locks'),
   lockClaim: (vins, holderId) => post('/api/ph/locks', { action: 'claim', vins, holderId }),

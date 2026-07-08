@@ -749,7 +749,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {!isBoxMode && <label>Default cost ($)<input type="number" min="0" step="0.01" value={header.defaultCost} onChange={(e) => setH('defaultCost', e.target.value)} /></label>}
                   {!noShipment && !isBoxMode && (
                     <label>Boxes expected
-                      <input type="number" min="1" step="1" value={header.expectedBoxes}
+                      <input type="number" inputMode="numeric" min="1" step="1" value={header.expectedBoxes}
                         onChange={(e) => setH('expectedBoxes', e.target.value)} title="More than 1 starts a multi-box batch you add boxes to from the Batch Page" />
                     </label>
                   )}
@@ -1223,8 +1223,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     if (activeBatch) persistBoxSlots(activeBatch.id, boxSlots.map((x, idx) => (idx === trackingSlot ? { ...x, tracking: t } : x)));
                   } else setH('tracking', t);
                   setScanTracking(false); setTrackingSlot(null);
+                  // Drop focus after the scanner closes. Otherwise iOS leaves the
+                  // tracking field DOM-focused with the keyboard suppressed (blue ring
+                  // + accessory bar, no keys); the next tap on that already-focused
+                  // field then won't raise the keyboard. Blurring makes a later tap a
+                  // clean gesture that does.
+                  setTimeout(() => document.activeElement?.blur?.(), 0);
                 }}
-                onClose={() => { setScanTracking(false); setTrackingSlot(null); }}
+                onClose={() => { setScanTracking(false); setTrackingSlot(null); setTimeout(() => document.activeElement?.blur?.(), 0); }}
                 zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
             </Suspense>
             <div className="modal-actions"><button className="btn ghost" onClick={() => { setScanTracking(false); setTrackingSlot(null); }}>Cancel</button></div>
@@ -1273,7 +1279,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             <h3 className="modal-title">Add new supplier</h3>
             <form onSubmit={(e) => { e.preventDefault(); saveNewSupplier(); }}>
               <label>Supplier name
-                <input autoFocus value={newSupplier} maxLength={80} placeholder="e.g. JD Sports"
+                {/* No autoFocus: on iOS a programmatic focus() sets DOM focus but
+                    Safari suppresses the software keyboard, so tapping the (already
+                    "focused") field then does nothing. Leaving it unfocused makes the
+                    user's tap a clean gesture that reliably raises the keyboard. */}
+                <input value={newSupplier} maxLength={80} placeholder="e.g. JD Sports"
                   onChange={(e) => setNewSupplier(e.target.value)} />
               </label>
               <p className="muted sm mt">Added to the list and selected for this batch — saved for next time when you commit.</p>

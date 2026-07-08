@@ -48,6 +48,12 @@
   (`PHTeamApp`); its pages are URL-routed under `/ph/*` (refresh/Back/deep-link work).
   **Cannot touch in-store** — the intake commit, `instore-list`/`instore-listed`, and
   every PH surface exclude `kind='instore'` (`in-store.md`).
+- **supplier** — external scan-out partner for the Purchase Order feature (an order
+  is created by PH; the supplier signs in and scans out what they ship). **DB role,
+  admin-assigned only** — `api/auth/signup.js` still offers only `warehouse | ph_team`,
+  so a supplier account can only be created by an admin changing the role in Check
+  Access. Scoped to their own POs on every PO endpoint (added with those endpoints in
+  Phase 1 — none exist yet). Schema landed in Phase 0; see `purchase-orders.md`.
 - `requireRole(req,res,[...])` returns the user or sends 401/403; **admin is
   auto-allowed**. `sku-search` allows `warehouse` + `ph_team`.
 

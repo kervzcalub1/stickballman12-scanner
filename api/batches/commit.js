@@ -14,7 +14,7 @@ import {
 } from '../_lib/util.js';
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
-  addSupplier, dbConfigured,
+  addSupplier, getPo, markPoReceiving, dbConfigured,
 } from '../_lib/db.js';
 import { enrichGlobalIndicators } from '../_lib/intake.js';
 
@@ -80,6 +80,17 @@ export default async function handler(req, res) {
   const createdBy = user.name || user.username || '';
   const defaultCost = toCost(header.defaultCost);
 
+  // V6 PO Phase 2: a receiving batch may be received against a purchase order —
+  // link it and move the PO into 'receiving'. Validate the PO is open first.
+  const poId = kind === 'receiving' && Number.isInteger(Number(body.poId)) && Number(body.poId) > 0
+    ? Number(body.poId) : null;
+  if (poId) {
+    const po = await getPo(poId);
+    if (!po) return send(res, 404, { ok: false, error: 'That purchase order was not found.' });
+    if (!['shipped', 'receiving'].includes(po.status))
+      return send(res, 409, { ok: false, error: `PO ${po.po_code} is ${po.status} — it can't be received against.` });
+  }
+
   // A unit flagged with a 'no_box' defect follows the no-box rules too (status
   // no_box / No-Box queue), same end state as the per-shoe box-status toggle.
   const noBoxVins = new Set(unitIssues.filter((u) => u.type === 'no_box').map((u) => u.vin));
@@ -120,10 +131,13 @@ export default async function handler(req, res) {
     origin: kind !== 'receiving' ? (String(header.origin ?? '').trim().slice(0, 80) || null) : null,
     // Set by the client when staff proceed past the duplicate-tracking warning.
     duplicateOf: kind !== 'receiving' ? null : (Number.isInteger(header.duplicateOf) ? header.duplicateOf : null),
+    poId,
   };
 
   try {
     const batch = await createBatch(bh, createdBy);
+    // Link + advance the PO (best-effort — the batch is already saved).
+    if (poId) markPoReceiving(poId, batch.id).catch((e) => console.warn('[commit] markPoReceiving:', e.message));
     // Auto-save the supplier name so custom vendors (e.g. "JD Sports") show up in
     // the dropdown next time. Best-effort — never fail the commit over this.
     if (kind === 'receiving' && bh.supplier) addSupplier(bh.supplier, createdBy).catch(() => {});

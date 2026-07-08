@@ -44,6 +44,29 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     ? (String(header.originOther || '').trim() || 'Other')
     : header.origin;
   const setH = (k, v) => setHeader((h) => ({ ...h, [k]: v }));
+
+  // V6 PO Phase 2: receive a shipment against a purchase order. When set, Step 1 is
+  // pre-filled from the PO (supplier, tag, each label → a box slot) and the commit
+  // links the batch back via poId (server flips the PO to 'receiving').
+  const [receivingPo, setReceivingPo] = useState(null); // { po, boxes, lines }
+  const [showPoPicker, setShowPoPicker] = useState(false);
+  function applyPo(data) {
+    const boxes = data.boxes || [];
+    setReceivingPo(data);
+    setHeader((h) => ({
+      ...h,
+      supplier: data.po.supplier_name || h.supplier,
+      batchTag: data.po.tag_code || h.batchTag,
+      tracking: boxes.length === 1 ? (boxes[0].tracking_number || '') : '',
+      expectedBoxes: String(Math.max(1, boxes.length)),
+    }));
+    if (boxes.length > 1) {
+      setBoxSlots(boxes.map((b, i) => ({ tracking: b.tracking_number || '', status: 'pending', boxNumber: i + 1, itemCount: 0 })));
+    }
+    setShowPoPicker(false);
+  }
+  const clearPo = () => setReceivingPo(null); // unlink; keep whatever's typed
+
   // Add-new-supplier modal (Feature 1): type a vendor → it's appended to the
   // dropdown and selected for this session (persisted to the DB on commit).
   const [showAddSupplier, setShowAddSupplier] = useState(false);
@@ -475,6 +498,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const created = await api.createOpenBatch({
       ...header, origin: effectiveOrigin, defaultCost: defaultCostNum,
       batchTag: header.batchTag, expectedBoxes: expectedBoxesNum,
+      poId: receivingPo?.po?.id ?? null,
     });
     const b = { id: created.id, batchCode: created.batchCode };
     setActiveBatch(b);
@@ -605,6 +629,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (items.length) {
         const payload = {
           kind: mode,
+          poId: receivingPo?.po?.id ?? null,
           batch: { ...header, origin: effectiveOrigin, defaultCost: defaultCostNum, duplicateOf: dupBatch?.id ?? null },
           items: out,
           unitIssues: flatUnitIssues,
@@ -693,6 +718,24 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   </div>
                 )}
                 <div className="batch-form">
+                  {/* PO Phase 2: receive against a purchase order (receiving mode only). */}
+                  {!noShipment && !isBoxMode && (
+                    <div className="batch-form-wide po-receive">
+                      {receivingPo ? (
+                        <div className="po-receive-banner">
+                          <div>
+                            <b>Receiving against {receivingPo.po.po_code}</b>
+                            <span className="muted sm"> · {receivingPo.po.supplier_name} · {receivingPo.boxes.length} label{receivingPo.boxes.length === 1 ? '' : 's'} · {(receivingPo.lines || []).reduce((n, l) => n + (l.qty_expected || 0), 0)} expected units</span>
+                          </div>
+                          <button type="button" className="btn sm ghost" onClick={clearPo}>Unlink</button>
+                        </div>
+                      ) : (
+                        <button type="button" className="btn ghost po-receive-btn" onClick={() => setShowPoPicker(true)}>
+                          <Icon name="box" /> Receive against a purchase order
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {!noShipment && !isBoxMode && <label>Buyer *<input value={header.buyer} onChange={(e) => setH('buyer', e.target.value)} /></label>}
                   {!noShipment && !isBoxMode && (
                     <label>Supplier *
@@ -1273,6 +1316,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         </div>
       )}
 
+      {showPoPicker && (
+        <PoPickerModal onPick={applyPo} onClose={() => setShowPoPicker(false)} onSignOut={onSignOut} />
+      )}
+
       {showAddSupplier && (
         <div className="modal-overlay" onClick={() => setShowAddSupplier(false)}>
           <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
@@ -1297,6 +1344,66 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       )}
 
       {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
+    </div>
+  );
+}
+
+/* PO Phase 2: pick an open purchase order to receive against — browse the open
+   (shipped/receiving) list or scan a label / type a PO code to pull one up. */
+function PoPickerModal({ onPick, onClose, onSignOut }) {
+  const [pos, setPos] = useState(null);
+  const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.poOpen()
+      .then((r) => setPos(r.pos || []))
+      .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const load = async (fn) => {
+    setBusy(true); setError('');
+    try { const r = await fn(); onPick({ po: r.po, boxes: r.boxes, lines: r.lines }); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal po-picker" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <div className="po-card-top">
+          <h3 className="modal-title">Receive against a purchase order</h3>
+          <button className="btn ghost sm" onClick={onClose}>Close</button>
+        </div>
+        <form className="searchrow" onSubmit={(e) => { e.preventDefault(); if (q.trim()) load(() => api.poLookup(q.trim())); }}>
+          <input value={q} autoCapitalize="characters" autoCorrect="off" placeholder="Scan a label or type a PO code"
+            onChange={(e) => setQ(e.target.value)} />
+          <button type="submit" className="btn" disabled={busy || !q.trim()}>{busy ? '…' : 'Find'}</button>
+        </form>
+        {error && <div className="po-err">{error}</div>}
+        <div className="muted sm po-picker-label">Open shipments</div>
+        {pos == null ? <p className="muted">Loading…</p>
+          : pos.length === 0 ? <div className="muted sm">No shipped purchase orders are waiting to be received.</div>
+          : (
+            <div className="po-list">
+              {pos.map((p) => (
+                <button key={p.id} className="po-card" disabled={busy} onClick={() => load(() => api.poGet(p.id))}>
+                  <div className="po-card-top">
+                    <span className="po-code">{p.po_code}</span>
+                    <span className={`po-chip ${p.status === 'receiving' ? 'receiving' : 'shipped'}`}>{p.status === 'receiving' ? 'Receiving' : 'Shipped'}</span>
+                  </div>
+                  <div className="po-card-meta">
+                    <span>{p.supplier_name}</span>
+                    {p.tag_code && <span>{p.tag_code}</span>}
+                    <span>{p.box_count} label{p.box_count === 1 ? '' : 's'}</span>
+                    <span>{p.unit_count} unit{p.unit_count === 1 ? '' : 's'}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+      </div>
     </div>
   );
 }

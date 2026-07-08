@@ -14,7 +14,20 @@ labels** (one tracking number each); it closes only when every label is shipped.
 - **Phase 1 (built, on branch `feat/po-phase1-scanout` — not deployed):** PH create-batch
   form + supplier scan-out portal + subdomain gating. Endpoints under `api/po/*`, client
   methods `api.po*`, screens `CreatePO.jsx` (PH) + `SupplierApp.jsx` (supplier).
-- Phases 2–5 (not started): receive-against-PO → reconciliation → 17TRACK tracking → polish.
+- **Phase 2 (built, on branch `feat/po-phase2-receive` — not deployed):** receive a shipment
+  against a PO. `GET /api/po/open` (open shipments) + `GET /api/po/lookup?q=` (by PO code OR a
+  label's tracking #). Receiving Step 1 gains a "Receive against a purchase order" picker
+  (`PoPickerModal`) that pre-fills supplier/tag and maps each label → a box slot; commit
+  (`commit.js` / `create-open.js`) accepts `poId`, sets `batches.po_id`, and `markPoReceiving`
+  flips the PO `shipped → receiving` (+ `received_batch_id`, idempotent). box-commit needs no
+  change (the batch already carries `po_id`).
+- Phases 3–5 (not started): reconciliation → 17TRACK tracking → polish.
+
+## Note — circular FK
+`batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`
+form a cycle. Creation order is fine (PO → batch(po_id) → set received_batch_id). Deletion of
+either row is blocked until one link is nulled — the app never deletes these, so it only
+matters for manual test-data cleanup (null `received_batch_id` first).
 
 ## Phase 1 — endpoints & flow
 `api/po/*` (house order: `applySecurity → requireRole → rateLimit → getJsonBody`; supplier

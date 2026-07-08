@@ -341,12 +341,12 @@ export async function createBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, tracking_number, date_received,
-       default_cost, notes, special_rules, kind, origin, duplicate_of, status, created_by, committed_at)
+       default_cost, notes, special_rules, kind, origin, duplicate_of, po_id, status, created_by, committed_at)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
        ${h.specialRules || null}, ${['receiving', 'rescale', 'instore'].includes(h.kind) ? h.kind : 'receiving'},
-       ${h.origin || null}, ${h.duplicateOf ?? null}, 'committed', ${createdBy || null}, now())
+       ${h.origin || null}, ${h.duplicateOf ?? null}, ${h.poId ?? null}, 'committed', ${createdBy || null}, now())
     RETURNING id, batch_code
   `;
   return rows[0];
@@ -617,11 +617,11 @@ export async function createOpenBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, date_received, default_cost, notes, special_rules,
-       kind, batch_tag, expected_boxes, status, created_by)
+       kind, batch_tag, expected_boxes, po_id, status, created_by)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.dateReceived || null},
        ${h.defaultCost ?? null}, ${h.notes || null}, ${h.specialRules || null},
-       'receiving', ${h.batchTag || null}, ${h.expectedBoxes ?? null}, 'open', ${createdBy || null})
+       'receiving', ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null}, 'open', ${createdBy || null})
     RETURNING id, batch_code
   `;
   return rows[0];
@@ -1712,4 +1712,50 @@ export async function countPoBoxLines(poBoxId) {
   const sql = db();
   const r = await sql`SELECT coalesce(sum(qty_expected), 0)::int AS n FROM po_lines WHERE po_box_id = ${poBoxId}`;
   return r[0].n;
+}
+
+/* ---- Phase 2: receive a shipment against a PO -------------------------------
+   The warehouse creates a normal receiving `batch` linked to the PO via
+   batches.po_id; the PO flips 'shipped' → 'receiving' on the first link. */
+
+// Open POs available to receive against (shipped or already being received).
+export async function listOpenPos() {
+  const sql = db();
+  return sql`
+    SELECT p.*,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
+      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+    FROM purchase_orders p
+    WHERE p.status IN ('shipped', 'receiving')
+    ORDER BY p.shipped_at DESC NULLS LAST, p.created_at DESC
+  `;
+}
+
+// Find a PO by its code (PO-xxxxx) or by any of its labels' tracking numbers —
+// so the warehouse can scan a shipping label to pull up the order.
+export async function lookupPoByCodeOrTracking(q) {
+  const sql = db();
+  const term = String(q || '').trim();
+  if (!term) return null;
+  const rows = await sql`
+    SELECT DISTINCT p.id FROM purchase_orders p
+    LEFT JOIN po_boxes b ON b.po_id = p.id
+    WHERE upper(p.po_code) = upper(${term})
+       OR upper(b.tracking_number) = upper(${term})
+    ORDER BY p.id DESC
+    LIMIT 1
+  `;
+  return rows[0] ? getPoFull(Number(rows[0].id)) : null;
+}
+
+// Link a batch to its PO and move the PO into 'receiving' on the first link.
+// Idempotent: keeps the first received_batch_id; only 'shipped' advances.
+export async function markPoReceiving(poId, batchId) {
+  const sql = db();
+  await sql`
+    UPDATE purchase_orders
+    SET status = CASE WHEN status = 'shipped' THEN 'receiving' ELSE status END,
+        received_batch_id = COALESCE(received_batch_id, ${batchId})
+    WHERE id = ${poId}
+  `;
 }

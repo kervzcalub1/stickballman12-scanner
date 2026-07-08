@@ -4,7 +4,7 @@
 // Starts an OPEN multi-box receiving batch (no items yet). Boxes are added and
 // committed one at a time from the Batch Page (V6 Feature 7).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { createOpenBatch, addSupplier, dbConfigured } from '../_lib/db.js';
+import { createOpenBatch, addSupplier, getPo, markPoReceiving, dbConfigured } from '../_lib/db.js';
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
 const toCost = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
@@ -25,6 +25,15 @@ export default async function handler(req, res) {
   const expected = Number(h.expectedBoxes);
   const createdBy = user.name || user.username || '';
 
+  // Optional: this open batch is being received against a purchase order.
+  const poId = Number.isInteger(Number(h.poId)) && Number(h.poId) > 0 ? Number(h.poId) : null;
+  if (poId) {
+    const po = await getPo(poId);
+    if (!po) return send(res, 404, { ok: false, error: 'That purchase order was not found.' });
+    if (!['shipped', 'receiving'].includes(po.status))
+      return send(res, 409, { ok: false, error: `PO ${po.po_code} is ${po.status} — it can't be received against.` });
+  }
+
   const header = {
     buyer: cleanName(h.buyer) || null,
     supplier,
@@ -34,10 +43,12 @@ export default async function handler(req, res) {
     specialRules: String(h.specialRules ?? '').trim().slice(0, 2000) || null,
     batchTag: String(h.batchTag ?? '').trim().slice(0, 120) || null,
     expectedBoxes: Number.isInteger(expected) && expected > 0 ? Math.min(expected, 999) : null,
+    poId,
   };
 
   try {
     const batch = await createOpenBatch(header, createdBy);
+    if (poId) markPoReceiving(poId, batch.id).catch((e) => console.warn('[create-open] markPoReceiving:', e.message));
     addSupplier(supplier, createdBy).catch(() => {});
     return send(res, 200, { ok: true, batchCode: batch.batch_code, id: batch.id });
   } catch (e) {

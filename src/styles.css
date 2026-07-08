@@ -1693,3 +1693,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-label-n { font-family: ui-monospace, monospace; color: var(--muted); font-size: 13px; width: 30px; flex: none; }
 .po-label-x { flex: none; font-size: 18px; line-height: 1; padding: 8px 12px; }
 .po-submit-bar { display: flex; justify-content: flex-end; gap: 10px; padding-bottom: 24px; }
+
+/* ---- PO Phase 2: receive-against-PO controls (in Receiving Step 1) ---- */
+.po-receive { }
+.po-receive-btn { width: 100%; justify-content: center; gap: 8px; }
+.po-receive-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: rgba(61,124,255,0.10); border: 1px solid rgba(61,124,255,0.35); border-radius: 10px; padding: 10px 12px; }
+.po-receive-banner b { font-size: 14px; }
+.po-picker { max-width: 520px; width: 100%; max-height: 90vh; overflow-y: auto; text-align: left; }
+.po-picker-label { margin: 12px 0 8px; }

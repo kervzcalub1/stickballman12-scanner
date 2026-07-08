@@ -159,6 +159,9 @@ export const api = {
   poScan: (payload) => post('/api/po/scan', payload),
   poLine: (lineId, qty) => post('/api/po/line', { lineId, qty }),
   poShip: (poBoxId) => post('/api/po/ship', { poBoxId }),
+  // Phase 2 — receive a shipment against a PO (warehouse side).
+  poOpen: () => get('/api/po/open'),
+  poLookup: (q) => get(`/api/po/lookup?q=${encodeURIComponent(q)}`),
   // PH edit locks (presence)
   lockList: () => get('/api/ph/locks'),
   lockClaim: (vins, holderId) => post('/api/ph/locks', { action: 'claim', vins, holderId }),

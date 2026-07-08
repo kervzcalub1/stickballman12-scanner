@@ -57,15 +57,36 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       ...h,
       supplier: data.po.supplier_name || h.supplier,
       batchTag: data.po.tag_code || h.batchTag,
-      tracking: boxes.length === 1 ? (boxes[0].tracking_number || '') : '',
+      tracking: '',
       expectedBoxes: String(Math.max(1, boxes.length)),
     }));
-    if (boxes.length > 1) {
-      setBoxSlots(boxes.map((b, i) => ({ tracking: b.tracking_number || '', status: 'pending', boxNumber: i + 1, itemCount: 0 })));
-    }
+    // Every label becomes a box slot — receiving each is a manifest checklist.
+    setBoxSlots(boxes.map((b, i) => ({
+      tracking: b.tracking_number || '', status: 'pending', boxNumber: i + 1, itemCount: 0, poBoxId: Number(b.id),
+    })));
     setShowPoPicker(false);
   }
   const clearPo = () => setReceivingPo(null); // unlink; keep whatever's typed
+
+  // Receive-against-PO = a per-box manifest checklist built from the PO's expected
+  // lines for that label (grouped one item per SKU, each size at its expected qty).
+  const manifestLinesFor = (poBoxId) => (receivingPo?.lines || []).filter((l) => Number(l.po_box_id) === Number(poBoxId));
+  function buildManifestItems(poBoxId) {
+    const bySku = new Map();
+    for (const l of manifestLinesFor(poBoxId)) {
+      const key = l.sku || `?${l.id}`;
+      if (!bySku.has(key)) bySku.set(key, {
+        key: cartKey++, name: l.name || l.sku || 'Unknown', sku: l.sku || '', image: '',
+        source: 'manual', upc: l.upc || '', gender: l.gender || null, colorway: l.colorway || null,
+        withBox: true, expected: true, sizes: [],
+      });
+      bySku.get(key).sizes.push({ key: cartKey++, size: String(l.size), qty: l.qty_expected, expectedQty: l.qty_expected, vins: [] });
+    }
+    return [...bySku.values()];
+  }
+  const setSizeQty = (itemKey, sizeKey, qty) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
+    ...it, sizes: it.sizes.map((s) => (s.key === sizeKey ? { ...s, qty: Math.max(0, parseInt(qty, 10) || 0) } : s)),
+  })));
 
   // Add-new-supplier modal (Feature 1): type a vendor → it's appended to the
   // dropdown and selected for this session (persisted to the DB on commit).
@@ -122,7 +143,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const setSlotTracking = (i, v) => setBoxSlots((s) => s.map((x, idx) => (idx === i ? { ...x, tracking: v } : x)));
   // Derived (declared early so the Back-button effect below can depend on them).
   const expectedBoxesNum = Math.max(1, parseInt(header.expectedBoxes, 10) || 1);
-  const isMultiBoxNew = !noShipment && !isBoxMode && expectedBoxesNum > 1;
+  // Receiving against a PO always uses the per-box (box-list) flow — even a
+  // single-label PO — so every label goes through its manifest checklist.
+  const isPoReceive = !!receivingPo && !isBoxMode && !noShipment;
+  const isMultiBoxNew = !noShipment && !isBoxMode && (expectedBoxesNum > 1 || isPoReceive);
   const receivedSlots = boxSlots.filter((s) => s.status === 'received').length;
 
   const [prefs, setPrefs] = useState(loadPrefs);
@@ -528,7 +552,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (!String(header.dateReceived).trim()) { setError('Enter the date first.'); return; }
     }
     setActiveSlot(i); setDraft(null);
-    setItems([]); setIssues([]); setUnitIssues({}); setRescanned([]);
+    setItems(isPoReceive ? buildManifestItems(boxSlots[i]?.poBoxId) : []);
+    setIssues([]); setUnitIssues({}); setRescanned([]);
     setStep(2);
   }
   // Leave the current box's scan and go back to the box list on step 1 (discards
@@ -569,7 +594,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const out = [];
       for (const it of items) {
         for (const r of it.sizes) {
-          for (let n = 0; n < Math.max(1, Number(r.qty) || 1); n++) {
+          // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
+          // flow's steppers are always ≥1, so this is unchanged for normal intake.
+          for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
             out.push({ name: it.name, sku: it.sku, size: r.size, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, vin: r.vins?.[n] || null });
           }
         }
@@ -868,6 +895,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {boxSlots[activeSlot]?.tracking ? <> · <Icon name="tag" /> {boxSlots[activeSlot].tracking}</> : ''}
                 </div>
               )}
+              {isPoReceive && activeSlot != null ? (
+                <ManifestChecklist boxNumber={activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
+                  items={items} totalItems={totalItems} onAddUnexpected={openAddItem}
+                  onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} />
+              ) : (
               <div className="card">
                 <div className="step-head">
                   <h3 className="rows-title">{isRescale ? 'New / unlabeled stock' : 'Items'} <span className="muted">({totalItems} unit{totalItems === 1 ? '' : 's'})</span></h3>
@@ -922,6 +954,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   </div>
                 )}
               </div>
+              )}
 
               {isRescale && (
                 <div className="card">
@@ -1344,6 +1377,63 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       )}
 
       {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
+    </div>
+  );
+}
+
+/* PO Phase 2b: receive one box by its manifest. The expected lines pre-populate;
+   check off / adjust the "got" count per size (shortage = got < expected), add
+   unexpected pairs (overage), then Review → per-shoe issues → submit the box. */
+function ManifestChecklist({ boxNumber, tracking, items, totalItems, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem }) {
+  return (
+    <div className="card po-manifest">
+      <div className="step-head">
+        <h3 className="rows-title">Box {boxNumber} · manifest <span className="muted">({totalItems} received)</span></h3>
+        <button className="btn sm" onClick={onAddUnexpected}>+ Add unexpected</button>
+      </div>
+      {tracking ? <div className="muted sm po-manifest-track"><Icon name="tag" /> {tracking}</div> : null}
+      {items.length === 0 ? (
+        <p className="muted">This label had no expected items. Use “Add unexpected” for anything found in the box.</p>
+      ) : (
+        <div className="po-manifest-list">
+          {items.map((it) => (
+            <div className={`po-manifest-item ${it.expected ? '' : 'overage'}`} key={it.key}>
+              <div className="po-manifest-head">
+                <span className="po-manifest-name">{it.name} <span className="muted">— {it.sku || '—'}</span></span>
+                {it.expected
+                  ? null
+                  : <span className="po-chip receiving">Overage · not on PO</span>}
+                {!it.expected && <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => onRemoveItem(it.key)}>×</button>}
+              </div>
+              {[...it.sizes].sort((a, b) => compareSizes(a.size, b.size)).map((s) => {
+                const got = Number(s.qty) || 0;
+                const exp = s.expectedQty;
+                const short = exp != null && got < exp;
+                const over = exp != null && got > exp;
+                return (
+                  <div className={`po-manifest-size ${got > 0 ? 'on' : 'off'}`} key={s.key}>
+                    <label className="po-check">
+                      <input type="checkbox" checked={got > 0}
+                        onChange={(e) => onSetQty(it.key, s.key, e.target.checked ? (exp ?? 1) : 0)} />
+                      <span className="po-size-lbl">size {s.size}{exp != null ? <span className="muted"> · exp {exp}</span> : null}</span>
+                    </label>
+                    <div className="qty-stepper">
+                      <button type="button" className="btn icon ghost step" onClick={() => onSetQty(it.key, s.key, got - 1)}>−</button>
+                      <input className="qty" type="number" inputMode="numeric" min="0" value={got} onChange={(e) => onSetQty(it.key, s.key, e.target.value)} />
+                      <button type="button" className="btn icon ghost step" onClick={() => onSetQty(it.key, s.key, got + 1)}>+</button>
+                    </div>
+                    {short && <span className="po-flag short">short {exp - got}</span>}
+                    {over && <span className="po-flag over">+{got - exp}</span>}
+                    {exp == null && got > 0 && <span className="po-flag over">extra</span>}
+                    {!it.expected && <button type="button" className="btn icon ghost remove" title="Remove size" onClick={() => onRemoveSize(it.key, s.key)}>×</button>}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="muted sm">Uncheck or lower a count for a shortage; add unexpected pairs above. Flag defects per shoe on the next screen.</p>
     </div>
   );
 }

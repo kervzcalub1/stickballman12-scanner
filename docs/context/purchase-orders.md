@@ -21,7 +21,16 @@ labels** (one tracking number each); it closes only when every label is shipped.
   (`commit.js` / `create-open.js`) accepts `poId`, sets `batches.po_id`, and `markPoReceiving`
   flips the PO `shipped → receiving` (+ `received_batch_id`, idempotent). box-commit needs no
   change (the batch already carries `po_id`).
-- Phases 3–5 (not started): reconciliation → 17TRACK tracking → polish.
+- **Phase 2b (in progress) — receive by MANIFEST, not blind re-scan (2026-07-09 decision):**
+  When a box is received against a PO, its expected lines (from `po_lines` for that label)
+  pre-populate a **checklist**: one row per SKU+size with a **present checkbox + editable
+  "received" count** (defaults to expected — lower it for a shortage). Each row has **add
+  issue** (defect/no-box/etc. per shoe). Staff can **add an unexpected item** (scan/type) →
+  received + flagged **overage / not-on-PO**. On confirm, the checklist builds the same
+  `items[]` + `unitIssues[]` the scan flow produces and reuses **box-commit** (mints VINs).
+  Reconciliation (received-vs-expected per SKU+size: shortage/overage/wrong-SKU) falls out of
+  this at receipt; the full PO-level snapshot + PO→`reconciled` is Phase 3.
+- Phases 3–5 (not started): reconciliation report/snapshot → 17TRACK tracking → polish.
 
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`

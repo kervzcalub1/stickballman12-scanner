@@ -1702,3 +1702,19 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-receive-banner b { font-size: 14px; }
 .po-picker { max-width: 520px; width: 100%; max-height: 90vh; overflow-y: auto; text-align: left; }
 .po-picker-label { margin: 12px 0 8px; }
+
+/* ---- PO Phase 2b: receive-by-manifest checklist (Receiving step 2) ---- */
+.po-manifest-track { margin: -4px 0 10px; }
+.po-manifest-list { display: flex; flex-direction: column; gap: 12px; }
+.po-manifest-item { border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.po-manifest-item.overage { border-color: rgba(198,135,26,0.45); background: rgba(198,135,26,0.06); }
+.po-manifest-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.po-manifest-name { font-weight: 600; flex: 1; min-width: 0; }
+.po-manifest-size { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.po-manifest-size.off { opacity: 0.55; }
+.po-check { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 140px; cursor: pointer; }
+.po-check input { width: 18px; height: 18px; flex: none; }
+.po-size-lbl { font-size: 14px; }
+.po-flag { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.po-flag.short { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }
+.po-flag.over { color: #c6871a; background: rgba(198,135,26,0.14); border: 1px solid rgba(198,135,26,0.35); }

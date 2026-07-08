@@ -49,11 +49,14 @@
   **Cannot touch in-store** — the intake commit, `instore-list`/`instore-listed`, and
   every PH surface exclude `kind='instore'` (`in-store.md`).
 - **supplier** — external scan-out partner for the Purchase Order feature (an order
-  is created by PH; the supplier signs in and scans out what they ship). **DB role,
-  admin-assigned only** — `api/auth/signup.js` still offers only `warehouse | ph_team`,
-  so a supplier account can only be created by an admin changing the role in Check
-  Access. Scoped to their own POs on every PO endpoint (added with those endpoints in
-  Phase 1 — none exist yet). Schema landed in Phase 0; see `purchase-orders.md`.
+  is created by PH; the supplier signs in and scans out what they ship). DB role.
+  **Onboarding: self-signup on the `supplier.` subdomain, admin-approved.**
+  `api/auth/signup.js` inspects the request `Host`: on `supplier.*` every self-signup
+  is forced to role `supplier` (still lands `pending` → admin approves in Check
+  Access); on the main host signup only offers `warehouse | ph_team` and can't be
+  tricked into `supplier` (Host-gated server-side, not client-trusted). Admin can also
+  set the role manually. Scoped to their own POs on every PO endpoint. See
+  `purchase-orders.md`.
 - `requireRole(req,res,[...])` returns the user or sends 401/403; **admin is
   auto-allowed**. `sku-search` allows `warehouse` + `ph_team`.
 

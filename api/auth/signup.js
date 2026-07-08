@@ -23,8 +23,11 @@ export default async function handler(req, res) {
   const name = String(body.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   const username = String(body.username || '').trim().toLowerCase();
   const password = String(body.password || '');
-  // Requested role — admin is never self-assignable at signup.
-  const role = ['warehouse', 'ph_team'].includes(body.role) ? body.role : 'warehouse';
+  // Requested role — admin is never self-assignable at signup. On the supplier
+  // subdomain (supplier.stickballman12.com) every self-signup is a SUPPLIER; it
+  // still lands pending until an admin approves. Elsewhere: warehouse | ph_team.
+  const isSupplierHost = /^supplier\./i.test(req.headers.host || '');
+  const role = isSupplierHost ? 'supplier' : (['warehouse', 'ph_team'].includes(body.role) ? body.role : 'warehouse');
 
   if (!name) return send(res, 400, { ok: false, error: 'Please enter your name.' });
   if (!USERNAME_RE.test(username))

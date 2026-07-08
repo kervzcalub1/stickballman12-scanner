@@ -77,10 +77,11 @@ VINs + inserts `items` = phantom stock).
   `po_lines` (expected) against `items` under that batch (actual), grouped by `(sku, size)`.
 
 ## Roles
-- **`supplier`** — new DB role (`users.role` CHECK now includes it). **Admin-assigned
-  only**: `api/auth/signup.js` offers only `warehouse | ph_team`; admin sets `supplier` via
-  Check Access (`api/admin/review.js` ROLES). Per-PO scoping lands with the endpoints
-  (Phase 1). See `auth-roles.md`.
+- **`supplier`** — DB role (`users.role` CHECK includes it). **Self-signup on the
+  `supplier.` subdomain, admin-approved**: `signup.js` forces role `supplier` when the
+  request `Host` is `supplier.*` (pending until an admin approves); the main host stays
+  `warehouse | ph_team` and can't be tricked into `supplier`. Admin can also set it via
+  Check Access. Per-PO scoping on every endpoint. See `auth-roles.md`.
 
 ## Gotchas
 - Schema-drift trap: run `npm run db:setup` on **local and prod** after this lands

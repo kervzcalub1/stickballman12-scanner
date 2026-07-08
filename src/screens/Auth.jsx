@@ -62,10 +62,13 @@ function LoginForm({ onAuthed }) {
 }
 
 function SignupForm({ onDone }) {
+  // On the supplier subdomain, self-signups are always suppliers (the server
+  // enforces this too by Host) — hide the staff role picker.
+  const supplierHost = typeof window !== 'undefined' && /^supplier\./i.test(window.location.hostname);
   const [name, setName] = useState('');
   const [username, setU] = useState('');
   const [password, setP] = useState('');
-  const [role, setRole] = useState('warehouse');
+  const [role, setRole] = useState(supplierHost ? 'supplier' : 'warehouse');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
@@ -89,12 +92,16 @@ function SignupForm({ onDone }) {
       <input placeholder="Full name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       <input placeholder="Username" autoCapitalize="none" autoCorrect="off" autoComplete="username" value={username} onChange={(e) => setU(e.target.value)} />
       <PasswordInput placeholder="Password (min 8 chars)" autoComplete="new-password" value={password} onChange={(e) => setP(e.target.value)} />
-      <label className="signup-role">Role
-        <select value={role} onChange={(e) => setRole(e.target.value)}>
-          <option value="warehouse">Warehouse — receiving &amp; inventory</option>
-          <option value="ph_team">PH Team — report only</option>
-        </select>
-      </label>
+      {supplierHost ? (
+        <p className="muted sm signup-supplier-note">Creating a <b>Supplier</b> account. An admin will approve it before you can sign in.</p>
+      ) : (
+        <label className="signup-role">Role
+          <select value={role} onChange={(e) => setRole(e.target.value)}>
+            <option value="warehouse">Warehouse — receiving &amp; inventory</option>
+            <option value="ph_team">PH Team — report only</option>
+          </select>
+        </label>
+      )}
       {error && <div className="error">{error}</div>}
       <button className="btn primary wide" disabled={busy}>{busy ? 'Creating…' : 'Create account'}</button>
     </form>

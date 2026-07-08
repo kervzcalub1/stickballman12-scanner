@@ -1674,7 +1674,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-box-actions .btn { flex: 1; }
 .po-shipped-note { color: var(--ok); font-size: 14px; margin: 8px 0 0; font-weight: 600; }
 
-.po-scan { max-width: 460px; width: 100%; max-height: 90vh; overflow-y: auto; }
+.po-scan { max-width: 460px; width: 100%; max-height: 90vh; overflow-y: auto; text-align: left; }
+/* Match .modal.additem's spacing: give the size rows breathing room and pin the
+   action buttons to the bottom of the scroll area so they never crowd/touch the
+   last size chip or size-line row. */
+.po-scan .size-rows { margin-bottom: 8px; }
+.po-scan .modal-actions { margin-top: 18px; position: sticky; bottom: 0; background: var(--panel); padding-top: 12px; border-top: 1px solid var(--border); }
 .po-confirm { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 8px; }
 .po-confirm-name { font-weight: 700; font-size: 15px; }
 .po-confirm-row { display: flex; gap: 10px; }

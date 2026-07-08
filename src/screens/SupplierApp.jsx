@@ -303,9 +303,10 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
             <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <h3 className="modal-title">Scan a UPC</h3>
               <Suspense fallback={<p className="muted">Loading camera…</p>}>
+                {/* CameraScanner renders its own Cancel/controls — no extra Cancel here
+                    (that made two stacked Cancel buttons). Backdrop tap also closes. */}
                 <CameraScanner mode="product" onDetected={(c) => { setCam(false); resolve(c); }} onClose={() => setCam(false)} />
               </Suspense>
-              <div className="modal-actions"><button className="btn ghost" onClick={() => setCam(false)}>Cancel</button></div>
             </div>
           </div>
         )}

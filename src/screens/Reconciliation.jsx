@@ -152,7 +152,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
             </div>
 
             <div className="rc-actions">
-              <button className="btn ghost" onClick={copyReport}>{copied ? 'Copied ✓' : 'Copy discrepancy report'}</button>
+              <button className="btn ghost" onClick={copyReport}>{copied ? 'Copied ✓' : 'Copy report'}</button>
               {canReconcile && po.status === 'receiving' && (
                 <button className="btn primary" disabled={busy} onClick={doReconcile}>{busy ? 'Reconciling…' : 'Reconcile & close'}</button>
               )}

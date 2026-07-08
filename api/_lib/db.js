@@ -1834,7 +1834,9 @@ export async function snapshotReconciliation(poId) {
     UPDATE purchase_orders
     SET reconciliation = ${JSON.stringify(snap)}::jsonb, reconciled_at = now(), status = 'reconciled'
     WHERE id = ${poId}`;
-  return { ...data, po: { ...data.po, status: 'reconciled' } };
+  // `data` was read before the UPDATE, so patch both status AND reconciled_at onto
+  // the returned PO — otherwise the immediate response's "Reconciled <date>" is blank.
+  return { ...data, po: { ...data.po, status: 'reconciled', reconciled_at: snap.at } };
 }
 
 // POs that have been received and are awaiting / have a reconciliation.

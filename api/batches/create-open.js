@@ -4,7 +4,7 @@
 // Starts an OPEN multi-box receiving batch (no items yet). Boxes are added and
 // committed one at a time from the Batch Page (V6 Feature 7).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { createOpenBatch, addSupplier, getPo, markPoReceiving, dbConfigured } from '../_lib/db.js';
+import { createOpenBatch, addSupplier, getPo, getOpenBatchForPo, markPoReceiving, dbConfigured } from '../_lib/db.js';
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
 const toCost = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
@@ -32,6 +32,9 @@ export default async function handler(req, res) {
     if (!po) return send(res, 404, { ok: false, error: 'That purchase order was not found.' });
     if (!['shipped', 'receiving'].includes(po.status))
       return send(res, 409, { ok: false, error: `PO ${po.po_code} is ${po.status} — it can't be received against.` });
+    // Idempotent: reuse the open batch already receiving this PO (no duplicate).
+    const existing = await getOpenBatchForPo(poId);
+    if (existing) return send(res, 200, { ok: true, batchCode: existing.batch_code, id: existing.id, reused: true });
   }
 
   const header = {

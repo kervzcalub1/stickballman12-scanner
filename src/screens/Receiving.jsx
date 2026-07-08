@@ -53,6 +53,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   function applyPo(data) {
     const boxes = data.boxes || [];
     setReceivingPo(data);
+    // Make the PO's supplier selectable so the <select> doesn't show blank when it
+    // isn't in the seeded list (the batch still commits with this supplier).
+    setSupplierOptions((opts) => (opts.includes(data.po.supplier_name)
+      ? opts : [...opts, data.po.supplier_name].sort((a, b) => a.localeCompare(b))));
     setHeader((h) => ({
       ...h,
       supplier: data.po.supplier_name || h.supplier,
@@ -62,9 +66,28 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }));
     // Every label becomes a box slot — receiving each is a manifest checklist.
     setBoxSlots(boxes.map((b, i) => ({
-      tracking: b.tracking_number || '', status: 'pending', boxNumber: i + 1, itemCount: 0, poBoxId: Number(b.id),
+      tracking: b.tracking_number || '', status: 'pending', boxNumber: i + 1, itemCount: 0, poBoxId: Number(b.id), boxId: null,
     })));
     setShowPoPicker(false);
+    // Resume: if this PO already has a linked receiving batch (returned/refreshed
+    // mid-receive), load it so received boxes show done and we REUSE that batch —
+    // ensureBatch won't create a duplicate, and received boxes can't be re-added.
+    if (data.po.received_batch_id) {
+      api.batchFull(data.po.received_batch_id).then((r) => {
+        if (!r?.batch) return;
+        setActiveBatch({ id: r.batch.id, batchCode: r.batch.batch_code });
+        const byNum = new Map((r.boxes || []).map((b) => [Number(b.box_number), b]));
+        setBoxSlots(boxes.map((b, i) => {
+          const bb = byNum.get(i + 1);
+          return {
+            tracking: b.tracking_number || '', poBoxId: Number(b.id), boxNumber: i + 1,
+            boxId: bb ? Number(bb.id) : null,
+            status: bb?.status === 'received' ? 'received' : 'pending',
+            itemCount: bb?.item_count ?? 0,
+          };
+        }));
+      }).catch(() => { /* treat as a fresh receive */ });
+    }
   }
   const clearPo = () => setReceivingPo(null); // unlink; keep whatever's typed
 
@@ -87,6 +110,31 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const setSizeQty = (itemKey, sizeKey, qty) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
     ...it, sizes: it.sizes.map((s) => (s.key === sizeKey ? { ...s, qty: Math.max(0, parseInt(qty, 10) || 0) } : s)),
   })));
+  // Reserve real VINs for the current manifest counts so every received unit shows
+  // its VIN on Review and can be flagged with a per-shoe defect (parity with the
+  // scan flow). Reserves only the shortfall; trims extras when a count drops.
+  async function ensureManifestVins() {
+    let need = 0;
+    for (const it of items) for (const s of it.sizes) {
+      need += Math.max(0, (Math.max(0, Number(s.qty) || 0)) - (s.vins?.length || 0));
+    }
+    let pool = [];
+    if (need > 0) {
+      try { const res = await api.reserveVins(need, header.dateReceived); pool = res.vins || []; }
+      catch (e) { if (e.unauthorized) { onSignOut(); return false; } /* else server assigns on commit */ }
+    }
+    let idx = 0;
+    setItems((arr) => arr.map((it) => ({
+      ...it,
+      sizes: it.sizes.map((s) => {
+        const q = Math.max(0, Number(s.qty) || 0);
+        let vs = (s.vins || []).slice(0, q);
+        while (vs.length < q && idx < pool.length) vs = [...vs, pool[idx++]];
+        return { ...s, vins: vs };
+      }),
+    })));
+    return true;
+  }
 
   // Add-new-supplier modal (Feature 1): type a vendor → it's appended to the
   // dropdown and selected for this session (persisted to the DB on commit).
@@ -498,7 +546,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const defaultCostNum = header.defaultCost === '' ? null : Number(header.defaultCost);
   // V6 Feature 7: expected boxes > 1 starts an OPEN multi-box batch up front
   // (isMultiBoxNew, see the box list above); box-mode adds a box to an existing one.
-  const itemUnits = (i) => i.sizes.reduce((a, r) => a + Math.max(1, Number(r.qty) || 1), 0);
+  // qty 0 counts as 0 units (PO-manifest shortage) — matches doCommit's expansion.
+  // Scan-intake rows are always ≥1, so this is unchanged there.
+  const itemUnits = (i) => i.sizes.reduce((a, r) => a + Math.max(0, Number(r.qty) || 0), 0);
   const totalItems = items.reduce((s, i) => s + itemUnits(i), 0);
   const totalCost = (defaultCostNum || 0) * totalItems;
   const rescaledCount = rescanned.length; // existing units re-scanned by VIN (rescale only)
@@ -579,9 +629,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (isRescale && header.origin === 'other' && !String(header.originOther).trim()) { setError('Enter a custom reason.'); return; }
     setStep(2);
   }
-  function goStep3() {
+  async function goStep3() {
     setError('');
     if (!items.length) { setError('Add at least one item first.'); return; }
+    // PO-manifest: reserve VINs for the received units so each shoe is flaggable.
+    if (isPoReceive && !(await ensureManifestVins())) return;
     setStep(3);  // Review
   }
   function goStep4() { setError(''); setStep(4); } // Issues (shipment-level)
@@ -1038,7 +1090,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                 </div>
                                 {open && (
                                   <div className="recv-units">
-                                    {Array.from({ length: Math.max(1, Number(s.qty) || 1) }, (_, i) => {
+                                    {Array.from({ length: Math.max(0, Number(s.qty) || 0) }, (_, i) => {
                                       const vin = s.vins?.[i];
                                       return (
                                         <div className="recv-unit" key={i}>

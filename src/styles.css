@@ -1710,10 +1710,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-manifest-item.overage { border-color: rgba(198,135,26,0.45); background: rgba(198,135,26,0.06); }
 .po-manifest-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .po-manifest-name { font-weight: 600; flex: 1; min-width: 0; }
-.po-manifest-size { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.po-manifest-size { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); flex-wrap: wrap; min-height: 44px; }
 .po-manifest-size.off { opacity: 0.55; }
-.po-check { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 140px; cursor: pointer; }
-.po-check input { width: 18px; height: 18px; flex: none; }
+.po-check { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 140px; min-height: 40px; cursor: pointer; }
+.po-check input { width: 22px; height: 22px; flex: none; }
+.po-manifest .qty-stepper .step { min-width: 40px; min-height: 40px; }
 .po-size-lbl { font-size: 14px; }
 .po-flag { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .po-flag.short { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }

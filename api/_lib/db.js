@@ -1759,3 +1759,11 @@ export async function markPoReceiving(poId, batchId) {
     WHERE id = ${poId}
   `;
 }
+
+// The still-open receiving batch already linked to a PO (if any) — so a second
+// "start receiving" against the same PO reuses it instead of creating a duplicate.
+export async function getOpenBatchForPo(poId) {
+  const sql = db();
+  const rows = await sql`SELECT id, batch_code FROM batches WHERE po_id = ${poId} AND status = 'open' ORDER BY id LIMIT 1`;
+  return rows[0] || null;
+}

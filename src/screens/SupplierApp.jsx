@@ -270,7 +270,7 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
               </div>
             </div>
             <div className="size-rows">
-              <div className="muted sm">Tap a size to add it (tap again for +1), or “+ Custom”.</div>
+              <div className="muted sm">Tap each size you’re shipping, then set its quantity with −/+. Use “+ Custom” for anything not listed.</div>
               <div className="size-chips">
                 {sizePool().map((s) => (
                   <button type="button" key={s} className="size-chip" onClick={() => addSize(s)}>{s}</button>

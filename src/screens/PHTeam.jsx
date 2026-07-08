@@ -20,6 +20,7 @@ import { NoBoxReport } from './NoBoxReport.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { PhEditedPhotos } from './PhEditedPhotos.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
+import { CreatePO } from './CreatePO.jsx';
 
 // Small "WY" chip shown beside a GI that came from the Alias "With You" basis
 // (the consigned GI was empty/0, so we fell back). Nothing renders for consigned
@@ -53,6 +54,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'photos') return <PhEditedPhotos onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -82,6 +84,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="inventory" /></span>
             <span className="home-card-title">Price Inquiry</span>
             <span className="home-card-sub">Look up live Alias prices for any SKU — lowest ask, highest offer, last sold &amp; Global Indicator</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('po')}>
+            <span className="home-card-icon"><NavIcon name="receiving" /></span>
+            <span className="home-card-title">New Batch (Purchase Order)</span>
+            <span className="home-card-sub">Open a supplier batch — labels + tracking numbers — for a supplier to scan out</span>
           </button>
         </div>
       </section>

@@ -150,6 +150,15 @@ export const api = {
   // Atomic multi-size group save — one entry per size, all-or-nothing (see phUpdateGroup).
   phUpdateGroup: (sizes, baseEditedAt) => post('/api/ph/update', { sizes, baseEditedAt }),
   phRefreshGi: (vins) => post('/api/ph/refresh-gi', { vins }),
+  // Purchase Orders — supplier scan-out (Phase 1). PH creates the PO shell + labels;
+  // supplier lists/opens their own, scans items under each label, ships per label.
+  poSuppliers: () => get('/api/po/suppliers'),
+  poCreate: (payload) => post('/api/po/create', payload),
+  poList: () => get('/api/po/list'),
+  poGet: (id) => get(`/api/po/get?id=${encodeURIComponent(id)}`),
+  poScan: (payload) => post('/api/po/scan', payload),
+  poLine: (lineId, qty) => post('/api/po/line', { lineId, qty }),
+  poShip: (poBoxId) => post('/api/po/ship', { poBoxId }),
   // PH edit locks (presence)
   lockList: () => get('/api/ph/locks'),
   lockClaim: (vins, holderId) => post('/api/ph/locks', { action: 'claim', vins, holderId }),

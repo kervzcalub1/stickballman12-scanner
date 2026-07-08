@@ -1569,3 +1569,147 @@ export async function addItemEvent({ itemId, type, details, createdBy }) {
   }
   await sql.transaction(queries);
 }
+
+/* -------------------- Purchase Orders (supplier scan-out) --------------------
+   PH creates a PO (the "batch" form) with one po_boxes row per shipping label;
+   the supplier fills po_lines by scanning under each label; the PO ships only
+   when every label is shipped. See docs/context/purchase-orders.md.
+   NOTE: none of these touch the receiving commit path — no VIN mint / items
+   insert (supplier scan-out must never create phantom stock). */
+
+// Approved supplier accounts — for the PH "create PO" supplier picker.
+export async function listSupplierUsers() {
+  const sql = db();
+  return sql`
+    SELECT id, name, username FROM users
+    WHERE role = 'supplier' AND status = 'approved'
+    ORDER BY name
+  `;
+}
+
+// Create a PO shell + one po_boxes row per label, atomically (CTE + unnest).
+export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, createdBy }) {
+  const sql = db();
+  const boxNumbers = labels.map((_, i) => i + 1);
+  const trackings = labels.map((l) => (String(l.trackingNumber || '').trim() || null));
+  const rows = await sql`
+    WITH po AS (
+      INSERT INTO purchase_orders
+        (supplier_name, supplier_user_id, tag_code, date_of_purchase, expected_boxes, notes, created_by)
+      VALUES (${supplierName}, ${supplierUserId || null}, ${tagCode || null}, ${dateOfPurchase || null},
+              ${labels.length}, ${notes || null}, ${createdBy || null})
+      RETURNING id
+    )
+    INSERT INTO po_boxes (po_id, box_number, tracking_number, status, created_by)
+    SELECT po.id, t.box_number, t.tracking_number, 'pending', ${createdBy || null}
+    FROM po, unnest(${boxNumbers}::int[], ${trackings}::text[]) AS t(box_number, tracking_number)
+    RETURNING po_id
+  `;
+  return getPoFull(rows[0].po_id);
+}
+
+export async function getPo(id) {
+  const sql = db();
+  return (await sql`SELECT * FROM purchase_orders WHERE id = ${id}`)[0] || null;
+}
+
+export async function getPoBox(id) {
+  const sql = db();
+  return (await sql`SELECT * FROM po_boxes WHERE id = ${id}`)[0] || null;
+}
+
+// Full PO: header + labels (boxes) + expected lines.
+export async function getPoFull(id) {
+  const sql = db();
+  const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${id}`)[0];
+  if (!po) return null;
+  const boxes = await sql`SELECT * FROM po_boxes WHERE po_id = ${id} ORDER BY box_number`;
+  const lines = await sql`SELECT * FROM po_lines WHERE po_id = ${id} ORDER BY po_box_id, sku, size`;
+  return { po, boxes, lines };
+}
+
+// List POs with roll-up counts. Supplier sees only their own; everyone else all.
+// (The shim can't nest sql fragments, so branch the whole statement.)
+export async function listPos({ uid, supplierScope }) {
+  const sql = db();
+  if (supplierScope) {
+    return sql`
+      SELECT p.*,
+        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
+        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status <> 'pending')::int AS shipped_count,
+        (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+      FROM purchase_orders p
+      WHERE p.supplier_user_id = ${uid}
+      ORDER BY p.created_at DESC
+    `;
+  }
+  return sql`
+    SELECT p.*,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status <> 'pending')::int AS shipped_count,
+      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+    FROM purchase_orders p
+    ORDER BY p.created_at DESC
+  `;
+}
+
+// Add/increment an expected line under a label. Re-scanning a SKU+size in the
+// same label bumps qty_expected (mirrors receiving's per-size auto-increment).
+export async function addPoScan({ poId, poBoxId, sku, size, qty, name, upc, colorway, gender, unitCost }) {
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost)
+    VALUES (${poId}, ${poBoxId}, ${sku}, ${size}, ${name || null}, ${upc || null},
+            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null})
+    ON CONFLICT (po_box_id, sku, size) DO UPDATE
+      SET qty_expected = po_lines.qty_expected + EXCLUDED.qty_expected,
+          unit_cost    = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+          name         = COALESCE(EXCLUDED.name, po_lines.name),
+          updated_at   = now()
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function setPoLineQty(lineId, qtyExpected) {
+  const sql = db();
+  if (qtyExpected <= 0) { await sql`DELETE FROM po_lines WHERE id = ${lineId}`; return null; }
+  return (await sql`
+    UPDATE po_lines SET qty_expected = ${qtyExpected}, updated_at = now()
+    WHERE id = ${lineId} RETURNING *
+  `)[0] || null;
+}
+
+export async function deletePoLine(lineId) {
+  const sql = db();
+  await sql`DELETE FROM po_lines WHERE id = ${lineId}`;
+}
+
+// Mark one label shipped; if every label on the PO is now shipped, flip the PO
+// to 'shipped'. Returns the updated box (or null if it wasn't pending).
+export async function shipPoBox(poBoxId) {
+  const sql = db();
+  const box = (await sql`
+    UPDATE po_boxes SET status = 'shipped', shipped_at = now()
+    WHERE id = ${poBoxId} AND status = 'pending'
+    RETURNING *
+  `)[0];
+  if (!box) return null;
+  await sql`
+    UPDATE purchase_orders SET status = 'shipped', shipped_at = now()
+    WHERE id = ${box.po_id} AND status = 'draft'
+      AND NOT EXISTS (SELECT 1 FROM po_boxes WHERE po_id = ${box.po_id} AND status = 'pending')
+  `;
+  return box;
+}
+
+export async function getPoLine(id) {
+  const sql = db();
+  return (await sql`SELECT * FROM po_lines WHERE id = ${id}`)[0] || null;
+}
+
+export async function countPoBoxLines(poBoxId) {
+  const sql = db();
+  const r = await sql`SELECT coalesce(sum(qty_expected), 0)::int AS n FROM po_lines WHERE po_box_id = ${poBoxId}`;
+  return r[0].n;
+}

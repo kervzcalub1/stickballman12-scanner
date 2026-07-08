@@ -1642,3 +1642,49 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 }
 .copytext.copied .copytext-cue { opacity: 1; transform: translateX(-50%) translateY(0); }
 @media (prefers-reduced-motion: reduce) { .copytext-cue { transition: opacity 0.12s; } }
+
+/* ---- Purchase Orders: supplier scan-out + PH create (Phase 1) ---- */
+.wrap-narrow { max-width: 720px; margin: 0 auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.empty-state { color: var(--muted); text-align: center; padding: 28px 18px; line-height: 1.5; }
+.po-err { background: rgba(213,69,63,0.12); border: 1px solid rgba(213,69,63,0.4); color: var(--err); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+.po-flash { background: rgba(26,157,99,0.12); border: 1px solid rgba(26,157,99,0.4); color: var(--ok); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+
+.po-chip { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; border: 1px solid var(--border); }
+.po-chip.draft { background: rgba(198,135,26,0.14); color: #c6871a; border-color: rgba(198,135,26,0.35); }
+.po-chip.shipped { background: rgba(61,107,255,0.14); color: var(--primary); border-color: rgba(61,107,255,0.35); }
+.po-chip.receiving { background: rgba(217,122,30,0.14); color: #d97a1e; border-color: rgba(217,122,30,0.35); }
+.po-chip.ok { background: rgba(26,157,99,0.14); color: var(--ok); border-color: rgba(26,157,99,0.35); }
+.po-chip.muted { background: var(--panel-2); color: var(--muted); }
+
+.po-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.po-list { display: flex; flex-direction: column; gap: 10px; }
+.po-card { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; color: var(--text); }
+.po-card:hover { border-color: var(--primary); }
+.po-code { font-weight: 700; font-size: 15px; }
+.po-card-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
+
+.po-box.shipped { opacity: 0.72; }
+.po-track { margin-top: 2px; }
+.po-lines { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.po-lines li { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; border-top: 1px solid var(--border); padding-top: 6px; }
+.po-line-name { font-weight: 600; }
+.po-line-meta { color: var(--muted); white-space: nowrap; }
+.po-box-actions { display: flex; gap: 8px; margin-top: 12px; }
+.po-box-actions .btn { flex: 1; }
+.po-shipped-note { color: var(--ok); font-size: 14px; margin: 8px 0 0; font-weight: 600; }
+
+.po-scan { max-width: 460px; width: 100%; }
+.po-confirm { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.po-confirm-name { font-weight: 700; font-size: 15px; }
+.po-confirm-row { display: flex; gap: 10px; }
+.po-confirm-row label { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+
+.po-created-icon { width: 46px; height: 46px; border-radius: 50%; background: var(--ok); color: #fff; display: grid; place-items: center; font-size: 26px; font-weight: 800; margin: 0 auto 10px; }
+
+.po-label-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.po-label-row { display: flex; align-items: center; gap: 8px; }
+.po-label-row input { flex: 1; min-width: 0; }
+.po-label-n { font-family: ui-monospace, monospace; color: var(--muted); font-size: 13px; width: 30px; flex: none; }
+.po-label-x { flex: none; font-size: 18px; line-height: 1; padding: 8px 12px; }
+.po-submit-bar { display: flex; justify-content: flex-end; gap: 10px; padding-bottom: 24px; }

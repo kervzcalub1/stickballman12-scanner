@@ -22,6 +22,13 @@ import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
 import { ShelvePage } from './screens/ShelvePage.jsx';
 import { Locations } from './screens/Locations.jsx';
 import { InstoreListing } from './screens/InstoreListing.jsx';
+import { SupplierApp } from './screens/SupplierApp.jsx';
+
+// The supplier scan-out portal is served on the `supplier.` subdomain. This is a
+// UX/branding branch only — the real boundary is server-side (every /api/po/*
+// endpoint scopes a supplier to their own POs). Never trust the hostname for authz.
+const SUPPLIER_HOST = typeof window !== 'undefined' && /^supplier\./i.test(window.location.hostname);
+const isPrivilegedRole = (r) => r === 'admin' || r === 'superadmin';
 
 export default function App() {
   const [user, setUserState] = useState(getUser);
@@ -42,7 +49,7 @@ export default function App() {
     setUserState(u);
     // PH users (and superadmin deep-linking into /ph/*) route under /ph/* inside
     // PHTeamApp, which reads the URL itself — don't rewrite it or we'd clobber the link.
-    if (u.role === 'ph_team') return;
+    if (u.role === 'ph_team' || u.role === 'supplier') return;
     if (u.role === 'superadmin' && window.location.pathname.startsWith('/ph')) { setPhMode(true); return; }
     // Honor a deep link the user landed on before signing in (e.g. /inventory).
     const v = viewForPath(window.location.pathname);
@@ -98,6 +105,20 @@ export default function App() {
   // PH Team users get their own home (New Inventory / Rescale Stock reports, etc.).
   // Superadmin reuses the same workspace when they've entered PH mode; exitPh takes
   // them back to the main admin home.
+  // Suppliers only ever see the scan-out portal (any host).
+  if (user.role === 'supplier') return <SupplierApp user={user} onSignOut={signOut} />;
+  // On the supplier subdomain, staff don't belong — admins pass through for oversight,
+  // everyone else is pointed at the main site.
+  if (SUPPLIER_HOST) {
+    if (isPrivilegedRole(user.role)) return <SupplierApp user={user} onSignOut={signOut} />;
+    return (
+      <div className="app"><div className="wrap-narrow"><div className="card empty-state">
+        This portal is for suppliers. Staff — please use <a href="https://stickballman12.com">stickballman12.com</a>.
+        <div style={{ marginTop: 12 }}><button className="btn ghost" onClick={signOut}>Sign out</button></div>
+      </div></div></div>
+    );
+  }
+
   if (user.role === 'ph_team') return <PHTeamApp user={user} onSignOut={signOut} />;
   if (user.role === 'superadmin' && phMode) return <PHTeamApp user={user} onSignOut={signOut} onExit={exitPh} />;
 

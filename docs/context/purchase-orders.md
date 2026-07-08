@@ -10,9 +10,27 @@ reconciling what was promised vs. what actually arrived. A batch spans **multipl
 labels** (one tracking number each); it closes only when every label is shipped.
 
 ## Status
-- **Phase 0 (done):** schema + `supplier` role. No endpoints or UI yet.
-- Phases 1–5 (not started): PH create + supplier scan-out → receive-against-PO →
-  reconciliation → 17TRACK shipment tracking → polish. See the plan doc for the order.
+- **Phase 0 (done, merged):** schema + `supplier` role.
+- **Phase 1 (built, on branch `feat/po-phase1-scanout` — not deployed):** PH create-batch
+  form + supplier scan-out portal + subdomain gating. Endpoints under `api/po/*`, client
+  methods `api.po*`, screens `CreatePO.jsx` (PH) + `SupplierApp.jsx` (supplier).
+- Phases 2–5 (not started): receive-against-PO → reconciliation → 17TRACK tracking → polish.
+
+## Phase 1 — endpoints & flow
+`api/po/*` (house order: `applySecurity → requireRole → rateLimit → getJsonBody`; supplier
+scoped to own POs on every one; admin/superadmin auto-allowed):
+- `create` (ph_team) — PO shell + one `po_boxes` row per label.
+- `suppliers` (ph_team) — approved supplier accounts for the create picker.
+- `list` / `get` — ph_team/warehouse/admin see all; supplier only their own.
+- `scan` (supplier) — add/increment a `po_lines` row under a label; **only** while the PO is
+  `draft` and the label `pending`. Writes po tables only — never the receiving commit path.
+- `line` (supplier) — adjust/remove a line qty.
+- `ship` (supplier) — mark a label shipped (needs ≥1 item); PO flips to `shipped` when all
+  labels are shipped.
+
+**UI:** PH `CreatePO` lives in PHTeamApp (`/ph/purchase-orders`). Supplier `SupplierApp`
+renders for `role === 'supplier'` (any host) and on the `supplier.` subdomain
+(`App.jsx` `SUPPLIER_HOST`); the hostname is UX-only — the server scoping is the boundary.
 
 ## Schema (in `scripts/db-setup.mjs`)
 Two entities, deliberately separate so **expected** (supplier) and **actual** (warehouse)

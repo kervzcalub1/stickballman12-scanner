@@ -8,7 +8,7 @@ import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
-import { isUpcCode } from '../lib/codes.js';
+import { isUpcCode, usSizeChart, compareSizes } from '../lib/codes.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -163,15 +163,17 @@ export function SupplierApp({ user, onSignOut }) {
   );
 }
 
-// Scan / type a UPC or SKU → resolve product → set size + qty → add to the label.
+// Scan / type a UPC or SKU → resolve the product → tap size chips (tap again for
+// +1) → add the whole shoe (every size) to the label at once, like the warehouse
+// Add-Item flow. Each size posts one po_line via /api/po/scan.
+let rowKey = 0;
 function ScanModal({ box, onClose, onAdded, onSignOut }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [flash, setFlash] = useState('');
-  const [product, setProduct] = useState(null); // resolved { name, sku, upc, colorway, gender }
-  const [size, setSize] = useState('');
-  const [qty, setQty] = useState('1');
+  // draft = { name, sku, upc, colorway, gender, image, sizeOptions, rows:[{key,size,qty}] }
+  const [draft, setDraft] = useState(null);
   const [cam, setCam] = useState(false);
 
   const resolve = async (raw) => {
@@ -181,34 +183,64 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
     try {
       const isUpc = isUpcCode(c);
       const { product: p } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
-      setProduct({
+      const rows = p.scannedSize ? [{ key: rowKey++, size: String(p.scannedSize), qty: 1 }] : [];
+      setDraft({
         name: p.name || '', sku: p.sku || (isUpc ? '' : c), upc: (isUpc ? c : '') || p.upc || '',
-        colorway: p.colorway || '', gender: p.gender || null,
+        colorway: p.colorway || '', gender: p.gender || null, image: p.image || '',
+        sizeOptions: p.sizes || [], rows,
       });
-      setSize(p.scannedSize || '');
+      setCode('');
+      if (rows.length === 0) setFlash("Tap the sizes you're shipping.");
     } catch (e) {
       if (e.unauthorized) return onSignOut();
       setError(e.message || 'Could not find that code.');
     } finally { setBusy(false); }
   };
 
-  const add = async () => {
-    if (!product?.sku || !size.trim()) { setError('A SKU and size are required.'); return; }
+  // Size helpers — mirror the warehouse Add-Item behavior.
+  const sizePool = () => {
+    const apiSizes = draft?.sizeOptions || [];
+    const tokens = [...apiSizes, ...(draft?.rows || []).map((r) => r.size)].map((s) => String(s || ''));
+    const kind = tokens.some((s) => /y$/i.test(s)) ? 'y' : tokens.some((s) => /w$/i.test(s)) ? 'w' : '';
+    const pool = apiSizes.length > 1 ? apiSizes : [...new Set([...apiSizes, ...usSizeChart(kind)])];
+    return pool.filter((s) => !(draft?.rows || []).some((r) => String(r.size) === String(s)));
+  };
+  const addSize = (s) => setDraft((d) => {
+    const i = d.rows.findIndex((r) => String(r.size) === String(s));
+    if (i >= 0) { const rows = d.rows.slice(); rows[i] = { ...rows[i], qty: rows[i].qty + 1 }; return { ...d, rows }; }
+    return { ...d, rows: [...d.rows, { key: rowKey++, size: String(s), qty: 1 }] };
+  });
+  const addCustom = () => setDraft((d) => ({ ...d, rows: [...d.rows, { key: rowKey++, size: '', qty: 1 }] }));
+  const setRow = (key, patch) => setDraft((d) => ({ ...d, rows: d.rows.map((r) => (r.key === key ? { ...r, ...patch } : r)) }));
+  const bump = (key, by) => setDraft((d) => ({ ...d, rows: d.rows.map((r) => (r.key === key ? { ...r, qty: Math.max(1, r.qty + by) } : r)) }));
+  const removeRow = (key) => setDraft((d) => ({ ...d, rows: d.rows.filter((r) => r.key !== key) }));
+
+  const addToLabel = async () => {
+    const rows = (draft?.rows || [])
+      .map((r) => ({ size: String(r.size).trim(), qty: Math.max(1, parseInt(r.qty, 10) || 1) }))
+      .filter((r) => r.size);
+    if (!draft?.sku) { setError('A SKU is required.'); return; }
+    if (rows.length === 0) { setError('Tap at least one size.'); return; }
     setBusy(true); setError('');
     try {
-      await api.poScan({
-        poBoxId: Number(box.id), sku: product.sku, size: size.trim(),
-        qty: Math.max(1, parseInt(qty, 10) || 1),
-        name: product.name, upc: product.upc, colorway: product.colorway, gender: product.gender,
-      });
-      setFlash(`Added ${product.name || product.sku} · sz ${size.trim()} ×${Math.max(1, parseInt(qty, 10) || 1)}`);
-      setProduct(null); setCode(''); setSize(''); setQty('1');
+      for (const r of rows) {
+        await api.poScan({
+          poBoxId: Number(box.id), sku: draft.sku, size: r.size, qty: r.qty,
+          name: draft.name, upc: draft.upc, colorway: draft.colorway, gender: draft.gender,
+        });
+      }
+      const total = rows.reduce((n, r) => n + r.qty, 0);
+      setFlash(`Added ${draft.name || draft.sku} · ${rows.length} size${rows.length === 1 ? '' : 's'} · ${total} unit${total === 1 ? '' : 's'}`);
+      setDraft(null); setCode('');
       onAdded();
     } catch (e) {
       if (e.unauthorized) return onSignOut();
       setError(e.message);
+      onAdded(); // reflect whatever landed before the failure
     } finally { setBusy(false); }
   };
+
+  const totalUnits = (draft?.rows || []).reduce((n, r) => n + (parseInt(r.qty, 10) || 0), 0);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -226,17 +258,43 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
         </form>
 
         {error && <div className="po-err">{error}</div>}
-        {flash && <div className="po-flash">✓ {flash}</div>}
+        {flash && !draft && <div className="po-flash">✓ {flash}</div>}
 
-        {product && (
-          <div className="po-confirm">
-            <div className="po-confirm-name">{product.name || product.sku}</div>
-            <div className="muted sm">{product.sku}{product.colorway ? ` · ${product.colorway}` : ''}</div>
-            <div className="po-confirm-row">
-              <label>Size<input value={size} autoCapitalize="off" placeholder="e.g. 9.5" onChange={(e) => setSize(e.target.value)} /></label>
-              <label>Qty<input type="number" inputMode="numeric" min="1" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
+        {draft && (
+          <div className="additem-draft">
+            <div className="additem-product">
+              {draft.image ? <img className="cart-thumb" src={draft.image} alt="" /> : <div className="cart-thumb placeholder">—</div>}
+              <div className="cart-fields">
+                <input className="cart-name" placeholder="Product name" value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
+                <input placeholder="SKU" value={draft.sku} onChange={(e) => setDraft((d) => ({ ...d, sku: e.target.value }))} />
+              </div>
             </div>
-            <button className="btn primary" disabled={busy || !size.trim()} onClick={add}>Add to label</button>
+            <div className="size-rows">
+              <div className="muted sm">Tap a size to add it (tap again for +1), or “+ Custom”.</div>
+              <div className="size-chips">
+                {sizePool().map((s) => (
+                  <button type="button" key={s} className="size-chip" onClick={() => addSize(s)}>{s}</button>
+                ))}
+                <button type="button" className="size-chip custom" onClick={addCustom}>+ Custom</button>
+              </div>
+              {[...draft.rows].sort((a, b) => compareSizes(a.size, b.size)).map((r) => (
+                <div className="size-line" key={r.key}>
+                  <input className={`sz ${!String(r.size).trim() ? 'need' : ''}`} placeholder="Size" value={r.size} onChange={(e) => setRow(r.key, { size: e.target.value })} autoFocus={!String(r.size).trim()} />
+                  <div className="qty-stepper">
+                    <button type="button" className="btn icon ghost step" onClick={() => bump(r.key, -1)}>−</button>
+                    <input className="qty" type="number" inputMode="numeric" min="1" value={r.qty} onChange={(e) => setRow(r.key, { qty: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
+                    <button type="button" className="btn icon ghost step" onClick={() => bump(r.key, 1)}>+</button>
+                  </div>
+                  <button type="button" className="btn icon ghost remove" title="Remove size" onClick={() => removeRow(r.key)}>×</button>
+                </div>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn ghost" onClick={() => setDraft(null)}>Cancel</button>
+              <button type="button" className="btn primary wide" disabled={busy || totalUnits < 1} onClick={addToLabel}>
+                Add {totalUnits > 0 ? `${totalUnits} unit${totalUnits === 1 ? '' : 's'} ` : ''}to label
+              </button>
+            </div>
           </div>
         )}
 
@@ -245,7 +303,7 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
             <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <h3 className="modal-title">Scan a UPC</h3>
               <Suspense fallback={<p className="muted">Loading camera…</p>}>
-                <CameraScanner mode="product" onDetected={(c) => { setCam(false); setCode(c); resolve(c); }} onClose={() => setCam(false)} />
+                <CameraScanner mode="product" onDetected={(c) => { setCam(false); resolve(c); }} onClose={() => setCam(false)} />
               </Suspense>
               <div className="modal-actions"><button className="btn ghost" onClick={() => setCam(false)}>Cancel</button></div>
             </div>

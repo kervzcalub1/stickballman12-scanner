@@ -73,7 +73,7 @@ function withScannedSize(sizes, scannedSize) {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  if (!requireRole(req, res, ['warehouse'])) return;
+  if (!requireRole(req, res, ['warehouse', 'supplier'])) return; // supplier: PO scan-out product lookup (scan a UPC)
   if (!rateLimit(req, { windowMs: 60_000, max: 40 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
 

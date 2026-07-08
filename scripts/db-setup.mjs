@@ -42,19 +42,21 @@ await sql(`
     name        TEXT        NOT NULL,
     username    TEXT        NOT NULL UNIQUE,            -- stored lowercased
     pass_hash   TEXT        NOT NULL,
-    role        TEXT        NOT NULL DEFAULT 'warehouse' CHECK (role IN ('warehouse','admin','ph_team')),
+    role        TEXT        NOT NULL DEFAULT 'warehouse' CHECK (role IN ('warehouse','admin','ph_team','supplier')),
     status      TEXT        NOT NULL DEFAULT 'pending'  CHECK (status IN ('pending','approved','rejected')),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     reviewed_at TIMESTAMPTZ,
     reviewed_by TEXT
   )
 `);
-// Roles: admin · warehouse · ph_team. Migrate any legacy 'employee' rows to
-// 'warehouse' before re-asserting the constraint (idempotent on existing DBs).
+// Roles: admin · warehouse · ph_team · supplier. Migrate any legacy 'employee' rows
+// to 'warehouse' before re-asserting the constraint (idempotent on existing DBs).
+// `supplier` (external partners who scan out shipments — see the PO tables below) is
+// admin-assigned only; signup never offers it (api/auth/signup.js).
 await sql(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check`);
 await sql(`UPDATE users SET role = 'warehouse' WHERE role = 'employee'`);
 await sql(`ALTER TABLE users ALTER COLUMN role SET DEFAULT 'warehouse'`);
-await sql(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('warehouse','admin','ph_team'))`);
+await sql(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('warehouse','admin','ph_team','supplier'))`);
 
 await sql(`
   CREATE TABLE IF NOT EXISTS login_attempts (
@@ -407,7 +409,93 @@ await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS location_id   BIGINT REFER
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS location_code TEXT`);
 await sql(`CREATE INDEX IF NOT EXISTS items_location_idx ON items (location_id)`);
 
+/* ---- Purchase Orders: supplier scan-out → reconciled receiving (Phase 0) ----
+   The order is created by the PH team (the "Form / Batch"), the supplier fills its
+   contents by scanning, and a receiving `batch` later links back via `batches.po_id`
+   to reconcile expected-vs-actual. Full design: docs/context/purchase-orders.md.
+   NOTE: the supplier scan-out writes ONLY these tables — it must never run the
+   receiving commit path (which mints VINs + inserts `items` = phantom stock). */
+await sql(`CREATE SEQUENCE IF NOT EXISTS po_seq START 100001`); // PO codes: PO-100001…
+
+// The order shell. `supplier_user_id` = the supplier account that fills it (nullable
+// until assigned). `expected_boxes` = how many shipping labels PH said the batch has.
+await sql(`
+  CREATE TABLE IF NOT EXISTS purchase_orders (
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    po_code           TEXT UNIQUE NOT NULL DEFAULT ('PO-' || nextval('po_seq')),
+    supplier_name     TEXT NOT NULL,
+    supplier_user_id  BIGINT REFERENCES users(id),
+    status            TEXT NOT NULL DEFAULT 'draft'
+                        CHECK (status IN ('draft','shipped','receiving','reconciled','closed')),
+    tag_code          TEXT,                 -- Tag/Code Name from the PH form
+    date_of_purchase  DATE,
+    expected_boxes    INT,                  -- number of shipping labels in this batch
+    notes             TEXT,
+    created_by        TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    shipped_at        TIMESTAMPTZ,          -- set when ALL labels are shipped
+    received_batch_id BIGINT REFERENCES batches(id),
+    reconciled_at     TIMESTAMPTZ,
+    reconciliation    JSONB                 -- expected-vs-received snapshot at reconcile time
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS purchase_orders_supplier_idx ON purchase_orders (supplier_user_id)`);
+await sql(`CREATE INDEX IF NOT EXISTS purchase_orders_status_idx   ON purchase_orders (status)`);
+
+// One row per shipping label (outbound mirror of batch_boxes). PH pre-assigns the
+// real courier `tracking_number` per label; `carrier`/`tracking_status`/`last_checkpoint`
+// are filled by the tracking aggregator (17TRACK) in a later phase. The PO flips to
+// 'shipped' only once every label here is shipped.
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_boxes (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    po_id           BIGINT REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    box_number      INT,
+    tracking_number TEXT,
+    carrier         TEXT,                   -- auto-detected by the tracking aggregator
+    status          TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','shipped','in_transit','delivered')),
+    tracking_status TEXT,                   -- raw status from the aggregator
+    last_checkpoint TEXT,
+    checked_at      TIMESTAMPTZ,
+    shipped_at      TIMESTAMPTZ,
+    created_by      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS po_boxes_po_idx       ON po_boxes (po_id)`);
+await sql(`CREATE INDEX IF NOT EXISTS po_boxes_tracking_idx ON po_boxes (tracking_number)`);
+
+// The "what the supplier says he shipped" lines — one per SKU+size PER LABEL, so the
+// same SKU+size can appear under different labels. Re-scanning a SKU/size increments
+// qty_expected (mirrors receiving's per-size auto-increment).
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_lines (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    po_id         BIGINT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    po_box_id     BIGINT NOT NULL REFERENCES po_boxes(id) ON DELETE CASCADE,
+    sku           TEXT,
+    size          TEXT,
+    name          TEXT,
+    upc           TEXT,
+    colorway      TEXT,
+    gender        TEXT,
+    qty_expected  INT NOT NULL DEFAULT 0,
+    unit_cost     NUMERIC(12,2),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS po_lines_po_idx ON po_lines (po_id)`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_box_sku_size_idx ON po_lines (po_box_id, sku, size)`);
+
+// Link the received receiving-batch back to its PO (set on scan-in). Reconciliation
+// joins po_lines (expected) against items under this batch (actual), by (sku, size).
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id)`);
+await sql(`CREATE INDEX IF NOT EXISTS batches_po_idx ON batches (po_id)`);
+
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);
-console.log(`✓ Tables ready. users: ${count}, batches: ${b}`);
+const { rows: [{ po }] } = await sql(`SELECT count(*)::int AS po FROM purchase_orders`);
+console.log(`✓ Tables ready. users: ${count}, batches: ${b}, purchase_orders: ${po}`);
 await pool.end();

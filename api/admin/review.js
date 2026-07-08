@@ -5,7 +5,8 @@
 import { getJsonBody, send, applySecurity, requireAdmin } from '../_lib/util.js';
 import { reviewUser, setUserRole, deleteUser, dbConfigured } from '../_lib/db.js';
 
-const ROLES = ['warehouse', 'ph_team', 'admin'];
+// `supplier` = external scan-out partner (PO feature); admin-assignable, never at signup.
+const ROLES = ['warehouse', 'ph_team', 'admin', 'supplier'];
 
 export default async function handler(req, res) {
   applySecurity(req, res);

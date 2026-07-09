@@ -40,7 +40,17 @@ labels** (one tracking number each); it closes only when every label is shipped.
   + summary + **Copy discrepancy report** for the group chat + **Reconcile & close**). Reachable
   from the main Home ("PO Reconciliation", warehouse/admin — full) and PHTeamApp
   (`/ph/reconciliation`, PH — view + copy only, `canReconcile={false}`).
-- Phases 4–5 (not started): 17TRACK shipment tracking → polish.
+- **Phase 4 (built, on branch `feat/po-phase4-tracking` — not deployed):** shipment tracking
+  via **17TRACK**, behind a thin adapter (`api/_lib/tracking.js`) that **no-ops unless
+  `TRACKING_API_KEY` is set**. On ship, `po/ship` registers the label's number; status lands
+  either by **webhook push** (`POST /api/po/tracking-webhook?secret=…`, gated by
+  `TRACKING_WEBHOOK_SECRET`) or an **on-demand pull** (`POST /api/po/track-refresh` {poId},
+  warehouse/ph). Both write `carrier` / `tracking_status` / `last_checkpoint` / `checked_at`
+  and advance `po_boxes.status` (17TRACK status → shipped/in_transit/delivered via
+  `mapBoxStatus`). Supplier portal shows per-label status + a "Refresh tracking" button.
+  Env: `TRACKING_API_KEY`, `TRACKING_WEBHOOK_SECRET` (see `.env.example`). Live register/
+  gettrackinfo calls need a real key to validate; mapper/parser/DB-update verified locally.
+- Phase 5 (not started): polish (notifications, PO archive, supplier-account admin).
 
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`

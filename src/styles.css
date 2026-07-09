@@ -1738,3 +1738,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .rc-row.overage, .rc-row.wrong_size { background: rgba(198,135,26,0.09); }
 .rc-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; padding-bottom: 24px; }
 .rc-actions .btn { flex: 1; min-width: 160px; }
+
+/* ---- PO Phase 4: shipment tracking display (supplier view) ---- */
+.po-track-refresh { margin-top: 10px; }
+.po-track-status { margin: 8px 0 0; }
+.po-track-carrier { font-weight: 600; color: var(--text); }
+.po-track-checkpoint { margin-top: 2px; }

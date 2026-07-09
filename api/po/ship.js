@@ -3,6 +3,7 @@
 // shipped, the PO flips to 'shipped'. Returns the refreshed full PO.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, countPoBoxLines, shipPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
+import { registerTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -30,6 +31,8 @@ export default async function handler(req, res) {
       return send(res, 400, { ok: false, error: 'Scan at least one item into this label before shipping it.' });
 
     await shipPoBox(poBoxId);
+    // Start tracking this label's shipment (best-effort; no-ops without a key).
+    if (box.tracking_number) registerTracking([box.tracking_number]).catch((e) => console.warn('[po/ship] registerTracking:', e.message));
     const data = await getPoFull(box.po_id);
     return send(res, 200, { ok: true, ...data });
   } catch (e) {

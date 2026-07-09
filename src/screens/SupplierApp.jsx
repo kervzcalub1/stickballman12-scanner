@@ -48,6 +48,19 @@ export function SupplierApp({ user, onSignOut }) {
   };
   const refreshDetail = () => { if (openId) openPo(openId); };
 
+  const [trackBusy, setTrackBusy] = useState(false);
+  const refreshTracking = async () => {
+    setTrackBusy(true); setError('');
+    try {
+      const r = await api.poTrackRefresh(openId);
+      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines });
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setTrackBusy(false); }
+  };
+  const boxStatusLabel = (b) => (b.status === 'delivered' ? 'Delivered ✓'
+    : b.status === 'in_transit' ? 'In transit'
+    : b.status === 'shipped' ? 'Shipped ✓' : null);
+
   const shipLabel = async (box) => {
     if (!window.confirm(`Ship label ${box.box_number}${box.tracking_number ? ` (${box.tracking_number})` : ''}? You won't be able to edit its items after.`)) return;
     setBusy(true);
@@ -115,6 +128,11 @@ export function SupplierApp({ user, onSignOut }) {
               {po.status !== 'draft'
                 ? <p className="po-shipped-note">✓ All labels shipped — this batch is on its way to the warehouse.</p>
                 : <p className="muted sm">Match each label to the tracking numbers we sent in the group chat, scan its items, then ship it. The batch closes when every label is shipped.</p>}
+              {po.status !== 'draft' && (
+                <button className="btn ghost sm po-track-refresh" disabled={trackBusy} onClick={refreshTracking}>
+                  <Icon name="refresh" /> {trackBusy ? 'Checking…' : 'Refresh tracking'}
+                </button>
+              )}
             </div>
 
             {detail.boxes.map((box) => {
@@ -128,8 +146,16 @@ export function SupplierApp({ user, onSignOut }) {
                       <b>Label {box.box_number}</b>
                       <div className="po-track muted sm">{box.tracking_number || '— no tracking #'}</div>
                     </div>
-                    {shipped ? <span className="po-chip shipped">Shipped ✓</span> : <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>}
+                    {shipped ? <span className={`po-chip ${box.status === 'delivered' ? 'ok' : box.status === 'in_transit' ? 'receiving' : 'shipped'}`}>{boxStatusLabel(box)}</span> : <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>}
                   </div>
+
+                  {shipped && (box.tracking_status || box.last_checkpoint) && (
+                    <div className="po-track-status muted sm">
+                      {box.carrier ? <span className="po-track-carrier">{box.carrier}</span> : null}
+                      {box.tracking_status ? <span> · {box.tracking_status}</span> : null}
+                      {box.last_checkpoint ? <div className="po-track-checkpoint">{box.last_checkpoint}</div> : null}
+                    </div>
+                  )}
 
                   {lines.length > 0 && (
                     <ul className="po-lines">

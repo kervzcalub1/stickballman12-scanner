@@ -1850,3 +1850,38 @@ export async function listReconcilePos() {
     WHERE p.status IN ('receiving', 'reconciled')
     ORDER BY (p.status = 'receiving') DESC, p.reconciled_at DESC NULLS LAST, p.created_at DESC`;
 }
+
+/* ---- Phase 4: shipment tracking (17TRACK) ---------------------------------- */
+
+// Tracking numbers for a PO's labels (to register / poll with the aggregator).
+export async function listPoTrackingNumbers(poId) {
+  const sql = db();
+  const rows = await sql`SELECT tracking_number FROM po_boxes WHERE po_id = ${poId} AND tracking_number IS NOT NULL`;
+  return rows.map((r) => r.tracking_number);
+}
+
+// Apply an aggregator status update to the label with this tracking number.
+// Advances box status only when the mapper gave one (never downgrades to null).
+// Returns the affected { id, po_id } rows.
+export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus, lastCheckpoint, boxStatus }) {
+  const sql = db();
+  if (boxStatus) {
+    return sql`
+      UPDATE po_boxes
+      SET carrier = COALESCE(${carrier ?? null}, carrier),
+          tracking_status = COALESCE(${trackingStatus ?? null}, tracking_status),
+          last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
+          checked_at = now(),
+          status = ${boxStatus}
+      WHERE upper(tracking_number) = upper(${trackingNumber})
+      RETURNING id, po_id`;
+  }
+  return sql`
+    UPDATE po_boxes
+    SET carrier = COALESCE(${carrier ?? null}, carrier),
+        tracking_status = COALESCE(${trackingStatus ?? null}, tracking_status),
+        last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
+        checked_at = now()
+    WHERE upper(tracking_number) = upper(${trackingNumber})
+    RETURNING id, po_id`;
+}

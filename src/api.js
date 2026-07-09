@@ -166,6 +166,7 @@ export const api = {
   poReconcileList: () => get('/api/po/reconcile-list'),
   poReconciliation: (poId) => get(`/api/po/reconciliation?poId=${encodeURIComponent(poId)}`),
   poReconcile: (poId) => post('/api/po/reconcile', { poId }),
+  poClose: (poId) => post('/api/po/close', { poId }),
   // Phase 4 — shipment tracking (17TRACK). Pull the latest status for a PO's labels.
   poTrackRefresh: (poId) => post('/api/po/track-refresh', { poId }),
   // PH edit locks (presence)

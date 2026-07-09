@@ -96,6 +96,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="reconcile" /></span>
             <span className="home-card-title">PO Reconciliation</span>
             <span className="home-card-sub">Received vs. supplier manifest — copy a discrepancy report to send the supplier</span>
+            <CardBadges badges={counts ? [['To reconcile', counts.po_to_reconcile]] : []} />
           </button>
         </div>
       </section>

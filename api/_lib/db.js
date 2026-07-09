@@ -956,7 +956,9 @@ export async function pendingCounts() {
       count(*) FILTER (WHERE NOT not_instore AND status NOT IN ('sold','shipped','missing','issue','no_box')
         AND NOT (instore_listed_alias AND instore_listed_stockx AND instore_listed_shopify))::int AS instore_unlisted,
       (SELECT count(*) FROM rescale_requests WHERE status = 'open')::int     AS rescale_requests,
-      (SELECT count(*) FROM rescale_requests WHERE status = 'audited')::int  AS rescale_requests_audited
+      (SELECT count(*) FROM rescale_requests WHERE status = 'audited')::int  AS rescale_requests_audited,
+      -- POs received but not yet reconciled (PO scan-out feature).
+      (SELECT count(*) FROM purchase_orders WHERE status = 'receiving')::int  AS po_to_reconcile
     FROM (
       -- not_instore gates the PH store-sync badges only: in-store buys bypass
       -- PH, so they must NOT inflate not_ii/alias/stockx/shopify. needs_shelf /
@@ -1884,4 +1886,14 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
         checked_at = now()
     WHERE upper(tracking_number) = upper(${trackingNumber})
     RETURNING id, po_id`;
+}
+
+// Archive a reconciled PO → status 'closed' (drops off the active reconcile list).
+export async function closePo(poId) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE purchase_orders SET status = 'closed'
+    WHERE id = ${poId} AND status = 'reconciled'
+    RETURNING id, po_code, status`;
+  return rows[0] || null;
 }

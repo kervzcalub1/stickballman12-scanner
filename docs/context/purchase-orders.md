@@ -50,7 +50,14 @@ labels** (one tracking number each); it closes only when every label is shipped.
   `mapBoxStatus`). Supplier portal shows per-label status + a "Refresh tracking" button.
   Env: `TRACKING_API_KEY`, `TRACKING_WEBHOOK_SECRET` (see `.env.example`). Live register/
   gettrackinfo calls need a real key to validate; mapper/parser/DB-update verified locally.
-- Phase 5 (not started): polish (notifications, PO archive, supplier-account admin).
+- **Phase 5 (built, on branch `feat/po-phase5-polish` — not deployed):** polish.
+  **Reconcile badge** — `pendingCounts` gains `po_to_reconcile` (count of `receiving` POs);
+  the "PO Reconciliation" Home card + PH card show a "To reconcile" badge, and it appears in
+  Home "Needs attention" when > 0. **Archive** — `POST /api/po/close` (warehouse) flips a
+  `reconciled` PO → `closed` (409 otherwise); an **Archive** button on the reconciled report
+  removes it from the reconcile list (which only shows receiving/reconciled). Supplier-account
+  admin is already covered by **Check Access** (approve / set role / reset password / delete),
+  so no new admin UI. Feature complete through Phase 5.
 
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`

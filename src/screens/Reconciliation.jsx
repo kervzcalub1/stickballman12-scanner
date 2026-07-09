@@ -73,6 +73,16 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
     finally { setBusy(false); }
   };
 
+  const doArchive = async () => {
+    if (!window.confirm('Archive this PO? It drops off the reconciliation list.')) return;
+    setBusy(true);
+    try {
+      await api.poClose(openId);
+      setOpenId(null); setDetail(null); loadList();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  };
+
   const copyReport = async () => {
     const ok = await copyToClipboard(buildReport(detail.po, detail.rows, detail.summary));
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1800); }
@@ -158,6 +168,9 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
               )}
               {po.status === 'reconciled' && po.reconciled_at && (
                 <span className="muted sm"><Icon name="reconcile" /> Reconciled {String(po.reconciled_at).slice(0, 10)}</span>
+              )}
+              {canReconcile && po.status === 'reconciled' && (
+                <button className="btn ghost" disabled={busy} onClick={doArchive}>Archive</button>
               )}
             </div>
           </>

@@ -79,6 +79,7 @@ export function homeCardBadges(key, c) {
   if (key === 'rescale') return [['Restock', c.restock_pending]];
   if (key === 'instore-listing') return [['Not listed', c.instore_unlisted]];
   if (key === 'rescalereq') return [['Pending', c.rescale_requests], ['Done', c.rescale_requests_audited, 'ok']];
+  if (key === 'reconcile') return [['To reconcile', c.po_to_reconcile]];
   return [];
 }
 
@@ -128,6 +129,7 @@ export const HOME_ATTENTION = [
   { key: 'shelve', label: 'Needs shelf', count: 'needs_shelf' },
   { key: 'rescalereq', label: 'Rescale requests', count: 'rescale_requests' },
   { key: 'rescale', label: 'Restock', count: 'restock_pending' },
+  { key: 'reconcile', label: 'PO reconcile', count: 'po_to_reconcile' },
 ];
 
 // Total quantity across a [{qty}] size array (rescale reported vs actual).

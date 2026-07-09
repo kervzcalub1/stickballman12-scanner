@@ -1,9 +1,8 @@
-// POST /api/po/ship  (supplier / admin)  { poBoxId }
-// Marks one label shipped (must hold ≥1 item). When every label on the PO is
-// shipped, the PO flips to 'shipped'. Returns the refreshed full PO.
+// POST /api/po/reopen-box  (supplier / admin)  { poBoxId }
+// Reopens a closed-but-not-shipped label to keep editing: 'packed' → 'pending'.
+// Returns the refreshed full PO.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { getPoBox, getPo, countPoBoxLines, shipPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
-import { registerTracking } from '../_lib/tracking.js';
+import { getPoBox, getPo, reopenPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -25,20 +24,14 @@ export default async function handler(req, res) {
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
     if (!isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
-    if (box.status === 'pending')
-      return send(res, 409, { ok: false, error: 'Close the box for shipment before shipping it.' });
     if (box.status !== 'packed')
-      return send(res, 409, { ok: false, error: 'This label is already shipped.' });
-    if ((await countPoBoxLines(poBoxId)) < 1)
-      return send(res, 400, { ok: false, error: 'Scan at least one item into this label before shipping it.' });
+      return send(res, 409, { ok: false, error: 'Only a closed (not yet shipped) label can be reopened.' });
 
-    await shipPoBox(poBoxId);
-    // Start tracking this label's shipment (best-effort; no-ops without a key).
-    if (box.tracking_number) registerTracking([box.tracking_number]).catch((e) => console.warn('[po/ship] registerTracking:', e.message));
+    await reopenPoBox(poBoxId);
     const data = await getPoFull(box.po_id);
     return send(res, 200, { ok: true, ...data });
   } catch (e) {
-    console.error('[po/ship]', e.message);
-    return send(res, 500, { ok: false, error: 'Could not ship the label.' });
+    console.error('[po/reopen-box]', e.message);
+    return send(res, 500, { ok: false, error: 'Could not reopen the label.' });
   }
 }

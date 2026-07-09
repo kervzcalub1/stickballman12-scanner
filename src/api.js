@@ -90,6 +90,7 @@ export const api = {
   setPriceMarkup: (priceMarkupPct) => post('/api/settings', { priceMarkupPct }),
   // Product search + sheet
   searchUpc: (upc) => post('/api/upc-search', { upc }),
+  setItemUpc: (vin, upc) => post('/api/items/set-upc', { vin, upc }),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // v4 — receiving / batches
   suppliers: () => get('/api/suppliers'),
@@ -158,6 +159,8 @@ export const api = {
   poGet: (id) => get(`/api/po/get?id=${encodeURIComponent(id)}`),
   poScan: (payload) => post('/api/po/scan', payload),
   poLine: (lineId, qty) => post('/api/po/line', { lineId, qty }),
+  poCloseBox: (poBoxId) => post('/api/po/close-box', { poBoxId }),
+  poReopenBox: (poBoxId) => post('/api/po/reopen-box', { poBoxId }),
   poShip: (poBoxId) => post('/api/po/ship', { poBoxId }),
   // Phase 2 — receive a shipment against a PO (warehouse side).
   poOpen: () => get('/api/po/open'),

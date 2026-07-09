@@ -103,7 +103,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                           <div className="batch-detail-row" key={it.id}>
                             <button className="vin vin-link" onClick={() => onOpenItem?.(it.vin)} title="View full shoe detail + history">{it.vin}</button>
                             <span className="batch-row-name">{it.name}</span>
-                            <span className="muted sm">{it.sku || '—'} · sz {it.size || '—'}</span>
+                            <span className="muted sm">{it.sku || '—'} · size {it.size || '—'}</span>
                             <StatusPill status={it.status} />
                           </div>
                         ))}

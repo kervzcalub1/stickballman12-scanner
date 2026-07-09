@@ -152,7 +152,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                 </div>
                 {detail.rows.map((r, i) => (
                   <div className={`rc-row ${r.flag}`} key={i}>
-                    <span className="rc-item"><b>{r.sku || '—'}</b> · sz {r.size}<span className="muted rc-name"> · {r.name}</span></span>
+                    <span className="rc-item"><b>{r.sku || '—'}</b> · size {r.size}<span className="muted rc-name"> · {r.name}</span></span>
                     <span className="rc-n">{r.expected}</span>
                     <span className="rc-n">{r.received}</span>
                     <span className="rc-flag"><span className={`po-flag ${FLAG[r.flag]?.cls || ''}`}>{flagText(r)}</span></span>

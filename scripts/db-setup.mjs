@@ -453,11 +453,14 @@ await sql(`
     box_number      INT,
     tracking_number TEXT,
     carrier         TEXT,                   -- auto-detected by the tracking aggregator
+    -- 'pending' (filling) → 'packed' (reviewed & closed, ready to ship) → 'shipped'
+    -- → 'in_transit' / 'delivered' (from tracking). Editing (scan) only while 'pending'.
     status          TEXT NOT NULL DEFAULT 'pending'
-                      CHECK (status IN ('pending','shipped','in_transit','delivered')),
+                      CHECK (status IN ('pending','packed','shipped','in_transit','delivered')),
     tracking_status TEXT,                   -- raw status from the aggregator
     last_checkpoint TEXT,
     checked_at      TIMESTAMPTZ,
+    packed_at       TIMESTAMPTZ,
     shipped_at      TIMESTAMPTZ,
     created_by      TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -465,6 +468,11 @@ await sql(`
 `);
 await sql(`CREATE INDEX IF NOT EXISTS po_boxes_po_idx       ON po_boxes (po_id)`);
 await sql(`CREATE INDEX IF NOT EXISTS po_boxes_tracking_idx ON po_boxes (tracking_number)`);
+// Existing DBs: add the 'packed' review state + packed_at (the inline CHECK/columns
+// above only apply to a fresh table). The CHECK gets Postgres's default name.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS packed_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE po_boxes DROP CONSTRAINT IF EXISTS po_boxes_status_check`);
+await sql(`ALTER TABLE po_boxes ADD CONSTRAINT po_boxes_status_check CHECK (status IN ('pending','packed','shipped','in_transit','delivered'))`);
 
 // The "what the supplier says he shipped" lines — one per SKU+size PER LABEL, so the
 // same SKU+size can appear under different labels. Re-scanning a SKU/size increments

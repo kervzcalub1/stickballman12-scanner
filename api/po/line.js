@@ -28,6 +28,8 @@ export default async function handler(req, res) {
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
     if (po.status !== 'draft')
       return send(res, 409, { ok: false, error: 'This order is already shipped — it can no longer be edited.' });
+    if (box && box.status === 'packed')
+      return send(res, 409, { ok: false, error: 'This label is closed — reopen it to edit.' });
     if (box && box.status !== 'pending')
       return send(res, 409, { ok: false, error: 'This label is already shipped.' });
 

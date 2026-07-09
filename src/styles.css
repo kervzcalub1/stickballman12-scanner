@@ -625,8 +625,18 @@ body {
 .inv-col-status { width: 210px; }
 .inv-status { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .inv-drow > td { padding: 0 12px 6px; background: rgba(79, 124, 255, 0.04); }
-.nobox-resolve { display: inline-flex; gap: 6px; align-items: center; }
 .nobox-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 4px 0 10px; }
+/* One tidy vertical action stack per row — same on the desktop cell and mobile card. */
+.nobox-cell-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; min-width: 210px; }
+.nobox-cell-actions .btn { width: 100%; justify-content: center; white-space: nowrap; }
+.nobox-other-sel { width: 100%; }
+.nobox-noupc-flag { color: #e0a458; font-weight: 600; }
+/* Keep the shoe name on one line so a long name can't blow up the row height. */
+.nobox-table .nobox-name { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nobox-col-actions { width: 220px; }
+.nobox-upc-input { width: 100%; margin-top: 8px; text-align: left; }
+.nobox-noupc-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; cursor: pointer; text-align: left; }
+.nobox-noupc-check input { width: 18px; height: 18px; flex: none; }
 
 /* Generic mobile data cards (No Box, Inventory, Mark Sold/Shipped) */
 .dcards { display: flex; flex-direction: column; gap: 10px; }
@@ -638,7 +648,8 @@ body {
 .dcard-name { font-weight: 600; }
 .dcard-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; margin-top: 6px; }
 .dcard .inv-status { margin-top: 8px; }
-.dcard-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.dcard-actions { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.dcard-actions .nobox-cell-actions { min-width: 0; }
 .dcard-selectall { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 2px; }
 .dcard .inv-detail { padding: 10px 0 0; }
 /* PH edit-lock presence (B2) */
@@ -1125,6 +1136,10 @@ body {
 .loc-sku-group { margin-bottom: 8px; }
 .loc-sku-group:last-child { margin-bottom: 0; }
 .loc-group-head { display: flex; align-items: center; gap: 12px; padding: 10px 10px 8px; margin: 0 -10px; border-bottom: 1px solid var(--border); }
+.loc-group-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; background: none; border: 0; padding: 0; margin: 0; text-align: left; color: inherit; cursor: pointer; font: inherit; }
+.loc-group-toggle .loc-group-info { flex: 1; }
+.loc-group-toggle:hover .loc-group-name { color: var(--primary); }
+.loc-caret { flex: none; color: var(--muted); font-size: 13px; width: 1em; text-align: center; }
 .loc-group-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .loc-group-name { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .loc-group-meta { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1656,6 +1671,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-chip.shipped { background: rgba(61,107,255,0.14); color: var(--primary); border-color: rgba(61,107,255,0.35); }
 .po-chip.receiving { background: rgba(217,122,30,0.14); color: #d97a1e; border-color: rgba(217,122,30,0.35); }
 .po-chip.ok { background: rgba(26,157,99,0.14); color: var(--ok); border-color: rgba(26,157,99,0.35); }
+.po-chip.packed { background: rgba(155,120,230,0.16); color: #9b78e6; border-color: rgba(155,120,230,0.4); }
 .po-chip.muted { background: var(--panel-2); color: var(--muted); }
 
 .po-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
@@ -1683,6 +1699,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-card-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
 
 .po-box.shipped { opacity: 0.72; }
+.po-box.packed { border-color: rgba(155,120,230,0.4); }
+.po-review-lines { margin-top: 4px; margin-bottom: 12px; max-height: 46vh; overflow-y: auto; }
+.po-review-total { margin: 0 0 4px; font-size: 13.5px; }
 .po-track { margin-top: 2px; }
 .po-lines { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .po-lines li { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; border-top: 1px solid var(--border); padding-top: 6px; }

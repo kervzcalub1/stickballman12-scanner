@@ -73,9 +73,18 @@ scoped to own POs on every one; admin/superadmin auto-allowed):
 - `list` / `get` — ph_team/warehouse/admin see all; supplier only their own.
 - `scan` (supplier) — add/increment a `po_lines` row under a label; **only** while the PO is
   `draft` and the label `pending`. Writes po tables only — never the receiving commit path.
-- `line` (supplier) — adjust/remove a line qty.
-- `ship` (supplier) — mark a label shipped (needs ≥1 item); PO flips to `shipped` when all
-  labels are shipped.
+- `line` (supplier) — adjust/remove a line qty (only while the label is `pending`).
+- `close-box` (supplier) — review then close a label for shipment: `pending` → `packed`
+  (needs ≥1 item). Editing (scan/line) is blocked while `packed`.
+- `reopen-box` (supplier) — `packed` → `pending`, to keep editing before shipping.
+- `ship` (supplier) — ship a **`packed`** label; PO flips to `shipped` only when no label is
+  still `pending` or `packed` (all shipped).
+
+**Box lifecycle:** `pending` (filling — scan items) → `packed` (reviewed & closed, ready to
+ship; reopenable) → `shipped` → `in_transit`/`delivered` (tracking). The supplier `ScanModal`
+mirrors the warehouse Add-Item dialog (inline continuous camera, 1.2s de-dup, auto-filled size
++ size chips + "+ Custom", re-scan bumps qty, different-shoe switch prompt). "Review & close
+box" opens a contents review before closing.
 
 **UI:** PH `CreatePO` lives in PHTeamApp (`/ph/purchase-orders`). Supplier `SupplierApp`
 renders for `role === 'supplier'` (any host) and on the `supplier.` subdomain

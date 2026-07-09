@@ -396,7 +396,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       try {
         const { item } = await api.itemLookup(vin);
         setRescanned((arr) => [...arr, { key: cartKey++, vin: item.vin, name: item.name, sku: item.sku, size: item.size, image: item.image_url, statusSel: '', custom: '' }]);
-        setFlash({ type: 'added', text: `✓ ${item.vin}${item.size ? ` · sz ${item.size}` : ''}` }); scanFeedback('added');
+        setFlash({ type: 'added', text: `✓ ${item.vin}${item.size ? ` · size ${item.size}` : ''}` }); scanFeedback('added');
       } catch (err) {
         if (err.unauthorized) return onSignOut();
         setMError(err.message); scanFeedback('dup');
@@ -1018,7 +1018,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           {r.image ? <img className="cart-thumb sm" src={r.image} alt="" /> : <div className="cart-thumb sm placeholder">—</div>}
                           <div className="rescan-info">
                             <span className="vin">{r.vin}</span>
-                            <span className="muted sm">{r.name || '—'} · {r.sku || '—'}{r.size ? ` · sz ${r.size}` : ''}</span>
+                            <span className="muted sm">{r.name || '—'} · {r.sku || '—'}{r.size ? ` · size ${r.size}` : ''}</span>
                           </div>
                           <div className="rescan-status">
                             <select value={r.statusSel} onChange={(e) => setRescannedStatus(r.key, e.target.value)}>
@@ -1609,7 +1609,7 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
                           <div className="batch-detail-row" key={it.id}>
                             <button className="vin vin-link" onClick={() => onOpenItem?.(it.vin)} title="View full shoe detail">{it.vin}</button>
                             <span className="batch-row-name">{it.name}</span>
-                            <span className="muted sm">{it.sku || '—'} · sz {it.size || '—'} · ${Number(it.cost || 0).toFixed(2)}</span>
+                            <span className="muted sm">{it.sku || '—'} · size {it.size || '—'} · ${Number(it.cost || 0).toFixed(2)}</span>
                           </div>
                         ))}
                         {detail.issues.map((is) => (

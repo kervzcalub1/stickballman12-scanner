@@ -80,6 +80,8 @@ export function Locations({ onHome, onSignOut }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState(null);     // shoe-search hits | null (browse mode)
   const [searchedFor, setSearchedFor] = useState('');
+  const [expandedSkus, setExpandedSkus] = useState(() => new Set()); // which result groups are open
+  const toggleSku = (k) => setExpandedSkus((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const [showCam, setShowCam] = useState(false);
   const [camZoom, setCamZoom] = useState(1);
   const [locations, setLocations] = useState(null);
@@ -144,7 +146,7 @@ export function Locations({ onHome, onSignOut }) {
     setError('');
     try {
       const { rows } = await api.itemsQuery({ q: term });
-      setResults(rows || []); setSearchedFor(term);
+      setResults(rows || []); setSearchedFor(term); setExpandedSkus(new Set());
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   // A camera scan (VIN CODE128 or UPC/EAN) → locate it. queryItems matches vin/upc.
@@ -329,22 +331,35 @@ export function Locations({ onHome, onSignOut }) {
                   return acc;
                 }, {})).sort((a, b) => (a.sample.name || '').localeCompare(b.sample.name || ''));
                 groups.forEach((g) => g.units.sort((a, b) => (parseFloat(a.size) || 0) - (parseFloat(b.size) || 0)));
+                // One result → keep it open; many → collapse each to a tappable summary.
+                const collapsible = groups.length > 1;
                 return groups.map((g) => {
+                  const key = g.sample.sku || g.sample.name;
                   const shelved = g.units.filter((u) => u.location_code).length;
                   const unshelved = g.units.length - shelved;
+                  const open = !collapsible || expandedSkus.has(key);
+                  const info = (
+                    <div className="loc-group-info">
+                      <span className="loc-group-name">{g.sample.name || '—'}</span>
+                      <span className="loc-group-meta">
+                        {g.sample.sku || '—'} · {g.units.length} pair{g.units.length === 1 ? '' : 's'}
+                        {shelved > 0 && <> · <span className="ok-txt">{shelved} shelved</span></>}
+                        {unshelved > 0 && <> · <span className="warn-txt">{unshelved} not shelved</span></>}
+                      </span>
+                    </div>
+                  );
                   return (
-                    <div className="loc-sku-group" key={g.sample.sku || g.sample.name}>
+                    <div className={`loc-sku-group ${open ? 'open' : ''}`} key={key}>
                       <div className="loc-group-head">
                         <ShoeThumb url={g.sample.photo_url} size={46} onOpen={() => openThumb(g.sample)} />
-                        <div className="loc-group-info">
-                          <span className="loc-group-name">{g.sample.name || '—'}</span>
-                          <span className="loc-group-meta">
-                            {g.sample.sku || '—'}
-                            {shelved > 0 && <> · <span className="ok-txt">{shelved} shelved</span></>}
-                            {unshelved > 0 && <> · <span className="warn-txt">{unshelved} not shelved</span></>}
-                          </span>
-                        </div>
+                        {collapsible ? (
+                          <button type="button" className="loc-group-toggle" aria-expanded={open} onClick={() => toggleSku(key)}>
+                            {info}
+                            <span className="loc-caret">{open ? '▾' : '▸'}</span>
+                          </button>
+                        ) : info}
                       </div>
+                      {open && (
                       <div className="loc-group-rows">
                         {g.units.map((u) => {
                           const loc = u.location_code ? list.find((l) => l.code === u.location_code) : null;
@@ -364,6 +379,7 @@ export function Locations({ onHome, onSignOut }) {
                           );
                         })}
                       </div>
+                      )}
                     </div>
                   );
                 });

@@ -1180,6 +1180,13 @@ export async function updateRescaleRequestListing(id, listing, by, baseListedAt 
 
 // "Box found": a no-box unit gets a box → becomes sellable. Sets with_box=true +
 // status needs_shelf and logs it. (We never sell without a box.)
+// Set a unit's UPC (from the No Box box-label flow, when a warehouse finds/enters
+// the missing UPC). Applies to the single VIN so its box label scans normally.
+export async function setItemUpc(itemId, upc) {
+  const sql = db();
+  await sql`UPDATE items SET upc = ${upc}, updated_at = now() WHERE id = ${itemId}`;
+}
+
 export async function markBoxFound(itemId, createdBy) {
   const sql = db();
   await sql.transaction([
@@ -1689,18 +1696,39 @@ export async function deletePoLine(lineId) {
 
 // Mark one label shipped; if every label on the PO is now shipped, flip the PO
 // to 'shipped'. Returns the updated box (or null if it wasn't pending).
+// Close a box for shipment: 'pending' (filling) → 'packed' (reviewed, ready to ship).
+export async function closePoBox(poBoxId) {
+  const sql = db();
+  return (await sql`
+    UPDATE po_boxes SET status = 'packed', packed_at = now()
+    WHERE id = ${poBoxId} AND status = 'pending'
+    RETURNING *
+  `)[0] || null;
+}
+
+// Reopen a packed box to keep editing: 'packed' → 'pending'.
+export async function reopenPoBox(poBoxId) {
+  const sql = db();
+  return (await sql`
+    UPDATE po_boxes SET status = 'pending', packed_at = NULL
+    WHERE id = ${poBoxId} AND status = 'packed'
+    RETURNING *
+  `)[0] || null;
+}
+
 export async function shipPoBox(poBoxId) {
   const sql = db();
   const box = (await sql`
     UPDATE po_boxes SET status = 'shipped', shipped_at = now()
-    WHERE id = ${poBoxId} AND status = 'pending'
+    WHERE id = ${poBoxId} AND status = 'packed'
     RETURNING *
   `)[0];
   if (!box) return null;
+  // The PO ships once no label is still open (pending) or merely packed — i.e. all shipped.
   await sql`
     UPDATE purchase_orders SET status = 'shipped', shipped_at = now()
     WHERE id = ${box.po_id} AND status = 'draft'
-      AND NOT EXISTS (SELECT 1 FROM po_boxes WHERE po_id = ${box.po_id} AND status = 'pending')
+      AND NOT EXISTS (SELECT 1 FROM po_boxes WHERE po_id = ${box.po_id} AND status IN ('pending','packed'))
   `;
   return box;
 }

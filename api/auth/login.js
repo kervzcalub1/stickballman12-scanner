@@ -103,6 +103,20 @@ export default async function handler(req, res) {
   if (row.status === 'rejected')
     return send(res, 403, { ok: false, error: 'Your account was not approved. Contact the admin.' });
 
+  // Portal gate: suppliers sign in ONLY on the supplier subdomain, and the supplier
+  // subdomain accepts ONLY suppliers. admin/superadmin (env accounts, handled above)
+  // are exempt; localhost is exempt so local/dev testing isn't blocked. Not recorded
+  // as a failed attempt — the password was correct, it's just the wrong portal.
+  const host = String(req.headers.host || '');
+  const onSupplierHost = /^supplier\./i.test(host);
+  const onLocalHost = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host) || /\.localhost(:\d+)?$/i.test(host);
+  if (!onLocalHost) {
+    if (row.role === 'supplier' && !onSupplierHost)
+      return send(res, 403, { ok: false, error: 'Suppliers, please sign in at supplier.stickballman12.com.' });
+    if (onSupplierHost && row.role !== 'supplier')
+      return send(res, 403, { ok: false, error: 'Staff, please sign in at stickballman12.com.' });
+  }
+
   await recordLoginAttempt({ username, ip, success: true });
   const user = { uid: row.id, username: row.username, name: row.name, role: row.role };
   return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });

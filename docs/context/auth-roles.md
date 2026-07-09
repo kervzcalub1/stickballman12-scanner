@@ -57,6 +57,11 @@
   tricked into `supplier` (Host-gated server-side, not client-trusted). Admin can also
   set the role manually. Scoped to their own POs on every PO endpoint. See
   `purchase-orders.md`.
+  **Login portal gate (`api/auth/login.js`, Host-based):** a `supplier` account can
+  authenticate **only** on `supplier.*`, and the `supplier.` subdomain accepts **only**
+  suppliers (staff get a 403 pointing them to the main site). admin/superadmin (env
+  accounts) are exempt; `localhost`/`*.localhost` is exempt so local/dev testing isn't
+  blocked. Enforced server-side; a wrong-portal login is a clean 403, not a failed attempt.
 - `requireRole(req,res,[...])` returns the user or sends 401/403; **admin is
   auto-allowed**. `sku-search` allows `warehouse` + `ph_team`.
 

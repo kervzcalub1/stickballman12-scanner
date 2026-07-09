@@ -58,6 +58,11 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
 - Plus **II / AL / SX / SH** Yes/No toggles per size (soft blue =
   yes, soft red = no — rendered as a colored **checkbox** in edit mode) plus a
   per-size **Note**. Persist to `items` (`global_indicator`, `gi_basis`, `price`, sync flags, `ph_note`).
+- **GOAT only** (`items.goat_only`, warehouse-set at intake or toggled on the grid
+  via `ph/set-goat`; group rollup = all units): shoe lists to **Alias(GOAT)+II only**
+  — SX/SH show **N/A** (not editable), a purple **GOAT only** chip marks the group,
+  and completion (`phListingStatus`) + the SX/SH badges/`pendingCounts` ignore SX/SH.
+  Required flags: `requiredFlags(g)` in `lib/ph.js`.
 - Nothing is group-level anymore; each size's fields apply to that size's VINs.
 - **GI fetched at receiving** (Alias pricing insights, per unit) seeds these; PH
   reviews/overrides. GI fetched best-effort, so it may be null. See `integrations.md`.

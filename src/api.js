@@ -150,6 +150,7 @@ export const api = {
   phUpdateMany: (vins, fields, baseEditedAt) => post('/api/ph/update', { vins, fields, baseEditedAt }),
   // Atomic multi-size group save — one entry per size, all-or-nothing (see phUpdateGroup).
   phUpdateGroup: (sizes, baseEditedAt) => post('/api/ph/update', { sizes, baseEditedAt }),
+  phSetGoat: (vins, goatOnly) => post('/api/ph/set-goat', { vins, goatOnly }),
   phRefreshGi: (vins) => post('/api/ph/refresh-gi', { vins }),
   // Purchase Orders — supplier scan-out (Phase 1). PH creates the PO shell + labels;
   // supplier lists/opens their own, scans items under each label, ships per label.

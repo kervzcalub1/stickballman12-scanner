@@ -343,6 +343,21 @@ body {
 .box-badge { font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; flex: none; }
 .box-badge.yes { color: #7bc99a; background: rgba(123,201,154,0.16); }
 .box-badge.no { color: #e08f8f; background: rgba(224,143,143,0.18); }
+/* "GOAT only" — list to Alias(GOAT)+II only. Purple to match the Alias/GOAT accent. */
+.goat-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; flex: none;
+  color: #b9a3e8; background: rgba(155,120,230,0.16); border: 1px solid rgba(155,120,230,0.4); white-space: nowrap; }
+.goat-chip { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  color: var(--muted); background: transparent; border: 1px solid var(--border); }
+.goat-chip:hover:not(:disabled) { color: #b9a3e8; border-color: rgba(155,120,230,0.5); }
+.goat-chip.on { color: #b9a3e8; background: rgba(155,120,230,0.16); border-color: rgba(155,120,230,0.5); }
+.goat-chip:disabled { opacity: 0.5; cursor: default; }
+.goat-toggle { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; font-size: 13.5px; cursor: pointer; text-align: left; }
+.goat-toggle input { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+.recv-item-toggles { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.goat-chip-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.goat-chip-toggle input { width: 16px; height: 16px; }
+.ph-flag-na { color: var(--muted); font-size: 12px; font-weight: 600; }
+.ph-sync-cell { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .recv-unit-n { color: var(--muted); width: 18px; flex: none; }
 .recv-unit-nobox { color: #e08f8f; font-size: 12px; font-weight: 600; }
 .recv-sizes { margin-top: 8px; font-size: 14px; }

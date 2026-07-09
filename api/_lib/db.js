@@ -373,14 +373,14 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   const sql = db();
   const queries = items.map((it) => sql`
     INSERT INTO items
-      (vin, batch_id, box_id, name, sku, size, upc, image_url, cost, source, status, with_box, gender, colorway, notes, created_by)
+      (vin, batch_id, box_id, name, sku, size, upc, image_url, cost, source, status, with_box, goat_only, gender, colorway, notes, created_by)
     VALUES
       (coalesce(${it.vin || null},
         'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
               || '-' || lpad(nextval('vin_seq')::text, 6, '0')),
        ${batchId}, ${it.boxId ?? null}, ${it.name || null}, ${it.sku || null}, ${it.size || null},
        ${it.upc || null}, ${it.image || null}, ${it.cost ?? null},
-       ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false},
+       ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false}, ${it.goatOnly === true},
        ${it.gender || null}, ${it.colorway || null}, ${it.notes || null}, ${createdBy || null})
     RETURNING id, vin
   `);
@@ -824,7 +824,7 @@ export async function phListItems(from, to, kind = null) {
       SELECT i.vin, coalesce(ev.created_at, i.updated_at) AS created_at,
              coalesce(ev.created_by, i.created_by) AS created_by, i.name, i.sku, i.size, i.gender,
              i.status, i.cost, i.price, i.global_indicator, i.gi_basis,
-             i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
+             i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.goat_only, i.listed_price,
              i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
              (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
              (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
@@ -848,7 +848,7 @@ export async function phListItems(from, to, kind = null) {
   return await db()`
     SELECT i.vin, i.created_at, i.created_by, i.name, i.sku, i.size, i.gender,
            i.status, i.cost, i.price, i.global_indicator, i.gi_basis,
-           i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
+           i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.goat_only, i.listed_price,
            i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
            (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
@@ -947,8 +947,8 @@ export async function pendingCounts() {
     SELECT
       count(*) FILTER (WHERE listable AND not_instore AND NOT added_to_intel_inv)::int AS not_ii,
       count(*) FILTER (WHERE listable AND not_instore AND NOT synced_alias)::int       AS not_alias,
-      count(*) FILTER (WHERE listable AND not_instore AND NOT synced_stockx)::int      AS not_stockx,
-      count(*) FILTER (WHERE listable AND not_instore AND NOT synced_shopify)::int     AS not_shopify,
+      count(*) FILTER (WHERE listable AND not_instore AND NOT goat_only AND NOT synced_stockx)::int  AS not_stockx,
+      count(*) FILTER (WHERE listable AND not_instore AND NOT goat_only AND NOT synced_shopify)::int AS not_shopify,
       count(*) FILTER (WHERE status = 'needs_shelf')::int              AS needs_shelf,
       count(*) FILTER (WHERE status = 'no_box')::int                   AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
@@ -1185,6 +1185,14 @@ export async function updateRescaleRequestListing(id, listing, by, baseListedAt 
 export async function setItemUpc(itemId, upc) {
   const sql = db();
   await sql`UPDATE items SET upc = ${upc}, updated_at = now() WHERE id = ${itemId}`;
+}
+
+// Toggle "GOAT only" (list to Alias/GOAT + II only) across a set of units — used
+// from Receiving (whole shoe) and the PH grid (a SKU group).
+export async function setItemsGoatOnly(vins, goatOnly) {
+  const list = (vins || []).filter(Boolean);
+  if (!list.length) return [];
+  return await db()`UPDATE items SET goat_only = ${!!goatOnly}, updated_at = now() WHERE vin = ANY(${list}) RETURNING vin, goat_only`;
 }
 
 export async function markBoxFound(itemId, createdBy) {

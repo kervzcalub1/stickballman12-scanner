@@ -436,6 +436,27 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     finally { setGiFillKey(null); }
   }
 
+  // "GOAT only": list to Alias(GOAT)+II only. Toggle it for the whole SKU group.
+  async function setGoat(g, goatOnly) {
+    setError('');
+    try {
+      await api.phSetGoat(g.vins, goatOnly);
+      setRows((rs) => rs.map((x) => (g.vins.includes(x.vin) ? { ...x, goat_only: goatOnly } : x)));
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  const goatChip = (g) => {
+    if (!canEdit) return g.goat_only ? <span className="goat-badge">GOAT only</span> : null;
+    return (
+      <button type="button" className={`goat-chip ${g.goat_only ? 'on' : ''}`} disabled={editing.has(g.key)}
+        title="GOAT only — PH lists to Alias (GOAT) + Intelligent Inventory; StockX/Shopify are N/A"
+        onClick={(e) => { e.stopPropagation(); setGoat(g, !g.goat_only); }}>
+        {g.goat_only ? '✓ GOAT only' : 'GOAT only'}
+      </button>
+    );
+  };
+  // A store flag is N/A on a GOAT-only group when it's StockX/Shopify.
+  const flagNA = (g, k) => g.goat_only && (k === 'synced_stockx' || k === 'synced_shopify');
+
   const isRescale = kind === 'rescale';
   // Click-to-copy the shoe name / SKU on the PH work pages (New Inventory +
   // Rescale) only — not the admin/warehouse "Listings & Sync" (kind=null).
@@ -527,7 +548,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                               {PH_FLAGS.map(([k, label]) => (
                                 <span className="ph-sizedetail-flag" key={k}>
                                   <span className="muted sm">{label}</span>
-                                  <YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} />
+                                  {flagNA(g, k)
+                                    ? <span className="ph-flag-na" title="GOAT only — not listed to this store">N/A</span>
+                                    : <YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} />}
                                 </span>
                               ))}
                             </span>
@@ -548,7 +571,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   {/* Saved-state badges — while editing, the live draft checkboxes below are
                       the source of truth, so this is captioned "Last saved" instead of
                       "Listed / synced" to avoid reading as contradicting the open draft. */}
-                  <div className="ph-card-synced"><span className="muted sm">{ed ? 'Last saved (all sizes)' : 'Listed / synced (all sizes)'}</span> <SyncBadges item={g} /></div>
+                  <div className="ph-card-synced"><span className="muted sm">{ed ? 'Last saved (all sizes)' : 'Listed / synced (all sizes)'}</span> <span className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}</span></div>
                   <div className="ph-card-foot">
                     <span className="muted sm ph-card-credit">
                       {g.first_edit_by ? (
@@ -613,7 +636,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                         <td>{g.gender || '—'}</td>
                         <td><StatusPill status={g.status} /></td>
-                        <td><SyncBadges item={g} /></td>
+                        <td><div className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}</div></td>
                         <td>{g._mixedBy ? <span className="muted">multiple</span> : (g.created_by || '—')}</td>
                         <td style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first" onClick={(e) => e.stopPropagation()}>
                           {!canEdit ? <span className="muted">—</span>
@@ -673,7 +696,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                               : '—')}</td>
                                         )}
                                         {PH_FLAGS.map(([k]) => (
-                                          <td key={k}><YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} /></td>
+                                          <td key={k}>{flagNA(g, k)
+                                            ? <span className="ph-flag-na" title="GOAT only — not listed to this store">N/A</span>
+                                            : <YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} />}</td>
                                         ))}
                                         <td className="ph-note-cell">
                                           {ed

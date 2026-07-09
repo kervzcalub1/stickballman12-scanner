@@ -94,6 +94,7 @@ export function groupPhSized(list) {
         vins: [], qty: 0,
         first_edit_at: null, first_edit_by: null, _hasSubsequent: false, _drift: false,
         last_edit_at: r.last_edit_at, last_edit_by: r.last_edit_by,
+        goat_only: true, // "GOAT only" (Alias+II only) — all-units rollup, set just below
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
         _sizes: new Map(),
       };
@@ -109,6 +110,7 @@ export function groupPhSized(list) {
     // first_edit_at (per-VIN, same-submit edits share now()) → subsequent edits exist.
     if (r.first_edit_at && r.last_edit_at && new Date(r.last_edit_at) > new Date(r.first_edit_at)) g._hasSubsequent = true;
     for (const f of FLAG_KEYS) g._flags[f] = g._flags[f] && !!r[f]; // group badge = all units true
+    g.goat_only = g.goat_only && !!r.goat_only; // GOAT-only only if every unit is
     const sz = r.size || '—';
     let s = g._sizes.get(sz);
     if (!s) {
@@ -158,9 +160,15 @@ export const PH_LISTING_STATUSES = [
   { key: 'in_progress', label: 'In-Progress' },
   { key: 'done', label: 'Done' },
 ];
+// The store flags that actually apply to a group. "GOAT only" shoes list to
+// Intelligent Inventory + Alias(GOAT) only — StockX/Shopify are N/A, so they don't
+// count toward completion or the badges.
+export const GOAT_FLAG_KEYS = ['added_to_intel_inv', 'synced_alias'];
+export const requiredFlags = (g) => (g && g.goat_only ? GOAT_FLAG_KEYS : FLAG_KEYS);
 export function phListingStatus(g) {
-  if (FLAG_KEYS.every((f) => g[f])) return 'done';
-  const anyOn = FLAG_KEYS.some((f) => g[f]) || (g.sizes || []).some((s) => FLAG_KEYS.some((f) => s[f]));
+  const req = requiredFlags(g);
+  if (req.every((f) => g[f])) return 'done';
+  const anyOn = req.some((f) => g[f]) || (g.sizes || []).some((s) => req.some((f) => s[f]));
   return anyOn ? 'in_progress' : 'pending';
 }
 

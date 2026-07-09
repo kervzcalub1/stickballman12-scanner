@@ -57,7 +57,9 @@ Full detail: `in-store.md`.
 2. **Items** — `+ Add Item` opens the scanning modal. Field auto-focuses so a
    **HID scanner gun types straight in**. Auto-detects UPC vs SKU. Re-scanning a
    shoe's boxes **auto-increments qty by size**. A **With Box** checkbox sets
-   `with_box` (off → status `no_box`). "Complete item" adds it to the cart.
+   `with_box` (off → status `no_box`). A **GOAT only** checkbox sets `goat_only`
+   (per shoe → all its units) — PH then lists it to Alias(GOAT)+II only; StockX/
+   Shopify are N/A. Carried through commit → `insertItems`. "Complete item" adds it to the cart.
    **Newest scanned shoe shows on top** of the cart; **sizes sort smallest→largest**
    in both the cart and the scanning modal (`compareSizes`, V6 Features 3 & 6).
    ⚠️ Scan **no-box pairs separately** so their VINs/labels don't get mixed with

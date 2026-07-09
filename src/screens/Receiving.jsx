@@ -229,6 +229,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     catch (err) { if (err.unauthorized) onSignOut(); return []; }
   }
   const setItemBox = (itemKey, withBox) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, withBox } : it)));
+  const setItemGoat = (itemKey, goatOnly) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, goatOnly } : it)));
   async function bumpSizeQty(itemKey, sizeKey, delta) {
     if (delta > 0) {
       const vins = await reserveMoreVins(1);
@@ -460,7 +461,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const vs = vins.slice(idx, idx + qty); idx += qty;
       return { key: r.key, size: r.size, qty, vins: vs };
     });
-    return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, colorway: d.colorway || null, withBox: d.withBox !== false, sizes };
+    return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, colorway: d.colorway || null, withBox: d.withBox !== false, goatOnly: d.goatOnly === true, sizes };
   }
   // Add a completed item to the cart, MERGING into an existing item when it's the
   // same product + same box status (so the same shoe scanned in two sessions
@@ -468,7 +469,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // stays separate (boxed vs no-box are tracked apart).
   function addOrMergeItem(item) {
     setItems((arr) => {
-      const i = arr.findIndex((x) => x.withBox === item.withBox && sameSku(x.sku, item.sku));
+      const i = arr.findIndex((x) => x.withBox === item.withBox && x.goatOnly === item.goatOnly && sameSku(x.sku, item.sku));
       // Newest scanned shoe shows on top (Feature 3) — prepend new lines.
       if (i === -1) return [item, ...arr];
       const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
@@ -649,7 +650,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, vin: r.vins?.[n] || null });
+            out.push({ name: it.name, sku: it.sku, size: r.size, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, goatOnly: it.goatOnly, vin: r.vins?.[n] || null });
           }
         }
       }
@@ -967,6 +968,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
                             <div className="recv-item-meta">
                               <span className={`box-badge ${it.withBox ? 'yes' : 'no'}`}>{it.withBox ? <><Icon name="box" /> With box</> : <><Icon name="nobox" /> No box</>}</span>
+                              {it.goatOnly && <span className="goat-badge">GOAT only</span>}
                               <span className="muted sm">{isRescale ? 'Rescale' : isInstore ? (header.origin?.trim() || 'In-store') : (header.supplier || '—')} · {defaultCostNum != null ? `$${defaultCostNum.toFixed(2)}` : 'no cost'}</span>
                             </div>
                           </div>
@@ -1065,9 +1067,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           {it.image ? <img className="cart-thumb" src={it.image} alt="" /> : <div className="cart-thumb placeholder">—</div>}
                           <div className="recv-item-info">
                             <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
-                            <div className="seg sm" role="group" aria-label="Box status">
-                              <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>
-                              <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
+                            <div className="recv-item-toggles">
+                              <div className="seg sm" role="group" aria-label="Box status">
+                                <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>
+                                <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
+                              </div>
+                              <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
+                                <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
+                              </label>
                             </div>
                           </div>
                           <button type="button" className="btn icon ghost remove" title="Delete shoe" onClick={() => removeItem(it.key)}>×</button>
@@ -1223,6 +1230,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     <button type="button" className={`seg-btn ${draft.withBox === false ? 'on no' : ''}`} aria-pressed={draft.withBox === false} onClick={() => setDraft((d) => ({ ...d, withBox: false }))}><Icon name="nobox" /> No Box</button>
                   </div>
                 </div>
+                <label className="goat-toggle">
+                  <input type="checkbox" checked={draft.goatOnly === true} onChange={(e) => setDraft((d) => ({ ...d, goatOnly: e.target.checked }))} />
+                  <span><b>GOAT only</b> — PH lists to Alias (GOAT) + Intelligent Inventory only (no StockX/Shopify)</span>
+                </label>
                 <div className="size-rows">
                   <div className="muted sm">Tap a size to add it (tap again for +1), or “+ Custom”.</div>
                   {/* One-tap size boxes — faster and clearer than a dropdown:

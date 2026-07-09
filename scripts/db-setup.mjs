@@ -165,6 +165,10 @@ await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS added_to_intel_inv BOOLEAN
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_alias       BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_stockx      BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_shopify     BOOLEAN NOT NULL DEFAULT false`);
+// "GOAT only": warehouse flags a shoe as list-to-Alias(GOAT)+Intelligent-Inventory
+// only — StockX/Shopify are N/A. PH is "done" at II+Alias for these. See
+// docs/context/ph-report.md.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS goat_only          BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS ph_note            TEXT`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS last_edit_by       TEXT`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS last_edit_at       TIMESTAMPTZ`);

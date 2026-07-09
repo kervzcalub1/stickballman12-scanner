@@ -111,6 +111,7 @@ export default async function handler(req, res) {
       colorway: String(it.colorway ?? '').trim().slice(0, 120) || null,
       notes: String(it.notes ?? '').trim().slice(0, 500) || null,
       withBox,
+      goatOnly: it.goatOnly === true, // list to Alias(GOAT)+II only; StockX/Shopify N/A
       status: withBox ? 'needs_shelf' : 'no_box',
       // Reserved VIN (assigned during receiving). Validated; else server generates.
       vin,

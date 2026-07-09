@@ -29,8 +29,10 @@ export function StatusPill({ status }) {
 // PH-Team sync indicators surfaced in the admin/warehouse views: Intelligent
 // Inventory + Alias / StockX / Shopify. `compact` shows only the lit ones (for a
 // list row); otherwise all four show, dim when not yet done.
-export function SyncBadges({ item, compact }) {
-  const fields = compact ? SYNC_FIELDS.filter(([k]) => item[k]) : SYNC_FIELDS;
+export function SyncBadges({ item, compact, goatOnly }) {
+  let fields = compact ? SYNC_FIELDS.filter(([k]) => item[k]) : SYNC_FIELDS;
+  // "GOAT only" shoes list to II + Alias only — StockX/Shopify don't apply.
+  if (goatOnly) fields = fields.filter(([k]) => k !== 'synced_stockx' && k !== 'synced_shopify');
   if (!fields.length) return null;
   return (
     <span className="sync-badges">

@@ -3,14 +3,16 @@
 // writes it onto each po_box. A manual fallback to the webhook push (and the only
 // path usable before a public webhook URL exists). No-ops if tracking isn't
 // configured (TRACKING_API_KEY unset).
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPo, listPoTrackingNumbers, setPoBoxTracking, getPoFull, dbConfigured } from '../_lib/db.js';
 import { trackingConfigured, fetchTrackInfo } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['warehouse', 'ph_team']);
+  // Supplier is included because the "Refresh tracking" button lives in their portal
+  // (scoped to their own PO below); warehouse/ph_team see all.
+  const user = requireRole(req, res, ['warehouse', 'ph_team', 'supplier']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
@@ -25,6 +27,8 @@ export default async function handler(req, res) {
   try {
     const po = await getPo(poId);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
+    if (user.role === 'supplier' && !isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
+      return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
     const numbers = await listPoTrackingNumbers(poId);
     const updates = await fetchTrackInfo(numbers);
     for (const u of updates) await setPoBoxTracking(u.trackingNumber, u);

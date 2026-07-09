@@ -48,6 +48,7 @@ export function CheckAccess({ onHome, onSignOut }) {
     <select className="role-select" value={u.role} disabled={busyId === u.id} onChange={(e) => changeRole(u.id, e.target.value)}>
       <option value="warehouse">Warehouse</option>
       <option value="ph_team">PH Team</option>
+      <option value="supplier">Supplier</option>
       <option value="admin">Admin</option>
     </select>
   );

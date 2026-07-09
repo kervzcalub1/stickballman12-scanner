@@ -42,6 +42,15 @@ export default async function handler(req, res) {
   if (!username || !password)
     return send(res, 400, { ok: false, error: 'Enter your username and password.' });
 
+  // Portal gate (host-based). The supplier subdomain accepts ONLY supplier accounts —
+  // staff AND the env admin/superadmin are turned away here, same as warehouse/ph_team.
+  // localhost is exempt so local/dev testing isn't blocked.
+  const host = String(req.headers.host || '');
+  const onSupplierHost = /^supplier\./i.test(host);
+  const onLocalHost = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host) || /\.localhost(:\d+)?$/i.test(host);
+  const supplierPortal = onSupplierHost && !onLocalHost;
+  const STAFF_WRONG_PORTAL = { ok: false, error: 'Staff, please sign in at stickballman12.com.' };
+
   // Brute-force throttle (checked before verifying the password).
   try {
     const { by_user, by_ip } = await countRecentFailures({ username, ip, windowMins: WINDOW_MINS });
@@ -63,6 +72,7 @@ export default async function handler(req, res) {
 
   // Admin account lives in env, not the DB.
   if (username === 'admin') {
+    if (supplierPortal) return send(res, 403, STAFF_WRONG_PORTAL);
     const adminPass = process.env.ADMIN_PASSWORD;
     if (!adminPass) return send(res, 500, { ok: false, error: 'Admin login is not configured.' });
     if (!constantTimeEqual(password, adminPass)) return fail();
@@ -75,6 +85,7 @@ export default async function handler(req, res) {
   // Same privileges as admin server-side, plus the PH-team pages client-side.
   const superUser = String(process.env.SUPERADMIN_USERNAME || '').trim().toLowerCase();
   if (superUser && username === superUser) {
+    if (supplierPortal) return send(res, 403, STAFF_WRONG_PORTAL);
     const superPass = process.env.SUPERADMIN_PASSWORD;
     if (!superPass) return send(res, 500, { ok: false, error: 'Superadmin login is not configured.' });
     if (!constantTimeEqual(password, superPass)) return fail();
@@ -103,18 +114,15 @@ export default async function handler(req, res) {
   if (row.status === 'rejected')
     return send(res, 403, { ok: false, error: 'Your account was not approved. Contact the admin.' });
 
-  // Portal gate: suppliers sign in ONLY on the supplier subdomain, and the supplier
-  // subdomain accepts ONLY suppliers. admin/superadmin (env accounts, handled above)
-  // are exempt; localhost is exempt so local/dev testing isn't blocked. Not recorded
-  // as a failed attempt — the password was correct, it's just the wrong portal.
-  const host = String(req.headers.host || '');
-  const onSupplierHost = /^supplier\./i.test(host);
-  const onLocalHost = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host) || /\.localhost(:\d+)?$/i.test(host);
+  // Portal gate (DB accounts): suppliers sign in ONLY on the supplier subdomain, and
+  // the supplier subdomain accepts ONLY suppliers (staff + env admin/superadmin are
+  // already handled above). Not recorded as a failed attempt — the password was
+  // correct, it's just the wrong portal.
   if (!onLocalHost) {
     if (row.role === 'supplier' && !onSupplierHost)
       return send(res, 403, { ok: false, error: 'Suppliers, please sign in at supplier.stickballman12.com.' });
     if (onSupplierHost && row.role !== 'supplier')
-      return send(res, 403, { ok: false, error: 'Staff, please sign in at stickballman12.com.' });
+      return send(res, 403, STAFF_WRONG_PORTAL);
   }
 
   await recordLoginAttempt({ username, ip, success: true });

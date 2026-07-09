@@ -201,6 +201,15 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
   // draft = { name, sku, upc, colorway, gender, image, sizeOptions, rows:[{key,size,qty}] }
   const [draft, setDraft] = useState(null);
   const [cam, setCam] = useState(false);
+  const [recent, setRecent] = useState([]); // running "added to this label" tally (this session)
+
+  // Merge a server-returned po_line into the running tally (its live incremented qty).
+  const recordScan = (line, fallbackName) => setRecent((rs) => {
+    if (!line) return rs;
+    const key = `${line.sku}|#|${line.size}`;
+    return [{ key, name: line.name || fallbackName || line.sku, size: line.size, qty: line.qty_expected ?? 1 },
+      ...rs.filter((r) => r.key !== key)];
+  });
 
   const resolve = async (raw) => {
     const c = String(raw).trim();
@@ -209,14 +218,29 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
     try {
       const isUpc = isUpcCode(c);
       const { product: p } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
-      const rows = p.scannedSize ? [{ key: rowKey++, size: String(p.scannedSize), qty: 1 }] : [];
-      setDraft({
-        name: p.name || '', sku: p.sku || (isUpc ? '' : c), upc: (isUpc ? c : '') || p.upc || '',
-        colorway: p.colorway || '', gender: p.gender || null, image: p.image || '',
-        sizeOptions: p.sizes || [], rows,
-      });
-      setCode('');
-      if (rows.length === 0) setFlash("Tap the sizes you're shipping.");
+      const sku = p.sku || (isUpc ? '' : c);
+      // Warehouse-style: a code that resolves to a SKU *and* a size auto-adds to the
+      // label immediately — the server increments the line on a re-scan, so scanning
+      // the same shoe again just bumps its quantity. No per-scan tap. When the catalog
+      // gives no size (a SKU-only match / StockX miss), fall back to the manual draft.
+      if (sku && p.scannedSize) {
+        const size = String(p.scannedSize);
+        const { line } = await api.poScan({
+          poBoxId: Number(box.id), sku, size, qty: 1,
+          name: p.name, upc: (isUpc ? c : '') || p.upc || '', colorway: p.colorway, gender: p.gender,
+        });
+        recordScan(line, p.name);
+        setDraft(null); setCode('');
+        setFlash(`✓ ${p.name || sku} · sz ${size} · ×${line?.qty_expected ?? 1}`);
+        onAdded();
+      } else {
+        setDraft({
+          name: p.name || '', sku, upc: (isUpc ? c : '') || p.upc || '',
+          colorway: p.colorway || '', gender: p.gender || null, image: p.image || '',
+          sizeOptions: p.sizes || [], rows: [],
+        });
+        setCode('');
+      }
     } catch (e) {
       if (e.unauthorized) return onSignOut();
       setError(e.message || 'Could not find that code.');
@@ -250,10 +274,11 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
     setBusy(true); setError('');
     try {
       for (const r of rows) {
-        await api.poScan({
+        const { line } = await api.poScan({
           poBoxId: Number(box.id), sku: draft.sku, size: r.size, qty: r.qty,
           name: draft.name, upc: draft.upc, colorway: draft.colorway, gender: draft.gender,
         });
+        recordScan(line, draft.name);
       }
       const total = rows.reduce((n, r) => n + r.qty, 0);
       setFlash(`Added ${draft.name || draft.sku} · ${rows.length} size${rows.length === 1 ? '' : 's'} · ${total} unit${total === 1 ? '' : 's'}`);
@@ -285,6 +310,22 @@ function ScanModal({ box, onClose, onAdded, onSignOut }) {
 
         {error && <div className="po-err">{error}</div>}
         {flash && !draft && <div className="po-flash">✓ {flash}</div>}
+        {!draft && (
+          <p className="muted sm po-scan-hint">Scan a shoe's UPC — it's added to the label automatically, and scanning the same shoe again bumps its quantity.</p>
+        )}
+        {recent.length > 0 && (
+          <div className="po-scan-recent">
+            <div className="muted sm">Added to Label {box.box_number}</div>
+            <ul className="po-lines">
+              {recent.map((r) => (
+                <li key={r.key}>
+                  <span className="po-line-name">{r.name}</span>
+                  <span className="po-line-meta">sz {r.size} · ×{r.qty}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {draft && (
           <div className="additem-draft">

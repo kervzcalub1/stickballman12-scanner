@@ -14,6 +14,7 @@ import { markupSuffix } from '../lib/config.js';
 import { rangeOf, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
 import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized,
+  phListingStatus, PH_LISTING_STATUSES,
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
 } from '../lib/ph.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
@@ -63,7 +64,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
       <TopBar onSignOut={onSignOut} onHome={onExit} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
       <section className="home-section">
-        <h2 className="home-section-title">Work</h2>
+        <h2 className="home-section-title">Pricing &amp; Listing</h2>
         <div className="home-grid">
           <button className="home-card" onClick={() => goPage('receiving')}>
             <span className="home-card-icon"><NavIcon name="receiving" /></span>
@@ -87,6 +88,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-title">Price Inquiry</span>
             <span className="home-card-sub">Look up live Alias prices for any SKU — lowest ask, highest offer, last sold &amp; Global Indicator</span>
           </button>
+        </div>
+      </section>
+      <section className="home-section">
+        <h2 className="home-section-title">Purchase Orders</h2>
+        <div className="home-grid">
           <button className="home-card" onClick={() => goPage('po')}>
             <span className="home-card-icon"><NavIcon name="receiving" /></span>
             <span className="home-card-title">New Batch (Purchase Order)</span>
@@ -101,7 +107,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
         </div>
       </section>
       <section className="home-section">
-        <h2 className="home-section-title">Track</h2>
+        <h2 className="home-section-title">Requests &amp; Tracking</h2>
         <div className="home-grid">
           <button className="home-card" onClick={() => goPage('nobox')}>
             <span className="home-card-icon"><NavIcon name="nobox" /></span>
@@ -140,6 +146,11 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [refreshing, setRefreshing] = useState(false); // re-fetching GI from Alias (all shown)
   const [giFillKey, setGiFillKey] = useState(null);    // group whose GI is being pulled into its draft
   const [sortDir, setSortDir] = useState('asc'); // by scan date: asc = oldest first
+  // New Inventory: filter lines by derived listing status (Pending/In-Progress/Done);
+  // multi-select, defaults to Pending (the unfinished worklist).
+  const useStatusFilter = kind === 'receiving';
+  const [statusFilter, setStatusFilter] = useState(() => new Set(['pending']));
+  const toggleStatus = (k) => setStatusFilter((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const [expanded, setExpanded] = useState(() => new Set()); // group keys showing per-size detail
   const toggleExpand = (key) => setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const [historyFor, setHistoryFor] = useState(null); // { vins, title } — open History modal
@@ -434,9 +445,11 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     : (cls ? <span className={cls}>{node}</span> : node));
 
   // Consolidate per SKU+status (with per-size detail), then sort by scan date.
-  const groups = groupPhSized(rows || []);
-  groups.sort((a, b) => (sortDir === 'desc' ? (a.created_at < b.created_at ? 1 : -1) : (a.created_at < b.created_at ? -1 : 1)));
-  const totalUnits = (rows || []).length;
+  const allGroups = groupPhSized(rows || []);
+  allGroups.sort((a, b) => (sortDir === 'desc' ? (a.created_at < b.created_at ? 1 : -1) : (a.created_at < b.created_at ? -1 : 1)));
+  // New Inventory only: narrow to the selected listing-status buckets.
+  const groups = useStatusFilter ? allGroups.filter((g) => statusFilter.has(phListingStatus(g))) : allGroups;
+  const totalUnits = groups.reduce((n, g) => n + g.qty, 0);
   return (
     <div className="app app-wide">
       <TopBar title={title} onHome={onHome} onSignOut={onSignOut} />
@@ -449,13 +462,31 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
               {showPricing && <button className="btn sm ph-gi-refresh-btn" type="button" style={{ marginLeft: 8 }} disabled={refreshing || loading} onClick={refreshPrices} title={`Re-fetch Global Indicator from Alias and update Final price (GI + ${markupSuffix()})`}><Icon name="refresh" className={refreshing ? 'spin' : ''} /> {refreshing ? 'Refreshing…' : 'Refresh prices'}</button>}
             </span>
           )} />
+        {useStatusFilter && (
+          <div className="ph-status-filter">
+            <span className="muted sm">Status</span>
+            <div className="seg sm">
+              {PH_LISTING_STATUSES.map((s) => (
+                <button key={s.key} type="button" aria-pressed={statusFilter.has(s.key)}
+                  className={`seg-btn${statusFilter.has(s.key) ? ' on' : ''}`}
+                  onClick={() => toggleStatus(s.key)}>{s.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {error && <div className="error mt">{error}</div>}
       {notice && <div className="notice mt">{notice}</div>}
 
       <div className="card">
-        {!rows ? <p className="muted">Loading…</p> : !groups.length ? <p className="muted">No {emptyKind} items in this range.</p> : isMobile ? (
+        {!rows ? <p className="muted">Loading…</p> : !groups.length ? (
+          <p className="muted">
+            {useStatusFilter && allGroups.length > 0
+              ? (statusFilter.size === 0 ? 'Select a status above to show lines.' : 'No lines match the selected status in this range.')
+              : `No ${emptyKind} items in this range.`}
+          </p>
+        ) : isMobile ? (
           <div className="ph-cards" ref={cardsAnimRef}>
             {groups.map((g) => {
               const ed = editing.has(g.key);

@@ -19,6 +19,8 @@ export function CreatePO({ onHome, onSignOut }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState(null); // { po, boxes } after success
+  const [pdfStatus, setPdfStatus] = useState(''); // progress/result note for the PDF import
+  const [dragOver, setDragOver] = useState(false); // dropzone highlight while dragging a file
 
   useEffect(() => {
     api.poSuppliers()
@@ -29,6 +31,32 @@ export function CreatePO({ onHome, onSignOut }) {
   const setLabel = (i, v) => setLabels((ls) => ls.map((l, idx) => (idx === i ? { trackingNumber: v } : l)));
   const addLabel = () => setLabels((ls) => [...ls, { trackingNumber: '' }]);
   const removeLabel = (i) => setLabels((ls) => (ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls));
+
+  // Upload a PDF of shipping labels (one label per page) → auto-create a label row
+  // per page with its tracking number read off the page. Rows stay fully editable.
+  const importPdf = async (file) => {
+    if (!file) return;
+    setError(''); setPdfStatus('Reading PDF…');
+    try {
+      const { decodeTrackingPdf } = await import('../trackingOcr.js');
+      const results = await decodeTrackingPdf(file, (p, n) => setPdfStatus(`Reading label ${p} of ${n}…`));
+      if (!results.length) { setPdfStatus(''); setError('That PDF had no pages to read.'); return; }
+      const found = results.map((r) => ({ trackingNumber: r.value || '' }));
+      // Keep any tracking numbers already typed; append the imported rows after them.
+      setLabels((ls) => { const kept = ls.filter((l) => l.trackingNumber.trim()); return [...kept, ...found]; });
+      const readCount = results.filter((r) => r.value).length;
+      setPdfStatus(`Added ${results.length} label${results.length === 1 ? '' : 's'} — read ${readCount} tracking number${readCount === 1 ? '' : 's'}${readCount < results.length ? '. Fill any blanks below.' : '.'}`);
+    } catch (e) {
+      setPdfStatus(''); setError(`Could not read that PDF. ${e.message || ''}`.trim());
+    }
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDragOver(false);
+    const file = [...(e.dataTransfer?.files || [])].find((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+    if (!file) { setError('Drop a PDF file of shipping labels.'); return; }
+    importPdf(file);
+  };
 
   const reset = () => {
     setSupplierUserId(''); setTagCode(''); setDateOfPurchase(today()); setNotes('');
@@ -121,6 +149,20 @@ export function CreatePO({ onHome, onSignOut }) {
             <button type="button" className="btn sm" onClick={addLabel}>+ Add label</button>
           </div>
           <p className="muted sm">One row per shipping label — enter each label's pre-assigned courier tracking number.</p>
+          <label
+            className={`po-dropzone${dragOver ? ' drag' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragEnter={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+          >
+            <input type="file" accept="application/pdf" hidden
+              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; importPdf(f); }} />
+            <span className="po-dropzone-icon">📄</span>
+            <span className="po-dropzone-text"><b>Drag &amp; drop a labels PDF</b> here, or <span className="po-dropzone-link">browse</span></span>
+            <span className="muted sm">One label per page — each tracking number is read in automatically.</span>
+          </label>
+          {pdfStatus && <p className="po-pdf-status sm">{pdfStatus}</p>}
           <div className="po-label-rows">
             {labels.map((l, i) => (
               <div className="po-label-row" key={i}>

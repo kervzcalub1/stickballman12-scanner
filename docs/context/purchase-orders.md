@@ -81,6 +81,20 @@ scoped to own POs on every one; admin/superadmin auto-allowed):
 renders for `role === 'supplier'` (any host) and on the `supplier.` subdomain
 (`App.jsx` `SUPPLIER_HOST`); the hostname is UX-only — the server scoping is the boundary.
 
+**PDF label import (`CreatePO`):** the Shipping-labels card has an **Upload labels PDF**
+button (one shipping label per page). `decodeTrackingPdf` in `src/trackingOcr.js`
+(lazy-loads `pdfjs-dist`) reads each page's tracking number — embedded PDF text first
+(`pickTrackingFromItems`, carrier-aware: UPS `1Z…`, USPS/FedEx grouped digits, FedEx `96…`),
+falling back to rendering the page and reusing the barcode/OCR image path. **Parses each
+positioned text item separately** — joining the whole page merges the tracking number into
+the adjacent zip / FedEx ASTRA form line and yields bogus numbers; it prefers an item that
+is a tracking number on its own, then the most-repeated candidate. It appends one editable
+label row per page; blanks are left for manual entry. All client-side.
+
+**PH home (PHTeamApp):** cards are grouped **Pricing & Listing** (New Inventory, Rescale
+Stock, Edited Photos, Price Inquiry) · **Purchase Orders** (New Batch, PO Reconciliation) ·
+**Requests & Tracking** (No Box, Request Rescale).
+
 ## Schema (in `scripts/db-setup.mjs`)
 Two entities, deliberately separate so **expected** (supplier) and **actual** (warehouse)
 stay independent, and so **supplier scan-out never runs the receiving commit** (which mints

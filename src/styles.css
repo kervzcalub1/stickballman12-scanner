@@ -866,6 +866,8 @@ body {
 .ph-gi-refresh:hover:not(:disabled) { background: rgba(79, 124, 255, 0.26); color: #8fb0ff; }
 .ph-gi-refresh-btn { display: inline-flex; align-items: center; gap: 6px; color: #6b96ff;
   border: 1px solid rgba(79, 124, 255, 0.55); background: rgba(79, 124, 255, 0.12); }
+.ph-status-filter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px;
+  padding-top: 12px; border-top: 1px solid var(--border); }
 .ph-gi-refresh-btn:hover:not(:disabled) { background: rgba(79, 124, 255, 0.22); color: #8fb0ff; }
 @keyframes ph-spin { to { transform: rotate(360deg); } }
 .spin { animation: ph-spin 0.8s linear infinite; transform-origin: center; }
@@ -1656,7 +1658,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-chip.ok { background: rgba(26,157,99,0.14); color: var(--ok); border-color: rgba(26,157,99,0.35); }
 .po-chip.muted { background: var(--panel-2); color: var(--muted); }
 
-.po-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.po-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.po-dropzone {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  text-align: center; cursor: pointer; margin-top: 12px; padding: 20px 16px;
+  border: 2px dashed var(--border); border-radius: 12px;
+  background: var(--surface-2, rgba(127,127,127,.04));
+  transition: border-color .12s ease, background .12s ease;
+}
+.po-dropzone:hover { border-color: var(--primary); }
+.po-dropzone.drag { border-color: var(--primary); background: rgba(59,130,246,.10); }
+.po-dropzone-icon { font-size: 24px; line-height: 1; }
+.po-dropzone-text { font-size: 14px; }
+.po-dropzone-link { color: var(--primary); text-decoration: underline; }
+.po-pdf-status { color: var(--primary); margin-top: 8px; }
+.po-scan-hint { margin: 8px 0 0; }
+.po-scan-recent { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.po-scan-recent .po-lines { margin-top: 6px; }
 
 .po-list { display: flex; flex-direction: column; gap: 10px; }
 .po-card { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; color: var(--text); }

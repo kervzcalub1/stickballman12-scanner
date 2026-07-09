@@ -148,6 +148,22 @@ export function groupPhSized(list) {
   }));
 }
 
+// Derived listing status of a PH group, from the store-sync flags (II/AL/SX/SH):
+//  · 'done'        — every store synced across all units (group rollup all true)
+//  · 'pending'     — nothing synced anywhere yet
+//  · 'in_progress' — some but not all stores synced (incl. a size partly done)
+// Used by the New Inventory status filter. Keys/labels in PH_LISTING_STATUSES.
+export const PH_LISTING_STATUSES = [
+  { key: 'pending', label: 'Pending' },
+  { key: 'in_progress', label: 'In-Progress' },
+  { key: 'done', label: 'Done' },
+];
+export function phListingStatus(g) {
+  if (FLAG_KEYS.every((f) => g[f])) return 'done';
+  const anyOn = FLAG_KEYS.some((f) => g[f]) || (g.sizes || []).some((s) => FLAG_KEYS.some((f) => s[f]));
+  return anyOn ? 'in_progress' : 'pending';
+}
+
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
 export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', request: '/ph/request', photos: '/ph/edited-photos', inquiry: '/ph/price-inquiry', po: '/ph/purchase-orders', reconcile: '/ph/reconciliation' };

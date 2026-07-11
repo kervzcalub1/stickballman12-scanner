@@ -36,3 +36,5 @@ version-update.txt
 version-4.md
 
 june22-progress.md
+# Auto-downloaded ONNX cutout model (fetched on first use)
+assets/branding/models/

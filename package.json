@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "@formkit/auto-animate": "^0.9.0",
+    "@napi-rs/canvas": "^1.0.2",
+    "@tugrul/rembg": "^1.0.3",
     "@zxing/browser": "^0.1.5",
     "@zxing/library": "^0.21.3",
     "express": "^5.2.1",

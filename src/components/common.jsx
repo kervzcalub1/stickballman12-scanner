@@ -286,22 +286,26 @@ export function ShoeThumb({ url, onOpen, size = 36 }) {
 // URLs and local object: URLs. Zoom widens the image inside a scrollable viewport
 // (so panning is native scroll/touch on every device); double-click toggles 1x↔2x.
 // Esc / +/- are wired; click the backdrop to close.
-export function ImageZoomModal({ url, label, onClose }) {
+// Optional `onPrev`/`onNext` (falsy = hidden) add left/right browsing through a set.
+export function ImageZoomModal({ url, label, onClose, onPrev, onNext }) {
   const [scale, setScale] = useState(1);
   const MIN = 1; const MAX = 4; const STEP = 0.5;
   const zoomIn = () => setScale((s) => Math.min(MAX, +(s + STEP).toFixed(2)));
   const zoomOut = () => setScale((s) => Math.max(MIN, +(s - STEP).toFixed(2)));
   const reset = () => setScale(1);
+  useEffect(() => { setScale(1); }, [url]); // reset zoom when the image changes
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') onClose();
       else if (e.key === '+' || e.key === '=') zoomIn();
       else if (e.key === '-' || e.key === '_') zoomOut();
       else if (e.key === '0') reset();
+      else if (e.key === 'ArrowLeft' && onPrev) onPrev();
+      else if (e.key === 'ArrowRight' && onNext) onNext();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, onPrev, onNext]);
   if (!url) return null;
   return createPortal(
     <div className="modal-overlay izm-overlay" onClick={onClose}>
@@ -317,7 +321,10 @@ export function ImageZoomModal({ url, label, onClose }) {
           </div>
         </div>
         <div className={`izm-viewport ${scale > 1 ? 'zoomed' : ''}`} onDoubleClick={() => setScale((s) => (s > 1 ? 1 : 2))}>
-          <img src={url} alt={label || ''} className="izm-img" style={{ width: `${scale * 100}%` }} draggable={false} />
+          {onPrev && <button type="button" className="izm-nav prev" onClick={onPrev} title="Previous" aria-label="Previous">‹</button>}
+          <img src={url} alt={label || ''} className={`izm-img ${scale > 1 ? 'zoomed' : ''}`}
+            style={scale > 1 ? { width: `${scale * 100}%` } : undefined} draggable={false} />
+          {onNext && <button type="button" className="izm-nav next" onClick={onNext} title="Next" aria-label="Next">›</button>}
         </div>
       </div>
     </div>,

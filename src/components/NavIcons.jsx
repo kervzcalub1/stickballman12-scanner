@@ -102,6 +102,12 @@ const PATHS = {
     <circle cx="12" cy="12" r="3" />
     <path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1l2.1-2.1M17 7l2.1-2.1" />
   </>),
+  // Image Finder — a framed picture with a peak (matches the inline `image` glyph)
+  image: (<>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <path d="M21 15l-5-5L5 21" />
+  </>),
 };
 
 export function NavIcon({ name, ...props }) {

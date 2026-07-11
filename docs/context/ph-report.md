@@ -212,3 +212,63 @@ ph_team + admin). Both sets coexist in `product_photos` (keyed by `(sku, angle, 
   (`photoDownload(sku,'warehouse')`). The warehouse capture screen (`ListingPhotos`)
   shows a "PH edited on file" banner when edits exist. The viewer (`PhotosModal`) groups
   **PH edited** vs **Warehouse originals**.
+
+## Image Finder (`ImageFinder`, `/ph/image-finder`)
+Auto-sources listing photos for a SKU from **GOAT's curated gallery via KicksDB** (PH-home
+card "Image Finder"; ph_team + admin). Saves straight into the **`ph_edited`** set — no new
+source, no schema change — so found images behave exactly like hand-edited uploads
+(precedence, thumbnail, viewer). Flow:
+1. Enter/scan a SKU → `GET /api/images/search?sku=` (`requireRole(['ph_team'])`) →
+   `kicksdbImagesBySku` (`api/_lib/kicksdb.js`, `KICKSDB_KEY`) which **cascades** so a SKU
+   always returns whatever exists, tagging the response `source`/`sourceLabel`:
+   **(a) GOAT curated gallery** (`GET /v3/goat/products` `images[]` — the retail
+   `product_template_additional_pictures`, real angles incl. **outsole** & **top-down** when
+   present; 8–11 imgs, varies per model) → **(b) StockX 360° spin** (`/v3/stockx/products`
+   `gallery_360`, 36 frames — rotational only, no sole/top) → **(c) hero image(s)** (GOAT
+   `image_url` + StockX `image`/`gallery`, deduped). The UI shows an amber note on the (b)/(c)
+   fallbacks. Suggestions adapt per source (GOAT: side@0/outsole@3; 360: side@0/diagonal@3/
+   rear@27; hero: side@0).
+2. **Slots** are the 5 standard `product_photos` angles: side · diagonal · **top** · **outsole** ·
+   rear. GOAT gallery order is only index-stable at the front, so we auto-suggest just the two
+   verified slots — **`0→side` (lateral), `3→outsole` (sole)** (`GOAT_SUGGESTIONS`) — and PH taps
+   a gallery image to fill 3/4 / top / heel (or Skips angles the shoe lacks).
+3. UI: 5 slots; the confident ones pre-filled, tap a slot to make it active, tap any gallery
+   image to (re)assign it. Each slot also has **Upload** — a PH photo for a blank/any angle
+   (raw → R2 via `photoSign`, then the slot points at that R2 URL). Editable **title** field
+   (pre-filled from the API name) is stamped on every branded slide.
+4. **Brand & Fill** → `POST /api/images/brand { sku, title, picks, includeSpec, includeWelcome }`
+   (`requireRole(['ph_team'])`). For each pick: fetch the image (SSRF-allowlisted to
+   `image.goat.com`/`images.stockx.com` **or** our own R2 host, for uploads) → composite onto the
+   Stickballman12 template with name+SKU → R2 → `setProductPhoto(source='ph_edited')`. Runs all
+   slides **concurrently**. Slots map to templates: side→1, diagonal→2, top→3, outsole→4, rear→5;
+   **spec slide→6** (extra1); **welcome→7** (extra2, static). Per-slot ✓/! in the UI.
+   - **Branding engine** = `api/_lib/branding.js` using **`@napi-rs/canvas`** (registers the font
+     files explicitly — same native binary on Railway; sharp's SVG renderer ignores `@font-face`,
+     so it was dropped). Templates in `src/components/ImageTemplate/{1..7}.png` (1600²); fonts in
+     `assets/branding/fonts/` — **Bebas Neue** (SKU/specs, OFL) + **Playfair Display** (serif title,
+     substitutes Canva's "The Youngest"). The shoe is cut out by `cutoutToPng()` in
+     `api/_lib/cutout.js` — a **full BiRefNet-general** AI matte (`@tugrul/rembg` on
+     onnxruntime-node, CPU, ~928MB model auto-downloaded to the gitignored
+     `assets/branding/models/`, ~50s–2.5min/image), falling back to the old colour-threshold
+     flood-fill only if the model is unavailable. Spec bullets = `specBulletsFromDescription()` heuristic over
+     the marketplace description + `colorway` from the API (no structured spec feed; Claude
+     extraction would be sharper but needs an `ANTHROPIC_API_KEY`, none configured).
+   - **Output quality**: JPEG q**90** (napi-canvas quality is 0–100, not 0–1 — the trap that
+     first shipped 30 KB images), 96 DPI (`encodeJpeg` patches the JFIF header), and the shoe is
+     fetched from GOAT's **`/original/`** rendition (`hiResSourceUrl`), not the soft `/medium/`
+     gallery size. ~0.75 MB/slide — Canva-parity.
+   - **Cutout + shadows**: the AI matte returns a clean alpha cut (no baked studio shadow to
+     strip), so `brandPhoto` just adds a synthetic soft ground shadow on the drawImage. White
+     shoes on GOAT's near-white bg are the hard case: ISNet/BiRefNet-lite give white parts too
+     little confidence and leave see-through holes, so `cutout.js` uses the **full** BiRefNet and
+     rescales its globally-offset matte to opaque via an **adaptive Otsu `liftAlpha()`** (bg→
+     transparent, shoe→opaque) plus a **border flood-fill** that clears any residual halo
+     (verified on white / all-black / multicolour shoes). Text shadows copied from the Canva samples — `SOFT_SHADOW` for the
+     serif title, `HARD_SHADOW` (crisp offset down-right) for the SKU + spec bullets.
+6. **Preview + download**: after Brand & Fill the UI shows a **Branded set** grid (tap a
+   thumbnail → full-size in a new tab) and **Download all** → a zip of every branded slide via
+   the existing `api.photoDownload(sku,'ph_edited')` (`GET /api/photos/download`).
+5. (Legacy) `POST /api/images/import` still exists — imports the raw picks un-branded into
+   `ph_edited`; the UI now uses Brand & Fill instead.
+- Rate-limited (search 40/min, import 20/min, brand 12/min). Degrades gracefully when
+  `KICKSDB_KEY`/R2 are unset (503 + clear message).

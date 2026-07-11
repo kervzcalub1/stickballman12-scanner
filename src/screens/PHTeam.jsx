@@ -20,6 +20,7 @@ import {
 import { NoBoxReport } from './NoBoxReport.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { PhEditedPhotos } from './PhEditedPhotos.jsx';
+import { ImageFinder } from './ImageFinder.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
@@ -55,6 +56,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'photos') return <PhEditedPhotos onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'reconcile') return <Reconciliation canReconcile={false} onHome={() => goPage(null)} onSignOut={onSignOut} />;
@@ -82,6 +84,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="instore-listing" /></span>
             <span className="home-card-title">Edited Photos</span>
             <span className="home-card-sub">Upload your edited listing images per SKU — used as the listing photos &amp; thumbnail</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('imagefinder')}>
+            <span className="home-card-icon"><NavIcon name="image" /></span>
+            <span className="home-card-title">Image Finder</span>
+            <span className="home-card-sub">Auto-source listing photos from StockX by SKU — pick angles from the 360° spin, saved as edited photos</span>
           </button>
           <button className="home-card" onClick={() => goPage('inquiry')}>
             <span className="home-card-icon"><NavIcon name="inventory" /></span>

@@ -112,6 +112,13 @@ export const api = {
   photoSignIssue: (vin, contentType) => post('/api/photos/sign-issue', { vin, contentType }),
   photoAttach: (sku, angle, url, source) => post('/api/photos/attach', { sku, angle, url, source }),
   photoRemove: (sku, angle, source) => post('/api/photos/remove', { sku, angle, source }),
+  // Image Finder — source StockX renders (hero + 360° spin) for a SKU, then import
+  // the picked angles into R2 as ph_edited listing photos.
+  imageFinderSearch: (sku) => get(`/api/images/search?sku=${encodeURIComponent(sku)}`),
+  imageFinderImport: (sku, picks) => post('/api/images/import', { sku, picks }),
+  // Brand & Fill — composite picks onto the template with name+SKU, + spec + welcome.
+  imageFinderBrand: (sku, title, picks, includeSpec, includeWelcome) =>
+    post('/api/images/brand', { sku, title, picks, includeSpec, includeWelcome }),
   reserveVins: (count, dateReceived) => post('/api/vins/reserve', { count, dateReceived }),
   batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),

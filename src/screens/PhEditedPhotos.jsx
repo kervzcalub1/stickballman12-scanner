@@ -4,7 +4,7 @@
 // here as read-only reference + download, and are never overwritten. Slots 1–5 are
 // the standard angles; 6–7 are extra images that show only in the photo viewer
 // (never a thumbnail). PH team + admin only. See docs/context/ph-report.md.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { api } from '../api.js';
 import { compressImage } from '../lib/image.js';
@@ -27,7 +27,12 @@ export function PhEditedPhotos({ onHome, onSignOut }) {
   const [notice, setNotice] = useState('');
   const [productName, setProductName] = useState(''); // best-effort shoe name for the loaded SKU
   const [replacing, setReplacing] = useState(false);  // SKU already has edits → hide bulk until "Replace" is clicked
-  const [preview, setPreview] = useState(null);       // { url, label } for the zoom modal
+  const [preview, setPreview] = useState(null);       // { list: [{url,label}], idx } for the zoom modal
+  // Filled edited slots, in slot order — the set you browse left/right in the viewer.
+  const editedList = useMemo(
+    () => ALL_SLOTS.filter(([a]) => edited[a]).map(([a, label]) => ({ url: edited[a], label, angle: a })),
+    [edited],
+  );
   const skuRef = useRef('');                           // latest loaded SKU (guards the async name-lookup race)
   const fileRefs = useRef({}); // angle -> input
   // Bulk upload: stage N images (mapped to the fixed angle slots by position),
@@ -277,7 +282,7 @@ export function PhEditedPhotos({ onHome, onSignOut }) {
                         >
                           <span className="pe-stage-slotno">{i + 1}</span>
                           <img src={s.url} alt={label} className="pe-stage-img" title={`Preview ${label}`}
-                            onClick={() => setPreview({ url: s.url, label })} />
+                            onClick={() => setPreview({ list: staged.map((st, k) => ({ url: st.url, label: ALL_SLOTS[k][1] })), idx: i })} />
                           {active && <span className="pe-stage-status">Uploading…</span>}
                           {done && <span className="pe-stage-status ok">✓</span>}
                           <div className="pe-stage-ctl">
@@ -312,7 +317,7 @@ export function PhEditedPhotos({ onHome, onSignOut }) {
                 return (
                   <div className={`pe-slot ${url ? 'filled' : ''} ${isExtra ? 'extra' : ''}`} key={angle}>
                     <button type="button" className="pe-slot-btn" disabled={busy}
-                      onClick={() => (url ? setPreview({ url, label }) : fileRefs.current[angle]?.click())}
+                      onClick={() => (url ? setPreview({ list: editedList, idx: Math.max(0, editedList.findIndex((x) => x.angle === angle)) }) : fileRefs.current[angle]?.click())}
                       title={url ? `Preview ${label}` : `Upload ${label}`}>
                       {url ? <img src={url} alt={label} className="pe-thumb" />
                         : <span className="pe-slot-empty">{busy ? '…' : <><Icon name="image" /><span>{isExtra ? 'Extra' : 'Upload'}</span></>}</span>}
@@ -336,11 +341,12 @@ export function PhEditedPhotos({ onHome, onSignOut }) {
                 ? <p className="muted sm">No warehouse photos on file for this SKU yet.</p>
                 : (
                   <div className="pe-orig-strip">
-                    {originals.map((p) => (
-                      <a className="pe-orig-cell" key={`${p.source}-${p.angle}`} href={p.url} target="_blank" rel="noreferrer" title={`Open ${p.angle} full size`}>
+                    {originals.map((p, oi) => (
+                      <button type="button" className="pe-orig-cell" key={`${p.source}-${p.angle}`} title={`Preview ${p.angle}`}
+                        onClick={() => setPreview({ list: originals.map((op) => ({ url: op.url, label: op.angle })), idx: oi })}>
                         <img src={p.url} alt={p.angle} />
                         <span className="pe-orig-angle">{p.angle}</span>
-                      </a>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -348,7 +354,15 @@ export function PhEditedPhotos({ onHome, onSignOut }) {
           </>
         )}
       </div>
-      {preview && <ImageZoomModal url={preview.url} label={preview.label} onClose={() => setPreview(null)} />}
+      {preview && preview.list[preview.idx] && (
+        <ImageZoomModal
+          url={preview.list[preview.idx].url}
+          label={preview.list[preview.idx].label}
+          onClose={() => setPreview(null)}
+          onPrev={preview.idx > 0 ? () => setPreview((p) => ({ ...p, idx: p.idx - 1 })) : undefined}
+          onNext={preview.idx < preview.list.length - 1 ? () => setPreview((p) => ({ ...p, idx: p.idx + 1 })) : undefined}
+        />
+      )}
     </div>
   );
 }

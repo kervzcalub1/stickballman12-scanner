@@ -1,27 +1,41 @@
-// AI background removal for the branding pipeline — replaces the old colour-threshold
-// flood-fill with a real segmentation matte (clean edges, correct lace-loop holes, no
-// eaten shoe parts, no grey halo). Uses BiRefNet (general) via @tugrul/rembg on
-// onnxruntime-node — fully in-process on CPU, no API, no per-image cost.
+// AI background removal for the branding pipeline. Two interchangeable providers,
+// selected at runtime by cutoutProvider() — the rest of the pipeline is identical:
 //
-// Why the full BiRefNet and not ISNet / BiRefNet-lite: the GOAT studio background is
-// near-white, and white shoes (e.g. Air Max 90 'Infrared', all-white uppers) sit on it
-// with very low contrast. ISNet and the lite swin_tiny BiRefNet both give the white
-// upper/midsole only ~30% confidence, so hardening the matte punches see-through holes
-// through the white parts. The full BiRefNet keeps the whole shoe (white heel, midsole,
-// translucent Air unit) — it only dims the whole matte uniformly to ~65-80% alpha,
-// which liftAlpha() rescales back to opaque. Cost: ~1 GB model, ~45-50 s/image on CPU.
+//   • 'local'    — BiRefNet (general) via @tugrul/rembg on onnxruntime-node, fully
+//                  in-process on CPU. No API, no per-image cost, best matte quality.
+//                  BUT: ~1 GB model in RAM + ~45-50 s/image. Fine on a dev box; on a
+//                  small web dyno it OOM-kills the process and blows the request past
+//                  the gateway timeout → 502. This is the DEFAULT (localhost).
+//   • 'removebg' — hosted remove.bg call: a few seconds/image, no model in memory, no
+//                  onnxruntime/sharp loaded at all. Set REMOVEBG_API_KEY (or
+//                  CUTOUT_PROVIDER=removebg) on constrained hosts (Railway) so Brand
+//                  & Fill runs without the 1 GB model. Costs per image.
 //
-// The model isn't committed; it's fetched once to assets/branding/models (gitignored)
-// on first use and cached, and the ort session is created once and reused.
+// Why the full BiRefNet locally and not ISNet / BiRefNet-lite: the GOAT studio
+// background is near-white, and white shoes (e.g. Air Max 90 'Infrared', all-white
+// uppers) sit on it with very low contrast. ISNet and the lite swin_tiny BiRefNet both
+// give the white upper/midsole only ~30% confidence, so hardening the matte punches
+// see-through holes through the white parts. The full BiRefNet keeps the whole shoe
+// (white heel, midsole, translucent Air unit) — it only dims the whole matte uniformly
+// to ~65-80% alpha, which liftAlpha() rescales back to opaque.
+//
+// The local model isn't committed; it's fetched once to assets/branding/models
+// (gitignored) on first use and cached, and the ort session is created once and reused.
+// The heavy native deps (onnxruntime-node, sharp, @tugrul/rembg) are required LAZILY so
+// the 'removebg' path never loads them — that's what keeps prod off the 1 GB model.
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import { fetchWithTimeout } from './util.js';
 
 const require = createRequire(import.meta.url);
-const ort = require('onnxruntime-node');
-const sharp = require('sharp');
-const { BackgroundRemover } = require('@tugrul/rembg');
+// Lazy native-module getters — only the 'local' provider ever touches these, so hosts
+// running 'removebg' never load onnxruntime/sharp (nor risk their native-binary install).
+let _ort, _sharp, _rembg;
+const ort = () => (_ort ||= require('onnxruntime-node'));
+const sharpLib = () => (_sharp ||= require('sharp'));
+const rembg = () => (_rembg ||= require('@tugrul/rembg'));
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const MODEL_DIR = path.join(ROOT, 'assets/branding/models');
@@ -46,15 +60,19 @@ function getRemover() {
   if (!removerPromise) {
     removerPromise = (async () => {
       await ensureModel();
-      const session = await ort.InferenceSession.create(MODEL_PATH, { graphOptimizationLevel: 'all' });
-      return new BackgroundRemover(session, MEAN, STD);
+      const session = await ort().InferenceSession.create(MODEL_PATH, { graphOptimizationLevel: 'all' });
+      return new (rembg().BackgroundRemover)(session, MEAN, STD);
     })().catch((e) => { removerPromise = null; throw e; });
   }
   return removerPromise;
 }
 
-// Warm the model up front (optional) so the first brand isn't slow.
-export async function warmCutout() { try { await getRemover(); return true; } catch { return false; } }
+// Warm the model up front (optional) so the first brand isn't slow. No-op unless the
+// local provider is active — we must never trigger the 1 GB download on a removebg host.
+export async function warmCutout() {
+  if (cutoutProvider() !== 'local') return true;
+  try { await getRemover(); return true; } catch { return false; }
+}
 
 // Lift the BiRefNet matte to a clean cutout. Via @tugrul/rembg the full model returns
 // a GLOBALLY-OFFSET matte, not a clean 0/1: on a white shoe against GOAT's near-white
@@ -112,11 +130,50 @@ function clearBorderBackground(data, w, h) {
   return data;
 }
 
-// Cut a shoe out of its background → transparent PNG buffer. (Not sharp-trimmed:
+// Which cutout provider to use. Explicit CUTOUT_PROVIDER wins; otherwise a present
+// REMOVEBG_API_KEY opts into the hosted path, else the in-process BiRefNet model.
+export function cutoutProvider() {
+  const p = (process.env.CUTOUT_PROVIDER || '').trim().toLowerCase();
+  if (p) return p;
+  return process.env.REMOVEBG_API_KEY ? 'removebg' : 'local';
+}
+
+// Cut a shoe out of its background → transparent PNG buffer. Dispatches to the active
+// provider; both return the same shape (PNG bytes with a clean alpha) so the branding
+// pipeline (bbox trim, shadow, composite) doesn't care which one ran.
+export async function cutoutToPng(buffer) {
+  if (cutoutProvider() === 'removebg') return cutoutRemoveBg(buffer);
+  return cutoutLocal(buffer);
+}
+
+// Hosted provider: remove.bg returns an already-clean transparent PNG, so none of the
+// local matte post-processing (liftAlpha / clearBorderBackground) applies here.
+async function cutoutRemoveBg(buffer) {
+  const key = process.env.REMOVEBG_API_KEY;
+  if (!key) throw new Error('REMOVEBG_API_KEY is not set');
+  const form = new FormData();
+  form.append('image_file', new Blob([buffer]), 'shoe.png');
+  form.append('size', 'auto');     // best resolution the account's plan allows
+  form.append('format', 'png');    // keep the alpha channel
+  form.append('type', 'product');  // shoes are product shots
+  const resp = await fetchWithTimeout(
+    'https://api.remove.bg/v1.0/removebg',
+    { method: 'POST', headers: { 'X-Api-Key': key }, body: form },
+    30000,
+  );
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`remove.bg ${resp.status} ${detail.slice(0, 200)}`);
+  }
+  return Buffer.from(await resp.arrayBuffer());
+}
+
+// Local provider: BiRefNet matte + valley-lift + border flood. (Not sharp-trimmed:
 // trim() compares RGB against the top-left pixel, which for a black shoe on a
 // transparent-black border wrongly eats the shoe. The caller trims via the alpha
 // channel instead.)
-export async function cutoutToPng(buffer) {
+async function cutoutLocal(buffer) {
+  const sharp = sharpLib();
   const remover = await getRemover();
   const resized = await sharp(buffer).resize(INPUT, INPUT, { fit: 'inside' }).toBuffer();
   const masked = await remover.mask(sharp(resized));

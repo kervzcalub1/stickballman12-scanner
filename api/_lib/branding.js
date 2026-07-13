@@ -22,14 +22,9 @@ const JPEG_QUALITY = 90;
 // serif at the top (wraps to 2 lines, kept clear of the logo); SKU in Bebas at the
 // bottom. Positions are constant across the 5 shoe templates.
 const SHOE_BOX = { cx: 800, cy: 812, w: 1050, h: 770 };
-// Shoe drop shadow — copied from the Canva "Shadows" panel used on the sample:
-//   Blur 42 · Angle 47° · Distance 41 · colour black · Intensity 78.
-// Canva's sliders are 0–100 in the design's own space; SHADOW_PX scales one slider
-// unit to px on our 1600² canvas (tuned so the render matches the Canva sample).
-// Angle 47° throws the shadow down-and-right (offsetX = cos, offsetY = sin, +y = down);
-// Intensity is the shadow's alpha.
-const CANVA_SHADOW = { blur: 42, angle: 47, distance: 41, intensity: 78 };
-const SHADOW_PX = 1.15;
+// Shoe drop shadow — dialed in the Shadow Playground (canvas-space px, down-right).
+// filter: drop-shadow(28px 30px 42px rgba(0,0,0,0.78)).
+const SHOE_SHADOW = { offsetX: 28, offsetY: 30, blur: 42, color: 'rgba(0,0,0,0.78)' };
 const TITLE = { cx: 800, topY: 188, size: 80, maxW: 1010, lineGap: 12, maxLines: 2 };
 const SKU = { cx: 800, y: 1476, size: 104 };
 const SPEC = { startX: 300, startY: 560, lineH: 118, size: 58, bulletR: 9, gap: 42 };
@@ -149,7 +144,7 @@ function wrapLines(ctx, text, maxW, maxLines) {
 // renders). Each element carries its own shadow.
 const TITLE_SHADOW = { offsetX: 5.7, offsetY: 5.7, blur: 5, color: 'rgba(0,0,0,1)' };
 const SKU_SHADOW = { offsetX: 5.7, offsetY: 5.7, blur: 5, color: 'rgba(0,0,0,1)' };
-function applyTextShadow(ctx, sh) {
+function applyShadow(ctx, sh) {
   ctx.shadowColor = sh.color;
   ctx.shadowBlur = sh.blur;
   ctx.shadowOffsetX = sh.offsetX;
@@ -210,15 +205,11 @@ export async function brandPhoto({ templateNum = 1, shoeBuffer, title, sku }) {
     const scale = Math.min(SHOE_BOX.w / bbox.w, SHOE_BOX.h / bbox.h);
     const dw = bbox.w * scale, dh = bbox.h * scale;
     const dx = SHOE_BOX.cx - dw / 2, dy = SHOE_BOX.cy - dh / 2;
-    // Drop shadow matched to the Canva "Shadows" panel (see CANVA_SHADOW). With the
-    // clean AI cutout there's no leftover API shadow to clash with, so this reads as one
-    // natural shadow rather than the old "landing" artifact.
-    const s = CANVA_SHADOW, rad = (s.angle * Math.PI) / 180;
+    // Drop shadow dialed in the Shadow Playground (see SHOE_SHADOW). With the clean AI
+    // cutout there's no leftover API shadow to clash with, so this reads as one natural
+    // shadow rather than the old "landing" artifact.
     ctx.save();
-    ctx.shadowColor = `rgba(0,0,0,${s.intensity / 100})`;
-    ctx.shadowBlur = s.blur * SHADOW_PX;
-    ctx.shadowOffsetX = Math.cos(rad) * s.distance * SHADOW_PX;
-    ctx.shadowOffsetY = Math.sin(rad) * s.distance * SHADOW_PX;
+    applyShadow(ctx, SHOE_SHADOW);
     ctx.drawImage(cut, bbox.x, bbox.y, bbox.w, bbox.h, dx, dy, dw, dh);
     ctx.restore();
   }

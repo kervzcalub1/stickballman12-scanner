@@ -157,25 +157,45 @@ export async function cutoutToPng(buffer) {
 // Hosted provider: Replicate running BiRefNet — the SAME architecture as the local
 // model, so the matte matches what was validated on the low-contrast white shoes, at
 // ~$0.0005/image and zero infra. Returns an already-clean transparent PNG (no local
-// matte post-processing). Uses the model-versioned prediction endpoint (always the
-// latest version) with `Prefer: wait` for a near-synchronous response, then polls if
-// the job hasn't finished inside the wait window.
+// matte post-processing). Community models run via /v1/predictions with a version hash
+// (the /v1/models/.../predictions shortcut is official-models only), so we resolve the
+// model's latest version once (cached) and reuse it. `Prefer: wait` gives a near-
+// synchronous response; we poll if the job hasn't finished inside the wait window.
 const REPLICATE_MODEL = process.env.REPLICATE_MODEL || '851-labs/background-remover';
+let _replicateVersion = null;
+async function replicateVersion(auth) {
+  if (process.env.REPLICATE_VERSION) return process.env.REPLICATE_VERSION;
+  if (_replicateVersion) return _replicateVersion;
+  const r = await fetchWithTimeout(`https://api.replicate.com/v1/models/${REPLICATE_MODEL}`, { headers: auth }, 15000);
+  if (!r.ok) throw new Error(`replicate model lookup ${r.status}`);
+  const id = (await r.json())?.latest_version?.id;
+  if (!id) throw new Error(`replicate model ${REPLICATE_MODEL} has no version`);
+  _replicateVersion = id;
+  return id;
+}
 async function cutoutReplicate(buffer) {
   const token = process.env.REPLICATE_API_TOKEN;
   if (!token) throw new Error('REPLICATE_API_TOKEN is not set');
   const auth = { Authorization: `Bearer ${token}` };
+  const version = await replicateVersion(auth);
   // Pass the shoe bytes inline as a data URI — no need to host/upload it first.
   const dataUri = `data:image/png;base64,${buffer.toString('base64')}`;
-  const resp = await fetchWithTimeout(
-    `https://api.replicate.com/v1/models/${REPLICATE_MODEL}/predictions`,
-    {
-      method: 'POST',
-      headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'wait' },
-      body: JSON.stringify({ input: { image: dataUri, format: 'png' } }),
-    },
-    70000, // > the 60s server-side `Prefer: wait` window
-  );
+  const body = JSON.stringify({ version, input: { image: dataUri, format: 'png' } });
+  // Retry on 429: Replicate throttles hard (6/min, burst 1) while account credit < $5,
+  // and Brand & Fill fires cutouts back-to-back. Without this a throttled request would
+  // fall through to the threshold cutout (which leaves a background box). Wait + retry.
+  let resp;
+  for (let attempt = 0; ; attempt++) {
+    resp = await fetchWithTimeout(
+      'https://api.replicate.com/v1/predictions',
+      { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'wait' }, body },
+      70000, // > the 60s server-side `Prefer: wait` window
+    );
+    if (resp.status !== 429 || attempt >= 4) break;
+    const retryAfter = Number(resp.headers.get('retry-after'));
+    const waitS = Math.min(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 3 * (attempt + 1), 15);
+    await new Promise((r) => setTimeout(r, waitS * 1000));
+  }
   if (!resp.ok) {
     const detail = await resp.text().catch(() => '');
     throw new Error(`replicate create ${resp.status} ${detail.slice(0, 200)}`);

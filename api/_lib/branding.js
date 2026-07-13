@@ -156,7 +156,7 @@ function drawTitle(ctx, title) {
   ctx.font = `${TITLE.size}px SbTitle`;
   const lines = wrapLines(ctx, title, TITLE.maxW, TITLE.maxLines);
   ctx.save();
-  applyTextShadow(ctx, TITLE_SHADOW);
+  applyShadow(ctx, TITLE_SHADOW);
   lines.forEach((ln, i) => ctx.fillText(ln, TITLE.cx, TITLE.topY + i * (TITLE.size + TITLE.lineGap)));
   ctx.restore();
 }
@@ -165,7 +165,7 @@ function drawSku(ctx, sku) {
   ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
   ctx.font = `${SKU.size}px SbSku`;
   ctx.save();
-  applyTextShadow(ctx, SKU_SHADOW);
+  applyShadow(ctx, SKU_SHADOW);
   ctx.fillText(String(sku || '').toUpperCase(), SKU.cx, SKU.y);
   ctx.restore();
 }

@@ -1,15 +1,17 @@
 // AI background removal for the branding pipeline. Two interchangeable providers,
 // selected at runtime by cutoutProvider() — the rest of the pipeline is identical:
 //
-//   • 'local'    — BiRefNet (general) via @tugrul/rembg on onnxruntime-node, fully
-//                  in-process on CPU. No API, no per-image cost, best matte quality.
-//                  BUT: ~1 GB model in RAM + ~45-50 s/image. Fine on a dev box; on a
-//                  small web dyno it OOM-kills the process and blows the request past
-//                  the gateway timeout → 502. This is the DEFAULT (localhost).
-//   • 'removebg' — hosted remove.bg call: a few seconds/image, no model in memory, no
-//                  onnxruntime/sharp loaded at all. Set REMOVEBG_API_KEY (or
-//                  CUTOUT_PROVIDER=removebg) on constrained hosts (Railway) so Brand
-//                  & Fill runs without the 1 GB model. Costs per image.
+//   • 'local'     — BiRefNet (general) via @tugrul/rembg on onnxruntime-node, fully
+//                   in-process on CPU. No API, no per-image cost, best matte quality.
+//                   BUT: ~1 GB model in RAM + ~45-50 s/image. Fine on a dev box; on a
+//                   small web dyno it OOM-kills the process and blows the request past
+//                   the gateway timeout → 502. This is the DEFAULT (localhost).
+//   • 'replicate' — hosted Replicate running BiRefNet (the SAME model as local, so the
+//                   matte matches what was validated on the white shoes). ~$0.0005/img,
+//                   no model in memory. PREFERRED for prod: set REPLICATE_API_TOKEN.
+//   • 'removebg'  — hosted remove.bg call: simple sync API but ~$0.23/img (pricey).
+//                   Set REMOVEBG_API_KEY. Kept as an alternative.
+// Both hosted paths run in seconds and never load onnxruntime/sharp or the 1 GB model.
 //
 // Why the full BiRefNet locally and not ISNet / BiRefNet-lite: the GOAT studio
 // background is near-white, and white shoes (e.g. Air Max 90 'Infrared', all-white
@@ -131,19 +133,69 @@ function clearBorderBackground(data, w, h) {
 }
 
 // Which cutout provider to use. Explicit CUTOUT_PROVIDER wins; otherwise a present
-// REMOVEBG_API_KEY opts into the hosted path, else the in-process BiRefNet model.
+// hosted-provider key opts in (Replicate preferred — cheapest and runs BiRefNet, the
+// same model as local), else the in-process BiRefNet.
 export function cutoutProvider() {
   const p = (process.env.CUTOUT_PROVIDER || '').trim().toLowerCase();
   if (p) return p;
-  return process.env.REMOVEBG_API_KEY ? 'removebg' : 'local';
+  if (process.env.REPLICATE_API_TOKEN) return 'replicate';
+  if (process.env.REMOVEBG_API_KEY) return 'removebg';
+  return 'local';
 }
 
 // Cut a shoe out of its background → transparent PNG buffer. Dispatches to the active
-// provider; both return the same shape (PNG bytes with a clean alpha) so the branding
+// provider; all return the same shape (PNG bytes with a clean alpha) so the branding
 // pipeline (bbox trim, shadow, composite) doesn't care which one ran.
 export async function cutoutToPng(buffer) {
-  if (cutoutProvider() === 'removebg') return cutoutRemoveBg(buffer);
-  return cutoutLocal(buffer);
+  switch (cutoutProvider()) {
+    case 'replicate': return cutoutReplicate(buffer);
+    case 'removebg':  return cutoutRemoveBg(buffer);
+    default:          return cutoutLocal(buffer);
+  }
+}
+
+// Hosted provider: Replicate running BiRefNet — the SAME architecture as the local
+// model, so the matte matches what was validated on the low-contrast white shoes, at
+// ~$0.0005/image and zero infra. Returns an already-clean transparent PNG (no local
+// matte post-processing). Uses the model-versioned prediction endpoint (always the
+// latest version) with `Prefer: wait` for a near-synchronous response, then polls if
+// the job hasn't finished inside the wait window.
+const REPLICATE_MODEL = process.env.REPLICATE_MODEL || '851-labs/background-remover';
+async function cutoutReplicate(buffer) {
+  const token = process.env.REPLICATE_API_TOKEN;
+  if (!token) throw new Error('REPLICATE_API_TOKEN is not set');
+  const auth = { Authorization: `Bearer ${token}` };
+  // Pass the shoe bytes inline as a data URI — no need to host/upload it first.
+  const dataUri = `data:image/png;base64,${buffer.toString('base64')}`;
+  const resp = await fetchWithTimeout(
+    `https://api.replicate.com/v1/models/${REPLICATE_MODEL}/predictions`,
+    {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'wait' },
+      body: JSON.stringify({ input: { image: dataUri, format: 'png' } }),
+    },
+    70000, // > the 60s server-side `Prefer: wait` window
+  );
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`replicate create ${resp.status} ${detail.slice(0, 200)}`);
+  }
+  let pred = await resp.json();
+  // Poll to a terminal state if `Prefer: wait` returned before completion.
+  const started = Date.now();
+  while (!['succeeded', 'failed', 'canceled'].includes(pred.status)) {
+    if (Date.now() - started > 120000) throw new Error('replicate timed out');
+    await new Promise((r) => setTimeout(r, 1500));
+    const get = await fetchWithTimeout(pred.urls.get, { headers: auth }, 15000);
+    if (!get.ok) throw new Error(`replicate poll ${get.status}`);
+    pred = await get.json();
+  }
+  if (pred.status !== 'succeeded') throw new Error(`replicate ${pred.status}: ${pred.error || ''}`);
+  const out = Array.isArray(pred.output) ? pred.output[0] : pred.output;
+  if (!out || typeof out !== 'string') throw new Error('replicate returned no image');
+  const img = await fetchWithTimeout(out, {}, 30000);
+  if (!img.ok) throw new Error(`replicate output fetch ${img.status}`);
+  return Buffer.from(await img.arrayBuffer());
 }
 
 // Hosted provider: remove.bg returns an already-clean transparent PNG, so none of the

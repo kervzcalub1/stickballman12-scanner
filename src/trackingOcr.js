@@ -1,3 +1,5 @@
+import { detectCarrierKey } from './lib/carriers.js';
+
 // Decode a carrier tracking number from an uploaded/snapped label photo — the
 // fallback for smudged or hard-to-scan labels (UPS/USPS/FedEx/DHL).
 // Primary: decode a barcode in the image with zxing. Fallback: OCR the printed
@@ -146,8 +148,10 @@ export async function decodeTrackingPdf(file, onProgress) {
       const page = await pdf.getPage(p);
       let value = '';
       let via = 'text';
+      let pageText = '';
       try {
         const tc = await page.getTextContent();
+        pageText = (tc?.items || []).map((it) => (it && it.str) || '').join(' ');
         value = pickTrackingFromItems(tc.items);
       } catch { /* no text layer — fall through to render */ }
       if (!value) {
@@ -156,8 +160,11 @@ export async function decodeTrackingPdf(file, onProgress) {
           if (blob) { const r = await decodeTrackingImage(blob); value = r.value; via = r.via; }
         } catch { /* leave blank for manual entry */ }
       }
+      // Detect the courier from the printed label text (reliable even when the number is a
+      // barcode we couldn't read) and/or the number format → a 17TRACK carrier key.
+      const carrierKey = detectCarrierKey({ text: pageText, number: value });
       page.cleanup?.();
-      out.push({ page: p, value, via });
+      out.push({ page: p, value, via, carrierKey });
     }
   } finally {
     pdf.destroy?.();

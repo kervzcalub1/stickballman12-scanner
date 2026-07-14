@@ -1609,6 +1609,7 @@ export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPu
   const sql = db();
   const boxNumbers = labels.map((_, i) => i + 1);
   const trackings = labels.map((l) => (String(l.trackingNumber || '').trim() || null));
+  const carrierKeys = labels.map((l) => (Number.isInteger(Number(l.carrierKey)) && Number(l.carrierKey) > 0 ? Number(l.carrierKey) : null));
   const rows = await sql`
     WITH po AS (
       INSERT INTO purchase_orders
@@ -1617,9 +1618,9 @@ export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPu
               ${labels.length}, ${notes || null}, ${createdBy || null})
       RETURNING id
     )
-    INSERT INTO po_boxes (po_id, box_number, tracking_number, status, created_by)
-    SELECT po.id, t.box_number, t.tracking_number, 'pending', ${createdBy || null}
-    FROM po, unnest(${boxNumbers}::int[], ${trackings}::text[]) AS t(box_number, tracking_number)
+    INSERT INTO po_boxes (po_id, box_number, tracking_number, carrier_key, status, created_by)
+    SELECT po.id, t.box_number, t.tracking_number, t.carrier_key, 'pending', ${createdBy || null}
+    FROM po, unnest(${boxNumbers}::int[], ${trackings}::text[], ${carrierKeys}::int[]) AS t(box_number, tracking_number, carrier_key)
     RETURNING po_id
   `;
   return getPoFull(rows[0].po_id);
@@ -1856,9 +1857,15 @@ export async function getPoReconciliation(poId) {
   const sql = db();
   const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
   if (!po) return null;
+  // "Expected" = only the lines on labels that actually SHIPPED (shipped/in_transit/
+  // delivered). A label still being filled or merely packed hasn't left the supplier, so
+  // its contents aren't due yet and must NOT count as shortages against what arrived.
   const expected = await sql`
-    SELECT sku, size, sum(qty_expected)::int AS qty, max(name) AS name
-    FROM po_lines WHERE po_id = ${poId} GROUP BY sku, size`;
+    SELECT l.sku, l.size, sum(l.qty_expected)::int AS qty, max(l.name) AS name
+    FROM po_lines l
+    JOIN po_boxes b ON b.id = l.po_box_id
+    WHERE l.po_id = ${poId} AND b.status IN ('shipped', 'in_transit', 'delivered')
+    GROUP BY l.sku, l.size`;
   const received = po.received_batch_id
     ? await sql`
         SELECT sku, size, count(*)::int AS qty, max(name) AS name
@@ -1929,23 +1936,27 @@ export async function listReconcilePos() {
 /* ---- Phase 4: shipment tracking (17TRACK) ---------------------------------- */
 
 // Tracking numbers for a PO's labels (to register / poll with the aggregator).
-export async function listPoTrackingNumbers(poId) {
+// Tracked items for a PO — { number, carrier } (carrier = the chosen 17TRACK key) so a
+// refresh can query each label against the correct courier.
+export async function listPoTrackingItems(poId) {
   const sql = db();
-  const rows = await sql`SELECT tracking_number FROM po_boxes WHERE po_id = ${poId} AND tracking_number IS NOT NULL`;
-  return rows.map((r) => r.tracking_number);
+  const rows = await sql`SELECT tracking_number, carrier_key FROM po_boxes WHERE po_id = ${poId} AND tracking_number IS NOT NULL`;
+  return rows.map((r) => ({ number: r.tracking_number, carrier: r.carrier_key }));
 }
 
 // Apply an aggregator status update to the label with this tracking number.
 // Advances box status only when the mapper gave one (never downgrades to null).
 // Returns the affected { id, po_id } rows.
-export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus, lastCheckpoint, boxStatus }) {
+export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus, lastCheckpoint, boxStatus, events }) {
   const sql = db();
+  const eventsJson = Array.isArray(events) && events.length ? JSON.stringify(events) : null;
   if (boxStatus) {
     return sql`
       UPDATE po_boxes
       SET carrier = COALESCE(${carrier ?? null}, carrier),
           tracking_status = COALESCE(${trackingStatus ?? null}, tracking_status),
           last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
+          tracking_events = COALESCE(${eventsJson}::jsonb, tracking_events),
           checked_at = now(),
           status = ${boxStatus}
       WHERE upper(tracking_number) = upper(${trackingNumber})
@@ -1956,6 +1967,7 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
     SET carrier = COALESCE(${carrier ?? null}, carrier),
         tracking_status = COALESCE(${trackingStatus ?? null}, tracking_status),
         last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
+        tracking_events = COALESCE(${eventsJson}::jsonb, tracking_events),
         checked_at = now()
     WHERE upper(tracking_number) = upper(${trackingNumber})
     RETURNING id, po_id`;

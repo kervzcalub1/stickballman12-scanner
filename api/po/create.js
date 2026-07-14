@@ -26,7 +26,10 @@ export default async function handler(req, res) {
   const notes = String(body.notes ?? '').trim().slice(0, 2000) || null;
   const labels = (Array.isArray(body.labels) ? body.labels : [])
     .slice(0, 100)
-    .map((l) => ({ trackingNumber: String(l?.trackingNumber ?? '').trim().slice(0, 120) }));
+    .map((l) => ({
+      trackingNumber: String(l?.trackingNumber ?? '').trim().slice(0, 120),
+      carrierKey: Number.isInteger(Number(l?.carrierKey)) && Number(l?.carrierKey) > 0 ? Number(l.carrierKey) : null,
+    }));
 
   if (!supplierName) return send(res, 400, { ok: false, error: 'Supplier name is required.' });
   if (labels.length < 1) return send(res, 400, { ok: false, error: 'Add at least one shipping label.' });

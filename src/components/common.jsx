@@ -192,6 +192,41 @@ export function ProgressBar({ value, label, indeterminate = false }) {
   );
 }
 
+// Shipment tracking as a milestone timeline — the full checkpoint history (newest first)
+// from 17TRACK. A connecting line runs down the nodes; the latest checkpoint is emphasized
+// (green check on delivery, otherwise an accent node with a soft pulse), earlier ones dim.
+const fmtEventTime = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
+export function TrackingTimeline({ events, status }) {
+  const list = Array.isArray(events) ? events.filter((e) => e && (e.description || e.time)) : [];
+  if (!list.length) return null;
+  const isDeliveredStage = (e, top) => /deliver/i.test(e?.stage || '') || (top && /deliver/i.test(status || ''));
+  return (
+    <ol className="tl" aria-label="Tracking history">
+      {list.map((e, i) => {
+        const top = i === 0;
+        const delivered = isDeliveredStage(e, top);
+        return (
+          <li key={i} className={`tl-row${top ? ' current' : ''}${delivered ? ' delivered' : ''}`}>
+            <span className="tl-marker"><span className="tl-dot">{delivered ? '✓' : ''}</span></span>
+            <div className="tl-content">
+              <div className="tl-desc">{e.description || e.stage || '—'}</div>
+              <div className="tl-meta">
+                {e.location ? <span className="tl-loc">📍 {e.location}</span> : null}
+                {e.time ? <span className="tl-time">{fmtEventTime(e.time)}</span> : null}
+              </div>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 // Reusable Day/Week/Month calendar switcher. Controlled: parent owns
 // {mode, anchor} and reloads when onChange fires. Pages compute from/to with
 // periodRange(mode, anchor).map(ymd).

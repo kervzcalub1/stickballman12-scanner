@@ -34,7 +34,7 @@ export default async function handler(req, res) {
 
     await shipPoBox(poBoxId);
     // Start tracking this label's shipment (best-effort; no-ops without a key).
-    if (box.tracking_number) registerTracking([box.tracking_number]).catch((e) => console.warn('[po/ship] registerTracking:', e.message));
+    if (box.tracking_number) registerTracking([{ number: box.tracking_number, carrier: box.carrier_key }]).catch((e) => console.warn('[po/ship] registerTracking:', e.message));
     const data = await getPoFull(box.po_id);
     return send(res, 200, { ok: true, ...data });
   } catch (e) {

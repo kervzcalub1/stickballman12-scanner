@@ -131,8 +131,18 @@ VINs + inserts `items` = phantom stock).
   `received_batch_id` → `batches(id)`, `reconciled_at`, `reconciliation JSONB` (snapshot).
 - **`po_boxes`** — one row per **shipping label** (outbound mirror of `batch_boxes`).
   `po_id`, `box_number`, `tracking_number` (PH pre-assigns the real courier number),
-  `carrier` / `tracking_status` / `last_checkpoint` / `checked_at` (filled by the tracking
-  aggregator later), `status` ∈ `pending | shipped | in_transit | delivered`, `shipped_at`.
+  **`carrier_key`** (the 17TRACK numeric carrier code chosen in the New Batch dropdown or
+  auto-detected from the labels PDF; passed to 17TRACK register/gettrackinfo so it pulls
+  from the RIGHT courier), `carrier` (display NAME the aggregator returns), `tracking_status`
+  / `last_checkpoint` / `checked_at`, `status` ∈ `pending | shipped | in_transit | delivered`,
+  `shipped_at`. **Carrier UX:** `src/lib/carriers.js` = curated 17TRACK carriers (UPS/FedEx/
+  USPS/… keyed by code) + `carrierName(code|name)` + `detectCarrierKey({text,number})`
+  (label-text keyword first, then number format — 1Z→UPS, 96…→FedEx, 9x→USPS, etc.).
+  `decodeTrackingPdf` returns `carrierKey` per page; `CreatePO` shows a per-label courier
+  `<select>` (— Select courier — · UPS · FedEx · USPS · …) preselected from the PDF; the key
+  flows create → `po_boxes.carrier_key` → `registerTracking`/`fetchTrackInfo` (items are
+  `{number, carrier}`). `parseTrackEntry` prefers the provider name / maps the code so a
+  label shows "UPS" not "100002". **Schema-touch: run `db:setup` (adds `carrier_key`).**
   The PO flips to `shipped` only when **all** its labels are shipped.
 - **`po_lines`** — the "what the supplier says he shipped." `po_id`, `po_box_id` (which
   label — **NOT NULL**), `sku`, `size`, `name/upc/colorway/gender`, `qty_expected`,

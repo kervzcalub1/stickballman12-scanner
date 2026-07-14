@@ -4,9 +4,22 @@
 // status via 17TRACK's webhook push (api/po/tracking-webhook.js) or an on-demand
 // pull (api/po/track-refresh.js). Kept behind this one module so swapping providers
 // (e.g. AfterShip) is a single-file change. See docs/po-scanout-plan.md.
+import { carrierName } from '../../src/lib/carriers.js';
+
 const BASE = 'https://api.17track.net/track/v2.2';
 
 export const trackingConfigured = () => !!process.env.TRACKING_API_KEY;
+
+// A tracked item is either a bare number string or { number, carrier } where carrier is
+// the 17TRACK numeric carrier key (so the aggregator pulls status from the RIGHT carrier
+// instead of guessing). Normalizes to 17TRACK's { number, carrier? } request shape.
+function toItem(x) {
+  const raw = x && typeof x === 'object' ? x : { number: x };
+  const number = String(raw.number || '').trim();
+  if (!number) return null;
+  const carrier = Number.isInteger(Number(raw.carrier)) && Number(raw.carrier) > 0 ? Number(raw.carrier) : null;
+  return carrier ? { number, carrier } : { number };
+}
 export const trackingWebhookSecret = () => process.env.TRACKING_WEBHOOK_SECRET || '';
 
 async function call(path, body) {
@@ -19,19 +32,20 @@ async function call(path, body) {
   return res.json();
 }
 
-// Register tracking numbers so 17TRACK starts tracking + will webhook updates.
-export async function registerTracking(numbers) {
-  const nums = (numbers || []).filter(Boolean).slice(0, 40);
-  if (!trackingConfigured() || !nums.length) return { skipped: true };
-  return call('/register', nums.map((n) => ({ number: String(n) })));
+// Register tracking numbers so 17TRACK starts tracking + will webhook updates. Items may
+// carry a `carrier` (17TRACK key) so registration is bound to the correct courier.
+export async function registerTracking(items) {
+  const list = (items || []).map(toItem).filter(Boolean).slice(0, 40);
+  if (!trackingConfigured() || !list.length) return { skipped: true };
+  return call('/register', list);
 }
 
-// Pull current status for a set of numbers. Returns [{ trackingNumber, carrier,
-// trackingStatus, lastCheckpoint, boxStatus }] (only entries we could parse).
-export async function fetchTrackInfo(numbers) {
-  const nums = (numbers || []).filter(Boolean).slice(0, 40);
-  if (!trackingConfigured() || !nums.length) return [];
-  const json = await call('/gettrackinfo', nums.map((n) => ({ number: String(n) })));
+// Pull current status for a set of items (number + optional carrier key). Returns
+// [{ trackingNumber, carrier, trackingStatus, lastCheckpoint, boxStatus }] (only parsed).
+export async function fetchTrackInfo(items) {
+  const list = (items || []).map(toItem).filter(Boolean).slice(0, 40);
+  if (!trackingConfigured() || !list.length) return [];
+  const json = await call('/gettrackinfo', list);
   const accepted = json?.data?.accepted || [];
   return accepted.map(parseTrackEntry).filter(Boolean);
 }
@@ -56,13 +70,27 @@ export function parseTrackEntry(entry) {
   const ti = entry.track_info || entry.track || entry;
   const trackingStatus = ti?.latest_status?.status || ti?.latest_status || null;
   const lastCheckpoint = ti?.latest_event?.description || ti?.latest_event?.stage || null;
-  const carrier = entry.carrier != null ? String(entry.carrier) : (ti?.tracking?.providers?.[0]?.provider?.name || null);
+  // Prefer the human-readable provider name; else map 17TRACK's numeric carrier code to a
+  // name (UPS, FedEx…) so labels never show a bare code like "100002".
+  const providerName = ti?.tracking?.providers?.[0]?.provider?.name || null;
+  const carrier = providerName || carrierName(entry.carrier);
+  // Full checkpoint history (newest first) for the milestone timeline UI, capped.
+  const events = (ti?.tracking?.providers?.[0]?.events || [])
+    .slice(0, 60)
+    .map((e) => ({
+      time: e.time_iso || e.time_utc || null,
+      description: e.description ? String(e.description).slice(0, 300) : null,
+      location: e.location ? String(e.location).slice(0, 200) : null,
+      stage: e.stage || null,
+    }))
+    .filter((e) => e.time || e.description);
   return {
     trackingNumber: String(number),
     carrier: carrier ? String(carrier) : null,
     trackingStatus: trackingStatus ? String(trackingStatus) : null,
     lastCheckpoint: lastCheckpoint ? String(lastCheckpoint).slice(0, 300) : null,
     boxStatus: mapBoxStatus(trackingStatus),
+    events,
   };
 }
 

@@ -31,7 +31,7 @@ export default async function handler(req, res) {
   if (!sku) return send(res, 400, { ok: false, error: 'A valid SKU is required.' });
   const url = String(body.url || '');
   if (!fetchable(url)) return send(res, 400, { ok: false, error: 'Image URL is not on an allowed host.' });
-  const safeSku = sku.replace(/[^A-Za-z0-9._-]/g, '_');
+  const safeSku = sku.replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.{2,}/g, '_');
 
   try {
     // A PH upload is already on our R2 host at full size; only marketplace renders
@@ -43,7 +43,7 @@ export default async function handler(req, res) {
     if (!buf.length || buf.length > MAX_BYTES) return send(res, 400, { ok: false, error: 'Image is empty or too large.' });
 
     const { pngBuffer, bbox, width, height } = await cutoutForEdit(buf);
-    const key = `listings/${safeSku}/_cut/${Date.now()}.png`;
+    const key = `listings/${safeSku}/_cut/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
     const put = await fetchWithTimeout(presignPutUrl({ key, expiresIn: 300 }),
       { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: pngBuffer }, 20000);
     if (!put.ok) return send(res, 502, { ok: false, error: 'Could not stage the cutout.' });

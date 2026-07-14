@@ -3,6 +3,11 @@ import React, { useState } from 'react';
 import { api, setToken, setUser } from '../api.js';
 import { Icon } from '../components/NavIcons.jsx';
 
+// The supplier scan-out portal lives on the `supplier.` subdomain; staff (admin /
+// warehouse / PH) sign in on the main domain. The subtitle reflects which one.
+const IS_SUPPLIER_HOST = typeof window !== 'undefined' && /^supplier\./i.test(window.location.hostname);
+const APP_SUBTITLE = IS_SUPPLIER_HOST ? 'Supplier' : 'Inventory';
+
 // Password field with a show/hide eye toggle. Forwards any input props
 // (placeholder, autoComplete, value, onChange…) to the underlying <input>.
 function PasswordInput(props) {
@@ -25,7 +30,7 @@ export function Auth({ onAuthed }) {
       <div className="card login">
         <img className="app-logo" src="/logo.png" alt="Stickballman12 logo" />
         <h1>Stickballman12</h1>
-        <p className="muted">Shoe Scanner</p>
+        <p className="muted">{APP_SUBTITLE}</p>
         <div className="tabs auth-tabs">
           <button className={`tab ${tab === 'login' ? 'active' : ''}`} onClick={() => setTab('login')}>Sign in</button>
           <button className={`tab ${tab === 'signup' ? 'active' : ''}`} onClick={() => setTab('signup')}>Create account</button>
@@ -64,7 +69,7 @@ function LoginForm({ onAuthed }) {
 function SignupForm({ onDone }) {
   // On the supplier subdomain, self-signups are always suppliers (the server
   // enforces this too by Host) — hide the staff role picker.
-  const supplierHost = typeof window !== 'undefined' && /^supplier\./i.test(window.location.hostname);
+  const supplierHost = IS_SUPPLIER_HOST;
   const [name, setName] = useState('');
   const [username, setU] = useState('');
   const [password, setP] = useState('');

@@ -63,14 +63,18 @@ export function SupplierApp({ user, onSignOut }) {
   };
   const refreshDetail = () => { if (openId) openPo(openId); };
 
-  const [trackBusy, setTrackBusy] = useState(false);
-  const refreshTracking = async () => {
-    setTrackBusy(true); setError('');
+  const [trackBusy, setTrackBusy] = useState(false);  // whole-PO refresh
+  const [trackBoxBusy, setTrackBoxBusy] = useState(null); // po_box id being refreshed on its own
+  // Refresh tracking status. Omit `boxId` to refresh every label at once; pass one to
+  // refresh just that label (one tracking-API call instead of all — saves credits).
+  const refreshTracking = async (boxId) => {
+    if (boxId != null) setTrackBoxBusy(Number(boxId)); else setTrackBusy(true);
+    setError('');
     try {
-      const r = await api.poTrackRefresh(openId);
+      const r = await api.poTrackRefresh(openId, boxId != null ? Number(boxId) : undefined);
       setDetail({ po: r.po, boxes: r.boxes, lines: r.lines });
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
-    finally { setTrackBusy(false); }
+    finally { if (boxId != null) setTrackBoxBusy(null); else setTrackBusy(false); }
   };
   const boxStatusLabel = (b) => (b.status === 'delivered' ? 'Delivered ✓'
     : b.status === 'in_transit' ? 'In transit'
@@ -170,8 +174,9 @@ export function SupplierApp({ user, onSignOut }) {
                 ? <p className="po-shipped-note">✓ All labels shipped — this batch is on its way to the warehouse.</p>
                 : <p className="muted sm">Match each label to the tracking numbers we sent in the group chat, scan its items, then ship it. The batch closes when every label is shipped.</p>}
               {po.status !== 'draft' && (
-                <button className="btn ghost sm po-track-refresh" disabled={trackBusy} onClick={refreshTracking}>
-                  <Icon name="refresh" /> {trackBusy ? 'Checking…' : 'Refresh tracking'}
+                <button className="btn ghost sm po-track-refresh" disabled={trackBusy || trackBoxBusy != null} onClick={() => refreshTracking()}
+                  title="Check every label at once">
+                  <Icon name="refresh" /> {trackBusy ? 'Checking…' : 'Refresh all tracking'}
                 </button>
               )}
             </div>
@@ -200,6 +205,13 @@ export function SupplierApp({ user, onSignOut }) {
                       {box.tracking_status ? <span> · {box.tracking_status}</span> : null}
                       {box.last_checkpoint ? <div className="po-track-checkpoint">{box.last_checkpoint}</div> : null}
                     </div>
+                  )}
+
+                  {isShipped && box.tracking_number && (
+                    <button className="btn ghost sm po-track-refresh-one" disabled={trackBusy || trackBoxBusy != null}
+                      onClick={() => refreshTracking(box.id)} title="Check just this label (saves credits)">
+                      <Icon name="refresh" /> {trackBoxBusy === Number(box.id) ? 'Checking…' : 'Refresh this label'}
+                    </button>
                   )}
 
                   {lines.length > 0 && (

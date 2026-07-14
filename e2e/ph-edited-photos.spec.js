@@ -213,7 +213,8 @@ test('PH team: /ph/edited-photos page shows 7 slots, uploads real photo, shows w
   // side angle already has a ph_edited photo from the fixture -> filled.
   await expect(page.locator('.pe-slot.filled')).toHaveCount(1);
   // Warehouse original (side) shown read-only with a Download button.
-  await expect(page.getByText('Warehouse originals')).toBeVisible();
+  // Scope to the read-only label (a help hint elsewhere also says "Warehouse originals").
+  await expect(page.locator('.pe-orig-lbl')).toBeVisible();
   await expect(page.locator('.pe-orig-cell')).toHaveCount(1);
   await expect(page.getByRole('button', { name: /Download originals/i })).toBeVisible();
 

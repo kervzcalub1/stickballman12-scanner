@@ -279,8 +279,8 @@ source, no schema change — so found images behave exactly like hand-edited upl
    - **Branding engine** = `api/_lib/branding.js` using **`@napi-rs/canvas`** (registers the font
      files explicitly — same native binary on Railway; sharp's SVG renderer ignores `@font-face`,
      so it was dropped). Templates in `src/components/ImageTemplate/{1..7}.png` (1600²); fonts in
-     `assets/branding/fonts/` — **Bebas Neue** (SKU/specs, OFL) + **Playfair Display** (serif title,
-     substitutes Canva's "The Youngest"). The shoe is cut out by `cutoutToPng()` in
+     `assets/branding/fonts/` — **Bebas Neue** (SKU/specs, OFL) + **The Youngest** (`TheYoungest-Serif-Book.ttf`,
+     the real Canva serif title face, registered as `SbTitle`). The shoe is cut out by `cutoutToPng()` in
      `api/_lib/cutout.js` — a **full BiRefNet-general** AI matte (`@tugrul/rembg` on
      onnxruntime-node, CPU, ~928MB model auto-downloaded to the gitignored
      `assets/branding/models/`, ~50s–2.5min/image), falling back to the old colour-threshold

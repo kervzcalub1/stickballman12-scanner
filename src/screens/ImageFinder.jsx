@@ -25,6 +25,7 @@ const SLOTS = [
 // Lightweight template backgrounds for the editor (the real templates are 5 MB each).
 const TEMPLATE_PREVIEW = { side: tpl1, diagonal: tpl2, top: tpl3, outsole: tpl4, rear: tpl5 };
 const SLOT_LABEL = Object.fromEntries(SLOTS.map((s) => [s.angle, s.label]));
+const SHOE_SLOTS = new Set(SLOTS.map((s) => s.angle));
 // Labels + listing order for the branded preview (angles + the two extra slides).
 const RESULT_LABEL = { ...SLOT_LABEL, spec: 'Spec', welcome: 'Welcome' };
 const RESULT_ORDER = ['side', 'diagonal', 'top', 'outsole', 'rear', 'spec', 'welcome'];
@@ -51,14 +52,24 @@ export function ImageFinder({ onHome, onSignOut }) {
   // The reviewable preview set (nothing is saved until Upload). Keyed by slot.
   const [preview, setPreview] = useState(null);       // { [slot]: {ok, preview(dataUri), cutoutUrl, bbox, error, throttled} }
   const [edits, setEdits] = useState({});             // angle -> transform dialed on the canvas (post-preview)
-  const [regenSlot, setRegenSlot] = useState(null);   // slot being re-rendered after an adjust
+  const [busySlots, setBusySlots] = useState(() => new Set()); // slots currently (re)rendering
   const [committed, setCommitted] = useState(false);  // uploaded to R2 yet?
+  const [previewTitle, setPreviewTitle] = useState(''); // title the current preview was rendered with
   const [previewIdx, setPreviewIdx] = useState(null); // index into previewList for the zoom modal
   const fileRefs = useRef({});
+  // Bumped whenever the preview is invalidated; async renders capture it and discard
+  // their result if it changed underneath them (prevents stale responses clobbering state).
+  const genRef = useRef(0);
 
+  const isBusy = busySlots.size > 0;
+  const markBusy = (slot, on) => setBusySlots((s) => { const n = new Set(s); if (on) n.add(slot); else n.delete(slot); return n; });
   // Any change to the source set (new SKU, re-assigned slot, upload) invalidates the
-  // rendered preview and its commit state.
-  const resetPreview = () => { setPreview(null); setEdits({}); setCommitted(false); setPreviewIdx(null); };
+  // rendered preview and its commit state, and supersedes any in-flight render.
+  const resetPreview = () => {
+    genRef.current += 1;
+    setPreview(null); setEdits({}); setCommitted(false); setPreviewIdx(null);
+    setBusySlots(new Set()); setPreviewTitle('');
+  };
 
   async function lookUp(e) {
     e?.preventDefault();
@@ -125,11 +136,17 @@ export function ImageFinder({ onHome, onSignOut }) {
   // show the results. Nothing is saved yet; PH reviews (and can adjust) before uploading.
   async function brandFill() {
     if (!product || !canBrand) return;
+    // Re-rendering rebuilds from scratch and drops manual size adjustments — confirm first.
+    if (preview && Object.keys(edits).length > 0 &&
+      !window.confirm('Re-rendering starts a fresh preview and discards your size adjustments. Continue?')) return;
+    const t = title.trim();
     setBranding(true); setError(''); setNotice(''); resetPreview();
+    const myGen = genRef.current; // captured after resetPreview bumped it
     try {
-      const { results: r } = await api.imageFinderBrand(product.sku, title.trim(), chosen, includeSpec, includeWelcome, outSize, 'preview');
+      const { results: r } = await api.imageFinderBrand(product.sku, t, chosen, includeSpec, includeWelcome, outSize, 'preview');
+      if (genRef.current !== myGen) return; // superseded by a newer action
       const bySlot = Object.fromEntries((r || []).map((x) => [x.slot, x]));
-      setPreview(bySlot);
+      setPreview(bySlot); setPreviewTitle(t);
       const okCount = (r || []).filter((x) => x.ok).length;
       const failed = (r || []).filter((x) => !x.ok);
       if (okCount > 0) setNotice(`Previewed ${okCount} slide${okCount === 1 ? '' : 's'}. Adjust any shoe, then Upload to save.`);
@@ -151,22 +168,28 @@ export function ImageFinder({ onHome, onSignOut }) {
   // (reuses the staged cutout — no re-cut) and drop the new preview in.
   async function adjustSave(slot, { cutoutUrl, bbox, transform }) {
     setEditorSlot(null);
-    setEdits((e) => ({ ...e, [slot]: transform }));
-    setPreview((p) => ({ ...p, [slot]: { ...p?.[slot], cutoutUrl, bbox, adjusting: true } }));
-    setRegenSlot(slot); setError('');
+    const myGen = genRef.current;
+    markBusy(slot, true); setError('');
     try {
       const { results: r } = await api.imageFinderBrand(
         product.sku, title.trim(),
         [{ angle: slot, url: cutoutUrl, precut: true, transform }],
         false, false, outSize, 'preview',
       );
+      if (genRef.current !== myGen) return; // superseded
       const one = (r || [])[0];
-      if (one?.ok) setPreview((p) => ({ ...p, [slot]: { ...one, cutoutUrl, bbox } }));
-      else setError(one?.error || 'Could not re-render that slide.');
+      if (one?.ok) {
+        // Only commit the adjustment once the server confirms it rendered — a failed
+        // re-render must NOT leave an unverified transform that Upload would ship.
+        setPreview((p) => ({ ...p, [slot]: { ...one, cutoutUrl, bbox } }));
+        setEdits((e) => ({ ...e, [slot]: transform }));
+        setCommitted(false); // an edit invalidates any prior upload
+      } else setError(one?.error || 'Could not re-render that slide.');
     } catch (err) {
+      if (genRef.current !== myGen) return;
       if (err.unauthorized) return onSignOut();
       setError(err.message);
-    } finally { setRegenSlot(null); }
+    } finally { markBusy(slot, false); }
   }
 
   // Re-cut ONE shoe: send its ORIGINAL source image back to Replicate for a fresh cutout
@@ -175,40 +198,49 @@ export function ImageFinder({ onHome, onSignOut }) {
   async function recutSlot(slot) {
     const url = picks[slot];
     if (!product || !url || !SHOE_SLOTS.has(slot)) return;
-    setRegenSlot(slot); setError(''); setNotice(''); setCommitted(false);
-    setEdits((e) => { const n = { ...e }; delete n[slot]; return n; });
-    setPreview((p) => ({ ...p, [slot]: { ...(p?.[slot] || {}) } }));
+    const myGen = genRef.current;
+    markBusy(slot, true); setError(''); setNotice(''); setCommitted(false);
+    setEdits((e) => { const n = { ...e }; delete n[slot]; return n; }); // fresh cut → drop old placement
     try {
       const { results: r } = await api.imageFinderBrand(
         product.sku, title.trim(),
         [{ angle: slot, url }],   // fresh (NOT precut) → forces a new Replicate cutout
         false, false, outSize, 'preview',
       );
+      if (genRef.current !== myGen) return; // superseded
       const one = (r || [])[0];
-      setPreview((p) => ({ ...p, [slot]: one || p[slot] }));
+      setPreview((p) => ({ ...p, [slot]: one || p?.[slot] }));
       if (!one?.ok) setError(one?.error || 'Could not cut out that shoe — try again.');
     } catch (err) {
+      if (genRef.current !== myGen) return;
       if (err.unauthorized) return onSignOut();
       setError(err.message);
-    } finally { setRegenSlot(null); }
+    } finally { markBusy(slot, false); }
   }
 
   // Step 3 — Upload to server: commit the (possibly adjusted) set to R2 + the photo library,
   // reusing each staged cutout + its dialed placement. No re-cut.
   async function uploadToServer() {
-    if (!product || !preview) return;
+    if (!product || !preview || isBusy) return; // don't commit mid-render
     const shoePicks = SLOTS.filter((s) => preview[s.angle]?.ok && preview[s.angle]?.cutoutUrl)
       .map((s) => ({ angle: s.angle, url: preview[s.angle].cutoutUrl, precut: true, transform: edits[s.angle] || null }));
     const spec = !!preview.spec?.ok, welcome = !!preview.welcome?.ok;
     if (!shoePicks.length && !spec && !welcome) { setError('Nothing to upload.'); return; }
+    // Completeness gate: warn before shipping a set that's missing shoe angles PH selected.
+    const missing = SLOTS.filter((s) => picks[s.angle] && !preview[s.angle]?.ok);
+    if (missing.length && !window.confirm(
+      `${missing.length} shoe slide${missing.length === 1 ? '' : 's'} didn’t render and won’t be uploaded (${missing.map((s) => s.label).join(', ')}). Upload the rest anyway?`)) return;
+    const myGen = genRef.current;
     setUploading(true); setError(''); setNotice('');
     try {
       const { saved, results: r } = await api.imageFinderBrand(product.sku, title.trim(), shoePicks, spec, welcome, outSize, 'commit');
+      if (genRef.current !== myGen) return; // superseded (e.g. PH searched a new SKU) — don't flash stale banners
       const failed = (r || []).filter((x) => !x.ok);
       if (saved > 0) { setCommitted(true); setNotice(`Uploaded ${saved} slide${saved === 1 ? '' : 's'} for ${product.sku}.`); }
       if (failed.length) setError(`${failed.length} slide${failed.length === 1 ? '' : 's'} failed to upload — try Upload again.`);
       else if (saved === 0) setError('Nothing was uploaded.');
     } catch (err) {
+      if (genRef.current !== myGen) return;
       if (err.unauthorized) return onSignOut();
       setError(err.message);
     } finally { setUploading(false); }
@@ -240,7 +272,9 @@ export function ImageFinder({ onHome, onSignOut }) {
     () => RESULT_ORDER.map((slot) => (preview?.[slot] && !preview[slot].ok ? { slot, ...preview[slot] } : null)).filter(Boolean),
     [preview],
   );
-  const SHOE_SLOTS = new Set(SLOTS.map((s) => s.angle));
+  // The title was changed after the preview was rendered — Upload would ship an
+  // unreviewed title, so gate it behind a re-render.
+  const titleStale = !!preview && previewTitle !== title.trim();
 
   return (
     <div className="app">
@@ -256,8 +290,8 @@ export function ImageFinder({ onHome, onSignOut }) {
           <input
             className="pi-sku-input" type="text" inputMode="text" autoCapitalize="characters"
             placeholder="Enter a SKU (e.g. JR1598)" value={skuInput}
-            onChange={(e) => setSkuInput(e.target.value)} disabled={looking} />
-          <button type="submit" className="btn" disabled={looking || !skuInput.trim()}>
+            onChange={(e) => setSkuInput(e.target.value)} disabled={looking || uploading} />
+          <button type="submit" className="btn" disabled={looking || uploading || !skuInput.trim()}>
             <Icon name="image" /> {looking ? 'Finding…' : 'Find images'}
           </button>
         </form>
@@ -393,16 +427,16 @@ export function ImageFinder({ onHome, onSignOut }) {
                     <div key={r.slot} className="if-preview-item">
                       <button type="button" className="if-preview-img" onClick={() => setPreviewIdx(i)}>
                         <img src={r.preview} alt={RESULT_LABEL[r.slot] || r.slot} loading="lazy" />
-                        {regenSlot === r.slot && <span className="if-preview-regen">Re-rendering…</span>}
+                        {busySlots.has(r.slot) && <span className="if-preview-regen">Re-rendering…</span>}
                       </button>
                       <div className="if-preview-foot">
                         <span className="if-preview-label">{RESULT_LABEL[r.slot] || r.slot}{edits[r.slot] ? ' · adjusted' : ''}</span>
                         {SHOE_SLOTS.has(r.slot) && (
                           <div className="if-preview-acts">
-                            <button type="button" className="if-slot-toggle" disabled={regenSlot === r.slot || uploading}
-                              onClick={() => recutSlot(r.slot)} title="Send this shoe to the background remover again">Cutout</button>
-                            <button type="button" className="if-slot-toggle" disabled={regenSlot === r.slot || uploading}
-                              onClick={() => setEditorSlot(r.slot)} title="Position &amp; resize the shoe">Adjust size</button>
+                            <button type="button" className="if-slot-toggle" disabled={busySlots.has(r.slot) || uploading || titleStale}
+                              onClick={() => recutSlot(r.slot)} title={titleStale ? 'Re-render the preview first (title changed)' : 'Send this shoe to the background remover again'}>Cutout</button>
+                            <button type="button" className="if-slot-toggle" disabled={busySlots.has(r.slot) || uploading || titleStale}
+                              onClick={() => setEditorSlot(r.slot)} title={titleStale ? 'Re-render the preview first (title changed)' : 'Position & resize the shoe'}>Adjust size</button>
                           </div>
                         )}
                       </div>
@@ -416,8 +450,8 @@ export function ImageFinder({ onHome, onSignOut }) {
                       <div key={r.slot} className="if-preview-err">
                         <span><b>{RESULT_LABEL[r.slot] || r.slot}:</b> {r.error || 'failed'}</span>
                         {SHOE_SLOTS.has(r.slot) && (
-                          <button type="button" className="btn sm" disabled={regenSlot === r.slot || uploading}
-                            onClick={() => recutSlot(r.slot)}>{regenSlot === r.slot ? 'Cutting…' : 'Cutout'}</button>
+                          <button type="button" className="btn sm" disabled={busySlots.has(r.slot) || uploading || titleStale}
+                            onClick={() => recutSlot(r.slot)}>{busySlots.has(r.slot) ? 'Cutting…' : 'Cutout'}</button>
                         )}
                       </div>
                     ))}
@@ -425,7 +459,7 @@ export function ImageFinder({ onHome, onSignOut }) {
                 )}
 
                 <div className="if-commit-actions">
-                  <button type="button" className="btn primary" disabled={uploading || committed || previewList.length === 0}
+                  <button type="button" className="btn primary" disabled={uploading || committed || isBusy || titleStale || previewList.length === 0}
                     onClick={uploadToServer}>
                     <Icon name="image" /> {uploading ? 'Uploading…' : committed ? 'Uploaded ✓' : `Upload to server (${previewList.length})`}
                   </button>
@@ -433,7 +467,9 @@ export function ImageFinder({ onHome, onSignOut }) {
                     <Icon name="download" /> {downloading ? 'Zipping…' : 'Download all'}
                   </button>
                 </div>
-                {!committed && <p className="muted sm mt">Nothing is saved until you press <b>Upload to server</b>.</p>}
+                {titleStale
+                  ? <p className="muted sm mt">Title changed since this preview — press <b>Re-render preview</b> to apply it before uploading.</p>
+                  : !committed && <p className="muted sm mt">Nothing is saved until you press <b>Upload to server</b>.</p>}
               </div>
             )}
           </>
@@ -596,7 +632,7 @@ function ShoeEditor({ angle, label, sku, sourceUrl, title, initial, onClose, onS
     const dw = bbox.w * fitScale * t.scale, dh = bbox.h * fitScale * t.scale;
     const dx = t.cx - dw / 2, dy = t.cy - dh / 2;
     const p = toPointDesign(clientX, clientY);
-    const R = 70; // generous touch target (design px)
+    const R = 110; // generous touch target (design px ≈ 44px on a phone-scaled canvas)
     return [[dx, dy], [dx + dw, dy], [dx, dy + dh], [dx + dw, dy + dh]]
       .some(([hx, hy]) => Math.hypot(p.x - hx, p.y - hy) <= R);
   };
@@ -640,10 +676,15 @@ function ShoeEditor({ angle, label, sku, sourceUrl, title, initial, onClose, onS
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) gesture.current.dist = 0;
   };
-  const onWheel = (e) => {
-    e.preventDefault();
-    setTf((t) => ({ ...t, scale: clampScale(t.scale * Math.exp(-e.deltaY * 0.0012)) }));
-  };
+  // Wheel-to-zoom must be a NATIVE non-passive listener — React 18 registers `wheel`
+  // as passive, so preventDefault() in an onWheel prop is a no-op and the page scrolls.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    const onWheelNative = (e) => { e.preventDefault(); setTf((t) => ({ ...t, scale: clampScale(t.scale * Math.exp(-e.deltaY * 0.0012)) })); };
+    canvas.addEventListener('wheel', onWheelNative, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheelNative);
+  }, []);
 
   const fit = () => setTf({ cx: ED_SHOE_BOX.cx, cy: ED_SHOE_BOX.cy, scale: 1 });
   const nudgeScale = (mult) => setTf((t) => ({ ...t, scale: clampScale(t.scale * mult) }));
@@ -666,7 +707,7 @@ function ShoeEditor({ angle, label, sku, sourceUrl, title, initial, onClose, onS
         <div className="se-stage">
           <canvas ref={canvasRef} width={DISP} height={DISP} className="se-canvas"
             onPointerDown={onPointerDown} onPointerMove={onPointerMove}
-            onPointerUp={endPointer} onPointerCancel={endPointer} onWheel={onWheel} />
+            onPointerUp={endPointer} onPointerCancel={endPointer} />
           {loading && <div className="se-overlay">Cutting out the shoe…</div>}
           {error && !loading && (
             <div className="se-overlay err">

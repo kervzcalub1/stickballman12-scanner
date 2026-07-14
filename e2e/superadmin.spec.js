@@ -22,7 +22,8 @@ test.describe('superadmin', () => {
     await page.getByText('PH Team Workspace').click();
     await expect(page).toHaveURL(/\/ph$/);
     await expect(page.getByText('New Inventory')).toBeVisible();
-    await expect(page.getByText('Edited Photos')).toBeVisible();
+    // Scope to the card title — the Image Finder card's subtitle also contains "edited photos".
+    await expect(page.locator('.home-card-title', { hasText: /^Edited Photos$/ })).toBeVisible();
 
     // "← Home" (onExit) returns to the main admin home.
     await page.getByRole('button', { name: '← Home' }).click();

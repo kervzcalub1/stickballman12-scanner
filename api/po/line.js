@@ -43,6 +43,9 @@ export default async function handler(req, res) {
     return send(res, 200, { ok: true, line: updated, removed, merged });
   } catch (e) {
     console.error('[po/line]', e.message);
+    // A concurrent edit converging on the same (po_box_id, sku, size) can trip the unique
+    // index between the merge check and the write — surface as a conflict, not a 500.
+    if (e.code === '23505') return send(res, 409, { ok: false, error: 'That size was just changed — reopen the label and try again.' });
     return send(res, 500, { ok: false, error: 'Could not update the item.' });
   }
 }

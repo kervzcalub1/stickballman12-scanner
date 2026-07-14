@@ -183,7 +183,8 @@ export const api = {
   poReconcile: (poId) => post('/api/po/reconcile', { poId }),
   poClose: (poId) => post('/api/po/close', { poId }),
   // Phase 4 — shipment tracking (17TRACK). Pull the latest status for a PO's labels.
-  poTrackRefresh: (poId) => post('/api/po/track-refresh', { poId }),
+  // Omit poBoxId to refresh every label on the PO; pass it to refresh just one (saves credits).
+  poTrackRefresh: (poId, poBoxId) => post('/api/po/track-refresh', poBoxId != null ? { poId, poBoxId } : { poId }),
   // PH edit locks (presence)
   lockList: () => get('/api/ph/locks'),
   lockClaim: (vins, holderId) => post('/api/ph/locks', { action: 'claim', vins, holderId }),

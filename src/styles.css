@@ -1689,8 +1689,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .if-slot-badge.bad { background: var(--danger, #dc2626); }
 .if-slot-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 8px; }
 .if-slot-label { font-size: 12px; font-weight: 600; }
-.if-slot-toggle { border: 0; background: none; color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 4px; border-radius: 6px; }
-.if-slot-toggle:hover { color: var(--primary); }
+/* Chip-styled secondary action with a 44px touch target (was 11px unbordered text). */
+.if-slot-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 6px 12px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; }
+.if-slot-toggle:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.if-slot-toggle:disabled { opacity: 0.5; cursor: default; }
 
 /* The horizontal 360° frame strip. */
 .if-strip-head { margin-bottom: 6px; }
@@ -1710,7 +1712,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .if-title-input:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
 
 /* Slot foot actions + uploaded tag */
-.if-slot-acts { display: flex; gap: 6px; }
+.if-slot-acts { display: flex; gap: 10px; flex-wrap: wrap; }
 .if-slot-tag { position: absolute; top: 4px; left: 4px; font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; background: var(--primary); color: #fff; padding: 2px 6px; border-radius: 6px; }
 
 /* Extra-slide checkboxes */
@@ -1731,7 +1733,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .se-hint { text-align: center; margin: 10px 0 6px; }
 .se-controls { display: flex; align-items: center; gap: 10px; padding: 4px 2px 8px; }
 .se-slider { flex: 1; accent-color: var(--primary); }
-.se-controls .btn.icon { min-width: 40px; min-height: 40px; font-size: 20px; }
+.se-controls .btn.icon { min-width: 44px; min-height: 44px; font-size: 20px; }
 .se-scale-val { min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 14px; }
 
 /* Output-resolution toggle */
@@ -1759,7 +1761,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .if-preview-acts { display: flex; gap: 6px; margin-left: auto; }
 .if-preview-errs { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .if-preview-err { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--danger, #c0392b); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-.if-preview-err .btn { flex: none; }
+.if-preview-err .btn { flex: none; min-height: 44px; }
 .if-commit-actions { display: flex; gap: 10px; margin-top: 14px; }
 .if-commit-actions .btn { flex: 1; justify-content: center; }
 .if-committed { font-size: 13px; font-weight: 700; color: var(--ok); }
@@ -1840,7 +1842,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-line-edit .po-line-controls { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
 .po-line-size { display: flex; flex-direction: column; gap: 2px; }
 .po-line-size .sz { width: 74px; padding: 8px 10px; text-align: center; }
-.po-line-edit .qty-stepper .step { min-width: 40px; min-height: 40px; }
+.po-line-edit .qty-stepper .step { min-width: 44px; min-height: 44px; }
 .po-line-edit .qty-val { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
 .po-line-edit .remove { margin-left: auto; min-width: 40px; min-height: 40px; }
 .po-box-actions { display: flex; gap: 8px; margin-top: 12px; }
@@ -1887,7 +1889,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-manifest-size.off { opacity: 0.55; }
 .po-check { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 140px; min-height: 40px; cursor: pointer; }
 .po-check input { width: 22px; height: 22px; flex: none; }
-.po-manifest .qty-stepper .step { min-width: 40px; min-height: 40px; }
+.po-manifest .qty-stepper .step { min-width: 44px; min-height: 44px; }
 .po-size-lbl { font-size: 14px; }
 .po-flag { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .po-flag.short { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }
@@ -1913,7 +1915,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .rc-actions .btn { flex: 1; min-width: 160px; }
 
 /* ---- PO Phase 4: shipment tracking display (supplier view) ---- */
-.po-track-refresh { margin-top: 10px; }
+.po-track-refresh { margin-top: 10px; min-height: 44px; }
+.po-track-refresh-one { margin-top: 10px; min-height: 44px; }
 .po-track-status { margin: 8px 0 0; }
 .po-track-carrier { font-weight: 600; color: var(--text); }
 .po-track-checkpoint { margin-top: 2px; }

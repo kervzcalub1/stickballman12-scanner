@@ -21,6 +21,11 @@ import { photoSourceForRole } from '../_lib/photos.js';
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
 const MAX_BYTES = 12 * 1024 * 1024;
 const PREVIEW_SIZE = 900; // review-grid resolution (final commit renders at the chosen size)
+// Wall-clock budget for the whole job loop. Under a sustained Replicate throttle a single
+// cutout can retry for ~2 min; without a cap a 5-shoe batch could run 10+ min in one HTTP
+// request (gateway drops the connection, client gets nothing). Once exceeded, remaining
+// jobs short-circuit to a "still busy, re-run" error instead of blocking.
+const BRAND_BUDGET_MS = 100_000;
 const fetchable = (url) => isAllowedSourceImageUrl(url) || isAllowedPhotoUrl(url);
 const toDataUri = (buf) => `data:image/jpeg;base64,${buf.toString('base64')}`;
 const numOrNull = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -41,7 +46,9 @@ export default async function handler(req, res) {
   const sku = normSku(body.sku);
   if (!sku) return send(res, 400, { ok: false, error: 'A valid SKU is required.' });
   const title = String(body.title || '').trim().slice(0, 120) || sku;
-  const safeSku = sku.replace(/[^A-Za-z0-9._-]/g, '_');
+  // Neutralize anything outside a safe key charset AND collapse `..` runs (defense-in-depth
+  // for the R2 key, even though R2 keys are a flat namespace with no traversal semantics).
+  const safeSku = sku.replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.{2,}/g, '_');
   const createdBy = user.name || user.username || '';
   const picks = Array.isArray(body.picks) ? body.picks.slice(0, 5) : [];
   const outSize = Number(body.size) === 1400 ? 1400 : 1600;
@@ -70,16 +77,27 @@ export default async function handler(req, res) {
   const jobs = [];
 
   for (const pick of picks) {
-    const angle = ANGLE_TEMPLATE[pick?.angle] ? pick.angle : null;
+    // Own-property lookup only — a plain-object bracket access would treat "__proto__" etc. as a valid angle.
+    const angle = pick?.angle && Object.hasOwn(ANGLE_TEMPLATE, pick.angle) ? pick.angle : null;
     const url = String(pick?.url || '');
-    // A "precut" pick reuses a staged cutout (from a preview / the canvas editor) and its
-    // exact { dx,dy,dw,dh } placement — no re-cut, no re-fit.
-    const precut = pick?.precut === true && isAllowedPhotoUrl(url);
-    const t = precut && pick?.transform && typeof pick.transform === 'object' ? pick.transform : null;
-    const transform = t && numOrNull(t.dw) && numOrNull(t.dh)
-      ? { dx: Number(t.dx), dy: Number(t.dy), dw: Number(t.dw), dh: Number(t.dh) } : null;
-    jobs.push(async () => {
+    // A "precut" pick reuses a staged cutout (from a preview / the canvas editor) and its exact
+    // { dx,dy,dw,dh } placement — no re-cut, no re-fit. It must be THIS SKU's staged cutout on
+    // our R2 host, not an arbitrary object under the bucket.
+    const claimedPrecut = pick?.precut === true;
+    const precut = claimedPrecut && isAllowedPhotoUrl(url) && url.includes(`/${safeSku}/_cut/`);
+    // Validate all four transform fields and bound them: dx/dy may be 0/negative; dw/dh
+    // must be > 0. Cap the magnitudes so an extreme scale can't hand a huge dimension to
+    // the canvas scaler (the target canvas is fixed W×W, but the source-scale path still
+    // shouldn't take an unbounded value from a non-admin caller).
+    const inBounds = (v, lo, hi) => v != null && v >= lo && v <= hi;
+    const t = pick?.transform && typeof pick.transform === 'object' ? pick.transform : null;
+    const dx = numOrNull(t?.dx), dy = numOrNull(t?.dy), dw = numOrNull(t?.dw), dh = numOrNull(t?.dh);
+    const transform = precut && inBounds(dx, -20000, 20000) && inBounds(dy, -20000, 20000)
+      && inBounds(dw, 1, 20000) && inBounds(dh, 1, 20000) ? { dx, dy, dw, dh } : null;
+    // A fresh pick runs the (throttle-prone) AI cutout; precut/spec/welcome jobs are cheap.
+    jobs.push({ slot: angle || pick?.angle || null, heavy: !precut, run: async () => {
       if (!angle) return { slot: pick?.angle || null, ok: false, error: 'Invalid angle.' };
+      if (claimedPrecut && !precut) return { slot: angle, ok: false, error: 'Cutout reference is not valid for this SKU.' };
       if (!fetchable(url)) return { slot: angle, ok: false, error: 'Image URL is not on an allowed host.' };
       try {
         let shoeBuffer, cutoutUrl = precut ? url : null, bbox = null;
@@ -87,6 +105,7 @@ export default async function handler(req, res) {
           const resp = await fetchWithTimeout(url, { headers: { accept: 'image/*' } }, 15000);
           if (!resp.ok) return { slot: angle, ok: false, error: `Cutout returned ${resp.status}.` };
           shoeBuffer = Buffer.from(await resp.arrayBuffer());
+          if (!shoeBuffer.length || shoeBuffer.length > MAX_BYTES) return { slot: angle, ok: false, error: 'Cutout is empty or too large.' };
         } else {
           // Fresh pick: pull the full-res GOAT rendition, cut it out ONCE, stage the PNG.
           const resp = await fetchWithTimeout(hiResSourceUrl(url), { headers: { accept: 'image/*' } }, 15000);
@@ -108,11 +127,11 @@ export default async function handler(req, res) {
             ? 'Background remover is rate-limited (Replicate < $5 credit). Wait a moment and re-run this shoe.'
             : 'Could not cut out this shoe — try again.' };
       }
-    });
+    } });
   }
 
   if (body.includeSpec) {
-    jobs.push(async () => {
+    jobs.push({ slot: 'spec', heavy: false, run: async () => {
       try {
         const spec = await kicksdbSpecData(sku);
         const bullets = specBulletsFromDescription(spec.description, spec.colorway);
@@ -120,23 +139,35 @@ export default async function handler(req, res) {
         if (commit) return { slot: 'spec', ok: true, url: await storeFinal('extra1', branded), bullets };
         return { slot: 'spec', ok: true, preview: toDataUri(branded), bullets };
       } catch (e) { console.error('[images/brand] spec', e.message); return { slot: 'spec', ok: false, error: 'Could not build the spec slide.' }; }
-    });
+    } });
   }
 
   if (body.includeWelcome) {
-    jobs.push(async () => {
+    jobs.push({ slot: 'welcome', heavy: false, run: async () => {
       try {
         const branded = await welcomeSlide({ outSize: renderSize });
         if (commit) return { slot: 'welcome', ok: true, url: await storeFinal('extra2', branded) };
         return { slot: 'welcome', ok: true, preview: toDataUri(branded) };
       } catch (e) { console.error('[images/brand] welcome', e.message); return { slot: 'welcome', ok: false, error: 'Could not add the welcome slide.' }; }
-    });
+    } });
   }
 
   // Sequentially — each AI cutout is CPU/network-bound; parallel jobs don't finish faster
   // and starve each other's I/O. (Only the fresh preview pass cuts; adjust/commit reuse.)
+  // A wall-clock budget bails the rest once a throttle has eaten too much time, so the
+  // client always gets a response (with partial results) instead of a dropped connection.
+  const deadline = Date.now() + BRAND_BUDGET_MS;
   const results = [];
-  for (const job of jobs) results.push(await job());
+  for (const job of jobs) {
+    // Only bail the throttle-prone cutout jobs once the budget is spent; the cheap
+    // spec/welcome (and precut adjust/commit) jobs still run so they're never dropped.
+    if (job.heavy && Date.now() > deadline) {
+      results.push({ slot: job.slot, ok: false, throttled: true,
+        error: 'Timed out waiting on the background remover (it may be rate-limited). Re-run the remaining shoes.' });
+      continue;
+    }
+    results.push(await job.run());
+  }
   const saved = results.filter((r) => r.ok).length;
   return send(res, 200, { ok: saved > 0, mode: commit ? 'commit' : 'preview', saved, results });
 }

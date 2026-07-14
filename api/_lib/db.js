@@ -1715,8 +1715,9 @@ export async function updatePoLine(lineId, { size, qty } = {}) {
       WHERE po_box_id = ${line.po_box_id} AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
     `)[0];
     if (sib) {
+      const mergedQty = Math.min(999, sib.qty_expected + newQty); // same 999 cap as a direct edit
       const merged = (await sql`
-        UPDATE po_lines SET qty_expected = ${sib.qty_expected + newQty}, updated_at = now()
+        UPDATE po_lines SET qty_expected = ${mergedQty}, updated_at = now()
         WHERE id = ${sib.id} RETURNING *
       `)[0];
       await sql`DELETE FROM po_lines WHERE id = ${lineId}`;

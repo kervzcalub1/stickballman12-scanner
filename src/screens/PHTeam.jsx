@@ -88,7 +88,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           <button className="home-card" onClick={() => goPage('imagefinder')}>
             <span className="home-card-icon"><NavIcon name="image" /></span>
             <span className="home-card-title">Image Finder</span>
-            <span className="home-card-sub">Auto-source listing photos from StockX by SKU — pick angles from the 360° spin, saved as edited photos</span>
+            <span className="home-card-sub">Build a branded listing set by SKU — cut out &amp; place each shoe on the template, review, then upload</span>
           </button>
           <button className="home-card" onClick={() => goPage('inquiry')}>
             <span className="home-card-icon"><NavIcon name="inventory" /></span>

@@ -44,8 +44,11 @@ labels** (one tracking number each); it closes only when every label is shipped.
   via **17TRACK**, behind a thin adapter (`api/_lib/tracking.js`) that **no-ops unless
   `TRACKING_API_KEY` is set**. On ship, `po/ship` registers the label's number; status lands
   either by **webhook push** (`POST /api/po/tracking-webhook?secret=…`, gated by
-  `TRACKING_WEBHOOK_SECRET`) or an **on-demand pull** (`POST /api/po/track-refresh` {poId},
-  warehouse/ph). Both write `carrier` / `tracking_status` / `last_checkpoint` / `checked_at`
+  `TRACKING_WEBHOOK_SECRET`) or an **on-demand pull** (`POST /api/po/track-refresh`
+  `{poId, poBoxId?}`, warehouse/ph/supplier). Omit `poBoxId` → refresh **every** label
+  (one lookup per tracking number); pass it → refresh just **that one** label (fewer
+  tracking-API credits). Supplier portal has **Refresh all tracking** + a per-label
+  **Refresh this label** button on each shipped label. Both write `carrier` / `tracking_status` / `last_checkpoint` / `checked_at`
   and advance `po_boxes.status` (17TRACK status → shipped/in_transit/delivered via
   `mapBoxStatus`). Supplier portal shows per-label status + a "Refresh tracking" button.
   Env: `TRACKING_API_KEY`, `TRACKING_WEBHOOK_SECRET` (see `.env.example`). Live register/

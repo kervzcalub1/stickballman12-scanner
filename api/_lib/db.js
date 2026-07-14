@@ -1697,6 +1697,39 @@ export async function setPoLineQty(lineId, qtyExpected) {
   `)[0] || null;
 }
 
+// Edit an expected line's size and/or qty (supplier fixing a scan). `size`/`qty`
+// are each optional (undefined = leave as-is). qty <= 0 removes the line. Changing
+// the size can collide with an existing line of the same SKU+size on the label
+// (unique po_box_id,sku,size) — in that case the two are MERGED (qtys summed) and
+// this line is deleted. Returns { line, removed, merged }.
+export async function updatePoLine(lineId, { size, qty } = {}) {
+  const sql = db();
+  const line = (await sql`SELECT * FROM po_lines WHERE id = ${lineId}`)[0];
+  if (!line) return { line: null, removed: false, merged: false };
+  const newQty = qty === undefined ? line.qty_expected : qty;
+  if (newQty <= 0) { await sql`DELETE FROM po_lines WHERE id = ${lineId}`; return { line: null, removed: true, merged: false }; }
+  const newSize = size === undefined ? line.size : String(size).trim();
+  if (newSize && newSize !== line.size) {
+    const sib = (await sql`
+      SELECT * FROM po_lines
+      WHERE po_box_id = ${line.po_box_id} AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
+    `)[0];
+    if (sib) {
+      const merged = (await sql`
+        UPDATE po_lines SET qty_expected = ${sib.qty_expected + newQty}, updated_at = now()
+        WHERE id = ${sib.id} RETURNING *
+      `)[0];
+      await sql`DELETE FROM po_lines WHERE id = ${lineId}`;
+      return { line: merged, removed: false, merged: true };
+    }
+  }
+  const updated = (await sql`
+    UPDATE po_lines SET size = ${newSize}, qty_expected = ${newQty}, updated_at = now()
+    WHERE id = ${lineId} RETURNING *
+  `)[0] || null;
+  return { line: updated, removed: false, merged: false };
+}
+
 export async function deletePoLine(lineId) {
   const sql = db();
   await sql`DELETE FROM po_lines WHERE id = ${lineId}`;

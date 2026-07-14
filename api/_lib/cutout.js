@@ -181,9 +181,13 @@ async function cutoutReplicate(buffer) {
   // Pass the shoe bytes inline as a data URI — no need to host/upload it first.
   const dataUri = `data:image/png;base64,${buffer.toString('base64')}`;
   const body = JSON.stringify({ version, input: { image: dataUri, format: 'png' } });
-  // Retry on 429: Replicate throttles hard (6/min, burst 1) while account credit < $5,
-  // and Brand & Fill fires cutouts back-to-back. Without this a throttled request would
-  // fall through to the threshold cutout (which leaves a background box). Wait + retry.
+  // Retry on 429 (and transient 503): Replicate throttles HARD — **6 req/min, burst 1,
+  // while the account has < $5 of credit** — and Brand & Fill fires cutouts back-to-back.
+  // A 429 is rejected at the gate (no prediction is created, so it never shows in the
+  // Replicate dashboard) and would otherwise fall through to the threshold cutout, which
+  // leaves the source image's baked "land effect" shadow. Wait + retry long enough to ride
+  // out a full throttle window (~60 s). The real fix is >= $5 credit (lifts the limit).
+  const RETRYABLE = new Set([429, 503]);
   let resp;
   for (let attempt = 0; ; attempt++) {
     resp = await fetchWithTimeout(
@@ -191,14 +195,18 @@ async function cutoutReplicate(buffer) {
       { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'wait' }, body },
       70000, // > the 60s server-side `Prefer: wait` window
     );
-    if (resp.status !== 429 || attempt >= 4) break;
+    if (!RETRYABLE.has(resp.status) || attempt >= 7) break;
     const retryAfter = Number(resp.headers.get('retry-after'));
-    const waitS = Math.min(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 3 * (attempt + 1), 15);
+    const waitS = Math.min(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 4 * (attempt + 1), 30);
+    console.warn(`[cutout] replicate ${resp.status} (throttled) — retry ${attempt + 1}/7 in ${waitS}s`);
     await new Promise((r) => setTimeout(r, waitS * 1000));
   }
   if (!resp.ok) {
     const detail = await resp.text().catch(() => '');
-    throw new Error(`replicate create ${resp.status} ${detail.slice(0, 200)}`);
+    const throttled = resp.status === 429;
+    const err = new Error(`replicate create ${resp.status} ${detail.slice(0, 200)}`);
+    err.throttled = throttled;
+    throw err;
   }
   let pred = await resp.json();
   // Poll to a terminal state if `Prefer: wait` returned before completion.

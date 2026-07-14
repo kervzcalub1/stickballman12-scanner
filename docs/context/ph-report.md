@@ -236,12 +236,46 @@ source, no schema change — so found images behave exactly like hand-edited upl
    image to (re)assign it. Each slot also has **Upload** — a PH photo for a blank/any angle
    (raw → R2 via `photoSign`, then the slot points at that R2 URL). Editable **title** field
    (pre-filled from the API name) is stamped on every branded slide.
-4. **Brand & Fill** → `POST /api/images/brand { sku, title, picks, includeSpec, includeWelcome }`
-   (`requireRole(['ph_team'])`). For each pick: fetch the image (SSRF-allowlisted to
-   `image.goat.com`/`images.stockx.com` **or** our own R2 host, for uploads) → composite onto the
-   Stickballman12 template with name+SKU → R2 → `setProductPhoto(source='ph_edited')`. Runs all
-   slides **concurrently**. Slots map to templates: side→1, diagonal→2, top→3, outsole→4, rear→5;
-   **spec slide→6** (extra1); **welcome→7** (extra2, static). Per-slot ✓/! in the UI.
+4. **Brand & Fill = PREVIEW, then Upload = COMMIT** (the flow is *find → angles → Brand & Fill →
+   review/adjust → Upload → Download*; nothing is saved until Upload).
+   `POST /api/images/brand { sku, title, picks, includeSpec, includeWelcome, size, mode }`
+   (`requireRole(['ph_team'])`), run **sequentially** (each AI cutout is CPU/network-bound):
+   - **`mode:'preview'` (Brand & Fill)** — for each shoe pick: fetch (SSRF-allowlisted to
+     `image.goat.com`/`images.stockx.com` **or** our R2 host) → **cut out ONCE** (`cutoutForEdit`)
+     → **stage** the transparent PNG on R2 → composite onto the template (name+SKU) at a small
+     **preview size (900²)** → return the slide as a **data-URI** plus its `cutoutUrl` + `bbox`.
+     Spec + welcome likewise. **Nothing is persisted to `product_photos`.** Slots→templates:
+     side→1, diagonal→2, top→3, outsole→4, rear→5; **spec→6** (extra1); **welcome→7** (extra2).
+   - **Adjust (live position & resize editor)**: each **preview** shoe slide has an **Adjust size**
+     button opening `ShoeEditor` — a Canva-style overlay that reuses the slide's staged `cutoutUrl`
+     + `bbox` (**no re-cut**), draws it over a lightweight template preview
+     (`src/components/ImageTemplate/previews/{1..5}.jpg`, ~200 KB — the real templates are 5 MB), and
+     lets PH **drag / drag a corner handle / pinch / scroll / slider-scale**. Geometry is in the
+     **1600² design space**; save emits `{ dx,dy,dw,dh }`. The client re-runs `mode:'preview'` for
+     just that slot (precut) to refresh its thumbnail (`edits[angle]` holds the transform).
+   - **Cutout (per-shoe re-cut)**: every preview shoe slide (and every failed shoe in the error list)
+     has a **Cutout** button (`recutSlot`) that re-sends the shoe's **original** source image
+     (`picks[slot]`, NOT the staged cutout) through a fresh `mode:'preview'` render → new Replicate
+     cutout + new staged PNG, re-rendering just that slide. For a shoe that got 429'd or cut poorly.
+     A fresh cut has a new shape, so its prior size adjustment (`edits[slot]`) is dropped.
+   - **`mode:'commit'` (Upload to server)** — the picks now carry the staged `cutoutUrl`
+     (`precut:true`) + each slot's `transform`; re-render at full `size` (**no re-cut**), upload the
+     final JPEG to R2, and `setProductPhoto(source='ph_edited')`. Then **Download all** zips them
+     (`api.photoDownload`, enabled after Upload). `brandPhoto` with `precut` loads the transparent
+     PNG as-is and honours the transform (auto-fit when null) — identical bytes → identical bbox, so
+     the preview == the saved result.
+   - **Output size** (`size`): **1600** (design size, default) or **1400** (eBay's recommendation) —
+     the *commit* render size. Everything renders at 1600 then `encodeJpeg` resamples to the chosen
+     size, so composition is pixel-identical; only resolution differs (`OUTPUT_SIZES`; `clampOutSize`
+     accepts 200–2000 so the 900 preview passes through).
+   - **Cutout reliability (no "land effect")**: a Replicate **429** (throttle at < $5 credit) is
+     rejected before a prediction exists (invisible in the dashboard). `cutoutReplicate` now retries
+     up to 7× honouring `Retry-After` (waits ≤30 s) to ride out the ~60 s window. If a **hosted**
+     provider still fails, `brandPhoto` **re-throws instead of using the colour-threshold fallback**
+     (`cutoutProvider() !== 'local'`) — the threshold cut leaves the source's baked reflection (the
+     "land effect"), so the slot reports a clear throttle error (`throttled`) rather than silently
+     saving a bad slide. Real fix = ≥ $5 Replicate credit. Staged cutout PNGs live at
+     `listings/<sku>/_cut/*.png` (reused across preview/adjust/commit; harmless orphans if abandoned).
    - **Branding engine** = `api/_lib/branding.js` using **`@napi-rs/canvas`** (registers the font
      files explicitly — same native binary on Railway; sharp's SVG renderer ignores `@font-face`,
      so it was dropped). Templates in `src/components/ImageTemplate/{1..7}.png` (1600²); fonts in
@@ -252,7 +286,12 @@ source, no schema change — so found images behave exactly like hand-edited upl
      `assets/branding/models/`, ~50s–2.5min/image), falling back to the old colour-threshold
      flood-fill only if the model is unavailable. Spec bullets = `specBulletsFromDescription()` heuristic over
      the marketplace description + `colorway` from the API (no structured spec feed; Claude
-     extraction would be sharper but needs an `ANTHROPIC_API_KEY`, none configured).
+     extraction would be sharper but needs an `ANTHROPIC_API_KEY`, none configured). On the spec
+     slide each bullet **word-wraps** to `SPEC.maxW` (a long colorway spans multiple lines and
+     pushes later bullets down, instead of running off the slide). Layout is tunable in the
+     **Spec Slide Playground** (a self-contained HTML artifact: real template-6 background on a
+     canvas mirroring the pipeline's draw math, sliders → px to paste into the `SPEC`/`TITLE`/`SKU`
+     constants).
    - **Output quality**: JPEG q**90** (napi-canvas quality is 0–100, not 0–1 — the trap that
      first shipped 30 KB images), 96 DPI (`encodeJpeg` patches the JFIF header), and the shoe is
      fetched from GOAT's **`/original/`** rendition (`hiResSourceUrl`), not the soft `/medium/`

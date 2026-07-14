@@ -33,6 +33,20 @@ export function SupplierApp({ user, onSignOut }) {
   const [scanBox, setScanBox] = useState(null); // po_box currently being scanned into
   const [closeReview, setCloseReview] = useState(null); // po_box being reviewed before closing
   const [busy, setBusy] = useState(false);
+  const [lineBusy, setLineBusy] = useState(null); // po_line id currently being saved
+
+  // Edit an already-scanned line (size and/or qty) while its label is still filling.
+  // qty:0 removes it. The server merges a size change into a matching SKU+size line.
+  const patchLine = async (line, patch) => {
+    setLineBusy(Number(line.id)); setError('');
+    try {
+      await api.poLine(Number(line.id), patch);
+      refreshDetail();
+    } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      setError(e.message);
+    } finally { setLineBusy(null); }
+  };
 
   const loadList = () => {
     api.poList()
@@ -189,14 +203,23 @@ export function SupplierApp({ user, onSignOut }) {
                   )}
 
                   {lines.length > 0 && (
-                    <ul className="po-lines">
-                      {lines.map((l) => (
-                        <li key={l.id}>
-                          <span className="po-line-name">{l.name || l.sku}</span>
-                          <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    isFilling ? (
+                      <ul className="po-lines po-lines-edit">
+                        {lines.map((l) => (
+                          <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)}
+                            onSave={(patch) => patchLine(l, patch)} />
+                        ))}
+                      </ul>
+                    ) : (
+                      <ul className="po-lines">
+                        {lines.map((l) => (
+                          <li key={l.id}>
+                            <span className="po-line-name">{l.name || l.sku}</span>
+                            <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )
                   )}
 
                   {isFilling && (
@@ -251,6 +274,44 @@ export function SupplierApp({ user, onSignOut }) {
         );
       })()}
     </div>
+  );
+}
+
+// One editable scanned line on a still-filling label: rename-free, but the size can be
+// corrected and the qty nudged (or the line removed at ×0). Size commits on blur/Enter;
+// qty posts on each ± tap. The parent reloads the PO after each save.
+function PoLineRow({ line, disabled, onSave }) {
+  const [size, setSize] = useState(String(line.size ?? ''));
+  useEffect(() => { setSize(String(line.size ?? '')); }, [line.size]);
+  const commitSize = () => {
+    const v = size.trim();
+    if (!v || v === String(line.size)) { setSize(String(line.size ?? '')); return; }
+    onSave({ size: v });
+  };
+  return (
+    <li className="po-line-edit">
+      <div className="po-line-head">
+        <span className="po-line-name">{line.name || line.sku}</span>
+        <span className="po-line-meta">{line.sku}</span>
+      </div>
+      <div className="po-line-controls">
+        <label className="po-line-size">
+          <span className="muted xs">Size</span>
+          <input className="sz" value={size} disabled={disabled} inputMode="decimal"
+            onChange={(e) => setSize(e.target.value)} onBlur={commitSize}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} />
+        </label>
+        <div className="qty-stepper">
+          <button type="button" className="btn icon ghost step" disabled={disabled || line.qty_expected <= 1}
+            onClick={() => onSave({ qty: line.qty_expected - 1 })}>−</button>
+          <span className="qty-val">×{line.qty_expected}</span>
+          <button type="button" className="btn icon ghost step" disabled={disabled}
+            onClick={() => onSave({ qty: line.qty_expected + 1 })}>+</button>
+        </div>
+        <button type="button" className="btn icon ghost remove" title="Remove item" disabled={disabled}
+          onClick={() => onSave({ qty: 0 })}>×</button>
+      </div>
+    </li>
   );
 }
 

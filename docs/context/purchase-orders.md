@@ -73,7 +73,11 @@ scoped to own POs on every one; admin/superadmin auto-allowed):
 - `list` / `get` — ph_team/warehouse/admin see all; supplier only their own.
 - `scan` (supplier) — add/increment a `po_lines` row under a label; **only** while the PO is
   `draft` and the label `pending`. Writes po tables only — never the receiving commit path.
-- `line` (supplier) — adjust/remove a line qty (only while the label is `pending`).
+- `line` (supplier) — edit an already-scanned line's **size and/or qty** (`{ lineId, size?, qty? }`;
+  qty ≤ 0 removes it), only while the PO is `draft` and the label is `pending`. Changing the size
+  into an existing SKU+size line on the same label **merges** them (`updatePoLine`, respecting the
+  unique `(po_box_id, sku, size)`). Surfaced as inline size input + qty stepper + remove on each
+  line of a still-filling box in `SupplierApp` (`PoLineRow`); read-only once packed/shipped.
 - `close-box` (supplier) — review then close a label for shipment: `pending` → `packed`
   (needs ≥1 item). Editing (scan/line) is blocked while `packed`.
 - `reopen-box` (supplier) — `packed` → `pending`, to keep editing before shipping.

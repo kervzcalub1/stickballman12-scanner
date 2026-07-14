@@ -116,9 +116,13 @@ export const api = {
   // the picked angles into R2 as ph_edited listing photos.
   imageFinderSearch: (sku) => get(`/api/images/search?sku=${encodeURIComponent(sku)}`),
   imageFinderImport: (sku, picks) => post('/api/images/import', { sku, picks }),
+  // Cut a shoe out for the live position/resize editor → { cutoutUrl, bbox, width, height }.
+  imageFinderCutout: (sku, url) => post('/api/images/cutout', { sku, url }),
   // Brand & Fill — composite picks onto the template with name+SKU, + spec + welcome.
-  imageFinderBrand: (sku, title, picks, includeSpec, includeWelcome) =>
-    post('/api/images/brand', { sku, title, picks, includeSpec, includeWelcome }),
+  // `size` = output resolution (1600 default, or 1400 for eBay's recommendation).
+  // `mode` = 'preview' (data-URI results, nothing saved) or 'commit' (persist to R2).
+  imageFinderBrand: (sku, title, picks, includeSpec, includeWelcome, size, mode = 'preview') =>
+    post('/api/images/brand', { sku, title, picks, includeSpec, includeWelcome, size, mode }),
   reserveVins: (count, dateReceived) => post('/api/vins/reserve', { count, dateReceived }),
   batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
@@ -166,7 +170,7 @@ export const api = {
   poList: () => get('/api/po/list'),
   poGet: (id) => get(`/api/po/get?id=${encodeURIComponent(id)}`),
   poScan: (payload) => post('/api/po/scan', payload),
-  poLine: (lineId, qty) => post('/api/po/line', { lineId, qty }),
+  poLine: (lineId, patch) => post('/api/po/line', { lineId, ...patch }),
   poCloseBox: (poBoxId) => post('/api/po/close-box', { poBoxId }),
   poReopenBox: (poBoxId) => post('/api/po/reopen-box', { poBoxId }),
   poShip: (poBoxId) => post('/api/po/ship', { poBoxId }),

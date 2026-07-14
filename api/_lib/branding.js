@@ -9,13 +9,20 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
-import { cutoutToPng } from './cutout.js';
+import { cutoutToPng, cutoutProvider } from './cutout.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const TEMPLATE_DIR = path.join(ROOT, 'src/components/ImageTemplate');
 const FONT_DIR = path.join(ROOT, 'assets/branding/fonts');
 
+// All layout/geometry is authored in this 1600×1600 design space; a smaller output
+// (e.g. eBay's recommended 1400²) is produced by resampling the finished canvas, so
+// the composition is pixel-identical, just a different resolution.
 const W = 1600;
+export const OUTPUT_SIZES = [1400, 1600]; // client-selectable final sizes (eBay rec = 1400)
+// Accept any sane square size (the endpoint also uses a smaller internal preview size);
+// anything out of range falls back to the 1600 design size.
+const clampOutSize = (n) => { const v = Math.round(Number(n)); return Number.isFinite(v) && v >= 200 && v <= 2000 ? v : W; };
 // @napi-rs/canvas JPEG quality is 0–100 (NOT 0–1). 90 ≈ Canva's export (~0.8–1 MB).
 const JPEG_QUALITY = 90;
 // Placement (validated against the sample): shoe centered in the chalk box; title
@@ -27,13 +34,22 @@ const SHOE_BOX = { cx: 800, cy: 812, w: 1050, h: 770 };
 const SHOE_SHADOW = { offsetX: 28, offsetY: 30, blur: 42, color: 'rgba(0,0,0,0.78)' };
 const TITLE = { cx: 800, topY: 188, size: 80, maxW: 1010, lineGap: 12, maxLines: 2 };
 const SKU = { cx: 800, y: 1476, size: 104 };
-const SPEC = { startX: 300, startY: 560, lineH: 118, size: 58, bulletR: 9, gap: 42 };
+// contLineH = spacing between wrapped continuation lines within ONE bullet; maxW =
+// right edge for wrapping (long colorways wrap here). outlineWidth/outlineColor draw a
+// stroke around the bullet text (0 = off). All tuned in the spec playground.
+const SPEC = { startX: 300, startY: 500, lineH: 118, size: 96, bulletR: 9, gap: 42, contLineH: 90, maxW: 1000, outlineWidth: 5, outlineColor: '#000000' };
 
 // Encode the canvas to JPEG and stamp the JFIF density to 96 DPI (Canva parity).
 // napi-canvas writes units=0/density=1 (which tools read as 72 DPI); we patch the
 // APP0 header bytes — units→1 (inch), X/Y density→96. Pixel data is untouched.
-function encodeJpeg(canvas) {
-  const buf = canvas.toBuffer('image/jpeg', JPEG_QUALITY);
+function encodeJpeg(canvas, outSize = W) {
+  let src = canvas;
+  if (outSize !== W) {
+    const c = createCanvas(outSize, outSize);
+    c.getContext('2d').drawImage(canvas, 0, 0, outSize, outSize); // high-quality downscale
+    src = c;
+  }
+  const buf = src.toBuffer('image/jpeg', JPEG_QUALITY);
   if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF && buf[3] === 0xE0
     && buf.toString('latin1', 6, 11) === 'JFIF\0') {
     buf[13] = 1;                         // units = dots per inch
@@ -113,6 +129,20 @@ function cutoutFallback(shoeImg) {
   return { canvas: c, bbox: { x: minX, y: minY, w: maxX - minX, h: maxY - minY } };
 }
 
+// Greedy word-wrap to a max pixel width, unbounded lines (for left-aligned spec
+// bullets — a long colorway wraps instead of running off the slide).
+function wrapGreedy(ctx, text, maxW) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  if (!words.length) return [''];
+  const lines = []; let cur = '';
+  for (const w of words) {
+    const t = cur ? `${cur} ${w}` : w;
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
 function wrapLines(ctx, text, maxW, maxLines) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
   if (!words.length) return [];
@@ -171,7 +201,7 @@ function drawSku(ctx, sku) {
 }
 
 // Tight bounding box of an image's non-transparent pixels (via the alpha channel).
-function alphaBbox(img) {
+export function alphaBbox(img) {
   const c = createCanvas(img.width, img.height);
   const cx = c.getContext('2d');
   cx.drawImage(img, 0, 0);
@@ -184,42 +214,79 @@ function alphaBbox(img) {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
+// The default auto-fit placement (shoe bbox centered + scaled into SHOE_BOX). The
+// live editor starts from this and lets PH move/scale from here; a saved edit arrives
+// as an explicit { dx, dy, dw, dh } transform in 1600-space.
+export function fitShoeBox(bbox) {
+  const scale = Math.min(SHOE_BOX.w / bbox.w, SHOE_BOX.h / bbox.h);
+  const dw = bbox.w * scale, dh = bbox.h * scale;
+  return { dx: SHOE_BOX.cx - dw / 2, dy: SHOE_BOX.cy - dh / 2, dw, dh };
+}
+
+// Cut a shoe out and return { pngBuffer, bbox, width, height } for the live editor.
+// The editor draws this exact PNG, so the final brand reuses it (precut) and the
+// placement is truly WYSIWYG.
+export async function cutoutForEdit(shoeBuffer) {
+  const pngBuffer = await cutoutToPng(shoeBuffer);
+  const img = await loadImage(pngBuffer);
+  return { pngBuffer, bbox: alphaBbox(img), width: img.width, height: img.height };
+}
+
 // Brand one shoe angle: template N + cut-out shoe + title + SKU → JPEG buffer.
-export async function brandPhoto({ templateNum = 1, shoeBuffer, title, sku }) {
+// `precut` = shoeBuffer is ALREADY a transparent cutout (from the editor) — don't
+// re-cut it. `transform` = explicit { dx, dy, dw, dh } placement in 1600-space (from
+// the editor); when absent the shoe auto-fits the chalk box.
+export async function brandPhoto({ templateNum = 1, shoeBuffer, title, sku, outSize = W, precut = false, transform = null }) {
+  outSize = clampOutSize(outSize);
   ensureFonts();
   const canvas = createCanvas(W, W);
   const ctx = canvas.getContext('2d');
   ctx.drawImage(await loadImage(path.join(TEMPLATE_DIR, `${templateNum}.png`)), 0, 0, W, W);
   if (shoeBuffer) {
-    // Preferred: AI matte (clean edges, no halo/eaten parts). Falls back to the
-    // colour-threshold cutout only if the model is unavailable.
     let cut, bbox;
-    try {
-      const img = await loadImage(await cutoutToPng(shoeBuffer));
+    if (precut) {
+      // Already a transparent cutout — load as-is (identical bytes → identical bbox
+      // to what the editor measured, so its transform lines up exactly).
+      const img = await loadImage(shoeBuffer);
       cut = img; bbox = alphaBbox(img);
-    } catch (e) {
-      console.error('[branding] AI cutout failed, using fallback:', e.message);
-      const fb = cutoutFallback(await loadImage(shoeBuffer));
-      cut = fb.canvas; bbox = fb.bbox;
+    } else {
+      // Preferred: AI matte (clean edges, no halo/eaten parts).
+      try {
+        const img = await loadImage(await cutoutToPng(shoeBuffer));
+        cut = img; bbox = alphaBbox(img);
+      } catch (e) {
+        // The colour-threshold fallback removes the near-white bg but LEAVES the source's
+        // baked reflection ("land effect"). That's acceptable as a last resort when no AI
+        // provider is even configured (bare local dev), but when a hosted provider IS
+        // configured and just failed (usually a Replicate 429 throttle), shipping the
+        // land-effect image silently is worse than failing — so re-throw and let the slot
+        // report the error, so PH knows to retry rather than saving a bad slide.
+        if (cutoutProvider() !== 'local') { console.error('[branding] cutout failed (hosted provider):', e.message); throw e; }
+        console.error('[branding] AI cutout failed, using threshold fallback:', e.message);
+        const fb = cutoutFallback(await loadImage(shoeBuffer));
+        cut = fb.canvas; bbox = fb.bbox;
+      }
     }
-    const scale = Math.min(SHOE_BOX.w / bbox.w, SHOE_BOX.h / bbox.h);
-    const dw = bbox.w * scale, dh = bbox.h * scale;
-    const dx = SHOE_BOX.cx - dw / 2, dy = SHOE_BOX.cy - dh / 2;
+    const place = (transform && transform.dw > 0 && transform.dh > 0)
+      ? transform : fitShoeBox(bbox);
     // Drop shadow dialed in the Shadow Playground (see SHOE_SHADOW). With the clean AI
     // cutout there's no leftover API shadow to clash with, so this reads as one natural
     // shadow rather than the old "landing" artifact.
     ctx.save();
     applyShadow(ctx, SHOE_SHADOW);
-    ctx.drawImage(cut, bbox.x, bbox.y, bbox.w, bbox.h, dx, dy, dw, dh);
+    ctx.drawImage(cut, bbox.x, bbox.y, bbox.w, bbox.h, place.dx, place.dy, place.dw, place.dh);
     ctx.restore();
   }
   drawTitle(ctx, title);
   drawSku(ctx, sku);
-  return encodeJpeg(canvas);
+  return encodeJpeg(canvas, outSize);
 }
 
-// Brand the spec slide: template 6 + title + SKU + bullet list → JPEG buffer.
-export async function brandSpec({ title, sku, bullets = [] }) {
+// Brand the spec slide: template 6 + title + SKU + bullet list → JPEG buffer. Each
+// bullet wraps to SPEC.maxW (a long colorway spans multiple lines and pushes the
+// bullets below it down, instead of running off the edge of the slide).
+export async function brandSpec({ title, sku, bullets = [], outSize = W }) {
+  outSize = clampOutSize(outSize);
   ensureFonts();
   const canvas = createCanvas(W, W);
   const ctx = canvas.getContext('2d');
@@ -227,24 +294,36 @@ export async function brandSpec({ title, sku, bullets = [] }) {
   drawTitle(ctx, title);
   ctx.textAlign = 'left'; ctx.fillStyle = '#fff';
   ctx.font = `${SPEC.size}px SbSku`;
+  ctx.lineJoin = 'round'; ctx.miterLimit = 2;
+  const outline = SPEC.outlineWidth > 0;
+  const shadowOn = () => { ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 5; ctx.shadowOffsetX = 4; ctx.shadowOffsetY = 4; };
+  const shadowOff = () => { ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; };
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 5; ctx.shadowOffsetX = 4; ctx.shadowOffsetY = 4;
-  bullets.slice(0, 7).forEach((b, i) => {
-    const y = SPEC.startY + i * SPEC.lineH;
+  let y = SPEC.startY;
+  bullets.slice(0, 7).forEach((b) => {
+    const lines = wrapGreedy(ctx, String(b).toUpperCase(), SPEC.maxW);
+    shadowOn();
     ctx.beginPath(); ctx.arc(SPEC.startX, y - SPEC.size * 0.32, SPEC.bulletR, 0, Math.PI * 2); ctx.fill();
-    ctx.fillText(String(b).toUpperCase(), SPEC.startX + SPEC.gap, y);
+    lines.forEach((ln, li) => {
+      const ly = y + li * SPEC.contLineH;
+      // Outline first (crisp, no shadow), then the fill on top (with the drop shadow).
+      if (outline) { shadowOff(); ctx.lineWidth = SPEC.outlineWidth; ctx.strokeStyle = SPEC.outlineColor; ctx.strokeText(ln, SPEC.startX + SPEC.gap, ly); }
+      shadowOn(); ctx.fillText(ln, SPEC.startX + SPEC.gap, ly);
+    });
+    y += SPEC.lineH + (lines.length - 1) * SPEC.contLineH;
   });
   ctx.restore();
   drawSku(ctx, sku);
-  return encodeJpeg(canvas);
+  return encodeJpeg(canvas, outSize);
 }
 
 // The finished welcome slide is static — just return the template bytes.
-export async function welcomeSlide() {
+export async function welcomeSlide({ outSize = W } = {}) {
+  outSize = clampOutSize(outSize);
   const canvas = createCanvas(W, W);
   const ctx = canvas.getContext('2d');
   ctx.drawImage(await loadImage(path.join(TEMPLATE_DIR, `${WELCOME_TEMPLATE}.png`)), 0, 0, W, W);
-  return encodeJpeg(canvas);
+  return encodeJpeg(canvas, outSize);
 }
 
 // Best-effort spec bullets from the marketplace description + colorway. No structured
@@ -275,6 +354,6 @@ export function specBulletsFromDescription(description = '', colorway = '') {
   // Outsole — nearly all performance sneakers have one; default to rubber unless stated.
   if (has('gum outsole', 'gum rubber')) bullets.push('Gum Rubber Outsole');
   else bullets.push('Rubber Outsole');
-  if (colorway) bullets.push(`Colour: ${String(colorway).replace(/\//g, ' / ')}`);
+  if (colorway) bullets.push(`Colorway: ${String(colorway).replace(/\//g, ' / ')}`);
   return bullets;
 }

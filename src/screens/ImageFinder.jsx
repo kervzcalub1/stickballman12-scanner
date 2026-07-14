@@ -4,10 +4,15 @@
 // Fill" then composites each pick onto the Stickballman12 template with the name + SKU,
 // auto-builds the spec slide, and appends the static welcome slide — all saved as this
 // SKU's edited listing photos (source='ph_edited').
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, ShoeThumb, ImageZoomModal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import tpl1 from '../components/ImageTemplate/previews/1.jpg';
+import tpl2 from '../components/ImageTemplate/previews/2.jpg';
+import tpl3 from '../components/ImageTemplate/previews/3.jpg';
+import tpl4 from '../components/ImageTemplate/previews/4.jpg';
+import tpl5 from '../components/ImageTemplate/previews/5.jpg';
 
 // The 5 shoe-angle slots (templates 1–5), in listing order.
 const SLOTS = [
@@ -17,6 +22,8 @@ const SLOTS = [
   { angle: 'outsole', label: 'Sole' },
   { angle: 'rear', label: 'Heel' },
 ];
+// Lightweight template backgrounds for the editor (the real templates are 5 MB each).
+const TEMPLATE_PREVIEW = { side: tpl1, diagonal: tpl2, top: tpl3, outsole: tpl4, rear: tpl5 };
 const SLOT_LABEL = Object.fromEntries(SLOTS.map((s) => [s.angle, s.label]));
 // Labels + listing order for the branded preview (angles + the two extra slides).
 const RESULT_LABEL = { ...SLOT_LABEL, spec: 'Spec', welcome: 'Welcome' };
@@ -28,26 +35,37 @@ export function ImageFinder({ onHome, onSignOut }) {
   const [title, setTitle] = useState('');             // editable shoe name stamped on each slide
   const [picks, setPicks] = useState({});             // angle -> image url (gallery or uploaded)
   const [uploaded, setUploaded] = useState({});       // angle -> true (came from a PH upload)
+  const [editorSlot, setEditorSlot] = useState(null); // slot currently open in the position/resize editor
   const [activeSlot, setActiveSlot] = useState(SLOTS[0].angle);
   const [includeSpec, setIncludeSpec] = useState(true);
   const [includeWelcome, setIncludeWelcome] = useState(true);
+  const [outSize, setOutSize] = useState(1600);       // output resolution: 1600 or 1400 (eBay rec.)
   const [looking, setLooking] = useState(false);
   const [branding, setBranding] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [uploading, setUploading] = useState(false);  // committing the preview to R2
   const [uploadingSlot, setUploadingSlot] = useState(null);
   const [notConfigured, setNotConfigured] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [results, setResults] = useState(null);
-  const [previewIdx, setPreviewIdx] = useState(null); // index into `branded` for the zoom modal
+  // The reviewable preview set (nothing is saved until Upload). Keyed by slot.
+  const [preview, setPreview] = useState(null);       // { [slot]: {ok, preview(dataUri), cutoutUrl, bbox, error, throttled} }
+  const [edits, setEdits] = useState({});             // angle -> transform dialed on the canvas (post-preview)
+  const [regenSlot, setRegenSlot] = useState(null);   // slot being re-rendered after an adjust
+  const [committed, setCommitted] = useState(false);  // uploaded to R2 yet?
+  const [previewIdx, setPreviewIdx] = useState(null); // index into previewList for the zoom modal
   const fileRefs = useRef({});
+
+  // Any change to the source set (new SKU, re-assigned slot, upload) invalidates the
+  // rendered preview and its commit state.
+  const resetPreview = () => { setPreview(null); setEdits({}); setCommitted(false); setPreviewIdx(null); };
 
   async function lookUp(e) {
     e?.preventDefault();
     const sku = skuInput.trim();
     if (!sku) return;
     setLooking(true); setError(''); setNotice(''); setNotConfigured(false);
-    setProduct(null); setPicks({}); setUploaded({}); setResults(null); setActiveSlot(SLOTS[0].angle);
+    setProduct(null); setPicks({}); setUploaded({}); resetPreview(); setActiveSlot(SLOTS[0].angle);
     try {
       const { configured, product: p } = await api.imageFinderSearch(sku);
       if (configured === false) { setNotConfigured(true); return; }
@@ -65,10 +83,11 @@ export function ImageFinder({ onHome, onSignOut }) {
   function assignFrame(url) {
     setPicks((p) => ({ ...p, [activeSlot]: url }));
     setUploaded((u) => { const n = { ...u }; delete n[activeSlot]; return n; });
-    setResults(null);
+    resetPreview();
   }
   function toggleSlot(angle) {
     setActiveSlot(angle);
+    resetPreview();
     setPicks((p) => {
       if (p[angle]) { const n = { ...p }; delete n[angle]; return n; }
       const sug = (product?.suggestions || []).find((s) => s.angle === angle);
@@ -88,7 +107,7 @@ export function ImageFinder({ onHome, onSignOut }) {
       if (!put.ok) throw new Error('Upload failed. Try again.');
       setPicks((p) => ({ ...p, [angle]: publicUrl }));
       setUploaded((u) => ({ ...u, [angle]: true }));
-      setActiveSlot(angle); setResults(null);
+      setActiveSlot(angle); resetPreview();
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
@@ -99,23 +118,103 @@ export function ImageFinder({ onHome, onSignOut }) {
     () => SLOTS.filter((s) => picks[s.angle]).map((s) => ({ angle: s.angle, url: picks[s.angle] })),
     [picks],
   );
+  const slideCount = chosen.length + (includeSpec ? 1 : 0) + (includeWelcome ? 1 : 0);
   const canBrand = chosen.length > 0 || includeSpec || includeWelcome;
 
+  // Step 1 — Brand & Fill = PREVIEW: cut each shoe out once, place it on the template, and
+  // show the results. Nothing is saved yet; PH reviews (and can adjust) before uploading.
   async function brandFill() {
     if (!product || !canBrand) return;
-    setBranding(true); setError(''); setNotice(''); setResults(null);
+    setBranding(true); setError(''); setNotice(''); resetPreview();
     try {
-      const { saved, results: r } = await api.imageFinderBrand(product.sku, title.trim(), chosen, includeSpec, includeWelcome);
-      setResults(r || []);
-      if (saved > 0) setNotice(`Branded ${saved} slide${saved === 1 ? '' : 's'} for ${product.sku}.`);
-      else setError('Nothing was saved — see the errors below.');
+      const { results: r } = await api.imageFinderBrand(product.sku, title.trim(), chosen, includeSpec, includeWelcome, outSize, 'preview');
+      const bySlot = Object.fromEntries((r || []).map((x) => [x.slot, x]));
+      setPreview(bySlot);
+      const okCount = (r || []).filter((x) => x.ok).length;
+      const failed = (r || []).filter((x) => !x.ok);
+      if (okCount > 0) setNotice(`Previewed ${okCount} slide${okCount === 1 ? '' : 's'}. Adjust any shoe, then Upload to save.`);
+      if (failed.length) {
+        const throttled = failed.some((x) => x.throttled);
+        setError(`${failed.length} slide${failed.length === 1 ? '' : 's'} didn’t cut out${throttled
+          ? ' — Replicate is rate-limited (add ≥$5 credit or wait ~1 min), then re-run.'
+          : ' — see the ! badges and re-run.'}`);
+      } else if (okCount === 0) {
+        setError('Nothing previewed — see the errors below.');
+      }
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
     } finally { setBranding(false); }
   }
 
-  // Download every branded slide for this SKU as a zip (all ph_edited photos).
+  // Step 2 — a shoe was repositioned/resized on the canvas: re-render JUST that slide
+  // (reuses the staged cutout — no re-cut) and drop the new preview in.
+  async function adjustSave(slot, { cutoutUrl, bbox, transform }) {
+    setEditorSlot(null);
+    setEdits((e) => ({ ...e, [slot]: transform }));
+    setPreview((p) => ({ ...p, [slot]: { ...p?.[slot], cutoutUrl, bbox, adjusting: true } }));
+    setRegenSlot(slot); setError('');
+    try {
+      const { results: r } = await api.imageFinderBrand(
+        product.sku, title.trim(),
+        [{ angle: slot, url: cutoutUrl, precut: true, transform }],
+        false, false, outSize, 'preview',
+      );
+      const one = (r || [])[0];
+      if (one?.ok) setPreview((p) => ({ ...p, [slot]: { ...one, cutoutUrl, bbox } }));
+      else setError(one?.error || 'Could not re-render that slide.');
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setError(err.message);
+    } finally { setRegenSlot(null); }
+  }
+
+  // Re-cut ONE shoe: send its ORIGINAL source image back to Replicate for a fresh cutout
+  // (not the staged one) and re-render just that slide. For a shoe that got throttled (429)
+  // or cut out poorly. A fresh cutout has a new shape, so its prior size adjustment is dropped.
+  async function recutSlot(slot) {
+    const url = picks[slot];
+    if (!product || !url || !SHOE_SLOTS.has(slot)) return;
+    setRegenSlot(slot); setError(''); setNotice(''); setCommitted(false);
+    setEdits((e) => { const n = { ...e }; delete n[slot]; return n; });
+    setPreview((p) => ({ ...p, [slot]: { ...(p?.[slot] || {}) } }));
+    try {
+      const { results: r } = await api.imageFinderBrand(
+        product.sku, title.trim(),
+        [{ angle: slot, url }],   // fresh (NOT precut) → forces a new Replicate cutout
+        false, false, outSize, 'preview',
+      );
+      const one = (r || [])[0];
+      setPreview((p) => ({ ...p, [slot]: one || p[slot] }));
+      if (!one?.ok) setError(one?.error || 'Could not cut out that shoe — try again.');
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setError(err.message);
+    } finally { setRegenSlot(null); }
+  }
+
+  // Step 3 — Upload to server: commit the (possibly adjusted) set to R2 + the photo library,
+  // reusing each staged cutout + its dialed placement. No re-cut.
+  async function uploadToServer() {
+    if (!product || !preview) return;
+    const shoePicks = SLOTS.filter((s) => preview[s.angle]?.ok && preview[s.angle]?.cutoutUrl)
+      .map((s) => ({ angle: s.angle, url: preview[s.angle].cutoutUrl, precut: true, transform: edits[s.angle] || null }));
+    const spec = !!preview.spec?.ok, welcome = !!preview.welcome?.ok;
+    if (!shoePicks.length && !spec && !welcome) { setError('Nothing to upload.'); return; }
+    setUploading(true); setError(''); setNotice('');
+    try {
+      const { saved, results: r } = await api.imageFinderBrand(product.sku, title.trim(), shoePicks, spec, welcome, outSize, 'commit');
+      const failed = (r || []).filter((x) => !x.ok);
+      if (saved > 0) { setCommitted(true); setNotice(`Uploaded ${saved} slide${saved === 1 ? '' : 's'} for ${product.sku}.`); }
+      if (failed.length) setError(`${failed.length} slide${failed.length === 1 ? '' : 's'} failed to upload — try Upload again.`);
+      else if (saved === 0) setError('Nothing was uploaded.');
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setError(err.message);
+    } finally { setUploading(false); }
+  }
+
+  // Download every uploaded slide for this SKU as a zip (all ph_edited photos).
   async function downloadAll() {
     if (!product) return;
     setDownloading(true); setError('');
@@ -132,21 +231,25 @@ export function ImageFinder({ onHome, onSignOut }) {
   }
 
   const images = product?.images || [];
-  const resBySlot = useMemo(() => Object.fromEntries((results || []).map((r) => [r.slot, r])), [results]);
-  const branded = useMemo(
-    () => (results || []).filter((r) => r.ok && r.url)
-      .sort((a, b) => RESULT_ORDER.indexOf(a.slot) - RESULT_ORDER.indexOf(b.slot)),
-    [results],
+  // Ordered preview slides for the review grid + zoom (only the ones that rendered).
+  const previewList = useMemo(
+    () => RESULT_ORDER.map((slot) => (preview?.[slot]?.ok && preview[slot].preview ? { slot, ...preview[slot] } : null)).filter(Boolean),
+    [preview],
   );
+  const previewBad = useMemo(
+    () => RESULT_ORDER.map((slot) => (preview?.[slot] && !preview[slot].ok ? { slot, ...preview[slot] } : null)).filter(Boolean),
+    [preview],
+  );
+  const SHOE_SLOTS = new Set(SLOTS.map((s) => s.angle));
 
   return (
     <div className="app">
       <TopBar title="Image Finder" onHome={onHome} onSignOut={onSignOut} />
       <div className="card">
         <p className="muted sm">
-          Build a SKU’s branded listing set. Assign an angle by tapping a gallery photo, or <b>Upload</b> your own for a
-          blank slot. <b>Brand &amp; Fill</b> drops each onto your template with the name &amp; SKU, auto-builds the spec
-          slide, and adds the welcome slide.
+          Build a SKU’s branded listing set. Assign an angle by tapping a gallery photo, or <b>Upload</b> your own.
+          <b> Brand &amp; Fill</b> cuts each shoe out and drops it on your template (with the spec + welcome slides) as a
+          <b> preview</b> — resize any shoe on the canvas, then <b>Upload to server</b> and <b>Download</b>.
         </p>
 
         <form className="pi-lookup" onSubmit={lookUp}>
@@ -195,7 +298,6 @@ export function ImageFinder({ onHome, onSignOut }) {
             <div className="if-slots mt">
               {SLOTS.map((s) => {
                 const url = picks[s.angle];
-                const res = resBySlot[s.angle];
                 const on = !!url;
                 const busy = uploadingSlot === s.angle;
                 return (
@@ -205,7 +307,6 @@ export function ImageFinder({ onHome, onSignOut }) {
                     <div className="if-slot-frame">
                       {url ? <img src={url} alt={s.label} loading="lazy" /> : <span className="if-slot-empty">{busy ? 'Uploading…' : 'Empty'}</span>}
                       {uploaded[s.angle] && <span className="if-slot-tag">Uploaded</span>}
-                      {res && <span className={`if-slot-badge ${res.ok ? 'ok' : 'bad'}`}>{res.ok ? '✓' : '!'}</span>}
                     </div>
                     <div className="if-slot-foot">
                       <span className="if-slot-label">{s.label}</span>
@@ -245,54 +346,351 @@ export function ImageFinder({ onHome, onSignOut }) {
             {/* Extra slides. */}
             <div className="if-extras mt">
               <label className="if-check">
-                <input type="checkbox" checked={includeSpec} onChange={(e) => setIncludeSpec(e.target.checked)} />
+                <input type="checkbox" checked={includeSpec} onChange={(e) => { setIncludeSpec(e.target.checked); resetPreview(); }} />
                 <span>Spec slide <span className="muted sm">— colour + materials, auto-filled</span></span>
-                {resBySlot.spec && <span className={`if-slot-badge inline ${resBySlot.spec.ok ? 'ok' : 'bad'}`}>{resBySlot.spec.ok ? '✓' : '!'}</span>}
+                {preview?.spec && <span className={`if-slot-badge inline ${preview.spec.ok ? 'ok' : 'bad'}`}>{preview.spec.ok ? '✓' : '!'}</span>}
               </label>
               <label className="if-check">
-                <input type="checkbox" checked={includeWelcome} onChange={(e) => setIncludeWelcome(e.target.checked)} />
+                <input type="checkbox" checked={includeWelcome} onChange={(e) => { setIncludeWelcome(e.target.checked); resetPreview(); }} />
                 <span>Welcome slide <span className="muted sm">— static store intro</span></span>
-                {resBySlot.welcome && <span className={`if-slot-badge inline ${resBySlot.welcome.ok ? 'ok' : 'bad'}`}>{resBySlot.welcome.ok ? '✓' : '!'}</span>}
+                {preview?.welcome && <span className={`if-slot-badge inline ${preview.welcome.ok ? 'ok' : 'bad'}`}>{preview.welcome.ok ? '✓' : '!'}</span>}
               </label>
+            </div>
+
+            {/* Output resolution — 1600 (design size) or 1400 (eBay's recommendation). */}
+            <div className="if-res mt">
+              <span className="if-field-label">Output size</span>
+              <div className="if-res-toggle">
+                {[1600, 1400].map((s) => (
+                  <button type="button" key={s}
+                    className={`if-res-opt ${outSize === s ? 'sel' : ''}`.trim()}
+                    onClick={() => { setOutSize(s); setCommitted(false); }}>
+                    {s}×{s}{s === 1400 ? <span className="muted xs"> · eBay</span> : null}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="if-actions mt">
-              <button type="button" className="btn primary" disabled={branding || !canBrand} onClick={brandFill}>
-                <Icon name="image" /> {branding ? 'Branding…' : `Brand & Fill (${chosen.length + (includeSpec ? 1 : 0) + (includeWelcome ? 1 : 0)})`}
+              <button type="button" className="btn primary" disabled={branding || uploading || !canBrand} onClick={brandFill}>
+                <Icon name="image" /> {branding ? 'Rendering…' : preview ? `Re-render preview (${slideCount})` : `Brand & Fill (${slideCount})`}
               </button>
             </div>
 
-            {/* Preview + download the branded set. */}
-            {branded.length > 0 && (
+            {/* Review the preview set → adjust any shoe → Upload → Download. Nothing is
+                saved to the library until Upload. */}
+            {preview && (
               <div className="if-preview mt">
                 <div className="if-preview-head">
-                  <span className="if-preview-title">Branded set <span className="muted sm">· tap to view full size</span></span>
-                  <button type="button" className="btn sm" disabled={downloading} onClick={downloadAll}>
+                  <span className="if-preview-title">
+                    Preview <span className="muted sm">· tap a slide to zoom{previewList.some((r) => SHOE_SLOTS.has(r.slot)) ? ' · Adjust to resize a shoe' : ''}</span>
+                  </span>
+                  {committed && <span className="if-committed">✓ Uploaded</span>}
+                </div>
+
+                <div className="if-preview-grid">
+                  {previewList.map((r, i) => (
+                    <div key={r.slot} className="if-preview-item">
+                      <button type="button" className="if-preview-img" onClick={() => setPreviewIdx(i)}>
+                        <img src={r.preview} alt={RESULT_LABEL[r.slot] || r.slot} loading="lazy" />
+                        {regenSlot === r.slot && <span className="if-preview-regen">Re-rendering…</span>}
+                      </button>
+                      <div className="if-preview-foot">
+                        <span className="if-preview-label">{RESULT_LABEL[r.slot] || r.slot}{edits[r.slot] ? ' · adjusted' : ''}</span>
+                        {SHOE_SLOTS.has(r.slot) && (
+                          <div className="if-preview-acts">
+                            <button type="button" className="if-slot-toggle" disabled={regenSlot === r.slot || uploading}
+                              onClick={() => recutSlot(r.slot)} title="Send this shoe to the background remover again">Cutout</button>
+                            <button type="button" className="if-slot-toggle" disabled={regenSlot === r.slot || uploading}
+                              onClick={() => setEditorSlot(r.slot)} title="Position &amp; resize the shoe">Adjust size</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {previewBad.length > 0 && (
+                  <div className="if-preview-errs">
+                    {previewBad.map((r) => (
+                      <div key={r.slot} className="if-preview-err">
+                        <span><b>{RESULT_LABEL[r.slot] || r.slot}:</b> {r.error || 'failed'}</span>
+                        {SHOE_SLOTS.has(r.slot) && (
+                          <button type="button" className="btn sm" disabled={regenSlot === r.slot || uploading}
+                            onClick={() => recutSlot(r.slot)}>{regenSlot === r.slot ? 'Cutting…' : 'Cutout'}</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="if-commit-actions">
+                  <button type="button" className="btn primary" disabled={uploading || committed || previewList.length === 0}
+                    onClick={uploadToServer}>
+                    <Icon name="image" /> {uploading ? 'Uploading…' : committed ? 'Uploaded ✓' : `Upload to server (${previewList.length})`}
+                  </button>
+                  <button type="button" className="btn" disabled={!committed || downloading} onClick={downloadAll}>
                     <Icon name="download" /> {downloading ? 'Zipping…' : 'Download all'}
                   </button>
                 </div>
-                <div className="if-preview-grid">
-                  {branded.map((r, i) => (
-                    <button type="button" key={r.slot} className="if-preview-item" onClick={() => setPreviewIdx(i)}>
-                      <img src={r.url} alt={RESULT_LABEL[r.slot] || r.slot} loading="lazy" />
-                      <span className="if-preview-label">{RESULT_LABEL[r.slot] || r.slot}</span>
-                    </button>
-                  ))}
-                </div>
+                {!committed && <p className="muted sm mt">Nothing is saved until you press <b>Upload to server</b>.</p>}
               </div>
             )}
           </>
         )}
       </div>
-      {previewIdx != null && branded[previewIdx] && (
-        <ImageZoomModal
-          url={branded[previewIdx].url}
-          label={RESULT_LABEL[branded[previewIdx].slot] || branded[previewIdx].slot}
-          onClose={() => setPreviewIdx(null)}
-          onPrev={previewIdx > 0 ? () => setPreviewIdx(previewIdx - 1) : undefined}
-          onNext={previewIdx < branded.length - 1 ? () => setPreviewIdx(previewIdx + 1) : undefined}
+      {editorSlot && product && preview?.[editorSlot]?.cutoutUrl && (
+        <ShoeEditor
+          angle={editorSlot}
+          label={SLOT_LABEL[editorSlot]}
+          sku={product.sku}
+          sourceUrl={picks[editorSlot]}
+          title={title}
+          initial={{ cutoutUrl: preview[editorSlot].cutoutUrl, bbox: preview[editorSlot].bbox, transform: edits[editorSlot] || null }}
+          onSignOut={onSignOut}
+          onClose={() => setEditorSlot(null)}
+          onSave={(payload) => adjustSave(editorSlot, payload)}
         />
       )}
+      {previewIdx != null && previewList[previewIdx] && (
+        <ImageZoomModal
+          url={previewList[previewIdx].preview}
+          label={RESULT_LABEL[previewList[previewIdx].slot] || previewList[previewIdx].slot}
+          onClose={() => setPreviewIdx(null)}
+          onPrev={previewIdx > 0 ? () => setPreviewIdx(previewIdx - 1) : undefined}
+          onNext={previewIdx < previewList.length - 1 ? () => setPreviewIdx(previewIdx + 1) : undefined}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Live "position & resize" editor ─────────────────────────────────────────
+// Cuts the shoe out (server), draws it over a lightweight template background, and
+// lets PH drag / pinch / slider-scale it — Canva-style — before it's saved. Geometry
+// is tracked in the pipeline's 1600×1600 design space and handed back as an explicit
+// { dx, dy, dw, dh } transform, so what PH positions is exactly what Brand & Fill renders.
+const DESIGN = 1600;
+const DISP = 900;                       // internal canvas resolution (CSS-scaled to fit)
+const K = DISP / DESIGN;
+// Mirrors branding.js — keep in sync.
+const ED_SHOE_BOX = { cx: 800, cy: 812, w: 1050, h: 770 };
+const ED_SHOE_SHADOW = { offsetX: 28, offsetY: 30, blur: 42, color: 'rgba(0,0,0,0.78)' };
+const ED_TITLE = { y: 188, size: 80 };
+const ED_SKU = { y: 1476, size: 104 };
+const clampScale = (s) => Math.min(2.5, Math.max(0.2, s));
+
+function ShoeEditor({ angle, label, sku, sourceUrl, title, initial, onClose, onSave, onSignOut }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [ready, setReady] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
+  const [tf, setTf] = useState({ cx: ED_SHOE_BOX.cx, cy: ED_SHOE_BOX.cy, scale: 1 });
+
+  const canvasRef = useRef(null);
+  const bgRef = useRef(null);           // template preview Image
+  const cutRef = useRef(null);          // transparent shoe Image
+  const dataRef = useRef({ cutoutUrl: null, bbox: null, fitScale: 1 });
+  const tfRef = useRef(tf); tfRef.current = tf;
+  const pointers = useRef(new Map());   // pointerId -> {x,y}
+  const gesture = useRef({ dist: 0 });
+
+  // Resolve the cutout: reuse the stored one when re-opening an edited slot (no
+  // re-cut, exact same geometry); otherwise cut it out on the server now.
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      setLoading(true); setError(''); setReady(false);
+      // Template background (lightweight preview).
+      const bg = new Image();
+      bg.onload = () => { bgRef.current = bg; };
+      bg.src = TEMPLATE_PREVIEW[angle];
+      try {
+        let cutoutUrl, bbox;
+        if (initial?.cutoutUrl && initial?.bbox) {
+          cutoutUrl = initial.cutoutUrl; bbox = initial.bbox;
+        } else {
+          const r = await api.imageFinderCutout(sku, sourceUrl);
+          if (!r?.cutoutUrl) throw new Error('Could not cut out the shoe.');
+          cutoutUrl = r.cutoutUrl; bbox = r.bbox;
+        }
+        const fitScale = Math.min(ED_SHOE_BOX.w / bbox.w, ED_SHOE_BOX.h / bbox.h);
+        // refDist = half-diagonal of the fit-size shoe (design px) — a corner drag sets
+        // scale = |pointer − centre| / refDist, so the dragged corner tracks the finger.
+        const refDist = 0.5 * Math.hypot(bbox.w * fitScale, bbox.h * fitScale);
+        dataRef.current = { cutoutUrl, bbox, fitScale, refDist };
+        // Initial transform: from a prior edit, else the default auto-fit.
+        let start = { cx: ED_SHOE_BOX.cx, cy: ED_SHOE_BOX.cy, scale: 1 };
+        if (initial?.transform?.dw > 0) {
+          const t = initial.transform;
+          start = { cx: t.dx + t.dw / 2, cy: t.dy + t.dh / 2, scale: t.dw / (bbox.w * fitScale) };
+        }
+        // Draw the shoe (cross-origin drawImage is fine; we never read pixels back).
+        const cut = new Image();
+        cut.onload = () => { if (dead) return; cutRef.current = cut; setTf(start); tfRef.current = start; setReady(true); setLoading(false); };
+        cut.onerror = () => { if (!dead) { setError('Could not load the cutout image.'); setLoading(false); } };
+        cut.src = cutoutUrl;
+      } catch (e) {
+        if (dead) return;
+        if (e.unauthorized) return onSignOut();
+        setError(e.message || 'Could not cut out the shoe.'); setLoading(false);
+      }
+    })();
+    return () => { dead = true; };
+  }, [angle, sku, sourceUrl, retryTick]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Redraw whenever the transform changes.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, DISP, DISP);
+    if (bgRef.current) ctx.drawImage(bgRef.current, 0, 0, DISP, DISP);
+    else { ctx.fillStyle = '#222'; ctx.fillRect(0, 0, DISP, DISP); }
+    const { bbox, fitScale } = dataRef.current;
+    if (ready && cutRef.current && bbox) {
+      const dw = bbox.w * fitScale * tf.scale, dh = bbox.h * fitScale * tf.scale;
+      const dx = tf.cx - dw / 2, dy = tf.cy - dh / 2;
+      ctx.save();
+      ctx.shadowColor = ED_SHOE_SHADOW.color; ctx.shadowBlur = ED_SHOE_SHADOW.blur * K;
+      ctx.shadowOffsetX = ED_SHOE_SHADOW.offsetX * K; ctx.shadowOffsetY = ED_SHOE_SHADOW.offsetY * K;
+      ctx.drawImage(cutRef.current, bbox.x, bbox.y, bbox.w, bbox.h, dx * K, dy * K, dw * K, dh * K);
+      ctx.restore();
+      // Selection frame + corner handles (drag a corner to resize, like Canva).
+      const X = dx * K, Y = dy * K, WW = dw * K, HH = dh * K, hs = 15;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 2; ctx.setLineDash([9, 6]);
+      ctx.strokeRect(X, Y, WW, HH); ctx.setLineDash([]);
+      ctx.fillStyle = '#fff'; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 1.5;
+      [[X, Y], [X + WW, Y], [X, Y + HH], [X + WW, Y + HH]].forEach(([hx, hy]) => {
+        ctx.beginPath(); ctx.rect(hx - hs / 2, hy - hs / 2, hs, hs); ctx.fill(); ctx.stroke();
+      });
+      ctx.restore();
+    }
+    // Title / SKU clearance guides (approximate fonts — just so PH avoids overlap).
+    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.shadowColor = 'rgba(0,0,0,0.85)'; ctx.shadowBlur = 4; ctx.shadowOffsetX = 3; ctx.shadowOffsetY = 3;
+    ctx.font = `${ED_TITLE.size * K}px Georgia, serif`;
+    ctx.fillText(String(title || sku || '').slice(0, 28), DESIGN * K / 2, ED_TITLE.y * K);
+    ctx.font = `${ED_SKU.size * K}px Arial, sans-serif`;
+    ctx.fillText(String(sku || '').toUpperCase(), DESIGN * K / 2, ED_SKU.y * K);
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+  }, [tf, ready, title, sku]);
+
+  // Client px → design px (independent of how the canvas is CSS-scaled).
+  const toDesign = (dClient) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return dClient * (DESIGN / rect.width);
+  };
+  const toPointDesign = (clientX, clientY) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return { x: (clientX - rect.left) * (DESIGN / rect.width), y: (clientY - rect.top) * (DESIGN / rect.height) };
+  };
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+  // Is this pointer starting on one of the shoe's corner handles? (design-space hit test)
+  const onHandle = (clientX, clientY) => {
+    const { bbox, fitScale } = dataRef.current;
+    if (!bbox) return false;
+    const t = tfRef.current;
+    const dw = bbox.w * fitScale * t.scale, dh = bbox.h * fitScale * t.scale;
+    const dx = t.cx - dw / 2, dy = t.cy - dh / 2;
+    const p = toPointDesign(clientX, clientY);
+    const R = 70; // generous touch target (design px)
+    return [[dx, dy], [dx + dw, dy], [dx, dy + dh], [dx + dw, dy + dh]]
+      .some(([hx, hy]) => Math.hypot(p.x - hx, p.y - hy) <= R);
+  };
+
+  const onPointerDown = (e) => {
+    canvasRef.current.setPointerCapture?.(e.pointerId);
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 2) {
+      const [p1, p2] = [...pointers.current.values()];
+      gesture.current.dist = dist(p1, p2);
+      gesture.current.mode = 'pinch';
+    } else {
+      gesture.current.mode = onHandle(e.clientX, e.clientY) ? 'resize' : 'move';
+    }
+  };
+  const onPointerMove = (e) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    const prev = pointers.current.get(e.pointerId);
+    const cur = { x: e.clientX, y: e.clientY };
+    pointers.current.set(e.pointerId, cur);
+    if (pointers.current.size >= 2) {
+      const [p1, p2] = [...pointers.current.values()];
+      const d = dist(p1, p2);
+      if (gesture.current.dist > 0) {
+        const ratio = d / gesture.current.dist;
+        setTf((t) => ({ ...t, scale: clampScale(t.scale * ratio) }));
+      }
+      gesture.current.dist = d;
+    } else if (gesture.current.mode === 'resize') {
+      // Drag a corner: scale about the centre so the corner tracks the pointer.
+      const { refDist } = dataRef.current;
+      const p = toPointDesign(cur.x, cur.y);
+      const t = tfRef.current;
+      setTf((tf2) => ({ ...tf2, scale: clampScale(Math.hypot(p.x - t.cx, p.y - t.cy) / refDist) }));
+    } else {
+      const dx = toDesign(cur.x - prev.x), dy = toDesign(cur.y - prev.y);
+      setTf((t) => ({ ...t, cx: t.cx + dx, cy: t.cy + dy }));
+    }
+  };
+  const endPointer = (e) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) gesture.current.dist = 0;
+  };
+  const onWheel = (e) => {
+    e.preventDefault();
+    setTf((t) => ({ ...t, scale: clampScale(t.scale * Math.exp(-e.deltaY * 0.0012)) }));
+  };
+
+  const fit = () => setTf({ cx: ED_SHOE_BOX.cx, cy: ED_SHOE_BOX.cy, scale: 1 });
+  const nudgeScale = (mult) => setTf((t) => ({ ...t, scale: clampScale(t.scale * mult) }));
+
+  const save = () => {
+    const { cutoutUrl, bbox, fitScale } = dataRef.current;
+    if (!cutoutUrl || !bbox) return;
+    const dw = bbox.w * fitScale * tf.scale, dh = bbox.h * fitScale * tf.scale;
+    onSave({ cutoutUrl, bbox, transform: { dx: tf.cx - dw / 2, dy: tf.cy - dh / 2, dw, dh } });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal shoe-editor" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3 className="modal-title">Position &amp; resize · {label}</h3>
+          <button type="button" className="btn icon ghost" onClick={onClose}>×</button>
+        </div>
+
+        <div className="se-stage">
+          <canvas ref={canvasRef} width={DISP} height={DISP} className="se-canvas"
+            onPointerDown={onPointerDown} onPointerMove={onPointerMove}
+            onPointerUp={endPointer} onPointerCancel={endPointer} onWheel={onWheel} />
+          {loading && <div className="se-overlay">Cutting out the shoe…</div>}
+          {error && !loading && (
+            <div className="se-overlay err">
+              <div>{error}</div>
+              <button type="button" className="btn sm" onClick={() => { setError(''); setLoading(true); setRetryTick((n) => n + 1); }}>Retry</button>
+            </div>
+          )}
+        </div>
+
+        <p className="muted sm se-hint">Drag the shoe to move · <b>drag a corner</b>, pinch, scroll, or use the slider to resize. Text positions are guides.</p>
+
+        <div className="se-controls">
+          <button type="button" className="btn icon ghost" disabled={!ready} onClick={() => nudgeScale(1 / 1.08)} title="Smaller">−</button>
+          <input className="se-slider" type="range" min="0.2" max="2" step="0.01" disabled={!ready}
+            value={tf.scale} onChange={(e) => setTf((t) => ({ ...t, scale: Number(e.target.value) }))} />
+          <button type="button" className="btn icon ghost" disabled={!ready} onClick={() => nudgeScale(1.08)} title="Bigger">+</button>
+          <span className="se-scale-val">{Math.round(tf.scale * 100)}%</span>
+        </div>
+
+        <div className="modal-actions">
+          <button type="button" className="btn ghost" onClick={fit} disabled={!ready}>Reset to fit</button>
+          <button type="button" className="btn primary" onClick={save} disabled={!ready}>Save placement</button>
+        </div>
+      </div>
     </div>
   );
 }

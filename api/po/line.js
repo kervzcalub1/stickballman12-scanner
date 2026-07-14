@@ -1,8 +1,9 @@
-// POST /api/po/line  (supplier / admin)  { lineId, qty }
-// Adjusts an expected line's quantity; qty <= 0 removes the line. Only on a
-// DRAFT PO the supplier owns, and only while its label is still pending.
+// POST /api/po/line  (supplier / admin)  { lineId, qty?, size? }
+// Edits an expected line's quantity and/or size; qty <= 0 removes the line. Only on
+// a DRAFT PO the supplier owns, and only while its label is still pending. Changing
+// the size into an existing SKU+size line on the same label merges the two.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { getPoLine, getPoBox, getPo, setPoLineQty, dbConfigured } from '../_lib/db.js';
+import { getPoLine, getPoBox, getPo, updatePoLine, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -15,8 +16,13 @@ export default async function handler(req, res) {
 
   const body = await getJsonBody(req);
   const lineId = Number(body.lineId);
-  const qty = Math.min(999, Math.max(0, parseInt(body.qty, 10) || 0));
   if (!Number.isInteger(lineId)) return send(res, 400, { ok: false, error: 'A valid line is required.' });
+  const hasQty = body.qty !== undefined;
+  const hasSize = body.size !== undefined;
+  if (!hasQty && !hasSize) return send(res, 400, { ok: false, error: 'Nothing to update.' });
+  const qty = hasQty ? Math.min(999, Math.max(0, parseInt(body.qty, 10) || 0)) : undefined;
+  const size = hasSize ? String(body.size ?? '').trim().slice(0, 20) : undefined;
+  if (hasSize && !size) return send(res, 400, { ok: false, error: 'Size can’t be blank.' });
 
   try {
     const line = await getPoLine(lineId);
@@ -33,8 +39,8 @@ export default async function handler(req, res) {
     if (box && box.status !== 'pending')
       return send(res, 409, { ok: false, error: 'This label is already shipped.' });
 
-    const updated = await setPoLineQty(lineId, qty);
-    return send(res, 200, { ok: true, line: updated, removed: updated == null });
+    const { line: updated, removed, merged } = await updatePoLine(lineId, { size, qty });
+    return send(res, 200, { ok: true, line: updated, removed, merged });
   } catch (e) {
     console.error('[po/line]', e.message);
     return send(res, 500, { ok: false, error: 'Could not update the item.' });

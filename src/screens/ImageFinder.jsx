@@ -6,8 +6,9 @@
 // SKU's edited listing photos (source='ph_edited').
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, ShoeThumb, ImageZoomModal } from '../components/common.jsx';
+import { TopBar, ShoeThumb, ImageZoomModal, ProgressBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import { EditedPhotosPanel } from './PhEditedPhotos.jsx';
 import tpl1 from '../components/ImageTemplate/previews/1.jpg';
 import tpl2 from '../components/ImageTemplate/previews/2.jpg';
 import tpl3 from '../components/ImageTemplate/previews/3.jpg';
@@ -33,6 +34,8 @@ const RESULT_ORDER = ['side', 'diagonal', 'top', 'outsole', 'rear', 'spec', 'wel
 export function ImageFinder({ onHome, onSignOut }) {
   const [skuInput, setSkuInput] = useState('');
   const [product, setProduct] = useState(null);
+  const [managedSku, setManagedSku] = useState('');   // the loaded SKU — drives the manage (EditedPhotosPanel) view
+  const [panelReload, setPanelReload] = useState(0);  // bump to make the panel re-fetch (after a Brand & Fill save)
   const [title, setTitle] = useState('');             // editable shoe name stamped on each slide
   const [picks, setPicks] = useState({});             // angle -> image url (gallery or uploaded)
   const [uploaded, setUploaded] = useState({});       // angle -> true (came from a PH upload)
@@ -54,6 +57,7 @@ export function ImageFinder({ onHome, onSignOut }) {
   const [edits, setEdits] = useState({});             // angle -> transform dialed on the canvas (post-preview)
   const [busySlots, setBusySlots] = useState(() => new Set()); // slots currently (re)rendering
   const [committed, setCommitted] = useState(false);  // uploaded to R2 yet?
+  const [progress, setProgress] = useState(null);     // { done, total } for the render/upload bar
   const [previewTitle, setPreviewTitle] = useState(''); // title the current preview was rendered with
   const [previewIdx, setPreviewIdx] = useState(null); // index into previewList for the zoom modal
   const fileRefs = useRef({});
@@ -71,25 +75,38 @@ export function ImageFinder({ onHome, onSignOut }) {
     setBusySlots(new Set()); setPreviewTitle('');
   };
 
-  async function lookUp(e) {
+  // Load a SKU → show its edited-photos manager (the panel fetches the photos). PH can
+  // manage them there, or press "Build from template" to generate a branded set.
+  function lookUp(e) {
     e?.preventDefault();
     const sku = skuInput.trim();
     if (!sku) return;
-    setLooking(true); setError(''); setNotice(''); setNotConfigured(false);
+    setError(''); setNotice(''); setNotConfigured(false);
     setProduct(null); setPicks({}); setUploaded({}); resetPreview(); setActiveSlot(SLOTS[0].angle);
-    try {
-      const { configured, product: p } = await api.imageFinderSearch(sku);
-      if (configured === false) { setNotConfigured(true); return; }
-      if (!p) { setError('No match found for that SKU.'); return; }
-      setProduct(p); setTitle(p.title || '');
-      const seeded = {};
-      for (const s of (p.suggestions || [])) seeded[s.angle] = s.url;
-      setPicks(seeded);
-    } catch (err) {
-      if (err.unauthorized) return onSignOut();
-      setError(err.message);
-    } finally { setLooking(false); }
+    setManagedSku(sku);
   }
+
+  // Run the marketplace image search + seed the angle slots (the Brand & Fill entry point).
+  async function runSearch(sku) {
+    const { configured, product: p } = await api.imageFinderSearch(sku);
+    if (configured === false) { setNotConfigured(true); return; }
+    if (!p) { setError('No match found for that SKU.'); return; }
+    setProduct(p); setTitle(p.title || '');
+    const seeded = {};
+    for (const s of (p.suggestions || [])) seeded[s.angle] = s.url;
+    setPicks(seeded);
+  }
+
+  // "Build from template" → open the marketplace search + Brand & Fill canvas.
+  async function startSearch(sku) {
+    setLooking(true); setError(''); setNotConfigured(false);
+    try { await runSearch(sku); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setLooking(false); }
+  }
+
+  // Leave the generate flow → back to the photo manager, reloading it so any just-saved slides show.
+  function backToPhotos() { setProduct(null); resetPreview(); setPanelReload((k) => k + 1); }
 
   function assignFrame(url) {
     setPicks((p) => ({ ...p, [activeSlot]: url }));
@@ -142,13 +159,27 @@ export function ImageFinder({ onHome, onSignOut }) {
     const t = title.trim();
     setBranding(true); setError(''); setNotice(''); resetPreview();
     const myGen = genRef.current; // captured after resetPreview bumped it
+    setPreviewTitle(t);
+    // One request per slide (sequential) so we can show real progress and reveal each slide
+    // as it finishes — the server still cuts one shoe at a time (no extra load).
+    const tasks = [
+      ...chosen.map((c) => ({ picks: [c], spec: false, welcome: false })),
+      ...(includeSpec ? [{ picks: [], spec: true, welcome: false }] : []),
+      ...(includeWelcome ? [{ picks: [], spec: false, welcome: true }] : []),
+    ];
+    setProgress({ done: 0, total: tasks.length });
+    const acc = {};
     try {
-      const { results: r } = await api.imageFinderBrand(product.sku, t, chosen, includeSpec, includeWelcome, outSize, 'preview');
-      if (genRef.current !== myGen) return; // superseded by a newer action
-      const bySlot = Object.fromEntries((r || []).map((x) => [x.slot, x]));
-      setPreview(bySlot); setPreviewTitle(t);
-      const okCount = (r || []).filter((x) => x.ok).length;
-      const failed = (r || []).filter((x) => !x.ok);
+      for (let i = 0; i < tasks.length; i++) {
+        const tk = tasks[i];
+        const { results: r } = await api.imageFinderBrand(product.sku, t, tk.picks, tk.spec, tk.welcome, outSize, 'preview');
+        if (genRef.current !== myGen) return; // superseded by a newer action
+        for (const one of (r || [])) acc[one.slot] = one;
+        setPreview({ ...acc });
+        setProgress({ done: i + 1, total: tasks.length });
+      }
+      const okCount = Object.values(acc).filter((x) => x.ok).length;
+      const failed = Object.values(acc).filter((x) => !x.ok);
       if (okCount > 0) setNotice(`Previewed ${okCount} slide${okCount === 1 ? '' : 's'}. Adjust any shoe, then Upload to save.`);
       if (failed.length) {
         const throttled = failed.some((x) => x.throttled);
@@ -159,9 +190,10 @@ export function ImageFinder({ onHome, onSignOut }) {
         setError('Nothing previewed — see the errors below.');
       }
     } catch (err) {
+      if (genRef.current !== myGen) return;
       if (err.unauthorized) return onSignOut();
       setError(err.message);
-    } finally { setBranding(false); }
+    } finally { setBranding(false); setProgress(null); }
   }
 
   // Step 2 — a shoe was repositioned/resized on the canvas: re-render JUST that slide
@@ -231,19 +263,34 @@ export function ImageFinder({ onHome, onSignOut }) {
     if (missing.length && !window.confirm(
       `${missing.length} shoe slide${missing.length === 1 ? '' : 's'} didn’t render and won’t be uploaded (${missing.map((s) => s.label).join(', ')}). Upload the rest anyway?`)) return;
     const myGen = genRef.current;
+    const t = title.trim();
+    // One commit request per slide (sequential) for real upload progress; each reuses its
+    // staged cutout + transform (no re-cut).
+    const tasks = [
+      ...shoePicks.map((p) => ({ picks: [p], spec: false, welcome: false })),
+      ...(spec ? [{ picks: [], spec: true, welcome: false }] : []),
+      ...(welcome ? [{ picks: [], spec: false, welcome: true }] : []),
+    ];
     setUploading(true); setError(''); setNotice('');
+    setProgress({ done: 0, total: tasks.length });
+    let saved = 0; const failed = [];
     try {
-      const { saved, results: r } = await api.imageFinderBrand(product.sku, title.trim(), shoePicks, spec, welcome, outSize, 'commit');
-      if (genRef.current !== myGen) return; // superseded (e.g. PH searched a new SKU) — don't flash stale banners
-      const failed = (r || []).filter((x) => !x.ok);
-      if (saved > 0) { setCommitted(true); setNotice(`Uploaded ${saved} slide${saved === 1 ? '' : 's'} for ${product.sku}.`); }
+      for (let i = 0; i < tasks.length; i++) {
+        const tk = tasks[i];
+        const { saved: s, results: r } = await api.imageFinderBrand(product.sku, t, tk.picks, tk.spec, tk.welcome, outSize, 'commit');
+        if (genRef.current !== myGen) return; // superseded — don't flash stale banners
+        saved += s || 0;
+        for (const one of (r || [])) if (!one.ok) failed.push(one);
+        setProgress({ done: i + 1, total: tasks.length });
+      }
+      if (saved > 0) { setCommitted(true); setPanelReload((k) => k + 1); setNotice(`Uploaded ${saved} slide${saved === 1 ? '' : 's'} for ${product.sku}.`); }
       if (failed.length) setError(`${failed.length} slide${failed.length === 1 ? '' : 's'} failed to upload — try Upload again.`);
       else if (saved === 0) setError('Nothing was uploaded.');
     } catch (err) {
       if (genRef.current !== myGen) return;
       if (err.unauthorized) return onSignOut();
       setError(err.message);
-    } finally { setUploading(false); }
+    } finally { setUploading(false); setProgress(null); }
   }
 
   // Download every uploaded slide for this SKU as a zip (all ph_edited photos).
@@ -278,30 +325,47 @@ export function ImageFinder({ onHome, onSignOut }) {
 
   return (
     <div className="app">
-      <TopBar title="Image Finder" onHome={onHome} onSignOut={onSignOut} />
+      <TopBar title="Find Image Listings" onHome={onHome} onSignOut={onSignOut} />
       <div className="card">
         <p className="muted sm">
-          Build a SKU’s branded listing set. Assign an angle by tapping a gallery photo, or <b>Upload</b> your own.
-          <b> Brand &amp; Fill</b> cuts each shoe out and drops it on your template (with the spec + welcome slides) as a
-          <b> preview</b> — resize any shoe on the canvas, then <b>Upload to server</b> and <b>Download</b>.
+          Manage a SKU’s listing photos in one place. Load a SKU to see and edit its images —
+          <b> upload finished photos</b> directly, or <b>Build from template</b> to auto-source the shoe and
+          drop it on your template (cut out, place, resize on the canvas), then save.
         </p>
 
         <form className="pi-lookup" onSubmit={lookUp}>
           <input
             className="pi-sku-input" type="text" inputMode="text" autoCapitalize="characters"
             placeholder="Enter a SKU (e.g. JR1598)" value={skuInput}
-            onChange={(e) => setSkuInput(e.target.value)} disabled={looking || uploading} />
-          <button type="submit" className="btn" disabled={looking || uploading || !skuInput.trim()}>
-            <Icon name="image" /> {looking ? 'Finding…' : 'Find images'}
+            onChange={(e) => setSkuInput(e.target.value)} disabled={uploading} />
+          <button type="submit" className="btn" disabled={uploading || !skuInput.trim()}>
+            <Icon name="image" /> Load SKU
           </button>
         </form>
 
         {error && <div className="error mt">{error}</div>}
         {notice && <div className="notice mt">{notice}</div>}
-        {notConfigured && <div className="notice mt">Image lookup isn’t configured on the server (KicksDB key missing).</div>}
+        {notConfigured && <div className="notice mt">Marketplace image search isn’t configured on the server (KicksDB key missing) — you can still upload photos manually below.</div>}
+
+        {/* Manage view — the SKU's edited-photos panel + a Brand & Fill entry point. */}
+        {managedSku && !product && (
+          <>
+            <div className="if-manage-head mt">
+              <span className="pi-product-sku">{managedSku}</span>
+              <button type="button" className="btn primary" disabled={looking} onClick={() => startSearch(managedSku)}>
+                <Icon name="image" /> {looking ? 'Finding…' : 'Build from template'}
+              </button>
+            </div>
+            <EditedPhotosPanel sku={managedSku} reloadKey={panelReload} onSignOut={onSignOut}
+              onBuildFromTemplate={() => startSearch(managedSku)} buildBusy={looking} />
+          </>
+        )}
 
         {product && (
           <>
+            <button type="button" className="if-back" onClick={backToPhotos}>
+              <span className="if-back-arrow" aria-hidden="true">←</span> Back to photos
+            </button>
             <div className="pi-product mt">
               <ShoeThumb url={product.hero} size={52} />
               <div className="pi-product-info">
@@ -410,6 +474,12 @@ export function ImageFinder({ onHome, onSignOut }) {
                 <Icon name="image" /> {branding ? 'Rendering…' : preview ? `Re-render preview (${slideCount})` : `Brand & Fill (${slideCount})`}
               </button>
             </div>
+            {branding && progress && (
+              <div className="mt">
+                <ProgressBar value={progress.done / progress.total}
+                  label={`Cutting out & placing — ${progress.done} of ${progress.total} slides`} />
+              </div>
+            )}
 
             {/* Review the preview set → adjust any shoe → Upload → Download. Nothing is
                 saved to the library until Upload. */}
@@ -467,6 +537,13 @@ export function ImageFinder({ onHome, onSignOut }) {
                     <Icon name="download" /> {downloading ? 'Zipping…' : 'Download all'}
                   </button>
                 </div>
+                {uploading && progress && (
+                  <div className="mt">
+                    <ProgressBar value={progress.done / progress.total}
+                      label={`Uploading — ${progress.done} of ${progress.total} slides`} />
+                  </div>
+                )}
+                {downloading && <div className="mt"><ProgressBar indeterminate label="Zipping the set…" /></div>}
                 {titleStale
                   ? <p className="muted sm mt">Title changed since this preview — press <b>Re-render preview</b> to apply it before uploading.</p>
                   : !committed && <p className="muted sm mt">Nothing is saved until you press <b>Upload to server</b>.</p>}
@@ -708,7 +785,12 @@ function ShoeEditor({ angle, label, sku, sourceUrl, title, initial, onClose, onS
           <canvas ref={canvasRef} width={DISP} height={DISP} className="se-canvas"
             onPointerDown={onPointerDown} onPointerMove={onPointerMove}
             onPointerUp={endPointer} onPointerCancel={endPointer} />
-          {loading && <div className="se-overlay">Cutting out the shoe…</div>}
+          {loading && (
+            <div className="se-overlay">
+              <div>Cutting out the shoe…</div>
+              <div className="se-overlay-bar"><ProgressBar indeterminate /></div>
+            </div>
+          )}
           {error && !loading && (
             <div className="se-overlay err">
               <div>{error}</div>

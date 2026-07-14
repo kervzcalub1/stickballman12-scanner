@@ -198,14 +198,15 @@ test('Receiving: ListingPhotos shows "PH edited on file" banner for a SKU with p
   await expect(listingPhotos.getByRole('button', { name: /listing photos|replace photos/i })).toBeVisible();
 });
 
-test('PH team: /ph/edited-photos page shows 7 slots, uploads real photo, shows warehouse originals read-only', async ({ page }) => {
+test('PH team: Find Image Listings shows 7 edited slots, uploads real photo, shows warehouse originals read-only', async ({ page }) => {
   await loginAs(page, 'ph_team');
+  // Edited Photos was consolidated into "Find Image Listings"; the old URL redirects here.
   await page.goto('/ph/edited-photos');
-  await expect(page.getByText('PH Edited Photos')).toBeVisible();
+  await expect(page.getByText('Find Image Listings')).toBeVisible();
 
-  const skuInput = page.locator('.pe-skubar input');
+  const skuInput = page.locator('.pi-sku-input');
   await skuInput.fill(SKU_COEXIST);
-  await page.getByRole('button', { name: 'Load' }).click();
+  await page.getByRole('button', { name: 'Load SKU' }).click();
 
   await expect(page.locator('.pe-grid')).toBeVisible({ timeout: 8000 });
   const slots = page.locator('.pe-slot');

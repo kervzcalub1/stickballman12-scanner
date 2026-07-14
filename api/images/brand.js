@@ -35,7 +35,9 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const user = requireRole(req, res, ['ph_team']);
   if (!user) return;
-  if (!rateLimit(req, { windowMs: 60_000, max: 20 }))
+  // Per-slide requests (the client renders/commits one slide at a time for progress),
+  // so a normal preview+adjust+upload cycle is a dozen-plus calls — keep the cap well above that.
+  if (!rateLimit(req, { windowMs: 60_000, max: 80 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
   if (!r2Configured()) return send(res, 503, { ok: false, error: 'Photo storage is not configured (R2 env vars missing).' });

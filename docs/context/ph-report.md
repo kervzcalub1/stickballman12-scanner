@@ -172,10 +172,17 @@ Inquiry" (ph_team + admin; nothing is saved, no inventory touched). Flow:
   upstream call per size). `aliasGlobalIndicator` is now a thin wrapper over
   `aliasPriceInsights`.
 
-## PH Edited Photos (V7 — `PhEditedPhotos`, `/ph/edited-photos`)
-The warehouse shoots raw listing photos on intake (`source='warehouse'`). PH can upload
-their own **edited** images per SKU on a separate page (PH-home card "Edited Photos";
-ph_team + admin). Both sets coexist in `product_photos` (keyed by `(sku, angle, source)`)
+## PH Edited Photos (V7 — `EditedPhotosPanel`, embedded in Find Image Listings)
+**CONSOLIDATED (2026-07-15):** the standalone "Edited Photos" page was merged into **"Find
+Image Listings"** (the renamed Image Finder, `/ph/image-finder`). `PhEditedPhotos.jsx` now
+exports `EditedPhotosPanel({ sku, reloadKey, onSignOut })` (self-loads the SKU's photos, no
+TopBar/SKU-form) which ImageFinder renders as the "manage" view; a **Build from template**
+button opens the Brand & Fill generate flow, **← Back to photos** returns (bumping `reloadKey`
+so just-saved slides show). The old `/ph/edited-photos` URL redirects to `imagefinder`
+(`phPageForPath`); the separate PH-home card is gone. — The warehouse shoots raw listing
+photos on intake (`source='warehouse'`). PH uploads their own **edited** images per SKU
+(upload-as-is / bulk drop + reorder / remove; ph_team + admin). Both sets coexist in
+`product_photos` (keyed by `(sku, angle, source)`)
 — a PH upload never overwrites the warehouse original.
 - **Precedence:** per angle — `ph_edited` wins within an angle, warehouse fills any
   angle PH hasn't edited. The `photo_url` thumbnail sub-queries in `db.js` order

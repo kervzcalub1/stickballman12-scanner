@@ -30,8 +30,11 @@ export default async function handler(req, res) {
   if (poId) {
     const po = await getPo(poId);
     if (!po) return send(res, 404, { ok: false, error: 'That purchase order was not found.' });
-    if (!['shipped', 'receiving'].includes(po.status))
-      return send(res, 409, { ok: false, error: `PO ${po.po_code} is ${po.status} — it can't be received against.` });
+    // Boxes arrive one at a time and often before the supplier marks every label shipped
+    // (a multi-label PO stays 'draft' until ALL labels ship), so allow receiving against a
+    // draft/shipped/receiving PO — block only already-finished ones.
+    if (['reconciled', 'closed'].includes(po.status))
+      return send(res, 409, { ok: false, error: `PO ${po.po_code} is already ${po.status} — it can't be received against again.` });
     // Idempotent: reuse the open batch already receiving this PO (no duplicate).
     const existing = await getOpenBatchForPo(poId);
     if (existing) return send(res, 200, { ok: true, batchCode: existing.batch_code, id: existing.id, reused: true });

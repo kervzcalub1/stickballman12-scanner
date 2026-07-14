@@ -19,8 +19,16 @@ labels** (one tracking number each); it closes only when every label is shipped.
   label's tracking #). Receiving Step 1 gains a "Receive against a purchase order" picker
   (`PoPickerModal`) that pre-fills supplier/tag and maps each label → a box slot; commit
   (`commit.js` / `create-open.js`) accepts `poId`, sets `batches.po_id`, and `markPoReceiving`
-  flips the PO `shipped → receiving` (+ `received_batch_id`, idempotent). box-commit needs no
-  change (the batch already carries `po_id`).
+  flips the PO **`draft`/`shipped` → `receiving`** (+ `received_batch_id`, idempotent). box-commit
+  needs no change (the batch already carries `po_id`). **Receiving is allowed against a `draft` or
+  `shipped` PO** — boxes arrive one at a time, often before the supplier marks every label shipped
+  (a multi-label PO stays `draft` until ALL labels ship), so `commit.js`/`create-open.js` block only
+  a `reconciled`/`closed` PO ("already … — can't be received against again"), not `draft`.
+- **PH "Purchase Orders" overview (`PoOverview.jsx`, `/ph/po-status`):** read-only list of every PO
+  the team opened — status chip + `shipped/box` label count + `delivered_count` (added to `listPos`)
+  + units; tap to expand per-label tracking (status/carrier/checkpoint) with **Refresh all** +
+  per-label refresh. Fixes "PH reconciliation page is blank" — Reconciliation only lists POs already
+  in `receiving`/`reconciled`, so shipped/draft POs (with tracking) had nowhere to show.
 - **Phase 2b (in progress) — receive by MANIFEST, not blind re-scan (2026-07-09 decision):**
   When a box is received against a PO, its expected lines (from `po_lines` for that label)
   pre-populate a **checklist**: one row per SKU+size with a **present checkbox + editable

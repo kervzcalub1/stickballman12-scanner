@@ -174,10 +174,12 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', request: '/ph/request', photos: '/ph/edited-photos', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', po: '/ph/purchase-orders', reconcile: '/ph/reconciliation' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
+  // The former "Edited Photos" page was merged into "Find Image Listings" (image-finder).
+  if (path === '/ph/edited-photos') return 'imagefinder';
   return Object.keys(PH_PATHS).find((k) => PH_PATHS[k] === path) || null;
 };
 

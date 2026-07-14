@@ -19,10 +19,10 @@ import {
 } from '../lib/ph.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
-import { PhEditedPhotos } from './PhEditedPhotos.jsx';
 import { ImageFinder } from './ImageFinder.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
 import { CreatePO } from './CreatePO.jsx';
+import { PoOverview } from './PoOverview.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
 
 // Small "WY" chip shown beside a GI that came from the Alias "With You" basis
@@ -55,10 +55,10 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   }, []);
   if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'photos') return <PhEditedPhotos onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'postatus') return <PoOverview onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'reconcile') return <Reconciliation canReconcile={false} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
@@ -80,15 +80,10 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
             <CardBadges badges={counts ? [['Restock', counts.restock_pending]] : []} />
           </button>
-          <button className="home-card" onClick={() => goPage('photos')}>
-            <span className="home-card-icon"><NavIcon name="instore-listing" /></span>
-            <span className="home-card-title">Edited Photos</span>
-            <span className="home-card-sub">Upload your edited listing images per SKU — used as the listing photos &amp; thumbnail</span>
-          </button>
           <button className="home-card" onClick={() => goPage('imagefinder')}>
             <span className="home-card-icon"><NavIcon name="image" /></span>
-            <span className="home-card-title">Image Finder</span>
-            <span className="home-card-sub">Build a branded listing set by SKU — cut out &amp; place each shoe on the template, review, then upload</span>
+            <span className="home-card-title">Find Image Listings</span>
+            <span className="home-card-sub">Manage a SKU’s listing photos — upload finished images, or build a branded set from the template (cut out, place, resize), then save</span>
           </button>
           <button className="home-card" onClick={() => goPage('inquiry')}>
             <span className="home-card-icon"><NavIcon name="inventory" /></span>
@@ -104,6 +99,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="receiving" /></span>
             <span className="home-card-title">New Batch (Purchase Order)</span>
             <span className="home-card-sub">Open a supplier batch — labels + tracking numbers — for a supplier to scan out</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('postatus')}>
+            <span className="home-card-icon"><NavIcon name="tag" /></span>
+            <span className="home-card-title">Purchase Orders</span>
+            <span className="home-card-sub">Every PO you opened — status &amp; live shipment tracking for each label</span>
           </button>
           <button className="home-card" onClick={() => goPage('reconcile')}>
             <span className="home-card-icon"><NavIcon name="reconcile" /></span>

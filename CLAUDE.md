@@ -1,4 +1,4 @@
-# Stickballman12 · Shoe Scanner — Project Context
+# Stickballman12 · Inventory — Project Context
 
 **Read this file first, then open ONLY the context chunk(s) for the feature you're
 touching** (under `docs/context/`). The chunks keep deep detail out of every

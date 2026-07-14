@@ -187,20 +187,29 @@ async function cutoutReplicate(buffer) {
   // Replicate dashboard) and would otherwise fall through to the threshold cutout, which
   // leaves the source image's baked "land effect" shadow. Wait + retry long enough to ride
   // out a full throttle window (~60 s). The real fix is >= $5 credit (lifts the limit).
+  // Retry on 429/503 AND on a network error / request timeout (fetchWithTimeout throws an
+  // AbortError, which would otherwise escape the loop with no retry and no classification).
   const RETRYABLE = new Set([429, 503]);
-  let resp;
+  let resp = null, lastErr = null;
   for (let attempt = 0; ; attempt++) {
-    resp = await fetchWithTimeout(
-      'https://api.replicate.com/v1/predictions',
-      { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'wait' }, body },
-      70000, // > the 60s server-side `Prefer: wait` window
-    );
-    if (!RETRYABLE.has(resp.status) || attempt >= 7) break;
-    const retryAfter = Number(resp.headers.get('retry-after'));
+    try {
+      resp = await fetchWithTimeout(
+        'https://api.replicate.com/v1/predictions',
+        { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'wait' }, body },
+        70000, // > the 60s server-side `Prefer: wait` window
+      );
+      lastErr = null;
+    } catch (e) {
+      resp = null; lastErr = e; // timeout / network — transient, retry below
+    }
+    const retryable = !resp || RETRYABLE.has(resp.status);
+    if (!retryable || attempt >= 7) break;
+    const retryAfter = resp ? Number(resp.headers.get('retry-after')) : NaN;
     const waitS = Math.min(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 4 * (attempt + 1), 30);
-    console.warn(`[cutout] replicate ${resp.status} (throttled) — retry ${attempt + 1}/7 in ${waitS}s`);
+    console.warn(`[cutout] replicate ${resp ? `${resp.status} (throttled)` : (lastErr?.name || 'network error')} — retry ${attempt + 1}/7 in ${waitS}s`);
     await new Promise((r) => setTimeout(r, waitS * 1000));
   }
+  if (!resp) throw new Error(`replicate request failed: ${lastErr?.message || 'network error'}`);
   if (!resp.ok) {
     const detail = await resp.text().catch(() => '');
     const throttled = resp.status === 429;

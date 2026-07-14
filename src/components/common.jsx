@@ -175,6 +175,23 @@ export function CardBadges({ badges }) {
   );
 }
 
+// Progress bar for any waiting process. Pass `value` (0–1) for real/determinate
+// progress, or `indeterminate` for a moving bar when the total isn't known. `label`
+// is optional text under the bar (e.g. "Rendering 3 of 7 slides…").
+export function ProgressBar({ value, label, indeterminate = false }) {
+  const pct = Math.max(0, Math.min(1, Number(value) || 0)) * 100;
+  return (
+    <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100}
+      aria-valuenow={indeterminate ? undefined : Math.round(pct)}>
+      <div className="progress-track">
+        <div className={`progress-fill${indeterminate ? ' indet' : ''}`}
+          style={indeterminate ? undefined : { width: `${pct}%` }} />
+      </div>
+      {label && <div className="progress-label muted sm">{label}</div>}
+    </div>
+  );
+}
+
 // Reusable Day/Week/Month calendar switcher. Controlled: parent owns
 // {mode, anchor} and reloads when onChange fires. Pages compute from/to with
 // periodRange(mode, anchor).map(ymd).

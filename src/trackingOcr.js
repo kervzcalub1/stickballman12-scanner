@@ -7,7 +7,10 @@
 // Pull the most tracking-number-like token out of free OCR text.
 function pickFromText(text) {
   const s = String(text || '').toUpperCase().replace(/[^0-9A-Z]/g, ' ');
-  const fx96 = s.replace(/\s+/g, '').match(/96\d{18,38}/); // FedEx Ground 96-barcode
+  const compact = s.replace(/\s+/g, '');
+  const upsC = compact.match(/1Z[0-9A-Z]{16}/); // UPS 1Z, incl. the SPACED human-readable form ("1Z E0X 4W6 …")
+  if (upsC) return upsC[0];
+  const fx96 = compact.match(/96\d{18,38}/); // FedEx Ground 96-barcode
   if (fx96) return fx96[0];
   const ups = s.match(/(?:^|\s)(1Z[0-9A-Z]{16})(?=\s|$)/); // UPS: standalone 1Z token
   if (ups) return ups[1];
@@ -17,22 +20,52 @@ function pickFromText(text) {
   return anyRun ? anyRun.sort((a, b) => b.length - a.length)[0] : '';
 }
 
+// Does a string look like a real carrier tracking number (not routing/MaxiCode noise)?
+const isTrackingLike = (v) => {
+  const s = String(v || '').toUpperCase().replace(/\s+/g, '');
+  return /^1Z[0-9A-Z]{16}$/.test(s) || /^96\d{18,38}$/.test(s) || /^\d{12,40}$/.test(s);
+};
+
 export async function decodeTrackingImage(file) {
   const url = URL.createObjectURL(file);
   try {
-    // 1) Barcode in the image.
+    // 1) Barcode(s) in the image. A shipping label carries several (MaxiCode, routing
+    // Code128, the 1Z) and zxing returns whichever it locks onto first — which is often
+    // NOT the tracking number. So run the decoded text through pickFromText to pull a
+    // real tracking pattern (the 1Z is usually embedded in the routing/MaxiCode payload
+    // too), and only trust it if it actually looks like a tracking number.
+    let barcodeText = '';
     try {
       const { BrowserMultiFormatReader } = await import('@zxing/browser');
-      const reader = new BrowserMultiFormatReader();
+      const { DecodeHintType, BarcodeFormat } = await import('@zxing/library');
+      // TRY_HARDER + restrict to the formats couriers actually print the tracking number
+      // in — Code128 (UPS 1Z / USPS), Code39, ITF (FedEx 96-barcode) — plus MaxiCode /
+      // Data Matrix whose payload embeds the 1Z. Restricting off the busy 2D graphics on a
+      // shipping label helps zxing lock onto the tracking barcode instead of returning
+      // nothing. pickFromText then pulls the 1Z out of whichever one decodes.
+      const hints = new Map();
+      hints.set(DecodeHintType.TRY_HARDER, true);
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.ITF,
+        BarcodeFormat.PDF_417, BarcodeFormat.MAXICODE, BarcodeFormat.DATA_MATRIX,
+      ]);
+      const reader = new BrowserMultiFormatReader(hints);
       const res = await reader.decodeFromImageUrl(url);
-      const text = res?.getText?.() || res?.text;
-      if (text) return { value: text, via: 'barcode' };
+      barcodeText = res?.getText?.() || res?.text || '';
     } catch { /* no readable barcode — fall through to OCR */ }
+    const fromBarcode = pickFromText(barcodeText);
+    if (isTrackingLike(fromBarcode)) return { value: fromBarcode, via: 'barcode' };
 
-    // 2) OCR the human-readable number.
+    // 2) OCR the human-readable number printed on the label (catches the 1Z when the
+    // barcode read gave routing noise).
     const { default: Tesseract } = await import('tesseract.js');
     const { data } = await Tesseract.recognize(url, 'eng');
-    return { value: pickFromText(data?.text), via: 'ocr' };
+    const fromOcr = pickFromText(data?.text);
+    if (isTrackingLike(fromOcr)) return { value: fromOcr, via: 'ocr' };
+
+    // Nothing that looks like a tracking number — leave it BLANK for manual entry rather
+    // than surfacing routing/URL noise (e.g. a label footer's "ActionOriginPair" URL param).
+    return { value: '', via: fromBarcode ? 'barcode' : 'ocr' };
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -87,7 +120,7 @@ function pickTrackingFromItems(items) {
 // Render a pdf.js page to a PNG blob so the image barcode/OCR path can read it —
 // the fallback when a page has no useful embedded text (a scanned/flattened label).
 async function renderPageToBlob(page) {
-  const viewport = page.getViewport({ scale: 2 }); // upscale for OCR legibility
+  const viewport = page.getViewport({ scale: 3 }); // upscale for barcode/OCR legibility (UPS Code128 needs the resolution)
   const canvas = document.createElement('canvas');
   canvas.width = viewport.width;
   canvas.height = viewport.height;

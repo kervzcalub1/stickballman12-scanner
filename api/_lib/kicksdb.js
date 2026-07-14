@@ -36,8 +36,12 @@ export function kicksdbConfigured() {
 }
 
 const hostIs = (url, host) => {
-  try { const u = new URL(String(url)); return u.protocol === 'https:' && u.hostname.toLowerCase() === host; }
-  catch { return false; }
+  try {
+    const u = new URL(String(url));
+    // Pin protocol, host AND default port (443) — same rigor as r2.isAllowedPhotoUrl, so a
+    // different service on a non-443 port of the same host can't be reached.
+    return u.protocol === 'https:' && u.port === '' && u.hostname.toLowerCase() === host;
+  } catch { return false; }
 };
 export const isStockxImageUrl = (url) => hostIs(url, STOCKX_IMG_HOST);
 export const isGoatImageUrl = (url) => hostIs(url, GOAT_IMG_HOST);

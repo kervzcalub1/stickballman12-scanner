@@ -162,6 +162,7 @@ export function CreatePO({ onHome, onSignOut }) {
             <span className="po-dropzone-text"><b>Drag &amp; drop a labels PDF</b> here, or <span className="po-dropzone-link">browse</span></span>
             <span className="muted sm">One label per page — each tracking number is read in automatically.</span>
           </label>
+          <p className="po-dropzone-note sm">The PDF is only used here to auto-read the tracking numbers — the shipping labels themselves are never stored or shown to the supplier.</p>
           {pdfStatus && <p className="po-pdf-status sm">{pdfStatus}</p>}
           <div className="po-label-rows">
             {labels.map((l, i) => (

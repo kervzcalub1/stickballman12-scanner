@@ -172,10 +172,17 @@ Inquiry" (ph_team + admin; nothing is saved, no inventory touched). Flow:
   upstream call per size). `aliasGlobalIndicator` is now a thin wrapper over
   `aliasPriceInsights`.
 
-## PH Edited Photos (V7 — `PhEditedPhotos`, `/ph/edited-photos`)
-The warehouse shoots raw listing photos on intake (`source='warehouse'`). PH can upload
-their own **edited** images per SKU on a separate page (PH-home card "Edited Photos";
-ph_team + admin). Both sets coexist in `product_photos` (keyed by `(sku, angle, source)`)
+## PH Edited Photos (V7 — `EditedPhotosPanel`, embedded in Find Image Listings)
+**CONSOLIDATED (2026-07-15):** the standalone "Edited Photos" page was merged into **"Find
+Image Listings"** (the renamed Image Finder, `/ph/image-finder`). `PhEditedPhotos.jsx` now
+exports `EditedPhotosPanel({ sku, reloadKey, onSignOut })` (self-loads the SKU's photos, no
+TopBar/SKU-form) which ImageFinder renders as the "manage" view; a **Build from template**
+button opens the Brand & Fill generate flow, **← Back to photos** returns (bumping `reloadKey`
+so just-saved slides show). The old `/ph/edited-photos` URL redirects to `imagefinder`
+(`phPageForPath`); the separate PH-home card is gone. — The warehouse shoots raw listing
+photos on intake (`source='warehouse'`). PH uploads their own **edited** images per SKU
+(upload-as-is / bulk drop + reorder / remove; ph_team + admin). Both sets coexist in
+`product_photos` (keyed by `(sku, angle, source)`)
 — a PH upload never overwrites the warehouse original.
 - **Precedence:** per angle — `ph_edited` wins within an angle, warehouse fills any
   angle PH hasn't edited. The `photo_url` thumbnail sub-queries in `db.js` order
@@ -279,8 +286,8 @@ source, no schema change — so found images behave exactly like hand-edited upl
    - **Branding engine** = `api/_lib/branding.js` using **`@napi-rs/canvas`** (registers the font
      files explicitly — same native binary on Railway; sharp's SVG renderer ignores `@font-face`,
      so it was dropped). Templates in `src/components/ImageTemplate/{1..7}.png` (1600²); fonts in
-     `assets/branding/fonts/` — **Bebas Neue** (SKU/specs, OFL) + **Playfair Display** (serif title,
-     substitutes Canva's "The Youngest"). The shoe is cut out by `cutoutToPng()` in
+     `assets/branding/fonts/` — **Bebas Neue** (SKU/specs, OFL) + **The Youngest** (`TheYoungest-Serif-Book.ttf`,
+     the real Canva serif title face, registered as `SbTitle`). The shoe is cut out by `cutoutToPng()` in
      `api/_lib/cutout.js` — a **full BiRefNet-general** AI matte (`@tugrul/rembg` on
      onnxruntime-node, CPU, ~928MB model auto-downloaded to the gitignored
      `assets/branding/models/`, ~50s–2.5min/image), falling back to the old colour-threshold

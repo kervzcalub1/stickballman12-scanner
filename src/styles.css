@@ -1687,10 +1687,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .if-slot-badge { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; }
 .if-slot-badge.ok { background: var(--ok, #16a34a); }
 .if-slot-badge.bad { background: var(--danger, #dc2626); }
-.if-slot-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 8px; }
+.if-slot-foot { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 8px; }
 .if-slot-label { font-size: 12px; font-weight: 600; }
-.if-slot-toggle { border: 0; background: none; color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 4px; border-radius: 6px; }
-.if-slot-toggle:hover { color: var(--primary); }
+/* Chip-styled secondary action with a 44px touch target (was 11px unbordered text). */
+.if-slot-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 6px 10px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; }
+.if-slot-toggle:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.if-slot-toggle:disabled { opacity: 0.5; cursor: default; }
 
 /* The horizontal 360° frame strip. */
 .if-strip-head { margin-bottom: 6px; }
@@ -1711,6 +1713,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 
 /* Slot foot actions + uploaded tag */
 .if-slot-acts { display: flex; gap: 6px; }
+.if-slot-acts .if-slot-toggle { flex: 1; min-width: 0; }
 .if-slot-tag { position: absolute; top: 4px; left: 4px; font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; background: var(--primary); color: #fff; padding: 2px 6px; border-radius: 6px; }
 
 /* Extra-slide checkboxes */
@@ -1727,11 +1730,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .se-canvas:active { cursor: grabbing; }
 .se-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; background: rgba(0,0,0,.55); color: #fff; font-size: 14px; text-align: center; padding: 20px; }
 .se-overlay.err { background: rgba(70,10,10,.72); }
+.se-overlay-bar { width: 70%; max-width: 260px; }
+.se-overlay-bar .progress-track { background: rgba(255,255,255,.25); border-color: rgba(255,255,255,.35); }
 .se-overlay .btn { background: #fff; color: #111; border-color: #fff; }
 .se-hint { text-align: center; margin: 10px 0 6px; }
 .se-controls { display: flex; align-items: center; gap: 10px; padding: 4px 2px 8px; }
 .se-slider { flex: 1; accent-color: var(--primary); }
-.se-controls .btn.icon { min-width: 40px; min-height: 40px; font-size: 20px; }
+.se-controls .btn.icon { min-width: 44px; min-height: 44px; font-size: 20px; }
 .se-scale-val { min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 14px; }
 
 /* Output-resolution toggle */
@@ -1754,15 +1759,41 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .if-preview-img:hover img { transform: scale(1.03); }
 .if-preview-img:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .if-preview-regen { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.5); color: #fff; font-size: 12px; font-weight: 600; }
-.if-preview-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px 8px; padding: 7px 9px; flex-wrap: wrap; }
+.if-preview-foot { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 9px; }
 .if-preview-label { font-size: 12px; font-weight: 600; color: var(--text); }
-.if-preview-acts { display: flex; gap: 6px; margin-left: auto; }
+.if-preview-acts { display: flex; gap: 6px; }
+.if-preview-acts .if-slot-toggle { flex: 1; min-width: 0; }
 .if-preview-errs { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .if-preview-err { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--danger, #c0392b); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-.if-preview-err .btn { flex: none; }
+.if-preview-err .btn { flex: none; min-height: 44px; }
 .if-commit-actions { display: flex; gap: 10px; margin-top: 14px; }
 .if-commit-actions .btn { flex: 1; justify-content: center; }
 .if-committed { font-size: 13px; font-weight: 700; color: var(--ok); }
+
+/* Progress bar (determinate + indeterminate) for any waiting process */
+.progress { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.progress-track { position: relative; height: 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); overflow: hidden; }
+.progress-fill { height: 100%; background: var(--primary); border-radius: 999px; transition: width 0.3s ease; }
+.progress-fill.indet { position: absolute; width: 40%; left: 0; animation: progress-indet 1.15s ease-in-out infinite; }
+@keyframes progress-indet { 0% { left: -40%; } 100% { left: 100%; } }
+.progress-label { text-align: center; }
+@media (prefers-reduced-motion: reduce) { .progress-fill.indet { animation: none; width: 100%; opacity: 0.45; } }
+
+/* Consolidated "Find Image Listings" — manage view header + back link */
+.if-manage-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pe-autosearch { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); }
+.pe-autosearch .btn { align-self: stretch; justify-content: center; }
+.if-back { display: inline-flex; align-items: center; gap: 8px; margin: 16px 0 16px; min-height: 44px; padding: 10px 16px; border: 1.5px solid var(--primary); border-radius: 10px; background: var(--panel-2); color: var(--primary); font-size: 14px; font-weight: 700; cursor: pointer; }
+.if-back:hover { background: var(--primary); color: #fff; }
+.if-back:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.if-back-arrow { font-size: 17px; line-height: 1; }
+.pe-panel { margin-top: 6px; }
+
+/* Existing photos already on file (shown before an API search) */
+.if-existing-cat { margin-top: 14px; }
+.if-existing-cat-head { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.if-existing-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+.if-existing-grid img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff; border: 1px solid var(--border); border-radius: 10px; display: block; }
 
 @media (max-width: 480px) {
   .if-actions .btn { width: 100%; justify-content: center; }
@@ -1815,6 +1846,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-dropzone-text { font-size: 14px; }
 .po-dropzone-link { color: var(--primary); text-decoration: underline; }
 .po-pdf-status { color: var(--primary); margin-top: 8px; }
+.po-dropzone-note { color: var(--muted); font-style: italic; margin-top: 8px; }
 .po-scan-hint { margin: 8px 0 0; }
 .po-scan-recent { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .po-scan-recent .po-lines { margin-top: 6px; }
@@ -1840,7 +1872,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-line-edit .po-line-controls { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
 .po-line-size { display: flex; flex-direction: column; gap: 2px; }
 .po-line-size .sz { width: 74px; padding: 8px 10px; text-align: center; }
-.po-line-edit .qty-stepper .step { min-width: 40px; min-height: 40px; }
+.po-line-edit .qty-stepper .step { min-width: 44px; min-height: 44px; }
 .po-line-edit .qty-val { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
 .po-line-edit .remove { margin-left: auto; min-width: 40px; min-height: 40px; }
 .po-box-actions { display: flex; gap: 8px; margin-top: 12px; }
@@ -1870,6 +1902,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* ---- PO Phase 2: receive-against-PO controls (in Receiving Step 1) ---- */
 .po-receive { }
 .po-receive-btn { width: 100%; justify-content: center; gap: 8px; }
+/* Tracking→PO auto-match suggestion (confirm-first) */
+.po-suggest { margin-top: 10px; padding: 11px 13px; border: 1px solid var(--primary); border-radius: 10px; background: var(--panel-2); }
+.po-suggest-text { font-size: 13.5px; }
+.po-suggest-acts { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+.po-suggest-acts .btn { min-height: 40px; }
 .po-receive-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px;
   background: rgba(61,124,255,0.10); border: 1px solid rgba(61,124,255,0.35); border-radius: 10px; padding: 10px 12px; }
 .po-receive-banner b { font-size: 14px; }
@@ -1887,7 +1924,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-manifest-size.off { opacity: 0.55; }
 .po-check { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 140px; min-height: 40px; cursor: pointer; }
 .po-check input { width: 22px; height: 22px; flex: none; }
-.po-manifest .qty-stepper .step { min-width: 40px; min-height: 40px; }
+.po-manifest .qty-stepper .step { min-width: 44px; min-height: 44px; }
 .po-size-lbl { font-size: 14px; }
 .po-flag { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .po-flag.short { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }
@@ -1913,7 +1950,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .rc-actions .btn { flex: 1; min-width: 160px; }
 
 /* ---- PO Phase 4: shipment tracking display (supplier view) ---- */
-.po-track-refresh { margin-top: 10px; }
+.po-track-refresh { margin-top: 10px; min-height: 44px; }
+.po-track-refresh-one { margin-top: 10px; min-height: 44px; }
+
+/* PH Purchase Orders overview (read-only list + expandable tracking) */
+.po-ov { padding: 0; overflow: hidden; }
+.po-ov-head { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; width: 100%; text-align: left; background: none; border: 0; cursor: pointer; padding: 14px 16px; color: var(--text); }
+.po-ov-top { display: flex; align-items: center; gap: 10px; }
+.po-ov-meta { grid-column: 1 / 2; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.po-ov-caret { grid-column: 2; grid-row: 1 / 3; align-self: center; color: var(--muted); font-size: 14px; }
+.po-ov-detail { border-top: 1px solid var(--border); padding: 12px 16px; background: var(--panel-2); }
+.po-ov-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.po-ov-label { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
+.po-ov-label:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+.po-ov-label-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .po-track-status { margin: 8px 0 0; }
 .po-track-carrier { font-weight: 600; color: var(--text); }
 .po-track-checkpoint { margin-top: 2px; }

@@ -19,8 +19,16 @@ labels** (one tracking number each); it closes only when every label is shipped.
   label's tracking #). Receiving Step 1 gains a "Receive against a purchase order" picker
   (`PoPickerModal`) that pre-fills supplier/tag and maps each label → a box slot; commit
   (`commit.js` / `create-open.js`) accepts `poId`, sets `batches.po_id`, and `markPoReceiving`
-  flips the PO `shipped → receiving` (+ `received_batch_id`, idempotent). box-commit needs no
-  change (the batch already carries `po_id`).
+  flips the PO **`draft`/`shipped` → `receiving`** (+ `received_batch_id`, idempotent). box-commit
+  needs no change (the batch already carries `po_id`). **Receiving is allowed against a `draft` or
+  `shipped` PO** — boxes arrive one at a time, often before the supplier marks every label shipped
+  (a multi-label PO stays `draft` until ALL labels ship), so `commit.js`/`create-open.js` block only
+  a `reconciled`/`closed` PO ("already … — can't be received against again"), not `draft`.
+- **PH "Purchase Orders" overview (`PoOverview.jsx`, `/ph/po-status`):** read-only list of every PO
+  the team opened — status chip + `shipped/box` label count + `delivered_count` (added to `listPos`)
+  + units; tap to expand per-label tracking (status/carrier/checkpoint) with **Refresh all** +
+  per-label refresh. Fixes "PH reconciliation page is blank" — Reconciliation only lists POs already
+  in `receiving`/`reconciled`, so shipped/draft POs (with tracking) had nowhere to show.
 - **Phase 2b (in progress) — receive by MANIFEST, not blind re-scan (2026-07-09 decision):**
   When a box is received against a PO, its expected lines (from `po_lines` for that label)
   pre-populate a **checklist**: one row per SKU+size with a **present checkbox + editable
@@ -44,8 +52,11 @@ labels** (one tracking number each); it closes only when every label is shipped.
   via **17TRACK**, behind a thin adapter (`api/_lib/tracking.js`) that **no-ops unless
   `TRACKING_API_KEY` is set**. On ship, `po/ship` registers the label's number; status lands
   either by **webhook push** (`POST /api/po/tracking-webhook?secret=…`, gated by
-  `TRACKING_WEBHOOK_SECRET`) or an **on-demand pull** (`POST /api/po/track-refresh` {poId},
-  warehouse/ph). Both write `carrier` / `tracking_status` / `last_checkpoint` / `checked_at`
+  `TRACKING_WEBHOOK_SECRET`) or an **on-demand pull** (`POST /api/po/track-refresh`
+  `{poId, poBoxId?}`, warehouse/ph/supplier). Omit `poBoxId` → refresh **every** label
+  (one lookup per tracking number); pass it → refresh just **that one** label (fewer
+  tracking-API credits). Supplier portal has **Refresh all tracking** + a per-label
+  **Refresh this label** button on each shipped label. Both write `carrier` / `tracking_status` / `last_checkpoint` / `checked_at`
   and advance `po_boxes.status` (17TRACK status → shipped/in_transit/delivered via
   `mapBoxStatus`). Supplier portal shows per-label status + a "Refresh tracking" button.
   Env: `TRACKING_API_KEY`, `TRACKING_WEBHOOK_SECRET` (see `.env.example`). Live register/

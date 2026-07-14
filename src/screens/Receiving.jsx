@@ -50,6 +50,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // links the batch back via poId (server flips the PO to 'receiving').
   const [receivingPo, setReceivingPo] = useState(null); // { po, boxes, lines }
   const [showPoPicker, setShowPoPicker] = useState(false);
+  const [poSuggest, setPoSuggest] = useState(null);     // { code, tracking, data } — a typed/scanned tracking matched an open PO
+  const poSuggestDismiss = useRef(new Set());           // trackings the user chose to receive plainly
   function applyPo(data) {
     const boxes = data.boxes || [];
     setReceivingPo(data);
@@ -196,6 +198,27 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const isPoReceive = !!receivingPo && !isBoxMode && !noShipment;
   const isMultiBoxNew = !noShipment && !isBoxMode && (expectedBoxesNum > 1 || isPoReceive);
   const receivedSlots = boxSlots.filter((s) => s.status === 'received').length;
+
+  // Suggest a PO when a typed/scanned tracking number matches an open shipment and the
+  // warehouse hasn't already picked one — so a box that shipped/arrived gets linked to its
+  // PO instead of leaving the PO open (avoids mismatch). Confirm-first: never auto-links.
+  useEffect(() => {
+    if (receivingPo || noShipment || isRescale || isBoxMode) { setPoSuggest(null); return undefined; }
+    const tracking = [header.tracking, ...boxSlots.map((s) => s.tracking)]
+      .map((t) => String(t || '').trim())
+      .find((t) => t.length >= 8 && !poSuggestDismiss.current.has(t));
+    if (!tracking) { setPoSuggest(null); return undefined; }
+    let dead = false;
+    const id = setTimeout(async () => {
+      try {
+        const data = await api.poLookup(tracking);
+        if (dead) return;
+        if (data?.po && ['draft', 'shipped', 'receiving'].includes(data.po.status)) setPoSuggest({ code: data.po.po_code, tracking, data });
+        else setPoSuggest(null);
+      } catch { if (!dead) setPoSuggest(null); } // 404 = no PO for this tracking
+    }, 600);
+    return () => { dead = true; clearTimeout(id); };
+  }, [header.tracking, boxSlots, receivingPo, noShipment, isRescale, isBoxMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showPrefs, setShowPrefs] = useState(false);
@@ -810,9 +833,20 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           <button type="button" className="btn sm ghost" onClick={clearPo}>Unlink</button>
                         </div>
                       ) : (
-                        <button type="button" className="btn ghost po-receive-btn" onClick={() => setShowPoPicker(true)}>
-                          <Icon name="box" /> Receive against a purchase order
-                        </button>
+                        <>
+                          <button type="button" className="btn ghost po-receive-btn" onClick={() => setShowPoPicker(true)}>
+                            <Icon name="box" /> Receive against a purchase order
+                          </button>
+                          {poSuggest && (
+                            <div className="po-suggest">
+                              <span className="po-suggest-text">Tracking <b>{poSuggest.tracking}</b> matches <b>{poSuggest.code}</b> · {poSuggest.data.po.supplier_name}.</span>
+                              <div className="po-suggest-acts">
+                                <button type="button" className="btn sm primary" onClick={() => { applyPo(poSuggest.data); setPoSuggest(null); }}>Receive against {poSuggest.code}</button>
+                                <button type="button" className="btn sm ghost" onClick={() => { poSuggestDismiss.current.add(poSuggest.tracking); setPoSuggest(null); }}>No, plain receive</button>
+                              </div>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   )}

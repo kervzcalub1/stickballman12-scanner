@@ -1664,6 +1664,7 @@ export async function listPos({ uid, supplierScope }) {
     SELECT p.*,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status <> 'pending')::int AS shipped_count,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status = 'delivered')::int AS delivered_count,
       (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
     FROM purchase_orders p
     ORDER BY p.created_at DESC
@@ -1715,8 +1716,9 @@ export async function updatePoLine(lineId, { size, qty } = {}) {
       WHERE po_box_id = ${line.po_box_id} AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
     `)[0];
     if (sib) {
+      const mergedQty = Math.min(999, sib.qty_expected + newQty); // same 999 cap as a direct edit
       const merged = (await sql`
-        UPDATE po_lines SET qty_expected = ${sib.qty_expected + newQty}, updated_at = now()
+        UPDATE po_lines SET qty_expected = ${mergedQty}, updated_at = now()
         WHERE id = ${sib.id} RETURNING *
       `)[0];
       await sql`DELETE FROM po_lines WHERE id = ${lineId}`;
@@ -1820,12 +1822,14 @@ export async function lookupPoByCodeOrTracking(q) {
 }
 
 // Link a batch to its PO and move the PO into 'receiving' on the first link.
-// Idempotent: keeps the first received_batch_id; only 'shipped' advances.
+// Idempotent: keeps the first received_batch_id. Advances a draft/shipped PO to
+// 'receiving' (a box can arrive before every label is marked shipped); never
+// downgrades a reconciled/closed PO.
 export async function markPoReceiving(poId, batchId) {
   const sql = db();
   await sql`
     UPDATE purchase_orders
-    SET status = CASE WHEN status = 'shipped' THEN 'receiving' ELSE status END,
+    SET status = CASE WHEN status IN ('draft', 'shipped') THEN 'receiving' ELSE status END,
         received_batch_id = COALESCE(received_batch_id, ${batchId})
     WHERE id = ${poId}
   `;

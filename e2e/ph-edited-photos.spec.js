@@ -198,14 +198,15 @@ test('Receiving: ListingPhotos shows "PH edited on file" banner for a SKU with p
   await expect(listingPhotos.getByRole('button', { name: /listing photos|replace photos/i })).toBeVisible();
 });
 
-test('PH team: /ph/edited-photos page shows 7 slots, uploads real photo, shows warehouse originals read-only', async ({ page }) => {
+test('PH team: Find Image Listings shows 7 edited slots, uploads real photo, shows warehouse originals read-only', async ({ page }) => {
   await loginAs(page, 'ph_team');
+  // Edited Photos was consolidated into "Find Image Listings"; the old URL redirects here.
   await page.goto('/ph/edited-photos');
-  await expect(page.getByText('PH Edited Photos')).toBeVisible();
+  await expect(page.getByText('Find Image Listings')).toBeVisible();
 
-  const skuInput = page.locator('.pe-skubar input');
+  const skuInput = page.locator('.pi-sku-input');
   await skuInput.fill(SKU_COEXIST);
-  await page.getByRole('button', { name: 'Load' }).click();
+  await page.getByRole('button', { name: 'Load SKU' }).click();
 
   await expect(page.locator('.pe-grid')).toBeVisible({ timeout: 8000 });
   const slots = page.locator('.pe-slot');
@@ -213,7 +214,8 @@ test('PH team: /ph/edited-photos page shows 7 slots, uploads real photo, shows w
   // side angle already has a ph_edited photo from the fixture -> filled.
   await expect(page.locator('.pe-slot.filled')).toHaveCount(1);
   // Warehouse original (side) shown read-only with a Download button.
-  await expect(page.getByText('Warehouse originals')).toBeVisible();
+  // Scope to the read-only label (a help hint elsewhere also says "Warehouse originals").
+  await expect(page.locator('.pe-orig-lbl')).toBeVisible();
   await expect(page.locator('.pe-orig-cell')).toHaveCount(1);
   await expect(page.getByRole('button', { name: /Download originals/i })).toBeVisible();
 

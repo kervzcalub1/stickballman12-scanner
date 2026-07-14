@@ -6,8 +6,9 @@
 // /api/po/track-refresh. See docs/context/purchase-orders.md.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar } from '../components/common.jsx';
+import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import { carrierName } from '../lib/carriers.js';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',    cls: 'draft' },
@@ -35,6 +36,8 @@ export function PoOverview({ onHome, onSignOut }) {
   const [detailBusy, setDetailBusy] = useState(false);
   const [trackBusy, setTrackBusy] = useState(false);    // whole-PO refresh
   const [trackBoxBusy, setTrackBoxBusy] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(() => new Set()); // box ids showing the timeline
+  const toggleHistory = (id) => setHistoryOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   const loadList = () => {
     api.poList()
@@ -107,7 +110,11 @@ export function PoOverview({ onHome, onSignOut }) {
                                 <div className="po-ov-label-top">
                                   <div>
                                     <b>Label {box.box_number}</b>
-                                    <div className="po-track muted sm">{box.tracking_number || '— no tracking #'}</div>
+                                    <div className="po-track muted sm">
+                                      {carrierName(box.carrier || box.carrier_key) ? <span className="po-carrier">{carrierName(box.carrier || box.carrier_key)}</span> : null}
+                                      {carrierName(box.carrier || box.carrier_key) && box.tracking_number ? ' · ' : ''}
+                                      {box.tracking_number || (carrierName(box.carrier || box.carrier_key) ? '' : '— no tracking #')}
+                                    </div>
                                   </div>
                                   <span className={`po-chip ${boxChipCls(box.status)}`}>{boxStatusLabel(box.status)}</span>
                                 </div>
@@ -118,11 +125,21 @@ export function PoOverview({ onHome, onSignOut }) {
                                     {box.last_checkpoint ? <div className="po-track-checkpoint">{box.last_checkpoint}</div> : null}
                                   </div>
                                 )}
-                                {box.tracking_number && ['shipped', 'in_transit', 'delivered'].includes(box.status) && (
-                                  <button className="btn ghost sm po-track-refresh-one" disabled={trackBusy || trackBoxBusy != null}
-                                    onClick={() => refreshTracking(p.id, box.id)}>
-                                    <Icon name="refresh" /> {trackBoxBusy === Number(box.id) ? 'Checking…' : 'Refresh this label'}
-                                  </button>
+                                <div className="po-track-actions">
+                                  {box.tracking_number && ['shipped', 'in_transit', 'delivered'].includes(box.status) && (
+                                    <button className="btn ghost sm po-track-refresh-one" disabled={trackBusy || trackBoxBusy != null}
+                                      onClick={() => refreshTracking(p.id, box.id)}>
+                                      <Icon name="refresh" /> {trackBoxBusy === Number(box.id) ? 'Checking…' : 'Refresh this label'}
+                                    </button>
+                                  )}
+                                  {box.tracking_events?.length > 0 && (
+                                    <button className="btn ghost sm" onClick={() => toggleHistory(Number(box.id))}>
+                                      <Icon name="tag" /> {historyOpen.has(Number(box.id)) ? 'Hide history' : `Tracking history (${box.tracking_events.length})`}
+                                    </button>
+                                  )}
+                                </div>
+                                {historyOpen.has(Number(box.id)) && box.tracking_events?.length > 0 && (
+                                  <TrackingTimeline events={box.tracking_events} status={box.tracking_status} />
                                 )}
                               </div>
                             ))}

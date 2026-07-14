@@ -6,7 +6,8 @@
 // PO tables via /api/po/* (never the receiving path). See docs/context/purchase-orders.md.
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar } from '../components/common.jsx';
+import { TopBar, TrackingTimeline } from '../components/common.jsx';
+import { carrierName } from '../lib/carriers.js';
 import { Icon } from '../components/NavIcons.jsx';
 import { isUpcCode, usSizeChart, compareSizes } from '../lib/codes.js';
 
@@ -65,6 +66,8 @@ export function SupplierApp({ user, onSignOut }) {
 
   const [trackBusy, setTrackBusy] = useState(false);  // whole-PO refresh
   const [trackBoxBusy, setTrackBoxBusy] = useState(null); // po_box id being refreshed on its own
+  const [historyOpen, setHistoryOpen] = useState(() => new Set()); // box ids showing the tracking timeline
+  const toggleHistory = (id) => setHistoryOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   // Refresh tracking status. Omit `boxId` to refresh every label at once; pass one to
   // refresh just that label (one tracking-API call instead of all — saves credits).
   const refreshTracking = async (boxId) => {
@@ -192,7 +195,11 @@ export function SupplierApp({ user, onSignOut }) {
                   <div className="po-card-top">
                     <div>
                       <b>Label {box.box_number}</b>
-                      <div className="po-track muted sm">{box.tracking_number || '— no tracking #'}</div>
+                      <div className="po-track muted sm">
+                        {carrierName(box.carrier || box.carrier_key) ? <span className="po-carrier">{carrierName(box.carrier || box.carrier_key)}</span> : null}
+                        {carrierName(box.carrier || box.carrier_key) && box.tracking_number ? ' · ' : ''}
+                        {box.tracking_number || (carrierName(box.carrier || box.carrier_key) ? '' : '— no tracking #')}
+                      </div>
                     </div>
                     {isFilling
                       ? <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>
@@ -207,11 +214,21 @@ export function SupplierApp({ user, onSignOut }) {
                     </div>
                   )}
 
-                  {isShipped && box.tracking_number && (
-                    <button className="btn ghost sm po-track-refresh-one" disabled={trackBusy || trackBoxBusy != null}
-                      onClick={() => refreshTracking(box.id)} title="Check just this label (saves credits)">
-                      <Icon name="refresh" /> {trackBoxBusy === Number(box.id) ? 'Checking…' : 'Refresh this label'}
-                    </button>
+                  <div className="po-track-actions">
+                    {isShipped && box.tracking_number && (
+                      <button className="btn ghost sm po-track-refresh-one" disabled={trackBusy || trackBoxBusy != null}
+                        onClick={() => refreshTracking(box.id)} title="Check just this label (saves credits)">
+                        <Icon name="refresh" /> {trackBoxBusy === Number(box.id) ? 'Checking…' : 'Refresh this label'}
+                      </button>
+                    )}
+                    {box.tracking_events?.length > 0 && (
+                      <button className="btn ghost sm" onClick={() => toggleHistory(Number(box.id))}>
+                        <Icon name="tag" /> {historyOpen.has(Number(box.id)) ? 'Hide history' : `Tracking history (${box.tracking_events.length})`}
+                      </button>
+                    )}
+                  </div>
+                  {historyOpen.has(Number(box.id)) && box.tracking_events?.length > 0 && (
+                    <TrackingTimeline events={box.tracking_events} status={box.tracking_status} />
                   )}
 
                   {lines.length > 0 && (

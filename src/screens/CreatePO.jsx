@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
+import { CARRIERS, carrierName } from '../lib/carriers.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -15,7 +16,7 @@ export function CreatePO({ onHome, onSignOut }) {
   const [tagCode, setTagCode] = useState('');
   const [dateOfPurchase, setDateOfPurchase] = useState(today());
   const [notes, setNotes] = useState('');
-  const [labels, setLabels] = useState([{ trackingNumber: '' }]);
+  const [labels, setLabels] = useState([{ trackingNumber: '', carrierKey: null }]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState(null); // { po, boxes } after success
@@ -28,8 +29,8 @@ export function CreatePO({ onHome, onSignOut }) {
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const setLabel = (i, v) => setLabels((ls) => ls.map((l, idx) => (idx === i ? { trackingNumber: v } : l)));
-  const addLabel = () => setLabels((ls) => [...ls, { trackingNumber: '' }]);
+  const setLabel = (i, patch) => setLabels((ls) => ls.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  const addLabel = () => setLabels((ls) => [...ls, { trackingNumber: '', carrierKey: null }]);
   const removeLabel = (i) => setLabels((ls) => (ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls));
 
   // Upload a PDF of shipping labels (one label per page) → auto-create a label row
@@ -41,11 +42,12 @@ export function CreatePO({ onHome, onSignOut }) {
       const { decodeTrackingPdf } = await import('../trackingOcr.js');
       const results = await decodeTrackingPdf(file, (p, n) => setPdfStatus(`Reading label ${p} of ${n}…`));
       if (!results.length) { setPdfStatus(''); setError('That PDF had no pages to read.'); return; }
-      const found = results.map((r) => ({ trackingNumber: r.value || '' }));
+      const found = results.map((r) => ({ trackingNumber: r.value || '', carrierKey: r.carrierKey || null }));
       // Keep any tracking numbers already typed; append the imported rows after them.
       setLabels((ls) => { const kept = ls.filter((l) => l.trackingNumber.trim()); return [...kept, ...found]; });
       const readCount = results.filter((r) => r.value).length;
-      setPdfStatus(`Added ${results.length} label${results.length === 1 ? '' : 's'} — read ${readCount} tracking number${readCount === 1 ? '' : 's'}${readCount < results.length ? '. Fill any blanks below.' : '.'}`);
+      const carrierCount = results.filter((r) => r.carrierKey).length;
+      setPdfStatus(`Added ${results.length} label${results.length === 1 ? '' : 's'} — read ${readCount} tracking number${readCount === 1 ? '' : 's'}${carrierCount ? `, detected ${carrierCount} courier${carrierCount === 1 ? '' : 's'}` : ''}${readCount < results.length ? '. Fill any blanks below.' : '.'}`);
     } catch (e) {
       setPdfStatus(''); setError(`Could not read that PDF. ${e.message || ''}`.trim());
     }
@@ -60,14 +62,14 @@ export function CreatePO({ onHome, onSignOut }) {
 
   const reset = () => {
     setSupplierUserId(''); setTagCode(''); setDateOfPurchase(today()); setNotes('');
-    setLabels([{ trackingNumber: '' }]); setCreated(null); setError('');
+    setLabels([{ trackingNumber: '', carrierKey: null }]); setCreated(null); setError('');
   };
 
   const submit = async () => {
     setError('');
     const supplier = (suppliers || []).find((s) => String(s.id) === String(supplierUserId));
     if (!supplier) { setError('Pick a supplier account.'); return; }
-    const cleaned = labels.map((l) => ({ trackingNumber: l.trackingNumber.trim() })).filter(() => true);
+    const cleaned = labels.map((l) => ({ trackingNumber: l.trackingNumber.trim(), carrierKey: l.carrierKey || null }));
     if (cleaned.length < 1) { setError('Add at least one shipping label.'); return; }
     setBusy(true);
     try {
@@ -169,7 +171,12 @@ export function CreatePO({ onHome, onSignOut }) {
               <div className="po-label-row" key={i}>
                 <span className="po-label-n">#{i + 1}</span>
                 <input value={l.trackingNumber} maxLength={120} placeholder="Tracking number"
-                  autoCapitalize="characters" autoCorrect="off" onChange={(e) => setLabel(i, e.target.value)} />
+                  autoCapitalize="characters" autoCorrect="off" onChange={(e) => setLabel(i, { trackingNumber: e.target.value })} />
+                <select className="po-label-carrier" value={l.carrierKey ?? ''}
+                  title="Courier" onChange={(e) => setLabel(i, { carrierKey: e.target.value ? Number(e.target.value) : null })}>
+                  <option value="">— Select courier —</option>
+                  {CARRIERS.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+                </select>
                 <button type="button" className="btn sm ghost po-label-x" title="Remove label" disabled={labels.length <= 1}
                   onClick={() => removeLabel(i)} aria-label="Remove label">×</button>
               </div>

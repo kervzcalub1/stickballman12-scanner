@@ -475,6 +475,13 @@ await sql(`CREATE INDEX IF NOT EXISTS po_boxes_tracking_idx ON po_boxes (trackin
 // Existing DBs: add the 'packed' review state + packed_at (the inline CHECK/columns
 // above only apply to a fresh table). The CHECK gets Postgres's default name.
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS packed_at TIMESTAMPTZ`);
+// The 17TRACK carrier code (chosen in the New Batch form / auto-detected from the labels
+// PDF) — passed to 17TRACK's register/gettrackinfo so it pulls status from the right
+// carrier. `carrier` (above) stays the display name the aggregator returns.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS carrier_key INT`);
+// Full checkpoint history (newest first) from the tracking aggregator, for the milestone
+// timeline UI: [{ time, description, location, stage }].
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS tracking_events JSONB`);
 await sql(`ALTER TABLE po_boxes DROP CONSTRAINT IF EXISTS po_boxes_status_check`);
 await sql(`ALTER TABLE po_boxes ADD CONSTRAINT po_boxes_status_check CHECK (status IN ('pending','packed','shipped','in_transit','delivered'))`);
 

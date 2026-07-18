@@ -108,10 +108,18 @@ db: `listLocations, getLocationByCode, createLocation, bulkCreateLocations,
 updateLocation, listItemsAtLocation, shelveItems`.
 
 ## Labels (`ShelfLabelSheet`)
-Bulk-select shelves on the Locations page → **Print labels** → pick paper. Each
-label is an **ATM-card (CR80, 3.375 × 2.125")**: big name (`A2-04`), warehouse·area
-line, **CODE128 barcode of `code`**, code text. Paper picker (Letter / A4 / US Legal
-/ A5 / 4×6, default Letter) sets `@page` size; cards tile N-up + cut guides.
+Bulk-select shelves on the Locations page → **Print labels** → pick label stock.
+Each label has a big name (`A2-04`), warehouse·area line, **CODE128 barcode of
+`code`**, code text. Printing builds an **exact-size, one-label-per-page PDF**
+(`src/lib/labelPdf.js`, `LABEL_STOCKS` — CR80 card default, plus Rollo/Dymo/Box/
+Brother **62 × 100 mm DK-11202**), not a `window.print()` of the page. This is
+deliberate: iOS Safari/AirPrint ignores CSS `@page { size }` and force-injects a
+url/date/"Page X of Y" footer, so page-printing came out mis-scaled with the site
+URL along the bottom and one label spilled across two sheets. A PDF whose page IS
+the label prints 1:1 (no browser chrome), batches as multi-page, and works on
+iPhone → Brother QL as well as desktop. Same mechanism backs `LabelSheet` (VIN /
+box labels). On touch devices we open the PDF in a new tab (share → Print); on
+desktop we auto-print via a hidden iframe.
 
 ## Seed / deploy
 `scripts/seed-manheim-locations.mjs` (`npm run db:seed-manheim`) generates the

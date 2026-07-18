@@ -11,6 +11,7 @@ import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
 import { upcDigits, upcFormat, sizeNum } from '../lib/codes.js';
+import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint } from '../lib/labelPdf.js';
 
 // Live clock, always rendered in US Eastern with a literal "EST" suffix so the
 // PH team (in PH time) is never confused about which timezone a time is in.
@@ -440,30 +441,36 @@ export function CopyText({ text, children, className = '', title }) {
 //  • UPC label  — the product's box-style barcode (name / size / colorway / SKU)
 //    for NO-BOX shoes, recreating the manufacturer's box label so it scans like
 //    a normal boxed pair downstream.
-const LABEL_SIZES = {
-  rollo: { w: 2.25, h: 1.25, label: 'Rollo 30256/30327 — 2.25 × 1.25"' },
-  dymo: { w: 2.125, h: 1.125, label: 'Dymo 30334 — 2.125 × 1.125"' },
-  box: { w: 3.14, h: 1.96, label: 'Box label — 3.14 × 1.96"' },
-};
-
 // `mode`: 'vin' (default — our SBM tracking label) or 'upc' (box-style label with
 // the product UPC barcode, used only from the No Box page). Box-style matches the
 // real shoe-box label: vertical UPC barcode on the left, text stacked on the right.
+// Printing generates an exact-size, one-label-per-page PDF (see lib/labelPdf.js) —
+// this is what makes labels come out at the right scale, without the browser's
+// url/date footer, on the warehouse's iPhone → Brother QL label printers.
 export function LabelSheet({ items, onClose, mode = 'vin' }) {
   const list = items || [];
   const [size, setSize] = useState(mode === 'upc' ? 'box' : 'rollo');
-  const s = LABEL_SIZES[size];
+  const [busy, setBusy] = useState(false);
+  const s = LABEL_STOCKS[size];
+  const doPrint = () => {
+    if (busy) return;
+    setBusy(true);
+    const preWin = isTouchPrint() ? window.open('', '_blank') : null;
+    buildLabelPdf({ kind: mode === 'upc' ? 'box' : 'vin', items: list, stock: size })
+      .then((doc) => dispatchPdf(doc, preWin))
+      .catch((e) => { if (preWin) preWin.close(); alert('Could not build labels: ' + (e?.message || e)); })
+      .finally(() => setBusy(false));
+  };
   return createPortal(
-    <div className="label-overlay" style={{ '--lw': `${s.w}in`, '--lh': `${s.h}in` }}>
-      <style>{`@media print { @page { size: ${s.w}in ${s.h}in; margin: 0; } }`}</style>
+    <div className="label-overlay" style={{ '--lw': `${s.long}mm`, '--lh': `${s.short}mm` }}>
       <div className="label-toolbar no-print">
         <span>{list.length} {mode === 'upc' ? 'box' : 'VIN'} label(s)</span>
         <span className="label-tools">
           <select value={size} onChange={(e) => setSize(e.target.value)}>
-            {Object.entries(LABEL_SIZES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            {Object.entries(LABEL_STOCKS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           <button className="btn ghost sm" onClick={onClose}>Close</button>
-          <button className="btn primary sm" onClick={() => window.print()}><Icon name="print" /> Print</button>
+          <button className="btn primary sm" onClick={doPrint} disabled={busy}><Icon name="print" /> {busy ? 'Building…' : 'Print'}</button>
         </span>
       </div>
       <div className="label-roll">
@@ -508,32 +515,34 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
   );
 }
 
-// Shelf-location labels — a big name + a CODE128 barcode of the location code,
-// each an ATM-card (CR80, 3.375 × 2.125") sized card. Cards tile N-up on the
-// chosen paper (Letter/A4/Legal/A5/4×6); the browser paginates on print.
-const SHELF_PAPERS = {
-  letter: { label: 'Letter — 8.5 × 11"', size: '8.5in 11in' },
-  a4: { label: 'A4 — 210 × 297mm', size: '210mm 297mm' },
-  legal: { label: 'US Legal — 8.5 × 14"', size: '8.5in 14in' },
-  a5: { label: 'A5 — 148 × 210mm', size: '148mm 210mm' },
-  label46: { label: '4 × 6" label', size: '4in 6in' },
-};
-
+// Shelf-location labels — a big name + a CODE128 barcode of the location code.
+// Printing generates an exact-size, one-label-per-page PDF (see lib/labelPdf.js),
+// so a single location prints on a single label — not spilled across a sheet by
+// the browser's print dialog.
 export function ShelfLabelSheet({ locations, onClose }) {
   const list = locations || [];
-  const [paper, setPaper] = useState('letter');
-  const p = SHELF_PAPERS[paper];
+  const [size, setSize] = useState('cr80');
+  const [busy, setBusy] = useState(false);
+  const s = LABEL_STOCKS[size];
+  const doPrint = () => {
+    if (busy) return;
+    setBusy(true);
+    const preWin = isTouchPrint() ? window.open('', '_blank') : null;
+    buildLabelPdf({ kind: 'shelf', items: list, stock: size })
+      .then((doc) => dispatchPdf(doc, preWin))
+      .catch((e) => { if (preWin) preWin.close(); alert('Could not build labels: ' + (e?.message || e)); })
+      .finally(() => setBusy(false));
+  };
   return createPortal(
-    <div className="label-overlay shelf-overlay">
-      <style>{`@media print { @page { size: ${p.size}; margin: 0.2in; } }`}</style>
+    <div className="label-overlay shelf-overlay" style={{ '--lw': `${s.long}mm`, '--lh': `${s.short}mm` }}>
       <div className="label-toolbar no-print">
         <span>{list.length} shelf label{list.length === 1 ? '' : 's'}</span>
         <span className="label-tools">
-          <select value={paper} onChange={(e) => setPaper(e.target.value)}>
-            {Object.entries(SHELF_PAPERS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          <select value={size} onChange={(e) => setSize(e.target.value)}>
+            {Object.entries(LABEL_STOCKS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           <button className="btn ghost sm" onClick={onClose}>Close</button>
-          <button className="btn primary sm" onClick={() => window.print()}><Icon name="print" /> Print</button>
+          <button className="btn primary sm" onClick={doPrint} disabled={busy}><Icon name="print" /> {busy ? 'Building…' : 'Print'}</button>
         </span>
       </div>
       <div className="shelf-sheet">

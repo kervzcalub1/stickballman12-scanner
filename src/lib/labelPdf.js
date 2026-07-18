@@ -16,12 +16,19 @@ const PT_PER_MM = 72 / 25.4; // 2.8346 — jsPDF font sizes are in points
 // the content (wide barcode) reads best that way — matching what the Brother QL
 // driver shows as "Landscape".
 export const LABEL_STOCKS = {
+  small35: { label: 'Small 1.1 × 3.5"', long: 88.9, short: 27.94 },
   rollo: { label: 'Rollo 2.25 × 1.25"', long: 57.15, short: 31.75 },
   dymo: { label: 'Dymo 2.125 × 1.125"', long: 53.98, short: 28.58 },
   box: { label: 'Box label 3.14 × 1.96"', long: 79.76, short: 49.78 },
   cr80: { label: 'Card 3.375 × 2.125"', long: 85.73, short: 53.98 },
   dk11202: { label: 'Brother 62 × 100 mm (DK-11202)', long: 100, short: 62 },
 };
+
+// The shoe name only fits legibly on a large label. On anything smaller than the
+// 62 × 100 mm stock we drop it — SKU + size + VIN barcode is all the warehouse /
+// shelving flow needs, and cramming the name onto a small label just shrinks the
+// bits that actually get scanned/read. Threshold keyed on the short side.
+const NAME_MIN_SHORT_MM = 62;
 
 async function loadJsPDF() {
   const mod = await import('jspdf');
@@ -96,11 +103,11 @@ function drawStack(doc, pw, ph, blocks) {
   }
 }
 
-// One VIN tracking label: shoe name (2-line clamp), SKU | SIZE, VIN, CODE128
-// barcode of the VIN, VIN text.
-function drawVinLabel(doc, JsBarcode, pw, ph, it) {
+// One VIN tracking label: shoe name (2-line clamp, large stock only), SKU | SIZE,
+// VIN, CODE128 barcode of the VIN, VIN text.
+function drawVinLabel(doc, JsBarcode, pw, ph, it, showName) {
   const blocks = [];
-  if (it.name) blocks.push({ kind: 'text', text: String(it.name).toUpperCase(), pt0: 8, bold: true, clamp: 2 });
+  if (showName && it.name) blocks.push({ kind: 'text', text: String(it.name).toUpperCase(), pt0: 8, bold: true, clamp: 2 });
   blocks.push({ kind: 'text', text: `${it.sku || '—'}   |   ${it.size || '—'}`, pt0: 14, bold: true });
   blocks.push({ kind: 'text', text: `VIN: ${it.vin}`, pt0: 8, bold: true });
   const bc = barcodeCanvas(JsBarcode, it.vin, { format: 'CODE128' });
@@ -178,6 +185,7 @@ export async function buildLabelPdf({ kind, items, stock }) {
   const [jsPDF, JsBarcode] = await Promise.all([loadJsPDF(), loadJsBarcode()]);
   const W = s.long;
   const H = s.short;
+  const showName = s.short >= NAME_MIN_SHORT_MM;
   let doc = null;
   for (const it of list) {
     if (!doc) doc = new jsPDF({ unit: 'mm', format: [W, H], orientation: 'landscape' });
@@ -186,7 +194,7 @@ export async function buildLabelPdf({ kind, items, stock }) {
     const ph = doc.internal.pageSize.getHeight();
     if (kind === 'box') drawBoxLabel(doc, JsBarcode, pw, ph, it);
     else if (kind === 'shelf') drawShelfLabel(doc, JsBarcode, pw, ph, it);
-    else drawVinLabel(doc, JsBarcode, pw, ph, it);
+    else drawVinLabel(doc, JsBarcode, pw, ph, it, showName);
   }
   if (!doc) doc = new jsPDF({ unit: 'mm', format: [W, H], orientation: 'landscape' }); // empty guard
   return doc;

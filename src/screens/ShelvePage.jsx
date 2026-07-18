@@ -28,6 +28,20 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const inputRef = useRef(null);
   const recentRef = useRef({});
+  const [flash, setFlash] = useState(null);   // transient scan feedback { kind:'shelf'|'vin'|'dup'|'err', text }
+  const [justVin, setJustVin] = useState(''); // most-recently added VIN — briefly highlighted in the list
+  const flashTimer = useRef(null);
+  const justTimer = useRef(null);
+  // Give every scan an unmistakable confirmation: a colored banner (works on iOS,
+  // which has no Vibration API) plus a best-effort haptic on Android. 'shelf'/'vin'
+  // = success (green), 'dup'/'err' = rejected (amber, double-buzz).
+  function pulse(kind, text) {
+    setFlash({ kind, text });
+    try { navigator.vibrate?.(kind === 'dup' || kind === 'err' ? [30, 40, 30] : 30); } catch { /* unsupported */ }
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(null), 1600);
+  }
+  useEffect(() => () => { clearTimeout(flashTimer.current); clearTimeout(justTimer.current); }, []);
   const [listRef] = useAutoAnimate(); // shoes slide in as each VIN is scanned onto the shelf
   const isMobile = useMediaQuery('(max-width: 768px)');
   useUnsavedGuard(rows.length > 0);
@@ -48,6 +62,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
     try {
       const { location: loc } = await api.locationLookup(code);
       setLocation({ code: loc.code, label: loc.label, warehouse: loc.warehouse, area: loc.area, active: loc.active });
+      pulse('shelf', `Shelf ready — ${loc.label || loc.code}. Now scan shoes.`);
       if (loc.active === false) setError(`Heads up: “${loc.code}” is marked inactive.`);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
@@ -57,13 +72,17 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
 
   async function addVin(code) {
     setError('');
-    if (!location) { setError('Scan the shelf barcode first.'); return; }
-    if (rows.some((r) => r.vin === code)) { setError(`${code} is already in the list.`); return; }
+    if (!location) { setError('Scan the shelf barcode first.'); pulse('err', 'Scan the shelf barcode first.'); return; }
+    if (rows.some((r) => r.vin === code)) { pulse('dup', `${code} is already on this shelf — each VIN is scanned once.`); return; }
     setBusy(true);
     try {
       const { item } = await api.itemLookup(code);
-      if (item.status === 'sold' || item.status === 'shipped') { setError(`${item.vin} is ${item.status} — can’t shelve it.`); return; }
+      if (item.status === 'sold' || item.status === 'shipped') { setError(`${item.vin} is ${item.status} — can’t shelve it.`); pulse('err', `${item.vin} is ${item.status} — can’t shelve it.`); return; }
       setRows((rs) => [{ vin: item.vin, name: item.name, sku: item.sku, size: item.size, status: item.status, with_box: item.with_box, nowHasBox: false }, ...rs]);
+      setJustVin(item.vin);
+      clearTimeout(justTimer.current);
+      justTimer.current = setTimeout(() => setJustVin(''), 1200);
+      pulse('vin', `Added ${item.vin}${item.size ? ` · US ${item.size}` : ''}${item.sku ? ` · ${item.sku}` : ''}`);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
@@ -156,8 +175,14 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
 
       {mode === 'scan' && (<>
       <div className="card">
+        {flash && (
+          <div className={`scan-flash scan-flash--${flash.kind}`} role="status" aria-live="assertive">
+            <span className="scan-flash-ic">{flash.kind === 'dup' || flash.kind === 'err' ? '!' : '✓'}</span>
+            <span>{flash.text}</span>
+          </div>
+        )}
         {location ? (
-          <div className="shelve-target">
+          <div className={`shelve-target${flash?.kind === 'shelf' ? ' flash-ok' : ''}`}>
             <span className="muted sm">Shelving to</span>
             <span className="shelve-loc"><Icon name="pin" /> {location.warehouse}{location.area ? ` · ${location.area}` : ''} · <b>{location.label || location.code}</b></span>
             <button type="button" className="btn ghost sm" onClick={clearShelf}>Change shelf</button>
@@ -206,7 +231,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
           {isMobile ? (
             <div className="dcards" ref={listRef}>
               {rows.map((r) => (
-                <div className="dcard" key={r.vin}>
+                <div className={`dcard${r.vin === justVin ? ' just-added' : ''}`} key={r.vin}>
                   <div className="dcard-top">
                     <span className="vin">{r.vin}</span>
                     <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeRow(r.vin)}>×</button>
@@ -225,7 +250,7 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
                 <thead><tr><th className="inv-col-vin">VIN</th><th>Shoe</th><th className="inv-col-size">Size</th><th>Current status</th><th>Box?</th><th aria-label="remove" /></tr></thead>
                 <tbody ref={listRef}>
                   {rows.map((r) => (
-                    <tr key={r.vin}>
+                    <tr className={r.vin === justVin ? 'just-added' : ''} key={r.vin}>
                       <td className="inv-col-vin"><span className="vin">{r.vin}</span></td>
                       <td className="inv-name" title={r.name}>{r.name || '—'}</td>
                       <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>

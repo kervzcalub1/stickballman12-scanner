@@ -24,7 +24,10 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
   See `in-store.md`.
 - Bulk **Edit status** → `api/items/bulk-status.js` (`bulkSetStatus`), one
   `status_change` event per VIN; sold/shipped cascades clear sync flags.
-- **Print labels** → `LabelSheet` (VIN barcodes, `jsbarcode` CODE128).
+- **Print labels** → `LabelSheet` (VIN barcodes, `jsbarcode` CODE128). Builds an
+  exact-size, one-label-per-page **PDF** (`src/lib/labelPdf.js`) instead of
+  `window.print()` — see `docs/context/locations.md` "Labels" for why (iOS
+  AirPrint mis-scaling + url/date footer).
 - CSV export.
 
 ## Listing photos (thumbnails + detail view/delete)

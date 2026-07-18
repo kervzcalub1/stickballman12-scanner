@@ -22,7 +22,10 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
 ## UPC box labels
 - **Print box labels** (`LabelSheet mode` box-style): recreates a real shoe-box
   label — vertical UPC barcode + name/size/colorway/SKU — so no-box pairs scan
-  normally. Accessible **only on this page**.
+  normally. Accessible **only on this page**. Emitted as an exact-size PDF
+  (`src/lib/labelPdf.js`, `drawBoxLabel`); no-UPC records fall back to a
+  centered text-only label. See `docs/context/locations.md` "Labels" for the
+  why (iOS AirPrint scaling/footer fix).
 - Uses `items.upc` (+ colorway). UPC must be on the record (captured at
   scan/lookup). Legacy items without a UPC can't be backfilled by SKU
   (per-size UPCs aren't in the KicksDB SKU lookup) → manual entry is a TODO.

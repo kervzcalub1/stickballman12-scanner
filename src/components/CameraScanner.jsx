@@ -19,6 +19,14 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
   const trackRef = useRef(null);
   const doneRef = useRef(false);
   const lastTextRef = useRef(null);
+  // Always call the *latest* onDetected. The decode loop lives in an effect keyed
+  // on [deviceId, restartKey] (we don't want to tear the camera down every render),
+  // so capturing onDetected directly would freeze it at mount — in continuous mode
+  // that made the caller's handler see stale state (e.g. the shelve list dedupe
+  // checked an empty `rows`, so the same VIN could be added repeatedly).
+  const onDetectedRef = useRef(onDetected);
+  useEffect(() => { onDetectedRef.current = onDetected; }, [onDetected]);
+  const firedRef = useRef(null); // last code fired in continuous mode (don't re-fire while it sits in view)
   const [error, setError] = useState('');
   const [devices, setDevices] = useState([]);
   const [deviceId, setDeviceId] = useState(undefined); // only set by the user switcher
@@ -93,9 +101,14 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
             if (result && !doneRef.current) {
               const raw = result.getText();
               const text = rawMode ? raw.trim() : (raw.replace(/\D/g, '') || raw);
+              // Require two consecutive identical decodes in raw mode (Code128/39 misread guard).
               if (rawMode && lastTextRef.current !== text) { lastTextRef.current = text; return; }
+              // Continuous mode: fire a given code once, not every frame it stays in view.
+              // (Re-firing spammed the caller and, before the dedupe fix, added dupes.)
+              if (continuous && firedRef.current === text) return;
+              firedRef.current = text;
               if (!continuous) { doneRef.current = true; try { controls.stop(); } catch { /* noop */ } }
-              onDetected(text);
+              onDetectedRef.current(text);
             }
           },
         );

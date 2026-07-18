@@ -26,6 +26,14 @@ Two modes (tabs): **Scan shelf → shoes** (classic: scan a shelf barcode → sc
 VIN → Shelve here) and **Pick from pending list** — a selectable list of `needs_shelf`
 shoes (grouped by SKU) → assign a shelf by **scanning** OR the hierarchical
 **`ShelfPicker`** (search + Site→Area→Bay→Shelf drill, `src/components/ShelfPicker.jsx`).
+Every scan gets loud feedback (`pulse()` → colored `.scan-flash` banner + row
+highlight + best-effort `navigator.vibrate`): green for shelf-set / VIN-added,
+amber for duplicate/rejected. A VIN already on the list is refused (each per-box
+VIN is unique). **Camera dedupe gotcha (fixed):** `CameraScanner`'s decode loop
+lives in an effect keyed on `[deviceId, restartKey]`, so it must call
+`onDetectedRef.current` (a ref synced each render) — capturing `onDetected`
+directly froze `routeScan` at mount with an empty `rows`, so continuous mode
+re-added the same VIN. It also fires each code once per appearance (`firedRef`).
 `POST /api/items/shelve { locationCode, units:[{vin, nowHasBox}] }` → `shelveItems`:
 - Boxed unit (or a no-box one flagged "box found now") → `status='in_stock'` at the shelf.
 - **A no-box unit without a confirmed box is REFUSED** (`results[].reason='no_box'`,
@@ -111,8 +119,11 @@ updateLocation, listItemsAtLocation, shelveItems`.
 Bulk-select shelves on the Locations page → **Print labels** → pick label stock.
 Each label has a big name (`A2-04`), warehouse·area line, **CODE128 barcode of
 `code`**, code text. Printing builds an **exact-size, one-label-per-page PDF**
-(`src/lib/labelPdf.js`, `LABEL_STOCKS` — CR80 card default, plus Rollo/Dymo/Box/
-Brother **62 × 100 mm DK-11202**), not a `window.print()` of the page. This is
+(`src/lib/labelPdf.js`, `LABEL_STOCKS` — CR80 card default, plus Small **1.1 ×
+3.5"**/Rollo/Dymo/Box/Brother **62 × 100 mm DK-11202**), not a `window.print()`
+of the page. VIN labels **omit the shoe name on any stock smaller than 62 × 100 mm**
+(`NAME_MIN_SHORT_MM`) — SKU + size + VIN barcode is all shelving needs, and the
+name just shrinks what actually gets scanned on a small label. This is
 deliberate: iOS Safari/AirPrint ignores CSS `@page { size }` and force-injects a
 url/date/"Page X of Y" footer, so page-printing came out mis-scaled with the site
 URL along the bottom and one label spilled across two sheets. A PDF whose page IS

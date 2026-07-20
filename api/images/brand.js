@@ -14,8 +14,15 @@ import { setProductPhoto, dbConfigured } from '../_lib/db.js';
 import { r2Configured, presignPutUrl, publicUrl, isAllowedPhotoUrl } from '../_lib/r2.js';
 import { isAllowedSourceImageUrl, kicksdbSpecData, hiResSourceUrl } from '../_lib/kicksdb.js';
 import {
-  brandPhoto, brandSpec, welcomeSlide, cutoutForEdit, specBulletsFromDescription, ANGLE_TEMPLATE,
+  brandPhoto, brandSpec, welcomeSlide, cutoutForEdit, specBulletsFromDescription,
+  ANGLE_TEMPLATE, SPEC_TEMPLATE, WELCOME_TEMPLATE,
 } from '../_lib/branding.js';
+
+// Listing images are named by their POSITION in the upload order (side=1 · diagonal=2 ·
+// top=3 · outsole=4 · rear=5 · spec=6 · welcome=7) rather than the angle name — e.g.
+// `…/2-<ts>.jpg` for the 3/4 shot. product_photos still records the angle/slot; only the
+// stored file key uses the number.
+const IMAGE_POSITION = { ...ANGLE_TEMPLATE, extra1: SPEC_TEMPLATE, extra2: WELCOME_TEMPLATE };
 import { photoSourceForRole } from '../_lib/photos.js';
 
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
@@ -67,7 +74,8 @@ export default async function handler(req, res) {
   }
   // Persist a finished slide (commit only) → R2 + product_photos.
   async function storeFinal(angle, buffer) {
-    const key = `listings/${safeSku}/ph_edited/${angle}-${Date.now()}.jpg`;
+    const pos = IMAGE_POSITION[angle] || angle; // number by position; fall back to the raw slot name
+    const key = `listings/${safeSku}/ph_edited/${pos}-${Date.now()}.jpg`;
     const put = await fetchWithTimeout(presignPutUrl({ key, expiresIn: 300 }),
       { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: buffer }, 20000);
     if (!put.ok) throw new Error(`upload ${put.status}`);

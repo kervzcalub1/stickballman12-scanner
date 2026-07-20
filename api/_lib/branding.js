@@ -34,10 +34,12 @@ const SHOE_BOX = { cx: 800, cy: 812, w: 1050, h: 770 };
 const SHOE_SHADOW = { offsetX: 28, offsetY: 30, blur: 42, color: 'rgba(0,0,0,0.78)' };
 const TITLE = { cx: 800, topY: 188, size: 80, maxW: 1010, lineGap: 12, maxLines: 2 };
 const SKU = { cx: 800, y: 1476, size: 104 };
-// contLineH = spacing between wrapped continuation lines within ONE bullet; maxW =
-// right edge for wrapping (long colorways wrap here). outlineWidth/outlineColor draw a
-// stroke around the bullet text (0 = off). All tuned in the spec playground.
-const SPEC = { startX: 300, startY: 500, lineH: 118, size: 96, bulletR: 9, gap: 42, contLineH: 90, maxW: 1000, outlineWidth: 5, outlineColor: '#000000' };
+// The bullet block is VERTICALLY CENTERED between boxTop and boxBottom automatically —
+// its real height (bullets + wrapped lines) is measured, so it stays centered whether it
+// has 3 bullets or 7. contLineH = spacing between wrapped continuation lines within ONE
+// bullet; maxW = right edge for wrapping (long colorways wrap here). outlineWidth/
+// outlineColor draw a stroke around the bullet text (0 = off). All tuned in the spec playground.
+const SPEC = { startX: 300, boxTop: 430, boxBottom: 1200, lineH: 118, size: 96, bulletR: 9, gap: 42, contLineH: 90, maxW: 1000, outlineWidth: 5, outlineColor: '#000000' };
 
 // Encode the canvas to JPEG and stamp the JFIF density to 96 DPI (Canva parity).
 // napi-canvas writes units=0/density=1 (which tools read as 72 DPI); we patch the
@@ -298,10 +300,19 @@ export async function brandSpec({ title, sku, bullets = [], outSize = W }) {
   const outline = SPEC.outlineWidth > 0;
   const shadowOn = () => { ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 5; ctx.shadowOffsetX = 4; ctx.shadowOffsetY = 4; };
   const shadowOff = () => { ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; };
+  // Pre-wrap every bullet so we know the whole block's height, then center it vertically
+  // in the spec box. `advance` is the total y-travel of the loop; the baseline span is
+  // `advance - lineH` (the last line adds no trailing gap). Offset by half the cap-height
+  // (ascent) so the visible glyphs — not the baselines — sit centered.
+  const wrapped = bullets.slice(0, 7).map((b) => wrapGreedy(ctx, String(b).toUpperCase(), SPEC.maxW));
+  const advance = wrapped.reduce((s, lines) => s + SPEC.lineH + (lines.length - 1) * SPEC.contLineH, 0);
+  const tm = ctx.measureText('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+  const ascent = tm.actualBoundingBoxAscent || SPEC.size * 0.72;
+  const descent = tm.actualBoundingBoxDescent || 0;
+  const centerY = (SPEC.boxTop + SPEC.boxBottom) / 2;
   ctx.save();
-  let y = SPEC.startY;
-  bullets.slice(0, 7).forEach((b) => {
-    const lines = wrapGreedy(ctx, String(b).toUpperCase(), SPEC.maxW);
+  let y = centerY - (advance - SPEC.lineH) / 2 + (ascent - descent) / 2;
+  wrapped.forEach((lines) => {
     shadowOn();
     ctx.beginPath(); ctx.arc(SPEC.startX, y - SPEC.size * 0.32, SPEC.bulletR, 0, Math.PI * 2); ctx.fill();
     lines.forEach((ln, li) => {

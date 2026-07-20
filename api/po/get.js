@@ -1,7 +1,7 @@
 // GET /api/po/get?id=  — full PO (header + labels + expected lines).
 // A supplier is restricted to their own POs; staff/admin see any.
 import { send, applySecurity, requireRole, isPrivileged } from '../_lib/util.js';
-import { getPoFull, dbConfigured } from '../_lib/db.js';
+import { getPoFull, getBusinessName, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -19,7 +19,14 @@ export default async function handler(req, res) {
     if (user.role === 'supplier' && !isPrivileged(user.role)
         && Number(data.po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
-    return send(res, 200, { ok: true, ...data });
+    const businessName = await getBusinessName();
+    // The supplier must never see WHICH staff member entered a line on their behalf —
+    // only that it was entered by the business's staff. Strip the identity but keep the
+    // on-behalf flag so their portal can show the generic "<business>'s Staff" note.
+    if (user.role === 'supplier' && !isPrivileged(user.role)) {
+      data.lines = (data.lines || []).map(({ entered_by, entered_by_name, entered_by_username, ...rest }) => rest);
+    }
+    return send(res, 200, { ok: true, businessName, ...data });
   } catch (e) {
     console.error('[po/get]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load the purchase order.' });

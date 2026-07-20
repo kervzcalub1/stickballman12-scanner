@@ -6,7 +6,7 @@
 // tracking isn't configured (TRACKING_API_KEY unset).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, getPoFull, dbConfigured } from '../_lib/db.js';
-import { trackingConfigured, fetchTrackInfo } from '../_lib/tracking.js';
+import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -52,6 +52,8 @@ export default async function handler(req, res) {
       updates.push(...await fetchTrackInfo(items.slice(i, i + 40)));
     }
     for (const u of updates) await setPoBoxTracking(u.trackingNumber, u);
+    // Keep the warehouse's Google Sheet in sync on manual pulls too (best-effort, env-gated).
+    forwardTrackingToSheet(updates).catch((e) => console.warn('[po/track-refresh] sheet:', e.message));
     const data = await getPoFull(poId);
     return send(res, 200, { ok: true, updated: updates.length, ...data });
   } catch (e) {

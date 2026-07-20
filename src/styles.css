@@ -1862,6 +1862,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-chip.receiving { background: rgba(217,122,30,0.14); color: #d97a1e; border-color: rgba(217,122,30,0.35); }
 .po-chip.ok { background: rgba(26,157,99,0.14); color: var(--ok); border-color: rgba(26,157,99,0.35); }
 .po-chip.packed { background: rgba(155,120,230,0.16); color: #9b78e6; border-color: rgba(155,120,230,0.4); }
+/* pre_transit: label made but parcel still with the supplier — a "staged, not yet moving"
+   slate, distinct from the amber "Filling" and the orange "In transit". */
+.po-chip.pretransit { background: rgba(120,134,156,0.18); color: #78869c; border-color: rgba(120,134,156,0.42); }
 .po-chip.muted { background: var(--panel-2); color: var(--muted); }
 
 .po-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
@@ -1895,9 +1898,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-review-total { margin: 0 0 4px; font-size: 13.5px; }
 .po-track { margin-top: 2px; }
 .po-lines { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.po-lines li { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; border-top: 1px solid var(--border); padding-top: 6px; }
+.po-lines li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; font-size: 13.5px; border-top: 1px solid var(--border); padding-top: 6px; }
 .po-line-name { font-weight: 600; }
 .po-line-meta { color: var(--muted); white-space: nowrap; }
+/* On-behalf attribution: who entered a manifest line. Full-width so it drops below
+   the name/meta row (supplier sees "<business>'s Staff"; staff see the real person). */
+.po-line-attribution { flex-basis: 100%; width: 100%; color: var(--muted); font-size: 11.5px; }
+.po-ov-fill-btn { margin-top: 10px; }
+.po-ov-fill-hint { margin: 8px 0 0; }
+/* Whole-order manifest block (Path C) inside the PO overview detail. */
+.po-ov-order { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--border); border-radius: 10px; background: var(--surface-2, rgba(155,120,230,0.06)); }
+.po-ov-order-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
 /* Editable line on a filling label — size + qty + remove. */
 .po-lines-edit li.po-line-edit { flex-direction: column; align-items: stretch; gap: 8px; }
 .po-line-edit .po-line-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
@@ -1965,6 +1976,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 
 /* ---- PO Phase 3: reconciliation report ---- */
 .rc-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.rc-no-manifest { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-2, rgba(155,120,230,0.08)); border: 1px solid var(--border); line-height: 1.45; }
 .po-flag.ok { color: var(--ok); background: rgba(26,157,99,0.14); border: 1px solid rgba(26,157,99,0.35); }
 /* Reconciliation semantic badges: bad = red (shortage / not-on-PO), warn = amber
    (overage / wrong-size). Match the manifest's .short/.over tones. */

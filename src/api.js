@@ -170,6 +170,8 @@ export const api = {
   poList: () => get('/api/po/list'),
   poGet: (id) => get(`/api/po/get?id=${encodeURIComponent(id)}`),
   poScan: (payload) => post('/api/po/scan', payload),
+  // Whole-order manifest (Path C): add a line against the PO itself (no label).
+  poScanOrder: (payload) => post('/api/po/scan-order', payload),
   poLine: (lineId, patch) => post('/api/po/line', { lineId, ...patch }),
   poCloseBox: (poBoxId) => post('/api/po/close-box', { poBoxId }),
   poReopenBox: (poBoxId) => post('/api/po/reopen-box', { poBoxId }),

@@ -458,9 +458,10 @@ await sql(`
     tracking_number TEXT,
     carrier         TEXT,                   -- auto-detected by the tracking aggregator
     -- 'pending' (filling) → 'packed' (reviewed & closed, ready to ship) → 'shipped'
-    -- → 'in_transit' / 'delivered' (from tracking). Editing (scan) only while 'pending'.
+    -- → 'pre_transit' (label made, still with supplier) → 'in_transit' / 'delivered'
+    -- (from tracking). Editing (scan) only while 'pending'.
     status          TEXT NOT NULL DEFAULT 'pending'
-                      CHECK (status IN ('pending','packed','shipped','in_transit','delivered')),
+                      CHECK (status IN ('pending','packed','pre_transit','shipped','in_transit','delivered')),
     tracking_status TEXT,                   -- raw status from the aggregator
     last_checkpoint TEXT,
     checked_at      TIMESTAMPTZ,
@@ -483,7 +484,7 @@ await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS carrier_key INT`);
 // timeline UI: [{ time, description, location, stage }].
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS tracking_events JSONB`);
 await sql(`ALTER TABLE po_boxes DROP CONSTRAINT IF EXISTS po_boxes_status_check`);
-await sql(`ALTER TABLE po_boxes ADD CONSTRAINT po_boxes_status_check CHECK (status IN ('pending','packed','shipped','in_transit','delivered'))`);
+await sql(`ALTER TABLE po_boxes ADD CONSTRAINT po_boxes_status_check CHECK (status IN ('pending','packed','pre_transit','shipped','in_transit','delivered'))`);
 
 // The "what the supplier says he shipped" lines — one per SKU+size PER LABEL, so the
 // same SKU+size can appear under different labels. Re-scanning a SKU/size increments
@@ -507,6 +508,35 @@ await sql(`
 `);
 await sql(`CREATE INDEX IF NOT EXISTS po_lines_po_idx ON po_lines (po_id)`);
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_box_sku_size_idx ON po_lines (po_box_id, sku, size)`);
+
+// On-behalf manifest entry: when a supplier doesn't scan out themselves, PH (or admin)
+// can type their manifest for them. entered_by = the staff user who entered/last edited
+// the line (NULL when the supplier scanned it themselves); entered_on_behalf flags a
+// staff-entered line — the supplier sees a generic "<business> Staff" attribution while
+// warehouse/PH see the real person (docs/context/purchase-orders.md).
+await sql(`ALTER TABLE po_lines ADD COLUMN IF NOT EXISTS entered_by BIGINT REFERENCES users(id)`);
+await sql(`ALTER TABLE po_lines ADD COLUMN IF NOT EXISTS entered_on_behalf BOOLEAN NOT NULL DEFAULT FALSE`);
+
+// Supplier-facing business name for the on-behalf attribution ("<name>'s Staff").
+// Configurable via app_settings; falls back to 'Stickballman12 LLC' in code when unset.
+await sql(`
+  INSERT INTO app_settings (key, value, updated_at)
+  VALUES ('business_display_name', 'Stickballman12 LLC', now())
+  ON CONFLICT (key) DO NOTHING
+`);
+
+// Whole-order manifest (Path C): when a supplier gives ONE list for the whole purchase
+// (no per-box breakdown), PH enters it against the PO itself — po_lines with po_box_id
+// NULL. `manifest_scope` flips to 'po' on the first such line; reconciliation then counts
+// the whole list order-wide instead of per shipped label. A PO is one scope or the other.
+// Receiving is still per box (like a blind receive). See docs/context/purchase-orders.md.
+await sql(`ALTER TABLE po_lines ALTER COLUMN po_box_id DROP NOT NULL`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS manifest_scope TEXT NOT NULL DEFAULT 'box'`);
+await sql(`ALTER TABLE purchase_orders DROP CONSTRAINT IF EXISTS purchase_orders_manifest_scope_check`);
+await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_manifest_scope_check CHECK (manifest_scope IN ('box','po'))`);
+// Order-scoped lines have no box, so the per-label unique index doesn't cover them —
+// this partial index keeps one line per (PO, sku, size) for the whole-order manifest.
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_size_idx ON po_lines (po_id, sku, size) WHERE po_box_id IS NULL`);
 
 // Link the received receiving-batch back to its PO (set on scan-in). Reconciliation
 // joins po_lines (expected) against items under this batch (actual), by (sku, size).

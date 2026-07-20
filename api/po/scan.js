@@ -1,15 +1,16 @@
-// POST /api/po/scan  (supplier / admin)
+// POST /api/po/scan  (supplier / ph_team / admin)
 //   { poBoxId, sku, size, qty?, name?, upc?, colorway?, gender?, unitCost? }
-// Adds/increments an expected line under one label of a DRAFT PO the supplier
-// owns. Product details are resolved client-side (reusing the existing UPC/SKU
-// search) and posted here; this only writes po_lines — never the receiving path.
+// Adds/increments an expected line under one label of a DRAFT PO. The supplier scans
+// their own manifest; PH/admin can enter it ON THEIR BEHALF when the supplier doesn't
+// (stamped entered_by + entered_on_behalf). Product details are resolved client-side
+// (reusing the UPC/SKU search); this only writes po_lines — never the receiving path.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, addPoScan, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['supplier']);
+  const user = requireRole(req, res, ['supplier', 'ph_team']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
@@ -28,8 +29,18 @@ export default async function handler(req, res) {
     if (!box) return send(res, 404, { ok: false, error: 'Label not found.' });
     const po = await getPo(box.po_id);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
-    if (!isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
+    // A supplier is scoped to their own POs; PH/admin can fill any PO on the team's behalf.
+    if (user.role === 'supplier' && !isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
+    // A PO is one manifest scope or the other — no mixing a whole-order manifest with per-box lines.
+    if (po.manifest_scope === 'po')
+      return send(res, 409, { ok: false, error: 'This PO uses a whole-order manifest — add items to the order, not a label.' });
+    // Anyone but the supplier scanning their own order is entering it on the supplier's behalf.
+    // entered_by references users(id); the env admin/superadmin have a non-numeric uid, so
+    // stamp the flag but leave entered_by NULL for them (no real users row to point at).
+    const onBehalf = user.role !== 'supplier';
+    const uidNum = Number(user.uid);
+    const enteredBy = onBehalf && Number.isInteger(uidNum) ? uidNum : null;
     if (po.status !== 'draft')
       return send(res, 409, { ok: false, error: 'This order is already shipped — it can no longer be edited.' });
     if (box.status === 'packed')
@@ -44,6 +55,8 @@ export default async function handler(req, res) {
       colorway: String(body.colorway ?? '').trim().slice(0, 120) || null,
       gender: String(body.gender ?? '').trim().slice(0, 20) || null,
       unitCost: body.unitCost != null && body.unitCost !== '' ? Number(body.unitCost) : null,
+      enteredBy,
+      enteredOnBehalf: onBehalf,
     });
     return send(res, 200, { ok: true, line });
   } catch (e) {

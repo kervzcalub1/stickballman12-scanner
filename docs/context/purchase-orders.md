@@ -70,6 +70,69 @@ labels** (one tracking number each); it closes only when every label is shipped.
   admin is already covered by **Check Access** (approve / set role / reset password / delete),
   so no new admin UI. Feature complete through Phase 5.
 
+## Supplier non-compliance — on-behalf manifest entry + no-manifest receiving
+Two escape hatches for when a supplier won't use the scan-out portal:
+
+- **Option 1 — supplier hands over a manual list → PH enters it on their behalf.**
+  `scan`/`line` now accept **`ph_team`** (not just `supplier`); admin/superadmin auto-allowed.
+  A supplier is still scoped to their own POs, but PH/admin may fill **any** PO the team
+  owns (only while it's `draft` + label `pending`, the same window a supplier scan uses).
+  Every write stamps `po_lines.entered_by` (the staff user's id) + `entered_on_behalf=true`.
+  **Attribution is dual-visibility:** `getPoFull` joins `entered_by_name`; `po/get` **strips
+  `entered_by`/`entered_by_name` from a supplier's response** (keeps `entered_on_behalf`),
+  so the **supplier sees only "{business}'s Staff"** while **warehouse/PH see the real
+  person**. Business name = `app_settings.business_display_name` (default `Stickballman12 LLC`),
+  returned as `businessName` on `po/get` and via `getBusinessName()`. If a supplier later edits
+  a PH-entered line, `onBehalf` becomes false and `entered_by` clears (they take ownership).
+  Env admin/superadmin have a non-numeric `uid`, so their writes set the flag but leave
+  `entered_by` NULL (no real `users` row to reference).
+  **UI:** the shared **`src/components/PoScanModal.jsx`** (extracted from `SupplierApp` — exports
+  `PoScanModal` + `PoLineRow`, used by both sides) is opened from **`PoOverview`** per draft/pending
+  label ("Add items on their behalf"), which also renders each line's internal attribution.
+  `SupplierApp` shows "Entered for you by {business}'s Staff" on flagged lines.
+
+- **Option 2 — no list at all → warehouse receives blind.** Already works (receive against a
+  `draft`/`shipped` PO, scan the actual items). `getPoReconciliation` now sets
+  **`summary.no_manifest`** (received PO with 0 expected units + >0 received). `Reconciliation.jsx`
+  then shows a **"No manifest provided — received blind"** banner, labels every row **"Received"**
+  instead of "Not on PO", and the copy-report says so — no wall of phantom overages.
+
+- **Option 3 (Path C) — supplier gives ONE list for the whole purchase, not per box.** PH enters it
+  against the **PO itself** (a `po_lines` row with **`po_box_id` NULL**), not a label —
+  `POST /api/po/scan-order` (ph_team; always on-behalf) via `addPoOrderScan` (conflict target =
+  partial unique index `(po_id, sku, size) WHERE po_box_id IS NULL`), which flips
+  **`purchase_orders.manifest_scope` `box`→`po`** (`setPoManifestScope`). **A PO is one scope
+  or the other** — `scan-order` 409s if the PO already has per-box lines (`poHasBoxLines`), and the
+  per-box `scan` 409s if `manifest_scope='po'`. **Reconciliation branches on scope:** `'po'` counts
+  the **entire** manifest order-wide (no shipped-label filter — the lines have no label); `'box'`
+  keeps the shipped-labels-only filter. **Receiving is unchanged — still per box, exactly like a
+  blind receive** (the manifest just isn't per-box, so there's no per-label checklist). `updatePoLine`
+  branches its size-merge sibling lookup for null-box lines (match within the PO, not the label).
+  **UI:** shared `PoScanModal` gains an order mode (`po` prop instead of `box`) → `api.poScanOrder`;
+  `PoOverview` shows a **"Whole-order manifest"** block with an **"Add whole-order manifest"** button
+  (draft PO, no per-box lines) + internal attribution; `SupplierApp` shows a read-only **"Order
+  manifest"** card with the "…'s Staff" note. **Schema-touch: `po_box_id` nullable + `manifest_scope`
+  + partial index → run `db:setup`.**
+
+## Tracking pushes (17TRACK webhook) — works for the non-compliant paths too
+For the pushes to actually fire when a supplier never uses the portal:
+- **Register at PO creation.** `create.js` calls `registerTracking()` on the labels' numbers right
+  after `createPo` (best-effort, no-ops without `TRACKING_API_KEY`) — not only at `po/ship` (which
+  non-compliant suppliers never hit). Registration is what makes 17TRACK watch the box + push.
+  **Consumes 1 quota/number** at register time.
+- **Webhook auth = the `?secret=` on the configured URL.** 17TRACK posts to the EXACT URL set in its
+  dashboard (`api.17track.net/admin/settings` — dashboard-only, no API to set it), query string
+  included, so configure `https://<host>/api/po/tracking-webhook?secret=<TRACKING_WEBHOOK_SECRET>`.
+  17TRACK also sends a `sign` header (SHA256 of body + API key) we could additionally verify later.
+- **`pre_transit` box status** (schema: added to the `po_boxes` status CHECK). `mapBoxStatus` maps
+  17TRACK **`InfoReceived` → `pre_transit`** ("label made, still with the supplier"), distinct from
+  `in_transit` ("courier has it"). UI shows it as a slate "With supplier · label made" chip.
+  `setPoBoxTracking` is now **forward-only** (rank pending<packed<pre_transit<shipped<in_transit<
+  delivered) so a late lower push never moves a box backwards. **Schema-touch: run `db:setup`.**
+- **Google Sheets mirror** (optional): `forwardTrackingToSheet` (env `GOOGLE_SHEETS_TRACKING_URL`)
+  posts every update to a Google Apps Script Web App from BOTH the webhook and `track-refresh`
+  (best-effort, env-gated). Setup + Apps Script in `docs/google-sheets-tracking.md`.
+
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`
 form a cycle. Creation order is fine (PO → batch(po_id) → set received_batch_id). Deletion of
@@ -146,8 +209,12 @@ VINs + inserts `items` = phantom stock).
   The PO flips to `shipped` only when **all** its labels are shipped.
 - **`po_lines`** — the "what the supplier says he shipped." `po_id`, `po_box_id` (which
   label — **NOT NULL**), `sku`, `size`, `name/upc/colorway/gender`, `qty_expected`,
-  `unit_cost`. **Unique `(po_box_id, sku, size)`** — one line per SKU+size **per label**, so
-  the same SKU+size can appear under different labels; a re-scan increments `qty_expected`.
+  `unit_cost`, **`entered_by`** → `users(id)` (staff who entered/last-edited an on-behalf
+  line; NULL when the supplier scanned it), **`entered_on_behalf`** bool. **Unique
+  `(po_box_id, sku, size)`** — one line per SKU+size **per label**, so the same SKU+size can
+  appear under different labels; a re-scan increments `qty_expected` (and re-stamps the actor).
+  **Schema-touch: run `db:setup`** (adds `entered_by`/`entered_on_behalf` + seeds the
+  `business_display_name` app_setting).
 - **`batches.po_id`** → `purchase_orders(id)` — set on scan-in. Reconciliation joins
   `po_lines` (expected) against `items` under that batch (actual), grouped by `(sku, size)`.
 

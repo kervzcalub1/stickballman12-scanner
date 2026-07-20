@@ -25,6 +25,14 @@ function flagText(r) {
 // Plain-text discrepancy report for the group chat.
 function buildReport(po, rows, summary) {
   const bad = rows.filter((r) => r.flag !== 'match');
+  // Received with no manifest: nothing was declared, so a per-line "not on PO" list is
+  // noise — report the totals and that it was received blind instead.
+  if (summary.no_manifest) {
+    const lines = [`${po.po_code} · ${po.supplier_name}`,
+      `No manifest was provided for this shipment — received blind.`,
+      `${summary.received_units} unit${summary.received_units === 1 ? '' : 's'} received and logged; none were pre-declared, so nothing is flagged as a discrepancy.`];
+    return lines.join('\n');
+  }
   const lines = [`${po.po_code} · ${po.supplier_name}`,
     `Received ${summary.received_units} of ${summary.expected_units} expected units.`];
   if (bad.length === 0) { lines.push('All items matched — no discrepancies. ✅'); return lines.join('\n'); }
@@ -135,14 +143,23 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                 <span className={`po-chip ${po.status === 'reconciled' ? 'ok' : 'receiving'}`}>{po.status === 'reconciled' ? 'Reconciled' : 'To reconcile'}</span>
               </div>
               <p className="muted sm">{po.supplier_name} · received <b>{s.received_units}</b> of <b>{s.expected_units}</b> expected units</p>
-              <div className="rc-summary">
-                {s.match ? <span className="po-flag ok">{s.match} match</span> : null}
-                {s.shortage ? <span className="po-flag bad">{s.shortage} short</span> : null}
-                {s.overage ? <span className="po-flag warn">{s.overage} over</span> : null}
-                {s.wrong_size ? <span className="po-flag warn">{s.wrong_size} wrong size</span> : null}
-                {s.wrong_sku ? <span className="po-flag bad">{s.wrong_sku} not on PO</span> : null}
-                {s.clean ? <span className="po-flag ok">All matched ✓</span> : null}
-              </div>
+              {s.no_manifest ? (
+                <p className="rc-no-manifest sm">
+                  <b>No manifest provided.</b> The supplier didn’t scan out and no one entered a manifest on their behalf, so every received unit is logged but nothing is flagged as a discrepancy. The items below are what the warehouse actually received.
+                </p>
+              ) : (
+                <div className="rc-summary">
+                  {s.match ? <span className="po-flag ok">{s.match} match</span> : null}
+                  {s.shortage ? <span className="po-flag bad">{s.shortage} short</span> : null}
+                  {s.overage ? <span className="po-flag warn">{s.overage} over</span> : null}
+                  {s.wrong_size ? <span className="po-flag warn">{s.wrong_size} wrong size</span> : null}
+                  {s.wrong_sku ? <span className="po-flag bad">{s.wrong_sku} not on PO</span> : null}
+                  {s.clean ? <span className="po-flag ok">All matched ✓</span> : null}
+                </div>
+              )}
+              {po.manifest_scope === 'po' && !s.no_manifest && (
+                <p className="muted xs" style={{ marginTop: '8px' }}>Whole-order manifest — matched on order totals, no per-box breakdown.</p>
+              )}
             </div>
 
             <div className="card">
@@ -155,7 +172,9 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                     <span className="rc-item"><b>{r.sku || '—'}</b> · size {r.size}<span className="muted rc-name"> · {r.name}</span></span>
                     <span className="rc-n">{r.expected}</span>
                     <span className="rc-n">{r.received}</span>
-                    <span className="rc-flag"><span className={`po-flag ${FLAG[r.flag]?.cls || ''}`}>{flagText(r)}</span></span>
+                    <span className="rc-flag">{s.no_manifest
+                      ? <span className="po-flag">Received</span>
+                      : <span className={`po-flag ${FLAG[r.flag]?.cls || ''}`}>{flagText(r)}</span>}</span>
                   </div>
                 ))}
               </div>

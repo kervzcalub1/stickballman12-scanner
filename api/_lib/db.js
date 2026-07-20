@@ -203,6 +203,17 @@ export async function setSetting(key, value, updatedBy) {
   return rows[0] || null;
 }
 
+// Supplier-facing business name for on-behalf attribution ("<name>'s Staff").
+// Configurable via app_settings.business_display_name; defaults when unset/blank.
+const DEFAULT_BUSINESS_NAME = 'Stickballman12 LLC';
+export async function getBusinessName() {
+  try {
+    const raw = await getSetting('business_display_name');
+    const s = String(raw ?? '').trim();
+    return s || DEFAULT_BUSINESS_NAME;
+  } catch { return DEFAULT_BUSINESS_NAME; }
+}
+
 // Price markup percent (GI → Final). Default 20 (= +20%). Cached ~30s.
 const DEFAULT_MARKUP_PCT = 20;
 let markupCache = { pct: null, expires: 0 };
@@ -1642,7 +1653,15 @@ export async function getPoFull(id) {
   const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${id}`)[0];
   if (!po) return null;
   const boxes = await sql`SELECT * FROM po_boxes WHERE po_id = ${id} ORDER BY box_number`;
-  const lines = await sql`SELECT * FROM po_lines WHERE po_id = ${id} ORDER BY po_box_id, sku, size`;
+  // entered_by_name = the staff member who entered/last-edited an on-behalf line, for
+  // the INTERNAL views (warehouse/PH). get.js strips it before responding to a supplier.
+  const lines = await sql`
+    SELECT l.*, u.name AS entered_by_name, u.username AS entered_by_username
+    FROM po_lines l
+    LEFT JOIN users u ON u.id = l.entered_by
+    WHERE l.po_id = ${id}
+    ORDER BY l.po_box_id, l.sku, l.size
+  `;
   return { po, boxes, lines };
 }
 
@@ -1674,20 +1693,60 @@ export async function listPos({ uid, supplierScope }) {
 
 // Add/increment an expected line under a label. Re-scanning a SKU+size in the
 // same label bumps qty_expected (mirrors receiving's per-size auto-increment).
-export async function addPoScan({ poId, poBoxId, sku, size, qty, name, upc, colorway, gender, unitCost }) {
+// enteredBy/enteredOnBehalf record who typed it — NULL/false for a supplier scanning
+// their own manifest, the staff uid + true when PH/admin enters it on their behalf.
+// Both insert and the re-scan UPDATE stamp the latest actor (last-editor semantics).
+export async function addPoScan({ poId, poBoxId, sku, size, qty, name, upc, colorway, gender, unitCost, enteredBy = null, enteredOnBehalf = false }) {
   const sql = db();
   const rows = await sql`
-    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost)
+    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, entered_by, entered_on_behalf)
     VALUES (${poId}, ${poBoxId}, ${sku}, ${size}, ${name || null}, ${upc || null},
-            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null})
+            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null},
+            ${enteredBy ?? null}, ${!!enteredOnBehalf})
     ON CONFLICT (po_box_id, sku, size) DO UPDATE
-      SET qty_expected = po_lines.qty_expected + EXCLUDED.qty_expected,
-          unit_cost    = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
-          name         = COALESCE(EXCLUDED.name, po_lines.name),
-          updated_at   = now()
+      SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
+          unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+          name              = COALESCE(EXCLUDED.name, po_lines.name),
+          entered_by        = EXCLUDED.entered_by,
+          entered_on_behalf = EXCLUDED.entered_on_behalf,
+          updated_at        = now()
     RETURNING *
   `;
   return rows[0];
+}
+
+// Whole-order manifest (Path C): add/increment a line against the PO itself (no label).
+// Conflict target is the partial unique index on (po_id, sku, size) WHERE po_box_id IS NULL.
+export async function addPoOrderScan({ poId, sku, size, qty, name, upc, colorway, gender, unitCost, enteredBy = null, enteredOnBehalf = false }) {
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, entered_by, entered_on_behalf)
+    VALUES (${poId}, NULL, ${sku}, ${size}, ${name || null}, ${upc || null},
+            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null},
+            ${enteredBy ?? null}, ${!!enteredOnBehalf})
+    ON CONFLICT (po_id, sku, size) WHERE po_box_id IS NULL DO UPDATE
+      SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
+          unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+          name              = COALESCE(EXCLUDED.name, po_lines.name),
+          entered_by        = EXCLUDED.entered_by,
+          entered_on_behalf = EXCLUDED.entered_on_behalf,
+          updated_at        = now()
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+// Does this PO already have any per-box manifest lines? Used to keep a PO to a single
+// manifest scope — you can't mix a per-box manifest and a whole-order one.
+export async function poHasBoxLines(poId) {
+  const sql = db();
+  const r = await sql`SELECT 1 FROM po_lines WHERE po_id = ${poId} AND po_box_id IS NOT NULL LIMIT 1`;
+  return r.length > 0;
+}
+
+export async function setPoManifestScope(poId, scope) {
+  const sql = db();
+  await sql`UPDATE purchase_orders SET manifest_scope = ${scope} WHERE id = ${poId}`;
 }
 
 export async function setPoLineQty(lineId, qtyExpected) {
@@ -1704,7 +1763,7 @@ export async function setPoLineQty(lineId, qtyExpected) {
 // the size can collide with an existing line of the same SKU+size on the label
 // (unique po_box_id,sku,size) — in that case the two are MERGED (qtys summed) and
 // this line is deleted. Returns { line, removed, merged }.
-export async function updatePoLine(lineId, { size, qty } = {}) {
+export async function updatePoLine(lineId, { size, qty, enteredBy = null, enteredOnBehalf = false } = {}) {
   const sql = db();
   const line = (await sql`SELECT * FROM po_lines WHERE id = ${lineId}`)[0];
   if (!line) return { line: null, removed: false, merged: false };
@@ -1712,14 +1771,23 @@ export async function updatePoLine(lineId, { size, qty } = {}) {
   if (newQty <= 0) { await sql`DELETE FROM po_lines WHERE id = ${lineId}`; return { line: null, removed: true, merged: false }; }
   const newSize = size === undefined ? line.size : String(size).trim();
   if (newSize && newSize !== line.size) {
-    const sib = (await sql`
-      SELECT * FROM po_lines
-      WHERE po_box_id = ${line.po_box_id} AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
-    `)[0];
+    // Find a sibling line that a size change would collide with. Order-scoped lines have
+    // no box, so match them within the PO (po_box_id IS NULL); box lines match within the
+    // label. (The shim can't nest sql fragments, so branch the whole query.)
+    const sib = (line.po_box_id == null
+      ? (await sql`
+          SELECT * FROM po_lines
+          WHERE po_id = ${line.po_id} AND po_box_id IS NULL AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
+        `)
+      : (await sql`
+          SELECT * FROM po_lines
+          WHERE po_box_id = ${line.po_box_id} AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
+        `))[0];
     if (sib) {
       const mergedQty = Math.min(999, sib.qty_expected + newQty); // same 999 cap as a direct edit
       const merged = (await sql`
-        UPDATE po_lines SET qty_expected = ${mergedQty}, updated_at = now()
+        UPDATE po_lines SET qty_expected = ${mergedQty}, entered_by = ${enteredBy ?? null},
+          entered_on_behalf = ${!!enteredOnBehalf}, updated_at = now()
         WHERE id = ${sib.id} RETURNING *
       `)[0];
       await sql`DELETE FROM po_lines WHERE id = ${lineId}`;
@@ -1727,7 +1795,8 @@ export async function updatePoLine(lineId, { size, qty } = {}) {
     }
   }
   const updated = (await sql`
-    UPDATE po_lines SET size = ${newSize}, qty_expected = ${newQty}, updated_at = now()
+    UPDATE po_lines SET size = ${newSize}, qty_expected = ${newQty}, entered_by = ${enteredBy ?? null},
+      entered_on_behalf = ${!!enteredOnBehalf}, updated_at = now()
     WHERE id = ${lineId} RETURNING *
   `)[0] || null;
   return { line: updated, removed: false, merged: false };
@@ -1857,15 +1926,24 @@ export async function getPoReconciliation(poId) {
   const sql = db();
   const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
   if (!po) return null;
-  // "Expected" = only the lines on labels that actually SHIPPED (shipped/in_transit/
-  // delivered). A label still being filled or merely packed hasn't left the supplier, so
-  // its contents aren't due yet and must NOT count as shortages against what arrived.
-  const expected = await sql`
-    SELECT l.sku, l.size, sum(l.qty_expected)::int AS qty, max(l.name) AS name
-    FROM po_lines l
-    JOIN po_boxes b ON b.id = l.po_box_id
-    WHERE l.po_id = ${poId} AND b.status IN ('shipped', 'in_transit', 'delivered')
-    GROUP BY l.sku, l.size`;
+  // "Expected" depends on the manifest scope:
+  // - 'po' (whole-order manifest, Path C): count the ENTIRE list order-wide. The lines
+  //   have no label, so there's no per-box "already shipped?" filter to apply.
+  // - 'box' (per-box manifest, Paths A/B): count only the lines on labels that actually
+  //   SHIPPED — a label still filling/packed hasn't left the supplier, so its contents
+  //   aren't due yet and must NOT read as shortages against what arrived.
+  const expected = po.manifest_scope === 'po'
+    ? await sql`
+        SELECT l.sku, l.size, sum(l.qty_expected)::int AS qty, max(l.name) AS name
+        FROM po_lines l
+        WHERE l.po_id = ${poId}
+        GROUP BY l.sku, l.size`
+    : await sql`
+        SELECT l.sku, l.size, sum(l.qty_expected)::int AS qty, max(l.name) AS name
+        FROM po_lines l
+        JOIN po_boxes b ON b.id = l.po_box_id
+        WHERE l.po_id = ${poId} AND b.status IN ('shipped', 'in_transit', 'delivered')
+        GROUP BY l.sku, l.size`;
   const received = po.received_batch_id
     ? await sql`
         SELECT sku, size, count(*)::int AS qty, max(name) AS name
@@ -1903,6 +1981,11 @@ export async function getPoReconciliation(poId) {
     wrong_sku: rows.filter((x) => x.flag === 'wrong_sku').length,
   };
   summary.clean = summary.shortage + summary.overage + summary.wrong_size + summary.wrong_sku === 0;
+  // "No manifest" (Option 2): the PO was received but nothing was ever declared for the
+  // shipped labels — the supplier didn't scan out and no one entered a manifest on their
+  // behalf. Every received unit then reads as wrong_sku; flag it so the report says
+  // "received blind" instead of presenting a wall of overages as discrepancies.
+  summary.no_manifest = po.received_batch_id != null && summary.expected_units === 0 && summary.received_units > 0;
   return { po, rows, summary };
 }
 
@@ -1945,12 +2028,16 @@ export async function listPoTrackingItems(poId) {
 }
 
 // Apply an aggregator status update to the label with this tracking number.
-// Advances box status only when the mapper gave one (never downgrades to null).
+// Advances box status only when the mapper gave one, and only FORWARD — a lower-ranked
+// push (e.g. a late "InfoReceived" arriving after the box already moved, or once a
+// supplier has marked it shipped) never moves the box backwards. Never downgrades to null.
 // Returns the affected { id, po_id } rows.
+const BOX_STATUS_RANK = { pending: 0, packed: 1, pre_transit: 2, shipped: 3, in_transit: 4, delivered: 5 };
 export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus, lastCheckpoint, boxStatus, events }) {
   const sql = db();
   const eventsJson = Array.isArray(events) && events.length ? JSON.stringify(events) : null;
-  if (boxStatus) {
+  const newRank = boxStatus != null ? BOX_STATUS_RANK[boxStatus] : undefined;
+  if (boxStatus && newRank != null) {
     return sql`
       UPDATE po_boxes
       SET carrier = COALESCE(${carrier ?? null}, carrier),
@@ -1958,7 +2045,10 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
           last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
           tracking_events = COALESCE(${eventsJson}::jsonb, tracking_events),
           checked_at = now(),
-          status = ${boxStatus}
+          status = CASE WHEN (CASE status
+              WHEN 'pending' THEN 0 WHEN 'packed' THEN 1 WHEN 'pre_transit' THEN 2
+              WHEN 'shipped' THEN 3 WHEN 'in_transit' THEN 4 WHEN 'delivered' THEN 5 ELSE 0 END) < ${newRank}
+            THEN ${boxStatus} ELSE status END
       WHERE upper(tracking_number) = upper(${trackingNumber})
       RETURNING id, po_id`;
   }

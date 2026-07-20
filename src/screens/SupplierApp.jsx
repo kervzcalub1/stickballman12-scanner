@@ -4,14 +4,12 @@
 // each label. The batch closes (PO → 'shipped') once every label is shipped.
 // Reuses the shared product search (UPC/SKU) and camera scanner; writes only the
 // PO tables via /api/po/* (never the receiving path). See docs/context/purchase-orders.md.
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { Icon } from '../components/NavIcons.jsx';
-import { isUpcCode, usSizeChart, compareSizes } from '../lib/codes.js';
-
-const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
+import { PoScanModal, PoLineRow } from '../components/PoScanModal.jsx';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',     cls: 'draft' },
@@ -31,6 +29,10 @@ export function SupplierApp({ user, onSignOut }) {
   const [error, setError] = useState('');
   const [openId, setOpenId] = useState(null);
   const [detail, setDetail] = useState(null); // { po, boxes, lines }
+  const [businessName, setBusinessName] = useState(''); // for "…'s Staff" on-behalf attribution
+  // The supplier only ever sees that a line was entered by the business's staff — never
+  // which staff member (the server strips the identity from their /po/get response).
+  const staffLabel = `${businessName || 'Stickballman12 LLC'}'s Staff`;
   const [scanBox, setScanBox] = useState(null); // po_box currently being scanned into
   const [closeReview, setCloseReview] = useState(null); // po_box being reviewed before closing
   const [busy, setBusy] = useState(false);
@@ -59,7 +61,7 @@ export function SupplierApp({ user, onSignOut }) {
   const openPo = (id) => {
     setOpenId(id); setDetail(null); setError('');
     api.poGet(id)
-      .then((r) => setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }))
+      .then((r) => { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); setBusinessName(r.businessName || ''); })
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
   const refreshDetail = () => { if (openId) openPo(openId); };
@@ -81,6 +83,7 @@ export function SupplierApp({ user, onSignOut }) {
   };
   const boxStatusLabel = (b) => (b.status === 'delivered' ? 'Delivered ✓'
     : b.status === 'in_transit' ? 'In transit'
+    : b.status === 'pre_transit' ? 'Label made · with supplier'
     : b.status === 'shipped' ? 'Shipped ✓'
     : b.status === 'packed' ? 'Ready to ship' : null);
 
@@ -189,7 +192,9 @@ export function SupplierApp({ user, onSignOut }) {
               const units = lines.reduce((n, l) => n + (l.qty_expected || 0), 0);
               const isFilling = box.status === 'pending';
               const isPacked = box.status === 'packed';
-              const isShipped = box.status === 'shipped' || box.status === 'in_transit' || box.status === 'delivered';
+              // "En route" states carry live tracking (show the status line + refresh). pre_transit
+              // means the label's made but the parcel is still with the supplier — tracking is active.
+              const isShipped = ['shipped', 'in_transit', 'delivered', 'pre_transit'].includes(box.status);
               return (
                 <div key={box.id} className={`card po-box ${isShipped ? 'shipped' : ''} ${isPacked ? 'packed' : ''}`}>
                   <div className="po-card-top">
@@ -203,7 +208,7 @@ export function SupplierApp({ user, onSignOut }) {
                     </div>
                     {isFilling
                       ? <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>
-                      : <span className={`po-chip ${box.status === 'delivered' ? 'ok' : box.status === 'in_transit' ? 'receiving' : box.status === 'packed' ? 'packed' : 'shipped'}`}>{boxStatusLabel(box)}</span>}
+                      : <span className={`po-chip ${box.status === 'delivered' ? 'ok' : box.status === 'in_transit' ? 'receiving' : box.status === 'pre_transit' ? 'pretransit' : box.status === 'packed' ? 'packed' : 'shipped'}`}>{boxStatusLabel(box)}</span>}
                   </div>
 
                   {isShipped && (box.tracking_status || box.last_checkpoint) && (
@@ -236,7 +241,8 @@ export function SupplierApp({ user, onSignOut }) {
                       <ul className="po-lines po-lines-edit">
                         {lines.map((l) => (
                           <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)}
-                            onSave={(patch) => patchLine(l, patch)} />
+                            onSave={(patch) => patchLine(l, patch)}
+                            attribution={l.entered_on_behalf ? `Entered for you by ${staffLabel}` : null} />
                         ))}
                       </ul>
                     ) : (
@@ -245,6 +251,7 @@ export function SupplierApp({ user, onSignOut }) {
                           <li key={l.id}>
                             <span className="po-line-name">{l.name || l.sku}</span>
                             <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                            {l.entered_on_behalf && <span className="po-line-attribution muted xs">Entered for you by {staffLabel}</span>}
                           </li>
                         ))}
                       </ul>
@@ -266,12 +273,37 @@ export function SupplierApp({ user, onSignOut }) {
                 </div>
               );
             })}
+
+            {(() => {
+              // Whole-order manifest (Path C): lines the Stickballman12 team entered for the
+              // whole purchase, not tied to a single label. Read-only on the supplier side.
+              const orderLines = (detail.lines || []).filter((l) => l.po_box_id == null);
+              if (!orderLines.length) return null;
+              const units = orderLines.reduce((n, l) => n + (l.qty_expected || 0), 0);
+              return (
+                <div className="card po-box">
+                  <div className="po-card-top">
+                    <div><b>Order manifest</b><div className="po-track muted sm">Entered for the whole purchase</div></div>
+                    <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>
+                  </div>
+                  <ul className="po-lines">
+                    {orderLines.map((l) => (
+                      <li key={l.id}>
+                        <span className="po-line-name">{l.name || l.sku}</span>
+                        <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                        {l.entered_on_behalf && <span className="po-line-attribution muted xs">Entered for you by {staffLabel}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
           </>
         )}
       </div>
 
       {scanBox && (
-        <ScanModal box={scanBox} onClose={() => setScanBox(null)}
+        <PoScanModal box={scanBox} onClose={() => setScanBox(null)}
           onAdded={refreshDetail} onSignOut={onSignOut} />
       )}
 
@@ -302,275 +334,6 @@ export function SupplierApp({ user, onSignOut }) {
           </div>
         );
       })()}
-    </div>
-  );
-}
-
-// One editable scanned line on a still-filling label: rename-free, but the size can be
-// corrected and the qty nudged (or the line removed at ×0). Size commits on blur/Enter;
-// qty posts on each ± tap. The parent reloads the PO after each save.
-function PoLineRow({ line, disabled, onSave }) {
-  const [size, setSize] = useState(String(line.size ?? ''));
-  useEffect(() => { setSize(String(line.size ?? '')); }, [line.size]);
-  const commitSize = () => {
-    const v = size.trim();
-    if (!v || v === String(line.size)) { setSize(String(line.size ?? '')); return; }
-    onSave({ size: v });
-  };
-  return (
-    <li className="po-line-edit">
-      <div className="po-line-head">
-        <span className="po-line-name">{line.name || line.sku}</span>
-        <span className="po-line-meta">{line.sku}</span>
-      </div>
-      <div className="po-line-controls">
-        <label className="po-line-size">
-          <span className="muted xs">Size</span>
-          <input className="sz" value={size} disabled={disabled} inputMode="decimal"
-            onChange={(e) => setSize(e.target.value)} onBlur={commitSize}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} />
-        </label>
-        <div className="qty-stepper">
-          <button type="button" className="btn icon ghost step" disabled={disabled || line.qty_expected <= 1}
-            onClick={() => onSave({ qty: line.qty_expected - 1 })}>−</button>
-          <span className="qty-val">×{line.qty_expected}</span>
-          <button type="button" className="btn icon ghost step" disabled={disabled}
-            onClick={() => onSave({ qty: line.qty_expected + 1 })}>+</button>
-        </div>
-        <button type="button" className="btn icon ghost remove" title="Remove item" disabled={disabled}
-          onClick={() => onSave({ qty: 0 })}>×</button>
-      </div>
-    </li>
-  );
-}
-
-// Scan / type a UPC or SKU → resolve the product → tap size chips (tap again for
-// +1) → add the whole shoe (every size) to the label at once, like the warehouse
-// Add-Item flow. Each size posts one po_line via /api/po/scan.
-let rowKey = 0;
-const sameSku = (a, b) => String(a || '').toUpperCase().replace(/[\s-]/g, '') === String(b || '').toUpperCase().replace(/[\s-]/g, '');
-
-function ScanModal({ box, onClose, onAdded, onSignOut }) {
-  const [code, setCode] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [flash, setFlash] = useState(null); // { type, text } — matches the warehouse scan flash
-  // draft = { name, sku, upc, colorway, gender, image, sizeOptions, rows:[{key,size,qty}] }
-  const [draft, setDraft] = useState(null);
-  const [mCam, setMCam] = useState(false);            // inline live camera toggle (like warehouse)
-  const [camZoom, setCamZoom] = useState(1);          // 1× / 2× camera zoom (like warehouse)
-  const [recent, setRecent] = useState([]);           // running "added to this label" tally (session)
-  const [pendingSwitch, setPendingSwitch] = useState(null); // a different shoe scanned mid-draft
-  const draftRef = useRef(null); draftRef.current = draft; // so the camera callback sees the live draft
-  const recentRef = useRef({});                       // code -> last-seen ms (dedup gun/camera re-reads)
-  const inputRef = useRef(null);
-
-  // Merge a server-returned po_line into the running tally (its live incremented qty).
-  const recordScan = (line, fallbackName) => setRecent((rs) => {
-    if (!line) return rs;
-    const key = `${line.sku}|#|${line.size}`;
-    return [{ key, name: line.name || fallbackName || line.sku, size: line.size, qty: line.qty_expected ?? 1 },
-      ...rs.filter((r) => r.key !== key)];
-  });
-
-  // Scan/type a code → resolve → build/accumulate the draft, exactly like the
-  // warehouse Add-Item flow: the catalog size auto-fills, re-scanning the same shoe
-  // bumps that size, and a *different* shoe prompts to finish the current one first.
-  // Repeat reads within 1.2s (gun / continuous camera) are ignored.
-  const resolve = async (raw, { showInField = false } = {}) => {
-    const c = String(raw).trim();
-    if (!c) return;
-    const now = Date.now();
-    if (recentRef.current[c] && now - recentRef.current[c] < 1200) return; // gun/camera re-read
-    recentRef.current[c] = now;
-    setCode(showInField ? c : ''); setError('');
-    setBusy(true);
-    try {
-      const isUpc = isUpcCode(c);
-      const { product: p } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
-      const incoming = {
-        name: p.name || '', sku: p.sku || (isUpc ? '' : c), image: p.image || '',
-        upc: (isUpc ? c : '') || p.upc || '', colorway: p.colorway || '', gender: p.gender || null,
-        scannedSize: p.scannedSize ? String(p.scannedSize) : null, sizeOptions: p.sizes || [],
-      };
-      const d = draftRef.current;
-      if (!d) {
-        const rows = incoming.scannedSize ? [{ key: rowKey++, size: incoming.scannedSize, qty: 1 }] : [];
-        setDraft({ ...incoming, rows });
-        setFlash(incoming.scannedSize
-          ? { type: 'added', text: `✓ ${incoming.name || c} · size ${incoming.scannedSize}` }
-          : { type: 'warn', text: `Scanned ${incoming.name || c} — no size from the catalog. Tap the size below.` });
-      } else if (!sameSku(d.sku, incoming.sku)) {
-        setPendingSwitch(incoming); // different shoe → confirm switch (finish current first)
-      } else if (incoming.scannedSize) {
-        addSize(incoming.scannedSize);
-        setFlash({ type: 'added', text: `+1 · size ${incoming.scannedSize}` });
-      } else {
-        setFlash({ type: 'warn', text: 'Scanned, but no size from the catalog. Tap the size below.' });
-      }
-    } catch (e) {
-      if (e.unauthorized) return onSignOut();
-      setError(e.message || 'Could not find that code.'); setFlash({ type: 'dup', text: 'Not found' });
-    } finally { setBusy(false); }
-  };
-
-  // Size helpers — mirror the warehouse Add-Item behavior.
-  const sizePool = () => {
-    const apiSizes = draft?.sizeOptions || [];
-    const tokens = [...apiSizes, ...(draft?.rows || []).map((r) => r.size)].map((s) => String(s || ''));
-    const kind = tokens.some((s) => /y$/i.test(s)) ? 'y' : tokens.some((s) => /w$/i.test(s)) ? 'w' : '';
-    const pool = apiSizes.length > 1 ? apiSizes : [...new Set([...apiSizes, ...usSizeChart(kind)])];
-    return pool.filter((s) => !(draft?.rows || []).some((r) => String(r.size) === String(s)));
-  };
-  const addSize = (s) => setDraft((d) => {
-    const i = d.rows.findIndex((r) => String(r.size) === String(s));
-    if (i >= 0) { const rows = d.rows.slice(); rows[i] = { ...rows[i], qty: rows[i].qty + 1 }; return { ...d, rows }; }
-    return { ...d, rows: [...d.rows, { key: rowKey++, size: String(s), qty: 1 }] };
-  });
-  const addCustom = () => setDraft((d) => ({ ...d, rows: [...d.rows, { key: rowKey++, size: '', qty: 1 }] }));
-  const setRow = (key, patch) => setDraft((d) => ({ ...d, rows: d.rows.map((r) => (r.key === key ? { ...r, ...patch } : r)) }));
-  const bump = (key, by) => setDraft((d) => ({ ...d, rows: d.rows.map((r) => (r.key === key ? { ...r, qty: Math.max(1, r.qty + by) } : r)) }));
-  const removeRow = (key) => setDraft((d) => ({ ...d, rows: d.rows.filter((r) => r.key !== key) }));
-
-  // Commit the whole draft (every size) to the label. Returns true on success.
-  const addToLabel = async () => {
-    const rows = (draft?.rows || [])
-      .map((r) => ({ size: String(r.size).trim(), qty: Math.max(1, parseInt(r.qty, 10) || 1) }))
-      .filter((r) => r.size);
-    if (!draft?.sku) { setError('A SKU is required.'); return false; }
-    if (rows.length === 0) { setError('Tap at least one size.'); return false; }
-    setBusy(true); setError('');
-    try {
-      for (const r of rows) {
-        const { line } = await api.poScan({
-          poBoxId: Number(box.id), sku: draft.sku, size: r.size, qty: r.qty,
-          name: draft.name, upc: draft.upc, colorway: draft.colorway, gender: draft.gender,
-        });
-        recordScan(line, draft.name);
-      }
-      const total = rows.reduce((n, r) => n + r.qty, 0);
-      setFlash({ type: 'added', text: `Added ${draft.name || draft.sku} · ${total} unit${total === 1 ? '' : 's'} to Label ${box.box_number}` });
-      setDraft(null); onAdded();
-      return true;
-    } catch (e) {
-      if (e.unauthorized) { onSignOut(); return false; }
-      setError(e.message); onAdded(); return false; // reflect whatever landed before the failure
-    } finally { setBusy(false); }
-  };
-
-  // "Different shoe" prompt: commit the current shoe, then open the new one.
-  const confirmSwitch = async () => {
-    const next = pendingSwitch;
-    const ok = await addToLabel();
-    setPendingSwitch(null);
-    if (ok && next) {
-      const rows = next.scannedSize ? [{ key: rowKey++, size: next.scannedSize, qty: 1 }] : [];
-      setDraft({ ...next, rows });
-      setFlash(next.scannedSize
-        ? { type: 'added', text: `✓ ${next.name || next.sku} · size ${next.scannedSize}` }
-        : { type: 'warn', text: `Scanned ${next.name || next.sku} — tap the size below.` });
-    }
-  };
-
-  const totalUnits = (draft?.rows || []).reduce((n, r) => n + (parseInt(r.qty, 10) || 0), 0);
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal additem" role="dialog" aria-modal="true"
-        onClick={(e) => { e.stopPropagation(); if (!mCam) inputRef.current?.focus({ preventScroll: true }); }}>
-        <div className="modal-head">
-          <h3 className="modal-title">Add items · Label {box.box_number}</h3>
-          <button type="button" className="btn icon ghost" onClick={onClose}>×</button>
-        </div>
-
-        <form className="searchrow" onSubmit={(e) => { e.preventDefault(); resolve(code, { showInField: true }); }}>
-          <input ref={inputRef} autoFocus autoCapitalize="characters" autoCorrect="off"
-            placeholder="Scan or type UPC / SKU" value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
-          <button className="btn primary" disabled={busy}>{busy ? '…' : 'Add'}</button>
-          <button type="button" className={`btn ${mCam ? 'primary' : 'ghost'}`} onClick={() => setMCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
-        </form>
-        {mCam && (
-          <Suspense fallback={<p className="muted">Loading camera…</p>}>
-            <CameraScanner continuous mode="product" onDetected={(c) => resolve(c, { showInField: true })} onClose={() => setMCam(false)}
-              zoom={camZoom} onZoomChange={setCamZoom} />
-          </Suspense>
-        )}
-
-        <div className="scan-flash-live" role="status" aria-live="polite">
-          {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
-        </div>
-        {error && <div className="error sm mt">{error}</div>}
-        {!draft && !busy && (
-          <p className="muted sm mt">Scan a shoe’s UPC to begin — its size auto-fills. Add other sizes with the chips, or “+ Custom” if a size isn’t listed. Re-scanning the same shoe bumps its size by 1.</p>
-        )}
-
-        {recent.length > 0 && (
-          <div className="po-scan-recent">
-            <div className="muted sm">Added to Label {box.box_number}</div>
-            <ul className="po-lines">
-              {recent.map((r) => (
-                <li key={r.key}>
-                  <span className="po-line-name">{r.name}</span>
-                  <span className="po-line-meta">size {r.size} · ×{r.qty}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {draft && (
-          // Any interaction with the draft closes the live camera so it can't keep
-          // detecting in the background.
-          <div className="additem-draft" onPointerDownCapture={() => { if (mCam) setMCam(false); }}>
-            <div className="additem-product">
-              {draft.image ? <img className="cart-thumb" src={draft.image} alt="" /> : <div className="cart-thumb placeholder">—</div>}
-              <div className="cart-fields">
-                <input className="cart-name" placeholder="Product name" value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
-                <input placeholder="SKU" value={draft.sku} onChange={(e) => setDraft((d) => ({ ...d, sku: e.target.value }))} />
-              </div>
-            </div>
-            <div className="size-rows">
-              <div className="muted sm">The scanned size is filled in below. Tap a chip to add another size (tap again for +1), or “+ Custom” if a size isn’t listed.</div>
-              <div className="size-chips">
-                {sizePool().map((s) => (
-                  <button type="button" key={s} className="size-chip" onClick={() => addSize(s)}>{s}</button>
-                ))}
-                <button type="button" className="size-chip custom" onClick={addCustom}>+ Custom</button>
-              </div>
-              {[...draft.rows].sort((a, b) => compareSizes(a.size, b.size)).map((r) => (
-                <div className="size-line" key={r.key}>
-                  <input className={`sz ${!String(r.size).trim() ? 'need' : ''}`} placeholder="Size" value={r.size} onChange={(e) => setRow(r.key, { size: e.target.value })} autoFocus={!String(r.size).trim()} />
-                  <div className="qty-stepper">
-                    <button type="button" className="btn icon ghost step" onClick={() => bump(r.key, -1)}>−</button>
-                    <input className="qty" type="number" inputMode="numeric" min="1" value={r.qty} onChange={(e) => setRow(r.key, { qty: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
-                    <button type="button" className="btn icon ghost step" onClick={() => bump(r.key, 1)}>+</button>
-                  </div>
-                  <button type="button" className="btn icon ghost remove" title="Remove size" onClick={() => removeRow(r.key)}>×</button>
-                </div>
-              ))}
-            </div>
-            <div className="modal-actions">
-              <button type="button" className="btn ghost" onClick={() => setDraft(null)}>Cancel</button>
-              <button type="button" className="btn primary wide" disabled={busy || totalUnits < 1} onClick={addToLabel}>
-                Add {totalUnits > 0 ? `${totalUnits} unit${totalUnits === 1 ? '' : 's'} ` : ''}to label
-              </button>
-            </div>
-          </div>
-        )}
-
-        {pendingSwitch && (
-          <div className="modal-overlay" style={{ zIndex: 130 }} onClick={() => setPendingSwitch(null)}>
-            <div className="modal confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-              <h3 className="modal-title">Different shoe detected</h3>
-              <p className="modal-msg">You scanned <b>{pendingSwitch.name || pendingSwitch.sku || 'a new item'}</b>, different from <b>{draft?.name || draft?.sku || 'the current shoe'}</b>. Add the current shoe to the label and start the new one?</p>
-              <div className="modal-actions">
-                <button type="button" className="btn ghost" disabled={busy} onClick={() => setPendingSwitch(null)}>Keep current</button>
-                <button type="button" className="btn primary" disabled={busy} onClick={confirmSwitch}>Add &amp; switch</button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

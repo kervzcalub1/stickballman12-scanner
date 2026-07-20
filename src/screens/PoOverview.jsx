@@ -9,6 +9,7 @@ import { api } from '../api.js';
 import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { carrierName } from '../lib/carriers.js';
+import { PoScanModal } from '../components/PoScanModal.jsx';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',    cls: 'draft' },
@@ -19,9 +20,10 @@ const PO_STATUS = {
 };
 const boxStatusLabel = (s) => (s === 'delivered' ? 'Delivered ✓'
   : s === 'in_transit' ? 'In transit'
+  : s === 'pre_transit' ? 'With supplier · label made'
   : s === 'shipped' ? 'Shipped'
   : s === 'packed' ? 'Ready to ship' : 'Filling');
-const boxChipCls = (s) => (s === 'delivered' ? 'ok' : s === 'in_transit' ? 'receiving' : s === 'shipped' ? 'shipped' : s === 'packed' ? 'packed' : 'draft');
+const boxChipCls = (s) => (s === 'delivered' ? 'ok' : s === 'in_transit' ? 'receiving' : s === 'pre_transit' ? 'pretransit' : s === 'shipped' ? 'shipped' : s === 'packed' ? 'packed' : 'draft');
 
 function PoStatusChip({ status }) {
   const s = PO_STATUS[status] || { label: status, cls: 'muted' };
@@ -38,6 +40,17 @@ export function PoOverview({ onHome, onSignOut }) {
   const [trackBoxBusy, setTrackBoxBusy] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(() => new Set()); // box ids showing the timeline
   const toggleHistory = (id) => setHistoryOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const [scanBox, setScanBox] = useState(null); // po_box being filled on the supplier's behalf
+  const [scanOrderPo, setScanOrderPo] = useState(null); // PO being filled as a whole-order manifest
+
+  // Reload the open PO's detail after entering items on behalf of the supplier.
+  const refreshOpenDetail = () => {
+    if (openId == null) return;
+    api.poGet(openId)
+      .then((r) => setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }))
+      .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
+    loadList(); // unit counts on the list may have advanced
+  };
 
   const loadList = () => {
     api.poList()
@@ -105,6 +118,43 @@ export function PoOverview({ onHome, onSignOut }) {
                                 <Icon name="refresh" /> {trackBusy ? 'Checking…' : 'Refresh all tracking'}
                               </button>
                             </div>
+                            {(() => {
+                              // Whole-order manifest (Path C): one list for the whole purchase, no per-box
+                              // breakdown. Shown when it's already in use, or available (draft PO with no
+                              // per-box lines yet). Receiving still happens per box, like a blind receive.
+                              const orderLines = (detail.lines || []).filter((l) => l.po_box_id == null);
+                              const hasBoxLines = (detail.lines || []).some((l) => l.po_box_id != null);
+                              const isDraft = detail.po.status === 'draft';
+                              if (!orderLines.length && (!isDraft || hasBoxLines)) return null;
+                              return (
+                                <div className="po-ov-order">
+                                  <div className="po-ov-order-head">
+                                    <b>Whole-order manifest</b>
+                                    <span className="muted xs">One list for the whole purchase — no per-box breakdown. Warehouse still receives box by box.</span>
+                                  </div>
+                                  {orderLines.length > 0 && (
+                                    <ul className="po-lines po-ov-lines">
+                                      {orderLines.map((l) => (
+                                        <li key={l.id}>
+                                          <span className="po-line-name">{l.name || l.sku}</span>
+                                          <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                                          {l.entered_on_behalf && (
+                                            <span className="po-line-attribution muted xs">
+                                              Entered by {l.entered_by_name || l.entered_by_username || 'staff'} · on supplier’s behalf
+                                            </span>
+                                          )}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                  {isDraft && !hasBoxLines && (
+                                    <button className="btn sm po-ov-fill-btn" onClick={() => setScanOrderPo(detail.po)}>
+                                      <Icon name="camera" /> {orderLines.length ? 'Add more to the order manifest' : 'Add whole-order manifest'}
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })()}
                             {detail.boxes.map((box) => (
                               <div key={box.id} className="po-ov-label">
                                 <div className="po-ov-label-top">
@@ -126,7 +176,7 @@ export function PoOverview({ onHome, onSignOut }) {
                                   </div>
                                 )}
                                 <div className="po-track-actions">
-                                  {box.tracking_number && ['shipped', 'in_transit', 'delivered'].includes(box.status) && (
+                                  {box.tracking_number && ['pre_transit', 'shipped', 'in_transit', 'delivered'].includes(box.status) && (
                                     <button className="btn ghost sm po-track-refresh-one" disabled={trackBusy || trackBoxBusy != null}
                                       onClick={() => refreshTracking(p.id, box.id)}>
                                       <Icon name="refresh" /> {trackBoxBusy === Number(box.id) ? 'Checking…' : 'Refresh this label'}
@@ -141,6 +191,41 @@ export function PoOverview({ onHome, onSignOut }) {
                                 {historyOpen.has(Number(box.id)) && box.tracking_events?.length > 0 && (
                                   <TrackingTimeline events={box.tracking_events} status={box.tracking_status} />
                                 )}
+                                {(() => {
+                                  const lines = (detail.lines || []).filter((l) => Number(l.po_box_id) === Number(box.id));
+                                  // PH can fill a per-box manifest while it's still editable (draft PO, pending
+                                  // label) — the same window the supplier's own scan-out uses. Not when the PO
+                                  // is on a whole-order manifest (that's entered against the order, not a label).
+                                  const canFill = detail.po.status === 'draft' && box.status === 'pending'
+                                    && detail.po.manifest_scope !== 'po';
+                                  return (
+                                    <>
+                                      {lines.length > 0 && (
+                                        <ul className="po-lines po-ov-lines">
+                                          {lines.map((l) => (
+                                            <li key={l.id}>
+                                              <span className="po-line-name">{l.name || l.sku}</span>
+                                              <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                                              {l.entered_on_behalf && (
+                                                <span className="po-line-attribution muted xs">
+                                                  Entered by {l.entered_by_name || l.entered_by_username || 'staff'} · on supplier’s behalf
+                                                </span>
+                                              )}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                      {canFill && lines.length === 0 && (
+                                        <p className="muted xs po-ov-fill-hint">No items yet — if the supplier sent a manual list of the box contents, enter it here so the warehouse can receive against this PO.</p>
+                                      )}
+                                      {canFill && (
+                                        <button className="btn sm po-ov-fill-btn" onClick={() => setScanBox(box)}>
+                                          <Icon name="camera" /> {lines.length ? 'Add more items on their behalf' : 'Add items on their behalf'}
+                                        </button>
+                                      )}
+                                    </>
+                                  );
+                                })()}
                               </div>
                             ))}
                           </>
@@ -153,6 +238,15 @@ export function PoOverview({ onHome, onSignOut }) {
             </div>
           )}
       </div>
+
+      {scanBox && (
+        <PoScanModal box={scanBox} onClose={() => setScanBox(null)}
+          onAdded={refreshOpenDetail} onSignOut={onSignOut} />
+      )}
+      {scanOrderPo && (
+        <PoScanModal po={scanOrderPo} onClose={() => setScanOrderPo(null)}
+          onAdded={refreshOpenDetail} onSignOut={onSignOut} />
+      )}
     </div>
   );
 }

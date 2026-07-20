@@ -6,6 +6,7 @@
 // supplier later fills the contents by scanning. See docs/context/purchase-orders.md.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { createPo, dbConfigured } from '../_lib/db.js';
+import { registerTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -35,11 +36,20 @@ export default async function handler(req, res) {
   if (labels.length < 1) return send(res, 400, { ok: false, error: 'Add at least one shipping label.' });
 
   try {
-    const po = await createPo({
+    const created = await createPo({
       supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels,
       createdBy: user.name || user.username || '',
     });
-    return send(res, 200, { ok: true, ...po });
+    // Register each label's tracking number with 17TRACK now — not only when a supplier
+    // ships via the portal (which non-compliant suppliers never do). This is what makes
+    // 17TRACK start watching the box and PUSH status updates on its own. Best-effort;
+    // no-ops without TRACKING_API_KEY. (docs/context/purchase-orders.md — webhook.)
+    const trackItems = (created.boxes || [])
+      .filter((b) => b.tracking_number)
+      .map((b) => ({ number: b.tracking_number, carrier: b.carrier_key }));
+    if (trackItems.length)
+      registerTracking(trackItems).catch((e) => console.warn('[po/create] registerTracking:', e.message));
+    return send(res, 200, { ok: true, ...created });
   } catch (e) {
     console.error('[po/create]', e.message);
     return send(res, 500, { ok: false, error: 'Could not create the purchase order.' });

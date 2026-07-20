@@ -1,14 +1,15 @@
-// POST /api/po/line  (supplier / admin)  { lineId, qty?, size? }
-// Edits an expected line's quantity and/or size; qty <= 0 removes the line. Only on
-// a DRAFT PO the supplier owns, and only while its label is still pending. Changing
-// the size into an existing SKU+size line on the same label merges the two.
+// POST /api/po/line  (supplier / ph_team / admin)  { lineId, qty?, size? }
+// Edits an expected line's quantity and/or size; qty <= 0 removes the line. Only on a
+// DRAFT PO, and only while its label is still pending. Changing the size into an existing
+// SKU+size line on the same label merges the two. The supplier edits their own manifest;
+// PH/admin edit ON THEIR BEHALF (re-stamps entered_by + entered_on_behalf on the surviving row).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoLine, getPoBox, getPo, updatePoLine, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['supplier']);
+  const user = requireRole(req, res, ['supplier', 'ph_team']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
@@ -30,8 +31,14 @@ export default async function handler(req, res) {
     const box = await getPoBox(line.po_box_id);
     const po = await getPo(line.po_id);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
-    if (!isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
+    // A supplier is scoped to their own POs; PH/admin can edit any PO on the team's behalf.
+    if (user.role === 'supplier' && !isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
+    // entered_by references users(id); env admin/superadmin have a non-numeric uid, so
+    // stamp the on-behalf flag but leave entered_by NULL for them.
+    const onBehalf = user.role !== 'supplier';
+    const uidNum = Number(user.uid);
+    const enteredBy = onBehalf && Number.isInteger(uidNum) ? uidNum : null;
     if (po.status !== 'draft')
       return send(res, 409, { ok: false, error: 'This order is already shipped — it can no longer be edited.' });
     if (box && box.status === 'packed')
@@ -39,7 +46,9 @@ export default async function handler(req, res) {
     if (box && box.status !== 'pending')
       return send(res, 409, { ok: false, error: 'This label is already shipped.' });
 
-    const { line: updated, removed, merged } = await updatePoLine(lineId, { size, qty });
+    const { line: updated, removed, merged } = await updatePoLine(lineId, {
+      size, qty, enteredBy, enteredOnBehalf: onBehalf,
+    });
     return send(res, 200, { ok: true, line: updated, removed, merged });
   } catch (e) {
     console.error('[po/line]', e.message);

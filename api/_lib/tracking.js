@@ -50,13 +50,16 @@ export async function fetchTrackInfo(items) {
   return accepted.map(parseTrackEntry).filter(Boolean);
 }
 
-// Map a 17TRACK status string → our po_boxes.status (pending|shipped|in_transit|delivered).
-// Unknown/exception statuses return null (leave the box status unchanged).
+// Map a 17TRACK status string → our po_boxes.status
+// (pending|pre_transit|shipped|in_transit|delivered). Unknown/exception → null (leave as-is).
 export function mapBoxStatus(status17) {
   const s = String(status17 || '').toLowerCase().replace(/[^a-z]/g, '');
   if (!s) return null;
   if (s.includes('delivered')) return 'delivered';
-  if (['intransit', 'outfordelivery', 'availableforpickup', 'inforeceived', 'pickup'].some((x) => s.includes(x)))
+  // "InfoReceived" = the carrier has the label details but hasn't scanned the parcel yet —
+  // it's still physically with the sender (the supplier). Distinct from actually moving.
+  if (s.includes('inforeceived')) return 'pre_transit';
+  if (['intransit', 'outfordelivery', 'availableforpickup', 'pickup'].some((x) => s.includes(x)))
     return 'in_transit';
   return null; // notfound / exception / expired / deliveryfailure → don't downgrade
 }
@@ -92,6 +95,37 @@ export function parseTrackEntry(entry) {
     boxStatus: mapBoxStatus(trackingStatus),
     events,
   };
+}
+
+// Fan-out to Google Sheets. 17TRACK pushes to ONE webhook URL (ours); the warehouse still
+// keeps tracking labels in a Google Sheet, so we forward each status update there too.
+// Point GOOGLE_SHEETS_TRACKING_URL at a Google Apps Script Web App (deployed "Anyone")
+// that appends/updates rows keyed by tracking number. Best-effort + env-gated: no-ops
+// without the URL, and a slow/broken Sheet never blocks the DB write or the 17TRACK 200.
+export const sheetsTrackingUrl = () => process.env.GOOGLE_SHEETS_TRACKING_URL || '';
+export async function forwardTrackingToSheet(updates) {
+  const url = sheetsTrackingUrl();
+  const rows = (updates || []).map((u) => ({
+    trackingNumber: u.trackingNumber,
+    status: u.trackingStatus || null,   // raw 17TRACK status text
+    stage: u.boxStatus || null,         // our mapped stage: pre_transit | in_transit | delivered
+    carrier: u.carrier || null,
+    lastCheckpoint: u.lastCheckpoint || null,
+  }));
+  if (!url || !rows.length) return { skipped: true };
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 6000);
+    try {
+      await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'stickballman12', updates: rows }), signal: ac.signal,
+      });
+    } finally { clearTimeout(t); }
+    return { ok: true, sent: rows.length };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 // Extract the track record(s) from a 17TRACK webhook push body.

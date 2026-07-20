@@ -5,7 +5,7 @@
 // valid secret (17TRACK treats non-200 as failure and retries).
 import { getJsonBody, send, applySecurity } from '../_lib/util.js';
 import { setPoBoxTracking, dbConfigured } from '../_lib/db.js';
-import { trackingWebhookSecret, parseWebhook } from '../_lib/tracking.js';
+import { trackingWebhookSecret, parseWebhook, forwardTrackingToSheet } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -20,6 +20,8 @@ export default async function handler(req, res) {
     const body = await getJsonBody(req);
     const updates = parseWebhook(body);
     for (const u of updates) await setPoBoxTracking(u.trackingNumber, u);
+    // Mirror the update into the warehouse's Google Sheet (best-effort, env-gated).
+    forwardTrackingToSheet(updates).catch((e) => console.warn('[po/tracking-webhook] sheet:', e.message));
     // Always 200 so the sender doesn't retry a push we accepted (even if 0 matched
     // a known label — a stray number isn't an error on our side).
     return send(res, 200, { ok: true, applied: updates.length });

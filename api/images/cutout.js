@@ -7,7 +7,7 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody, cleanSku, fetchWithTimeout } from '../_lib/util.js';
 import { dbConfigured } from '../_lib/db.js';
 import { r2Configured, presignPutUrl, publicUrl, isAllowedPhotoUrl } from '../_lib/r2.js';
-import { isAllowedSourceImageUrl, hiResSourceUrl } from '../_lib/kicksdb.js';
+import { isAllowedSourceImageUrl, hiResSourceUrl } from '../_lib/imgsources.js';
 import { cutoutForEdit } from '../_lib/branding.js';
 import { photoSourceForRole } from '../_lib/photos.js';
 

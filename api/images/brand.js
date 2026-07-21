@@ -12,18 +12,15 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody, cleanSku, fetchWithTimeout } from '../_lib/util.js';
 import { setProductPhoto, dbConfigured } from '../_lib/db.js';
 import { r2Configured, presignPutUrl, publicUrl, isAllowedPhotoUrl } from '../_lib/r2.js';
-import { isAllowedSourceImageUrl, kicksdbSpecData, hiResSourceUrl } from '../_lib/kicksdb.js';
+import { kicksdbSpecData } from '../_lib/kicksdb.js';
+import { nikeSpecData } from '../_lib/nike.js';
+import { isAllowedSourceImageUrl, hiResSourceUrl } from '../_lib/imgsources.js';
 import {
-  brandPhoto, brandSpec, welcomeSlide, cutoutForEdit, specBulletsFromDescription,
-  ANGLE_TEMPLATE, SPEC_TEMPLATE, WELCOME_TEMPLATE,
+  brandPhoto, brandSpec, welcomeSlide, cutoutForEditMaybePreCut, specBulletsFromDescription,
+  ANGLE_TEMPLATE,
 } from '../_lib/branding.js';
 
-// Listing images are named by their POSITION in the upload order (side=1 · diagonal=2 ·
-// top=3 · outsole=4 · rear=5 · spec=6 · welcome=7) rather than the angle name — e.g.
-// `…/2-<ts>.jpg` for the 3/4 shot. product_photos still records the angle/slot; only the
-// stored file key uses the number.
-const IMAGE_POSITION = { ...ANGLE_TEMPLATE, extra1: SPEC_TEMPLATE, extra2: WELCOME_TEMPLATE };
-import { photoSourceForRole } from '../_lib/photos.js';
+import { photoSourceForRole, listingPhotoBaseName } from '../_lib/photos.js';
 
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
 const MAX_BYTES = 12 * 1024 * 1024;
@@ -74,8 +71,11 @@ export default async function handler(req, res) {
   }
   // Persist a finished slide (commit only) → R2 + product_photos.
   async function storeFinal(angle, buffer) {
-    const pos = IMAGE_POSITION[angle] || angle; // number by position; fall back to the raw slot name
-    const key = `listings/${safeSku}/ph_edited/${pos}-${Date.now()}.jpg`;
+    // `<sku>-<position>-<angle>-<ts>.jpg` — same name PH downloads (see photos/download.js),
+    // so a file in the bucket and a file in the zip are recognisably the same thing. The
+    // timestamp stays: re-branding an angle must write a NEW key, or the public URL would be
+    // unchanged and browsers/CDN would keep serving the previous image.
+    const key = `listings/${safeSku}/ph_edited/${listingPhotoBaseName(sku, angle)}-${Date.now()}.jpg`;
     const put = await fetchWithTimeout(presignPutUrl({ key, expiresIn: 300 }),
       { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: buffer }, 20000);
     if (!put.ok) throw new Error(`upload ${put.status}`);
@@ -122,7 +122,9 @@ export default async function handler(req, res) {
           if (!resp.ok) return { slot: angle, ok: false, error: `Source returned ${resp.status}.` };
           const srcBuf = Buffer.from(await resp.arrayBuffer());
           if (!srcBuf.length || srcBuf.length > MAX_BYTES) return { slot: angle, ok: false, error: 'Image is empty or too large.' };
-          const cut = await cutoutForEdit(srcBuf);   // throws (no land-effect fallback) if the AI cutout fails
+          // Nike's renditions arrive already transparent — that path skips the AI matte
+          // entirely; everything else still throws (no land-effect fallback) on failure.
+          const cut = await cutoutForEditMaybePreCut(srcBuf);
           shoeBuffer = cut.pngBuffer; bbox = cut.bbox;
           cutoutUrl = await stageCutout(cut.pngBuffer);
         }
@@ -143,8 +145,16 @@ export default async function handler(req, res) {
   if (body.includeSpec) {
     jobs.push({ slot: 'spec', heavy: false, run: async () => {
       try {
-        const spec = await kicksdbSpecData(sku);
-        const bullets = specBulletsFromDescription(spec.description, spec.colorway);
+        // Merge the two catalogues rather than picking one — they're good at different
+        // things. Nike is authoritative for the FACTS we print verbatim (official
+        // colourway naming and order, real product category). But its marketing copy is
+        // shorter than GOAT's and often omits the upper material — e.g. for the Air
+        // Jordan 1 only GOAT's prose says "leather" — so the keyword inference below
+        // reads BOTH descriptions. Non-Nike SKUs just fall through to GOAT alone.
+        const [nike, kicks] = await Promise.all([nikeSpecData(sku), kicksdbSpecData(sku)]);
+        const description = [nike?.description, kicks?.description].filter(Boolean).join(' ');
+        const colorway = nike?.colorway || kicks?.colorway || '';
+        const bullets = specBulletsFromDescription(description, colorway, { subtitle: nike?.subtitle });
         const branded = await brandSpec({ title, sku, bullets, outSize: renderSize });
         if (commit) return { slot: 'spec', ok: true, url: await storeFinal('extra1', branded), bullets };
         return { slot: 'spec', ok: true, preview: toDataUri(branded), bullets };

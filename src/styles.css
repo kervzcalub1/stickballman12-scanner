@@ -9,7 +9,22 @@
   --primary-d: #3a63d8;
   --ok: #2ecc71;
   --err: #ff6b6b;
+
+  /* Section accents. Each home section owns a hue so the dashboard reads as grouped
+     areas rather than one undifferentiated wall of blue cards. Three explicit stops
+     per accent (line / tint / edge) instead of color-mix(), which needs Safari 16.4+
+     and the warehouse runs older iPhones. */
+  --accent: var(--primary);
+  --accent-tint: rgba(79, 124, 255, 0.10);
+  --accent-edge: rgba(79, 124, 255, 0.22);
 }
+/* Set on <section data-accent="…"> — see Home.jsx / PHTeam.jsx. */
+[data-accent="attention"] { --accent: #e0a458; --accent-tint: rgba(224, 164, 88, 0.12); --accent-edge: rgba(224, 164, 88, 0.26); }
+[data-accent="listing"]   { --accent: #4f7cff; --accent-tint: rgba(79, 124, 255, 0.10); --accent-edge: rgba(79, 124, 255, 0.22); }
+[data-accent="orders"]    { --accent: #2bb3a3; --accent-tint: rgba(43, 179, 163, 0.12); --accent-edge: rgba(43, 179, 163, 0.26); }
+[data-accent="requests"]  { --accent: #8b7cf6; --accent-tint: rgba(139, 124, 246, 0.12); --accent-edge: rgba(139, 124, 246, 0.26); }
+[data-accent="inventory"] { --accent: #e0729b; --accent-tint: rgba(224, 114, 155, 0.12); --accent-edge: rgba(224, 114, 155, 0.26); }
+[data-accent="shipping"]  { --accent: #4bb3d9; --accent-tint: rgba(75, 179, 217, 0.12); --accent-edge: rgba(75, 179, 217, 0.26); }
 
 * { box-sizing: border-box; }
 button { -webkit-tap-highlight-color: transparent; }
@@ -161,18 +176,33 @@ body {
 }
 .home-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .home-card {
+  position: relative; overflow: hidden;
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
-  padding: 18px; border-radius: 14px; cursor: pointer; text-align: left;
+  /* Extra left padding clears the accent rail. */
+  padding: 18px 18px 18px 21px; border-radius: 14px; cursor: pointer; text-align: left;
   background: var(--panel); border: 1px solid var(--border); color: var(--text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
   transition: border-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
 }
-.home-card:hover { border-color: var(--primary); box-shadow: 0 8px 22px rgba(79, 124, 255, 0.12); transform: translateY(-2px); }
+/* Accent rail — the section's hue as a left edge, so cards group at a glance. */
+.home-card::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--accent); opacity: 0.7;
+  transition: width 0.15s ease, opacity 0.15s ease;
+}
+.home-card:hover::before { width: 5px; opacity: 1; }
+.home-card:hover { border-color: var(--accent-edge); box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35); transform: translateY(-2px); }
 .home-card:active { transform: translateY(0); }
 .home-card-icon {
-  width: 44px; height: 44px; margin-bottom: 4px; padding: 11px; color: var(--primary);
+  width: 44px; height: 44px; margin-bottom: 4px; padding: 11px; color: var(--accent);
   display: flex; align-items: center; justify-content: center;
-  border-radius: 12px; background: rgba(79, 124, 255, 0.1); border: 1px solid rgba(79, 124, 255, 0.2);
+  border-radius: 12px; background: var(--accent-tint); border: 1px solid var(--accent-edge);
+}
+/* Section heading picks up the accent as a leading marker. */
+.home-section-title { display: flex; align-items: center; gap: 8px; }
+.home-section-title::before {
+  content: ''; width: 8px; height: 8px; border-radius: 3px; flex: none;
+  background: var(--accent); opacity: 0.85;
 }
 .home-card-title { font-size: 17px; font-weight: 700; }
 .home-card-sub { font-size: 12px; color: var(--muted); }
@@ -194,12 +224,21 @@ body {
 .home-attention-top { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .home-attention-count { font-size: 26px; font-weight: 800; line-height: 1; color: #e0a458; font-variant-numeric: tabular-nums; }
 .card-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+/* Three tones, and the distinction is meaningful — amber is a CALL TO ACTION, not
+   decoration. Store-sync counts (II/AL/SX/SH) are just numbers, so they're `info`;
+   using amber for them made a healthy dashboard look like seven warnings and
+   devalued the two chips that genuinely needed a response. */
 .card-badge {
   font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-  color: #e9c46a; background: rgba(233,196,106,0.16); border: 1px solid rgba(233,196,106,0.4);
+  font-variant-numeric: tabular-nums;
+  color: #e9c46a; background: rgba(233, 196, 106, 0.16); border: 1px solid rgba(233, 196, 106, 0.4);
 }
 .card-badge--ok {
-  color: #6fd49a; background: rgba(90,200,140,0.16); border-color: rgba(90,200,140,0.4);
+  color: #6fd49a; background: rgba(90, 200, 140, 0.16); border-color: rgba(90, 200, 140, 0.4);
+}
+/* Neutral count — reads as data, not as a problem. */
+.card-badge--info {
+  color: var(--muted); background: rgba(154, 160, 170, 0.12); border-color: rgba(154, 160, 170, 0.28);
 }
 
 /* Check Access table */
@@ -1729,8 +1768,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* The horizontal 360° frame strip. */
 .if-strip-head { margin-bottom: 6px; }
 .if-strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
-.if-frame { flex: none; width: 120px; height: 90px; padding: 0; border: 2px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; cursor: pointer; scroll-snap-align: start; }
-.if-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.if-frame { flex: none; width: 120px; height: 108px; padding: 0; border: 2px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; cursor: pointer; scroll-snap-align: start; display: flex; flex-direction: column; }
+.if-frame img { width: 100%; flex: 1; min-height: 0; object-fit: contain; display: block; }
+/* Angle caption — real for Nike (labelled views), an index for the marketplaces. */
+.if-frame-cap { flex: none; font-size: 10px; line-height: 18px; text-align: center; color: var(--muted); background: var(--bg-subtle, #f6f7f9); border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+.if-frame.sel .if-frame-cap { color: var(--primary); }
+/* One group per image source, stacked. */
+.if-strip-group + .if-strip-group { margin-top: 10px; }
+.if-strip-src { margin-bottom: 4px; font-weight: 600; }
 .if-frame:hover { border-color: var(--primary); }
 .if-frame.sel { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
 .if-actions { display: flex; justify-content: flex-end; }

@@ -1,8 +1,9 @@
 // One page: search/scan inventory, filter (date/supplier/status) with totals +
 // CSV (the daily report), select rows → print VIN labels, and click a row (or
 // scan a VIN) to open an item's detail + history + status/notes.
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { useQueryParam } from '../lib/urlstate.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
 import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb } from '../components/common.jsx';
@@ -21,15 +22,25 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   const today = estToday();
   const [mode, setMode] = useState('list'); // 'list' | 'detail'
 
-  // list / filters
-  const [q, setQ] = useState('');
-  const [from, setFrom] = useState(() => ymd(periodRange('week', new Date())[0]));
-  const [to, setTo] = useState(() => ymd(periodRange('week', new Date())[1]));
-  const [supplier, setSupplier] = useState('');
-  const [status, setStatus] = useState('');
-  const [intake, setIntake] = useState(''); // '' | 'receiving' | 'rescale'
-  const [periodMode, setPeriodMode] = useState('week'); // 'day' | 'week' | 'month' | 'custom'
-  const [anchor, setAnchor] = useState(() => new Date()); // reference date for the current period
+  // list / filters — mirrored into the query string so a refresh (or a link shared
+  // with a colleague) comes back to the same view instead of resetting to "this week,
+  // no filters". These are all short, non-sensitive and safe for someone else to open.
+  const [q, setQ] = useQueryParam('q');
+  const [from, setFrom] = useQueryParam('from', ymd(periodRange('week', new Date())[0]));
+  const [to, setTo] = useQueryParam('to', ymd(periodRange('week', new Date())[1]));
+  const [supplier, setSupplier] = useQueryParam('supplier');
+  const [status, setStatus] = useQueryParam('status');
+  const [intake, setIntake] = useQueryParam('intake'); // '' | 'receiving' | 'rescale'
+  const [periodMode, setPeriodMode] = useQueryParam('period', 'week'); // 'day' | 'week' | 'month' | 'custom'
+  // The period anchor is a Date; it round-trips through the URL as a plain ymd string.
+  // Falls back to today if absent or unparseable, so a hand-edited URL can't produce an
+  // Invalid Date that would poison every period calculation downstream.
+  const [anchorYmd, setAnchorYmd] = useQueryParam('anchor', ymd(new Date()));
+  const anchor = useMemo(() => {
+    const d = new Date(`${anchorYmd}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? new Date() : d;
+  }, [anchorYmd]);
+  const setAnchor = (d) => setAnchorYmd(ymd(d instanceof Date ? d : new Date(d)));
   const [data, setData] = useState(null); // { rows, totals }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

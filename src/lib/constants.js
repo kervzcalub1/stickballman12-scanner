@@ -70,7 +70,13 @@ export const SYNC_FIELDS = [
 
 // Which badges a given home-card key shows. The four store badges (II/AL/SX/SH)
 // go on the listing card; the others on their matching card.
-export const SYNC_BADGES = (c) => [['II', c.not_ii], ['AL', c.not_alias], ['SX', c.not_stockx], ['SH', c.not_shopify]];
+// Store-sync backlog. Toned `info` (neutral) rather than amber: these are a standing
+// workload that's essentially never zero, and four permanent amber chips drown out the
+// episodic queues (No box / To reconcile) that actually want a response today.
+export const SYNC_BADGES = (c) => [
+  ['II', c.not_ii, 'info'], ['AL', c.not_alias, 'info'],
+  ['SX', c.not_stockx, 'info'], ['SH', c.not_shopify, 'info'],
+];
 export function homeCardBadges(key, c) {
   if (!c) return [];
   if (key === 'report') return SYNC_BADGES(c);
@@ -86,37 +92,39 @@ export function homeCardBadges(key, c) {
 // Home is grouped by the shoe's lifecycle through the warehouse: Intake →
 // Put-away → Rescale → Sell & Ship → Browse & Reports, with Admin last.
 // `adminOnly` sections show for admin + superadmin; `superOnly` for superadmin only.
+// `accent` picks the section's colour token (see [data-accent] in styles.css) — it only
+// affects the card rail + icon hue, so an unknown/absent value just falls back to blue.
 export const HOME_SECTIONS = [
-  { title: 'Receiving Shipment Orders', cards: [
+  { title: 'Receiving Shipment Orders', accent: 'shipping', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
   ] },
-  { title: 'In-Store Mode', cards: [
+  { title: 'In-Store Mode', accent: 'inventory', cards: [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },
     { key: 'instore-listing', icon: '🏷️', title: 'In-Store Listing', sub: 'Mark in-store buys listed to Alias/StockX/Shopify' },
   ] },
-  { title: 'Put-away', cards: [
+  { title: 'Put-away', accent: 'orders', cards: [
     { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },
     { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Resolve units bought without a box' },
   ] },
-  { title: 'Rescale', cards: [
+  { title: 'Rescale', accent: 'requests', cards: [
     { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },
     { key: 'rescalereq', icon: '📨', title: 'Rescale Requests', sub: 'PH-flagged SKUs to recount / rescan' },
   ] },
-  { title: 'Sell & Ship', cards: [
+  { title: 'Sell & Ship', accent: 'shipping', cards: [
     { key: 'sold', icon: '💰', title: 'Mark Sold', sub: 'Scan VINs to mark sold (delists from all stores)' },
     { key: 'shipped', icon: '📦', title: 'Mark Shipped', sub: 'Scan VINs to mark shipped' },
   ] },
-  { title: 'Browse & Listings', cards: [
+  { title: 'Browse & Listings', accent: 'listing', cards: [
     { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
     { key: 'locations', icon: '🗺️', title: 'Locate Shoe', sub: 'Find which shelf a shoe is on' },
     { key: 'report', icon: '📊', title: 'Listings & Sync', sub: 'Store listings & sync status' },
   ] },
-  { title: 'PH Team', superOnly: true, cards: [
+  { title: 'PH Team', superOnly: true, accent: 'requests', cards: [
     { key: 'ph', icon: '🧾', title: 'PH Team Workspace', sub: 'Open the PH pricing / listing pages (New Inventory, Rescale, Photos…)' },
   ] },
-  { title: 'Administration', adminOnly: true, cards: [
+  { title: 'Administration', adminOnly: true, accent: 'orders', cards: [
     { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },
     { key: 'settings', icon: '⚙️', title: 'Settings', sub: 'Price margin % and other app-wide settings' },
   ] },

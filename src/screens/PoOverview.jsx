@@ -6,6 +6,7 @@
 // /api/po/track-refresh. See docs/context/purchase-orders.md.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { carrierName } from '../lib/carriers.js';
@@ -33,7 +34,12 @@ function PoStatusChip({ status }) {
 export function PoOverview({ onHome, onSignOut }) {
   const [pos, setPos] = useState(null);
   const [error, setError] = useState('');
-  const [openId, setOpenId] = useState(null);
+  // The open PO rides in ?po= so a refresh reopens it instead of dropping you back on
+  // the list to hunt for it again. Numeric id — the detail is re-fetched by the effect
+  // below, so nothing stale is restored.
+  const [openIdRaw, setOpenIdRaw] = useQueryParam('po');
+  const openId = openIdRaw ? Number(openIdRaw) : null;
+  const setOpenId = (v) => setOpenIdRaw(v == null ? '' : String(v));
   const [detail, setDetail] = useState(null);          // { po, boxes, lines }
   const [detailBusy, setDetailBusy] = useState(false);
   const [trackBusy, setTrackBusy] = useState(false);    // whole-PO refresh

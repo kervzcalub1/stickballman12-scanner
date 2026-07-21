@@ -4,8 +4,9 @@
 // the Global Indicator, and our Final = GI + 20%. Tapping a priced size again
 // removes it; "Price all" fetches the whole run at once. Nothing is saved — it
 // never touches inventory. PH team + admin only (pricing is hidden from warehouse).
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { useQueryParam, readParam, writeParam } from '../lib/urlstate.js';
 import { TopBar, ShoeThumb } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { markupSuffix } from '../lib/config.js';
@@ -29,29 +30,75 @@ const PRICE_COLS = [
 ];
 
 export function PriceInquiry({ onHome, onSignOut }) {
-  const [skuInput, setSkuInput] = useState('');
+  // The SKU lives in `?sku=` so a refresh comes back to the same shoe instead of an
+  // empty form. Only the SKU: the per-size Alias prices are deliberately NOT restored
+  // automatically (see the effect below).
+  const [skuInput, setSkuInput] = useQueryParam('sku');
   const [product, setProduct] = useState(null);        // { name, sku, image, sizes[] }
   const [priced, setPriced] = useState({});            // size -> result row (or { size, _empty } when Alias had nothing)
   const [loading, setLoading] = useState(() => new Set()); // sizes currently fetching
   const [notConfigured, setNotConfigured] = useState(false);
   const [looking, setLooking] = useState(false);       // SKU catalog lookup in flight
   const [error, setError] = useState('');
-  const [basis, setBasis] = useState('consigned');     // 'consigned' (daily ops) | 'with_you'
+  // Basis rides in the URL too — it changes every printed number, so restoring the
+  // sizes on the wrong basis would silently show different prices than you left.
+  const [basis, setBasis] = useQueryParam('basis', 'consigned'); // 'consigned' (daily ops) | 'with_you'
 
   // Step 1 — resolve the SKU on the Alias catalog (title + size run + catalog_id).
-  async function lookUp(e) {
+  async function lookUp(e, skuOverride, restoreSizes = []) {
     e?.preventDefault();
-    const sku = skuInput.trim();
+    const sku = String(skuOverride ?? skuInput).trim();
     if (!sku) return;
     setLooking(true); setError(''); setNotConfigured(false); setProduct(null); setPriced({}); setLoading(new Set());
     try {
       const { product: p } = await api.searchSku(sku);
       setProduct(p);
+      // On a URL restore, re-price exactly the sizes that were on screen before. Keep
+      // only sizes this SKU actually has, so a stale/hand-edited ?sizes= can't ask
+      // Alias for sizes that don't exist.
+      const want = restoreSizes.filter((sz) => (p?.sizes || []).map(String).includes(String(sz)));
+      if (want.length) setPendingRestore(want);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
     } finally { setLooking(false); }
   }
+
+  // `fetchSizes` closes over `product`, which is still null inside lookUp — so the
+  // restore is staged here and fired by the effect below once product has landed.
+  const [pendingRestore, setPendingRestore] = useState(null);
+  useEffect(() => {
+    if (!product || !pendingRestore?.length) return;
+    const want = pendingRestore;
+    setPendingRestore(null);
+    fetchSizes(want);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product, pendingRestore]);
+
+  // Restore from the URL on mount (refresh / shared link): the SKU, the basis, and the
+  // exact sizes that were priced — so you come back to the table you left instead of
+  // re-picking chips one at a time.
+  //
+  // Re-pricing does cost live Alias calls, but the cost is bounded by what the user
+  // already chose: we re-fetch ONLY the sizes in `?sizes=`, never the whole run. (A
+  // blanket "price all" on restore is what we're avoiding — that's 5+ round-trips
+  // nobody asked for.) `restoreSizes` is handed to lookUp so it fires once the catalog
+  // resolves and `product` exists.
+  const boot = useRef({ sku: readParam('sku'), sizes: readParam('sizes') });
+  useEffect(() => {
+    const b = boot.current;
+    if (!b.sku) return;
+    boot.current = { sku: '', sizes: '' };
+    lookUp(null, b.sku, b.sizes ? b.sizes.split(',').filter(Boolean) : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mirror the priced sizes into ?sizes= whenever they change, so a refresh at any
+  // moment restores exactly what's on screen.
+  useEffect(() => {
+    if (!product) return;
+    writeParam('sizes', Object.keys(priced).join(','));
+  }, [priced, product]);
 
   const setLoad = (sizes, on) => setLoading((s) => {
     const n = new Set(s); for (const sz of sizes) (on ? n.add(sz) : n.delete(sz)); return n;

@@ -7,8 +7,8 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody, cleanSku, fetchWithTimeout } from '../_lib/util.js';
 import { setProductPhoto, dbConfigured } from '../_lib/db.js';
 import { r2Configured, presignPutUrl, publicUrl } from '../_lib/r2.js';
-import { isAllowedSourceImageUrl } from '../_lib/kicksdb.js';
-import { photoSourceForRole, PHOTO_ANGLES, PH_EXTRA_ANGLES } from '../_lib/photos.js';
+import { isAllowedSourceImageUrl } from '../_lib/imgsources.js';
+import { photoSourceForRole, PHOTO_ANGLES, PH_EXTRA_ANGLES, listingPhotoBaseName } from '../_lib/photos.js';
 
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
 const ALLOWED_ANGLES = [...PHOTO_ANGLES, ...PH_EXTRA_ANGLES];
@@ -56,7 +56,7 @@ export default async function handler(req, res) {
       const buf = Buffer.from(await resp.arrayBuffer());
       if (!buf.length || buf.length > MAX_BYTES) return { angle, ok: false, error: 'Image is empty or too large.' };
 
-      const key = `listings/${safeSku}/${source}/${angle}-${Date.now()}.${ext}`;
+      const key = `listings/${safeSku}/${source}/${listingPhotoBaseName(sku, angle)}-${Date.now()}.${ext}`;
       const uploadUrl = presignPutUrl({ key, expiresIn: 300 });
       const put = await fetchWithTimeout(uploadUrl, { method: 'PUT', headers: { 'Content-Type': ct }, body: buf }, 20000);
       if (!put.ok) return { angle, ok: false, error: `Upload failed (${put.status}).` };

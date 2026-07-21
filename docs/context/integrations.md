@@ -72,6 +72,45 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
   `receiving.md` / `ph-report.md` / `data-model.md`.
 - `scripts/probe-apis.mjs` — diagnostic that dumps each API's fields for a SKU/UPC.
 
+## Listing imagery (PH Image Finder) — see `ph-report.md` for the UI flow
+Three sources, queried **concurrently** by `api/images/search.js`; all best-effort (any
+failure resolves to `null` and the others still answer). SSRF allowlist for every
+server-side image fetch is unioned in **`api/_lib/imgsources.js`**.
+- **Nike / Jordan** (`api/_lib/nike.js`) — `GET api.nike.com/product_feed/threads/v2`,
+  **undocumented, no auth**. Filters: `marketplace(US)`, `language(en)`,
+  `channelId(d9a5bc42-4b9c-4976-858a-f159cf99c647)` (**mandatory** — 400 without it), and
+  `productInfo.merchProduct.styleColor(<SKU>)`. Response gzips. Images are tagged with a
+  `view` LETTER (**A** lateral · **B** outsole · **C** medial · **D** top-down · **E** 3/4 ·
+  **F** heel) — the only source that labels angles, which is what makes a reliable
+  top-down/outsole possible. Renditions: use the NAMED presets
+  (`t_PDP_1920_v1` = 1920²); an arbitrary `t_default/w_3000,c_limit` silently returns
+  **400×400**. Dropping the background transform (`/a/images/w_1728/<id>/image.png`) yields a
+  **pre-cut RGBA PNG** → no Replicate cutout. `productInfo[0].productContent` also carries the
+  official `colorDescription`, `subtitle`, `description` and a `colors[]` array with hex
+  (`techSpec`/`bestFor`/`widths` are always empty). One cached feed call per SKU serves both.
+  Retired products can return a record with **zero images** — treated as a miss.
+- **adidas** (`api/_lib/adidas.js`) — no first-party route exists: `assets.adidas.com` URLs
+  embed a per-product hash that isn't derivable from the article code, `adidas.com` HTML/APIs
+  are **Akamai-WAF'd** from server IPs, and the CDN isn't search-indexed so the hash can't be
+  discovered. ⚠️ `m.adidas.com/.../<CODE>_01_standard.jpg` is a **false positive** — HTTP 200
+  for *any* code including bogus ones, returning a ~1.2 KB HTML WAF page with a `.jpg`
+  extension; validate magic bytes, never status codes. Instead a **cached index** is crawled
+  from `asphalt-nyc.com/products.json` (35 pages), which republishes adidas' studio files with
+  adidas' **semantic filenames** (`_02`=top-down, `_03`=outsole). Built **in the background**
+  (~40 s cold; a request never waits — the first lookup misses and the next is served),
+  refreshed daily. The store **429s `local_rate_limited`** on bursts, so pages are fetched
+  sequentially with backoff; a truncated crawl is detected (`complete:false`), never allowed to
+  overwrite a larger index, and retried in 30 min instead of caching gaps for a day
+  (`adidasIndexStats()` reports health). Max **840×840** — Shopify won't upscale past the
+  source (`?width=2048` and `_2048x2048` both return 840); ~1.17× into the template box.
+  These renders carry a **baked drop shadow**, so they still need the AI cutout.
+- **KicksDB** (`api/_lib/kicksdb.js`, `KICKSDB_KEY`) — GOAT curated gallery → StockX 360° spin
+  → hero. Covers everything else. **GOAT has no top-down at all** (the asset isn't shot), so
+  outside Nike/adidas that angle stays manual.
+- ⚖️ **Licensing:** this is brand-owned imagery from undocumented endpoints. Nike's ToS grants
+  a personal/noncommercial licence only; the adidas set is third-party republished. Compositing
+  into Brand & Fill carries the same exposure as direct use. Unresolved — a business decision.
+
 ## Railway proxies
 - StockX: separate keyless Railway host (no auto-relogin).
 - Alias: the bypass proxy above.

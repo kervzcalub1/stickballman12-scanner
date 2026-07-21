@@ -19,3 +19,24 @@ export function photoSourceForRole(role, requested) {
 
 export const PHOTO_ANGLES = ['side', 'diagonal', 'outsole', 'top', 'rear'];
 export const PH_EXTRA_ANGLES = ['extra1', 'extra2'];
+
+// Listing photos are named `<sku>-<position>-<angle>.jpg` — e.g. FD8311-401-4-outsole.jpg.
+// The POSITION is the marketplace upload order (what the stores show first), and the
+// ANGLE word makes the file self-describing for whoever is doing the uploading. The
+// internal slot keys don't read well on a filename, so two are renamed for humans:
+// `side` → lateral and `rear` → heel.
+export const ANGLE_POSITION = { side: 1, diagonal: 2, top: 3, outsole: 4, rear: 5, extra1: 6, extra2: 7 };
+export const ANGLE_FILE_LABEL = {
+  side: 'lateral', diagonal: 'diagonal', top: 'top', outsole: 'outsole', rear: 'heel',
+  extra1: 'spec', extra2: 'welcome',
+};
+
+// `<sku>-<position>-<angle>` with no extension (callers append their own). Falls back to
+// the raw slot name for anything not in the map, so an unknown angle still yields a
+// usable, unique-ish name instead of "undefined".
+export function listingPhotoBaseName(sku, angle) {
+  const pos = ANGLE_POSITION[angle];
+  const label = ANGLE_FILE_LABEL[angle] || String(angle || 'photo');
+  const clean = (s) => String(s || '').replace(/[^A-Za-z0-9._-]+/g, '-');
+  return pos ? `${clean(sku)}-${pos}-${clean(label)}` : `${clean(sku)}-${clean(label)}`;
+}

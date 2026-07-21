@@ -5,6 +5,7 @@
 // freezes the snapshot onto it. See docs/context/purchase-orders.md.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 
@@ -51,7 +52,11 @@ function buildReport(po, rows, summary) {
 export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   const [pos, setPos] = useState(null);
   const [error, setError] = useState('');
-  const [openId, setOpenId] = useState(null);
+  // Same as PoOverview: ?po= keeps the open order across a refresh. The reconciliation
+  // rows are always re-fetched from the server, never restored from the URL.
+  const [openIdRaw, setOpenIdRaw] = useQueryParam('po');
+  const openId = openIdRaw ? Number(openIdRaw) : null;
+  const setOpenId = (v) => setOpenIdRaw(v == null ? '' : String(v));
   const [detail, setDetail] = useState(null); // { po, rows, summary }
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);

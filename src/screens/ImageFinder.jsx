@@ -6,6 +6,7 @@
 // SKU's edited listing photos (source='ph_edited').
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, ShoeThumb, ImageZoomModal, ProgressBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { EditedPhotosPanel } from './PhEditedPhotos.jsx';
@@ -34,7 +35,17 @@ const RESULT_ORDER = ['side', 'diagonal', 'top', 'outsole', 'rear', 'spec', 'wel
 export function ImageFinder({ onHome, onSignOut }) {
   const [skuInput, setSkuInput] = useState('');
   const [product, setProduct] = useState(null);
-  const [managedSku, setManagedSku] = useState('');   // the loaded SKU — drives the manage (EditedPhotosPanel) view
+  // Every source that matched the SKU (Nike, GOAT, StockX…) — the gallery lists them
+  // all so PH can pick the angle they want rather than trusting one catalogue's order.
+  const [sources, setSources] = useState([]);
+  // `?sku=` restores the LOADED SKU on refresh — i.e. you land back on that shoe's
+  // photo manager instead of an empty form. Nothing else from this screen is
+  // URL-restored, and that's deliberate: `preview` holds full-size rendered slides as
+  // data-URIs (too big for a URL), `cutoutUrl` points at a server-staged object that
+  // may have been collected, `committed` would lie about whether a set was already
+  // saved, and re-running Brand & Fill spends a Replicate cutout per slot. Picks and
+  // edits are cheap to re-make; a silent re-render is not cheap to undo.
+  const [managedSku, setManagedSku] = useQueryParam('sku');   // the loaded SKU — drives the manage (EditedPhotosPanel) view
   const [panelReload, setPanelReload] = useState(0);  // bump to make the panel re-fetch (after a Brand & Fill save)
   const [title, setTitle] = useState('');             // editable shoe name stamped on each slide
   const [picks, setPicks] = useState({});             // angle -> image url (gallery or uploaded)
@@ -88,12 +99,18 @@ export function ImageFinder({ onHome, onSignOut }) {
 
   // Run the marketplace image search + seed the angle slots (the Brand & Fill entry point).
   async function runSearch(sku) {
-    const { configured, product: p } = await api.imageFinderSearch(sku);
+    const { configured, product: p, sources: srcs } = await api.imageFinderSearch(sku);
     if (configured === false) { setNotConfigured(true); return; }
     if (!p) { setError('No match found for that SKU.'); return; }
-    setProduct(p); setTitle(p.title || '');
+    const list = Array.isArray(srcs) && srcs.length ? srcs : [p];
+    setProduct(p); setSources(list); setTitle(p.title || '');
+    // Seed each slot from the first source that can fill it — sources are ordered
+    // best-first (Nike's labelled angles lead), so an unlabelled gallery only fills
+    // the slots the labelled one couldn't.
     const seeded = {};
-    for (const s of (p.suggestions || [])) seeded[s.angle] = s.url;
+    for (const src of list) {
+      for (const s of (src.suggestions || [])) if (!seeded[s.angle]) seeded[s.angle] = s.url;
+    }
     setPicks(seeded);
   }
 
@@ -106,7 +123,7 @@ export function ImageFinder({ onHome, onSignOut }) {
   }
 
   // Leave the generate flow → back to the photo manager, reloading it so any just-saved slides show.
-  function backToPhotos() { setProduct(null); resetPreview(); setPanelReload((k) => k + 1); }
+  function backToPhotos() { setProduct(null); setSources([]); resetPreview(); setPanelReload((k) => k + 1); }
 
   function assignFrame(url) {
     setPicks((p) => ({ ...p, [activeSlot]: url }));
@@ -118,7 +135,8 @@ export function ImageFinder({ onHome, onSignOut }) {
     resetPreview();
     setPicks((p) => {
       if (p[angle]) { const n = { ...p }; delete n[angle]; return n; }
-      const sug = (product?.suggestions || []).find((s) => s.angle === angle);
+      // Re-checking a slot re-fills it from the best source that has that angle.
+      const sug = sources.flatMap((s) => s.suggestions || []).find((s) => s.angle === angle);
       return { ...p, [angle]: sug?.url || product?.images?.[0] || product?.hero };
     });
   }
@@ -309,7 +327,8 @@ export function ImageFinder({ onHome, onSignOut }) {
     } finally { setDownloading(false); }
   }
 
-  const images = product?.images || [];
+  // Every photo across every matched source (the gallery groups them per source).
+  const images = sources.flatMap((s) => s.images || []);
   // Ordered preview slides for the review grid + zoom (only the ones that rendered).
   const previewList = useMemo(
     () => RESULT_ORDER.map((slot) => (preview?.[slot]?.ok && preview[slot].preview ? { slot, ...preview[slot] } : null)).filter(Boolean),
@@ -373,7 +392,7 @@ export function ImageFinder({ onHome, onSignOut }) {
                 <div className="muted sm">
                   <span className="pi-product-sku">{product.sku || '—'}</span>
                   {product.brand ? <span> · {product.brand}</span> : null}
-                  {images.length ? <span> · {images.length} photo{images.length === 1 ? '' : 's'}{product.sourceLabel ? ` · ${product.sourceLabel}` : ''}</span> : null}
+                  {images.length ? <span> · {images.length} photo{images.length === 1 ? '' : 's'} · {sources.map((s) => s.sourceLabel).join(' + ')}</span> : null}
                 </div>
                 {product.source && product.source !== 'goat' && (
                   <div className="if-fallback-note sm">
@@ -426,18 +445,32 @@ export function ImageFinder({ onHome, onSignOut }) {
             </div>
 
             {/* Gallery — tap any image to drop it into the active slot. */}
-            {images.length > 0 && (
+            {sources.some((s) => (s.images || []).length > 0) && (
               <div className="if-strip-wrap mt">
                 <div className="if-strip-head muted sm">Assign to <b>{SLOT_LABEL[activeSlot]}</b> — tap a photo</div>
-                <div className="if-strip">
-                  {images.map((url, i) => (
-                    <button type="button" key={i}
-                      className={`if-frame ${picks[activeSlot] === url ? 'sel' : ''}`.trim()}
-                      onClick={() => assignFrame(url)} title={`Photo ${i + 1}`}>
-                      <img src={url} alt={`Photo ${i + 1}`} loading="lazy" />
-                    </button>
-                  ))}
-                </div>
+                {/* One strip per source. Nike labels each shot's angle, so those
+                    captions are real; the marketplace galleries fall back to an index. */}
+                {sources.map((src) => (src.images || []).length > 0 && (
+                  <div className="if-strip-group" key={src.source}>
+                    <div className="if-strip-src muted sm">
+                      {src.sourceLabel}
+                      <span className="muted"> · {src.images.length} photo{src.images.length === 1 ? '' : 's'}</span>
+                    </div>
+                    <div className="if-strip">
+                      {src.images.map((url, i) => {
+                        const caption = src.labels?.[i] || `Photo ${i + 1}`;
+                        return (
+                          <button type="button" key={`${src.source}-${i}`}
+                            className={`if-frame ${picks[activeSlot] === url ? 'sel' : ''}`.trim()}
+                            onClick={() => assignFrame(url)} title={`${src.sourceLabel} — ${caption}`}>
+                            <img src={url} alt={caption} loading="lazy" />
+                            <span className="if-frame-cap">{caption}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 

@@ -7,6 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { getUser, clearAuth, api } from './api.js';
 import { isUnsavedDirty } from './hooks.js';
 import { pathForView, viewForPath } from './lib/constants.js';
+import { clearQuery } from './lib/urlstate.js';
 import { setMarkupPct } from './lib/config.js';
 import { Auth } from './screens/Auth.jsx';
 import { Home } from './screens/Home.jsx';
@@ -79,14 +80,18 @@ export default function App() {
     const onPop = () => {
       // Let the page handle Back internally first (close a modal, step back a
       // wizard) — that keeps you on the page, so no "lose changes" prompt.
+      // Re-pushing the current path must PRESERVE the query string — screens keep
+      // their restorable state there (?sku=…), and dropping it would blank the page
+      // the moment Back is cancelled.
+      const here = () => pathForView(appRef.current.view) + window.location.search;
       const back = navBack.current;
       if (back && back()) {
-        window.history.pushState(null, '', pathForView(appRef.current.view));
+        window.history.pushState(null, '', here());
         return;
       }
       // Back would now leave the page — if there's unsaved data, confirm first.
       if (isUnsavedDirty() && !window.confirm('You have unsaved changes. Leave this page and lose them?')) {
-        window.history.pushState(null, '', pathForView(appRef.current.view));
+        window.history.pushState(null, '', here());
         return;
       }
       // Keep superadmin's PH-workspace flag in sync with the URL (PHTeamApp handles
@@ -125,7 +130,10 @@ export default function App() {
 
   const go = (v) => {
     setView(v);
+    // Changing page drops the old page's query — another screen's ?sku= is meaningless
+    // and would read as state that failed to load.
     if (window.location.pathname !== pathForView(v)) window.history.pushState(null, '', pathForView(v));
+    else clearQuery();
   };
   const openItem = (vin) => { setOpenVin(vin); go('inventory'); };
   if (view === 'receiving') return <Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />;

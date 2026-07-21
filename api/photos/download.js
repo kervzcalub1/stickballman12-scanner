@@ -6,6 +6,7 @@ import { applySecurity, rateLimit, requireRole, cleanSku, send, fetchWithTimeout
 import { listProductPhotos, dbConfigured } from '../_lib/db.js';
 import { isAllowedPhotoUrl } from '../_lib/r2.js';
 import { makeZip } from '../_lib/zip.js';
+import { listingPhotoBaseName, ANGLE_POSITION } from '../_lib/photos.js';
 
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
 const EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' };
@@ -46,16 +47,31 @@ export default async function handler(req, res) {
     }
     if (!fetched.length) return send(res, 502, { ok: false, error: 'Could not fetch the photos.' });
 
+    // Sort into marketplace upload order so the zip unpacks 1→7 rather than in row order.
+    fetched.sort((a, b) => (ANGLE_POSITION[a.angle] || 99) - (ANGLE_POSITION[b.angle] || 99));
+
+    // `<sku>-<position>-<angle>.jpg`. Without a source filter the same angle can appear
+    // twice (a warehouse original AND a PH edit), which would collide to one zip entry
+    // and silently drop a photo — so disambiguate only those, keeping the clean name for
+    // the common single-source download.
+    const seen = new Map();
+    for (const f of fetched) {
+      const base = listingPhotoBaseName(sku, f.angle);
+      const n = (seen.get(base) || 0) + 1;
+      seen.set(base, n);
+      f.name = (n === 1 ? base : `${base}-${safe(f.source)}`) + f.ext;
+    }
+
     if (fetched.length === 1) {
       const f = fetched[0];
       res.statusCode = 200;
       res.setHeader('Content-Type', f.ct);
-      res.setHeader('Content-Disposition', `attachment; filename="${safe(sku)}-${safe(f.source)}-${safe(f.angle)}${f.ext}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${f.name}"`);
       res.setHeader('Content-Length', f.buf.length);
       return res.end(f.buf);
     }
 
-    const zip = makeZip(fetched.map((f) => ({ name: `${safe(sku)}-${safe(f.source)}-${safe(f.angle)}${f.ext}`, data: f.buf })));
+    const zip = makeZip(fetched.map((f) => ({ name: f.name, data: f.buf })));
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${safe(sku)}-photos.zip"`);

@@ -15,7 +15,7 @@ export function Home({ user, onPick, onSignOut }) {
       <TopBar onSignOut={onSignOut} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
       {attention.length > 0 && (
-        <section className="home-section">
+        <section className="home-section" data-accent="attention">
           <h2 className="home-section-title">Needs attention</h2>
           <div className="home-grid">
             {attention.map((a) => (
@@ -31,7 +31,7 @@ export function Home({ user, onPick, onSignOut }) {
         </section>
       )}
       {HOME_SECTIONS.filter((s) => (!s.adminOnly || isAdmin) && (!s.superOnly || isSuper)).map((section) => (
-        <section className="home-section" key={section.title}>
+        <section className="home-section" key={section.title} data-accent={section.accent}>
           <h2 className="home-section-title">{section.title}</h2>
           <div className="home-grid">
             {section.cards.map((c) => (

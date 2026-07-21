@@ -234,6 +234,32 @@ export async function cutoutForEdit(shoeBuffer) {
   return { pngBuffer, bbox: alphaBbox(img), width: img.width, height: img.height };
 }
 
+// Does this image already have a cut-out background? Samples the four corners: a
+// studio render on a transparent canvas has all four clear, while a JPEG (no alpha)
+// or a flattened PNG has them opaque. Used to skip the AI matte when the SOURCE is
+// already transparent — currently Nike's un-transformed renditions.
+function looksPreCut(img) {
+  const c = createCanvas(img.width, img.height);
+  const cx = c.getContext('2d');
+  cx.drawImage(img, 0, 0);
+  const d = cx.getImageData(0, 0, img.width, img.height).data;
+  const at = (x, y) => d[(y * img.width + x) * 4 + 3];
+  const m = 2; // inset a couple of px — some renders have a stray edge pixel
+  return at(m, m) === 0 && at(img.width - 1 - m, m) === 0
+      && at(m, img.height - 1 - m) === 0 && at(img.width - 1 - m, img.height - 1 - m) === 0;
+}
+
+// Like cutoutForEdit, but skips the (paid, throttle-prone) AI matte when the source is
+// ALREADY transparent. Falls back to the normal cutout when it isn't, so a source that
+// changes format silently degrades to the old path instead of compositing a grey box.
+export async function cutoutForEditMaybePreCut(shoeBuffer) {
+  try {
+    const img = await loadImage(shoeBuffer);
+    if (looksPreCut(img)) return { pngBuffer: shoeBuffer, bbox: alphaBbox(img), width: img.width, height: img.height, preCut: true };
+  } catch { /* unreadable here → let the normal path report the error */ }
+  return { ...(await cutoutForEdit(shoeBuffer)), preCut: false };
+}
+
 // Brand one shoe angle: template N + cut-out shoe + title + SKU → JPEG buffer.
 // `precut` = shoeBuffer is ALREADY a transparent cutout (from the editor) — don't
 // re-cut it. `transform` = explicit { dx, dy, dw, dh } placement in 1600-space (from
@@ -340,13 +366,21 @@ export async function welcomeSlide({ outSize = W } = {}) {
 // Best-effort spec bullets from the marketplace description + colorway. No structured
 // spec feed exists, so keyword-match the prose into the standard bullet vocabulary.
 // Colour always comes through (from the API colorway).
-export function specBulletsFromDescription(description = '', colorway = '') {
+export function specBulletsFromDescription(description = '', colorway = '', extra = {}) {
   const t = String(description).toLowerCase();
   const bullets = [];
   const has = (...ws) => ws.some((w) => t.includes(w));
+  // Only infer from prose when there IS prose. With no description every keyword test
+  // below misses, and the `else` defaults would print confident claims ("Regular Fit",
+  // "Rubber Outsole") that nothing supports — on a listing that's a misstatement, not a
+  // neutral guess. Better to ship a short honest slide than a padded invented one.
+  const inferable = t.length > 40;
+  // Product category straight from the brand ("Men's Road Racing Shoes") — a fact,
+  // where everything below this line is an inference.
+  if (extra.subtitle) bullets.push(String(extra.subtitle));
   // Fit
   if (has('snug fit', 'snug and comfortable', 'sock-like', 'bootie')) bullets.push('Snug Fit');
-  else bullets.push('Regular Fit');
+  else if (inferable) bullets.push('Regular Fit');
   // Upper — check the real upper materials before "knit" (which usually refers to
   // an interior knit *bootie*, not the upper). Only call it a knit upper when the
   // prose clearly says so.
@@ -364,7 +398,7 @@ export function specBulletsFromDescription(description = '', colorway = '') {
   else if (has('lightstrike', 'bounce', 'foam')) bullets.push('Foam Midsole');
   // Outsole — nearly all performance sneakers have one; default to rubber unless stated.
   if (has('gum outsole', 'gum rubber')) bullets.push('Gum Rubber Outsole');
-  else bullets.push('Rubber Outsole');
+  else if (inferable) bullets.push('Rubber Outsole');
   if (colorway) bullets.push(`Colorway: ${String(colorway).replace(/\//g, ' / ')}`);
   return bullets;
 }

@@ -2,7 +2,7 @@
 // Request) and the editable PHGrid (per-size pricing + cross-store sync flags,
 // edit locks, live refresh, history). PHGrid is also used read-only as the
 // admin/warehouse Report.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
@@ -17,6 +17,7 @@ import {
   phListingStatus, PH_LISTING_STATUSES,
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
 } from '../lib/ph.js';
+import { clearQuery, useQueryParam } from '../lib/urlstate.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { ImageFinder } from './ImageFinder.jsx';
@@ -46,7 +47,9 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   const goPage = (p) => {
     setPage(p);
     const path = phPathForPage(p);
+    // Leaving a page drops its query (?sku=…) — it means nothing on the next screen.
     if (window.location.pathname !== path) window.history.pushState(null, '', path);
+    else clearQuery();
   };
   useEffect(() => {
     const onPop = () => setPage(phPageForPath(window.location.pathname));
@@ -65,7 +68,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     <div className="app">
       <TopBar onSignOut={onSignOut} onHome={onExit} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
-      <section className="home-section">
+      <section className="home-section" data-accent="listing">
         <h2 className="home-section-title">Pricing &amp; Listing</h2>
         <div className="home-grid">
           <button className="home-card" onClick={() => goPage('receiving')}>
@@ -92,7 +95,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           </button>
         </div>
       </section>
-      <section className="home-section">
+      <section className="home-section" data-accent="orders">
         <h2 className="home-section-title">Purchase Orders</h2>
         <div className="home-grid">
           <button className="home-card" onClick={() => goPage('po')}>
@@ -113,7 +116,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           </button>
         </div>
       </section>
-      <section className="home-section">
+      <section className="home-section" data-accent="requests">
         <h2 className="home-section-title">Requests &amp; Tracking</h2>
         <div className="home-grid">
           <button className="home-card" onClick={() => goPage('nobox')}>
@@ -143,7 +146,21 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const emptyKind = kind === 'rescale' ? 'rescaled' : kind === 'receiving' ? 'received' : 'scanned';
   const isMobile = useMediaQuery('(max-width: 768px)'); // phones get cards, not the wide grid
   // Date range: Report (kind null/receiving) defaults to Month; Rescale to Day.
-  const [dr, setDr] = useState(() => ({ mode: kind === 'rescale' ? 'day' : 'month', anchor: new Date() }));
+  // Date range in the URL (?dm=month&da=2026-07-21) — PH re-picks the same month on
+  // every refresh otherwise. `dr.anchor` is a Date, so it round-trips as ymd and falls
+  // back to today if the param is missing or unparseable.
+  const [drMode, setDrMode] = useQueryParam('dm', kind === 'rescale' ? 'day' : 'month');
+  const [drAnchor, setDrAnchor] = useQueryParam('da', '');
+  const dr = useMemo(() => {
+    const d = drAnchor ? new Date(`${drAnchor}T00:00:00`) : new Date();
+    return { mode: drMode, anchor: Number.isNaN(d.getTime()) ? new Date() : d };
+  }, [drMode, drAnchor]);
+  const setDr = (next) => {
+    const v = typeof next === 'function' ? next(dr) : next;
+    setDrMode(v.mode);
+    const a = v.anchor instanceof Date ? v.anchor : new Date(v.anchor);
+    setDrAnchor(Number.isNaN(a.getTime()) ? '' : a.toISOString().slice(0, 10));
+  };
   const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -156,8 +173,22 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // New Inventory: filter lines by derived listing status (Pending/In-Progress/Done);
   // multi-select, defaults to Pending (the unfinished worklist).
   const useStatusFilter = kind === 'receiving';
-  const [statusFilter, setStatusFilter] = useState(() => new Set(['pending']));
-  const toggleStatus = (k) => setStatusFilter((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  // Multi-select, so it serialises as a comma list (?st=pending,in_progress). NOTE what
+  // is deliberately NOT in the URL on this screen: `editing` and `drafts`. PH edit locks
+  // are held server-side on a heartbeat, so restoring "editing" rows after a refresh
+  // would open an edit UI for locks that have expired or been taken by someone else, and
+  // the drafts would then fail their optimistic-concurrency check on save. Worse, a
+  // shared link would carry someone else's pending writes.
+  const [statusFilterRaw, setStatusFilterRaw] = useQueryParam('st', 'pending');
+  const statusFilter = useMemo(
+    () => new Set(statusFilterRaw ? statusFilterRaw.split(',').filter(Boolean) : []),
+    [statusFilterRaw],
+  );
+  const toggleStatus = (k) => {
+    const n = new Set(statusFilter);
+    n.has(k) ? n.delete(k) : n.add(k);
+    setStatusFilterRaw([...n].join(','));
+  };
   const [expanded, setExpanded] = useState(() => new Set()); // group keys showing per-size detail
   const toggleExpand = (key) => setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const [historyFor, setHistoryFor] = useState(null); // { vins, title } — open History modal

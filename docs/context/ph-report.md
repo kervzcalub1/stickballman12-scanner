@@ -221,24 +221,36 @@ photos on intake (`source='warehouse'`). PH uploads their own **edited** images 
   **PH edited** vs **Warehouse originals**.
 
 ## Image Finder (`ImageFinder`, `/ph/image-finder`)
-Auto-sources listing photos for a SKU from **GOAT's curated gallery via KicksDB** (PH-home
-card "Image Finder"; ph_team + admin). Saves straight into the **`ph_edited`** set — no new
+Auto-sources listing photos for a SKU from **every image source at once** (PH-home card
+"Image Finder"; ph_team + admin). Saves straight into the **`ph_edited`** set — no new
 source, no schema change — so found images behave exactly like hand-edited uploads
 (precedence, thumbnail, viewer). Flow:
-1. Enter/scan a SKU → `GET /api/images/search?sku=` (`requireRole(['ph_team'])`) →
-   `kicksdbImagesBySku` (`api/_lib/kicksdb.js`, `KICKSDB_KEY`) which **cascades** so a SKU
-   always returns whatever exists, tagging the response `source`/`sourceLabel`:
-   **(a) GOAT curated gallery** (`GET /v3/goat/products` `images[]` — the retail
-   `product_template_additional_pictures`, real angles incl. **outsole** & **top-down** when
-   present; 8–11 imgs, varies per model) → **(b) StockX 360° spin** (`/v3/stockx/products`
-   `gallery_360`, 36 frames — rotational only, no sole/top) → **(c) hero image(s)** (GOAT
-   `image_url` + StockX `image`/`gallery`, deduped). The UI shows an amber note on the (b)/(c)
-   fallbacks. Suggestions adapt per source (GOAT: side@0/outsole@3; 360: side@0/diagonal@3/
-   rear@27; hero: side@0).
+1. Enter/scan a SKU → `GET /api/images/search?sku=` (`requireRole(['ph_team'])`) queries the
+   sources **concurrently** and returns them ALL as `sources[]` (best-first), so PH picks the
+   angle rather than trusting one catalogue's ordering. `product` = `sources[0]`, kept for
+   backwards compatibility. The brand sources lead because they **LABEL their angles**:
+   - **Nike / Jordan** (`api/_lib/nike.js`) — `api.nike.com/product_feed/threads/v2`, **no API
+     key**, filtered on `productInfo.merchProduct.styleColor`. The mandatory `channelId` filter
+     is `d9a5bc42-…` (the feed 400s without it). Every image carries a `view` LETTER; verified by
+     eye on three unrelated silhouettes: **A=lateral, B=outsole, C=medial, D=top-down, E=3/4,
+     F=heel** → fills **all five slots**. Jordan resolves through the same channel
+     (`brand:'Jordan'`). One cached feed round-trip per SKU serves both images and specs.
+   - **adidas** (`api/_lib/adidas.js`) — adidas has no usable first-party route (hash-based CDN
+     URLs, Akamai-WAF'd APIs, CDN not search-indexed). Instead a **cached catalogue index** is
+     crawled from `asphalt-nyc.com/products.json`, which republishes adidas' studio files with
+     adidas' **semantic filenames** intact: `_01`=lateral, **`_02`=top-down**, **`_03`=outsole**,
+     `_04`=3/4, `_05`=rear (plus a modern `FOOTWEAR_Photography_<View>` form). ~226–234 codes.
+     Angle comes from the FILENAME, never a gallery position — the higher-res alternative
+     (Sneakersnstuff, 2500px) can only be read positionally and its order shifts per product.
+   - **KicksDB** (`api/_lib/kicksdb.js`, `KICKSDB_KEY`) — unchanged cascade: **GOAT curated
+     gallery** → **StockX 360° spin** (36 frames, rotational only) → **hero image(s)**. Still the
+     only source for everything else. Note **GOAT has no top-down at all** — the asset isn't shot.
+   A missing `KICKSDB_KEY` no longer fails the search; it just means one fewer source.
 2. **Slots** are the 5 standard `product_photos` angles: side · diagonal · **top** · **outsole** ·
-   rear. GOAT gallery order is only index-stable at the front, so we auto-suggest just the two
-   verified slots — **`0→side` (lateral), `3→outsole` (sole)** (`GOAT_SUGGESTIONS`) — and PH taps
-   a gallery image to fill 3/4 / top / heel (or Skips angles the shoe lacks).
+   rear. Each slot is seeded from the **first source that can fill it**, so Nike/adidas labelled
+   angles win and GOAT only fills what's left (GOAT: `0→side`, `3→outsole` — `GOAT_SUGGESTIONS`).
+   The gallery renders **one strip per source** with a header and a per-image angle caption
+   (real for the brand sources, `Photo N` for the marketplaces). PH taps any image to (re)assign.
 3. UI: 5 slots; the confident ones pre-filled, tap a slot to make it active, tap any gallery
    image to (re)assign it. Each slot also has **Upload** — a PH photo for a blank/any angle
    (raw → R2 via `photoSign`, then the slot points at that R2 URL). Editable **title** field
@@ -247,12 +259,29 @@ source, no schema change — so found images behave exactly like hand-edited upl
    review/adjust → Upload → Download*; nothing is saved until Upload).
    `POST /api/images/brand { sku, title, picks, includeSpec, includeWelcome, size, mode }`
    (`requireRole(['ph_team'])`), run **sequentially** (each AI cutout is CPU/network-bound):
-   - **`mode:'preview'` (Brand & Fill)** — for each shoe pick: fetch (SSRF-allowlisted to
-     `image.goat.com`/`images.stockx.com` **or** our R2 host) → **cut out ONCE** (`cutoutForEdit`)
-     → **stage** the transparent PNG on R2 → composite onto the template (name+SKU) at a small
+   - **`mode:'preview'` (Brand & Fill)** — for each shoe pick: fetch (SSRF-allowlisted by
+     `api/_lib/imgsources.js` to `image.goat.com` / `images.stockx.com` / `static.nike.com` /
+     `cdn.shopify.com` **or** our R2 host) → **cut out ONCE**
+     (`cutoutForEditMaybePreCut`) → **stage** the transparent PNG on R2 → composite onto the
+     template (name+SKU) at a small
      **preview size (900²)** → return the slide as a **data-URI** plus its `cutoutUrl` + `bbox`.
      Spec + welcome likewise. **Nothing is persisted to `product_photos`.** Slots→templates:
      side→1, diagonal→2, top→3, outsole→4, rear→5; **spec→6** (extra1); **welcome→7** (extra2).
+   - **Pre-cut sources skip the AI matte.** `hiResSourceUrl` rewrites a Nike gallery URL to its
+     background-free twin (`/a/images/w_1728/<id>/image.png`), which is a genuine RGBA PNG
+     (~77% transparent). `cutoutForEditMaybePreCut` samples the four corner alphas and, when the
+     source is already transparent, uses it as-is — **no Replicate call, no throttling** for
+     Nike/Jordan. It falls back to the normal cutout when the corners are opaque, so a rendition
+     change degrades to the old path instead of compositing a grey box. adidas renders carry a
+     **baked drop shadow**, so they still need the full cutout.
+   - **Spec slide data is MERGED, not either/or** (`nikeSpecData` + `kicksdbSpecData`). Nike is
+     authoritative for what's printed verbatim (official colourway naming/order, and `subtitle`
+     as the product category, e.g. "Men's Road Racing Shoes"); the keyword inference reads
+     **both** descriptions because Nike's copy is shorter and often omits the upper material
+     (only GOAT's prose says "leather" for the Air Jordan 1). Nike's `techSpec`/`bestFor`/
+     `widths` are **always empty** — don't build on them. `specBulletsFromDescription` no longer
+     asserts "Regular Fit"/"Rubber Outsole" unconditionally: with no description text those
+     defaults are skipped rather than printing unsupported claims on a listing.
    - **Adjust (live position & resize editor)**: each **preview** shoe slide has an **Adjust size**
      button opening `ShoeEditor` — a Canva-style overlay that reuses the slide's staged `cutoutUrl`
      + `bbox` (**no re-cut**), draws it over a lightweight template preview
@@ -271,6 +300,18 @@ source, no schema change — so found images behave exactly like hand-edited upl
      (`api.photoDownload`, enabled after Upload). `brandPhoto` with `precut` loads the transparent
      PNG as-is and honours the transform (auto-fit when null) — identical bytes → identical bbox, so
      the preview == the saved result.
+   - **Listing-photo filenames** (`listingPhotoBaseName` in `api/_lib/photos.js`, the single source
+     of truth for `images/brand`, `images/import` and `photos/download`):
+     **`<sku>-<position>-<angle>`** — e.g. `FD8311-401-4-outsole.jpg`. Position is the marketplace
+     upload order (side=1 · diagonal=2 · top=3 · outsole=4 · rear=5 · spec=6 · welcome=7); the
+     angle word makes the file self-describing for whoever uploads it. Two slots are renamed for
+     humans: **`side`→`lateral`, `rear`→`heel`** (the DB still stores the internal slot names —
+     nothing re-derives an angle from a filename). The **R2 key keeps a `-<ts>` suffix** so
+     re-branding an angle writes a NEW key; without it the public URL would be unchanged and
+     browsers/CDN would keep serving the previous image. The **download name has no timestamp**.
+     `photos/download` sorts entries 1→7 so the zip unpacks in upload order, and disambiguates
+     with a `-<source>` suffix only when the same angle appears twice (a warehouse original AND a
+     PH edit would otherwise collide to one zip entry and silently drop a photo).
    - **Output size** (`size`): **1600** (design size, default) or **1400** (eBay's recommendation) —
      the *commit* render size. Everything renders at 1600 then `encodeJpeg` resamples to the chosen
      size, so composition is pixel-identical; only resolution differs (`OUTPUT_SIZES`; `clampOutSize`

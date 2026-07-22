@@ -281,6 +281,12 @@ body {
 .status-pill.rejected, .status-pill.issue, .status-pill.missing { background: rgba(255,107,107,0.15); color: var(--err); }
 .status-pill.sold { background: rgba(130,125,189,0.18); color: #b1b9f9; }
 .status-pill.returned { background: rgba(255,193,7,0.15); color: #ffca3a; }
+.reset-req-pill { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: rgba(255,193,7,0.18); color: #ffca3a; vertical-align: middle; }
+.reset-req-pill.pending { background: rgba(130,125,189,0.18); color: #b1b9f9; }
+.dcard-pills { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.link-btn { background: none; border: 0; color: var(--accent, #6ea8fe); font: inherit; cursor: pointer; padding: 6px; text-decoration: underline; }
+.link-btn:hover { opacity: 0.85; }
+.auth-forgot { display: block; margin: 4px auto 0; font-size: 13px; }
 
 /* Confirm-before-send dialog */
 .modal.confirm { max-width: 420px; text-align: left; }

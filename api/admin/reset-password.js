@@ -1,13 +1,14 @@
 // POST /api/admin/reset-password  (admin / superadmin)
 //   { userId }  ->  { ok, user, tempPassword }
-// Generates a random temporary password for a DB account, stores only its hash,
-// and returns the plaintext ONCE so the admin can relay it to the user. The user
-// can keep using it (no forced change — plain reset). The env admin/superadmin
-// accounts have no DB row and cannot be reset here.
+// Generates a random temporary password for a DB account, stores only its hash, and
+// returns the plaintext ONCE so the admin can relay it to the user. The account is
+// flagged must_change_password, so the user is forced to pick a new password on their
+// next sign-in before they can use the app. The env admin/superadmin accounts have no
+// DB row and cannot be reset here.
 
 import crypto from 'node:crypto';
 import { getJsonBody, send, applySecurity, requireAdmin, rateLimit, hashPassword } from '../_lib/util.js';
-import { setUserPassword, dbConfigured } from '../_lib/db.js';
+import { adminResetPassword, dbConfigured } from '../_lib/db.js';
 
 // Readable temp password: 12 chars from an unambiguous alphabet (no 0/O/1/I/l).
 function makeTempPassword(len = 12) {
@@ -33,7 +34,7 @@ export default async function handler(req, res) {
 
   try {
     const tempPassword = makeTempPassword();
-    const updated = await setUserPassword(userId, hashPassword(tempPassword));
+    const updated = await adminResetPassword(userId, hashPassword(tempPassword));
     if (!updated) return send(res, 404, { ok: false, error: 'Account not found.' });
     return send(res, 200, { ok: true, user: updated, tempPassword });
   } catch (e) {

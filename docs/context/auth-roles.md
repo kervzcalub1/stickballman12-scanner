@@ -80,3 +80,19 @@
 - All secrets server-side only (`ADMIN_PASSWORD, SESSION_SECRET, DATABASE_URL,
   KICKSDB_KEY, ALIAS_EMAIL, ALIAS_PASSWORD`); browser calls same-origin `/api/*`.
 - `.env` is git-ignored — never commit it.
+
+## Password reset (self-request → admin issues temp → forced change)
+- `users.reset_requested_at` (self-request stamp) + `users.must_change_password`
+  (temp-password issued, change required). Both added idempotently in `db-setup`.
+- **Flow:** user taps "Forgot password?" on sign-in → `POST /api/auth/request-reset`
+  (public, rate-limited, ALWAYS a generic reply — no enumeration) stamps
+  `reset_requested_at` on the approved account. It surfaces in Check Access as a
+  "reset requested" badge. Admin clicks Reset password → `admin/reset-password`
+  (`adminResetPassword`) sets a temp hash, `must_change_password=true`, clears the
+  request, and returns the temp password once. User signs in with it → login puts
+  `mustChange` in the **signed token** → client shows `ForcedPasswordChange` (blocks the
+  app) and `requireRole`/`requireAdmin` reject every gated call with **428** until
+  `POST /api/auth/change-password` sets a new hash, clears the flag, and returns a fresh
+  token. `requireAuth` stays open so change-password itself works.
+- Env `admin`/`superadmin` have no DB row — not resettable here; their passwords live in
+  Railway env.

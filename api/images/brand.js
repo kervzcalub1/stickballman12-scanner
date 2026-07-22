@@ -19,6 +19,7 @@ import {
   brandPhoto, brandSpec, welcomeSlide, cutoutForEditMaybePreCut, specBulletsFromDescription,
   ANGLE_TEMPLATE,
 } from '../_lib/branding.js';
+import { cutoutProvider } from '../_lib/cutout.js';
 
 import { photoSourceForRole, listingPhotoBaseName } from '../_lib/photos.js';
 
@@ -132,12 +133,19 @@ export default async function handler(req, res) {
         if (commit) return { slot: angle, ok: true, url: await storeFinal(angle, branded) };
         return { slot: angle, ok: true, preview: toDataUri(branded), cutoutUrl, bbox };
       } catch (e) {
-        console.error('[images/brand] photo', angle, e.message);
+        const provider = cutoutProvider();
+        console.error('[images/brand] photo', angle, `provider=${provider}`, e.message);
         const throttled = e.throttled || /\b429\b|rate|throttl/i.test(e.message || '');
+        // Surface the active provider (and, for a config problem, why) so a prod failure
+        // is self-diagnosing instead of a generic "try again". If the provider resolved to
+        // 'local' on prod, the token isn't taking effect (missing var or CUTOUT_PROVIDER=local).
+        const misconfigured = provider !== 'replicate' && provider !== 'removebg';
         return { slot: angle, ok: false, throttled,
           error: throttled
             ? 'Background remover is rate-limited (Replicate < $5 credit). Wait a moment and re-run this shoe.'
-            : 'Could not cut out this shoe — try again.' };
+            : misconfigured
+              ? `No hosted background remover is active (provider="${provider}"). Set REPLICATE_API_TOKEN on the server and clear any CUTOUT_PROVIDER=local override.`
+              : `Could not cut out this shoe via ${provider} — try again. (${String(e.message || '').slice(0, 120)})` };
       }
     } });
   }

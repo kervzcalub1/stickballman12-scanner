@@ -79,6 +79,8 @@ export const api = {
   // Auth
   login: (username, password) => post('/api/auth/login', { username, password }, { auth: false }),
   signup: (payload) => post('/api/auth/signup', payload, { auth: false }),
+  requestReset: (username) => post('/api/auth/request-reset', { username }, { auth: false }),
+  changePassword: (newPassword) => post('/api/auth/change-password', { newPassword }),
   // Admin
   adminListUsers: () => get('/api/admin/users'),
   adminReview: (userId, decision) => post('/api/admin/review', { userId, decision }),

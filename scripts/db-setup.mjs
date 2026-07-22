@@ -58,6 +58,13 @@ await sql(`UPDATE users SET role = 'warehouse' WHERE role = 'employee'`);
 await sql(`ALTER TABLE users ALTER COLUMN role SET DEFAULT 'warehouse'`);
 await sql(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('warehouse','admin','ph_team','supplier'))`);
 
+// Password reset: a user asks for a reset from the sign-in screen (reset_requested_at
+// stamps the request so it shows in the admin's "Check Access" queue). An admin issues
+// a temp password, which sets must_change_password = true; the user is then forced to
+// pick a new one on their next sign-in before they can use the app.
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_requested_at TIMESTAMPTZ`);
+
 await sql(`
   CREATE TABLE IF NOT EXISTS login_attempts (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

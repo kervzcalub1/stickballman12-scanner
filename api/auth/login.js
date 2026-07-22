@@ -126,10 +126,14 @@ export default async function handler(req, res) {
   }
 
   await recordLoginAttempt({ username, ip, success: true });
-  const user = { uid: row.id, username: row.username, name: row.name, role: row.role };
+  // must_change_password (admin issued a temp password): the flag rides in the SIGNED
+  // token so it can't be stripped client-side, and the role-gated endpoints reject it
+  // until the user sets a new password (see requireRole/requireAdmin).
+  const mustChange = !!row.must_change_password;
+  const user = { uid: row.id, username: row.username, name: row.name, role: row.role, ...(mustChange ? { mustChange: true } : {}) };
   return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });
 }
 
 function publicUser(u) {
-  return { username: u.username, name: u.name, role: u.role };
+  return { username: u.username, name: u.name, role: u.role, ...(u.mustChange ? { mustChange: true } : {}) };
 }

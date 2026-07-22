@@ -73,7 +73,11 @@ export function CheckAccess({ onHome, onSignOut }) {
                 <div className="dcard" key={u.id}>
                   <div className="dcard-top">
                     <span><b>{u.name}</b> <span className="muted sm">{u.username}</span></span>
-                    <span className={`status-pill ${u.status}`}>{u.status}</span>
+                    <span className="dcard-pills">
+                      {u.reset_requested_at && <span className="reset-req-pill" title="This user asked for a password reset">reset requested</span>}
+                      {u.must_change_password && <span className="reset-req-pill pending" title="A temp password was issued; awaiting the user’s change">temp issued</span>}
+                      <span className={`status-pill ${u.status}`}>{u.status}</span>
+                    </span>
                   </div>
                   <label className="dcard-line">Role <RoleSelect u={u} /></label>
                   <div className="dcard-actions"><Actions u={u} /></div>
@@ -90,7 +94,11 @@ export function CheckAccess({ onHome, onSignOut }) {
                       <td>{u.name}</td>
                       <td>{u.username}</td>
                       <td><RoleSelect u={u} /></td>
-                      <td><span className={`status-pill ${u.status}`}>{u.status}</span></td>
+                      <td>
+                        <span className={`status-pill ${u.status}`}>{u.status}</span>
+                        {u.reset_requested_at && <span className="reset-req-pill" title="This user asked for a password reset">reset requested</span>}
+                        {u.must_change_password && <span className="reset-req-pill pending" title="A temp password was issued; awaiting the user’s change">temp issued</span>}
+                      </td>
                       <td className="access-actions"><Actions u={u} /></td>
                     </tr>
                   ))}
@@ -110,7 +118,7 @@ export function CheckAccess({ onHome, onSignOut }) {
           message={confirm.action === 'delete'
             ? 'This permanently removes the account and cannot be undone.'
             : confirm.action === 'reset'
-            ? 'Generates a new temporary password and replaces the current one. The new password is shown once — copy it and relay it to the user.'
+            ? 'Generates a new temporary password and replaces the current one. It’s shown once — copy it and relay it to the user. They’ll be required to set their own new password the next time they sign in.'
             : 'This blocks the account from signing in until you approve it.'}
           onClose={() => setConfirm(null)}>
           {confirm.action === 'delete'
@@ -126,7 +134,7 @@ export function CheckAccess({ onHome, onSignOut }) {
         <Modal
           type="success"
           title={`Temporary password for "${tempPw.u.username}"`}
-          message="Shown only once. Copy it now and relay it to the user — they sign in with it and can keep using it."
+          message="Shown only once. Copy it now and relay it to the user — they sign in with it, then must set their own new password before using the app."
           onClose={() => setTempPw(null)}>
           <div className="temp-pw-box">
             <CopyText text={tempPw.password} className="temp-pw-value" title="Copy password">

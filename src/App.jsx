@@ -9,7 +9,7 @@ import { isUnsavedDirty } from './hooks.js';
 import { pathForView, viewForPath } from './lib/constants.js';
 import { clearQuery } from './lib/urlstate.js';
 import { setMarkupPct } from './lib/config.js';
-import { Auth } from './screens/Auth.jsx';
+import { Auth, ForcedPasswordChange } from './screens/Auth.jsx';
 import { Home } from './screens/Home.jsx';
 import { CheckAccess } from './screens/CheckAccess.jsx';
 import { Settings } from './screens/Settings.jsx';
@@ -104,6 +104,9 @@ export default function App() {
   }, [user]);
 
   if (!user) return <Auth onAuthed={onAuthed} />;
+  // Signed in with an admin-issued temp password → force a change before anything else
+  // (the server also rejects role-gated calls with 428 until this is done).
+  if (user.mustChange) return <ForcedPasswordChange user={user} onChanged={onAuthed} onSignOut={signOut} />;
 
   const enterPh = () => { setPhMode(true); if (window.location.pathname !== '/ph') window.history.pushState(null, '', '/ph'); };
   const exitPh = () => { setPhMode(false); window.history.pushState(null, '', pathForView('home')); setView('home'); };

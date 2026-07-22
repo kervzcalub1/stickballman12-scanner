@@ -140,11 +140,23 @@ export function requireAuth(req, res) {
 // env `superadmin` account (which additionally reaches the PH-team pages, client-side).
 export const isPrivileged = (role) => role === 'admin' || role === 'superadmin';
 
+// A user carrying the signed `mustChange` flag (admin issued a temp password) is blocked
+// from every role/admin-gated endpoint until they set a new password via
+// /api/auth/change-password (which requireAuth allows). 428 = "precondition required".
+function blockIfMustChange(user, res) {
+  if (user && user.mustChange) {
+    send(res, 428, { ok: false, error: 'Set a new password to continue.', mustChange: true });
+    return true;
+  }
+  return false;
+}
+
 // Like requireAuth but also requires an admin-level role (admin or superadmin).
 // Returns the user or null.
 export function requireAdmin(req, res) {
   const user = requireAuth(req, res);
   if (!user) return null;
+  if (blockIfMustChange(user, res)) return null;
   if (!isPrivileged(user.role)) {
     send(res, 403, { ok: false, error: 'Admin access required.' });
     return null;
@@ -157,6 +169,7 @@ export function requireAdmin(req, res) {
 export function requireRole(req, res, roles) {
   const user = requireAuth(req, res);
   if (!user) return null;
+  if (blockIfMustChange(user, res)) return null;
   if (!isPrivileged(user.role) && !roles.includes(user.role)) {
     send(res, 403, { ok: false, error: 'You do not have access to this feature.' });
     return null;

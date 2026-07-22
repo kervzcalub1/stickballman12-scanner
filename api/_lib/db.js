@@ -102,7 +102,7 @@ export async function createUser({ name, username, passHash, role = 'warehouse' 
 
 export async function findUserByUsername(username) {
   const rows = await db()`
-    SELECT id, name, username, pass_hash, role, status
+    SELECT id, name, username, pass_hash, role, status, must_change_password
     FROM users WHERE username = ${username} LIMIT 1
   `;
   return rows[0] || null;
@@ -111,9 +111,10 @@ export async function findUserByUsername(username) {
 // Admin views. Pending first, then most recent.
 export async function listUsers() {
   return await db()`
-    SELECT id, name, username, role, status, created_at, reviewed_at, reviewed_by
+    SELECT id, name, username, role, status, created_at, reviewed_at, reviewed_by,
+           must_change_password, reset_requested_at
     FROM users
-    ORDER BY (status = 'pending') DESC, created_at DESC
+    ORDER BY (reset_requested_at IS NOT NULL) DESC, (status = 'pending') DESC, created_at DESC
     LIMIT 500
   `;
 }
@@ -146,6 +147,39 @@ export async function setUserPassword(id, passHash) {
     UPDATE users SET pass_hash = ${passHash}
     WHERE id = ${id}
     RETURNING id, name, username, role, status
+  `;
+  return rows[0] || null;
+}
+// Admin-issued reset: set the temp hash, FORCE a change on next sign-in, and clear any
+// pending self-request (it's been handled). See api/admin/reset-password.js.
+export async function adminResetPassword(id, passHash) {
+  const rows = await db()`
+    UPDATE users
+    SET pass_hash = ${passHash}, must_change_password = true, reset_requested_at = NULL
+    WHERE id = ${id}
+    RETURNING id, name, username, role, status
+  `;
+  return rows[0] || null;
+}
+// User picks their own new password (clears the forced-change flag). Used by the
+// forced-change screen after signing in with a temp password.
+export async function changeOwnPassword(id, passHash) {
+  const rows = await db()`
+    UPDATE users
+    SET pass_hash = ${passHash}, must_change_password = false, reset_requested_at = NULL
+    WHERE id = ${id}
+    RETURNING id, name, username, role, status
+  `;
+  return rows[0] || null;
+}
+// Self-service reset request from the sign-in screen. Only approved DB accounts can
+// request. Returns the row if one matched — the HTTP layer answers generically regardless
+// (no username enumeration).
+export async function requestPasswordReset(username) {
+  const rows = await db()`
+    UPDATE users SET reset_requested_at = now()
+    WHERE username = ${username} AND status = 'approved'
+    RETURNING id
   `;
   return rows[0] || null;
 }

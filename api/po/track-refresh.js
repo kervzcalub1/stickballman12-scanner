@@ -6,7 +6,7 @@
 // tracking isn't configured (TRACKING_API_KEY unset).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, getPoFull, dbConfigured } from '../_lib/db.js';
-import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet } from '../_lib/tracking.js';
+import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet, registerTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -44,6 +44,16 @@ export default async function handler(req, res) {
       items = [{ number: box.tracking_number, carrier: box.carrier_key }];
     } else {
       items = await listPoTrackingItems(poId);
+    }
+    // Self-heal: (re-)register every number first (idempotent) so 17TRACK is tracking
+    // it and will PUSH future updates. Registration otherwise only happens at PO-creation
+    // and at ship — a number attached any other way (label import, a box the supplier
+    // never formally "shipped") is never registered, so it silently stops auto-updating
+    // and the box can sit on "Filling" even after the parcel is delivered. Registering on
+    // refresh turns this button into a repair tool. Best-effort — a failure here must not
+    // block the pull below.
+    for (let i = 0; i < items.length; i += 40) {
+      await registerTracking(items.slice(i, i + 40)).catch((e) => console.warn('[po/track-refresh] register:', e.message));
     }
     // fetchTrackInfo caps at 40/call — chunk so a large multi-label PO's "refresh all"
     // doesn't silently drop the tail. Each item carries its carrier key.

@@ -11,6 +11,8 @@ import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { PoScanModal } from '../components/PoScanModal.jsx';
+import { buildManifestPdf } from '../lib/manifestPdf.js';
+import { dispatchPdf, isTouchPrint } from '../lib/labelPdf.js';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',    cls: 'draft' },
@@ -41,6 +43,8 @@ export function PoOverview({ onHome, onSignOut }) {
   const openId = openIdRaw ? Number(openIdRaw) : null;
   const setOpenId = (v) => setOpenIdRaw(v == null ? '' : String(v));
   const [detail, setDetail] = useState(null);          // { po, boxes, lines }
+  const [bizName, setBizName] = useState('');          // business name for the manifest header
+  const [printBusy, setPrintBusy] = useState(false);
   const [detailBusy, setDetailBusy] = useState(false);
   const [trackBusy, setTrackBusy] = useState(false);    // whole-PO refresh
   const [trackBoxBusy, setTrackBoxBusy] = useState(null);
@@ -73,11 +77,31 @@ export function PoOverview({ onHome, onSignOut }) {
     let cancelled = false;
     setDetail(null); setDetailBusy(true); setError('');
     api.poGet(openId)
-      .then((r) => { if (!cancelled) setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); })
+      .then((r) => { if (!cancelled) { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); setBizName(r.businessName || ''); } })
       .catch((e) => { if (cancelled) return; if (e.unauthorized) return onSignOut(); setError(e.message); })
       .finally(() => { if (!cancelled) setDetailBusy(false); });
     return () => { cancelled = true; };
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Print the expected-contents manifest as a PDF — per box (a page per label) or the
+  // whole order (one list). Opens the touch pre-window synchronously so iOS doesn't
+  // popup-block it. Same print/open handoff as the label PDFs.
+  const printManifest = async (mode) => {
+    if (!detail) return;
+    const preWin = isTouchPrint() ? window.open('', '_blank') : null;
+    setPrintBusy(true);
+    try {
+      const generatedAt = `Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EST`;
+      const doc = await buildManifestPdf({
+        po: detail.po, boxes: detail.boxes, lines: detail.lines,
+        businessName: bizName, mode, generatedAt,
+      });
+      dispatchPdf(doc, preWin);
+    } catch (e) {
+      if (preWin) preWin.close();
+      alert('Could not build the manifest: ' + (e?.message || e));
+    } finally { setPrintBusy(false); }
+  };
 
   // p.id is a BIGINT that arrives as a STRING; openId is numeric — compare coerced.
   const toggle = (id) => setOpenId(Number(openId) === Number(id) ? null : id);
@@ -130,6 +154,15 @@ export function PoOverview({ onHome, onSignOut }) {
                               <span className="muted sm">From {detail.po.supplier_name}{detail.po.date_of_purchase ? ` · ${String(detail.po.date_of_purchase).slice(0, 10)}` : ''}</span>
                               <button className="btn ghost sm" disabled={trackBusy || trackBoxBusy != null} onClick={() => refreshTracking(p.id)}>
                                 <Icon name="refresh" /> {trackBusy ? 'Checking…' : 'Refresh all tracking'}
+                              </button>
+                            </div>
+                            <div className="po-ov-print">
+                              <span className="muted xs">Print manifest:</span>
+                              <button className="btn ghost sm" disabled={printBusy} onClick={() => printManifest('perbox')}>
+                                <Icon name="print" /> Per box
+                              </button>
+                              <button className="btn ghost sm" disabled={printBusy} onClick={() => printManifest('whole')}>
+                                <Icon name="print" /> Whole order
                               </button>
                             </div>
                             {(() => {

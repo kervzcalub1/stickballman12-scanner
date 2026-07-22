@@ -65,14 +65,21 @@ export function PoOverview({ onHome, onSignOut }) {
   };
   useEffect(loadList, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const toggle = (id) => {
-    if (openId === id) { setOpenId(null); setDetail(null); return; }
-    setOpenId(id); setDetail(null); setDetailBusy(true); setError('');
-    api.poGet(id)
-      .then((r) => setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }))
-      .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); })
-      .finally(() => setDetailBusy(false));
-  };
+  // Fetch the open PO's detail whenever the open id changes — covers both a tap and a
+  // refresh that restored ?po= from the URL. (Without this the restored PO renders
+  // "open" but its detail never loads, so it sits on "Loading…" forever.)
+  useEffect(() => {
+    if (openId == null) { setDetail(null); return; }
+    let cancelled = false;
+    setDetail(null); setDetailBusy(true); setError('');
+    api.poGet(openId)
+      .then((r) => { if (!cancelled) setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); })
+      .catch((e) => { if (cancelled) return; if (e.unauthorized) return onSignOut(); setError(e.message); })
+      .finally(() => { if (!cancelled) setDetailBusy(false); });
+    return () => { cancelled = true; };
+  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggle = (id) => setOpenId(openId === id ? null : id);
 
   // Refresh tracking — omit boxId for the whole PO, pass it for a single label.
   const refreshTracking = async (poId, boxId) => {

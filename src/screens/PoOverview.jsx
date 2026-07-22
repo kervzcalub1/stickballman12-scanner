@@ -79,7 +79,8 @@ export function PoOverview({ onHome, onSignOut }) {
     return () => { cancelled = true; };
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const toggle = (id) => setOpenId(openId === id ? null : id);
+  // p.id is a BIGINT that arrives as a STRING; openId is numeric — compare coerced.
+  const toggle = (id) => setOpenId(Number(openId) === Number(id) ? null : id);
 
   // Refresh tracking — omit boxId for the whole PO, pass it for a single label.
   const refreshTracking = async (poId, boxId) => {
@@ -104,7 +105,7 @@ export function PoOverview({ onHome, onSignOut }) {
           : (
             <div className="po-list">
               {pos.map((p) => {
-                const open = openId === p.id;
+                const open = Number(openId) === Number(p.id);
                 return (
                   <div key={p.id} className="card po-ov">
                     <button className="po-ov-head" onClick={() => toggle(p.id)}>

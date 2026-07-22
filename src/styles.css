@@ -2075,6 +2075,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-ov-caret { grid-column: 2; grid-row: 1 / 3; align-self: center; color: var(--muted); font-size: 14px; }
 .po-ov-detail { border-top: 1px solid var(--border); padding: 12px 16px; background: var(--panel-2); }
 .po-ov-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.po-ov-print { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.po-ov-print .muted { margin-right: 2px; }
 .po-ov-label { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
 .po-ov-label:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
 .po-ov-label-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }

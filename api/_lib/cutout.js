@@ -48,6 +48,17 @@ const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
 const INPUT = 1024; // BiRefNet's native input size
 
+// Are we on a small managed dyno (Railway), where loading the ~1 GB BiRefNet model
+// OOM-kills the process? Loading it there doesn't just fail the one cutout — while the
+// dyno thrashes/allocates, EVERY concurrent request times out at the gateway (502/504),
+// which is exactly what silently breaks 17TRACK's webhook pushes. So the in-process
+// model is a DEV-ONLY convenience: on a server we refuse to load it unless explicitly
+// opted in, and the caller degrades to the lightweight threshold cutout instead.
+const onManagedServer = () =>
+  !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID
+     || process.env.RAILWAY_SERVICE_ID || process.env.NODE_ENV === 'production');
+const localCutoutAllowed = () => !onManagedServer() || process.env.ALLOW_LOCAL_CUTOUT === '1';
+
 async function ensureModel() {
   if (fs.existsSync(MODEL_PATH) && fs.statSync(MODEL_PATH).size > 1_000_000) return;
   fs.mkdirSync(MODEL_DIR, { recursive: true });
@@ -73,6 +84,7 @@ function getRemover() {
 // local provider is active — we must never trigger the 1 GB download on a removebg host.
 export async function warmCutout() {
   if (cutoutProvider() !== 'local') return true;
+  if (!localCutoutAllowed()) return false; // never pull the 1 GB model onto a managed dyno
   try { await getRemover(); return true; } catch { return false; }
 }
 
@@ -262,6 +274,13 @@ async function cutoutRemoveBg(buffer) {
 // transparent-black border wrongly eats the shoe. The caller trims via the alpha
 // channel instead.)
 async function cutoutLocal(buffer) {
+  // Never load the 1 GB model on a managed dyno — it OOM-kills the process and takes
+  // down every other in-flight request (incl. the 17TRACK webhook) with it. Fail fast
+  // so the branding caller degrades to the threshold cutout. The real fix on prod is a
+  // hosted provider — set REPLICATE_API_TOKEN (and don't force CUTOUT_PROVIDER=local).
+  if (!localCutoutAllowed()) {
+    throw new Error('local cutout disabled on this host (no hosted provider — set REPLICATE_API_TOKEN, or ALLOW_LOCAL_CUTOUT=1 to override)');
+  }
   const sharp = sharpLib();
   const remover = await getRemover();
   const resized = await sharp(buffer).resize(INPUT, INPUT, { fit: 'inside' }).toBuffer();

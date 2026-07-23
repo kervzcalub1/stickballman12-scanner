@@ -12,7 +12,6 @@ import { Icon } from '../components/NavIcons.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { PoScanModal } from '../components/PoScanModal.jsx';
 import { buildManifestPdf } from '../lib/manifestPdf.js';
-import { dispatchPdf, isTouchPrint } from '../lib/labelPdf.js';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',    cls: 'draft' },
@@ -83,12 +82,13 @@ export function PoOverview({ onHome, onSignOut }) {
     return () => { cancelled = true; };
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Print the expected-contents manifest as a PDF — per box (a page per label) or the
-  // whole order (one list). Opens the touch pre-window synchronously so iOS doesn't
-  // popup-block it. Same print/open handoff as the label PDFs.
+  // Download the expected-contents manifest as a PDF — per box (a page per label) or the
+  // whole order (one list). We download rather than auto-print: the thermal-label iframe
+  // trick fires .print() before the PDF viewer renders (unreliable for a multi-page doc),
+  // and navigating a popup to a blob PDF is flaky across browsers. A download works
+  // everywhere — the user opens the file and prints it with the OS print dialog.
   const printManifest = async (mode) => {
     if (!detail) return;
-    const preWin = isTouchPrint() ? window.open('', '_blank') : null;
     setPrintBusy(true);
     try {
       const generatedAt = `Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EST`;
@@ -96,9 +96,13 @@ export function PoOverview({ onHome, onSignOut }) {
         po: detail.po, boxes: detail.boxes, lines: detail.lines,
         businessName: bizName, mode, generatedAt,
       });
-      dispatchPdf(doc, preWin);
+      const url = URL.createObjectURL(doc.output('blob'));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `manifest-${detail.po.po_code}-${mode === 'perbox' ? 'per-box' : 'whole-order'}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
-      if (preWin) preWin.close();
       alert('Could not build the manifest: ' + (e?.message || e));
     } finally { setPrintBusy(false); }
   };
@@ -157,12 +161,12 @@ export function PoOverview({ onHome, onSignOut }) {
                               </button>
                             </div>
                             <div className="po-ov-print">
-                              <span className="muted xs">Print manifest:</span>
+                              <span className="muted xs">Manifest PDF:</span>
                               <button className="btn ghost sm" disabled={printBusy} onClick={() => printManifest('perbox')}>
-                                <Icon name="print" /> Per box
+                                <Icon name="download" /> Per box
                               </button>
                               <button className="btn ghost sm" disabled={printBusy} onClick={() => printManifest('whole')}>
-                                <Icon name="print" /> Whole order
+                                <Icon name="download" /> Whole order
                               </button>
                             </div>
                             {(() => {

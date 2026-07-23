@@ -189,7 +189,15 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal additem" role="dialog" aria-modal="true"
-        onClick={(e) => { e.stopPropagation(); if (!mCam) inputRef.current?.focus({ preventScroll: true }); }}>
+        onClick={(e) => {
+          e.stopPropagation();
+          // Keep the scan gun aimed at the SKU field by refocusing it when the user taps
+          // empty modal space — but NEVER when they tapped another control (the size box,
+          // qty, product name, a chip/button). That refocus was bouncing every click back
+          // to SKU, so the size field was impossible to type letters into (5C, 3Y, …).
+          if (mCam || e.target.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+          inputRef.current?.focus({ preventScroll: true });
+        }}>
         <div className="modal-head">
           <h3 className="modal-title">Add items · {orderMode ? 'Whole order' : `Label ${box.box_number}`}</h3>
           <button type="button" className="btn icon ghost" onClick={onClose}>×</button>

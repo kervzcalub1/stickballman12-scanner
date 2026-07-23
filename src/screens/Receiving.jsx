@@ -316,9 +316,19 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (el && !el.disabled) { el.focus({ preventScroll: true }); el.select(); }
   }, [mBusy]);
 
-  // Keep the scan field focused so a HID scanner gun types straight into it.
+  // Keep the scan field focused so a HID scanner gun types straight into it. `draft` is a
+  // dep so the field re-arms after a scan builds/updates the draft — but that also fires on
+  // every size/qty/name edit, so DON'T steal focus when the user is typing in another field
+  // (e.g. correcting a size to 5C / 3Y). Only refocus when nothing editable is focused.
   useEffect(() => {
-    if (showAdd && !mCam && !photoCam && !pendingSwitch) { const t = setTimeout(() => mInputRef.current?.focus({ preventScroll: true }), 60); return () => clearTimeout(t); }
+    if (showAdd && !mCam && !photoCam && !pendingSwitch) {
+      const t = setTimeout(() => {
+        const ae = document.activeElement;
+        if (ae && ae !== mInputRef.current && ae.matches?.('input, textarea, select, [contenteditable="true"]')) return;
+        mInputRef.current?.focus({ preventScroll: true });
+      }, 60);
+      return () => clearTimeout(t);
+    }
   }, [showAdd, mCam, photoCam, pendingSwitch, draft]);
   // While the listing-photo camera is open, drop focus so the mobile keyboard
   // closes — capturing a photo must never re-summon it via the hidden scan field.
@@ -1214,7 +1224,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       {/* Add Item modal */}
       {showAdd && (
         <div className="modal-overlay" onClick={closeAddItem}>
-          <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => { e.stopPropagation(); if (!mCam && !photoCam) mInputRef.current?.focus({ preventScroll: true }); }}>
+          <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => {
+            e.stopPropagation();
+            // Refocus the scan field when tapping empty modal space (keeps the gun aimed),
+            // but never when the user tapped another control (size/qty/name inputs, chips) —
+            // otherwise the size box can't be typed into (letters like 5C / 3Y).
+            if (mCam || photoCam || e.target.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+            mInputRef.current?.focus({ preventScroll: true });
+          }}>
             <div className="modal-head">
               <h3 className="modal-title">Add item</h3>
               <button type="button" className="btn icon ghost" onClick={closeAddItem}>×</button>

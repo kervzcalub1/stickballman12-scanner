@@ -32,6 +32,11 @@ const SHOE_SLOTS = new Set(SLOTS.map((s) => s.angle));
 const RESULT_LABEL = { ...SLOT_LABEL, spec: 'Spec', welcome: 'Welcome' };
 const RESULT_ORDER = ['side', 'diagonal', 'top', 'outsole', 'rear', 'spec', 'welcome'];
 
+// The slot key(s) a single-slide render/commit task covers — used to mark the right slide(s)
+// failed when a request throws without carrying per-slide results.
+const taskSlots = (tk) =>
+  tk.spec ? ['spec'] : tk.welcome ? ['welcome'] : (tk.picks || []).map((p) => p.angle).filter(Boolean);
+
 export function ImageFinder({ onHome, onSignOut }) {
   const [skuInput, setSkuInput] = useState('');
   const [product, setProduct] = useState(null);
@@ -187,15 +192,30 @@ export function ImageFinder({ onHome, onSignOut }) {
     ];
     setProgress({ done: 0, total: tasks.length });
     const acc = {};
+    let unauth = false;
     try {
       for (let i = 0; i < tasks.length; i++) {
         const tk = tasks[i];
-        const { results: r } = await api.imageFinderBrand(product.sku, t, tk.picks, tk.spec, tk.welcome, outSize, 'preview');
-        if (genRef.current !== myGen) return; // superseded by a newer action
-        for (const one of (r || [])) acc[one.slot] = one;
+        try {
+          const { results: r } = await api.imageFinderBrand(product.sku, t, tk.picks, tk.spec, tk.welcome, outSize, 'preview');
+          if (genRef.current !== myGen) return; // superseded by a newer action
+          for (const one of (r || [])) acc[one.slot] = one;
+        } catch (err) {
+          if (genRef.current !== myGen) return;
+          if (err.unauthorized) { unauth = true; break; }
+          // A single-slide request whose picks all fail comes back ok:false, and the API
+          // client throws on ok:false (api.js) — but it still carries the per-slide results.
+          // Record those (so the ! badge shows) and DON'T abort: the remaining shoes and the
+          // independent spec/welcome slides must still render. (Previously one failed upload
+          // killed the whole run, including spec + welcome.)
+          const rr = err.data?.results;
+          if (Array.isArray(rr) && rr.length) for (const one of rr) acc[one.slot] = one;
+          else for (const s of taskSlots(tk)) acc[s] = { slot: s, ok: false, error: err.message };
+        }
         setPreview({ ...acc });
         setProgress({ done: i + 1, total: tasks.length });
       }
+      if (unauth) return onSignOut();
       const okCount = Object.values(acc).filter((x) => x.ok).length;
       const failed = Object.values(acc).filter((x) => !x.ok);
       if (okCount > 0) setNotice(`Previewed ${okCount} slide${okCount === 1 ? '' : 's'}. Adjust any shoe, then Upload to save.`);
@@ -207,10 +227,6 @@ export function ImageFinder({ onHome, onSignOut }) {
       } else if (okCount === 0) {
         setError('Nothing previewed — see the errors below.');
       }
-    } catch (err) {
-      if (genRef.current !== myGen) return;
-      if (err.unauthorized) return onSignOut();
-      setError(err.message);
     } finally { setBranding(false); setProgress(null); }
   }
 
@@ -291,23 +307,30 @@ export function ImageFinder({ onHome, onSignOut }) {
     ];
     setUploading(true); setError(''); setNotice('');
     setProgress({ done: 0, total: tasks.length });
-    let saved = 0; const failed = [];
+    let saved = 0; const failed = []; let unauth = false;
     try {
       for (let i = 0; i < tasks.length; i++) {
         const tk = tasks[i];
-        const { saved: s, results: r } = await api.imageFinderBrand(product.sku, t, tk.picks, tk.spec, tk.welcome, outSize, 'commit');
-        if (genRef.current !== myGen) return; // superseded — don't flash stale banners
-        saved += s || 0;
-        for (const one of (r || [])) if (!one.ok) failed.push(one);
+        try {
+          const { saved: s, results: r } = await api.imageFinderBrand(product.sku, t, tk.picks, tk.spec, tk.welcome, outSize, 'commit');
+          if (genRef.current !== myGen) return; // superseded — don't flash stale banners
+          saved += s || 0;
+          for (const one of (r || [])) if (!one.ok) failed.push(one);
+        } catch (err) {
+          if (genRef.current !== myGen) return;
+          if (err.unauthorized) { unauth = true; break; }
+          // ok:false throws in the API client but still carries results; record the failed
+          // slide(s) and keep committing the rest (one bad slide must not abort the upload).
+          const rr = err.data?.results;
+          if (Array.isArray(rr) && rr.length) for (const one of rr) { if (!one.ok) failed.push(one); }
+          else for (const s of taskSlots(tk)) failed.push({ slot: s, ok: false, error: err.message });
+        }
         setProgress({ done: i + 1, total: tasks.length });
       }
+      if (unauth) return onSignOut();
       if (saved > 0) { setCommitted(true); setPanelReload((k) => k + 1); setNotice(`Uploaded ${saved} slide${saved === 1 ? '' : 's'} for ${product.sku}.`); }
       if (failed.length) setError(`${failed.length} slide${failed.length === 1 ? '' : 's'} failed to upload — try Upload again.`);
       else if (saved === 0) setError('Nothing was uploaded.');
-    } catch (err) {
-      if (genRef.current !== myGen) return;
-      if (err.unauthorized) return onSignOut();
-      setError(err.message);
     } finally { setUploading(false); setProgress(null); }
   }
 

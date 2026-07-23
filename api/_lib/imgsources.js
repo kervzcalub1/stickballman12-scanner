@@ -5,7 +5,7 @@
 // — rather than growing it inside kicksdb.js — means adding a brand (adidas, New
 // Balance, …) is a one-line change here and nothing else has to move.
 import { isAllowedSourceImageUrl as isKicksdbImageUrl, hiResSourceUrl as kicksdbHiRes } from './kicksdb.js';
-import { isNikeImageUrl, nikeCutoutUrl } from './nike.js';
+import { isNikeImageUrl } from './nike.js';
 import { isAdidasImageUrl } from './adidas.js';
 
 // SSRF guard for every server-side image fetch: StockX / GOAT (KicksDB), Nike, or the
@@ -20,7 +20,10 @@ import { isAdidasImageUrl } from './adidas.js';
 export const isAllowedSourceImageUrl = (url) =>
   isKicksdbImageUrl(url) || isNikeImageUrl(url) || isAdidasImageUrl(url);
 
-// Upgrade a gallery URL to the rendition we actually want to composite from. For
-// KicksDB that's the full-resolution GOAT original; for Nike it's the transparent PNG
-// twin, which arrives pre-cut and lets Brand & Fill skip the AI background removal.
-export const hiResSourceUrl = (url) => (isNikeImageUrl(url) ? nikeCutoutUrl(url) : kicksdbHiRes(url));
+// Upgrade a gallery URL to the rendition we actually want to composite from. For KicksDB
+// that's the full-resolution GOAT original. For Nike we use the ORIGINAL white-bg render
+// (not the transparent PNG twin): Nike bakes its own soft drop-shadow into the cutout, so
+// running the white-bg image through the AI matte strips that shadow and lets Brand & Fill
+// apply its own — worth the per-image cutout cost for a consistent look. (Previously the
+// pre-cut twin skipped the matte but kept Nike's shadow.)
+export const hiResSourceUrl = (url) => (isNikeImageUrl(url) ? url : kicksdbHiRes(url));

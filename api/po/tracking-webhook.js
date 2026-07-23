@@ -4,7 +4,7 @@
 // or an X-Webhook-Secret header — there's no session here. Always answers 200 on a
 // valid secret (17TRACK treats non-200 as failure and retries).
 import { getJsonBody, send, applySecurity } from '../_lib/util.js';
-import { setPoBoxTracking, dbConfigured } from '../_lib/db.js';
+import { setPoBoxTracking, rollupPoShippedFromTracking, dbConfigured } from '../_lib/db.js';
 import { trackingWebhookSecret, parseWebhook, forwardTrackingToSheet } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
@@ -19,7 +19,13 @@ export default async function handler(req, res) {
   try {
     const body = await getJsonBody(req);
     const updates = parseWebhook(body);
-    for (const u of updates) await setPoBoxTracking(u.trackingNumber, u);
+    const affectedPoIds = new Set();
+    for (const u of updates) {
+      const rows = await setPoBoxTracking(u.trackingNumber, u);
+      for (const r of (rows || [])) if (r?.po_id != null) affectedPoIds.add(Number(r.po_id));
+    }
+    // Roll each touched PO off "Filling" once all its labels have left the supplier.
+    for (const poId of affectedPoIds) await rollupPoShippedFromTracking(poId);
     // Mirror the update into the warehouse's Google Sheet (best-effort, env-gated).
     forwardTrackingToSheet(updates).catch((e) => console.warn('[po/tracking-webhook] sheet:', e.message));
     // Always 200 so the sender doesn't retry a push we accepted (even if 0 matched

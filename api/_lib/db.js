@@ -2097,6 +2097,25 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
     RETURNING id, po_id`;
 }
 
+// Roll the PO forward off 'draft' (Filling) once tracking shows every label has LEFT the
+// supplier (shipped / in transit / delivered). Mirrors shipPoBox's rollup, but driven by
+// tracking instead of the in-app "ship" tap — a supplier who just drops the boxes at UPS
+// never taps ship, so without this the PO sat on "Filling" even after all labels delivered.
+// Only advances when there IS at least one box and NONE is still pending/packed/pre_transit.
+export async function rollupPoShippedFromTracking(poId) {
+  const rows = await db()`
+    UPDATE purchase_orders
+    SET status = 'shipped', shipped_at = COALESCE(shipped_at, now())
+    WHERE id = ${poId} AND status = 'draft'
+      AND EXISTS (SELECT 1 FROM po_boxes WHERE po_id = ${poId})
+      AND NOT EXISTS (
+        SELECT 1 FROM po_boxes
+        WHERE po_id = ${poId} AND status NOT IN ('shipped','in_transit','delivered')
+      )
+    RETURNING id, status`;
+  return rows[0] || null;
+}
+
 // Archive a reconciled PO → status 'closed' (drops off the active reconcile list).
 export async function closePo(poId) {
   const sql = db();

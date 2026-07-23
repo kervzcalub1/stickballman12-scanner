@@ -5,7 +5,7 @@
 // fewer tracking-API calls/credits. A manual fallback to the webhook push. No-ops if
 // tracking isn't configured (TRACKING_API_KEY unset).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, getPoFull, dbConfigured } from '../_lib/db.js';
+import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured } from '../_lib/db.js';
 import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet, registerTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
@@ -62,6 +62,9 @@ export default async function handler(req, res) {
       updates.push(...await fetchTrackInfo(items.slice(i, i + 40)));
     }
     for (const u of updates) await setPoBoxTracking(u.trackingNumber, u);
+    // Now that box statuses are current, roll the PO off "Filling" if every label has left
+    // the supplier (delivered/in-transit/shipped) — the supplier may never have tapped "ship".
+    await rollupPoShippedFromTracking(poId);
     // Keep the warehouse's Google Sheet in sync on manual pulls too (best-effort, env-gated).
     forwardTrackingToSheet(updates).catch((e) => console.warn('[po/track-refresh] sheet:', e.message));
     const data = await getPoFull(poId);

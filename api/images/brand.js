@@ -20,6 +20,7 @@ import {
   ANGLE_TEMPLATE,
 } from '../_lib/branding.js';
 import { cutoutProvider } from '../_lib/cutout.js';
+import { aliasCatalogBySku } from '../_lib/alias.js';
 
 import { photoSourceForRole, listingPhotoBaseName } from '../_lib/photos.js';
 
@@ -153,15 +154,22 @@ export default async function handler(req, res) {
   if (body.includeSpec) {
     jobs.push({ slot: 'spec', heavy: false, run: async () => {
       try {
-        // Merge the two catalogues rather than picking one — they're good at different
+        // Merge the catalogues rather than picking one — they're good at different
         // things. Nike is authoritative for the FACTS we print verbatim (official
         // colourway naming and order, real product category). But its marketing copy is
         // shorter than GOAT's and often omits the upper material — e.g. for the Air
         // Jordan 1 only GOAT's prose says "leather" — so the keyword inference below
         // reads BOTH descriptions. Non-Nike SKUs just fall through to GOAT alone.
-        const [nike, kicks] = await Promise.all([nikeSpecData(sku), kicksdbSpecData(sku)]);
+        // COLORWAY chain: Nike's official naming first (the only brand with a direct spec
+        // API), then the Alias catalog — the same canonical source the listing name comes
+        // from — so adidas/other brands (no direct spec API) match the rest of the app;
+        // KicksDB stays as a last-resort net for anything Alias misses. Alias is wrapped
+        // best-effort so a network hiccup can't fail the whole spec slide.
+        const [nike, kicks, alias] = await Promise.all([
+          nikeSpecData(sku), kicksdbSpecData(sku), aliasCatalogBySku(sku).catch(() => null),
+        ]);
         const description = [nike?.description, kicks?.description].filter(Boolean).join(' ');
-        const colorway = nike?.colorway || kicks?.colorway || '';
+        const colorway = nike?.colorway || alias?.colorway || kicks?.colorway || '';
         const bullets = specBulletsFromDescription(description, colorway, { subtitle: nike?.subtitle });
         const branded = await brandSpec({ title, sku, bullets, outSize: renderSize });
         if (commit) return { slot: 'spec', ok: true, url: await storeFinal('extra1', branded), bullets };

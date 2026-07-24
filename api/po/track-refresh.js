@@ -6,7 +6,7 @@
 // tracking isn't configured (TRACKING_API_KEY unset).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured } from '../_lib/db.js';
-import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet, registerTracking } from '../_lib/tracking.js';
+import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet, registerTracking, stopTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -65,6 +65,11 @@ export default async function handler(req, res) {
     // Now that box statuses are current, roll the PO off "Filling" if every label has left
     // the supplier (delivered/in-transit/shipped) — the supplier may never have tapped "ship".
     await rollupPoShippedFromTracking(poId);
+    // Stop tracking any label that's now delivered so it stops consuming 17TRACK quota
+    // (matches the webhook path). Best-effort — a failure here must not fail the refresh.
+    const deliveredNums = updates.filter((u) => u.boxStatus === 'delivered').map((u) => u.trackingNumber);
+    if (deliveredNums.length)
+      stopTracking(deliveredNums).catch((e) => console.warn('[po/track-refresh] stoptrack:', e.message));
     // Keep the warehouse's Google Sheet in sync on manual pulls too (best-effort, env-gated).
     forwardTrackingToSheet(updates).catch((e) => console.warn('[po/track-refresh] sheet:', e.message));
     const data = await getPoFull(poId);

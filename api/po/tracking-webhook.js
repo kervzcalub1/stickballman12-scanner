@@ -5,7 +5,7 @@
 // valid secret (17TRACK treats non-200 as failure and retries).
 import { getJsonBody, send, applySecurity } from '../_lib/util.js';
 import { setPoBoxTracking, rollupPoShippedFromTracking, dbConfigured } from '../_lib/db.js';
-import { trackingWebhookSecret, parseWebhook, forwardTrackingToSheet } from '../_lib/tracking.js';
+import { trackingWebhookSecret, parseWebhook, forwardTrackingToSheet, stopTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -26,6 +26,12 @@ export default async function handler(req, res) {
     }
     // Roll each touched PO off "Filling" once all its labels have left the supplier.
     for (const poId of affectedPoIds) await rollupPoShippedFromTracking(poId);
+    // Stop tracking anything that's now delivered — a delivered parcel won't change again,
+    // so keeping it on auto-tracking just burns 17TRACK quota. Covers every delivered number
+    // in the push (matched or not), since the whole account funnels through here. Best-effort.
+    const deliveredNums = updates.filter((u) => u.boxStatus === 'delivered').map((u) => u.trackingNumber);
+    if (deliveredNums.length)
+      stopTracking(deliveredNums).catch((e) => console.warn('[po/tracking-webhook] stoptrack:', e.message));
     // Mirror the update into the warehouse's Google Sheet (best-effort, env-gated).
     forwardTrackingToSheet(updates).catch((e) => console.warn('[po/tracking-webhook] sheet:', e.message));
     // Always 200 so the sender doesn't retry a push we accepted (even if 0 matched

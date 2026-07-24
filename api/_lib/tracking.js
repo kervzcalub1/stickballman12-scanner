@@ -40,6 +40,17 @@ export async function registerTracking(items) {
   return call('/register', list);
 }
 
+// Tell 17TRACK to STOP auto-tracking these numbers — call once a parcel is delivered.
+// A delivered parcel never changes again, so leaving it on auto-tracking just burns the
+// account's tracking quota (see the "Tracking stopped" state in the 17TRACK dashboard).
+// Idempotent: stopping an already-stopped number is a harmless no-op. Best-effort, and
+// no-ops without TRACKING_API_KEY.
+export async function stopTracking(items) {
+  const list = (items || []).map(toItem).filter(Boolean).slice(0, 40);
+  if (!trackingConfigured() || !list.length) return { skipped: true };
+  return call('/stoptrack', list);
+}
+
 // Pull current status for a set of items (number + optional carrier key). Returns
 // [{ trackingNumber, carrier, trackingStatus, lastCheckpoint, boxStatus }] (only parsed).
 export async function fetchTrackInfo(items) {

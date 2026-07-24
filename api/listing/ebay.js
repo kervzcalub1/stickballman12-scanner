@@ -100,9 +100,14 @@ function buildTitle({ brand, nameClean, dept, color, code }) {
 }
 
 // ---- the pure composer (exported for tests) -----------------------------------
-export function buildEbayListing({ sku, alias, nike, kicks }) {
+// `styleToken` (Intelligent Inventory): emit II's dynamic {STYLE_ID} token in the DESCRIPTION
+// where the style code appears, so II substitutes the real SKU per item on store sync. The
+// title and Style Code item-specific stay the literal SKU (separate fields; eBay title search
+// needs the real code).
+export function buildEbayListing({ sku, alias, nike, kicks, styleToken = false }) {
   const name = alias?.name || nike?.name || null;
   if (!name) return null;
+  const styleRef = styleToken ? '{STYLE_ID}' : sku;
   const brand = alias?.brand || 'Nike';
   const colorway = nike?.colorway || alias?.colorway || kicks?.colorway || '';
   const prose = [nike?.description, kicks?.description].filter(Boolean).join(' ');
@@ -138,32 +143,41 @@ export function buildEbayListing({ sku, alias, nike, kicks }) {
   const features = featureBullets(prose, specBullets, colorway);
   const headColor = color ? ` &mdash; ${escapeHtml(color)}` : '';
 
-  const descriptionHtml =
-`<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.6;color:#1a1a1a;">
-  <h3 style="font-size:20px;margin:0 0 12px;color:#111;">${escapeHtml(name)}${headColor}</h3>
-  <p style="font-size:13px;color:#6b6b6b;margin:-6px 0 16px;">Style ${escapeHtml(sku)} &middot; ${escapeHtml(dept)}</p>
-  ${intro ? `<p style="margin:0 0 14px;">${escapeHtml(intro)}</p>` : ''}
-  <h4 style="font-size:15px;text-transform:uppercase;letter-spacing:.04em;margin:18px 0 8px;color:#111;">Features</h4>
-  <ul style="margin:0 0 14px;padding-left:22px;">
-${features.map((f) => `    <li style="margin:5px 0;">${f}</li>`).join('\n')}
-  </ul>
-  <p style="background:#f4f6f5;border-radius:8px;padding:12px 16px;font-size:14px;color:#333;margin:0 0 14px;"><b>Brand:</b> ${escapeHtml(brand)} &nbsp;&middot;&nbsp; <b>Model:</b> ${escapeHtml(model || '')} &nbsp;&middot;&nbsp; <b>Style Code:</b> ${escapeHtml(sku)}</p>
-  <h4 style="font-size:15px;text-transform:uppercase;letter-spacing:.04em;margin:18px 0 8px;color:#111;">Condition</h4>
-  <p style="border-left:3px solid #0a7d4e;padding-left:14px;margin:0 0 14px;"><strong style="color:#0a7d4e;">Brand new, deadstock</strong> &mdash; never worn or tried on. Ships in the original box. 100% authentic, sourced and verified through our inventory system.</p>
-  <p style="font-size:14px;color:#555;margin:0;">Available in multiple sizes &mdash; choose your size from the options above.</p>
-</div>`;
+  // A blank-line spacer: rich-text editors (eBay, Intelligent Inventory) normalize away our
+  // CSS margins, so an explicit empty paragraph is the only thing that reliably renders as a
+  // blank line between sections in every editor.
+  const SP = '  <p style="margin:0;line-height:1.5;">&nbsp;</p>';
+  const descriptionHtml = [
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.6;color:#1a1a1a;">',
+    `  <h3 style="font-size:20px;margin:0;color:#111;">${escapeHtml(name)}${headColor}</h3>`,
+    `  <p style="font-size:13px;color:#6b6b6b;margin:4px 0 0;">Style ${escapeHtml(styleRef)} &middot; ${escapeHtml(dept)}</p>`,
+    ...(intro ? [SP, `  <p style="margin:0;">${escapeHtml(intro)}</p>`] : []),
+    SP,
+    '  <h4 style="font-size:15px;text-transform:uppercase;letter-spacing:.04em;margin:0;color:#111;">Features</h4>',
+    '  <ul style="margin:6px 0 0;padding-left:22px;">',
+    ...features.map((f) => `    <li style="margin:5px 0;">${f}</li>`),
+    '  </ul>',
+    SP,
+    `  <p style="background:#f4f6f5;border-radius:8px;padding:12px 16px;font-size:14px;color:#333;margin:0;"><b>Brand:</b> ${escapeHtml(brand)} &nbsp;&middot;&nbsp; <b>Model:</b> ${escapeHtml(model || '')} &nbsp;&middot;&nbsp; <b>Style Code:</b> ${escapeHtml(styleRef)}</p>`,
+    SP,
+    '  <h4 style="font-size:15px;text-transform:uppercase;letter-spacing:.04em;margin:0;color:#111;">Condition</h4>',
+    `  <p style="border-left:3px solid #0a7d4e;padding-left:14px;margin:6px 0 0;"><strong style="color:#0a7d4e;">Brand new, deadstock</strong> &mdash; never worn or tried on. Ships in the original box. 100% authentic, sourced and verified through our inventory system.</p>`,
+    SP,
+    '  <p style="font-size:14px;color:#555;margin:0;">Available in multiple sizes &mdash; choose your size from the options above.</p>',
+    '</div>',
+  ].join('\n');
 
   const plainFeatures = features.map((f) => f.replace(/<[^>]+>/g, ''));
   const descriptionText =
 `${name}${color ? ` — ${color}` : ''}
-Style ${sku} · ${dept}
+Style ${styleRef} · ${dept}
 
 ${intro}
 
 FEATURES
 ${plainFeatures.map((f) => `- ${f}`).join('\n')}
 
-Brand: ${brand} · Model: ${model || ''} · Style Code: ${sku}
+Brand: ${brand} · Model: ${model || ''} · Style Code: ${styleRef}
 
 CONDITION
 Brand new, deadstock — never worn or tried on. Ships in the original box. 100% authentic, sourced and verified through our inventory system.
@@ -198,6 +212,8 @@ export default async function handler(req, res) {
   const skuIn = normSku(url.searchParams.get('sku'));
   if (!skuIn) return send(res, 400, { ok: false, error: 'A valid ?sku= is required.' });
   if (!process.env.ALIAS_API_KEY) return send(res, 500, { ok: false, error: 'Server is missing the Alias API key.' });
+  // ?token=1 → emit II's {STYLE_ID} dynamic token in the description instead of the literal SKU.
+  const styleToken = /^(1|true|yes)$/i.test(url.searchParams.get('token') || '');
 
   try {
     const [alias, nike, kicks] = await Promise.all([
@@ -205,7 +221,7 @@ export default async function handler(req, res) {
       nikeSpecData(skuIn).catch(() => null),
       kicksdbSpecData(skuIn).catch(() => null),
     ]);
-    const listing = buildEbayListing({ sku: skuIn, alias, nike, kicks });
+    const listing = buildEbayListing({ sku: skuIn, alias, nike, kicks, styleToken });
     if (!listing) return send(res, 404, { ok: false, error: `No catalogue match for "${skuIn}".` });
     return send(res, 200, { ok: true, ...listing });
   } catch (e) {

@@ -9,7 +9,7 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
-import { cutoutToPng, cutoutProvider } from './cutout.js';
+import { cutoutToPng, cutoutProvider, localCutoutAllowed } from './cutout.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const TEMPLATE_DIR = path.join(ROOT, 'src/components/ImageTemplate');
@@ -290,6 +290,13 @@ export async function brandPhoto({ templateNum = 1, shoeBuffer, title, sku, outS
         // land-effect image silently is worse than failing — so re-throw and let the slot
         // report the error, so PH knows to retry rather than saving a bad slide.
         if (cutoutProvider() !== 'local') { console.error('[branding] cutout failed (hosted provider):', e.message); throw e; }
+        // Provider resolved to 'local' but this host REFUSES the 1 GB model (a managed dyno):
+        // there is no working matte here at all. The threshold fallback only strips near-pure-
+        // white, so on a real photo (grey/coloured studio bg, e.g. a PH manual upload) it
+        // silently ships an UN-CUT rectangle onto the brick. Fail loudly instead — brand.js
+        // turns this into a clear "set REPLICATE_API_TOKEN / clear CUTOUT_PROVIDER=local" badge,
+        // so a prod misconfig is obvious rather than masquerading as a bad-looking slide.
+        if (!localCutoutAllowed()) { console.error('[branding] local cutout disabled on this host + no hosted provider — refusing threshold fallback:', e.message); throw e; }
         console.error('[branding] AI cutout failed, using threshold fallback:', e.message);
         const fb = cutoutFallback(await loadImage(shoeBuffer));
         cut = fb.canvas; bbox = fb.bbox;

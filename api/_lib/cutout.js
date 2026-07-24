@@ -57,7 +57,10 @@ const INPUT = 1024; // BiRefNet's native input size
 const onManagedServer = () =>
   !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID
      || process.env.RAILWAY_SERVICE_ID || process.env.NODE_ENV === 'production');
-const localCutoutAllowed = () => !onManagedServer() || process.env.ALLOW_LOCAL_CUTOUT === '1';
+// Exported so the branding pipeline can tell "local dev, threshold fallback is OK" apart from
+// "provider resolved to local on a managed dyno where the model is refused" — the latter has NO
+// working matte, so it must fail loudly rather than ship an un-cut rectangle.
+export const localCutoutAllowed = () => !onManagedServer() || process.env.ALLOW_LOCAL_CUTOUT === '1';
 
 async function ensureModel() {
   if (fs.existsSync(MODEL_PATH) && fs.statSync(MODEL_PATH).size > 1_000_000) return;

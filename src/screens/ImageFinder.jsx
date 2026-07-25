@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { toUploadableImage } from '../lib/image.js';
 import { TopBar, ShoeThumb, ImageZoomModal, ProgressBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { EditedPhotosPanel } from './PhEditedPhotos.jsx';
@@ -150,11 +151,14 @@ export function ImageFinder({ onHome, onSignOut }) {
   // slot points at that R2 URL. Brand & Fill will template it like a gallery pick.
   async function uploadToSlot(angle, file) {
     if (!file || !product) return;
-    const type = /jpeg|jpg|png|webp/i.test(file.type) ? file.type : 'image/jpeg';
     setUploadingSlot(angle); setError('');
     try {
+      // HEIC (straight off an iPhone) and AVIF (what Chrome saves brand-site photos as)
+      // are unreadable further down the chain, so convert here rather than stamping
+      // `image/jpeg` on bytes that aren't. Throws with a fixable message if it can't.
+      const { blob, type } = await toUploadableImage(file);
       const { uploadUrl, publicUrl } = await api.photoSign(product.sku, angle, type, 'ph_edited');
-      const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': type }, body: file });
+      const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
       if (!put.ok) throw new Error('Upload failed. Try again.');
       setPicks((p) => ({ ...p, [angle]: publicUrl }));
       setUploaded((u) => ({ ...u, [angle]: true }));

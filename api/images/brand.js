@@ -20,6 +20,7 @@ import {
   ANGLE_TEMPLATE,
 } from '../_lib/branding.js';
 import { cutoutProvider } from '../_lib/cutout.js';
+import { normalizeSourceImage } from '../_lib/imgformat.js';
 import { aliasCatalogBySku } from '../_lib/alias.js';
 
 import { photoSourceForRole, listingPhotoBaseName } from '../_lib/photos.js';
@@ -122,8 +123,16 @@ export default async function handler(req, res) {
           // Fresh pick: pull the full-res GOAT rendition, cut it out ONCE, stage the PNG.
           const resp = await fetchWithTimeout(hiResSourceUrl(url), { headers: { accept: 'image/*' } }, 15000);
           if (!resp.ok) return { slot: angle, ok: false, error: `Source returned ${resp.status}.` };
-          const srcBuf = Buffer.from(await resp.arrayBuffer());
-          if (!srcBuf.length || srcBuf.length > MAX_BYTES) return { slot: angle, ok: false, error: 'Image is empty or too large.' };
+          const rawBuf = Buffer.from(await resp.arrayBuffer());
+          if (!rawBuf.length || rawBuf.length > MAX_BYTES) return { slot: angle, ok: false, error: 'Image is empty or too large.' };
+          // A PH upload arrives in whatever the phone/browser produced. AVIF (what Chrome
+          // saves brand-site photos as) is unreadable to the cutout provider and HEIC
+          // segfaults the canvas decoder, so normalise — or reject with a reason PH can
+          // act on — BEFORE anything touches the bytes. Reported as its own error, not a
+          // "cutout failed", so PH doesn't retry a file that will never work.
+          let srcBuf;
+          try { srcBuf = await normalizeSourceImage(rawBuf); }
+          catch (e) { return { slot: angle, ok: false, error: e.message }; }
           // Nike's renditions arrive already transparent — that path skips the AI matte
           // entirely; everything else still throws (no land-effect fallback) on failure.
           const cut = await cutoutForEditMaybePreCut(srcBuf);

@@ -9,6 +9,7 @@ import { dbConfigured } from '../_lib/db.js';
 import { r2Configured, presignPutUrl, publicUrl, isAllowedPhotoUrl } from '../_lib/r2.js';
 import { isAllowedSourceImageUrl, hiResSourceUrl } from '../_lib/imgsources.js';
 import { cutoutForEdit } from '../_lib/branding.js';
+import { normalizeSourceImage } from '../_lib/imgformat.js';
 import { photoSourceForRole } from '../_lib/photos.js';
 
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
@@ -39,8 +40,13 @@ export default async function handler(req, res) {
     const src = isAllowedPhotoUrl(url) ? url : hiResSourceUrl(url);
     const resp = await fetchWithTimeout(src, { headers: { accept: 'image/*' } }, 15000);
     if (!resp.ok) return send(res, 502, { ok: false, error: `Source returned ${resp.status}.` });
-    const buf = Buffer.from(await resp.arrayBuffer());
-    if (!buf.length || buf.length > MAX_BYTES) return send(res, 400, { ok: false, error: 'Image is empty or too large.' });
+    const raw = Buffer.from(await resp.arrayBuffer());
+    if (!raw.length || raw.length > MAX_BYTES) return send(res, 400, { ok: false, error: 'Image is empty or too large.' });
+    // Normalise odd upload formats (AVIF → PNG) and reject the decode-unsafe ones (HEIC)
+    // before the canvas/cutout path sees them — see api/_lib/imgformat.js.
+    let buf;
+    try { buf = await normalizeSourceImage(raw); }
+    catch (e) { return send(res, 400, { ok: false, error: e.message }); }
 
     const { pngBuffer, bbox, width, height } = await cutoutForEdit(buf);
     const key = `listings/${safeSku}/_cut/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;

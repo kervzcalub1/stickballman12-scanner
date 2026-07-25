@@ -324,6 +324,18 @@ source, no schema change — so found images behave exactly like hand-edited upl
      "land effect"), so the slot reports a clear throttle error (`throttled`) rather than silently
      saving a bad slide. Real fix = ≥ $5 Replicate credit. Staged cutout PNGs live at
      `listings/<sku>/_cut/*.png` (reused across preview/adjust/commit; harmless orphans if abandoned).
+   - **Source-format normalisation** (`api/_lib/imgformat.js`, applied in `images/brand.js` +
+     `images/cutout.js` right after the source fetch): the cutout provider is Pillow-based and reads
+     only JPEG/PNG/WebP/GIF/BMP/TIFF. A PH upload is whatever the phone/browser produced — **AVIF**
+     (what Chrome saves brand-site photos as, e.g. adidas.com) made Replicate fail with the opaque
+     `cannot identify image file '/tmp/….png'`, surfaced as "Could not cut out this shoe". Worse,
+     `@napi-rs/canvas` `loadImage` **SEGFAULTS on HEIC** (raw iPhone photo) — it doesn't throw, it
+     kills the Node process. So `normalizeSourceImage()` sniffs the **magic bytes** (never the
+     Content-Type — the upload path stamps `image/jpeg` on anything), passes readable formats through
+     untouched, transcodes AVIF → PNG via canvas, and **rejects HEIC before it reaches the decoder**
+     with a fixable message. Client side, `toUploadableImage()` (`src/lib/image.js`) converts HEIC/AVIF
+     **in the browser** at upload time (the only place that can still decode them), so odd formats
+     never reach R2; `compressImage` likewise clamps its output type to jpeg/png/webp.
    - **Branding engine** = `api/_lib/branding.js` using **`@napi-rs/canvas`** (registers the font
      files explicitly — same native binary on Railway; sharp's SVG renderer ignores `@font-face`,
      so it was dropped). Templates in `src/components/ImageTemplate/{1..7}.png` (1600²); fonts in

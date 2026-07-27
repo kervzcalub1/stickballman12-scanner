@@ -148,6 +148,7 @@ export function SupplierApp({ user, onSignOut }) {
                       <span>{p.shipped_count}/{p.box_count} labels shipped</span>
                       <span>{p.unit_count} unit{p.unit_count === 1 ? '' : 's'}</span>
                     </div>
+                    {p.reconcile_note && <div className="po-note-peek">{p.reconcile_note}</div>}
                   </button>
                 ))}
               </div>
@@ -184,6 +185,17 @@ export function SupplierApp({ user, onSignOut }) {
                   title="Check every label at once">
                   <Icon name="refresh" /> {trackBusy ? 'Checking…' : 'Refresh all tracking'}
                 </button>
+              )}
+              {/* The warehouse's reconciliation note, read-only. Attributed to the business,
+                  never to the individual who wrote it — the server strips that name. */}
+              {po.reconcile_note && (
+                <div className="po-note">
+                  <div className="po-note-head">
+                    From {businessName || 'Stickballman12 LLC'}
+                    {po.reconcile_note_at ? ` · ${String(po.reconcile_note_at).slice(0, 10)}` : ''}
+                  </div>
+                  {po.reconcile_note}
+                </div>
               )}
             </div>
 

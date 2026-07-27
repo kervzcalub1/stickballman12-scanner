@@ -2099,6 +2099,7 @@ export async function listReconcilePos() {
   return sql`
     SELECT p.id, p.po_code, p.status, p.supplier_name, p.tag_code, p.manifest_scope,
       p.reconciled_at, p.created_at, p.reconciliation->'summary' AS snapshot_summary,
+      p.reconcile_note, p.reconcile_note_by, p.reconcile_note_at,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
       (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
     FROM purchase_orders p
@@ -2169,6 +2170,24 @@ export async function rollupPoShippedFromTracking(poId) {
         WHERE po_id = ${poId} AND status NOT IN ('shipped','in_transit','delivered')
       )
     RETURNING id, status`;
+  return rows[0] || null;
+}
+
+// The reconciliation note — one editable free-text field per PO ("supplier says the short
+// pair ships Thursday", "credited on the next invoice"). Writable at any status, including
+// after the PO is reconciled or archived: the outcome often lands days after the count did.
+// Empty/blank clears it (note + byline + timestamp all go NULL together).
+export const RECONCILE_NOTE_MAX = 2000;
+export async function setPoReconcileNote(poId, note, byName) {
+  const sql = db();
+  const text = String(note ?? '').trim().slice(0, RECONCILE_NOTE_MAX) || null;
+  const rows = await sql`
+    UPDATE purchase_orders
+    SET reconcile_note = ${text},
+        reconcile_note_by = ${text ? (byName || null) : null},
+        reconcile_note_at = ${text ? new Date().toISOString() : null}
+    WHERE id = ${poId}
+    RETURNING id, po_code, reconcile_note, reconcile_note_by, reconcile_note_at`;
   return rows[0] || null;
 }
 

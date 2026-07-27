@@ -75,6 +75,16 @@ labels** (one tracking number each); it closes only when every label is shipped.
     returns both (PHTeam's card now calls it instead of hand-rolling its own badge array); only
     the amber one feeds Home's "Needs attention" strip.
     Closing mid-intake still works but shows a "closing now freezes the count" note.
+  - **Reconciliation note** — the *why* behind the counts ("size 10.5 ships Thursday", "short
+    pair credited"). **One editable free-text field per PO**, `POST /api/po/note {poId, note}`
+    (warehouse/ph_team, 2000 chars, blank clears all three columns) → `setPoReconcileNote`.
+    Writable at **any status including `reconciled`/`closed`** — the resolution usually lands
+    days after the count. Appended to the **Copy report** text so the group-chat message already
+    carries the explanation. Shown as a one-line italic preview on the reconcile list card.
+    **The supplier sees it read-only** in their portal (card preview + a bordered block on the
+    PO), attributed to the business — `po/get` and `po/list` **strip `reconcile_note_by`** for
+    supplier scope, exactly like the on-behalf line attribution; the timestamp is kept.
+    **Schema-touch: `purchase_orders.reconcile_note` + `_by` + `_at` → run `db:setup`.**
   - **Report table UI.** Classes are prefixed **`rcn-`, not `rc-`** — `RescaleRequests.jsx` owns
     `rc-*` and `.rc-item` there paints a bordered card, which drew a stray pill around every SKU
     cell. Rows are two-line (SKU · size, then product name), qty is one `got/exp` cell, and a chip
@@ -225,7 +235,9 @@ VINs + inserts `items` = phantom stock).
   100001), `supplier_name`, `supplier_user_id` → `users(id)` (the supplier account that
   fills it), `status` ∈ `draft | shipped | receiving | reconciled | closed`, `tag_code` +
   `date_of_purchase` (from the PH form), `expected_boxes` (how many shipping labels),
-  `received_batch_id` → `batches(id)`, `reconciled_at`, `reconciliation JSONB` (snapshot).
+  `received_batch_id` → `batches(id)`, `reconciled_at`, `reconciliation JSONB` (snapshot),
+  **`reconcile_note` + `reconcile_note_by` + `reconcile_note_at`** (one editable note per PO;
+  `_by` holds the staff display name and is stripped from every supplier-facing response).
 - **`po_boxes`** — one row per **shipping label** (outbound mirror of `batch_boxes`).
   `po_id`, `box_number`, `tracking_number` (PH pre-assigns the real courier number),
   **`carrier_key`** (the 17TRACK numeric carrier code chosen in the New Batch dropdown or

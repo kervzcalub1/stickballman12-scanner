@@ -2081,6 +2081,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .rcn-fold:hover { color: var(--text); }
 .rcn-fold-cta { font-size: 12px; font-weight: 700; }
 
+/* Supplier's read-only view of the warehouse's reconciliation note. */
+.po-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); border-left: 3px solid var(--primary); background: var(--panel-2); font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
+.po-note-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 5px; }
+.po-note-peek { margin-top: 8px; color: var(--muted); font-size: 12px; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Reconciliation note — the "why" behind the counts. */
+.rcn-note-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.rcn-note-input { width: 100%; min-height: 76px; resize: vertical; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit; font-size: 14px; line-height: 1.45; }
+.rcn-note-input:focus { outline: none; border-color: var(--primary); }
+.rcn-note-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+/* One-line preview on the list card — truncated, never wraps the card open. */
+.rcn-note-peek { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 12px; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcn-note-peek svg { flex: none; opacity: .7; }
+
 .rcn-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; padding-bottom: 24px; }
 .rcn-actions .btn { flex: 1; min-width: 160px; }
 .rcn-warn { flex-basis: 100%; margin: 0; line-height: 1.45; }

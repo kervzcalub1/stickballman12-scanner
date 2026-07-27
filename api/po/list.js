@@ -13,6 +13,11 @@ export default async function handler(req, res) {
   try {
     const supplierScope = user.role === 'supplier' && !isPrivileged(user.role);
     const pos = await listPos({ uid: Number(user.uid), supplierScope });
+    // A supplier reads the reconciliation note but never which staff member wrote it
+    // (same rule as po/get and the on-behalf line attribution).
+    if (supplierScope) {
+      return send(res, 200, { ok: true, pos: pos.map(({ reconcile_note_by, ...p }) => p) });
+    }
     return send(res, 200, { ok: true, pos });
   } catch (e) {
     console.error('[po/list]', e.message);

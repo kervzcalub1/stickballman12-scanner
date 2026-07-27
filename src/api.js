@@ -186,6 +186,8 @@ export const api = {
   poReconciliation: (poId) => get(`/api/po/reconciliation?poId=${encodeURIComponent(poId)}`),
   poReconcile: (poId) => post('/api/po/reconcile', { poId }),
   poClose: (poId) => post('/api/po/close', { poId }),
+  // Reconciliation note — one editable field per PO, saved at any status. Blank clears it.
+  poSaveNote: (poId, note) => post('/api/po/note', { poId, note }),
   // Phase 4 — shipment tracking (17TRACK). Pull the latest status for a PO's labels.
   // Omit poBoxId to refresh every label on the PO; pass it to refresh just one (saves credits).
   poTrackRefresh: (poId, poBoxId) => post('/api/po/track-refresh', poBoxId != null ? { poId, poBoxId } : { poId }),

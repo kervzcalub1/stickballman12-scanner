@@ -1,8 +1,8 @@
 // PO Phase 3: reconciliation. Warehouse/PH review a received PO's expected-vs-
 // received table (grouped by SKU+size), see per-line flags (match / shortage /
-// overage / wrong-size / wrong-sku), copy a discrepancy report to send the
-// supplier in the group chat, and (warehouse) reconcile & close the PO — which
-// freezes the snapshot onto it. See docs/context/purchase-orders.md.
+// overage / wrong-size / wrong-sku), leave a note explaining the outcome, copy a
+// discrepancy report to send the supplier in the group chat, and reconcile & close
+// the PO — which freezes the snapshot onto it. See docs/context/purchase-orders.md.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -42,7 +42,6 @@ export function poChip(status, rc) {
   return { cls: 'ok', label: 'Matched · ready to close' };
 }
 
-// Worst-first, so a SKU group inherits the flag that most needs attention.
 // The PO tag is usually just the supplier's name again — printing both gives you
 // "Andrew · Andrew". Only show it when it actually says something new.
 const tagOf = (po) => {
@@ -50,6 +49,7 @@ const tagOf = (po) => {
   return t && t.toLowerCase() !== String(po?.supplier_name || '').trim().toLowerCase() ? t : '';
 };
 
+// Worst-first, so a SKU group inherits the flag that most needs attention.
 const SEVERITY = ['shortage', 'wrong_sku', 'overage', 'wrong_size', 'match'];
 const worstFlag = (rows) => SEVERITY.find((f) => rows.some((r) => r.flag === f)) || 'match';
 
@@ -68,20 +68,26 @@ function groupBySku(rows) {
   return [...out.values()].map((g) => ({ ...g, flag: worstFlag(g.sizes) }));
 }
 
-// Plain-text discrepancy report for the group chat.
-function buildReport(po, rows, summary) {
+// Plain-text discrepancy report for the group chat. `note` is the reconciliation note —
+// appended so the copied message already carries the explanation instead of the sender
+// retyping it underneath.
+function buildReport(po, rows, summary, note) {
+  const tail = (lines) => {
+    const n = String(note || '').trim();
+    if (n) lines.push('', `Note: ${n}`);
+    return lines.join('\n');
+  };
   const bad = rows.filter((r) => r.flag !== 'match');
   // Received with no manifest: nothing was declared, so a per-line "not on PO" list is
   // noise — report the totals and that it was received blind instead.
   if (summary.no_manifest) {
-    const lines = [`${po.po_code} · ${po.supplier_name}`,
+    return tail([`${po.po_code} · ${po.supplier_name}`,
       `No manifest was provided for this shipment — received blind.`,
-      `${summary.received_units} unit${summary.received_units === 1 ? '' : 's'} received and logged; none were pre-declared, so nothing is flagged as a discrepancy.`];
-    return lines.join('\n');
+      `${summary.received_units} unit${summary.received_units === 1 ? '' : 's'} received and logged; none were pre-declared, so nothing is flagged as a discrepancy.`]);
   }
   const lines = [`${po.po_code} · ${po.supplier_name}`,
     `Received ${summary.received_units} of ${summary.expected_units} expected units.`];
-  if (bad.length === 0) { lines.push('All items matched — no discrepancies. ✅'); return lines.join('\n'); }
+  if (bad.length === 0) { lines.push('All items matched — no discrepancies. ✅'); return tail(lines); }
   lines.push('', 'Discrepancies:');
   for (const r of bad) {
     const label = r.flag === 'shortage' ? `short ${r.expected - r.received}`
@@ -91,7 +97,7 @@ function buildReport(po, rows, summary) {
     lines.push(`- ${r.sku} size ${r.size}: ${label} (expected ${r.expected}, got ${r.received})`);
   }
   if (summary.match) lines.push('', `Matched: ${summary.match} line${summary.match === 1 ? '' : 's'}.`);
-  return lines.join('\n');
+  return tail(lines);
 }
 
 export function Reconciliation({ canReconcile, onHome, onSignOut }) {
@@ -107,6 +113,9 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   const [copied, setCopied] = useState(false);
   const [bySku, setBySku] = useState(false);     // opt-in: one row per SKU + size chips
   const [showMatched, setShowMatched] = useState(false); // matched lines stay folded away
+  const [note, setNote] = useState('');          // draft text of the reconciliation note
+  const [noteSaved, setNoteSaved] = useState(''); // what's on the server, to detect edits
+  const [noteBusy, setNoteBusy] = useState(false);
 
   const loadList = () => {
     api.poReconcileList()
@@ -117,12 +126,30 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
 
   const open = (id) => {
     setOpenId(id); setDetail(null); setError(''); setCopied(false); setShowMatched(false);
+    setNote(''); setNoteSaved('');
     api.poReconciliation(id)
-      .then((r) => setDetail({
-        po: r.po, rows: r.rows, summary: r.summary,
-        intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
-      }))
+      .then((r) => {
+        setDetail({
+          po: r.po, rows: r.rows, summary: r.summary,
+          intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
+        });
+        setNote(r.po.reconcile_note || ''); setNoteSaved(r.po.reconcile_note || '');
+      })
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
+  };
+
+  const saveNote = async () => {
+    setNoteBusy(true);
+    try {
+      const r = await api.poSaveNote(openId, note);
+      setNoteSaved(r.reconcile_note || '');
+      setNote(r.reconcile_note || '');
+      setDetail((d) => ({ ...d, po: { ...d.po,
+        reconcile_note: r.reconcile_note, reconcile_note_by: r.reconcile_note_by,
+        reconcile_note_at: r.reconcile_note_at } }));
+      loadList(); // keep the list card's preview in step
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setNoteBusy(false); }
   };
 
   const doReconcile = async () => {
@@ -147,7 +174,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   };
 
   const copyReport = async () => {
-    const ok = await copyToClipboard(buildReport(detail.po, detail.rows, detail.summary));
+    const ok = await copyToClipboard(buildReport(detail.po, detail.rows, detail.summary, noteSaved));
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1800); }
   };
 
@@ -182,6 +209,11 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                         {tagOf(p) && <span>{tagOf(p)}</span>}
                         <span>{units}</span>
                       </div>
+                      {p.reconcile_note && (
+                        <div className="rcn-note-peek">
+                          <Icon name="reconcile" /> {p.reconcile_note}
+                        </div>
+                      )}
                     </button>
                   );
                 })}
@@ -295,6 +327,35 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                   </button>
                 )}
                 {matched.length > 0 && (blind || showMatched) && renderRows(matched)}
+              </div>
+            </div>
+
+            {/* The "why" behind the numbers. Editable at any status — the resolution
+                (credit agreed, missing pair found) usually lands days after the count,
+                often once the PO is already reconciled or archived. The supplier sees
+                this read-only in their portal, so it doubles as the message to them. */}
+            <div className="card rcn-note">
+              <div className="rcn-note-head">
+                <h4 className="rows-title">Note</h4>
+                {po.reconcile_note_by && po.reconcile_note_at && (
+                  <span className="muted xs">
+                    {po.reconcile_note_by} · {String(po.reconcile_note_at).slice(0, 10)}
+                  </span>
+                )}
+              </div>
+              <textarea
+                className="rcn-note-input"
+                rows={3}
+                maxLength={2000}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="What happened, and what was agreed? e.g. “Size 10.5 shipped separately, ETA Thursday — Andrew confirmed.” The supplier can see this."
+              />
+              <div className="rcn-note-foot">
+                <span className="muted xs">Visible to the supplier · {2000 - note.length} left</span>
+                <button className="btn ghost sm" disabled={noteBusy || note === noteSaved} onClick={saveNote}>
+                  {noteBusy ? 'Saving…' : note === noteSaved ? 'Saved ✓' : 'Save note'}
+                </button>
               </div>
             </div>
 

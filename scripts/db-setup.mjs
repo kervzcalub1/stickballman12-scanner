@@ -545,6 +545,15 @@ await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_manifest_s
 // this partial index keeps one line per (PO, sku, size) for the whole-order manifest.
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_size_idx ON po_lines (po_id, sku, size) WHERE po_box_id IS NULL`);
 
+// Reconciliation note — the "why" behind a PO's outcome (what the supplier said about a
+// shortage, what was credited, why it was closed out). One editable note per PO, written by
+// warehouse/PH and shown READ-ONLY to the supplier, so it doubles as the message to them.
+// `_by` stores the staff display name for the internal byline; the supplier's endpoints strip
+// it and show a generic "From <business>" instead (they never see individual staff names).
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS reconcile_note TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS reconcile_note_by TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS reconcile_note_at TIMESTAMPTZ`);
+
 // Link the received receiving-batch back to its PO (set on scan-in). Reconciliation
 // joins po_lines (expected) against items under this batch (actual), by (sku, size).
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id)`);

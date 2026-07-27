@@ -14,7 +14,7 @@ import {
 } from '../_lib/util.js';
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
-  addSupplier, getPo, markPoReceiving, dbConfigured,
+  addSupplier, getPo, markPoReceiving, autoReconcileIfClean, dbConfigured,
 } from '../_lib/db.js';
 import { enrichGlobalIndicators } from '../_lib/intake.js';
 
@@ -141,7 +141,11 @@ export default async function handler(req, res) {
   try {
     const batch = await createBatch(bh, createdBy);
     // Link + advance the PO (best-effort — the batch is already saved).
-    if (poId) markPoReceiving(poId, batch.id).catch((e) => console.warn('[commit] markPoReceiving:', e.message));
+    // Kept as a promise (not fire-and-forget) so the auto-reconcile below runs only
+    // after the PO is actually on 'receiving' with its batch linked.
+    const poMarked = poId
+      ? markPoReceiving(poId, batch.id).catch((e) => { console.warn('[commit] markPoReceiving:', e.message); throw e; })
+      : null;
     // Auto-save the supplier name so custom vendors (e.g. "JD Sports") show up in
     // the dropdown next time. Best-effort — never fail the commit over this.
     if (kind === 'receiving' && bh.supplier) addSupplier(bh.supplier, createdBy).catch(() => {});
@@ -173,6 +177,12 @@ export default async function handler(req, res) {
     if (kind !== 'instore') {
       enrichGlobalIndicators(created, items)
         .catch((e) => console.warn('[batches/commit] GI enrichment failed:', e.message));
+    }
+    // A PO that came in with zero discrepancies closes itself out rather than
+    // parking in the reconcile queue. Anything short/over/blind stays for a human.
+    if (poMarked) {
+      poMarked.then(() => autoReconcileIfClean(poId))
+        .catch((e) => console.warn('[batches/commit] auto-reconcile skipped:', e.message));
     }
     return;
   } catch (e) {

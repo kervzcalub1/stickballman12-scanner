@@ -2,7 +2,7 @@
 // Manually finish ('done' → committed) or reopen ('open') a multi-box batch —
 // staff override of the auto-complete. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { setBatchStatus, getBatchWithBoxes, dbConfigured } from '../_lib/db.js';
+import { setBatchStatus, getBatchWithBoxes, autoReconcileIfClean, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -20,6 +20,12 @@ export default async function handler(req, res) {
     const found = await getBatchWithBoxes(id);
     if (!found || found.batch.kind !== 'receiving') return send(res, 404, { ok: false, error: 'Batch not found.' });
     await setBatchStatus(id, status);
+    // Finishing a batch by hand is the same signal as auto-complete: if the PO came
+    // out clean it closes itself instead of parking in the reconcile queue.
+    if (status === 'done' && found.batch.po_id) {
+      await autoReconcileIfClean(Number(found.batch.po_id))
+        .catch((e) => console.warn('[batches/set-status] auto-reconcile skipped:', e.message));
+    }
     return send(res, 200, { ok: true });
   } catch (e) {
     console.error('[batches/set-status]', e.message);

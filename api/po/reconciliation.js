@@ -2,7 +2,7 @@
 // The expected-vs-received table + summary for a PO (computed on demand). If the
 // PO is already reconciled, the frozen snapshot is on the PO too (po.reconciliation).
 import { send, applySecurity, requireRole } from '../_lib/util.js';
-import { getPoReconciliation, dbConfigured } from '../_lib/db.js';
+import { getPoReconcileState, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -14,9 +14,12 @@ export default async function handler(req, res) {
   if (!Number.isInteger(poId)) return send(res, 400, { ok: false, error: 'A valid poId is required.' });
 
   try {
-    const data = await getPoReconciliation(poId);
-    if (!data) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
-    return send(res, 200, { ok: true, ...data });
+    // One read for both the table and the "is anything still coming?" flags the
+    // header chip needs to distinguish "still receiving" from "genuinely done".
+    const st = await getPoReconcileState(poId);
+    if (!st) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
+    const { intakeDone, awaitingBoxes, ...data } = st;
+    return send(res, 200, { ok: true, ...data, intake_done: intakeDone, awaiting_boxes: awaitingBoxes });
   } catch (e) {
     console.error('[po/reconciliation]', e.message);
     return send(res, 500, { ok: false, error: 'Could not compute the reconciliation.' });

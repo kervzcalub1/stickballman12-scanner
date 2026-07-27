@@ -23,6 +23,51 @@ function flagText(r) {
   return FLAG[r.flag]?.label || r.flag;
 }
 
+// What the chip should actually SAY. "To reconcile" on a 13-of-13 all-matched PO is
+// noise — it reads as a chore when there's nothing to decide. So name the real state:
+// what's wrong, or what's still on its way, or that it's done.
+//   rc = { clean, no_manifest, shortage, overage, wrong_size, wrong_sku,
+//          expected_units, received_units, intake_done, awaiting_boxes }
+export function poChip(status, rc) {
+  if (status === 'reconciled') return { cls: 'ok', label: 'Reconciled' };
+  if (status === 'closed') return { cls: 'muted', label: 'Archived' };
+  if (!rc) return { cls: 'receiving', label: 'To reconcile' };
+  if (!rc.intake_done) return { cls: 'receiving', label: 'Receiving' };
+  if (rc.no_manifest) return { cls: 'warn', label: 'Received blind' };
+  const issues = (rc.shortage || 0) + (rc.overage || 0) + (rc.wrong_size || 0) + (rc.wrong_sku || 0);
+  if (issues) return { cls: 'bad', label: `${issues} discrepanc${issues === 1 ? 'y' : 'ies'}` };
+  // Clean, but auto-reconcile held off because a label hasn't left the supplier yet —
+  // more units are still due, so closing now would freeze an incomplete picture.
+  if (rc.awaiting_boxes) return { cls: 'receiving', label: 'Boxes still out' };
+  return { cls: 'ok', label: 'Matched · ready to close' };
+}
+
+// Worst-first, so a SKU group inherits the flag that most needs attention.
+// The PO tag is usually just the supplier's name again — printing both gives you
+// "Andrew · Andrew". Only show it when it actually says something new.
+const tagOf = (po) => {
+  const t = String(po?.tag_code || '').trim();
+  return t && t.toLowerCase() !== String(po?.supplier_name || '').trim().toLowerCase() ? t : '';
+};
+
+const SEVERITY = ['shortage', 'wrong_sku', 'overage', 'wrong_size', 'match'];
+const worstFlag = (rows) => SEVERITY.find((f) => rows.some((r) => r.flag === f)) || 'match';
+
+// Collapse the per-size rows into one row per SKU: the product name is printed once
+// and each size becomes a chip. Kills the repetition when a PO carries the same shoe
+// in several sizes (the flat list repeats the full name on every one).
+function groupBySku(rows) {
+  const out = new Map();
+  for (const r of rows) {
+    const k = r.sku || '—';
+    if (!out.has(k)) out.set(k, { sku: k, name: r.name, expected: 0, received: 0, sizes: [] });
+    const g = out.get(k);
+    g.expected += r.expected; g.received += r.received; g.sizes.push(r);
+    if (!g.name && r.name) g.name = r.name;
+  }
+  return [...out.values()].map((g) => ({ ...g, flag: worstFlag(g.sizes) }));
+}
+
 // Plain-text discrepancy report for the group chat.
 function buildReport(po, rows, summary) {
   const bad = rows.filter((r) => r.flag !== 'match');
@@ -60,6 +105,8 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   const [detail, setDetail] = useState(null); // { po, rows, summary }
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [bySku, setBySku] = useState(false);     // opt-in: one row per SKU + size chips
+  const [showMatched, setShowMatched] = useState(false); // matched lines stay folded away
 
   const loadList = () => {
     api.poReconcileList()
@@ -69,9 +116,12 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   useEffect(loadList, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = (id) => {
-    setOpenId(id); setDetail(null); setError(''); setCopied(false);
+    setOpenId(id); setDetail(null); setError(''); setCopied(false); setShowMatched(false);
     api.poReconciliation(id)
-      .then((r) => setDetail({ po: r.po, rows: r.rows, summary: r.summary }))
+      .then((r) => setDetail({
+        po: r.po, rows: r.rows, summary: r.summary,
+        intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
+      }))
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
 
@@ -80,7 +130,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
     setBusy(true);
     try {
       const r = await api.poReconcile(openId);
-      setDetail({ po: r.po, rows: r.rows, summary: r.summary });
+      setDetail((d) => ({ ...d, po: r.po, rows: r.rows, summary: r.summary }));
       loadList();
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
@@ -112,19 +162,29 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
             : pos.length === 0 ? <div className="card empty-state">No received purchase orders yet. Reconciliation shows up here once a PO has been received against.</div>
             : (
               <div className="po-list">
-                {pos.map((p) => (
-                  <button key={p.id} className="po-card" onClick={() => open(p.id)}>
-                    <div className="po-card-top">
-                      <span className="po-code">{p.po_code}</span>
-                      <span className={`po-chip ${p.status === 'reconciled' ? 'ok' : 'receiving'}`}>{p.status === 'reconciled' ? 'Reconciled' : 'To reconcile'}</span>
-                    </div>
-                    <div className="po-card-meta">
-                      <span>{p.supplier_name}</span>
-                      {p.tag_code && <span>{p.tag_code}</span>}
-                      <span>{p.unit_count} expected unit{p.unit_count === 1 ? '' : 's'}</span>
-                    </div>
-                  </button>
-                ))}
+                {pos.map((p) => {
+                  const chip = poChip(p.status, p.rc);
+                  // "3 of 0 units received" is nonsense on a blind receipt — nothing was
+                  // ever declared to count against.
+                  const units = !p.rc || p.rc.expected_units == null
+                    ? `${p.unit_count} expected unit${p.unit_count === 1 ? '' : 's'}`
+                    : p.rc.no_manifest
+                      ? `${p.rc.received_units} unit${p.rc.received_units === 1 ? '' : 's'} received · no manifest`
+                      : `${p.rc.received_units} of ${p.rc.expected_units} unit${p.rc.expected_units === 1 ? '' : 's'} received`;
+                  return (
+                    <button key={p.id} className="po-card" onClick={() => open(p.id)}>
+                      <div className="po-card-top">
+                        <span className="po-code">{p.po_code}</span>
+                        <span className={`po-chip ${chip.cls}`}>{chip.label}</span>
+                      </div>
+                      <div className="po-card-meta">
+                        <span>{p.supplier_name}</span>
+                        {tagOf(p) && <span>{tagOf(p)}</span>}
+                        <span>{units}</span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             )}
         </div>
@@ -134,6 +194,51 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
 
   // ---- Detail ----
   const po = detail?.po; const s = detail?.summary;
+  // Received blind: nothing was declared, so nothing is a "discrepancy" — every line is
+  // just a receipt and the problems/matched split doesn't apply.
+  const blind = !!s?.no_manifest;
+  const headChip = poChip(po?.status, s && {
+    ...s, intake_done: detail?.intakeDone, awaiting_boxes: detail?.awaitingBoxes,
+  });
+  // Group BEFORE the problem/matched split, so a SKU that's short in one size and fine
+  // in another lands in the problem section once (with every size chip) instead of
+  // being torn in half across the two sections.
+  const allRows = bySku ? groupBySku(detail?.rows || []) : (detail?.rows || []);
+  const problems = blind ? [] : allRows.filter((r) => r.flag !== 'match');
+  const matched = blind ? allRows : allRows.filter((r) => r.flag === 'match');
+
+  // One line: flat (per size) or grouped (per SKU, sizes as chips).
+  const renderRow = (r, key) => (
+    <div className={`rcn-row ${r.flag}`} key={key}>
+      <div className="rcn-main">
+        <div className="rcn-id">
+          <b>{r.sku || '—'}</b>
+          {!bySku && <span className="rcn-size">size {r.size}</span>}
+        </div>
+        {r.name && r.name !== r.sku && <div className="rcn-name">{r.name}</div>}
+        {bySku && (
+          <div className="rcn-chips">
+            {r.sizes.map((z, i) => (
+              <span className={`rcn-chip ${z.flag}`} key={i}>
+                {z.size}<i>{z.received}/{z.expected}</i>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="rcn-right">
+        <div className="rcn-qty"><b>{r.received}</b><span>/{r.expected}</span></div>
+        <div className="rcn-status">
+          {blind ? <span className="po-flag">Received</span>
+            : r.flag === 'match' ? <span className="rcn-tick" title="Match">✓</span>
+            : <span className={`po-flag ${FLAG[r.flag]?.cls || ''}`}>{bySku ? FLAG[r.flag]?.label : flagText(r)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderRows = (list) => list.map((r, i) => renderRow(r, `${r.sku || '—'}-${r.size ?? 'g'}-${i}`));
+
   return (
     <div className="app">
       <TopBar title={po ? po.po_code : 'Reconciliation'} onHome={onHome} onSignOut={onSignOut}
@@ -144,22 +249,22 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
           <>
             <div className="card">
               <div className="po-card-top">
-                <h3 className="rows-title">{po.po_code}{po.tag_code ? ` · ${po.tag_code}` : ''}</h3>
-                <span className={`po-chip ${po.status === 'reconciled' ? 'ok' : 'receiving'}`}>{po.status === 'reconciled' ? 'Reconciled' : 'To reconcile'}</span>
+                <h3 className="rows-title">{po.po_code}{tagOf(po) ? ` · ${tagOf(po)}` : ''}</h3>
+                <span className={`po-chip ${headChip.cls}`}>{headChip.label}</span>
               </div>
               <p className="muted sm">{po.supplier_name} · received <b>{s.received_units}</b> of <b>{s.expected_units}</b> expected units</p>
-              {s.no_manifest ? (
-                <p className="rc-no-manifest sm">
+              {blind ? (
+                <p className="rcn-no-manifest sm">
                   <b>No manifest provided.</b> The supplier didn’t scan out and no one entered a manifest on their behalf, so every received unit is logged but nothing is flagged as a discrepancy. The items below are what the warehouse actually received.
                 </p>
               ) : (
-                <div className="rc-summary">
-                  {s.match ? <span className="po-flag ok">{s.match} match</span> : null}
+                <div className="rcn-summary">
+                  {s.clean ? <span className="po-flag ok">All {s.match} lines matched ✓</span> : null}
+                  {!s.clean && s.match ? <span className="po-flag ok">{s.match} match</span> : null}
                   {s.shortage ? <span className="po-flag bad">{s.shortage} short</span> : null}
                   {s.overage ? <span className="po-flag warn">{s.overage} over</span> : null}
                   {s.wrong_size ? <span className="po-flag warn">{s.wrong_size} wrong size</span> : null}
                   {s.wrong_sku ? <span className="po-flag bad">{s.wrong_sku} not on PO</span> : null}
-                  {s.clean ? <span className="po-flag ok">All matched ✓</span> : null}
                 </div>
               )}
               {po.manifest_scope === 'po' && !s.no_manifest && (
@@ -168,27 +273,47 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
             </div>
 
             <div className="card">
-              <div className="rc-table">
-                <div className="rc-row rc-head">
-                  <span>SKU / size</span><span className="rc-n">Exp</span><span className="rc-n">Got</span><span className="rc-flag">Status</span>
+              <div className="rcn-toolbar">
+                <span className="rcn-head-lbl">SKU / size</span>
+                <div className="rcn-seg">
+                  <button className={bySku ? '' : 'on'} onClick={() => setBySku(false)}>By size</button>
+                  <button className={bySku ? 'on' : ''} onClick={() => setBySku(true)}>By SKU</button>
                 </div>
-                {detail.rows.map((r, i) => (
-                  <div className={`rc-row ${r.flag}`} key={i}>
-                    <span className="rc-item"><b>{r.sku || '—'}</b> · size {r.size}<span className="muted rc-name"> · {r.name}</span></span>
-                    <span className="rc-n">{r.expected}</span>
-                    <span className="rc-n">{r.received}</span>
-                    <span className="rc-flag">{s.no_manifest
-                      ? <span className="po-flag">Received</span>
-                      : <span className={`po-flag ${FLAG[r.flag]?.cls || ''}`}>{flagText(r)}</span>}</span>
-                  </div>
-                ))}
+                <span className="rcn-head-qty">Got / exp</span>
+              </div>
+
+              <div className="rcn-table">
+                {problems.length > 0 && renderRows(problems)}
+
+                {/* Matched lines are the boring majority — folded away so the eye lands on
+                    the discrepancies (or, on a clean PO, on nothing at all). A blind receipt
+                    has no matched/problem split, so its lines are simply always shown. */}
+                {matched.length > 0 && !blind && (
+                  <button className="rcn-fold" onClick={() => setShowMatched((v) => !v)}>
+                    <span>{matched.length} {bySku ? 'SKU' : 'line'}{matched.length === 1 ? '' : 's'} matched ✓</span>
+                    <span className="rcn-fold-cta">{showMatched ? 'Hide ▴' : 'Show ▾'}</span>
+                  </button>
+                )}
+                {matched.length > 0 && (blind || showMatched) && renderRows(matched)}
               </div>
             </div>
 
-            <div className="rc-actions">
+            <div className="rcn-actions">
               <button className="btn ghost" onClick={copyReport}>{copied ? 'Copied ✓' : 'Copy report'}</button>
               {canReconcile && po.status === 'receiving' && (
-                <button className="btn primary" disabled={busy} onClick={doReconcile}>{busy ? 'Reconciling…' : 'Reconcile & close'}</button>
+                <button className="btn primary" disabled={busy} onClick={doReconcile}>
+                  {busy ? 'Closing…' : s?.clean && !blind ? 'Confirm & close' : 'Reconcile & close'}
+                </button>
+              )}
+              {/* Closing mid-intake freezes a snapshot that's missing whatever hasn't
+                  arrived yet — worth saying out loud, not blocking. */}
+              {canReconcile && po.status === 'receiving' && (detail?.intakeDone === false || detail?.awaitingBoxes) && (
+                <p className="muted xs rcn-warn">
+                  {detail.intakeDone === false
+                    ? 'The receiving batch is still open — more units may still be scanned in.'
+                    : 'A label hasn’t left the supplier yet — more units are still due.'}
+                  {' '}Closing now freezes the count as it stands.
+                </p>
               )}
               {po.status === 'reconciled' && po.reconciled_at && (
                 <span className="muted sm"><Icon name="reconcile" /> Reconciled {String(po.reconciled_at).slice(0, 10)}</span>

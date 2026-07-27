@@ -62,7 +62,9 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'postatus') return <PoOverview onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'reconcile') return <Reconciliation canReconcile={false} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  // PH closes out the stragglers too — they're the ones chasing the supplier over a
+  // shortage, so making them wait on warehouse just parked POs in the queue.
+  if (page === 'reconcile') return <Reconciliation canReconcile onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">

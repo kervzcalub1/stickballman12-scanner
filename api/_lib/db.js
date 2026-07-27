@@ -2091,6 +2091,27 @@ export async function autoReconcileIfClean(poId) {
   return snap;
 }
 
+// Auto-close if we can; otherwise describe what's wrong so the caller can tell whoever
+// just finished receiving, right there on the "batch saved" screen. That's the one moment
+// the warehouse is guaranteed to be looking — a Home badge only works if they go back and
+// notice, and a shortage needs someone to message the supplier today.
+// Returns null when there's nothing to say (auto-closed, or intake isn't finished yet).
+export async function reconcileOutcomeForIntake(poId) {
+  if (await autoReconcileIfClean(poId)) return null;
+  const st = await getPoReconcileState(poId);
+  if (!st || st.po.status !== 'receiving' || !st.intakeDone) return null;
+  const s = st.summary;
+  if (!s) return null;
+  const issues = s.shortage + s.overage + s.wrong_size + s.wrong_sku;
+  if (!issues && !s.no_manifest) return null;   // clean but a label is still out — not news
+  return {
+    poId: Number(st.po.id), poCode: st.po.po_code, supplierName: st.po.supplier_name,
+    issues, shortage: s.shortage, overage: s.overage, wrongSize: s.wrong_size,
+    wrongSku: s.wrong_sku, noManifest: s.no_manifest,
+    expectedUnits: s.expected_units, receivedUnits: s.received_units,
+  };
+}
+
 // POs that have been received and are awaiting / have a reconciliation. Explicit column
 // list on purpose: `p.*` dragged the whole `reconciliation` snapshot (every row of every
 // closed PO) into a list that only needs its summary.

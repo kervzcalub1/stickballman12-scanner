@@ -7,7 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { getUser, clearAuth, api } from './api.js';
 import { isUnsavedDirty } from './hooks.js';
 import { pathForView, viewForPath } from './lib/constants.js';
-import { clearQuery } from './lib/urlstate.js';
+import { clearQuery, writeParam } from './lib/urlstate.js';
 import { setMarkupPct } from './lib/config.js';
 import { Auth, ForcedPasswordChange } from './screens/Auth.jsx';
 import { Home } from './screens/Home.jsx';
@@ -139,7 +139,10 @@ export default function App() {
     else clearQuery();
   };
   const openItem = (vin) => { setOpenVin(vin); go('inventory'); };
-  if (view === 'receiving') return <Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />;
+  // Jump straight from "batch saved, but this PO is 2 short" into that PO's report.
+  // go() lands on /reconcile and clears the query, so the ?po= is written after.
+  const openReconcile = (poId) => { setBatchContext(null); go('reconcile'); writeParam('po', poId); };
+  if (view === 'receiving') return <Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onOpenReconcile={openReconcile} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />;
   if (view === 'rescale') return <Receiving mode="rescale" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
   // In-store buying: admin/warehouse only. ph_team never reaches here (they short-
   // circuit to PHTeamApp above), so the normal Home/router already gates it.

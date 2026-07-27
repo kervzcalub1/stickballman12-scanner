@@ -20,7 +20,38 @@ const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 // Monotonic key source for the cart's React lists (unique among siblings).
 let cartKey = 1;
 
-export function Receiving({ mode = 'receiving', navBack, batchContext = null, onBatchDone, onOpenItem, onHome, onSignOut }) {
+// Shown on the "batch saved" modal when the PO it was received against doesn't add up.
+// Reconciliation is shared between warehouse and PH — whoever is standing here can open
+// the report and message the supplier, so this states the problem and hands over a link
+// rather than assuming an owner.
+function ReconcileAlert({ rc, onOpen }) {
+  const parts = [];
+  if (rc.shortage) parts.push(`${rc.shortage} short`);
+  if (rc.overage) parts.push(`${rc.overage} over`);
+  if (rc.wrongSize) parts.push(`${rc.wrongSize} wrong size`);
+  if (rc.wrongSku) parts.push(`${rc.wrongSku} not on the PO`);
+  return (
+    <div className="po-mismatch">
+      <div className="po-mismatch-top">
+        <b>{rc.poCode} doesn’t match the manifest</b>
+        <span className="po-flag bad">{rc.noManifest ? 'No manifest' : parts.join(' · ')}</span>
+      </div>
+      <p className="muted sm">
+        {rc.noManifest
+          ? `${rc.receivedUnits} unit${rc.receivedUnits === 1 ? '' : 's'} received with nothing declared — received blind.`
+          : `Received ${rc.receivedUnits} of ${rc.expectedUnits} expected units from ${rc.supplierName}.`}
+        {' '}Someone needs to tell the supplier — warehouse or PH, whoever gets there first.
+      </p>
+      {onOpen && (
+        <button className="btn sm" onClick={() => onOpen(rc.poId)}>
+          <Icon name="reconcile" /> Review &amp; copy the report
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function Receiving({ mode = 'receiving', navBack, batchContext = null, onBatchDone, onOpenItem, onOpenReconcile, onHome, onSignOut }) {
   const isRescale = mode === 'rescale';
   const isInstore = mode === 'instore';
   // No-shipment intake (rescale OR in-store buying): no supplier/buyer/tracking and
@@ -649,8 +680,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   async function finishBatchNow() {
     if (!activeBatch) return;
     setCommitting(true);
-    try { await persistBoxSlots(activeBatch.id); await api.batchSetStatus(activeBatch.id, 'done'); onBatchDone ? onBatchDone() : onHome?.(); }
-    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    try {
+      await persistBoxSlots(activeBatch.id);
+      const res = await api.batchSetStatus(activeBatch.id, 'done');
+      // Don't navigate away on a discrepancy — hold them here to say the PO came up
+      // short, since this is the last moment they're guaranteed to be looking.
+      if (res?.reconcile) { setResult({ batchCode: activeBatch.batchCode, finishOnly: true, reconcile: res.reconcile }); return; }
+      onBatchDone ? onBatchDone() : onHome?.();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setCommitting(false); }
   }
 
@@ -730,10 +767,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
             ? { ...s, status: 'received', boxNumber: box.box_number, itemCount: res.count || 0 } : s)));
           setActiveSlot(null); setStep(1);
-          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, inBatchList: true, autoCompleted: res.autoCompleted });
+          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, inBatchList: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile });
         } else {
           setStep(1);
-          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, autoCompleted: res.autoCompleted });
+          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile });
         }
         return;
       }
@@ -782,6 +819,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         rescaledCount: rescaledDone,
         vins: batchRes?.vins || [],
         printItems,
+        reconcile: batchRes?.reconcile || null,
       });
       setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); setStep(1);
       setHeader((h) => ({ ...h, tracking: '', notes: '', specialRules: '' })); // keep buyer/supplier/date/cost
@@ -1371,9 +1409,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
       {result && (
         <Modal type="success"
-          title={result.boxCommit
-            ? (result.autoCompleted ? `Box saved · ${result.batchCode} complete ✓` : `Box saved to ${result.batchCode}`)
-            : (result.batchCode ? `Batch ${result.batchCode} saved` : 'Rescale saved')}
+          title={result.finishOnly ? `${result.batchCode} finished`
+            : result.boxCommit
+              ? (result.autoCompleted ? `Box saved · ${result.batchCode} complete ✓` : `Box saved to ${result.batchCode}`)
+              : (result.batchCode ? `Batch ${result.batchCode} saved` : 'Rescale saved')}
           message={[
             result.rescaledCount ? `${result.rescaledCount} existing unit(s) rescanned & updated.` : '',
             result.newCount ? `${result.newCount} new item(s) recorded — VINs ${result.vins?.[0]}…${result.vins?.[result.vins.length - 1]}.` : '',
@@ -1381,20 +1420,27 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               ? (result.inBatchList ? 'Back to the box list to scan the next box.' : 'Add the next box from the Batches page.') : '',
           ].filter(Boolean).join(' ')}
           onClose={() => {
+            if (result.finishOnly) { onBatchDone ? onBatchDone() : onHome?.(); return; }
             if (result.inBatchList) { if (result.autoCompleted) (onBatchDone ? onBatchDone() : onHome?.()); else setResult(null); }
             else if (result.boxCommit) onBatchDone?.();
             else setResult(null);
           }}>
+          {/* The PO didn't add up. Say it here — this is the last moment the person who
+              received it is guaranteed to be looking, and a shortage needs someone to
+              message the supplier today. Either team can pick it up from the report. */}
+          {result.reconcile && <ReconcileAlert rc={result.reconcile} onOpen={onOpenReconcile} />}
           {result.printItems?.length > 0 && (
             <button className="btn primary" onClick={() => setPrintLabels({ batchCode: result.batchCode, items: result.printItems })}><Icon name="print" /> Print labels</button>
           )}
-          {result.inBatchList
-            ? (result.autoCompleted
-                ? <button className="btn ghost" onClick={() => (onBatchDone ? onBatchDone() : onHome?.())}>Done</button>
-                : <button className="btn ghost" onClick={() => setResult(null)}>← Box list</button>)
-            : result.boxCommit
-              ? <button className="btn ghost" onClick={() => onBatchDone?.()}>← Back to Batches</button>
-              : <button className="btn ghost" onClick={() => setResult(null)}>Start another</button>}
+          {result.finishOnly
+            ? <button className="btn ghost" onClick={() => (onBatchDone ? onBatchDone() : onHome?.())}>Done</button>
+            : result.inBatchList
+              ? (result.autoCompleted
+                  ? <button className="btn ghost" onClick={() => (onBatchDone ? onBatchDone() : onHome?.())}>Done</button>
+                  : <button className="btn ghost" onClick={() => setResult(null)}>← Box list</button>)
+              : result.boxCommit
+                ? <button className="btn ghost" onClick={() => onBatchDone?.()}>← Back to Batches</button>
+                : <button className="btn ghost" onClick={() => setResult(null)}>Start another</button>}
         </Modal>
       )}
 

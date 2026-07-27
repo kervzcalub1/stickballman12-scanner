@@ -85,6 +85,16 @@ labels** (one tracking number each); it closes only when every label is shipped.
     PO), attributed to the business — `po/get` and `po/list` **strip `reconcile_note_by`** for
     supplier scope, exactly like the on-behalf line attribution; the timestamp is kept.
     **Schema-touch: `purchase_orders.reconcile_note` + `_by` + `_at` → run `db:setup`.**
+  - **The warehouse is told at the moment of intake, not just by a badge.** Reconciliation is
+    shared between warehouse and PH (whoever gets to the supplier first), so discovery can't
+    rely on someone wandering back to Home. `reconcileOutcomeForIntake(poId)` = auto-close if
+    clean, else describe what's wrong; `batches/commit`, `box-commit` (on `autoCompleted`) and
+    `set-status` ('done') **await it before responding** and return it as `reconcile`. The
+    "batch saved" modal then renders a red **`<ReconcileAlert>`** — "PO-100037 doesn't match the
+    manifest · 1 short" + a **Review & copy the report** button that deep-links to
+    `/reconcile?po=<id>` (`onOpenReconcile` → `App.jsx`'s `openReconcile`). Returns null (silent)
+    when the PO auto-closed, when intake isn't finished, or when there's no PO at all.
+    Class prefix is **`po-mismatch`**, deliberately not `rc-*` (see the collision above).
   - **Report table UI.** Classes are prefixed **`rcn-`, not `rc-`** — `RescaleRequests.jsx` owns
     `rc-*` and `.rc-item` there paints a bordered card, which drew a stray pill around every SKU
     cell. Rows are two-line (SKU · size, then product name), qty is one `got/exp` cell, and a chip

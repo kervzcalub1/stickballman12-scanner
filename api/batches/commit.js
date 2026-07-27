@@ -14,7 +14,7 @@ import {
 } from '../_lib/util.js';
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
-  addSupplier, getPo, markPoReceiving, autoReconcileIfClean, dbConfigured,
+  addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
 } from '../_lib/db.js';
 import { enrichGlobalIndicators } from '../_lib/intake.js';
 
@@ -163,11 +163,21 @@ export default async function handler(req, res) {
       if (entries.length) await insertIssueEvents(entries, createdBy);
     }
 
+    // Reconcile BEFORE responding when there's a PO: a clean one closes itself, and a
+    // short/over/blind one comes back in the payload so the "batch saved" screen can say
+    // so while the person is still standing over the boxes. Best-effort — a failure here
+    // must never turn a saved batch into an error.
+    const reconcile = poMarked
+      ? await poMarked.then(() => reconcileOutcomeForIntake(poId))
+        .catch((e) => { console.warn('[commit] reconcile outcome:', e.message); return null; })
+      : null;
+
     send(res, 200, {
       ok: true,
       batchCode: batch.batch_code,
       count: created.length,
       vins: created.map((r) => r.vin),
+      reconcile,
     });
 
     // Best-effort, AFTER responding (slow/flaky Alias must never delay the
@@ -177,12 +187,6 @@ export default async function handler(req, res) {
     if (kind !== 'instore') {
       enrichGlobalIndicators(created, items)
         .catch((e) => console.warn('[batches/commit] GI enrichment failed:', e.message));
-    }
-    // A PO that came in with zero discrepancies closes itself out rather than
-    // parking in the reconcile queue. Anything short/over/blind stays for a human.
-    if (poMarked) {
-      poMarked.then(() => autoReconcileIfClean(poId))
-        .catch((e) => console.warn('[batches/commit] auto-reconcile skipped:', e.message));
     }
     return;
   } catch (e) {

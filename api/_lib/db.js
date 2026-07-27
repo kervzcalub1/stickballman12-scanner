@@ -1009,7 +1009,13 @@ export async function pendingCounts() {
       -- blind receipts, and orders with labels still out.
       (SELECT count(*) FROM purchase_orders p
          JOIN batches b ON b.id = p.received_batch_id
-        WHERE p.status = 'receiving' AND b.status = 'committed')::int  AS po_to_reconcile
+        WHERE p.status = 'receiving' AND b.status = 'committed')::int  AS po_to_reconcile,
+      -- The other half: arrived but intake is still open, so it's in-flight rather than a
+      -- chore. Counted separately (neutral badge) instead of folded into the amber one —
+      -- Home still shows that something is happening, without crying wolf.
+      (SELECT count(*) FROM purchase_orders p
+         LEFT JOIN batches b ON b.id = p.received_batch_id
+        WHERE p.status = 'receiving' AND b.status IS DISTINCT FROM 'committed')::int AS po_receiving
     FROM (
       -- not_instore gates the PH store-sync badges only: in-store buys bypass
       -- PH, so they must NOT inflate not_ii/alias/stockx/shopify. needs_shelf /

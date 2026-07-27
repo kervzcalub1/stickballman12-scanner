@@ -85,7 +85,10 @@ export function homeCardBadges(key, c) {
   if (key === 'rescale') return [['Restock', c.restock_pending]];
   if (key === 'instore-listing') return [['Not listed', c.instore_unlisted]];
   if (key === 'rescalereq') return [['Pending', c.rescale_requests], ['Done', c.rescale_requests_audited, 'ok']];
-  if (key === 'reconcile') return [['To reconcile', c.po_to_reconcile]];
+  // Two states, two tones: 'To reconcile' (amber) = intake finished and a human has to
+  // decide something; 'Receiving' (neutral info) = arrived, still being scanned in. Both
+  // hide at 0, so the card still tells you a PO is in flight without dressing it as a chore.
+  if (key === 'reconcile') return [['To reconcile', c.po_to_reconcile], ['Receiving', c.po_receiving, 'info']];
   return [];
 }
 

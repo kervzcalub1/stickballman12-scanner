@@ -9,7 +9,7 @@ import { api } from '../api.js';
 import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, HistoryModal, DateRangeBar, ShoeThumb, CopyText } from '../components/common.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
-import { roleLabel, SYNC_BADGES } from '../lib/constants.js';
+import { roleLabel, SYNC_BADGES, homeCardBadges } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
 import { rangeOf, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
 import {
@@ -114,7 +114,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="reconcile" /></span>
             <span className="home-card-title">PO Reconciliation</span>
             <span className="home-card-sub">Received vs. supplier manifest — copy a discrepancy report to send the supplier</span>
-            <CardBadges badges={counts ? [['To reconcile', counts.po_to_reconcile]] : []} />
+            <CardBadges badges={counts ? homeCardBadges('reconcile', counts) : []} />
           </button>
         </div>
       </section>

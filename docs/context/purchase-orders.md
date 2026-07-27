@@ -68,8 +68,12 @@ labels** (one tracking number each); it closes only when every label is shipped.
     uses, so a badge can never contradict it. `reconcile-list` attaches it per open PO as `rc`
     (closed POs reuse their frozen `reconciliation->'summary'`); `po/reconciliation` returns
     `intake_done`/`awaiting_boxes` for the detail header. New `.po-chip.bad`/`.warn` variants.
-    **`pendingCounts.po_to_reconcile` now requires the receiving batch to be `committed`** — a PO
-    still being scanned in isn't a chore yet, and counting it lit a badge nobody could act on.
+    **The Home badge is split in two** so narrowing it never hides a live PO:
+    `pendingCounts.po_to_reconcile` (amber, intake `committed` — a human must decide) +
+    **`po_receiving`** (neutral `info`, batch not committed — arrived, still being scanned in).
+    They partition the old single `status='receiving'` count exactly. `homeCardBadges('reconcile')`
+    returns both (PHTeam's card now calls it instead of hand-rolling its own badge array); only
+    the amber one feeds Home's "Needs attention" strip.
     Closing mid-intake still works but shows a "closing now freezes the count" note.
   - **Report table UI.** Classes are prefixed **`rcn-`, not `rc-`** — `RescaleRequests.jsx` owns
     `rc-*` and `.rc-item` there paints a bordered card, which drew a stray pill around every SKU

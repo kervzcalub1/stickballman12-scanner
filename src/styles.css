@@ -1917,6 +1917,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    slate, distinct from the amber "Filling" and the orange "In transit". */
 .po-chip.pretransit { background: rgba(120,134,156,0.18); color: #78869c; border-color: rgba(120,134,156,0.42); }
 .po-chip.muted { background: var(--panel-2); color: var(--muted); }
+/* Reconciliation outcomes: bad = discrepancies, warn = received blind. Same tones as
+   the .po-flag badges inside the report so the card and the table agree. */
+.po-chip.bad { background: rgba(213,69,63,0.14); color: var(--err); border-color: rgba(213,69,63,0.35); }
+.po-chip.warn { background: rgba(198,135,26,0.14); color: #c6871a; border-color: rgba(198,135,26,0.35); }
 
 .po-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .po-dropzone {
@@ -2025,25 +2029,67 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-flag.short { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }
 .po-flag.over { color: #c6871a; background: rgba(198,135,26,0.14); border: 1px solid rgba(198,135,26,0.35); }
 
-/* ---- PO Phase 3: reconciliation report ---- */
-.rc-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.rc-no-manifest { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-2, rgba(155,120,230,0.08)); border: 1px solid var(--border); line-height: 1.45; }
+/* ---- PO Phase 3: reconciliation report ----
+   Prefixed `rcn-`, NOT `rc-`: the Rescale-request report above already owns `rc-*`
+   (.rc-item there paints a bordered card), and sharing the prefix drew a stray pill
+   around every SKU cell in this table. Keep the two namespaces apart. */
+.rcn-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.rcn-no-manifest { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-2, rgba(155,120,230,0.08)); border: 1px solid var(--border); line-height: 1.45; }
 .po-flag.ok { color: var(--ok); background: rgba(26,157,99,0.14); border: 1px solid rgba(26,157,99,0.35); }
 /* Reconciliation semantic badges: bad = red (shortage / not-on-PO), warn = amber
    (overage / wrong-size). Match the manifest's .short/.over tones. */
 .po-flag.bad { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }
 .po-flag.warn { color: #c6871a; background: rgba(198,135,26,0.14); border: 1px solid rgba(198,135,26,0.35); }
-.rc-table { display: flex; flex-direction: column; }
-.rc-row { display: grid; grid-template-columns: 1fr 44px 44px auto; gap: 8px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; }
-.rc-row.rc-head { border-top: 0; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-.rc-item { min-width: 0; }
-.rc-name { font-weight: 400; }
-.rc-n { text-align: center; font-variant-numeric: tabular-nums; }
-.rc-flag { text-align: right; }
-.rc-row.shortage, .rc-row.wrong_sku { background: rgba(213,69,63,0.09); }
-.rc-row.overage, .rc-row.wrong_size { background: rgba(198,135,26,0.09); }
-.rc-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; padding-bottom: 24px; }
-.rc-actions .btn { flex: 1; min-width: 160px; }
+
+/* Header strip: column labels + the by-size / by-SKU switch. */
+.rcn-toolbar { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.rcn-head-lbl { flex: 1; min-width: 0; }
+.rcn-head-qty { text-transform: uppercase; }
+.rcn-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.rcn-seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px; letter-spacing: .04em; padding: 4px 11px; min-height: 28px; cursor: pointer; }
+.rcn-seg button.on { background: var(--panel-2); color: var(--text); font-weight: 700; }
+
+.rcn-table { display: flex; flex-direction: column; }
+.rcn-row { display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 12px; border-top: 1px solid var(--border); font-size: 14px; border-left: 2px solid transparent; }
+.rcn-row:first-child { border-top: 0; }
+.rcn-main { flex: 1; min-width: 0; }
+.rcn-right { display: flex; align-items: center; gap: 12px; flex: none; }
+.rcn-id { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.rcn-id b { font-family: ui-monospace, monospace; letter-spacing: -.01em; }
+.rcn-size { color: var(--muted); font-size: 13px; }
+.rcn-name { color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcn-qty { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; color: var(--muted); }
+.rcn-qty b { font-size: 15px; color: var(--text); }
+.rcn-status { text-align: right; min-width: 24px; }
+.rcn-tick { color: var(--ok); font-size: 13px; }
+/* Problem rows earn a coloured spine + wash; matched rows stay quiet. */
+.rcn-row.shortage, .rcn-row.wrong_sku { background: rgba(213,69,63,0.08); border-left-color: var(--err); }
+.rcn-row.overage, .rcn-row.wrong_size { background: rgba(198,135,26,0.08); border-left-color: #c6871a; }
+
+/* Grouped (by SKU) view: one chip per size under the product name. */
+.rcn-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.rcn-chip { display: inline-flex; align-items: baseline; gap: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.rcn-chip i { font-style: normal; font-weight: 400; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rcn-chip.shortage, .rcn-chip.wrong_sku { border-color: rgba(213,69,63,0.45); color: var(--err); }
+.rcn-chip.shortage i, .rcn-chip.wrong_sku i { color: var(--err); opacity: .85; }
+.rcn-chip.overage, .rcn-chip.wrong_size { border-color: rgba(198,135,26,0.45); color: #c6871a; }
+.rcn-chip.overage i, .rcn-chip.wrong_size i { color: #c6871a; opacity: .85; }
+
+/* "13 matched ✓ — Show" disclosure. */
+.rcn-fold { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--muted); font: inherit; font-size: 13px; padding: 11px 10px 11px 12px; min-height: 44px; cursor: pointer; text-align: left; }
+.rcn-table > .rcn-fold:first-child { border-top: 0; }
+.rcn-fold:hover { color: var(--text); }
+.rcn-fold-cta { font-size: 12px; font-weight: 700; }
+
+.rcn-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; padding-bottom: 24px; }
+.rcn-actions .btn { flex: 1; min-width: 160px; }
+.rcn-warn { flex-basis: 100%; margin: 0; line-height: 1.45; }
+
+@media (max-width: 560px) {
+  .rcn-row { gap: 8px; padding: 10px 6px 10px 10px; }
+  .rcn-right { flex-direction: column; align-items: flex-end; gap: 3px; }
+  .rcn-toolbar .rcn-head-qty { display: none; }
+}
 
 /* ---- PO Phase 4: shipment tracking display (supplier view) ---- */
 .po-carrier { font-weight: 600; color: var(--text); }

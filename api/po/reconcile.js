@@ -1,4 +1,4 @@
-// POST /api/po/reconcile  (warehouse / admin)  { poId }
+// POST /api/po/reconcile  (warehouse / ph_team / admin)  { poId }
 // Freezes the current expected-vs-received comparison onto the PO
 // (reconciliation JSONB + reconciled_at) and closes it out → status 'reconciled'.
 // Allowed once the PO has been received against (status 'receiving').
@@ -8,7 +8,7 @@ import { getPo, snapshotReconciliation, dbConfigured } from '../_lib/db.js';
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['warehouse']);
+  const user = requireRole(req, res, ['warehouse', 'ph_team']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 60 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

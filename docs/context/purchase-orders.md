@@ -47,7 +47,37 @@ labels** (one tracking number each); it closes only when every label is shipped.
   (only from `receiving`; 409 otherwise). UI: `Reconciliation.jsx` screen (list → report table
   + summary + **Copy discrepancy report** for the group chat + **Reconcile & close**). Reachable
   from the main Home ("PO Reconciliation", warehouse/admin — full) and PHTeamApp
-  (`/ph/reconciliation`, PH — view + copy only, `canReconcile={false}`).
+  (`/ph/reconciliation`). **PH can reconcile + archive too** (`canReconcile` on both routes;
+  `po/reconcile` and `po/close` accept `['warehouse','ph_team']`) — PH is the side chasing the
+  supplier over a shortage, so gating the close on warehouse just parked POs in the queue.
+  - **Auto-reconcile (a clean PO closes itself).** `autoReconcileIfClean(poId)` snapshots + flips
+    `receiving`→`reconciled` with **no human tap** when *every* guard holds: PO is still
+    `receiving`; its `received_batch_id` batch is **`committed`**; **no `po_boxes` row is
+    `pending`/`packed`** (nothing left at the supplier); and the reconciliation is
+    `clean` + `!no_manifest` + `expected_units > 0` + `received == expected`. Anything short/over/
+    blind/mid-intake stays in the manual queue. Called (best-effort, never blocks the response)
+    from `batches/commit`, `batches/box-commit` (on `autoCompleted`), `batches/set-status`
+    (manual "done"), and as a **self-heal sweep in `po/reconcile-list`** so POs received before
+    this existed clear themselves on the next page load. Without it, a no-discrepancy PO sat in
+    the queue forever and the supplier read the `receiving` chip as still-outstanding.
+  - **The chip says what's actually true** (`poChip()` in `Reconciliation.jsx`), because
+    "To reconcile" on a 13-of-13 all-matched PO reads as a chore when there's nothing to decide:
+    `Reconciled` / `Receiving` (intake unfinished) / `Received blind` / `N discrepancies` /
+    `Boxes still out` / `Matched · ready to close`. Fed by **`getPoReconcileState(poId)`**
+    (`{ po, rows, summary, intakeDone, awaitingBoxes }`) — the *same* helper the auto-close guard
+    uses, so a badge can never contradict it. `reconcile-list` attaches it per open PO as `rc`
+    (closed POs reuse their frozen `reconciliation->'summary'`); `po/reconciliation` returns
+    `intake_done`/`awaiting_boxes` for the detail header. New `.po-chip.bad`/`.warn` variants.
+    **`pendingCounts.po_to_reconcile` now requires the receiving batch to be `committed`** — a PO
+    still being scanned in isn't a chore yet, and counting it lit a badge nobody could act on.
+    Closing mid-intake still works but shows a "closing now freezes the count" note.
+  - **Report table UI.** Classes are prefixed **`rcn-`, not `rc-`** — `RescaleRequests.jsx` owns
+    `rc-*` and `.rc-item` there paints a bordered card, which drew a stray pill around every SKU
+    cell. Rows are two-line (SKU · size, then product name), qty is one `got/exp` cell, and a chip
+    shows only on problem rows (matched get a green ✓ + a fold: **"N lines matched ✓ — Show"**).
+    A **By size / By SKU** switch groups the lines one-per-SKU with a chip per size; grouping runs
+    **before** the problem/matched split so a SKU that's short in one size isn't torn across both
+    sections (it inherits its worst flag). Duplicate `tag_code`/`supplier_name` is suppressed.
 - **Phase 4 (built, on branch `feat/po-phase4-tracking` — not deployed):** shipment tracking
   via **17TRACK**, behind a thin adapter (`api/_lib/tracking.js`) that **no-ops unless
   `TRACKING_API_KEY` is set**. On ship, `po/ship` registers the label's number; status lands

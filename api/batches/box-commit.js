@@ -5,7 +5,8 @@
 // the batch when received == expected. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import {
-  getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues, dbConfigured,
+  getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues,
+  autoReconcileIfClean, dbConfigured,
 } from '../_lib/db.js';
 import { normalizeItems, parseUnitIssues, enrichGlobalIndicators } from '../_lib/intake.js';
 
@@ -62,6 +63,12 @@ export default async function handler(req, res) {
 
     send(res, 200, { ok: true, count: created.length, vins, autoCompleted });
     enrichGlobalIndicators(created, items).catch((e) => console.warn('[box-commit] GI enrichment failed:', e.message));
+    // Last box in → the batch just auto-completed, so a clean PO can close itself out.
+    // No-op while boxes are still outstanding (the helper requires a committed batch).
+    if (autoCompleted && found.batch.po_id) {
+      autoReconcileIfClean(Number(found.batch.po_id))
+        .catch((e) => console.warn('[box-commit] auto-reconcile skipped:', e.message));
+    }
     return;
   } catch (e) {
     if (e.conflict) return send(res, 409, { ok: false, error: e.message });

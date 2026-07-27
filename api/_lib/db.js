@@ -1002,8 +1002,14 @@ export async function pendingCounts() {
         AND NOT (instore_listed_alias AND instore_listed_stockx AND instore_listed_shopify))::int AS instore_unlisted,
       (SELECT count(*) FROM rescale_requests WHERE status = 'open')::int     AS rescale_requests,
       (SELECT count(*) FROM rescale_requests WHERE status = 'audited')::int  AS rescale_requests_audited,
-      -- POs received but not yet reconciled (PO scan-out feature).
-      (SELECT count(*) FROM purchase_orders WHERE status = 'receiving')::int  AS po_to_reconcile
+      -- POs that genuinely need a human on the reconcile screen. Intake must be FINISHED
+      -- (batch committed) — a PO still being scanned in isn't a chore yet, and counting it
+      -- lit the badge for orders nobody could act on. Clean+finished POs auto-reconcile
+      -- themselves (autoReconcileIfClean), so what's left here really is discrepancies,
+      -- blind receipts, and orders with labels still out.
+      (SELECT count(*) FROM purchase_orders p
+         JOIN batches b ON b.id = p.received_batch_id
+        WHERE p.status = 'receiving' AND b.status = 'committed')::int  AS po_to_reconcile
     FROM (
       -- not_instore gates the PH store-sync badges only: in-store buys bypass
       -- PH, so they must NOT inflate not_ii/alias/stockx/shopify. needs_shelf /
@@ -2038,11 +2044,55 @@ export async function snapshotReconciliation(poId) {
   return { ...data, po: { ...data.po, status: 'reconciled', reconciled_at: snap.at } };
 }
 
-// POs that have been received and are awaiting / have a reconciliation.
+// Auto-close a PO whose intake came out perfectly clean, so a no-discrepancy order
+// doesn't sit in the reconcile queue forever waiting on a button tap (PH can see that
+// queue but can't clear it, and the supplier reads 'receiving' as still-outstanding).
+// Deliberately conservative — anything ambiguous is left for a human:
+//   • the PO is still 'receiving' (never touches draft/shipped/reconciled/closed)
+//   • its receiving batch is committed — a multi-box batch mid-intake isn't done
+//   • no label is still pending/packed at the supplier (more units are coming)
+//   • a manifest existed, every expected unit arrived, and every line matched
+// Returns the frozen snapshot when it closed the PO, else null. Callers fire-and-forget:
+// a failure here just leaves the PO in the manual queue, which is the old behaviour.
+// Where a received PO actually stands: the live comparison plus the two "is more
+// still coming?" facts. Shared by the auto-close guard AND the list's status chip, so
+// the badge can never claim something the auto-close logic disagrees with.
+export async function getPoReconcileState(poId) {
+  const sql = db();
+  const data = await getPoReconciliation(poId);
+  if (!data) return null;
+  const { po } = data;
+  const batch = po.received_batch_id
+    ? (await sql`SELECT status FROM batches WHERE id = ${po.received_batch_id}`)[0]
+    : null;
+  const unshipped = await sql`
+    SELECT 1 FROM po_boxes WHERE po_id = ${poId} AND status IN ('pending', 'packed') LIMIT 1`;
+  return {
+    ...data,                                     // { po, rows, summary }
+    intakeDone: batch?.status === 'committed',   // receiving finished, not mid multi-box
+    awaitingBoxes: unshipped.length > 0,         // a label is still sitting at the supplier
+  };
+}
+
+export async function autoReconcileIfClean(poId) {
+  const st = await getPoReconcileState(poId);
+  if (!st || st.po.status !== 'receiving' || !st.po.received_batch_id) return null;
+  if (!st.intakeDone || st.awaitingBoxes) return null;
+  const s = st.summary;
+  if (!s || !s.clean || s.no_manifest || s.expected_units === 0 || s.received_units !== s.expected_units) return null;
+  const snap = await snapshotReconciliation(poId);
+  if (snap) console.log(`[auto-reconcile] PO ${poId} closed clean — ${s.received_units}/${s.expected_units} units, ${s.match} lines matched.`);
+  return snap;
+}
+
+// POs that have been received and are awaiting / have a reconciliation. Explicit column
+// list on purpose: `p.*` dragged the whole `reconciliation` snapshot (every row of every
+// closed PO) into a list that only needs its summary.
 export async function listReconcilePos() {
   const sql = db();
   return sql`
-    SELECT p.*,
+    SELECT p.id, p.po_code, p.status, p.supplier_name, p.tag_code, p.manifest_scope,
+      p.reconciled_at, p.created_at, p.reconciliation->'summary' AS snapshot_summary,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
       (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
     FROM purchase_orders p

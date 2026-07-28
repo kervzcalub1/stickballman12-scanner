@@ -1990,11 +1990,16 @@ export async function getPoReconciliation(poId) {
         JOIN po_boxes b ON b.id = l.po_box_id
         WHERE l.po_id = ${poId} AND b.status IN ('shipped', 'in_transit', 'delivered')
         GROUP BY l.sku, l.size`;
-  const received = po.received_batch_id
-    ? await sql`
-        SELECT sku, size, count(*)::int AS qty, max(name) AS name
-        FROM items WHERE batch_id = ${po.received_batch_id} GROUP BY sku, size`
-    : [];
+  // Counted across EVERY batch linked to this PO, not just `received_batch_id`. An order
+  // can be received in more than one batch — most obviously a replacement shipment that
+  // arrives weeks later — and keying off the first batch alone silently undercounts the
+  // later ones, which would read as a shortage that never clears.
+  const received = await sql`
+    SELECT i.sku, i.size, count(*)::int AS qty, max(i.name) AS name
+    FROM items i
+    JOIN batches b ON b.id = i.batch_id
+    WHERE b.po_id = ${poId}
+    GROUP BY i.sku, i.size`;
 
   const key = (s, z) => `${rcSku(s)}|${rcSize(z)}`;
   const expMap = new Map(); const expSkus = new Set();
@@ -2031,7 +2036,7 @@ export async function getPoReconciliation(poId) {
   // shipped labels — the supplier didn't scan out and no one entered a manifest on their
   // behalf. Every received unit then reads as wrong_sku; flag it so the report says
   // "received blind" instead of presenting a wall of overages as discrepancies.
-  summary.no_manifest = po.received_batch_id != null && summary.expected_units === 0 && summary.received_units > 0;
+  summary.no_manifest = summary.expected_units === 0 && summary.received_units > 0;
   return { po, rows, summary };
 }
 
@@ -2068,14 +2073,18 @@ export async function getPoReconcileState(poId) {
   const data = await getPoReconciliation(poId);
   if (!data) return null;
   const { po } = data;
-  const batch = po.received_batch_id
-    ? (await sql`SELECT status FROM batches WHERE id = ${po.received_batch_id}`)[0]
-    : null;
+  // Intake is finished when the PO has at least one batch and NONE is still open. Keyed
+  // off every linked batch, not just `received_batch_id`, for the same reason the received
+  // count is — a later replacement batch must hold the order open until it's committed.
+  const batches = await sql`
+    SELECT count(*)::int AS total, count(*) FILTER (WHERE status = 'open')::int AS open
+    FROM batches WHERE po_id = ${poId}`;
   const unshipped = await sql`
     SELECT 1 FROM po_boxes WHERE po_id = ${poId} AND status IN ('pending', 'packed') LIMIT 1`;
+  const b = batches[0] || { total: 0, open: 0 };
   return {
     ...data,                                     // { po, rows, summary }
-    intakeDone: batch?.status === 'committed',   // receiving finished, not mid multi-box
+    intakeDone: b.total > 0 && b.open === 0,     // receiving finished, not mid multi-box
     awaitingBoxes: unshipped.length > 0,         // a label is still sitting at the supplier
   };
 }
@@ -2087,8 +2096,32 @@ export async function autoReconcileIfClean(poId) {
   const s = st.summary;
   if (!s || !s.clean || s.no_manifest || s.expected_units === 0 || s.received_units !== s.expected_units) return null;
   const snap = await snapshotReconciliation(poId);
-  if (snap) console.log(`[auto-reconcile] PO ${poId} closed clean — ${s.received_units}/${s.expected_units} units, ${s.match} lines matched.`);
+  if (snap) {
+    console.log(`[auto-reconcile] PO ${poId} closed clean — ${s.received_units}/${s.expected_units} units, ${s.match} lines matched.`);
+    // A reship that's been scanned in makes the order add up again, which IS the proof it
+    // arrived — so the last resolution step ticks itself rather than asking someone to
+    // confirm what the count already shows. Only for replacements: a refund's money
+    // landing has nothing to do with the unit count.
+    await settleReplacementIfArrived(poId).catch((e) =>
+      console.warn('[auto-reconcile] replacement settle:', e.message));
+  }
   return snap;
+}
+
+// Tick "Replacement received" once the order reconciles clean again. No-op unless the
+// outcome is a replacement that's still outstanding.
+async function settleReplacementIfArrived(poId) {
+  const r = await getPoResolution(poId);
+  if (!r || r.outcome !== 'replacement' || r.settled_at) return null;
+  const fresh = await setResolutionStep({
+    poId, step: 'settled', author: { name: null, id: null, role: 'system' },
+  });
+  await addPoComment({
+    poId, kind: 'system',
+    body: 'Replacement received — the order reconciles clean again.',
+    author: { name: null, id: null, role: 'system' },
+  }).catch(() => {});
+  return fresh;
 }
 
 // Auto-close if we can; otherwise describe what's wrong so the caller can tell whoever
@@ -2121,6 +2154,7 @@ export async function listReconcilePos() {
     SELECT p.id, p.po_code, p.status, p.supplier_name, p.tag_code, p.manifest_scope,
       p.reconciled_at, p.created_at, p.reconciliation->'summary' AS snapshot_summary,
       p.reconcile_note, p.reconcile_note_by, p.reconcile_note_at,
+      p.resolution_state, p.comment_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
       (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
     FROM purchase_orders p
@@ -2212,6 +2246,174 @@ export async function setPoReconcileNote(poId, note, byName) {
   return rows[0] || null;
 }
 
+/* ---- Discrepancy resolution: the four steps + the internal thread ------------
+   State (po_resolutions, one row) and log (po_comments, append-only) are separate on
+   purpose — see scripts/db-setup.mjs. Every step write also posts a system comment, so
+   the thread doubles as the audit trail and there's no third table to keep in step. */
+
+export const COMMENT_MAX = 2000;
+export const RESOLUTION_STEPS = ['contacted', 'outcome', 'reference', 'settled'];
+export const RESOLUTION_OUTCOMES = ['refund', 'replacement', 'writeoff'];
+
+// Which steps are actually live for an outcome. A write-off has nothing to chase, so it
+// skips the reference step entirely — the UI must not show a box that can never be ticked.
+export function stepsFor(outcome) {
+  if (outcome === 'writeoff') return ['contacted', 'outcome', 'settled'];
+  return RESOLUTION_STEPS;
+}
+
+const stepDone = (r, step) => {
+  if (!r) return false;
+  if (step === 'contacted') return !!r.contacted_at;
+  if (step === 'outcome') return !!r.outcome_at && !!r.outcome;
+  if (step === 'reference') return !!r.ref_at;
+  if (step === 'settled') return !!r.settled_at;
+  return false;
+};
+
+// 'none' (nothing started) | 'open' (started, not settled) | 'settled'. Mirrored onto
+// purchase_orders so the list can chip an order without touching this table.
+function resolutionStateOf(r) {
+  if (!r) return 'none';
+  if (r.settled_at) return 'settled';
+  if (r.contacted_at || r.outcome_at || r.ref_at) return 'open';
+  return 'none';
+}
+
+export async function getPoResolution(poId) {
+  const sql = db();
+  return (await sql`SELECT * FROM po_resolutions WHERE po_id = ${poId}`)[0] || null;
+}
+
+// Latest-first, capped. The thread is read only when an order is opened, never in a list.
+export async function listPoComments(poId, { limit = 50, before = null } = {}) {
+  const sql = db();
+  const rows = before
+    ? await sql`
+        SELECT * FROM po_comments
+        WHERE po_id = ${poId} AND created_at < ${before}
+        ORDER BY created_at DESC LIMIT ${limit}`
+    : await sql`
+        SELECT * FROM po_comments
+        WHERE po_id = ${poId}
+        ORDER BY created_at DESC LIMIT ${limit}`;
+  return rows.reverse(); // hand back oldest-first for rendering
+}
+
+// Append one entry and keep the PO's denormalised counters in step, in the same request.
+export async function addPoComment({ poId, body, kind = 'note', audience = 'internal', author }) {
+  const sql = db();
+  const text = String(body ?? '').trim().slice(0, COMMENT_MAX);
+  if (!text) return null;
+  const rows = await sql`
+    INSERT INTO po_comments (po_id, kind, audience, body, author_id, author_name, author_role)
+    VALUES (${poId}, ${kind}, ${audience}, ${text},
+            ${author?.id ?? null}, ${author?.name || null}, ${author?.role || null})
+    RETURNING *`;
+  await sql`
+    UPDATE purchase_orders
+    SET comment_count = comment_count + 1, last_comment_at = now()
+    WHERE id = ${poId}`;
+  return rows[0];
+}
+
+// Tick, untick, or fill in one step. Returns the fresh resolution row.
+// `undo` is first-class: a refund that never lands has to be re-openable, so nothing here
+// is write-once. Each call posts its own system line to the thread.
+export async function setResolutionStep({ poId, step, undo = false, outcome = null, value = null, amount = null, boxId = null, author }) {
+  const sql = db();
+  const who = author?.name || null;
+  await sql`INSERT INTO po_resolutions (po_id) VALUES (${poId}) ON CONFLICT (po_id) DO NOTHING`;
+
+  // The shim can't nest sql fragments, so each step gets its own statement.
+  if (step === 'contacted') {
+    if (undo) await sql`UPDATE po_resolutions SET contacted_by = NULL, contacted_at = NULL, updated_at = now() WHERE po_id = ${poId}`;
+    else await sql`UPDATE po_resolutions SET contacted_by = ${who}, contacted_at = now(), updated_at = now() WHERE po_id = ${poId}`;
+  } else if (step === 'outcome') {
+    if (undo || !outcome) {
+      // Clearing the outcome clears what depended on it — a credit reference makes no
+      // sense once you've switched to a reship.
+      await sql`
+        UPDATE po_resolutions
+        SET outcome = NULL, outcome_by = NULL, outcome_at = NULL,
+            ref_value = NULL, ref_amount = NULL, ref_box_id = NULL, ref_by = NULL, ref_at = NULL,
+            settled_amount = NULL, settled_by = NULL, settled_at = NULL, updated_at = now()
+        WHERE po_id = ${poId}`;
+    } else {
+      await sql`UPDATE po_resolutions SET outcome = ${outcome}, outcome_by = ${who}, outcome_at = now(), updated_at = now() WHERE po_id = ${poId}`;
+    }
+  } else if (step === 'reference') {
+    if (undo) await sql`UPDATE po_resolutions SET ref_value = NULL, ref_amount = NULL, ref_box_id = NULL, ref_by = NULL, ref_at = NULL, updated_at = now() WHERE po_id = ${poId}`;
+    else await sql`
+      UPDATE po_resolutions
+      SET ref_value = ${value}, ref_amount = ${amount}, ref_box_id = ${boxId},
+          ref_by = ${who}, ref_at = now(), updated_at = now()
+      WHERE po_id = ${poId}`;
+  } else if (step === 'settled') {
+    if (undo) await sql`UPDATE po_resolutions SET settled_amount = NULL, settled_by = NULL, settled_at = NULL, updated_at = now() WHERE po_id = ${poId}`;
+    else await sql`UPDATE po_resolutions SET settled_amount = ${amount}, settled_by = ${who}, settled_at = now(), updated_at = now() WHERE po_id = ${poId}`;
+  } else {
+    throw new Error(`Unknown resolution step: ${step}`);
+  }
+
+  const fresh = await getPoResolution(poId);
+  await sql`UPDATE purchase_orders SET resolution_state = ${resolutionStateOf(fresh)} WHERE id = ${poId}`;
+  return fresh;
+}
+
+// The reship as a real label on the ORIGINAL order: same PO, next box number, tracked
+// like any other. Carries NO po_lines on purpose — those units were declared on the
+// original manifest and already counted short, so declaring them again would double the
+// expected count and make chasing a shortage look like a worse one. The box is only a
+// vehicle; when it lands, `received` climbs and the order goes clean on its own.
+export async function addReplacementBox(poId, { trackingNumber, carrierKey, createdBy }) {
+  const sql = db();
+  const next = (await sql`
+    SELECT coalesce(max(box_number), 0) + 1 AS n FROM po_boxes WHERE po_id = ${poId}`)[0].n;
+  const rows = await sql`
+    INSERT INTO po_boxes (po_id, box_number, tracking_number, carrier_key, status, kind, shipped_at, created_by)
+    VALUES (${poId}, ${next}, ${trackingNumber || null},
+            ${Number.isInteger(carrierKey) && carrierKey > 0 ? carrierKey : null},
+            'shipped', 'replacement', now(), ${createdBy || null})
+    RETURNING *`;
+  return rows[0];
+}
+
+// Receiving against a reconciled or archived PO is blocked, deliberately — so an inbound
+// reship has to put the order back in play. Lands on 'receiving' (not 'draft'): the
+// manifest is settled, only the intake reopens. Returns the new status, or null if the
+// order was already open.
+export async function reopenPoForReceiving(poId) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE purchase_orders SET status = 'receiving'
+    WHERE id = ${poId} AND status IN ('reconciled', 'closed')
+    RETURNING id, po_code, status`;
+  return rows[0] || null;
+}
+
+// A refund that came in under what was agreed. Surfaced rather than quietly closed —
+// this is the whole reason both amounts are recorded.
+export function refundShortfall(r) {
+  if (!r || r.outcome !== 'refund' || r.ref_amount == null || r.settled_amount == null) return 0;
+  const diff = Number(r.ref_amount) - Number(r.settled_amount);
+  return diff > 0.004 ? Number(diff.toFixed(2)) : 0;
+}
+
+// Compact view for the UI: which steps exist, which are done, and what's outstanding.
+export function resolutionView(r) {
+  const steps = stepsFor(r?.outcome);
+  const done = steps.filter((s) => stepDone(r, s));
+  return {
+    ...(r || {}),
+    steps,
+    done_count: done.length,
+    step_count: steps.length,
+    state: resolutionStateOf(r),
+    shortfall: refundShortfall(r),
+  };
+}
+
 // Archive a reconciled PO → status 'closed' (drops off the active reconcile list).
 export async function closePo(poId) {
   const sql = db();
@@ -2244,6 +2446,7 @@ export async function listArchivedPos({ limit = 100 } = {}) {
     SELECT p.id, p.po_code, p.status, p.supplier_name, p.tag_code,
       p.reconciled_at, p.created_at, p.reconciliation->'summary' AS snapshot_summary,
       p.reconcile_note, p.reconcile_note_by, p.reconcile_note_at,
+      p.resolution_state, p.comment_count,
       (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
     FROM purchase_orders p
     WHERE p.status = 'closed'

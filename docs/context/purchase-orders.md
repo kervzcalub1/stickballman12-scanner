@@ -135,6 +135,16 @@ labels** (one tracking number each); it closes only when every label is shipped.
   - **Thread is INTERNAL** (`POST /api/po/comment`, warehouse/ph_team). The supplier reads the
     single `reconcile_note`, written on purpose for them. `po_comments.audience` exists from
     the first migration (default `internal`) so opening it up later is a flag, not a migration.
+    `po/get` and `po/reconciliation` are separate endpoints, so the thread and the resolution
+    are never in a supplier-facing payload at all — verified, not just hidden in the UI.
+  - **What the SUPPLIER sees of all this:** the note (read-only, attributed to the business)
+    and the replacement label. A reship lands in their portal as a box on their order, so it
+    must not read as one they forgot to pack — `SupplierApp`/`PoOverview` title it
+    **"Replacement shipment"** instead of `Label N`, tint it with a blue rail
+    (`.po-box.replacement`), and explain whose it is. **`listPos` excludes
+    `kind='replacement'` from `box_count`/`shipped_count`** (and adds `replacement_count`):
+    "1 of 1 labels shipped" describes the *supplier's packing job*, and a reship they didn't
+    create must not turn that into "1 of 2".
   - **Reads:** resolution + the latest 50 comments ride along on `po/reconciliation` (no extra
     round trips) and are **never** loaded by a list. No new Home badge — resolution shows as
     "3 of 4" on the order's own card.

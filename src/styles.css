@@ -2143,6 +2143,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-mismatch p { margin: 0 0 10px; line-height: 1.45; }
 .po-mismatch .btn { width: 100%; }
 
+/* A replacement shipment is on the order but isn't one of the supplier's own labels —
+   tinted and rail-marked so it never reads as a box they forgot to pack. */
+.po-box.replacement, .po-ov-label.replacement {
+  border-left: 3px solid var(--primary);
+  background: rgba(79, 124, 255, 0.06);
+}
+.po-box-note {
+  margin: 8px 0 0; padding: 9px 11px; border-radius: 8px; line-height: 1.45;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+}
+
 /* Supplier's read-only view of the warehouse's reconciliation note. */
 .po-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); border-left: 3px solid var(--primary); background: var(--panel-2); font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
 .po-note-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 5px; }

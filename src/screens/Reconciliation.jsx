@@ -8,6 +8,7 @@ import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import { PoResolution } from '../components/PoResolution.jsx';
 
 const FLAG = {
   match:      { label: 'Match', cls: 'ok' },
@@ -154,10 +155,39 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
         setDetail({
           po: r.po, rows: r.rows, summary: r.summary,
           intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
+          resolution: r.resolution, steps: r.steps, comments: r.comments || [],
         });
         setNote(r.po.reconcile_note || ''); setNoteSaved(r.po.reconcile_note || '');
       })
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
+  };
+
+  // Every resolution write returns the fresh row, so the checklist updates without a
+  // refetch — but the thread and the PO's own status can both move too (logging
+  // replacement tracking reopens the order), so pull the detail again after.
+  const doStep = async (payload) => {
+    setBusy(true); setError('');
+    try {
+      await api.poResolutionStep({ poId: openId, ...payload });
+      const r = await api.poReconciliation(openId);
+      setDetail((d) => ({
+        ...d, po: r.po, rows: r.rows, summary: r.summary,
+        intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
+        resolution: r.resolution, steps: r.steps, comments: r.comments || [],
+      }));
+      loadList();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const doComment = async (body) => {
+    setBusy(true); setError('');
+    try {
+      const r = await api.poComment(openId, body);
+      setDetail((d) => ({ ...d, comments: [...(d.comments || []), r.comment] }));
+      loadList();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
   };
 
   const saveNote = async () => {
@@ -225,6 +255,15 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
               {tagOf(p) && <span>{tagOf(p)}</span>}
               <span>{units}</span>
             </div>
+            {(p.resolution_state === 'open' || p.comment_count > 0) && (
+              <div className="rcn-card-foot">
+                {p.resolution_state === 'open' && <span className="po-flag warn">Resolution open</span>}
+                {p.resolution_state === 'settled' && <span className="po-flag ok">Resolved</span>}
+                {p.comment_count > 0 && (
+                  <span className="muted xs">{p.comment_count} note{p.comment_count === 1 ? '' : 's'}</span>
+                )}
+              </div>
+            )}
             {p.reconcile_note && (
               <div className="rcn-note-peek">
                 <Icon name="reconcile" /> {p.reconcile_note}
@@ -401,6 +440,21 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                 </button>
               </div>
             </div>
+
+            {/* Only for orders that actually went wrong — a clean PO has nothing to
+                chase, and an empty checklist on every order is noise. Stays visible once
+                started, even after the order is reconciled or archived: the money often
+                lands weeks after the count did. */}
+            {(!s.clean || detail.resolution?.state !== 'none') && (
+              <PoResolution
+                resolution={detail.resolution}
+                steps={detail.steps}
+                comments={detail.comments}
+                busy={busy}
+                onStep={doStep}
+                onComment={doComment}
+              />
+            )}
 
             <div className="rcn-actions">
               <button className="btn ghost" onClick={copyReport}>{copied ? 'Copied ✓' : 'Copy report'}</button>

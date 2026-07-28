@@ -105,6 +105,45 @@ labels** (one tracking number each); it closes only when every label is shipped.
     `<button>`, since nested buttons are invalid and swallow the tap on mobile. Archived cards
     read their numbers from the **frozen `reconciliation->'summary'`**, never recomputed, so
     history can't shift under later data changes.
+- **Discrepancy resolution (what happens AFTER an order comes up short).** Two shapes on
+  purpose: **`po_resolutions` is STATE** (four known steps → fixed columns, one row per PO,
+  so "how many refunds are outstanding" is one indexed query with no join) and
+  **`po_comments` is a LOG** (append-only, never read by a list screen). Folding the
+  checklist into the log would turn every "is step 3 done?" into a scan. Three denormalised
+  columns on `purchase_orders` — **`resolution_state`** (`none|open|settled`),
+  `comment_count`, `last_comment_at` — keep list screens single-table; they're written by
+  the same endpoints, in the same request, never recomputed on read.
+  - **Steps:** `contacted → outcome → reference → settled`, via
+    `POST /api/po/resolution {poId, step, undo?, outcome?, value?, amount?, carrierKey?}`.
+    Every step accepts **`undo`** — a refund that never lands has to be re-openable — and
+    clearing the outcome cascades (a credit ref is meaningless once you switch to a reship).
+    `outcome='writeoff'` **drops the reference step** (`stepsFor()`), so the UI never shows a
+    box that can't be ticked. Each write posts a **`kind='system'` comment**, which is what
+    makes the thread the audit trail — there is no separate history table.
+  - **Refund = expected vs actual**, mirroring the reconciliation itself: `ref_amount` (agreed,
+    step 3) vs `settled_amount` (arrived, step 4); `refundShortfall()` surfaces a short-paid
+    credit instead of letting it close green. `NUMERIC(12,2)`, not float — this gets totalled.
+  - **Replacement = a real label on the ORIGINAL PO.** `addReplacementBox()` inserts a
+    `po_boxes` row (`kind='replacement'`, next `box_number`, status `shipped`) and registers
+    it with 17TRACK. **It carries NO `po_lines`** — those units were already declared and
+    already counted short, so re-declaring them would double `expected` and make chasing a
+    shortage read as a worse one. Logging it calls **`reopenPoForReceiving()`**
+    (`reconciled|closed → receiving`), because receiving against a finished PO is blocked;
+    that reopen is announced in the thread, never silent. When the reship is scanned in the
+    order goes clean, auto-reconcile fires, and **`settleReplacementIfArrived()` ticks
+    "Replacement received" by itself** — the count *is* the proof it arrived.
+  - **Thread is INTERNAL** (`POST /api/po/comment`, warehouse/ph_team). The supplier reads the
+    single `reconcile_note`, written on purpose for them. `po_comments.audience` exists from
+    the first migration (default `internal`) so opening it up later is a flag, not a migration.
+  - **Reads:** resolution + the latest 50 comments ride along on `po/reconciliation` (no extra
+    round trips) and are **never** loaded by a list. No new Home badge — resolution shows as
+    "3 of 4" on the order's own card.
+  - **`getPoReconciliation` now counts received items across EVERY batch with
+    `batches.po_id = poId`**, not just `received_batch_id` — an order can be received in more
+    than one batch (most obviously a reship weeks later) and keying off the first silently
+    undercounted the rest. `intakeDone` likewise means "≥1 batch and none still open".
+  - **Schema-touch: `po_resolutions` + `po_comments` tables, `purchase_orders.resolution_state`
+    / `comment_count` / `last_comment_at`, `po_boxes.kind` → run `db:setup`.**
   - **Report table UI.** Classes are prefixed **`rcn-`, not `rc-`** — `RescaleRequests.jsx` owns
     `rc-*` and `.rc-item` there paints a bordered card, which drew a stray pill around every SKU
     cell. Rows are two-line (SKU · size, then product name), qty is one `got/exp` cell, and a chip

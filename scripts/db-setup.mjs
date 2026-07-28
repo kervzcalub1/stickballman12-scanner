@@ -554,6 +554,69 @@ await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS reconcile_note T
 await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS reconcile_note_by TEXT`);
 await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS reconcile_note_at TIMESTAMPTZ`);
 
+/* ---- Discrepancy resolution -------------------------------------------------
+   What happens AFTER an order comes up short: chase the supplier, agree a refund or a
+   reship, wait for it to land. Two shapes on purpose —
+   • po_resolutions is STATE: four known steps, so fixed columns and one row per order.
+     Keeps "how many refunds are outstanding" a single indexed query with no join.
+   • po_comments is a LOG: append-only, never read by a list screen.
+   Folding the checklist into the log would turn every "is step 3 done?" into a scan. */
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_resolutions (
+    po_id           BIGINT PRIMARY KEY REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    outcome         TEXT,
+    contacted_by    TEXT,
+    contacted_at    TIMESTAMPTZ,
+    outcome_by      TEXT,
+    outcome_at      TIMESTAMPTZ,
+    ref_value       TEXT,
+    ref_amount      NUMERIC(12,2),
+    ref_box_id      BIGINT REFERENCES po_boxes(id),
+    ref_by          TEXT,
+    ref_at          TIMESTAMPTZ,
+    settled_amount  NUMERIC(12,2),
+    settled_by      TEXT,
+    settled_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`ALTER TABLE po_resolutions DROP CONSTRAINT IF EXISTS po_resolutions_outcome_check`);
+await sql(`ALTER TABLE po_resolutions ADD CONSTRAINT po_resolutions_outcome_check
+           CHECK (outcome IS NULL OR outcome IN ('refund','replacement','writeoff'))`);
+
+// `audience` from day one, defaulting to internal: showing selected entries to the
+// supplier later is then a flag on a row, not a migration. Author name is denormalised
+// so the thread renders without joining users.
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_comments (
+    id          BIGSERIAL PRIMARY KEY,
+    po_id       BIGINT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL DEFAULT 'note',
+    audience    TEXT NOT NULL DEFAULT 'internal',
+    body        TEXT NOT NULL,
+    author_id   BIGINT,
+    author_name TEXT,
+    author_role TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS po_comments_po_idx ON po_comments (po_id, created_at DESC)`);
+
+// Denormalised onto the PO so list screens and badges stay single-table — no join to
+// po_resolutions or po_comments just to draw a chip. Written by the same endpoints that
+// write the real rows, in the same request; never recomputed on read.
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS resolution_state TEXT NOT NULL DEFAULT 'none'`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS comment_count INT NOT NULL DEFAULT 0`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS last_comment_at TIMESTAMPTZ`);
+await sql(`CREATE INDEX IF NOT EXISTS purchase_orders_resolution_idx
+           ON purchase_orders (resolution_state) WHERE resolution_state <> 'none'`);
+
+// A reship arrives on the ORIGINAL order as its own label. It carries no po_lines —
+// those units were already declared and already counted short, so declaring them again
+// would double the expected count and make chasing a shortage look like a bigger one.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'original'`);
+
 // Link the received receiving-batch back to its PO (set on scan-in). Reconciliation
 // joins po_lines (expected) against items under this batch (actual), by (sku, size).
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id)`);

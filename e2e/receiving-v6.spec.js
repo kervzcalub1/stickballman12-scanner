@@ -61,13 +61,32 @@ test.describe('V6 · listing photos (Feature 5)', () => {
   });
 
   test('presignPutUrl builds a well-formed signed URL', () => {
-    const prev = { ...process.env };
-    Object.assign(process.env, {
-      R2_ACCOUNT_ID: 'acct123', R2_ACCESS_KEY_ID: 'AKIDEXAMPLE',
-      R2_SECRET_ACCESS_KEY: 'secret', R2_BUCKET: 'photos',
-    });
-    const url = presignPutUrl({ key: 'listings/AB-12/side-1.jpg' });
-    Object.assign(process.env, prev);
+    // Stub the R2 credentials just for this call, then put the environment back
+    // EXACTLY as it was.
+    //
+    // `Object.assign(process.env, prev)` cannot do that: it restores keys that
+    // existed, but has no way to remove keys it ADDED. Where R2 isn't configured —
+    // CI — none of these existed, so R2_ACCOUNT_ID stayed set to 'acct123' for the
+    // rest of the worker, and the later "sign-issue … or 503 if R2 unset" test read
+    // it, took the `expect(200)` branch, and failed against a correct 503. On retry
+    // Playwright ran that test alone in a clean worker and it passed — which is
+    // precisely why it showed up as flaky rather than broken. Locally the keys DO
+    // exist in .env, so the restore worked and the bug was invisible.
+    const KEYS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'];
+    const prev = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+    let url;
+    try {
+      Object.assign(process.env, {
+        R2_ACCOUNT_ID: 'acct123', R2_ACCESS_KEY_ID: 'AKIDEXAMPLE',
+        R2_SECRET_ACCESS_KEY: 'secret', R2_BUCKET: 'photos',
+      });
+      url = presignPutUrl({ key: 'listings/AB-12/side-1.jpg' });
+    } finally {
+      for (const k of KEYS) {
+        if (prev[k] === undefined) delete process.env[k];
+        else process.env[k] = prev[k];
+      }
+    }
     expect(url).toContain('https://acct123.r2.cloudflarestorage.com/photos/listings/AB-12/side-1.jpg?');
     expect(url).toContain('X-Amz-Algorithm=AWS4-HMAC-SHA256');
     expect(url).toMatch(/X-Amz-Signature=[0-9a-f]{64}/);
@@ -103,8 +122,9 @@ test.describe('V6 · defect issue photos (Feature 4)', () => {
     // The in-memory rate limiter is per-IP and shared across endpoints (see the note
     // below), so a full-suite run can return 429 here before the handler is reached.
     // That's an environment condition, not a product failure — same treatment the
-    // other endpoints in this file already give it. Without this the test was flaky:
-    // it failed on the first attempt and passed on retry.
+    // other endpoints in this file already give it. (This guard is for consistency
+    // with its neighbours; the flakiness actually seen in CI was the env leak fixed
+    // in `presignPutUrl builds a well-formed signed URL` above.)
     test.skip(res.status() === 429, 'rate-limited in full suite');
     if (!process.env.R2_ACCOUNT_ID) { expect(res.status()).toBe(503); return; }
     expect(res.status()).toBe(200);

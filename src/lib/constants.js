@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -126,6 +126,12 @@ export const HOME_SECTIONS = [
   ] },
   { title: 'PH Team', superOnly: true, accent: 'requests', cards: [
     { key: 'ph', icon: '🧾', title: 'PH Team Workspace', sub: 'Open the PH pricing / listing pages (New Inventory, Rescale, Photos…)' },
+  ] },
+  // Last, and for everyone: the written procedures are a reference you go to
+  // deliberately, not a queue — so it sits below the work rather than competing
+  // with it. No badge, ever.
+  { title: 'Help', accent: 'listing', cards: [
+    { key: 'sop', icon: '📖', title: 'SOP & Help', sub: 'Step-by-step procedures for every screen, searchable, plus FAQ' },
   ] },
   { title: 'Administration', adminOnly: true, accent: 'orders', cards: [
     { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },

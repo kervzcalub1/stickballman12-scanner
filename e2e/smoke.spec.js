@@ -54,6 +54,7 @@ test.describe('admin screens render', () => {
     ['/rescalereq', 'Rescale Requests'],
     ['/shelve', 'Shelve / Put-away'],
     ['/locations', 'Bulk add'],
+    ['/sop', 'Standard operating procedures'],
   ];
   for (const [route, marker] of ROUTES) {
     test(`admin ${route}`, async ({ page }) => {
@@ -78,6 +79,7 @@ test.describe('PH team screens render', () => {
     ['/ph/rescale', 'Rescale Stock'],
     ['/ph/nobox', 'No Box'],
     ['/ph/request', 'Rescale Requests'],
+    ['/ph/sop', 'Standard operating procedures'],
   ];
   for (const [route, marker] of PH_ROUTES) {
     test(`ph_team ${route}`, async ({ page }) => {
@@ -86,6 +88,80 @@ test.describe('PH team screens render', () => {
       await expect(page.getByText(marker, { exact: false }).first()).toBeVisible();
     });
   }
+});
+
+// The SOP library is static data, so these assert the wiring (routing, role
+// filtering, search) rather than the prose — the prose is reviewed, not tested.
+test.describe('SOP & Help', () => {
+  test('search narrows to a matching procedure', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    await page.goto('/sop');
+    await page.locator('.sop-search').fill('no box');
+    // Scope to the result card — the same title also appears as a FAQ cross-link.
+    await expect(page.locator('.sop-item-title', { hasText: 'Resolve the No Box queue' })).toBeVisible();
+  });
+
+  test('opening an article is deep-linkable and shows its steps', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    await page.goto('/sop?a=shelve-putaway');
+    await expect(page.locator('.sop-title')).toHaveText('Shelve / put-away');
+    await expect(page.locator('.sop-steps > li').first()).toBeVisible();
+  });
+
+  test('role filter hides other desks\' procedures', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    await page.goto('/sop?role=supplier');
+    // A supplier-only procedure shows; a warehouse-only one does not.
+    await expect(page.locator('.sop-item-title', { hasText: 'Scan out what you are shipping' })).toBeVisible();
+    await expect(page.locator('.sop-item-title', { hasText: 'Resolve the No Box queue' })).toHaveCount(0);
+  });
+});
+
+// Manifest PDF is one shared component (components/ManifestPrint.jsx) on three
+// surfaces. Assert it is WIRED on each — building the PDF itself is jsPDF's job.
+//
+// These lists load async, so presence is checked with waitFor(), NOT isVisible():
+// isVisible() resolves immediately and would report "empty" while the fetch is still
+// in flight, turning real coverage into a silent skip. Only a genuine timeout skips.
+const appears = async (loc, ms = 6000) => {
+  try { await loc.waitFor({ state: 'visible', timeout: ms }); return true; }
+  catch { return false; }
+};
+
+test.describe('manifest print', () => {
+  test('warehouse: on the Receiving PO banner once a PO is linked', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    await page.goto('/receiving');
+    await page.locator('.po-receive-btn').click();
+    const first = page.locator('.po-picker .po-card').first();
+    // Nothing open to receive against on this DB — the banner can't exist, so skip
+    // rather than fail on unrelated data.
+    if (!(await appears(first))) test.skip(true, 'no open POs');
+    await first.click();
+    await expect(page.locator('.po-receive-banner .mf-print')).toBeVisible();
+    await expect(page.locator('.po-receive-banner .mf-print button')).toHaveCount(2);
+  });
+
+  test('warehouse: on the PO Reconciliation report', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    await page.goto('/reconcile');
+    const card = page.locator('.rcn-card, .po-card').first();
+    if (!(await appears(card))) test.skip(true, 'no POs to reconcile');
+    await card.click();
+    // A blind receipt has no manifest to print, so the block is legitimately absent.
+    const blind = await page.locator('.rcn-no-manifest').isVisible().catch(() => false);
+    if (blind) await expect(page.locator('.mf-print')).toHaveCount(0);
+    else await expect(page.locator('.mf-print')).toBeVisible();
+  });
+
+  test('PH: on the Purchase Orders overview', async ({ page }) => {
+    await loginAs(page, 'ph_team');
+    await page.goto('/ph/po-status');
+    const head = page.locator('.po-ov-head').first();
+    if (!(await appears(head))) test.skip(true, 'no POs');
+    await head.click();
+    await expect(page.locator('.mf-print')).toBeVisible();
+  });
 });
 
 test.describe('warehouse role', () => {

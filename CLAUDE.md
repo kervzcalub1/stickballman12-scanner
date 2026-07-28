@@ -23,6 +23,7 @@ React 18 + Vite — UI split into `src/screens/*` (one per page), shared
 npm run dev   # localhost:5173 (app + /api)      npm run build  # -> dist/
 npm start     # node server.mjs (prod)           npm run db:setup  # migrate (idempotent)
 npm run db:reset  # wipe inventory, KEEP accounts (destructive)
+npm run sop:shots # re-capture the SOP screenshots (needs dev on :5189 + local data)
 ```
 Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 
@@ -43,6 +44,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Purchase Orders: supplier scan-out, PO/label schema, `supplier` role (Phase 0) | `docs/context/purchase-orders.md` |
 | StockX / Alias / KicksDB, Alias auto-relogin, proxies | `docs/context/integrations.md` |
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |
+| In-app SOP & Help: article/FAQ data model, search, SVG schematics, screenshot capture | `docs/context/sop.md` |
 
 Current work log / next steps: `june22-progress.md`. Full feature history:
 `version-5.md`. Team SOPs: `SOP-WAREHOUSE.md`, `SOP-PH-TEAM.md`.

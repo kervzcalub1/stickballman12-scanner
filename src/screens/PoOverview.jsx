@@ -12,7 +12,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { PoScanModal } from '../components/PoScanModal.jsx';
-import { buildManifestPdf } from '../lib/manifestPdf.js';
+import { ManifestPrint } from '../components/ManifestPrint.jsx';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',    cls: 'draft' },
@@ -43,8 +43,6 @@ export function PoOverview({ onHome, onSignOut }) {
   const openId = openIdRaw ? Number(openIdRaw) : null;
   const setOpenId = (v) => setOpenIdRaw(v == null ? '' : String(v));
   const [detail, setDetail] = useState(null);          // { po, boxes, lines }
-  const [bizName, setBizName] = useState('');          // business name for the manifest header
-  const [printBusy, setPrintBusy] = useState(false);
   const [detailBusy, setDetailBusy] = useState(false);
   const [trackBusy, setTrackBusy] = useState(false);    // whole-PO refresh
   const [trackBoxBusy, setTrackBoxBusy] = useState(null);
@@ -77,36 +75,11 @@ export function PoOverview({ onHome, onSignOut }) {
     let cancelled = false;
     setDetail(null); setDetailBusy(true); setError('');
     api.poGet(openId)
-      .then((r) => { if (!cancelled) { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); setBizName(r.businessName || ''); } })
+      .then((r) => { if (!cancelled) setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); })
       .catch((e) => { if (cancelled) return; if (e.unauthorized) return onSignOut(); setError(e.message); })
       .finally(() => { if (!cancelled) setDetailBusy(false); });
     return () => { cancelled = true; };
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Download the expected-contents manifest as a PDF — per box (a page per label) or the
-  // whole order (one list). We download rather than auto-print: the thermal-label iframe
-  // trick fires .print() before the PDF viewer renders (unreliable for a multi-page doc),
-  // and navigating a popup to a blob PDF is flaky across browsers. A download works
-  // everywhere — the user opens the file and prints it with the OS print dialog.
-  const printManifest = async (mode) => {
-    if (!detail) return;
-    setPrintBusy(true);
-    try {
-      const generatedAt = `Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EST`;
-      const doc = await buildManifestPdf({
-        po: detail.po, boxes: detail.boxes, lines: detail.lines,
-        businessName: bizName, mode, generatedAt,
-      });
-      const url = URL.createObjectURL(doc.output('blob'));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `manifest-${detail.po.po_code}-${mode === 'perbox' ? 'per-box' : 'whole-order'}.pdf`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-    } catch (e) {
-      alert('Could not build the manifest: ' + (e?.message || e));
-    } finally { setPrintBusy(false); }
-  };
 
   // p.id is a BIGINT that arrives as a STRING; openId is numeric — compare coerced.
   const toggle = (id) => setOpenId(Number(openId) === Number(id) ? null : id);
@@ -161,15 +134,7 @@ export function PoOverview({ onHome, onSignOut }) {
                                 <Icon name="refresh" /> {trackBusy ? 'Checking…' : 'Refresh all tracking'}
                               </button>
                             </div>
-                            <div className="po-ov-print">
-                              <span className="muted xs">Manifest PDF:</span>
-                              <button className="btn ghost sm" disabled={printBusy} onClick={() => printManifest('perbox')}>
-                                <Icon name="download" /> Per box
-                              </button>
-                              <button className="btn ghost sm" disabled={printBusy} onClick={() => printManifest('whole')}>
-                                <Icon name="download" /> Whole order
-                              </button>
-                            </div>
+                            <ManifestPrint poId={p.id} poCode={p.po_code} onSignOut={onSignOut} />
                             {(() => {
                               // Whole-order manifest (Path C): one list for the whole purchase, no per-box
                               // breakdown. Shown when it's already in use, or available (draft PO with no

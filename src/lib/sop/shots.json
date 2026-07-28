@@ -1,0 +1,455 @@
+{
+  "home": {
+    "file": "/sop/home.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Home is laid out along the lifecycle of a shoe. \"Needs attention\" only appears when something is actually waiting.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 118,
+        "y": 59,
+        "w": 1044,
+        "h": 29,
+        "side": "below",
+        "label": "Your name and role — check this is the right account before you start"
+      },
+      {
+        "n": 2,
+        "x": 116,
+        "y": 96,
+        "w": 1048,
+        "h": 150,
+        "side": "right",
+        "label": "Work that needs a decision today. Cards only show here when their count is above zero."
+      },
+      {
+        "n": 3,
+        "x": 118,
+        "y": 260,
+        "w": 1044,
+        "h": 30,
+        "side": "right",
+        "label": "Sections follow the shoe: Receiving → In-Store → Put-away → Rescale → Sell & Ship → Browse"
+      }
+    ]
+  },
+  "receiving-step1": {
+    "file": "/sop/receiving-step1.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Step 1 of the receiving wizard. Supplier and tracking are both required — the server rejects a batch without them.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 641,
+        "y": 310,
+        "w": 506,
+        "h": 53,
+        "side": "right",
+        "label": "Supplier — required. Pick from the list, or \"Custom…\" to add a new one (it is saved for next time)."
+      },
+      {
+        "n": 2,
+        "x": 133,
+        "y": 384,
+        "w": 506,
+        "h": 52,
+        "side": "right",
+        "label": "Tracking number — required. Type it, scan the barcode, or photograph the label."
+      },
+      {
+        "n": 3,
+        "x": 133,
+        "y": 459,
+        "w": 506,
+        "h": 52,
+        "side": "right",
+        "label": "Boxes expected. Set above 1 and this becomes a per-box list, each with its own tracking number."
+      }
+    ]
+  },
+  "batches": {
+    "file": "/sop/batches.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Every intake. Open batches are resumable; a box showing a red 0 has a tracking number but no items.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 133,
+        "y": 122,
+        "w": 1014,
+        "h": 67,
+        "side": "right",
+        "label": "Open batches are resumable — tap one to see its boxes, or to add a box that arrived late."
+      },
+      {
+        "n": 2,
+        "x": 1028,
+        "y": 144,
+        "w": 99,
+        "h": 22,
+        "side": "left",
+        "label": "Boxes received / expected, and the item count. An \"Empty\" badge means nothing was scanned in."
+      }
+    ]
+  },
+  "inventory": {
+    "file": "/sop/inventory.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Rows merge by SKU and status. Scan a VIN to jump to a pair, or a shelf code to list that shelf.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 133,
+        "y": 76,
+        "w": 763,
+        "h": 52,
+        "side": "right",
+        "label": "Search — a VIN, SKU or name. A shelf code (MNH-WH-A2-04) returns that shelf's contents instead."
+      },
+      {
+        "n": 2,
+        "x": 133,
+        "y": 190,
+        "w": 145,
+        "h": 53,
+        "side": "below",
+        "label": "Filters: date, supplier, status, and intake (receiving / rescale / in-store)."
+      },
+      {
+        "n": 3,
+        "x": 974,
+        "y": 422,
+        "w": 61,
+        "h": 55,
+        "side": "left",
+        "label": "Sizes as quantity chips with a total. Tick the row to select every pair in it for a bulk action."
+      }
+    ]
+  },
+  "shelve": {
+    "file": "/sop/shelve.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Put-away. Scan the shelf first, then each VIN onto it — or pick from the list of shoes waiting for a shelf.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 116,
+        "y": 59,
+        "w": 1048,
+        "h": 53,
+        "side": "below",
+        "label": "Two modes: scan a shelf then the shoes, or pick from the pending list and assign a shelf."
+      },
+      {
+        "n": 2,
+        "x": 133,
+        "y": 185,
+        "w": 754,
+        "h": 52,
+        "side": "below",
+        "label": "Every scan flashes green (accepted) or amber (duplicate or refused) and buzzes the device."
+      }
+    ]
+  },
+  "nobox": {
+    "file": "/sop/nobox.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Pairs received without a box. Not sellable, and hidden from the listing grid until resolved.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 954,
+        "y": 265,
+        "w": 218,
+        "h": 41,
+        "side": "right",
+        "label": "\"Box found → With Box\" makes the pair sellable again and sends it to Needs shelf."
+      },
+      {
+        "n": 2,
+        "x": 133,
+        "y": 179,
+        "w": 186,
+        "h": 41,
+        "side": "left",
+        "label": "Print box labels lives only on this page — it recreates a shoe-box label with a UPC barcode."
+      }
+    ]
+  },
+  "listings": {
+    "file": "/sop/listings.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Listings & Sync, warehouse view: read-only, and Global indicator / Final price are hidden.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 1038,
+        "y": 209,
+        "w": 111,
+        "h": 44,
+        "side": "left",
+        "label": "II · AL · SX · SH — a badge reads \"on\" only when every pair in the group has that flag."
+      },
+      {
+        "n": 2,
+        "x": 146,
+        "y": 192,
+        "w": 218,
+        "h": 78,
+        "side": "right",
+        "label": "One row per SKU and status. Click it to expand the per-size table, where every field actually lives."
+      }
+    ]
+  },
+  "reconcile": {
+    "file": "/sop/reconcile.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "PO reconciliation. The chip says what is actually true — a clean order closes itself and never appears here.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 361,
+        "y": 72,
+        "w": 96,
+        "h": 46,
+        "side": "below",
+        "label": "Active / Archived. The archive is loaded only when you open it, so the live queue stays fast."
+      },
+      {
+        "n": 2,
+        "x": 890,
+        "y": 152,
+        "w": 87,
+        "h": 30,
+        "side": "right",
+        "label": "The chip: Reconciled · Receiving · Received blind · N discrepancies · Boxes still out · Matched."
+      }
+    ]
+  },
+  "locations": {
+    "file": "/sop/locations.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Locate Shoe. Search for a pair, or browse the tiles down Site → Area → Bay → Shelf.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 59,
+        "y": 96,
+        "w": 626,
+        "h": 52,
+        "side": "right",
+        "label": "Search by name, SKU, VIN or UPC — or scan. Results group by SKU with a shelved / not-shelved count."
+      },
+      {
+        "n": 2,
+        "x": 59,
+        "y": 260,
+        "w": 190,
+        "h": 149,
+        "side": "right",
+        "label": "Each tile is a real URL, so Back drills up and a shelf can be linked to someone."
+      }
+    ]
+  },
+  "access": {
+    "file": "/sop/access.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Check Access. Approve accounts, change roles, issue a temporary password, or remove an account.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 321,
+        "y": 108,
+        "w": 112,
+        "h": 41,
+        "side": "right",
+        "label": "Role picker — Warehouse or PH Team for staff, Supplier for an external partner."
+      },
+      {
+        "n": 2,
+        "x": 688,
+        "y": 108,
+        "w": 134,
+        "h": 41,
+        "side": "left",
+        "label": "Reset password shows a temporary password ONCE. Only its hash is stored."
+      }
+    ]
+  },
+  "ph-grid": {
+    "file": "/sop/ph-grid.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "New Inventory. One row per SKU and status; expand it for the per-size table where every field lives.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 59,
+        "y": 78,
+        "w": 203,
+        "h": 39,
+        "side": "below",
+        "label": "Date range — work the intake you are pricing. Days are Eastern, wherever you are sitting."
+      },
+      {
+        "n": 2,
+        "x": 820,
+        "y": 76,
+        "w": 144,
+        "h": 41,
+        "side": "left",
+        "label": "Refresh prices re-pulls the Global Indicator for everything on screen and recomputes Final."
+      },
+      {
+        "n": 3,
+        "x": 146,
+        "y": 241,
+        "w": 218,
+        "h": 88,
+        "side": "right",
+        "label": "Click a row to expand its per-size table; click Edit to change it. One row at a time per session."
+      }
+    ]
+  },
+  "po-create": {
+    "file": "/sop/po-create.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Opening a purchase order: the supplier, and one row per shipping label with its real tracking number.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 305,
+        "y": 153,
+        "w": 334,
+        "h": 53,
+        "side": "right",
+        "label": "The supplier account that will scan this order out."
+      },
+      {
+        "n": 2,
+        "x": 305,
+        "y": 504,
+        "w": 670,
+        "h": 119,
+        "side": "right",
+        "label": "Drop a labels PDF here — one label per page — and each page's tracking number and courier are read off it."
+      },
+      {
+        "n": 3,
+        "x": 653,
+        "y": 679,
+        "w": 280,
+        "h": 45,
+        "side": "left",
+        "label": "One row per shipping label. Set the courier — that is what makes tracking pull from the right carrier."
+      }
+    ]
+  },
+  "po-overview": {
+    "file": "/sop/po-overview.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Every order you opened, with live tracking per shipping label.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 289,
+        "y": 152,
+        "w": 702,
+        "h": 77,
+        "side": "right",
+        "label": "Status chip, labels shipped, delivered count and units — then tap to expand per-label tracking."
+      }
+    ]
+  },
+  "supplier-list": {
+    "file": "/sop/supplier-list.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "The supplier portal: every order we opened for you. Nothing else on the system is visible here.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 303,
+        "y": 151,
+        "w": 85,
+        "h": 25,
+        "side": "right",
+        "label": "The order code. Quote this when you message us about a shipment."
+      },
+      {
+        "n": 2,
+        "x": 303,
+        "y": 178,
+        "w": 674,
+        "h": 23,
+        "side": "right",
+        "label": "How many of your labels are shipped, and how many units you declared. A replacement we sent is not counted here."
+      }
+    ]
+  },
+  "supplier-order": {
+    "file": "/sop/supplier-order.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "One order: a card per shipping label, each with its own tracking number, status and contents.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 305,
+        "y": 211,
+        "w": 172,
+        "h": 52,
+        "side": "right",
+        "label": "Refresh all tracking at once, or use the per-label button lower down to check just one."
+      },
+      {
+        "n": 2,
+        "x": 305,
+        "y": 317,
+        "w": 670,
+        "h": 46,
+        "side": "right",
+        "label": "Each shipping label is its own card, with its own tracking number and unit count."
+      },
+      {
+        "n": 3,
+        "x": 305,
+        "y": 553,
+        "w": 335,
+        "h": 41,
+        "side": "left",
+        "label": "Scan the shoes into this label. Re-scanning the same shoe bumps its quantity; each line's size and quantity stay editable while the label is open."
+      },
+      {
+        "n": 4,
+        "x": 640,
+        "y": 553,
+        "w": 335,
+        "h": 41,
+        "side": "right",
+        "label": "Close the label once it is packed. You can reopen it to edit, then mark it shipped when the courier has it."
+      },
+      {
+        "n": 5,
+        "x": 874,
+        "y": 656,
+        "w": 101,
+        "h": 31,
+        "side": "left",
+        "label": "The label's state: filling → packed → shipped → in transit → delivered."
+      }
+    ]
+  }
+}

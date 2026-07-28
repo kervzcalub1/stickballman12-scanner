@@ -108,6 +108,12 @@ const PATHS = {
     <circle cx="8.5" cy="8.5" r="1.5" />
     <path d="M21 15l-5-5L5 21" />
   </>),
+  // SOP & Help — an open manual with a bookmark
+  sop: (<>
+    <path d="M3 5.5A1.5 1.5 0 0 1 4.5 4H9a3 3 0 0 1 3 3v13a2.5 2.5 0 0 0-2.5-2.5H3z" />
+    <path d="M21 5.5A1.5 1.5 0 0 0 19.5 4H15a3 3 0 0 0-3 3v13a2.5 2.5 0 0 1 2.5-2.5H21z" />
+    <path d="M16 4v5l1.8-1.3L19.5 9V4" />
+  </>),
 };
 
 export function NavIcon({ name, ...props }) {
@@ -144,6 +150,10 @@ const INLINE = {
     <path d="M3.3 7 12 12l8.7-5M12 12v9" />
   </>),
   nobox: PATHS.nobox,
+  search: (<>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M20 20l-3.6-3.6" />
+  </>),
   pin: (<>
     <path d="M12 2a7 7 0 0 1 7 7c0 5.25-7 13-7 13S5 14.25 5 9a7 7 0 0 1 7-7z" />
     <circle cx="12" cy="9" r="2.5" />

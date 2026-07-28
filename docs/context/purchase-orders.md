@@ -274,6 +274,31 @@ For the pushes to actually fire when a supplier never uses the portal:
     dropped — the existing columns are unaffected either way.
   - **Schema-touch: `po_boxes.tracking_sub_status` + `_descr` → run `db:setup`.**
 
+## Manifest PDF (printable packing slip)
+`src/components/ManifestPrint.jsx` renders **"Manifest PDF: [Per box] [Whole order]"** and
+`src/lib/manifestPdf.js` builds it (Letter-size document pages, jsPDF lazy-loaded, same
+`dispatchPdf` handoff as `labelPdf.js`). Two shapes: **`perbox`** = one page per shipping
+label, carrying that label's tracking # + carrier and its expected items; **`whole`** = one
+table for the entire order with every tracking number in the header.
+
+**Available on three surfaces, one component:**
+- **PH** — `PoOverview` (`/ph/po-status`), per expanded PO.
+- **Warehouse** — `Reconciliation` (`/reconcile`) detail header, and the **Receiving PO
+  banner** (Step 1, once a PO is linked) so the sheet can be printed *before* unpacking and
+  pairs ticked off on paper.
+
+**It always re-fetches `po/get` on click** rather than using a `detail` the caller already
+holds. `po/get` is the only endpoint returning **`businessName`** (the PDF letterhead) —
+`po/open` and `po/lookup` omit it, so Receiving's copy would print a generic header; the
+caller's lines can also be stale after an on-behalf manifest edit. One code path, callers
+pass only an id. Cost is one request per print, on an explicit user action. A failed fetch
+is **not** cached, or every later click would reuse the failure.
+
+Hidden on a **blind receipt** in Reconciliation (`summary.no_manifest`): there is nothing to
+print, and an empty slip reads as "the supplier declared nothing" rather than "nobody ever
+entered a manifest". `po/get` is `requireRole(['ph_team','warehouse','supplier'])` (admin
+auto), so no server change was needed to open this to the warehouse.
+
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`
 form a cycle. Creation order is fine (PO → batch(po_id) → set received_batch_id). Deletion of

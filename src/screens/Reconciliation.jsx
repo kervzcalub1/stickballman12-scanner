@@ -9,6 +9,7 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoResolution } from '../components/PoResolution.jsx';
+import { ManifestPrint } from '../components/ManifestPrint.jsx';
 
 const FLAG = {
   match:      { label: 'Match', cls: 'ok' },
@@ -408,6 +409,12 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
               {po.manifest_scope === 'po' && !s.no_manifest && (
                 <p className="muted xs" style={{ marginTop: '8px' }}>Whole-order manifest — matched on order totals, no per-box breakdown.</p>
               )}
+              {/* What the supplier said was in the boxes, as a printable packing slip —
+                  the paper you stand next to the pallet with when a count is disputed.
+                  Hidden on a blind receipt: there is no manifest to print, and an empty
+                  slip would read as "the supplier declared nothing" rather than "nobody
+                  ever entered one". */}
+              {!blind && <ManifestPrint poId={openId} poCode={po.po_code} onSignOut={onSignOut} />}
             </div>
 
             <div className="card">

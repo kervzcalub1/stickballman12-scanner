@@ -80,6 +80,10 @@ skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
   (`RescaleRequestForm` + `RescaleRequestsReport`).
 - `PhEditedPhotos` (`/ph/edited-photos`, PH+admin) — PH uploads edited listing
   images per SKU (`source='ph_edited'`, precedence over warehouse; `ph-report.md`).
+- `Sop` (`/sop`, `/ph/sop`, + a supplier top-bar toggle) — the in-app SOP & Help
+  centre: role-filtered procedures, keyword search, FAQ, inline SVG schematics
+  (`SopDiagram.jsx`) and Playwright-captured annotated screenshots
+  (`SopShot.jsx`). Static data, no API. See `sop.md`.
 - Shared (`src/components/common.jsx`): `TopBar`, `StatusPill`, `SyncBadges`,
   `CardBadges`, `DateRangeBar`, `SizesQty`, `YesNo`, `Modal`, `HistoryModal`,
   `LabelSheet`, `Barcode`, `PreferencesModal`, `RescaleCompare`, `EstClock`.

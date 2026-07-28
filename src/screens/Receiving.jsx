@@ -9,6 +9,7 @@ import { TopBar, Modal, LabelSheet, PreferencesModal } from '../components/commo
 import { ListingPhotos } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
@@ -879,6 +880,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             <span className="muted sm"> · {receivingPo.po.supplier_name} · {receivingPo.boxes.length} label{receivingPo.boxes.length === 1 ? '' : 's'} · {(receivingPo.lines || []).reduce((n, l) => n + (l.qty_expected || 0), 0)} expected units</span>
                           </div>
                           <button type="button" className="btn sm ghost" onClick={clearPo}>Unlink</button>
+                          {/* Print what the supplier says is in the boxes BEFORE unpacking, so
+                              pairs can be ticked off on paper as they come out. Per box = a page
+                              per label, which is the one you carry to the pallet. */}
+                          <ManifestPrint poId={receivingPo.po.id} poCode={receivingPo.po.po_code}
+                            label="Print manifest:" onSignOut={onSignOut} />
                         </div>
                       ) : (
                         <>

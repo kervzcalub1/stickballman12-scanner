@@ -25,6 +25,7 @@ import { PriceInquiry } from './PriceInquiry.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
+import { Sop } from './Sop.jsx';
 
 // Small "WY" chip shown beside a GI that came from the Alias "With You" basis
 // (the consigned GI was empty/0, so we fell back). Nothing renders for consigned
@@ -65,6 +66,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   // PH closes out the stragglers too — they're the ones chasing the supplier over a
   // shortage, so making them wait on warehouse just parked POs in the queue.
   if (page === 'reconcile') return <Reconciliation canReconcile onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'sop') return <Sop user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -132,6 +134,16 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-title">Request Rescale</span>
             <span className="home-card-sub">Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)</span>
             <CardBadges badges={counts ? [['Pending audit', counts.rescale_requests], ['Audited', counts.rescale_requests_audited, 'ok']] : []} />
+          </button>
+        </div>
+      </section>
+      <section className="home-section" data-accent="listing">
+        <h2 className="home-section-title">Help</h2>
+        <div className="home-grid">
+          <button className="home-card" onClick={() => goPage('sop')}>
+            <span className="home-card-icon"><NavIcon name="sop" /></span>
+            <span className="home-card-title">SOP &amp; Help</span>
+            <span className="home-card-sub">Step-by-step procedures for every screen, searchable, plus FAQ</span>
           </button>
         </div>
       </section>

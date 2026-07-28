@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, TrackingTimeline } from '../components/common.jsx';
+import { Sop } from './Sop.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { Icon } from '../components/NavIcons.jsx';
@@ -38,6 +39,9 @@ export function SupplierApp({ user, onSignOut }) {
   const [closeReview, setCloseReview] = useState(null); // po_box being reviewed before closing
   const [busy, setBusy] = useState(false);
   const [lineBusy, setLineBusy] = useState(null); // po_line id currently being saved
+  // Written procedures. Suppliers have no home screen to hang a card on, so Help
+  // is a top-bar toggle over the list rather than a route.
+  const [help, setHelp] = useState(false);
 
   // Edit an already-scanned line (size and/or qty) while its label is still filling.
   // qty:0 removes it. The server merges a size change into a matching SKU+size line.
@@ -126,11 +130,14 @@ export function SupplierApp({ user, onSignOut }) {
     } finally { setBusy(false); }
   };
 
+  if (help) return <Sop user={user} onHome={() => setHelp(false)} onSignOut={onSignOut} />;
+
   // ---- List view ----------------------------------------------------------
   if (!openId) {
     return (
       <div className="app">
-        <TopBar title="Outbound Shipments" onSignOut={onSignOut} />
+        <TopBar title="Outbound Shipments" onSignOut={onSignOut}
+          right={<button className="btn ghost sm" onClick={() => setHelp(true)}>How-to</button>} />
         <div className="wrap-narrow">
           <p className="muted sm">Signed in as <b>{user.name || user.username}</b> · your batches from Stickballman12.</p>
           {error && <div className="po-err">{error}</div>}

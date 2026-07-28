@@ -41,6 +41,13 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Migrate test DB (idempotent schema)
         run: npm run db:setup
+      # Shelf locations are a SEPARATE, idempotent seed — `db:setup` only creates the
+      # empty table. A real environment is provisioned db:setup THEN db:seed-manheim
+      # (docs/context/deploy.md), so CI has to do the same or the put-away, Locate and
+      # "Select all" specs run against a warehouse with no shelves and fail on data
+      # that was never loaded rather than on a defect.
+      - name: Seed shelf locations (idempotent)
+        run: npm run db:seed-manheim
       - name: Run E2E
         run: npm run e2e
       - name: Upload report on failure

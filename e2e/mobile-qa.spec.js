@@ -124,8 +124,17 @@ test.describe('390x844 mobile functional', () => {
       const n = await cards.count();
       test.skip(n === 0, 'no PH rows in range (empty DB)');
 
-      // Card chrome should be reachable and expand.
+      // Card chrome should be reachable and expand. Remember which SKU we edit —
+      // after the reload the row is found by SKU, not by position.
       const first = cards.first();
+      // The card title reads "{name} — {sku}". Take the SKU generically: on a
+      // populated database the first card is whatever is newest, not necessarily
+      // one of this file's MQA fixtures. The SKU is wrapped in CopyText, whose
+      // click-to-copy affordance adds its own line to innerText ("SKU\nCopy") —
+      // so keep only the first line.
+      const editedSku = (await first.locator('.ph-card-title').innerText())
+        .split('—').pop().trim().split('\n')[0].trim();
+      expect(editedSku, 'could not read the SKU off the first PH card').not.toBe('');
       await first.locator('.ph-card-sizes-btn').click();
       await expect(first.locator('.ph-sizedetail')).toBeVisible();
 
@@ -134,9 +143,19 @@ test.describe('390x844 mobile functional', () => {
       await editBtn.click();
       const giInput = first.locator('input.ph-price').first();
       await expect(giInput).toBeVisible();
+      // Final = GI × the configured margin, rounded to the NEAREST WHOLE DOLLAR
+      // (lib/ph.js calcFinalPrice → String(Math.round(...))). This asserted '133.20'
+      // for a 111 GI, which predates the whole-dollar rounding and the configurable
+      // margin — it had been failing ever since. Read the live margin so the test
+      // stays right whatever it's set to, exactly as ph-grid.spec.js does.
+      const pct = await page.evaluate(async () => {
+        const t = sessionStorage.getItem('sb_session_token');
+        const r = await fetch('/api/settings', { headers: { Authorization: `Bearer ${t}` } });
+        return (await r.json()).priceMarkupPct;
+      });
       await giInput.fill('111');
       const finalInput = first.locator('input.ph-price').nth(1);
-      await expect(finalInput).toHaveValue('133.20'); // GI + 20%
+      await expect(finalInput).toHaveValue(String(Math.round(111 * (1 + Number(pct) / 100))));
 
       // Flag checkbox toggles.
       const flag = first.locator('.ph-yn-check').first();
@@ -153,9 +172,23 @@ test.describe('390x844 mobile functional', () => {
       await expect(first.locator('.ph-edit-actions').getByText('Submit')).toHaveCount(0, { timeout: 8000 });
 
       // Re-open to confirm persistence.
+      //
+      // Turning a store flag on moves the group from Pending to In-Progress
+      // (lib/ph.js phListingStatus), and the grid defaults to the Pending filter —
+      // so after the reload this row is legitimately NOT in the default view. The
+      // old check grabbed `.ph-card` .first() and waited 30s for a card that had
+      // correctly filtered itself out. The filter is an additive multi-select, so
+      // turn the other two on as well — the flag we toggled could land the group in
+      // in_progress OR done (or back in pending, if it was already on) depending on
+      // the row's other flags, and this is true for all of them. Then find the row
+      // by SKU instead of trusting position.
       await page.reload();
       await page.waitForTimeout(800);
-      const cardsAfter = page.locator('.ph-card').first();
+      await page.getByRole('button', { name: 'In-Progress' }).click();
+      await page.getByRole('button', { name: 'Done' }).click();
+      await page.waitForTimeout(500);
+      const cardsAfter = page.locator('.ph-card').filter({ hasText: editedSku }).first();
+      await expect(cardsAfter).toBeVisible({ timeout: 10000 });
       await cardsAfter.locator('.ph-card-sizes-btn').click();
       await expect(cardsAfter.locator('.ph-sizedetail')).toContainText(`MQA note ${TAG}`);
     });

@@ -2143,6 +2143,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-mismatch p { margin: 0 0 10px; line-height: 1.45; }
 .po-mismatch .btn { width: 100%; }
 
+/* 17TRACK sub-status: the detail behind a coarse "Exception"/"InTransit". Tone comes from
+   src/lib/trackstatus.js — red when someone has to act, amber when it's just slow. */
+.po-substatus { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 5px 0 2px; }
+.po-substatus-detail { font-size: 12px; color: var(--muted); }
+.po-flag.info { color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); }
+
 /* A replacement shipment is on the order but isn't one of the supplier's own labels —
    tinted and rail-marked so it never reads as a box they forgot to pack. */
 .po-box.replacement, .po-ov-label.replacement {

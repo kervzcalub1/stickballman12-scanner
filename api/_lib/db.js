@@ -2184,15 +2184,23 @@ export async function listPoTrackingItems(poId) {
 // supplier has marked it shipped) never moves the box backwards. Never downgrades to null.
 // Returns the affected { id, po_id } rows.
 const BOX_STATUS_RANK = { pending: 0, packed: 1, pre_transit: 2, shipped: 3, in_transit: 4, delivered: 5 };
-export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus, lastCheckpoint, boxStatus, events }) {
+export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus, subStatus, subStatusDescr, lastCheckpoint, boxStatus, events }) {
   const sql = db();
   const eventsJson = Array.isArray(events) && events.length ? JSON.stringify(events) : null;
   const newRank = boxStatus != null ? BOX_STATUS_RANK[boxStatus] : undefined;
+  // Sub-status is tied to the status it came with, NOT COALESCEd like the other fields.
+  // It describes the CURRENT state, so a parcel that clears customs and goes back to plain
+  // "InTransit" must lose its old sub-status — COALESCE would leave "Held — security"
+  // showing on a box that's moving fine. `hasStatus` gates the whole pair: an update that
+  // carries no status at all (a bare checkpoint ping) leaves both alone.
+  const hasStatus = trackingStatus != null;
   if (boxStatus && newRank != null) {
     return sql`
       UPDATE po_boxes
       SET carrier = COALESCE(${carrier ?? null}, carrier),
           tracking_status = COALESCE(${trackingStatus ?? null}, tracking_status),
+          tracking_sub_status = CASE WHEN ${hasStatus} THEN ${subStatus ?? null} ELSE tracking_sub_status END,
+          tracking_sub_status_descr = CASE WHEN ${hasStatus} THEN ${subStatusDescr ?? null} ELSE tracking_sub_status_descr END,
           last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
           tracking_events = COALESCE(${eventsJson}::jsonb, tracking_events),
           checked_at = now(),
@@ -2207,6 +2215,8 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
     UPDATE po_boxes
     SET carrier = COALESCE(${carrier ?? null}, carrier),
         tracking_status = COALESCE(${trackingStatus ?? null}, tracking_status),
+        tracking_sub_status = CASE WHEN ${hasStatus} THEN ${subStatus ?? null} ELSE tracking_sub_status END,
+        tracking_sub_status_descr = CASE WHEN ${hasStatus} THEN ${subStatusDescr ?? null} ELSE tracking_sub_status_descr END,
         last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
         tracking_events = COALESCE(${eventsJson}::jsonb, tracking_events),
         checked_at = now()

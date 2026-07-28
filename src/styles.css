@@ -2081,6 +2081,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .rcn-fold:hover { color: var(--text); }
 .rcn-fold-cta { font-size: 12px; font-weight: 700; }
 
+/* Active / Archived switch on the reconciliation list. */
+/* align-self/width so a stretching flex-column parent can't blow the pill full-width. */
+.rcn-tabs { display: inline-flex; align-self: flex-start; width: fit-content; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin-bottom: 14px; }
+.rcn-tabs button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 16px; min-height: 38px; cursor: pointer; }
+.rcn-tabs button.on { background: var(--panel-2); color: var(--text); }
+/* The unarchive action sits OUTSIDE the card button — nested buttons are invalid HTML
+   and eat the tap on mobile. Stacked under the card rather than floated over it, so it
+   can never land on top of the note preview. */
+.po-card-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.po-card-wrap > .po-card { width: 100%; }
+
 /* "This PO doesn't match the manifest" callout on the batch-saved modal. */
 .po-mismatch { text-align: left; margin: 4px 0 14px; padding: 12px; border-radius: 10px; border: 1px solid rgba(213,69,63,0.35); border-left: 3px solid var(--err); background: rgba(213,69,63,0.08); }
 .po-mismatch-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }

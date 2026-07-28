@@ -117,12 +117,34 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   const [noteSaved, setNoteSaved] = useState(''); // what's on the server, to detect edits
   const [noteBusy, setNoteBusy] = useState(false);
 
+  // The archived list only grows and is opened rarely, so it's a separate fetch that
+  // never runs unless the tab is actually visited.
+  const [tab, setTab] = useQueryParam('tab');           // '' = active, 'archived'
+  const archived = tab === 'archived';
+  const [archivedPos, setArchivedPos] = useState(null);
+
   const loadList = () => {
     api.poReconcileList()
       .then((r) => setPos(r.pos || []))
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
+  const loadArchived = () => {
+    api.poArchived()
+      .then((r) => setArchivedPos(r.pos || []))
+      .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
+  };
   useEffect(loadList, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (archived && archivedPos == null) loadArchived(); }, [archived]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const doUnarchive = async (poId, poCode) => {
+    if (!window.confirm(`Bring ${poCode} back? It returns to Reconciled — the frozen count is unchanged.`)) return;
+    setBusy(true);
+    try {
+      await api.poUnarchive(poId);
+      loadArchived(); loadList();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  };
 
   const open = (id) => {
     setOpenId(id); setDetail(null); setError(''); setCopied(false); setShowMatched(false);
@@ -164,11 +186,12 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   };
 
   const doArchive = async () => {
-    if (!window.confirm('Archive this PO? It drops off the reconciliation list.')) return;
+    if (!window.confirm('Archive this PO? It moves to the Archived tab — you can bring it back from there.')) return;
     setBusy(true);
     try {
       await api.poClose(openId);
       setOpenId(null); setDetail(null); loadList();
+      if (archivedPos != null) loadArchived(); // keep the other tab honest if it's been opened
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
   };
@@ -180,44 +203,64 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
 
   // ---- List ----
   if (!openId) {
+    const list = archived ? archivedPos : pos;
+    const card = (p) => {
+      const chip = poChip(p.status, p.rc);
+      // "3 of 0 units received" is nonsense on a blind receipt — nothing was ever
+      // declared to count against.
+      const units = !p.rc || p.rc.expected_units == null
+        ? `${p.unit_count} expected unit${p.unit_count === 1 ? '' : 's'}`
+        : p.rc.no_manifest
+          ? `${p.rc.received_units} unit${p.rc.received_units === 1 ? '' : 's'} received · no manifest`
+          : `${p.rc.received_units} of ${p.rc.expected_units} unit${p.rc.expected_units === 1 ? '' : 's'} received`;
+      return (
+        <div className="po-card-wrap" key={p.id}>
+          <button className="po-card" onClick={() => open(p.id)}>
+            <div className="po-card-top">
+              <span className="po-code">{p.po_code}</span>
+              <span className={`po-chip ${chip.cls}`}>{chip.label}</span>
+            </div>
+            <div className="po-card-meta">
+              <span>{p.supplier_name}</span>
+              {tagOf(p) && <span>{tagOf(p)}</span>}
+              <span>{units}</span>
+            </div>
+            {p.reconcile_note && (
+              <div className="rcn-note-peek">
+                <Icon name="reconcile" /> {p.reconcile_note}
+              </div>
+            )}
+          </button>
+          {/* Outside the card button — nesting a button inside a button is invalid and
+              swallows the click on mobile. */}
+          {archived && (
+            <button className="btn ghost sm rcn-unarchive" disabled={busy}
+              onClick={() => doUnarchive(p.id, p.po_code)}>
+              Bring back
+            </button>
+          )}
+        </div>
+      );
+    };
+
     return (
       <div className="app">
         <TopBar title="PO Reconciliation" onHome={onHome} onSignOut={onSignOut} />
         <div className="wrap-narrow">
           {error && <div className="po-err">{error}</div>}
-          {pos == null ? <p className="muted">Loading…</p>
-            : pos.length === 0 ? <div className="card empty-state">No received purchase orders yet. Reconciliation shows up here once a PO has been received against.</div>
-            : (
-              <div className="po-list">
-                {pos.map((p) => {
-                  const chip = poChip(p.status, p.rc);
-                  // "3 of 0 units received" is nonsense on a blind receipt — nothing was
-                  // ever declared to count against.
-                  const units = !p.rc || p.rc.expected_units == null
-                    ? `${p.unit_count} expected unit${p.unit_count === 1 ? '' : 's'}`
-                    : p.rc.no_manifest
-                      ? `${p.rc.received_units} unit${p.rc.received_units === 1 ? '' : 's'} received · no manifest`
-                      : `${p.rc.received_units} of ${p.rc.expected_units} unit${p.rc.expected_units === 1 ? '' : 's'} received`;
-                  return (
-                    <button key={p.id} className="po-card" onClick={() => open(p.id)}>
-                      <div className="po-card-top">
-                        <span className="po-code">{p.po_code}</span>
-                        <span className={`po-chip ${chip.cls}`}>{chip.label}</span>
-                      </div>
-                      <div className="po-card-meta">
-                        <span>{p.supplier_name}</span>
-                        {tagOf(p) && <span>{tagOf(p)}</span>}
-                        <span>{units}</span>
-                      </div>
-                      {p.reconcile_note && (
-                        <div className="rcn-note-peek">
-                          <Icon name="reconcile" /> {p.reconcile_note}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
+          <div className="rcn-tabs">
+            <button className={archived ? '' : 'on'} onClick={() => setTab('')}>Active</button>
+            <button className={archived ? 'on' : ''} onClick={() => setTab('archived')}>Archived</button>
+          </div>
+          {list == null ? <p className="muted">Loading…</p>
+            : list.length === 0 ? (
+              <div className="card empty-state">
+                {archived
+                  ? 'Nothing archived yet. Archiving a reconciled order moves it here — and you can bring it back.'
+                  : 'No received purchase orders yet. Reconciliation shows up here once a PO has been received against.'}
               </div>
+            ) : (
+              <div className="po-list">{list.map(card)}</div>
             )}
         </div>
       </div>
@@ -381,6 +424,12 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
               )}
               {canReconcile && po.status === 'reconciled' && (
                 <button className="btn ghost" disabled={busy} onClick={doArchive}>Archive</button>
+              )}
+              {canReconcile && po.status === 'closed' && (
+                <button className="btn ghost" disabled={busy}
+                  onClick={() => doUnarchive(po.id, po.po_code).then(() => { setOpenId(null); setDetail(null); })}>
+                  Bring back from archive
+                </button>
               )}
             </div>
           </>

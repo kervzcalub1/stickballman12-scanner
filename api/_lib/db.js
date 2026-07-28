@@ -2221,3 +2221,32 @@ export async function closePo(poId) {
     RETURNING id, po_code, status`;
   return rows[0] || null;
 }
+
+// Undo an archive → back to 'reconciled', where it's visible and actionable again.
+// Archiving used to be a one-way door: nothing moved a PO out of 'closed', and receiving
+// against it is blocked, so a late box or a mis-tap meant a hand-edit in the database.
+// Deliberately lands on 'reconciled', not 'receiving' — the frozen count still stands;
+// this only puts the order back where someone can see and work with it.
+export async function unarchivePo(poId) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE purchase_orders SET status = 'reconciled'
+    WHERE id = ${poId} AND status = 'closed'
+    RETURNING id, po_code, status`;
+  return rows[0] || null;
+}
+
+// Archived orders, newest first. Its own query rather than a flag on listReconcilePos:
+// the active queue must not pay for a list that grows forever and is opened rarely.
+export async function listArchivedPos({ limit = 100 } = {}) {
+  const sql = db();
+  return sql`
+    SELECT p.id, p.po_code, p.status, p.supplier_name, p.tag_code,
+      p.reconciled_at, p.created_at, p.reconciliation->'summary' AS snapshot_summary,
+      p.reconcile_note, p.reconcile_note_by, p.reconcile_note_at,
+      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+    FROM purchase_orders p
+    WHERE p.status = 'closed'
+    ORDER BY p.reconciled_at DESC NULLS LAST, p.created_at DESC
+    LIMIT ${limit}`;
+}

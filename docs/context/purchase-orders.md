@@ -95,6 +95,16 @@ labels** (one tracking number each); it closes only when every label is shipped.
     `/reconcile?po=<id>` (`onOpenReconcile` → `App.jsx`'s `openReconcile`). Returns null (silent)
     when the PO auto-closed, when intake isn't finished, or when there's no PO at all.
     Class prefix is **`po-mismatch`**, deliberately not `rc-*` (see the collision above).
+  - **Archiving is reversible.** `GET /api/po/archived` (its own endpoint, `LIMIT 100`, **not**
+    a flag on `reconcile-list` — the archive only grows and is opened rarely, so the active
+    queue must never pay to load it) + `POST /api/po/unarchive {poId}` → `closed`→`reconciled`
+    (warehouse/ph_team; 409 with the actual status if it isn't archived, 404 if missing).
+    Lands on `reconciled`, **not** `receiving`: the frozen count still stands, this only makes
+    the order workable again. UI: an **Active / Archived** switch on the list (`?tab=archived`,
+    fetched lazily on first visit) and a **Bring back** button — rendered *outside* the card
+    `<button>`, since nested buttons are invalid and swallow the tap on mobile. Archived cards
+    read their numbers from the **frozen `reconciliation->'summary'`**, never recomputed, so
+    history can't shift under later data changes.
   - **Report table UI.** Classes are prefixed **`rcn-`, not `rc-`** — `RescaleRequests.jsx` owns
     `rc-*` and `.rc-item` there paints a bordered card, which drew a stray pill around every SKU
     cell. Rows are two-line (SKU · size, then product name), qty is one `got/exp` cell, and a chip

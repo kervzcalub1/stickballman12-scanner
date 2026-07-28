@@ -108,10 +108,24 @@ test.describe('SOP & Help', () => {
     await expect(page.locator('.sop-steps > li').first()).toBeVisible();
   });
 
-  test('role filter hides other desks\' procedures', async ({ page }) => {
+  // A warehouse/PH/supplier account is SCOPED to its own role — not offered a filter.
+  test('a non-admin account is locked to its own role', async ({ page }) => {
     await loginAs(page, 'warehouse');
+    // ?role= is deliberately ignored: a pasted link must not walk someone into
+    // another desk's procedures.
     await page.goto('/sop?role=supplier');
-    // A supplier-only procedure shows; a warehouse-only one does not.
+    await expect(page.locator('.sop-role')).toHaveCount(0);               // no role switcher
+    await expect(page.locator('.sop-item-title', { hasText: 'Resolve the No Box queue' })).toBeVisible();
+    await expect(page.locator('.sop-item-title', { hasText: 'Scan out what you are shipping' })).toHaveCount(0);
+    // Cross-cutting procedures stay available to everyone.
+    await expect(page.locator('.sop-item-title', { hasText: 'Statuses and what they mean' })).toBeVisible();
+  });
+
+  test('admin keeps the role switcher and can browse another desk', async ({ page }) => {
+    await loginAs(page, 'admin');
+    await page.goto('/sop');
+    await expect(page.locator('.sop-role')).toHaveCount(6);
+    await page.getByRole('tab', { name: 'Supplier' }).click();
     await expect(page.locator('.sop-item-title', { hasText: 'Scan out what you are shipping' })).toBeVisible();
     await expect(page.locator('.sop-item-title', { hasText: 'Resolve the No Box queue' })).toHaveCount(0);
   });

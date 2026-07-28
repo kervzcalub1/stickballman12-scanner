@@ -66,11 +66,17 @@ export const areaAccent = (k) => (SOP_AREAS.find((a) => a.key === k) || {}).acce
 export const roleLabelSop = (k) => (SOP_ROLES.find((r) => r.key === k) || {}).label || k;
 export const articleById = (id) => SOP_ARTICLES.find((a) => a.id === id);
 
-// An article is visible to a role if it lists it. admin/superadmin see everything
-// (they supervise every desk), which mirrors `isPrivileged()` on the server.
+// An article is visible to a role only if it lists that role.
+//
+// Cross-cutting procedures are not special-cased here — they simply LIST every role
+// they apply to (the Reference and Getting-started articles carry the full staff or
+// all-roles list), so a warehouse account still gets "what scans as what" while never
+// seeing the PH pricing grid. admin/superadmin appear in the staff articles' own role
+// lists, so supervising still works without a blanket override: previously
+// `role === 'admin'` returned true for EVERYTHING, which meant an admin browsing as
+// "Supplier" was shown warehouse procedures too.
 export function visibleTo(article, role) {
   if (role === 'all') return true;
-  if (role === 'admin' || role === 'superadmin') return true;
   return article.roles.includes(role);
 }
 
@@ -94,7 +100,9 @@ const INDEX = [
 
 export function searchSop(query, role = 'all') {
   const terms = norm(query).split(' ').filter(Boolean);
-  const pool = INDEX.filter((e) => (role === 'all' || role === 'admin' || role === 'superadmin' ? true : e.roles.includes(role)));
+  // Same rule as visibleTo — search must never surface a procedure the browse list
+  // won't show, or a locked account could reach another desk's SOP through the box.
+  const pool = INDEX.filter((e) => role === 'all' || e.roles.includes(role));
   if (!terms.length) return [];
   return pool
     .map((e) => {

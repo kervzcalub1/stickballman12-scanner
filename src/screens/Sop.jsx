@@ -17,19 +17,31 @@ import {
   areaLabel, areaAccent, roleLabelSop, articleById, visibleTo, searchSop,
 } from '../lib/sop/index.js';
 
-// The role whose procedures a signed-in user most likely wants first. Admins get
-// "All roles" — they supervise every desk, so pre-filtering hides work from them.
-const defaultRoleFor = (role) => (role === 'warehouse' || role === 'ph_team' || role === 'supplier' ? role : 'all');
+// A warehouse, PH or supplier account only ever sees ITS OWN procedures — the role
+// isn't a filter they can change. Showing someone every other desk's SOPs buries the
+// handful that are actually theirs. Cross-cutting procedures still appear because
+// those articles list every role they apply to (see visibleTo), so a locked account
+// keeps sign-in, statuses, scanning and troubleshooting.
+//
+// admin/superadmin are deliberately NOT locked: they supervise every desk and are the
+// people answering "how does receiving do X?", so they keep the switcher and default
+// to All roles.
+const LOCKED_ROLES = ['warehouse', 'ph_team', 'supplier'];
+const lockedRoleFor = (role) => (LOCKED_ROLES.includes(role) ? role : null);
 
 export function Sop({ user, navBack, onHome, onSignOut }) {
-  const [role, setRole] = useState(() => readParam('role') || defaultRoleFor(user?.role));
+  const lockedRole = lockedRoleFor(user?.role);
+  const defaultRoleFor = () => lockedRole || 'all';
+  // A locked account ignores ?role= entirely — otherwise a pasted link would walk
+  // them straight into another desk's procedures.
+  const [role, setRole] = useState(() => lockedRole || readParam('role') || 'all');
   const [query, setQuery] = useState(() => readParam('q'));
   const [openId, setOpenId] = useState(() => readParam('a'));
   const isPhone = useMediaQuery('(max-width: 768px)');
   const searchRef = useRef(null);
   const topRef = useRef(null);
 
-  useEffect(() => { writeParam('role', role === defaultRoleFor(user?.role) ? '' : role); }, [role, user]);
+  useEffect(() => { writeParam('role', lockedRole || role === 'all' ? '' : role); }, [role, lockedRole]);
   useEffect(() => { writeParam('q', query); }, [query]);
   useEffect(() => { writeParam('a', openId); }, [openId]);
 
@@ -62,6 +74,13 @@ export function Sop({ user, navBack, onHome, onSignOut }) {
 
   const faqForRole = useMemo(() => FAQ.filter((f) => visibleTo(f, role)), [role]);
 
+  // Count what THIS account can reach, not the whole library — "53 procedures" on a
+  // page showing 18 of them is just wrong.
+  const visibleCount = useMemo(() => ({
+    articles: SOP_ARTICLES.filter((a) => visibleTo(a, role)).length,
+    faqs: faqForRole.length,
+  }), [role, faqForRole]);
+
   const open = (id) => { setOpenId(id); setQuery(''); };
 
   return (
@@ -69,15 +88,20 @@ export function Sop({ user, navBack, onHome, onSignOut }) {
       <TopBar title="SOP & Help" onHome={onHome} onSignOut={onSignOut} />
       <div ref={topRef} />
 
-      {/* --- search + role filter: always visible, so you can re-search from
-          inside an article without going back first --- */}
+      {/* --- search + role filter: sticky, so you can re-search from inside an
+          article without going back first. Kept SHORT and fully opaque — see the
+          keyword chips below, which deliberately live outside it. --- */}
       <div className="sop-hero">
         <div className="sop-hero-top">
           <div>
             <h1 className="sop-h1">Standard operating procedures</h1>
-            <p className="sop-lede">Every feature, written up for the person doing it. Search, or browse by area below.</p>
+            <p className="sop-lede">
+              {lockedRole
+                ? `The procedures for your role, ${roleLabelSop(lockedRole)}, plus the ones everyone needs.`
+                : 'Every feature, written up for the person doing it. Search, or browse by area below.'}
+            </p>
           </div>
-          <div className="sop-count">{SOP_ARTICLES.length} procedures · {FAQ.length} FAQs</div>
+          <div className="sop-count">{visibleCount.articles} procedures · {visibleCount.faqs} FAQs</div>
         </div>
 
         <div className="sop-searchrow">
@@ -94,30 +118,36 @@ export function Sop({ user, navBack, onHome, onSignOut }) {
           {query && <button className="btn ghost sm sop-clear" onClick={() => { setQuery(''); searchRef.current?.focus(); }}>Clear</button>}
         </div>
 
-        <div className="sop-roles" role="tablist" aria-label="Filter by role">
-          {SOP_ROLES.map((r) => (
-            <button
-              key={r.key}
-              role="tab"
-              aria-selected={role === r.key}
-              className={`sop-role${role === r.key ? ' is-on' : ''}`}
-              onClick={() => setRole(r.key)}
-              title={r.blurb}
-            >{r.label}</button>
-          ))}
-        </div>
-
-        {/* Chips are a browsing aid — inside an article they are just noise, and on
-            a phone the sticky hero would eat most of the screen. */}
-        {!searching && !article && (
-          <div className="sop-chips">
-            <span className="sop-chips-label">Jump to</span>
-            {SOP_KEYWORDS.map((k) => (
-              <button key={k} className="sop-chip" onClick={() => { setQuery(k); setOpenId(''); }}>{k}</button>
+        {/* Only admins choose a role. Everyone else is scoped to their own account. */}
+        {!lockedRole && (
+          <div className="sop-roles" role="tablist" aria-label="Filter by role">
+            {SOP_ROLES.map((r) => (
+              <button
+                key={r.key}
+                role="tab"
+                aria-selected={role === r.key}
+                className={`sop-role${role === r.key ? ' is-on' : ''}`}
+                onClick={() => setRole(r.key)}
+                title={r.blurb}
+              >{r.label}</button>
             ))}
           </div>
         )}
       </div>
+
+      {/* Keyword chips sit OUTSIDE the sticky hero on purpose. They wrap to three
+          rows on a normal window, and inside a sticky container that meant a tall
+          translucent band sitting permanently over the article list — the cards
+          scrolled underneath and both became unreadable. As ordinary page content
+          they scroll away like everything else. */}
+      {!searching && !article && (
+        <div className="sop-chips">
+          <span className="sop-chips-label">Jump to</span>
+          {SOP_KEYWORDS.map((k) => (
+            <button key={k} className="sop-chip" onClick={() => { setQuery(k); setOpenId(''); }}>{k}</button>
+          ))}
+        </div>
+      )}
 
       {searching ? (
         <SearchResults query={query} results={results} onOpen={open} />

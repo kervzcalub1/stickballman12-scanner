@@ -2264,10 +2264,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    ==========================================================================*/
 
 /* --- hero: search + role filter, sticky so you can re-search from anywhere --- */
+/* Sticky, and therefore FULLY OPAQUE. This was a gradient fading to transparent at
+   the bottom, so article cards scrolling underneath showed straight through the
+   header — the keyword chips and the card text overlapped into an unreadable mess.
+   A sticky bar has to occlude what passes beneath it. */
 .sop-hero {
   position: sticky; top: 0; z-index: 5;
-  margin: 0 0 20px; padding: 16px 0 14px;
-  background: linear-gradient(180deg, var(--bg) 0%, var(--bg) 78%, transparent 100%);
+  margin: 0 0 16px; padding: 14px 0 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
 }
 .sop-hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .sop-h1 { margin: 0; font-size: 24px; letter-spacing: -0.2px; }
@@ -2293,13 +2298,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .sop-role:hover { border-color: var(--primary); color: var(--text); }
 .sop-role.is-on { background: rgba(79,124,255,0.16); border-color: var(--primary); color: var(--text); }
 
-.sop-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.sop-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 22px; }
 .sop-chips-label { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+/* Opaque, not transparent: a see-through chip over any content behind it renders
+   two overlapping strings of text. */
 .sop-chip {
   padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer;
-  border: 1px dashed var(--border); background: transparent; color: var(--muted);
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted);
 }
-.sop-chip:hover { border-style: solid; border-color: var(--primary); color: var(--text); background: var(--panel-2); }
+.sop-chip:hover { border-color: var(--primary); color: var(--text); background: var(--panel-2); }
 
 /* --- index list --- */
 .sop-area { margin-bottom: 26px; }

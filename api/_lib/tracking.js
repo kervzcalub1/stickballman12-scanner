@@ -5,6 +5,7 @@
 // pull (api/po/track-refresh.js). Kept behind this one module so swapping providers
 // (e.g. AfterShip) is a single-file change. See docs/po-scanout-plan.md.
 import { carrierName } from '../../src/lib/carriers.js';
+import { subStatusLabel, subStatusNeedsAction } from '../../src/lib/trackstatus.js';
 
 const BASE = 'https://api.17track.net/track/v2.2';
 
@@ -83,6 +84,11 @@ export function parseTrackEntry(entry) {
   if (!number) return null;
   const ti = entry.track_info || entry.track || entry;
   const trackingStatus = ti?.latest_status?.status || ti?.latest_status || null;
+  // sub_status is the detail behind the coarse status — Exception_Returning vs
+  // Exception_Security are the same "Exception" but very different problems. Only present
+  // when latest_status is an object (older/simpler payloads send a bare string).
+  const subStatus = ti?.latest_status?.sub_status || null;
+  const subStatusDescr = ti?.latest_status?.sub_status_descr || null;
   const lastCheckpoint = ti?.latest_event?.description || ti?.latest_event?.stage || null;
   // Prefer the human-readable provider name; else map 17TRACK's numeric carrier code to a
   // name (UPS, FedEx…) so labels never show a bare code like "100002".
@@ -102,6 +108,8 @@ export function parseTrackEntry(entry) {
     trackingNumber: String(number),
     carrier: carrier ? String(carrier) : null,
     trackingStatus: trackingStatus ? String(trackingStatus) : null,
+    subStatus: subStatus ? String(subStatus).slice(0, 60) : null,
+    subStatusDescr: subStatusDescr ? String(subStatusDescr).slice(0, 300) : null,
     lastCheckpoint: lastCheckpoint ? String(lastCheckpoint).slice(0, 300) : null,
     boxStatus: mapBoxStatus(trackingStatus),
     events,
@@ -116,9 +124,15 @@ export function parseTrackEntry(entry) {
 export const sheetsTrackingUrl = () => process.env.GOOGLE_SHEETS_TRACKING_URL || '';
 export async function forwardTrackingToSheet(updates) {
   const url = sheetsTrackingUrl();
+  // Both the raw sub-status and a readable version: the raw code is what you'd filter or
+  // pivot on in the sheet, the label is what a person reads without a lookup table.
   const rows = (updates || []).map((u) => ({
     trackingNumber: u.trackingNumber,
     status: u.trackingStatus || null,   // raw 17TRACK status text
+    subStatus: u.subStatus || null,     // raw 17TRACK sub_status, e.g. Exception_Returning
+    subStatusLabel: subStatusLabel(u.subStatus) || null,   // e.g. "Being returned to sender"
+    subStatusDetail: u.subStatusDescr || null,             // 17TRACK's own extra description
+    needsAction: subStatusNeedsAction(u.subStatus),        // stuck / returning / lost
     stage: u.boxStatus || null,         // our mapped stage: pre_transit | in_transit | delivered
     carrier: u.carrier || null,
     lastCheckpoint: u.lastCheckpoint || null,

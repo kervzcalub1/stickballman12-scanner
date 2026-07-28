@@ -40,7 +40,8 @@ export default async function handler(req, res) {
     // Railway logs (e.g. after firing the dashboard's "Test Webhook"). Shows exactly what we
     // extracted — number : raw-status → mapped-stage — so a payload-shape change is obvious.
     console.log('[po/tracking-webhook] parsed', updates.length,
-      updates.map((u) => `${u.trackingNumber}:${u.trackingStatus || '?'}→${u.boxStatus || 'null'}`).join(', ') || '(none)');
+      updates.map((u) => `${u.trackingNumber}:${u.trackingStatus || '?'}`
+        + `${u.subStatus ? `/${u.subStatus}` : ''}→${u.boxStatus || 'null'}`).join(', ') || '(none)');
     // If a push parsed to zero, log the envelope shape (not the full body) to diagnose a
     // 17TRACK version/format change without dumping sensitive tracking data.
     if (!updates.length)

@@ -253,6 +253,26 @@ For the pushes to actually fire when a supplier never uses the portal:
 - **Google Sheets mirror** (optional): `forwardTrackingToSheet` (env `GOOGLE_SHEETS_TRACKING_URL`)
   posts every update to a Google Apps Script Web App from BOTH the webhook and `track-refresh`
   (best-effort, env-gated). Setup + Apps Script in `docs/google-sheets-tracking.md`.
+- **Sub-status** — 17TRACK's `latest_status` carries `{ status, sub_status, sub_status_descr }`.
+  `status` is the coarse stage we map onto `po_boxes.status` and it's too blunt to act on:
+  "Exception" doesn't say whether customs is holding the parcel or the courier already sent it
+  back. `parseTrackEntry` now pulls `sub_status`/`sub_status_descr` (tolerating the older
+  payloads where `latest_status` is a bare string) into **`po_boxes.tracking_sub_status` +
+  `tracking_sub_status_descr`**.
+  - **Not COALESCEd like the other fields.** Sub-status describes the CURRENT state, so it's
+    written whenever a push carries a status — including to NULL. COALESCE would leave
+    "Held — security" pinned to a box that has since cleared customs and is moving fine. A push
+    with no status at all (a bare checkpoint) leaves both columns alone.
+  - **`src/lib/trackstatus.js`** is the shared vocabulary (imported by the API *and* the UI, same
+    as `carriers.js`): `subStatusLabel()` turns `Exception_Returning` into "Being returned to
+    sender" and de-camel-cases anything unmapped so a new 17TRACK code still reads as words;
+    `subStatusTone()` returns **bad** (stuck / returning / lost / failed delivery), **warn**
+    (customs, delayed) or **info**. Shown as a toned chip on the supplier portal and PoOverview.
+  - **The Sheets payload gained four keys** — `subStatus` (raw, for filtering/pivots),
+    `subStatusLabel` (readable), `subStatusDetail` (17TRACK's own text) and `needsAction`
+    (boolean). **The Apps Script must be updated to write the new columns** or they're silently
+    dropped — the existing columns are unaffected either way.
+  - **Schema-touch: `po_boxes.tracking_sub_status` + `_descr` → run `db:setup`.**
 
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`
@@ -320,8 +340,9 @@ VINs + inserts `items` = phantom stock).
   **`carrier_key`** (the 17TRACK numeric carrier code chosen in the New Batch dropdown or
   auto-detected from the labels PDF; passed to 17TRACK register/gettrackinfo so it pulls
   from the RIGHT courier), `carrier` (display NAME the aggregator returns), `tracking_status`
-  / `last_checkpoint` / `checked_at`, `status` ∈ `pending | shipped | in_transit | delivered`,
-  `shipped_at`. **Carrier UX:** `src/lib/carriers.js` = curated 17TRACK carriers (UPS/FedEx/
+  / **`tracking_sub_status`** / **`tracking_sub_status_descr`** / `last_checkpoint` /
+  `checked_at`, `status` ∈ `pending | shipped | in_transit | delivered`, `shipped_at`,
+  **`kind`** (`original | replacement` — a reship carries no `po_lines`). **Carrier UX:** `src/lib/carriers.js` = curated 17TRACK carriers (UPS/FedEx/
   USPS/… keyed by code) + `carrierName(code|name)` + `detectCarrierKey({text,number})`
   (label-text keyword first, then number format — 1Z→UPS, 96…→FedEx, 9x→USPS, etc.).
   `decodeTrackingPdf` returns `carrierKey` per page; `CreatePO` shows a per-label courier

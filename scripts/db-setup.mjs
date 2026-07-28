@@ -490,6 +490,12 @@ await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS carrier_key INT`);
 // Full checkpoint history (newest first) from the tracking aggregator, for the milestone
 // timeline UI: [{ time, description, location, stage }].
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS tracking_events JSONB`);
+// 17TRACK's `latest_status` carries { status, sub_status, sub_status_descr }. `status` is
+// the coarse stage already mapped onto po_boxes.status and it's too blunt to act on —
+// "Exception" doesn't say whether customs is holding the parcel or it's been sent back.
+// Stored raw (e.g. Exception_Returning); src/lib/trackstatus.js turns it into words.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS tracking_sub_status TEXT`);
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS tracking_sub_status_descr TEXT`);
 await sql(`ALTER TABLE po_boxes DROP CONSTRAINT IF EXISTS po_boxes_status_check`);
 await sql(`ALTER TABLE po_boxes ADD CONSTRAINT po_boxes_status_check CHECK (status IN ('pending','packed','pre_transit','shipped','in_transit','delivered'))`);
 

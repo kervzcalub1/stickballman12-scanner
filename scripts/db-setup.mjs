@@ -165,10 +165,15 @@ await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS gi_basis           TEXT`);
 // a later divergence (price <> listed_price while on II) surfaces the ⚠ "Price changed"
 // drift chip on the PH grid — the live store listing is now at a stale price. See ph-report.md.
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS listed_price       NUMERIC(12,2)`);
-// One-time baseline for shoes already on II before this column existed (only fills
-// nulls, so it never masks a drift that's already been recorded).
-await sql(`UPDATE items SET listed_price = price WHERE added_to_intel_inv AND listed_price IS NULL AND price IS NOT NULL`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS added_to_intel_inv BOOLEAN NOT NULL DEFAULT false`);
+// One-time baseline for shoes already on II before `listed_price` existed (only fills
+// nulls, so it never masks a drift that's already been recorded).
+// MUST run after the ADD COLUMN above, not before: on an EXISTING database
+// `added_to_intel_inv` is already there so either order works, which is why this went
+// unnoticed — but on a FRESH one the UPDATE aborted the whole migration with
+// `column "added_to_intel_inv" does not exist`, so no new environment (or CI's
+// ephemeral Postgres) could be provisioned at all.
+await sql(`UPDATE items SET listed_price = price WHERE added_to_intel_inv AND listed_price IS NULL AND price IS NOT NULL`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_alias       BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_stockx      BOOLEAN NOT NULL DEFAULT false`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS synced_shopify     BOOLEAN NOT NULL DEFAULT false`);

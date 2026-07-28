@@ -30,10 +30,22 @@ search, and cross-linked without duplicating copy.
 - **Files:** `articles.warehouse.js` · `articles.ph.js` · `articles.supplier.js` ·
   `articles.admin.js` · `articles.reference.js` · `faq.js`. `index.js` concatenates
   them and owns the vocabulary (`SOP_ROLES`, `SOP_AREAS`, `SOP_KEYWORDS`).
-- **Roles:** `visibleTo()` — admin/superadmin see everything (they supervise every
-  desk), mirroring `isPrivileged()` on the server. A default role is pre-selected
-  from the signed-in user, except for admins, who get "All roles" (pre-filtering
-  would hide work from them).
+- **Roles — scoped to the account, not a free filter.** `visibleTo(article, role)`
+  is a plain `article.roles.includes(role)`; there is no admin blanket-true (that
+  version showed warehouse procedures to an admin browsing as "Supplier").
+  - **warehouse / ph_team / supplier are LOCKED** to their own role (`LOCKED_ROLES`
+    in `Sop.jsx`): the role switcher isn't rendered, and **`?role=` is ignored** so a
+    pasted link can't walk someone into another desk's SOPs. Showing a PH user every
+    warehouse procedure buries the handful that are actually theirs.
+  - **admin / superadmin keep the switcher** and default to "All roles" — they
+    supervise every desk and answer "how does receiving do X?".
+  - **Cross-cutting procedures are not special-cased.** They simply list every role
+    they apply to, so Reference and Getting-started carry the full staff/all-roles
+    list and a locked account still gets sign-in, statuses, scanning and
+    troubleshooting. Add a role to an article's `roles` to share it.
+  - `searchSop()` applies the same rule, so search can never surface something the
+    browse list won't show.
+  - The header count reflects what THIS account can reach, not the library total.
 - **FAQ** entries are `{ id, q, a, area, roles, see?, keywords? }`. `see` links to
   an article id; that article's page also renders every FAQ pointing at it. The bar
   for a FAQ: a real misunderstanding, answered in one paragraph. Anything needing
@@ -45,6 +57,18 @@ AND-over-terms, scored so a title hit outranks a body hit and a procedure beats 
 FAQ on a tie. ~50 documents — deliberately not a search engine. Role filter applies
 before matching. Query, role and open article live in `?q=` / `?role=` / `?a=` so a
 refresh, Back, and a link pasted into the group chat all land in the same place.
+
+## Layout gotcha — the sticky header must be opaque
+`.sop-hero` (search + role switcher) is `position: sticky`. It was originally painted
+with a gradient fading to `transparent` at the bottom, so article cards scrolling
+underneath showed straight through it and the two sets of text overlapped into an
+unreadable mess. A sticky bar has to **occlude** what passes beneath it: it is now a
+solid `var(--bg)` with a bottom border. `.sop-chip` is likewise opaque, never
+`background: transparent`.
+
+The **keyword chips live OUTSIDE the sticky hero**, as ordinary page content. They
+wrap to three rows on a normal window; inside the sticky container that meant a tall
+band permanently covering the list. Keep the sticky area short.
 
 ## Schematics (`src/components/SopDiagram.jsx`)
 13 hand-laid inline SVG diagrams (plus one HTML permission matrix), registered in

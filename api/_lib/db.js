@@ -1713,13 +1713,17 @@ export async function getPoFull(id) {
 
 // List POs with roll-up counts. Supplier sees only their own; everyone else all.
 // (The shim can't nest sql fragments, so branch the whole statement.)
+// "x of y labels shipped" describes the SUPPLIER'S packing job, so a replacement label —
+// which the warehouse created, not them — must not land in these counts. Otherwise a
+// supplier who shipped everything they were asked to suddenly reads "2 of 3".
 export async function listPos({ uid, supplierScope }) {
   const sql = db();
   if (supplierScope) {
     return sql`
       SELECT p.*,
-        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
-        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status <> 'pending')::int AS shipped_count,
+        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
+        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement' AND b.status <> 'pending')::int AS shipped_count,
+        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
         (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
       FROM purchase_orders p
       WHERE p.supplier_user_id = ${uid}
@@ -1728,9 +1732,10 @@ export async function listPos({ uid, supplierScope }) {
   }
   return sql`
     SELECT p.*,
-      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
-      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status <> 'pending')::int AS shipped_count,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement' AND b.status <> 'pending')::int AS shipped_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status = 'delivered')::int AS delivered_count,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
       (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
     FROM purchase_orders p
     ORDER BY p.created_at DESC

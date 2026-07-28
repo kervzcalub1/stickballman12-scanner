@@ -202,16 +202,20 @@ export function SupplierApp({ user, onSignOut }) {
             {detail.boxes.map((box) => {
               const lines = linesFor(box.id);
               const units = lines.reduce((n, l) => n + (l.qty_expected || 0), 0);
-              const isFilling = box.status === 'pending';
+              // A replacement label was added by the warehouse to cover a shortage on this
+              // order — the supplier never packed it. Without saying so it reads as a box
+              // they forgot to fill: numbered like their own, and empty.
+              const isReplacement = box.kind === 'replacement';
+              const isFilling = !isReplacement && box.status === 'pending';
               const isPacked = box.status === 'packed';
               // "En route" states carry live tracking (show the status line + refresh). pre_transit
               // means the label's made but the parcel is still with the supplier — tracking is active.
               const isShipped = ['shipped', 'in_transit', 'delivered', 'pre_transit'].includes(box.status);
               return (
-                <div key={box.id} className={`card po-box ${isShipped ? 'shipped' : ''} ${isPacked ? 'packed' : ''}`}>
+                <div key={box.id} className={`card po-box ${isShipped ? 'shipped' : ''} ${isPacked ? 'packed' : ''} ${isReplacement ? 'replacement' : ''}`}>
                   <div className="po-card-top">
                     <div>
-                      <b>Label {box.box_number}</b>
+                      <b>{isReplacement ? 'Replacement shipment' : `Label ${box.box_number}`}</b>
                       <div className="po-track muted sm">
                         {carrierName(box.carrier || box.carrier_key) ? <span className="po-carrier">{carrierName(box.carrier || box.carrier_key)}</span> : null}
                         {carrierName(box.carrier || box.carrier_key) && box.tracking_number ? ' · ' : ''}
@@ -222,6 +226,14 @@ export function SupplierApp({ user, onSignOut }) {
                       ? <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>
                       : <span className={`po-chip ${box.status === 'delivered' ? 'ok' : box.status === 'in_transit' ? 'receiving' : box.status === 'pre_transit' ? 'pretransit' : box.status === 'packed' ? 'packed' : 'shipped'}`}>{boxStatusLabel(box)}</span>}
                   </div>
+
+                  {isReplacement && (
+                    <p className="po-box-note sm">
+                      Tracking for the replacement covering the pairs that came up short.
+                      {' '}{businessName || 'Stickballman12 LLC'} added it here so both sides can
+                      follow the same number — there’s no manifest to fill in.
+                    </p>
+                  )}
 
                   {isShipped && (box.tracking_status || box.last_checkpoint) && (
                     <div className="po-track-status muted sm">

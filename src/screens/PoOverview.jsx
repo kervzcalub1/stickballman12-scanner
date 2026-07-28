@@ -207,10 +207,12 @@ export function PoOverview({ onHome, onSignOut }) {
                               );
                             })()}
                             {detail.boxes.map((box) => (
-                              <div key={box.id} className="po-ov-label">
+                              <div key={box.id} className={`po-ov-label${box.kind === 'replacement' ? ' replacement' : ''}`}>
                                 <div className="po-ov-label-top">
                                   <div>
-                                    <b>Label {box.box_number}</b>
+                                    {/* A reship we added to cover a shortage — not one of the
+                                        supplier's original labels, so don't number it as one. */}
+                                    <b>{box.kind === 'replacement' ? 'Replacement shipment' : `Label ${box.box_number}`}</b>
                                     <div className="po-track muted sm">
                                       {carrierName(box.carrier || box.carrier_key) ? <span className="po-carrier">{carrierName(box.carrier || box.carrier_key)}</span> : null}
                                       {carrierName(box.carrier || box.carrier_key) && box.tracking_number ? ' · ' : ''}

@@ -147,9 +147,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
     finally { setBusy(false); }
   };
 
-  const open = (id) => {
-    setOpenId(id); setDetail(null); setError(''); setCopied(false); setShowMatched(false);
-    setNote(''); setNoteSaved('');
+  const loadDetail = (id) => {
     api.poReconciliation(id)
       .then((r) => {
         setDetail({
@@ -161,6 +159,19 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
       })
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
+
+  const open = (id) => {
+    setOpenId(id); setDetail(null); setError(''); setCopied(false); setShowMatched(false);
+    setNote(''); setNoteSaved('');
+  };
+
+  // Fetch whenever a PO is open but its detail isn't loaded. Driven off `openId` rather
+  // than the click, because ?po= can arrive from the URL — a refresh, a Back, or the
+  // "Review & copy the report" deep link on the batch-saved alert. Fetching only in the
+  // click handler left every one of those stuck on "Loading…" forever.
+  useEffect(() => {
+    if (openId && !detail) loadDetail(openId);
+  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Every resolution write returns the fresh row, so the checklist updates without a
   // refetch — but the thread and the PO's own status can both move too (logging
@@ -190,10 +201,10 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
     finally { setBusy(false); }
   };
 
-  const saveNote = async () => {
-    setNoteBusy(true);
+  const writeNote = async (text) => {
+    setNoteBusy(true); setError('');
     try {
-      const r = await api.poSaveNote(openId, note);
+      const r = await api.poSaveNote(openId, text);
       setNoteSaved(r.reconcile_note || '');
       setNote(r.reconcile_note || '');
       setDetail((d) => ({ ...d, po: { ...d.po,
@@ -202,6 +213,16 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
       loadList(); // keep the list card's preview in step
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setNoteBusy(false); }
+  };
+  const saveNote = () => writeNote(note);
+
+  // Most of what you'd tell the supplier is something you already typed internally, so
+  // one tap promotes a comment into the note rather than making you retype it. There's
+  // only ever ONE supplier-facing note, so replacing an existing one is confirmed first.
+  const sendToSupplier = async (body) => {
+    if (noteSaved.trim() && noteSaved.trim() !== body.trim()
+      && !window.confirm('Replace the note the supplier currently sees with this line?')) return;
+    await writeNote(body);
   };
 
   const doReconcile = async () => {
@@ -311,6 +332,9 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   // Received blind: nothing was declared, so nothing is a "discrepancy" — every line is
   // just a receipt and the problems/matched split doesn't apply.
   const blind = !!s?.no_manifest;
+  // Anything started on the checklist means someone is actively working this order — the
+  // moment where "has the supplier actually been told?" is worth asking.
+  const resolutionStarted = !!detail?.resolution?.state && detail.resolution.state !== 'none';
   const headChip = poChip(po?.status, s && {
     ...s, intake_done: detail?.intakeDone, awaiting_boxes: detail?.awaitingBoxes,
   });
@@ -418,13 +442,21 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                 this read-only in their portal, so it doubles as the message to them. */}
             <div className="card rcn-note">
               <div className="rcn-note-head">
-                <h4 className="rows-title">Note</h4>
+                <h4 className="rows-title">Note to the supplier</h4>
                 {po.reconcile_note_by && po.reconcile_note_at && (
                   <span className="muted xs">
                     {po.reconcile_note_by} · {String(po.reconcile_note_at).slice(0, 10)}
                   </span>
                 )}
               </div>
+              {/* Easy to work a whole resolution — ticking steps, writing internal notes —
+                  and never tell the supplier anything, because the field they can actually
+                  read is the one nobody types in. Say so while it's still relevant. */}
+              {resolutionStarted && !noteSaved.trim() && (
+                <p className="rcn-note-nudge">
+                  The supplier hasn’t been told anything yet. Everything below is internal.
+                </p>
+              )}
               <textarea
                 className="rcn-note-input"
                 rows={3}
@@ -450,9 +482,11 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                 resolution={detail.resolution}
                 steps={detail.steps}
                 comments={detail.comments}
-                busy={busy}
+                busy={busy || noteBusy}
                 onStep={doStep}
                 onComment={doComment}
+                onSendToSupplier={sendToSupplier}
+                supplierNote={noteSaved}
               />
             )}
 

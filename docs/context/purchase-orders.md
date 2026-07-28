@@ -137,6 +137,14 @@ labels** (one tracking number each); it closes only when every label is shipped.
     the first migration (default `internal`) so opening it up later is a flag, not a migration.
     `po/get` and `po/reconciliation` are separate endpoints, so the thread and the resolution
     are never in a supplier-facing payload at all — verified, not just hidden in the UI.
+  - **Keeping the two channels from swallowing each other.** A supplier-visible field and an
+    internal thread on one screen is a trap — people type in the internal one and the supplier
+    is told nothing (observed on a real PO: resolution settled, 5 internal notes,
+    `reconcile_note` still NULL). Two guards: the card is titled **"Note to the supplier"** and
+    shows an amber **nudge** ("The supplier hasn't been told anything yet") whenever a
+    resolution has started and the note is still empty; and every internal comment carries
+    **Send to supplier**, which promotes that line into the note (confirms first if it would
+    replace a different one, and flips to "✓ This is what the supplier sees" once it matches).
   - **What the SUPPLIER sees of all this:** the note (read-only, attributed to the business)
     and the replacement label. A reship lands in their portal as a box on their order, so it
     must not read as one they forgot to pack — `SupplierApp`/`PoOverview` title it

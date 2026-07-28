@@ -40,7 +40,7 @@ function referenceLabel(outcome) {
 const money = (v) => (v == null ? null : Number(v).toFixed(2));
 const stamp = (by, at) => [by, at ? String(at).slice(0, 10) : null].filter(Boolean).join(' · ');
 
-export function PoResolution({ resolution, steps, comments, onStep, onComment, busy }) {
+export function PoResolution({ resolution, steps, comments, onStep, onComment, onSendToSupplier, supplierNote, busy }) {
   const r = resolution || {};
   const outcome = r.outcome || null;
   const list = steps && steps.length ? steps : ['contacted', 'outcome', 'reference', 'settled'];
@@ -211,6 +211,17 @@ export function PoResolution({ resolution, steps, comments, onStep, onComment, b
                     {c.author_name || 'Someone'} · {String(c.created_at).slice(0, 16).replace('T', ' ')}
                   </div>
                   <div className="rsl-msg-body">{c.body}</div>
+                  {/* Usually the thing worth telling the supplier is already written here.
+                      One tap promotes it into the note instead of retyping it. */}
+                  {onSendToSupplier && (
+                    (supplierNote || '').trim() === c.body.trim()
+                      ? <span className="rsl-sent">✓ This is what the supplier sees</span>
+                      : (
+                        <button className="rsl-send" disabled={busy} onClick={() => onSendToSupplier(c.body)}>
+                          Send to supplier
+                        </button>
+                      )
+                  )}
                 </div>
               )
             ))}

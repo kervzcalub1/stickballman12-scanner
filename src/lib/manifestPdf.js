@@ -7,8 +7,17 @@
 // Letter-size document pages (not a die-cut label), so it reads/prints like a packing
 // slip. jsPDF is lazy-loaded on demand — same pattern as labelPdf.js. Key fields
 // (tracking #s, total pairs, supplier, tag/code, date of purchase) sit in the header
-// of every page so a loose sheet is never ambiguous. Reuses dispatchPdf/isTouchPrint
-// from labelPdf.js for the print/open handoff.
+// of every page so a loose sheet is never ambiguous. The caller downloads the blob
+// (see ManifestPrint.jsx) rather than printing it inline.
+//
+// Both shapes must account for WHOLE-ORDER (Path C) manifests, where PH enters one
+// list against the purchase and every line has a NULL `po_box_id`. Those lines belong
+// to no label, so 'perbox' gives them their own page at the back instead of dropping
+// them — otherwise a warehouse printing the per-box manifest (the one you carry to
+// the pallet) got a stack of "No items recorded for this box".
+//
+// Every string that gets DRAWN is plain ASCII: jsPDF's built-in Helvetica silently
+// drops em-dashes and middots, so "Tag / Code —" printed as a blank cell.
 import { carrierName } from './carriers.js';
 
 // US Letter in mm (portrait). UPS/US-carrier shop, so Letter over A4.
@@ -29,7 +38,7 @@ async function loadJsPDF() {
 }
 
 const fmtDate = (d) => {
-  if (!d) return '—';
+  if (!d) return '-';
   const s = String(d).slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : s;
 };
@@ -42,7 +51,7 @@ function metaCell(doc, x, y, w, label, value) {
   doc.text(String(label).toUpperCase(), x, y);
   doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
   doc.setTextColor(...INK);
-  const lines = doc.splitTextToSize(String(value || '—'), w).slice(0, 2);
+  const lines = doc.splitTextToSize(String(value || '-'), w).slice(0, 2);
   lines.forEach((ln, i) => doc.text(ln, x, y + 5 + i * 5));
   return y + 5 + lines.length * 5;
 }
@@ -68,7 +77,7 @@ function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle })
   const colW = (PAGE_W - MARGIN * 2 - 12) / 3;
   const x0 = MARGIN, x1 = MARGIN + colW + 6, x2 = MARGIN + (colW + 6) * 2;
   metaCell(doc, x0, y, colW, 'Supplier', po.supplier_name);
-  metaCell(doc, x1, y, colW, 'Tag / Code', po.tag_code || '—');
+  metaCell(doc, x1, y, colW, 'Tag / Code', po.tag_code || '-');
   metaCell(doc, x2, y, colW, 'PO', po.po_code);
   y += 16;
   metaCell(doc, x0, y, colW, 'Date of Purchase', fmtDate(po.date_of_purchase));
@@ -129,12 +138,12 @@ function drawItemTable(doc, startY, items, headerFn) {
     const qty = Number(it.qty_expected) || 0;
     total += qty;
     doc.setTextColor(...INK); doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    const name = doc.splitTextToSize(String(it.name || it.sku || '—'), cols[0].w)[0] || '—';
+    const name = doc.splitTextToSize(String(it.name || it.sku || '-'), cols[0].w)[0] || '-';
     doc.text(name, cols[0].x, y + 4.8);
     doc.setFont('courier', 'normal'); doc.setFontSize(8.5);
-    doc.text(String(it.sku || '—'), cols[1].x, y + 4.8);
+    doc.text(String(it.sku || '-'), cols[1].x, y + 4.8);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    doc.text(String(it.size || '—'), cols[2].x, y + 4.8);
+    doc.text(String(it.size || '-'), cols[2].x, y + 4.8);
     doc.setFont('helvetica', 'bold');
     doc.text(String(qty), cols[3].x, y + 4.8, { align: 'right' });
     doc.setDrawColor(...HAIR); doc.setLineWidth(0.2);
@@ -163,9 +172,29 @@ function stampFooters(doc, generatedAt) {
   }
 }
 
-// Group PO lines by box id; box lines keyed by Number(po_box_id).
+// Box ids arrive as BIGINT strings, so compare numerically — but a NULL id is not a
+// box, and `Number(null)` is 0, which would make every order-level line "match" a
+// box whose id is null/0. Normalize to null-or-number and never match null to null.
+const boxIdOf = (v) => (v == null || v === '' ? null : Number(v));
 function linesForBox(lines, boxId) {
-  return (lines || []).filter((l) => Number(l.po_box_id) === Number(boxId));
+  const want = boxIdOf(boxId);
+  if (want == null) return [];
+  return (lines || []).filter((l) => boxIdOf(l.po_box_id) === want);
+}
+// Whole-order (Path C) lines: entered against the purchase, not against a label.
+const orderLevelLines = (lines) => (lines || []).filter((l) => boxIdOf(l.po_box_id) == null);
+
+const sortLines = (lines) => (lines || []).slice().sort((a, b) =>
+  String(a.name || a.sku).localeCompare(String(b.name || b.sku)) || String(a.size).localeCompare(String(b.size)));
+
+const trackingList = (boxes) => (boxes || [])
+  .filter((b) => b.tracking_number)
+  .map((b) => ({ number: b.tracking_number, carrier: carrierName(b.carrier || b.carrier_key) }));
+
+// An italic "nothing here" note under a header.
+function drawNote(doc, y, text) {
+  doc.setFont('helvetica', 'italic'); doc.setFontSize(10); doc.setTextColor(...MUTED);
+  doc.splitTextToSize(text, PAGE_W - MARGIN * 2).forEach((ln, i) => doc.text(ln, MARGIN, y + 6 + i * 5));
 }
 
 // Build the manifest PDF. `mode`: 'perbox' | 'whole'. Returns a jsPDF doc.
@@ -176,45 +205,60 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
 
   if (mode === 'perbox') {
     // One page per box. A box with no items still gets a page (so the count of pages
-    // matches the count of labels and nothing looks "missing").
-    const list = boxes.length ? boxes : [{ box_number: 1, id: null }];
-    list.forEach((box, idx) => {
-      if (idx > 0) doc.addPage();
+    // matches the count of labels and nothing looks "missing"). A replacement label is
+    // a reship the WAREHOUSE raised, not one of the supplier's — so it doesn't count
+    // towards "box N of M", same rule the PO roll-ups use.
+    const supplierBoxes = (boxes || []).filter((b) => b.kind !== 'replacement');
+    const list = [...supplierBoxes, ...(boxes || []).filter((b) => b.kind === 'replacement')];
+    const orderLines = sortLines(orderLevelLines(lines));
+    let drawn = 0;
+    const newPage = () => { if (drawn++) doc.addPage(); };
+
+    list.forEach((box) => {
+      newPage();
       const tn = box.tracking_number
         ? [{ number: box.tracking_number, carrier: carrierName(box.carrier || box.carrier_key) }]
         : [];
-      const startY = drawHeader(doc, {
-        businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: tn,
-        subtitle: { label: 'Box', value: `Box ${box.box_number} of ${list.length}` },
+      const subtitle = box.kind === 'replacement'
+        ? { label: 'Shipment', value: 'Replacement shipment' }
+        : { label: 'Box', value: `Box ${box.box_number} of ${supplierBoxes.length}` };
+      const header = () => drawHeader(doc, {
+        businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: tn, subtitle,
       });
-      const items = linesForBox(lines, box.id);
-      if (items.length) {
-        drawItemTable(doc, startY, items, () => drawHeader(doc, {
-          businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: tn,
-          subtitle: { label: 'Box', value: `Box ${box.box_number} of ${list.length}` },
-        }));
-      } else {
-        doc.setFont('helvetica', 'italic'); doc.setFontSize(10); doc.setTextColor(...MUTED);
-        doc.text('No items recorded for this box.', MARGIN, startY + 6);
-      }
+      const startY = header();
+      const items = sortLines(linesForBox(lines, box.id));
+      if (items.length) drawItemTable(doc, startY, items, header);
+      else if (orderLines.length) drawNote(doc, startY, 'This order was manifested as one whole-order list, not box by box - the full item list is on the last page.');
+      else drawNote(doc, startY, 'No items recorded for this box.');
     });
+
+    // The whole-order (Path C) list, on its own page at the back.
+    if (orderLines.length) {
+      newPage();
+      const header = () => drawHeader(doc, {
+        businessName, title: 'Inbound Shipment Manifest - Whole Order', po,
+        trackingNumbers: trackingList(boxes),
+        subtitle: { label: 'Scope', value: 'Whole order - not broken out by box' },
+      });
+      drawItemTable(doc, header(), orderLines, header);
+    }
+
+    // No labels and nothing manifested — still produce a readable sheet.
+    if (!drawn) {
+      const startY = drawHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: [] });
+      drawNote(doc, startY, 'No labels or items recorded on this order yet.');
+    }
   } else {
     // Whole order — every line (box lines + order-level Path-C lines), all tracking up top.
-    const tns = (boxes || [])
-      .filter((b) => b.tracking_number)
-      .map((b) => ({ number: b.tracking_number, carrier: carrierName(b.carrier || b.carrier_key) }));
+    const tns = trackingList(boxes);
     const header = () => drawHeader(doc, {
-      businessName, title: 'Inbound Shipment Manifest — Whole Order', po, trackingNumbers: tns,
-      subtitle: { label: 'Labels', value: plural((boxes || []).length, 'box') },
+      businessName, title: 'Inbound Shipment Manifest - Whole Order', po, trackingNumbers: tns,
+      subtitle: { label: 'Labels', value: plural((boxes || []).filter((b) => b.kind !== 'replacement').length, 'box') },
     });
     const startY = header();
-    const allItems = (lines || []).slice().sort((a, b) =>
-      String(a.name || a.sku).localeCompare(String(b.name || b.sku)) || String(a.size).localeCompare(String(b.size)));
+    const allItems = sortLines(lines);
     if (allItems.length) drawItemTable(doc, startY, allItems, header);
-    else {
-      doc.setFont('helvetica', 'italic'); doc.setFontSize(10); doc.setTextColor(...MUTED);
-      doc.text('No items recorded on this order yet.', MARGIN, startY + 6);
-    }
+    else drawNote(doc, startY, 'No items recorded on this order yet.');
   }
 
   stampFooters(doc, stamp);

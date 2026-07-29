@@ -89,7 +89,13 @@ Diagrams scroll inside their own `overflow-x: auto` container (`.sd-canvas`, SVG
 
 ## Annotated screenshots
 `npm run sop:shots` (`scripts/capture-sop-shots.mjs`) drives the **real app** in
-Playwright, writes `public/sop/<id>.png`, and regenerates `src/lib/sop/shots.json`.
+Playwright, writes `public/sop-shots/<id>.png`, and regenerates `src/lib/sop/shots.json`.
+
+**The directory is `public/sop-shots/`, deliberately NOT `public/sop/`.** `sop` is an
+app route: a static directory of the same name makes `serve-static` 301 every `/sop`
+request to `/sop/` (the query survives and the SPA still resolves, but it's a pointless
+round trip), and an `index.html` landing in it would shadow the route outright. Keep
+static asset folders out of the `ROUTES` namespace.
 
 **Each callout is a LOCATOR, and its rectangle is read out of the live DOM at
 capture time.** A UI change moves the arrow on the next re-capture instead of

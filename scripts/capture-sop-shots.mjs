@@ -3,7 +3,11 @@
 //   npm run sop:shots            # all shots
 //   npm run sop:shots -- inventory batches   # only these ids
 //
-// Writes public/sop/<id>.png and rewrites src/lib/sop/shots.json.
+// Writes public/sop-shots/<id>.png and rewrites src/lib/sop/shots.json.
+//
+// NOT public/sop/ — `sop` is an app route (/sop), and a static directory of the same
+// name makes the static handler 301 every /sop request to /sop/, and would shadow the
+// route outright if an index.html ever landed in it.
 //
 // The point of doing this in Playwright rather than by hand: each callout is a
 // LOCATOR, and its rectangle is read out of the live DOM at capture time. A UI
@@ -19,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { loginAs } from '../e2e/helpers/auth.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT_DIR = path.join(ROOT, 'public', 'sop');
+const OUT_DIR = path.join(ROOT, 'public', 'sop-shots');
 const JSON_OUT = path.join(ROOT, 'src', 'lib', 'sop', 'shots.json');
 const PORT = Number(process.env.SOP_PORT) || Number(process.env.E2E_PORT) || 5189;
 const BASE = `http://localhost:${PORT}`;
@@ -319,7 +323,7 @@ async function main() {
       const file = path.join(OUT_DIR, `${shot.id}.png`);
       await page.screenshot({ path: file, fullPage: false });
       manifest[shot.id] = {
-        file: `/sop/${shot.id}.png`,
+        file: `/sop-shots/${shot.id}.png`,
         w: VIEWPORT.width, h: VIEWPORT.height,
         caption: shot.caption,
         hotspots,
@@ -343,7 +347,7 @@ async function main() {
   }
   fs.writeFileSync(JSON_OUT, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  console.log(`\n${captured}/${wanted.length} shots captured → public/sop/`);
+  console.log(`\n${captured}/${wanted.length} shots captured → public/sop-shots/`);
   if (problems.length) {
     console.log(`\n${problems.length} callout(s) could not be anchored (skipped, not guessed):`);
     problems.forEach((p) => console.log(`  · ${p}`));

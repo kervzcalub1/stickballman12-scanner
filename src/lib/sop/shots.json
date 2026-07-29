@@ -1,6 +1,6 @@
 {
   "home": {
-    "file": "/sop/home.png",
+    "file": "/sop-shots/home.png",
     "w": 1280,
     "h": 820,
     "caption": "Home is laid out along the lifecycle of a shoe. \"Needs attention\" only appears when something is actually waiting.",
@@ -12,7 +12,7 @@
         "w": 1044,
         "h": 29,
         "side": "below",
-        "label": "Your name and role — check this is the right account before you start"
+        "label": "Your name and role \u2014 check this is the right account before you start"
       },
       {
         "n": 2,
@@ -30,15 +30,15 @@
         "w": 1044,
         "h": 30,
         "side": "right",
-        "label": "Sections follow the shoe: Receiving → In-Store → Put-away → Rescale → Sell & Ship → Browse"
+        "label": "Sections follow the shoe: Receiving \u2192 In-Store \u2192 Put-away \u2192 Rescale \u2192 Sell & Ship \u2192 Browse"
       }
     ]
   },
   "receiving-step1": {
-    "file": "/sop/receiving-step1.png",
+    "file": "/sop-shots/receiving-step1.png",
     "w": 1280,
     "h": 820,
-    "caption": "Step 1 of the receiving wizard. Supplier and tracking are both required — the server rejects a batch without them.",
+    "caption": "Step 1 of the receiving wizard. Supplier and tracking are both required \u2014 the server rejects a batch without them.",
     "hotspots": [
       {
         "n": 1,
@@ -47,7 +47,7 @@
         "w": 506,
         "h": 53,
         "side": "right",
-        "label": "Supplier — required. Pick from the list, or \"Custom…\" to add a new one (it is saved for next time)."
+        "label": "Supplier \u2014 required. Pick from the list, or \"Custom\u2026\" to add a new one (it is saved for next time)."
       },
       {
         "n": 2,
@@ -56,7 +56,7 @@
         "w": 506,
         "h": 52,
         "side": "right",
-        "label": "Tracking number — required. Type it, scan the barcode, or photograph the label."
+        "label": "Tracking number \u2014 required. Type it, scan the barcode, or photograph the label."
       },
       {
         "n": 3,
@@ -70,7 +70,7 @@
     ]
   },
   "batches": {
-    "file": "/sop/batches.png",
+    "file": "/sop-shots/batches.png",
     "w": 1280,
     "h": 820,
     "caption": "Every intake. Open batches are resumable; a box showing a red 0 has a tracking number but no items.",
@@ -82,7 +82,7 @@
         "w": 1014,
         "h": 67,
         "side": "right",
-        "label": "Open batches are resumable — tap one to see its boxes, or to add a box that arrived late."
+        "label": "Open batches are resumable \u2014 tap one to see its boxes, or to add a box that arrived late."
       },
       {
         "n": 2,
@@ -96,7 +96,7 @@
     ]
   },
   "inventory": {
-    "file": "/sop/inventory.png",
+    "file": "/sop-shots/inventory.png",
     "w": 1280,
     "h": 820,
     "caption": "Rows merge by SKU and status. Scan a VIN to jump to a pair, or a shelf code to list that shelf.",
@@ -108,7 +108,7 @@
         "w": 763,
         "h": 52,
         "side": "right",
-        "label": "Search — a VIN, SKU or name. A shelf code (MNH-WH-A2-04) returns that shelf's contents instead."
+        "label": "Search \u2014 a VIN, SKU or name. A shelf code (MNH-WH-A2-04) returns that shelf's contents instead."
       },
       {
         "n": 2,
@@ -131,10 +131,10 @@
     ]
   },
   "shelve": {
-    "file": "/sop/shelve.png",
+    "file": "/sop-shots/shelve.png",
     "w": 1280,
     "h": 820,
-    "caption": "Put-away. Scan the shelf first, then each VIN onto it — or pick from the list of shoes waiting for a shelf.",
+    "caption": "Put-away. Scan the shelf first, then each VIN onto it \u2014 or pick from the list of shoes waiting for a shelf.",
     "hotspots": [
       {
         "n": 1,
@@ -157,7 +157,7 @@
     ]
   },
   "nobox": {
-    "file": "/sop/nobox.png",
+    "file": "/sop-shots/nobox.png",
     "w": 1280,
     "h": 820,
     "caption": "Pairs received without a box. Not sellable, and hidden from the listing grid until resolved.",
@@ -169,7 +169,7 @@
         "w": 218,
         "h": 41,
         "side": "right",
-        "label": "\"Box found → With Box\" makes the pair sellable again and sends it to Needs shelf."
+        "label": "\"Box found \u2192 With Box\" makes the pair sellable again and sends it to Needs shelf."
       },
       {
         "n": 2,
@@ -178,12 +178,12 @@
         "w": 186,
         "h": 41,
         "side": "left",
-        "label": "Print box labels lives only on this page — it recreates a shoe-box label with a UPC barcode."
+        "label": "Print box labels lives only on this page \u2014 it recreates a shoe-box label with a UPC barcode."
       }
     ]
   },
   "listings": {
-    "file": "/sop/listings.png",
+    "file": "/sop-shots/listings.png",
     "w": 1280,
     "h": 820,
     "caption": "Listings & Sync, warehouse view: read-only, and Global indicator / Final price are hidden.",
@@ -195,7 +195,7 @@
         "w": 111,
         "h": 44,
         "side": "left",
-        "label": "II · AL · SX · SH — a badge reads \"on\" only when every pair in the group has that flag."
+        "label": "II \u00b7 AL \u00b7 SX \u00b7 SH \u2014 a badge reads \"on\" only when every pair in the group has that flag."
       },
       {
         "n": 2,
@@ -209,10 +209,10 @@
     ]
   },
   "reconcile": {
-    "file": "/sop/reconcile.png",
+    "file": "/sop-shots/reconcile.png",
     "w": 1280,
     "h": 820,
-    "caption": "PO reconciliation. The chip says what is actually true — a clean order closes itself and never appears here.",
+    "caption": "PO reconciliation. The chip says what is actually true \u2014 a clean order closes itself and never appears here.",
     "hotspots": [
       {
         "n": 1,
@@ -230,15 +230,15 @@
         "w": 87,
         "h": 30,
         "side": "right",
-        "label": "The chip: Reconciled · Receiving · Received blind · N discrepancies · Boxes still out · Matched."
+        "label": "The chip: Reconciled \u00b7 Receiving \u00b7 Received blind \u00b7 N discrepancies \u00b7 Boxes still out \u00b7 Matched."
       }
     ]
   },
   "locations": {
-    "file": "/sop/locations.png",
+    "file": "/sop-shots/locations.png",
     "w": 1280,
     "h": 820,
-    "caption": "Locate Shoe. Search for a pair, or browse the tiles down Site → Area → Bay → Shelf.",
+    "caption": "Locate Shoe. Search for a pair, or browse the tiles down Site \u2192 Area \u2192 Bay \u2192 Shelf.",
     "hotspots": [
       {
         "n": 1,
@@ -247,7 +247,7 @@
         "w": 626,
         "h": 52,
         "side": "right",
-        "label": "Search by name, SKU, VIN or UPC — or scan. Results group by SKU with a shelved / not-shelved count."
+        "label": "Search by name, SKU, VIN or UPC \u2014 or scan. Results group by SKU with a shelved / not-shelved count."
       },
       {
         "n": 2,
@@ -261,7 +261,7 @@
     ]
   },
   "access": {
-    "file": "/sop/access.png",
+    "file": "/sop-shots/access.png",
     "w": 1280,
     "h": 820,
     "caption": "Check Access. Approve accounts, change roles, issue a temporary password, or remove an account.",
@@ -273,7 +273,7 @@
         "w": 112,
         "h": 41,
         "side": "right",
-        "label": "Role picker — Warehouse or PH Team for staff, Supplier for an external partner."
+        "label": "Role picker \u2014 Warehouse or PH Team for staff, Supplier for an external partner."
       },
       {
         "n": 2,
@@ -287,7 +287,7 @@
     ]
   },
   "ph-grid": {
-    "file": "/sop/ph-grid.png",
+    "file": "/sop-shots/ph-grid.png",
     "w": 1280,
     "h": 820,
     "caption": "New Inventory. One row per SKU and status; expand it for the per-size table where every field lives.",
@@ -299,7 +299,7 @@
         "w": 203,
         "h": 39,
         "side": "below",
-        "label": "Date range — work the intake you are pricing. Days are Eastern, wherever you are sitting."
+        "label": "Date range \u2014 work the intake you are pricing. Days are Eastern, wherever you are sitting."
       },
       {
         "n": 2,
@@ -322,7 +322,7 @@
     ]
   },
   "po-create": {
-    "file": "/sop/po-create.png",
+    "file": "/sop-shots/po-create.png",
     "w": 1280,
     "h": 820,
     "caption": "Opening a purchase order: the supplier, and one row per shipping label with its real tracking number.",
@@ -343,7 +343,7 @@
         "w": 670,
         "h": 119,
         "side": "right",
-        "label": "Drop a labels PDF here — one label per page — and each page's tracking number and courier are read off it."
+        "label": "Drop a labels PDF here \u2014 one label per page \u2014 and each page's tracking number and courier are read off it."
       },
       {
         "n": 3,
@@ -352,12 +352,12 @@
         "w": 280,
         "h": 45,
         "side": "left",
-        "label": "One row per shipping label. Set the courier — that is what makes tracking pull from the right carrier."
+        "label": "One row per shipping label. Set the courier \u2014 that is what makes tracking pull from the right carrier."
       }
     ]
   },
   "po-overview": {
-    "file": "/sop/po-overview.png",
+    "file": "/sop-shots/po-overview.png",
     "w": 1280,
     "h": 820,
     "caption": "Every order you opened, with live tracking per shipping label.",
@@ -369,12 +369,12 @@
         "w": 702,
         "h": 77,
         "side": "right",
-        "label": "Status chip, labels shipped, delivered count and units — then tap to expand per-label tracking."
+        "label": "Status chip, labels shipped, delivered count and units \u2014 then tap to expand per-label tracking."
       }
     ]
   },
   "supplier-list": {
-    "file": "/sop/supplier-list.png",
+    "file": "/sop-shots/supplier-list.png",
     "w": 1280,
     "h": 820,
     "caption": "The supplier portal: every order we opened for you. Nothing else on the system is visible here.",
@@ -400,7 +400,7 @@
     ]
   },
   "supplier-order": {
-    "file": "/sop/supplier-order.png",
+    "file": "/sop-shots/supplier-order.png",
     "w": 1280,
     "h": 820,
     "caption": "One order: a card per shipping label, each with its own tracking number, status and contents.",
@@ -448,7 +448,7 @@
         "w": 101,
         "h": 31,
         "side": "left",
-        "label": "The label's state: filling → packed → shipped → in transit → delivered."
+        "label": "The label's state: filling \u2192 packed \u2192 shipped \u2192 in transit \u2192 delivered."
       }
     ]
   }

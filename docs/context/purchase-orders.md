@@ -137,13 +137,32 @@ labels** (one tracking number each); it closes only when every label is shipped.
     credit instead of letting it close green. `NUMERIC(12,2)`, not float — this gets totalled.
   - **Replacement = a real label on the ORIGINAL PO.** `addReplacementBox()` inserts a
     `po_boxes` row (`kind='replacement'`, next `box_number`, status `shipped`) and registers
-    it with 17TRACK. **It carries NO `po_lines`** — those units were already declared and
-    already counted short, so re-declaring them would double `expected` and make chasing a
-    shortage read as a worse one. Logging it calls **`reopenPoForReceiving()`**
+    it with 17TRACK. Logging it calls **`reopenPoForReceiving()`**
     (`reconciled|closed → receiving`), because receiving against a finished PO is blocked;
     that reopen is announced in the thread, never silent. When the reship is scanned in the
     order goes clean, auto-reconcile fires, and **`settleReplacementIfArrived()` ticks
     "Replacement received" by itself** — the count *is* the proof it arrived.
+  - **A replacement label CAN be manifested — its lines just never reach `expected`.**
+    (Reverses the original "a reship carries no `po_lines`" rule, which left the warehouse
+    re-scanning a reship blind with nothing to check it against.) The **supplier** declares it
+    in their portal ("List what you're sending"), or **PH enters it on their behalf** from
+    `PoOverview`, both through the ordinary `po/scan` + `po/line` endpoints. The reason the
+    old rule existed is still true and is now enforced in the arithmetic instead of by
+    forbidding the data: **`getPoReconciliation` excludes `b.kind = 'replacement'` from the
+    box-scope `expected` query** (and the `'po'`-scope query is pinned to `po_box_id IS NULL`,
+    which excludes them too), and `listPos`'s `unit_count` excludes them the same way. Those
+    units were already declared on the ORIGINAL manifest and already counted short — count
+    them twice and `expected` rises by exactly the shortage, so the order reads short forever
+    even after the reship lands. The reship manifest is a **checklist for the warehouse**
+    (Receiving builds one from it like any other label, and the per-box manifest PDF gives it
+    a *Replacement shipment* page), never a second claim.
+  - **The reship manifest's edit window is the mirror of a normal label's.**
+    `api/_lib/po-manifest.js` → **`manifestEditBlock({ po, box })`**, shared by `po/scan` and
+    `po/line`. A supplier's own label: PO still `draft` **and** label still `pending`. A
+    replacement: created already-`shipped` on a `receiving`/`reconciled` PO, so it could never
+    pass that test — it stays editable until the order is **archived** (`closed`). `po/scan`
+    also skips the whole-order-scope guard for a reship: it's one specific label whatever
+    shape the original purchase was declared in, and it can't pollute the roll-up.
   - **Thread is INTERNAL** (`POST /api/po/comment`, warehouse/ph_team). The supplier reads the
     single `reconcile_note`, written on purpose for them. `po_comments.audience` exists from
     the first migration (default `internal`) so opening it up later is a flag, not a migration.
@@ -161,7 +180,11 @@ labels** (one tracking number each); it closes only when every label is shipped.
     and the replacement label. A reship lands in their portal as a box on their order, so it
     must not read as one they forgot to pack — `SupplierApp`/`PoOverview` title it
     **"Replacement shipment"** instead of `Label N`, tint it with a blue rail
-    (`.po-box.replacement`), and explain whose it is. **`listPos` excludes
+    (`.po-box.replacement`), and explain whose it is. It's the one box they can still fill
+    after the order left draft (`canDeclare`), with editable line rows + **Add items** but
+    **no close/ship** — the warehouse already created it as a shipped label with its tracking
+    on it. `PoScanModal` names the target *the replacement shipment* rather than `Label 4`,
+    and so does Receiving's box-slot header (`kind` rides on the slot). **`listPos` excludes
     `kind='replacement'` from `box_count`/`shipped_count`** (and adds `replacement_count`):
     "1 of 1 labels shipped" describes the *supplier's packing job*, and a reship they didn't
     create must not turn that into "1 of 2".
@@ -393,7 +416,8 @@ VINs + inserts `items` = phantom stock).
   from the RIGHT courier), `carrier` (display NAME the aggregator returns), `tracking_status`
   / **`tracking_sub_status`** / **`tracking_sub_status_descr`** / `last_checkpoint` /
   `checked_at`, `status` ∈ `pending | shipped | in_transit | delivered`, `shipped_at`,
-  **`kind`** (`original | replacement` — a reship carries no `po_lines`). **Carrier UX:** `src/lib/carriers.js` = curated 17TRACK carriers (UPS/FedEx/
+  **`kind`** (`original | replacement` — a reship's `po_lines` are excluded from `expected`,
+  not forbidden). **Carrier UX:** `src/lib/carriers.js` = curated 17TRACK carriers (UPS/FedEx/
   USPS/… keyed by code) + `carrierName(code|name)` + `detectCarrierKey({text,number})`
   (label-text keyword first, then number format — 1Z→UPS, 96…→FedEx, 9x→USPS, etc.).
   `decodeTrackingPdf` returns `carrierKey` per page; `CreatePO` shows a per-label courier

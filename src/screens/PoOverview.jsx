@@ -226,8 +226,15 @@ export function PoOverview({ onHome, onSignOut }) {
                                   // PH can fill a per-box manifest while it's still editable (draft PO, pending
                                   // label) — the same window the supplier's own scan-out uses. Not when the PO
                                   // is on a whole-order manifest (that's entered against the order, not a label).
-                                  const canFill = detail.po.status === 'draft' && box.status === 'pending'
-                                    && detail.po.manifest_scope !== 'po';
+                                  //
+                                  // A REPLACEMENT label runs the other way round: it's created already-shipped
+                                  // on an order that's past draft, so it never passes that test. Its manifest
+                                  // stays open until the order is archived, on any scope — the lines are a
+                                  // checklist for the warehouse, and are excluded from reconciliation.
+                                  const isReplacement = box.kind === 'replacement';
+                                  const canFill = isReplacement
+                                    ? detail.po.status !== 'closed'
+                                    : (detail.po.status === 'draft' && box.status === 'pending' && detail.po.manifest_scope !== 'po');
                                   return (
                                     <>
                                       {lines.length > 0 && (
@@ -246,7 +253,9 @@ export function PoOverview({ onHome, onSignOut }) {
                                         </ul>
                                       )}
                                       {canFill && lines.length === 0 && (
-                                        <p className="muted xs po-ov-fill-hint">No items yet — if the supplier sent a manual list of the box contents, enter it here so the warehouse can receive against this PO.</p>
+                                        <p className="muted xs po-ov-fill-hint">{isReplacement
+                                          ? 'No items declared yet — enter what the supplier says they’re reshipping so the warehouse can check the box off against it. It won’t change the shortage on the original order.'
+                                          : 'No items yet — if the supplier sent a manual list of the box contents, enter it here so the warehouse can receive against this PO.'}</p>
                                       )}
                                       {canFill && (
                                         <button className="btn sm po-ov-fill-btn" onClick={() => setScanBox(box)}>

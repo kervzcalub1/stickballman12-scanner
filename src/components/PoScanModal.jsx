@@ -61,7 +61,12 @@ const sameSku = (a, b) => String(a || '').toUpperCase().replace(/[\s-]/g, '') ==
 // one of the two is passed; everything else is identical.
 export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
   const orderMode = !box;
-  const targetLabel = orderMode ? 'the whole order' : `Label ${box.box_number}`;
+  // Name the target the way the rest of the app does — a reship is "the replacement
+  // shipment" everywhere else, so "Label 3" here would read as a fourth original box.
+  const targetLabel = orderMode ? 'the whole order'
+    : box.kind === 'replacement' ? 'the replacement shipment' : `Label ${box.box_number}`;
+  const targetTitle = orderMode ? 'Whole order'
+    : box.kind === 'replacement' ? 'Replacement shipment' : `Label ${box.box_number}`;
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -199,7 +204,7 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
           inputRef.current?.focus({ preventScroll: true });
         }}>
         <div className="modal-head">
-          <h3 className="modal-title">Add items · {orderMode ? 'Whole order' : `Label ${box.box_number}`}</h3>
+          <h3 className="modal-title">Add items · {targetTitle}</h3>
           <button type="button" className="btn icon ghost" onClick={onClose}>×</button>
         </div>
 

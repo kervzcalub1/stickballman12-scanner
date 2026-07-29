@@ -102,6 +102,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // Every label becomes a box slot — receiving each is a manifest checklist.
     setBoxSlots(boxes.map((b, i) => ({
       tracking: b.tracking_number || '', status: 'pending', boxNumber: i + 1, itemCount: 0, poBoxId: Number(b.id), boxId: null,
+      kind: b.kind || 'original',
     })));
     setShowPoPicker(false);
     // Resume: if this PO already has a linked receiving batch (returned/refreshed
@@ -116,7 +117,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           const bb = byNum.get(i + 1);
           return {
             tracking: b.tracking_number || '', poBoxId: Number(b.id), boxNumber: i + 1,
-            boxId: bb ? Number(bb.id) : null,
+            kind: b.kind || 'original', boxId: bb ? Number(bb.id) : null,
             status: bb?.status === 'received' ? 'received' : 'pending',
             itemCount: bb?.item_count ?? 0,
           };
@@ -1052,12 +1053,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             <>
               {isMultiBoxNew && activeSlot != null && (
                 <div className="box-context">
-                  Scanning <b>Box {activeSlot + 1}</b> of {boxSlots.length} · {activeBatch?.batchCode}
+                  Scanning <b>{boxSlots[activeSlot]?.kind === 'replacement' ? 'the replacement shipment' : `Box ${activeSlot + 1}`}</b>
+                  {boxSlots[activeSlot]?.kind === 'replacement' ? '' : ` of ${boxSlots.length}`} · {activeBatch?.batchCode}
                   {boxSlots[activeSlot]?.tracking ? <> · <Icon name="tag" /> {boxSlots[activeSlot].tracking}</> : ''}
                 </div>
               )}
               {isPoReceive && activeSlot != null ? (
                 <ManifestChecklist boxNumber={activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
+                  kind={boxSlots[activeSlot]?.kind}
                   items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
                   onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} />
               ) : (
@@ -1572,13 +1575,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
    list is the picking guide and whatever stays unticked is the shortage. Adjust the
    "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
    issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem }) {
+function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem }) {
   const done = expectedUnits > 0 && totalItems >= expectedUnits;
+  // A reship isn't one of the supplier's numbered boxes — every other screen calls it
+  // the replacement shipment, and "Box 4" here would read as a fourth original label.
+  const title = kind === 'replacement' ? 'Replacement shipment' : `Box ${boxNumber}`;
   return (
     <div className="card po-manifest">
       <div className="step-head">
         <h3 className="rows-title">
-          Box {boxNumber} · manifest{' '}
+          {title} · manifest{' '}
           <span className={`po-manifest-progress ${done ? 'done' : ''}`}>
             {totalItems} of {expectedUnits} checked
           </span>

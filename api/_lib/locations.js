@@ -28,6 +28,22 @@ export const areaPrefixFor = (area) => (area ? (AREA_PREFIXES[area] || derivePre
 // Bay as a code segment: uppercased, spaces stripped ("Pod 1" → "POD1", "A2" → "A2").
 export const bayCodeFor = (bay) => String(bay || '').toUpperCase().replace(/\s+/g, '');
 
+// The derived Row/aisle key — the bay's leading letters ("A2" → "A", "Pod 1" → "POD").
+// A Row is NOT stored anywhere: the Locations tile view groups bays by this, and renaming a
+// row means rewriting that prefix on each of its bays. Must stay in step with `rowKeyOf` in
+// src/screens/Locations.jsx, or the server would rename a different set than the tile shows.
+export const bayRowKey = (bay) => {
+  const m = String(bay ?? '').match(/^\s*([A-Za-z]+)/);
+  return m ? m[1].toUpperCase() : String(bay ?? '');
+};
+
+// The label `create` gives a shelf when none is typed — "A2-04", or just the bay for a
+// whole-bay pod. Used to tell an auto-generated name (which should follow a move, since it
+// describes the position) from one a human typed (which must not be overwritten).
+export const autoLabelFor = (bay, shelf) => (shelf != null && shelf !== ''
+  ? `${String(bay).trim()}-${pad2(shelf)}`
+  : String(bay).trim());
+
 // Build the canonical code from parts. `bayCode` is the code segment ("A2",
 // "K10", or a pod number "1"); shelf null/'' → whole-bay.
 export function buildLocationCode({ sitePrefix, areaPrefix, bayCode, shelf }) {

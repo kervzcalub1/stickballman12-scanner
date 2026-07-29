@@ -178,6 +178,10 @@ const INLINE = {
     <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
     <path d="M2 2l20 20" />
   </>),
+  pencil: (<>
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </>),
 };
 
 export function Icon({ name, size = '1.05em', ...props }) {

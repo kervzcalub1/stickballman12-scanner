@@ -215,6 +215,12 @@ export function SupplierApp({ user, onSignOut }) {
               // they forgot to fill: numbered like their own, and empty.
               const isReplacement = box.kind === 'replacement';
               const isFilling = !isReplacement && box.status === 'pending';
+              // A reship is created already-shipped on a reopened order, so it never passes
+              // the draft/pending test the supplier's own labels use — but saying what's in
+              // it is useful right up until the order is archived, and it's what the
+              // warehouse checks off when the box lands. Declaring it can't move the
+              // shortage numbers (those lines are excluded from reconciliation).
+              const canDeclare = isReplacement ? po.status !== 'closed' : isFilling;
               const isPacked = box.status === 'packed';
               // "En route" states carry live tracking (show the status line + refresh). pre_transit
               // means the label's made but the parcel is still with the supplier — tracking is active.
@@ -237,9 +243,11 @@ export function SupplierApp({ user, onSignOut }) {
 
                   {isReplacement && (
                     <p className="po-box-note sm">
-                      Tracking for the replacement covering the pairs that came up short.
-                      {' '}{businessName || 'Stickballman12 LLC'} added it here so both sides can
-                      follow the same number — there’s no manifest to fill in.
+                      The replacement covering the pairs that came up short.
+                      {' '}{businessName || 'Stickballman12 LLC'} added it here so both sides follow
+                      the same tracking number.{canDeclare
+                        ? ' List what you’re sending back below — the warehouse checks the box off against it, and it won’t change the shortage on the original order.'
+                        : ''}
                     </p>
                   )}
 
@@ -281,7 +289,7 @@ export function SupplierApp({ user, onSignOut }) {
                   )}
 
                   {lines.length > 0 && (
-                    isFilling ? (
+                    canDeclare ? (
                       <ul className="po-lines po-lines-edit">
                         {lines.map((l) => (
                           <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)}
@@ -306,6 +314,16 @@ export function SupplierApp({ user, onSignOut }) {
                     <div className="po-box-actions">
                       <button className="btn sm" onClick={() => setScanBox(box)}><Icon name="camera" /> Add items</button>
                       <button className="btn sm primary" disabled={units < 1 || busy} onClick={() => setCloseReview(box)}>Review &amp; close box</button>
+                    </div>
+                  )}
+                  {/* A reship gets the same scan-in, but no close/ship: the warehouse
+                      already created it as a shipped label with its tracking on it. */}
+                  {isReplacement && canDeclare && (
+                    <div className="po-box-actions">
+                      <button className="btn sm" onClick={() => setScanBox(box)}>
+                        <Icon name="camera" /> {lines.length ? 'Add more items' : 'List what you’re sending'}
+                      </button>
+                      {units > 0 && <span className="muted sm">{units} unit{units === 1 ? '' : 's'} declared</span>}
                     </div>
                   )}
                   {isPacked && (

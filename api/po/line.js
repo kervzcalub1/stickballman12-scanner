@@ -1,10 +1,12 @@
 // POST /api/po/line  (supplier / ph_team / admin)  { lineId, qty?, size? }
 // Edits an expected line's quantity and/or size; qty <= 0 removes the line. Only on a
-// DRAFT PO, and only while its label is still pending. Changing the size into an existing
+// DRAFT PO while its label is still pending — or, for a REPLACEMENT label, any time before
+// the order is archived (`manifestEditBlock`). Changing the size into an existing
 // SKU+size line on the same label merges the two. The supplier edits their own manifest;
 // PH/admin edit ON THEIR BEHALF (re-stamps entered_by + entered_on_behalf on the surviving row).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoLine, getPoBox, getPo, updatePoLine, dbConfigured } from '../_lib/db.js';
+import { manifestEditBlock } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -39,12 +41,8 @@ export default async function handler(req, res) {
     const onBehalf = user.role !== 'supplier';
     const uidNum = Number(user.uid);
     const enteredBy = onBehalf && Number.isInteger(uidNum) ? uidNum : null;
-    if (po.status !== 'draft')
-      return send(res, 409, { ok: false, error: 'This order is already shipped — it can no longer be edited.' });
-    if (box && box.status === 'packed')
-      return send(res, 409, { ok: false, error: 'This label is closed — reopen it to edit.' });
-    if (box && box.status !== 'pending')
-      return send(res, 409, { ok: false, error: 'This label is already shipped.' });
+    const blocked = manifestEditBlock({ po, box });
+    if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
 
     const { line: updated, removed, merged } = await updatePoLine(lineId, {
       size, qty, enteredBy, enteredOnBehalf: onBehalf,

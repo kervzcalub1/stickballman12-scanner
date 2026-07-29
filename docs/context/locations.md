@@ -83,9 +83,10 @@ plus **Edit** / **activate-deactivate** / print that one **Label** / **Delete**.
 catalog image)` from `listItemsAtLocation` — real pair where we have one (~40%),
 catalog image otherwise (~95% coverage), logo placeholder as last resort
 (`ShoeThumb`); tapping it enlarges the SKU's listing photos or the catalog image
-(`PhotoLightbox`). No schema change — both columns already exist. **Print-selection** checkboxes sit on every tile (folders roll
-up their ids; `Select all` per level); the count + **Print labels** live in the
-crumb bar. A **breadcrumb** tracks the path and jumps to any ancestor.
+(`PhotoLightbox`). No schema change — both columns already exist. Every tile carries two
+corner controls (`.loc-tile-tools`): an **edit pencil** (see "Edit any level" below) and a
+**print-selection** checkbox (folders roll up their ids; `Select all` per level); the count +
+**Print labels** live in the crumb bar. A **breadcrumb** tracks the path and jumps to any ancestor.
 
 **Locate Shoe** — the page/card is titled **Locate Shoe** (warehouse ops look for
 a shoe, not a shelf). The search box runs a **shoe search**
@@ -111,9 +112,50 @@ only). **Add** one shelf or
 **bulk-add** a site's bays (one per line, `A1 5`). Warehouse & Area pickers have a
 **"＋ Custom…"** free-text option (`ComboField`) to add a new site/area; the Area
 picker **suggests the selected site's own areas first** (`siteAreas`). Endpoints (query-param style):
-`GET /api/locations`, `GET /api/locations/items?id=`, `POST /api/locations/{create,bulk,update,delete}`.
+`GET /api/locations`, `GET /api/locations/items?id=`,
+`POST /api/locations/{create,bulk,update,delete,rename-group}`.
 db: `listLocations, getLocationByCode, getLocationById, createLocation, bulkCreateLocations,
-updateLocation, moveLocation, deleteLocation, listItemsAtLocation, shelveItems`.
+updateLocation, moveLocation, deleteLocation, listLocationGroup, findLocationCodeConflicts,
+countLiveItemsAt, applyLocationMoves, listItemsAtLocation, shelveItems`. Code helpers:
+`api/_lib/locations.js` (`buildLocationCode, bayRowKey, autoLabelFor, …`).
+
+### Edit any level of the tree (site / area / row / bay)
+**Every folder tile carries a pencil** (`.loc-tile-edit`, beside its print checkbox) that opens
+`EditGroupModal`; a shelf tile's pencil opens the per-shelf editor below instead. This exists
+because **the folder levels are not rows in the database.** `locations` holds one row per
+SHELF, and Site / Area / Bay are just its distinct `warehouse` / `area` / `bay` values — while
+**Row is derived and stored nowhere at all** (`bayRowKey`/`rowKeyOf` = the bay's leading
+letters, shown only when it usefully subdivides a long bay list). So "rename this area" *is*
+"rewrite `area` on all 189 shelves under it", which through the per-shelf editor meant 189
+passes. That's the gap this closes.
+
+`POST /api/locations/rename-group` → `{ match, patch, dryRun? }`. How much of the path is
+pinned in `match` picks the scope — `{warehouse}` = the site, `+area` = one area (`area: null`
+is the real "(no area)" folder, hence `coalesce` matching, not `=`), `+bayPrefix` = one derived
+row, `+bay` = one bay. `patch` renames in place **or moves the node** (patch an `area` onto a
+bay to relocate it). `bayPrefix` in the patch substitutes just the prefix, so row A → B rewrites
+`A1…A5` as `B1…B5` and `A10` as `B10`.
+
+- **Barcodes.** The site and area segments are baked into `code` (`MNH-WH-A2-04`), so any of
+  these reissues the code on every shelf beneath and every printed label needs reprinting.
+  **`dryRun` runs the real endpoint** and returns `{ count, changedCount, liveItems, changes }`;
+  the modal previews `from → to` and the affected-pair count live (debounced 350 ms). The code
+  builder stays server-side on purpose — mirroring it in the client would drift.
+- **Two-pass write.** `applyLocationMoves` parks every affected row on a throwaway `~mv~<id>`
+  code, *then* writes the real ones. `locations.code` is a plain non-deferrable UNIQUE checked
+  per statement, so any renumbering that shifts or swaps within the group (bay `A1→A2` while
+  `A2→A3`) would otherwise collide with a row that is itself about to move. `~` can't appear in
+  a real code (`normalizeLocationCode`), so the temporaries can't hit a shelf that isn't moving.
+- **Collisions are rejected up front**, not left to a mid-transaction unique violation: two
+  shelves landing on one code → 409 naming it; a clash with a shelf *outside* the group →
+  409 listing them (`findLocationCodeConflicts`).
+- `items.location_code` is rewritten for every unit in the same transaction, and auto-derived
+  labels (`A1-03`) follow the move while typed ones are left alone — same rule as a single shelf.
+- **Live stock does NOT block it.** Reorganising a rack with pairs on it is the normal case; the
+  pairs don't move, only their codes do. The count is stated in the preview and the label sheet
+  opens on save, since relabelling is the only part that can't fix itself.
+- **Row itself stays uneditable as an entity** — renaming its bays is the only thing that can
+  change it, which is exactly what the row scope does.
 
 ### Edit / move / delete a shelf
 **Edit** opens `EditShelfModal` (a form on the raw `.modal` shell, `.modal.loc-edit-modal` to

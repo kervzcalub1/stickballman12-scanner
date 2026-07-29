@@ -1091,6 +1091,11 @@ export async function getLocationByCode(code) {
   return rows[0] || null;
 }
 
+export async function getLocationById(id) {
+  const rows = await db()`SELECT * FROM locations WHERE id = ${id} LIMIT 1`;
+  return rows[0] || null;
+}
+
 // Create one location. Returns the row, or null if the code already existed.
 export async function createLocation(loc, createdBy) {
   const rows = await db()`
@@ -1136,6 +1141,54 @@ export async function updateLocation(id, patch) {
     RETURNING *
   `;
   return rows[0] || null;
+}
+
+// Structural edit — move/renumber a shelf (site, area, bay, shelf #) and/or rename it.
+// The scannable `code` is DERIVED from those parts, so the caller rebuilds it and passes
+// it in. Two things have to move with it in one transaction:
+//   • `items.location_code` — a denormalized snapshot with no FK. Leave it behind and
+//     every unit on the shelf points at a barcode that no longer resolves.
+//   • nothing else references a location by code (put-away looks it up live).
+// The printed shelf label carries the OLD code, so the caller warns to reprint.
+// Throws on a code collision (locations.code is UNIQUE) — the endpoint maps that to 409.
+export async function moveLocation(id, next) {
+  const sql = db();
+  const res = await sql.transaction([
+    sql`
+      UPDATE locations SET
+        code = ${next.code}, warehouse = ${next.warehouse}, area = ${next.area ?? null},
+        bay = ${next.bay}, shelf = ${next.shelf ?? null}, label = ${next.label ?? null},
+        updated_at = now()
+      WHERE id = ${id}
+      RETURNING *
+    `,
+    sql`UPDATE items SET location_code = ${next.code} WHERE location_id = ${id}`,
+  ]);
+  return res[0]?.[0] || null;
+}
+
+// Hard-delete a shelf. `items.location_id` is a real FK with no ON DELETE rule, so
+// Postgres would raise a constraint error on any referencing row — this checks first and
+// hands back a usable reason instead of a 500. Live stock BLOCKS the delete (move it or
+// just deactivate the shelf); sold/shipped units are detached, because holding a closed
+// unit's FK hostage would make an old shelf permanently undeletable. Their
+// `location_code` text is kept as a historical breadcrumb, and the `shelved` item_event
+// records where the pair sat regardless.
+export async function deleteLocation(id) {
+  const sql = db();
+  const loc = (await sql`SELECT * FROM locations WHERE id = ${id}`)[0];
+  if (!loc) return { deleted: false, notFound: true };
+  const counts = (await sql`
+    SELECT (count(*) FILTER (WHERE status NOT IN ('sold','shipped')))::int AS live,
+           count(*)::int AS total
+    FROM items WHERE location_id = ${id}
+  `)[0] || { live: 0, total: 0 };
+  if (counts.live > 0) return { deleted: false, live: counts.live, location: loc };
+  await sql.transaction([
+    sql`UPDATE items SET location_id = NULL WHERE location_id = ${id}`,
+    sql`DELETE FROM locations WHERE id = ${id}`,
+  ]);
+  return { deleted: true, location: loc, detached: counts.total };
 }
 
 // Put-away / transfer: place a set of units on a shelf. Each unit → its

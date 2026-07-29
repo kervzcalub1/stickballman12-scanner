@@ -31,11 +31,23 @@ labels** (one tracking number each); it closes only when every label is shipped.
   in `receiving`/`reconciled`, so shipped/draft POs (with tracking) had nowhere to show.
 - **Phase 2b (in progress) — receive by MANIFEST, not blind re-scan (2026-07-09 decision):**
   When a box is received against a PO, its expected lines (from `po_lines` for that label)
-  pre-populate a **checklist**: one row per SKU+size with a **present checkbox + editable
-  "received" count** (defaults to expected — lower it for a shortage). Each row has **add
-  issue** (defect/no-box/etc. per shoe). Staff can **add an unexpected item** (scan/type) →
-  received + flagged **overage / not-on-PO**. On confirm, the checklist builds the same
-  `items[]` + `unitIssues[]` the scan flow produces and reuses **box-commit** (mints VINs).
+  populate a **checklist**: one row per SKU+size with a **present checkbox + editable
+  "received" count**. Each row has **add issue** (defect/no-box/etc. per shoe). Staff can
+  **add an unexpected item** (scan/type) → received + flagged **overage / not-on-PO**. On
+  confirm, the checklist builds the same `items[]` + `unitIssues[]` the scan flow produces
+  and reuses **box-commit** (mints VINs).
+  - **Every row starts UNCHECKED at qty 0** (`buildManifestItems`), so the list is the guide
+    for what's being pulled out of the box — tick a size as the pair comes out, and whatever
+    stays unticked is the shortage. Pre-filling at the expected qty made "I received
+    everything" the default and turned the screen into something to skim past; a shortage
+    only got caught if someone remembered to untick it. Supporting bits: an **"x of y
+    checked"** progress chip in the card header, a **ticked row gets the done wash** (the
+    `.off` fade is gone — unchecked is the full-strength "still to pull" state), the red
+    `short N` flag is reserved for a **partial** (`0 < got < exp`) with an untouched row
+    reading a neutral `to pull N`, and **Review** on a fully-unchecked PO box warns once
+    before letting it through (`emptyBoxAck`) — an all-short label is legitimate, just never
+    silent. Nothing changed downstream: qty 0 already expanded to 0 units in `doCommit`, and
+    the shortage is still inferred server-side by `getPoReconciliation`.
   Reconciliation (received-vs-expected per SKU+size: shortage/overage/wrong-SKU) falls out of
   this at receipt; the full PO-level snapshot + PO→`reconciled` is Phase 3.
 - **Phase 3 (built, on branch `feat/po-phase3-reconcile` — not deployed):** reconciliation.
@@ -276,10 +288,23 @@ For the pushes to actually fire when a supplier never uses the portal:
 
 ## Manifest PDF (printable packing slip)
 `src/components/ManifestPrint.jsx` renders **"Manifest PDF: [Per box] [Whole order]"** and
-`src/lib/manifestPdf.js` builds it (Letter-size document pages, jsPDF lazy-loaded, same
-`dispatchPdf` handoff as `labelPdf.js`). Two shapes: **`perbox`** = one page per shipping
-label, carrying that label's tracking # + carrier and its expected items; **`whole`** = one
-table for the entire order with every tracking number in the header.
+`src/lib/manifestPdf.js` builds it (Letter-size document pages, jsPDF lazy-loaded; the
+component downloads the blob rather than printing it inline). Two shapes: **`perbox`** = one
+page per shipping label, carrying that label's tracking # + carrier and its expected items;
+**`whole`** = one table for the entire order with every tracking number in the header.
+
+**Whole-order (Path C) lines are order-level, not box-level, and `perbox` must not drop
+them.** Those lines carry `po_box_id = NULL`, so a strict box match excludes every one of
+them; the per-box PDF appends **a final "Whole order — not broken out by box" page** with
+the full list, and a box page with no lines of its own says so ("the full item list is on
+the last page") instead of "No items recorded for this box". Before this, a warehouse that
+linked a Path-C PO in Receiving and hit **Per box** — the sheet the banner tells them to
+carry to the pallet — got nothing but empty pages. Two related rules in `linesForBox`:
+box ids are compared as **null-or-number** (`Number(null)` is `0`, which used to make every
+order-level line "match" a null/0-id box), and **replacement labels** are excluded from the
+"Box N of M" count and titled *Replacement shipment* (they're the warehouse's reship, not
+the supplier's packing job). Everything the PDF draws is **plain ASCII** — jsPDF's built-in
+Helvetica silently drops em-dashes, which is why "Tag / Code —" printed as a blank cell.
 
 **Available on three surfaces, one component:**
 - **PH** — `PoOverview` (`/ph/po-status`), per expanded PO.
@@ -287,12 +312,13 @@ table for the entire order with every tracking number in the header.
   banner** (Step 1, once a PO is linked) so the sheet can be printed *before* unpacking and
   pairs ticked off on paper.
 
-**It always re-fetches `po/get` on click** rather than using a `detail` the caller already
-holds. `po/get` is the only endpoint returning **`businessName`** (the PDF letterhead) —
-`po/open` and `po/lookup` omit it, so Receiving's copy would print a generic header; the
-caller's lines can also be stale after an on-behalf manifest edit. One code path, callers
-pass only an id. Cost is one request per print, on an explicit user action. A failed fetch
-is **not** cached, or every later click would reuse the failure.
+**It re-fetches `po/get` on every click** — no caching — rather than using a `detail` the
+caller already holds. `po/get` is the only endpoint returning **`businessName`** (the PDF
+letterhead) — `po/open` and `po/lookup` omit it, so Receiving's copy would print a generic
+header; the caller's lines can also be stale after an on-behalf manifest edit; and the
+component stays mounted across `poId` changes (Reconciliation drives the open PO off a
+query param), so a per-mount cache could hand back the *previous* PO's manifest. One code
+path, callers pass only an id. Cost is one request per print, on an explicit user action.
 
 Hidden on a **blind receipt** in Reconciliation (`summary.no_manifest`): there is nothing to
 print, and an empty slip reads as "the supplier declared nothing" rather than "nobody ever

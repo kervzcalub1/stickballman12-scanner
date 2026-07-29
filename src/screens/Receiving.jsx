@@ -84,6 +84,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [showPoPicker, setShowPoPicker] = useState(false);
   const [poSuggest, setPoSuggest] = useState(null);     // { code, tracking, data } — a typed/scanned tracking matched an open PO
   const poSuggestDismiss = useRef(new Set());           // trackings the user chose to receive plainly
+  const emptyBoxAck = useRef(false);                    // "yes, this PO box really is empty" — see goStep3
   function applyPo(data) {
     const boxes = data.boxes || [];
     setReceivingPo(data);
@@ -126,7 +127,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const clearPo = () => setReceivingPo(null); // unlink; keep whatever's typed
 
   // Receive-against-PO = a per-box manifest checklist built from the PO's expected
-  // lines for that label (grouped one item per SKU, each size at its expected qty).
+  // lines for that label (grouped one item per SKU, one row per size).
+  //
+  // Every row starts UNCHECKED (qty 0), not at the expected qty: the checklist is the
+  // guide for what's actually being pulled out of the box, so you tick a size as the
+  // pair comes out. Pre-checking made "I received everything" the default and turned
+  // the screen into something you skim past — a shortage only got caught if someone
+  // remembered to untick it.
   const manifestLinesFor = (poBoxId) => (receivingPo?.lines || []).filter((l) => Number(l.po_box_id) === Number(poBoxId));
   function buildManifestItems(poBoxId) {
     const bySku = new Map();
@@ -137,7 +144,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         source: 'manual', upc: l.upc || '', gender: l.gender || null, colorway: l.colorway || null,
         withBox: true, expected: true, sizes: [],
       });
-      bySku.get(key).sizes.push({ key: cartKey++, size: String(l.size), qty: l.qty_expected, expectedQty: l.qty_expected, vins: [] });
+      bySku.get(key).sizes.push({ key: cartKey++, size: String(l.size), qty: 0, expectedQty: l.qty_expected, vins: [] });
     }
     return [...bySku.values()];
   }
@@ -616,6 +623,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // Scan-intake rows are always ≥1, so this is unchanged there.
   const itemUnits = (i) => i.sizes.reduce((a, r) => a + Math.max(0, Number(r.qty) || 0), 0);
   const totalItems = items.reduce((s, i) => s + itemUnits(i), 0);
+  // Pairs this label was supposed to hold — the denominator of the "x of y checked"
+  // progress on the PO checklist (overage rows have no expectation, so they're excluded).
+  const manifestExpected = items.reduce((s, i) => s + i.sizes.reduce((a, r) => a + (Number(r.expectedQty) || 0), 0), 0);
   const totalCost = (defaultCostNum || 0) * totalItems;
   const rescaledCount = rescanned.length; // existing units re-scanned by VIN (rescale only)
 
@@ -670,6 +680,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setActiveSlot(i); setDraft(null);
     setItems(isPoReceive ? buildManifestItems(boxSlots[i]?.poBoxId) : []);
     setIssues([]); setUnitIssues({}); setRescanned([]);
+    emptyBoxAck.current = false;
     setStep(2);
   }
   // Leave the current box's scan and go back to the box list on step 1 (discards
@@ -677,6 +688,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   function backToBoxList() {
     setActiveSlot(null); setStep(1);
     setItems([]); setIssues([]); setUnitIssues({}); setDraft(null);
+    emptyBoxAck.current = false;
   }
   async function finishBatchNow() {
     if (!activeBatch) return;
@@ -704,6 +716,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   async function goStep3() {
     setError('');
     if (!items.length) { setError('Add at least one item first.'); return; }
+    // The PO checklist now starts fully unchecked, so "nothing ticked" is also what an
+    // untouched screen looks like. Say so once before letting it through — an empty box
+    // IS a legitimate outcome (the whole label came up short), just never a silent one.
+    if (isPoReceive && totalItems === 0 && !emptyBoxAck.current) {
+      emptyBoxAck.current = true;
+      setError(`Nothing is checked off — tick each pair as you pull it from the box. If this label really arrived empty, press Review again to record all ${manifestExpected} pair${manifestExpected === 1 ? '' : 's'} as short.`);
+      return;
+    }
     // PO-manifest: reserve VINs for the received units so each shoe is flaggable.
     if (isPoReceive && !(await ensureManifestVins())) return;
     setStep(3);  // Review
@@ -1038,7 +1058,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               )}
               {isPoReceive && activeSlot != null ? (
                 <ManifestChecklist boxNumber={activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
-                  items={items} totalItems={totalItems} onAddUnexpected={openAddItem}
+                  items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
                   onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} />
               ) : (
               <div className="card">
@@ -1547,14 +1567,22 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   );
 }
 
-/* PO Phase 2b: receive one box by its manifest. The expected lines pre-populate;
-   check off / adjust the "got" count per size (shortage = got < expected), add
-   unexpected pairs (overage), then Review → per-shoe issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, items, totalItems, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem }) {
+/* PO Phase 2b: receive one box by its manifest. The expected lines are listed but
+   every size starts UNCHECKED — tick each pair as it comes out of the box, so the
+   list is the picking guide and whatever stays unticked is the shortage. Adjust the
+   "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
+   issues → submit the box. */
+function ManifestChecklist({ boxNumber, tracking, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem }) {
+  const done = expectedUnits > 0 && totalItems >= expectedUnits;
   return (
     <div className="card po-manifest">
       <div className="step-head">
-        <h3 className="rows-title">Box {boxNumber} · manifest <span className="muted">({totalItems} received)</span></h3>
+        <h3 className="rows-title">
+          Box {boxNumber} · manifest{' '}
+          <span className={`po-manifest-progress ${done ? 'done' : ''}`}>
+            {totalItems} of {expectedUnits} checked
+          </span>
+        </h3>
         <button className="btn sm" onClick={onAddUnexpected}>+ Add unexpected</button>
       </div>
       {tracking ? <div className="muted sm po-manifest-track"><Icon name="tag" /> {tracking}</div> : null}
@@ -1574,7 +1602,11 @@ function ManifestChecklist({ boxNumber, tracking, items, totalItems, onAddUnexpe
               {[...it.sizes].sort((a, b) => compareSizes(a.size, b.size)).map((s) => {
                 const got = Number(s.qty) || 0;
                 const exp = s.expectedQty;
-                const short = exp != null && got < exp;
+                // An untouched row isn't a shortage yet, it's just not pulled — the red
+                // "short" flag is reserved for a partial (some pulled, but fewer than
+                // expected), or it would scream on every row the moment the box opens.
+                const pending = exp != null && exp > 0 && got === 0;
+                const short = exp != null && got > 0 && got < exp;
                 const over = exp != null && got > exp;
                 return (
                   <div className={`po-manifest-size ${got > 0 ? 'on' : 'off'}`} key={s.key}>
@@ -1588,6 +1620,7 @@ function ManifestChecklist({ boxNumber, tracking, items, totalItems, onAddUnexpe
                       <input className="qty" type="number" inputMode="numeric" min="0" value={got} onChange={(e) => onSetQty(it.key, s.key, e.target.value)} />
                       <button type="button" className="btn icon ghost step" onClick={() => onSetQty(it.key, s.key, got + 1)}>+</button>
                     </div>
+                    {pending && <span className="po-flag pending">to pull {exp}</span>}
                     {short && <span className="po-flag short">short {exp - got}</span>}
                     {over && <span className="po-flag over">+{got - exp}</span>}
                     {exp == null && got > 0 && <span className="po-flag over">extra</span>}
@@ -1599,7 +1632,7 @@ function ManifestChecklist({ boxNumber, tracking, items, totalItems, onAddUnexpe
           ))}
         </div>
       )}
-      <p className="muted sm">Uncheck or lower a count for a shortage; add unexpected pairs above. Flag defects per shoe on the next screen.</p>
+      <p className="muted sm">Check each size off as you pull it from the box. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for pairs that aren’t on the PO. Flag defects per shoe on the next screen.</p>
     </div>
   );
 }

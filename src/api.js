@@ -137,6 +137,7 @@ export const api = {
   locationCreate: (payload) => post('/api/locations/create', payload),
   locationBulk: (payload) => post('/api/locations/bulk', payload),
   locationUpdate: (id, patch) => post('/api/locations/update', { id, ...patch }),
+  locationDelete: (id) => post('/api/locations/delete', { id }),
   itemHistory: (vins) => get(`/api/items/history?vins=${encodeURIComponent((vins || []).join(','))}`),
   itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
   rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),

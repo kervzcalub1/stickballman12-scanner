@@ -4,11 +4,11 @@
 // no horizontal scroll); clicking a tile drills in and pushes a real URL segment
 // (/locations/manheim-main-shed/warehouse-rows/a/a2/4), so refresh + browser Back
 // work. The final level (a shelf, or a whole-bay pod) shows the shoes stored
-// there. Add / bulk-add, rename, activate-deactivate, and bulk label printing all
-// still live here.
+// there. Add / bulk-add, edit (rename + move), delete, activate-deactivate, and bulk
+// label printing all still live here.
 import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { api } from '../api.js';
-import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox } from '../components/common.jsx';
+import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { WAREHOUSES, LOCATION_AREAS } from '../lib/constants.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
@@ -95,8 +95,10 @@ export function Locations({ onHome, onSignOut }) {
   const [resultsRef] = useAutoAnimate(); // search hits ease in
   const [tilesRef] = useAutoAnimate();   // tiles reflow as you drill in/out
   const [contents, setContents] = useState(null);   // shoes on the open shelf | 'loading' | null
-  const [editing, setEditing] = useState(false);
-  const [editLabel, setEditLabel] = useState('');
+  const [editShelf, setEditShelf] = useState(null); // the location row being edited | null
+  const [delShelf, setDelShelf] = useState(null);   // the location row queued for deletion | null
+  const [delBusy, setDelBusy] = useState(false);
+  const [pendingNav, setPendingNav] = useState(null); // location id to re-open once the list reloads
   const [busy, setBusy] = useState(false);
   const [lightbox, setLightbox] = useState(null); // urls[] to enlarge, or null
 
@@ -111,7 +113,7 @@ export function Locations({ onHome, onSignOut }) {
 
   // Navigate to a level: update state + push a real URL so Back/refresh work.
   const navigate = (newSegs, { replace = false } = {}) => {
-    setSegs(newSegs); setEditing(false);
+    setSegs(newSegs); setEditShelf(null);
     const path = pathFromSegs(newSegs);
     if (window.location.pathname !== path) window.history[replace ? 'replaceState' : 'pushState'](null, '', path);
   };
@@ -213,6 +215,16 @@ export function Locations({ onHome, onSignOut }) {
     navigate(target);
   }
 
+  // After a shelf moves, re-open it at its new address. Deferred to an effect so the
+  // tree (and therefore segsForLocation) is rebuilt from the reloaded list first.
+  useEffect(() => {
+    if (pendingNav == null || !locations) return;
+    const loc = list.find((l) => l.id === pendingNav);
+    const target = loc && segsForLocation(loc);
+    setPendingNav(null);
+    if (target) navigate(target, { replace: true });
+  }, [pendingNav, locations]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load the open shelf's contents when we land on a shelf.
   useEffect(() => {
     const id = r.shelfId;
@@ -234,14 +246,33 @@ export function Locations({ onHome, onSignOut }) {
   const openPrint = () => setPrintLocs(list.filter((l) => sel.has(l.id)));
 
   // --- Shelf mutations -------------------------------------------------------
-  async function saveLabel() {
-    setBusy(true); setError('');
+  // A move can change the site/area/bay/shelf #, i.e. where the shelf lives in the
+  // tree — and the URL path is derived from exactly those. Reload, then let the effect
+  // above re-open the shelf at its new address so you're not dumped at a dead path.
+  function onShelfSaved({ location, codeChanged, previousCode }) {
+    setEditShelf(null); setError('');
+    setLocations((ls) => (ls || []).map((x) => (x.id === location.id ? { ...x, ...location } : x)));
+    setNotice(codeChanged
+      ? `Moved to ${location.code} (was ${previousCode}) — the old shelf label no longer scans, so reprint it.`
+      : `Saved ${location.label || location.code}.`);
+    load().then(() => setPendingNav(location.id));
+    if (codeChanged) setPrintLocs([location]);
+  }
+  async function doDelete() {
+    if (!delShelf) return;
+    setDelBusy(true); setError('');
+    // Step back to the parent level first — the shelf we're standing on is about to stop existing.
+    const parent = r.trail[r.trail.length - 2]?.segs || [];
     try {
-      const { location } = await api.locationUpdate(r.shelfObj.id, { label: editLabel.trim() });
-      setLocations((ls) => ls.map((x) => (x.id === location.id ? { ...x, ...location } : x)));
-      setEditing(false);
-    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
-    finally { setBusy(false); }
+      const { location, detached } = await api.locationDelete(delShelf.id);
+      setDelShelf(null);
+      navigate(parent);
+      await load();
+      setNotice(`Deleted ${location.label || location.code} (${location.code}).${detached ? ` ${detached} closed unit${detached === 1 ? '' : 's'} kept the code as history.` : ''}`);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setDelShelf(null); setError(err.message);
+    } finally { setDelBusy(false); }
   }
   async function toggleActive() {
     setBusy(true); setError('');
@@ -421,31 +452,17 @@ export function Locations({ onHome, onSignOut }) {
               <div className="loc-shelf">
                 <div className="loc-detail-head">
                   <div className="loc-detail-title">
-                    {editing ? (
-                      <input className="loc-label-edit" value={editLabel} autoFocus
-                        onChange={(e) => setEditLabel(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveLabel(); } if (e.key === 'Escape') setEditing(false); }} />
-                    ) : (
-                      <span className="loc-detail-name">{r.shelfObj.label || r.shelfObj.code}</span>
-                    )}
+                    <span className="loc-detail-name">{r.shelfObj.label || r.shelfObj.code}</span>
                     <span className="loc-code muted sm">{r.shelfObj.code}</span>
                     {Array.isArray(contents) && contents.length > 0 && (
                       <span className="loc-pair-count muted sm">· {contents.length} pair{contents.length === 1 ? '' : 's'}</span>
                     )}
                   </div>
                   <div className="loc-detail-actions">
-                    {editing ? (
-                      <>
-                        <button className="btn sm primary" disabled={busy} onClick={saveLabel}>Save</button>
-                        <button className="btn sm ghost" onClick={() => setEditing(false)}>Cancel</button>
-                      </>
-                    ) : (
-                      <>
-                        <button className="btn sm ghost" onClick={() => { setEditing(true); setEditLabel(r.shelfObj.label || ''); }}>Rename</button>
-                        <button className="btn sm ghost" disabled={busy} onClick={toggleActive}>{r.shelfObj.active ? 'Deactivate' : 'Activate'}</button>
-                        <button className="btn sm ghost" onClick={() => setPrintLocs([r.shelfObj])}><Icon name="print" /> Label</button>
-                      </>
-                    )}
+                    <button className="btn sm ghost" onClick={() => setEditShelf(r.shelfObj)}>Edit</button>
+                    <button className="btn sm ghost" disabled={busy} onClick={toggleActive}>{r.shelfObj.active ? 'Deactivate' : 'Activate'}</button>
+                    <button className="btn sm ghost" onClick={() => setPrintLocs([r.shelfObj])}><Icon name="print" /> Label</button>
+                    <button className="btn sm danger" onClick={() => setDelShelf(r.shelfObj)}>Delete</button>
                   </div>
                 </div>
                 {!r.shelfObj.active && <div className="loc-detail-flag">This shelf is inactive — hidden from put-away.</div>}
@@ -504,8 +521,95 @@ export function Locations({ onHome, onSignOut }) {
           </>
         )}
       </div>
+      {editShelf && (
+        <EditShelfModal shelf={editShelf} siteAreas={siteAreas} itemCount={Array.isArray(contents) ? contents.length : editShelf.item_count}
+          onSaved={onShelfSaved} onClose={() => setEditShelf(null)} onSignOut={onSignOut} />
+      )}
+      {delShelf && (
+        <Modal type="error" title={`Delete ${delShelf.label || delShelf.code}?`}
+          message={`${delShelf.code} is removed for good and its barcode stops scanning. To retire a shelf but keep its history, deactivate it instead.`}
+          onClose={() => (delBusy ? null : setDelShelf(null))}>
+          <button className="btn danger" disabled={delBusy} onClick={doDelete}>{delBusy ? 'Deleting…' : 'Delete shelf'}</button>
+          <button className="btn ghost" disabled={delBusy} onClick={() => setDelShelf(null)}>Cancel</button>
+        </Modal>
+      )}
       {printLocs && <ShelfLabelSheet locations={printLocs} onClose={() => setPrintLocs(null)} />}
       {lightbox && <PhotoLightbox photos={lightbox} onClose={() => setLightbox(null)} />}
+    </div>
+  );
+}
+
+// --- Edit one shelf: rename, and/or move it to another site/area/bay/shelf # ---
+// The scannable `code` is derived from those parts server-side, so moving a shelf
+// re-issues its barcode — hence the warning, and the label sheet that opens on save.
+function EditShelfModal({ shelf, siteAreas = {}, itemCount = 0, onSaved, onClose, onSignOut }) {
+  const [warehouse, setWarehouse] = useState(shelf.warehouse);
+  const [area, setArea] = useState(shelf.area || '');
+  const [bay, setBay] = useState(shelf.bay || '');
+  const [shelfNo, setShelfNo] = useState(shelf.shelf == null ? '' : String(shelf.shelf));
+  const [label, setLabel] = useState(shelf.label || '');
+  // Most shelves keep the auto name ("A1-03"), which describes the POSITION — so while
+  // it's still the default, let it follow a move instead of leaving "A1-03" sitting on
+  // shelf 12. A name someone actually typed is never overwritten.
+  const autoLabel = (b, s) => (s ? `${String(b).trim()}-${String(s).padStart(2, '0')}` : String(b).trim());
+  const [labelTouched, setLabelTouched] = useState(!!shelf.label && shelf.label !== autoLabel(shelf.bay, shelf.shelf));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const areaOptions = [...new Set([...(siteAreas[warehouse] || []), ...LOCATION_AREAS])];
+  useEffect(() => {
+    if (labelTouched) return;
+    setLabel(autoLabel(bay, shelfNo === '' ? null : Number(shelfNo)));
+  }, [bay, shelfNo, labelTouched]); // eslint-disable-line react-hooks/exhaustive-deps
+  const moved = warehouse !== shelf.warehouse
+    || (area.trim() || null) !== (shelf.area || null)
+    || bay.trim() !== (shelf.bay || '')
+    || (shelfNo === '' ? null : Number(shelfNo)) !== (shelf.shelf ?? null);
+
+  async function save() {
+    setError('');
+    if (!String(warehouse).trim()) { setError('Pick a warehouse / site.'); return; }
+    if (!bay.trim()) { setError('Enter a bay.'); return; }
+    setBusy(true);
+    try {
+      const res = await api.locationUpdate(shelf.id, {
+        label: label.trim(),
+        warehouse: String(warehouse).trim(),
+        area: area.trim() || null,
+        bay: bay.trim(),
+        shelf: shelfNo === '' ? null : Number(shelfNo),
+      });
+      onSaved(res);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <div className="modal loc-edit-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">Edit shelf</h3>
+        <p className="modal-msg">Current barcode <span className="vin">{shelf.code}</span></p>
+        <div className="loc-pane">
+          <label className="loc-edit-label">Display name<input value={label} maxLength={40} placeholder={shelf.code}
+            onChange={(e) => { setLabelTouched(true); setLabel(e.target.value); }} /></label>
+          <div className="loc-pane-row">
+            <label>Warehouse / Site<ComboField value={warehouse} onChange={(w) => { setWarehouse(w); setArea(''); }} options={WAREHOUSES} placeholder="New site name" /></label>
+            <label>Area (optional)<ComboField key={warehouse} value={area} onChange={setArea} options={areaOptions} allowNone placeholder="New area name" /></label>
+            <label>Bay<input value={bay} onChange={(e) => setBay(e.target.value)} placeholder="e.g. A2 or Pod 1" autoCapitalize="characters" /></label>
+            <label>Shelf #<input type="number" min="1" max="99" value={shelfNo} onChange={(e) => setShelfNo(e.target.value)} placeholder="blank = whole bay" /></label>
+          </div>
+        </div>
+        {moved && (
+          <div className="loc-edit-warn">
+            Moving the shelf re-issues its barcode, so the printed label stops scanning — reprint it
+            (the label sheet opens on save).{itemCount > 0 ? ` The ${itemCount} pair${itemCount === 1 ? '' : 's'} stored here stay on the shelf and follow it.` : ''}
+          </div>
+        )}
+        {error && <div className="error mt">{error}</div>}
+        <div className="modal-actions">
+          <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+          <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+        </div>
+      </div>
     </div>
   );
 }

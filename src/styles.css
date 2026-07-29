@@ -1187,7 +1187,23 @@ body {
 .loc-sel-actions { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
 .loc-code { font-variant-numeric: tabular-nums; }
 .loc-inactive-badge { font-size: 11px; color: #e08f8f; font-weight: 600; }
-.loc-label-edit { width: 160px; }
+/* Edit-shelf dialog: a form, so it uses the raw .modal shell (not the result Modal's
+   centred icon layout). `.modal.x` to out-specify the base .modal rules further down. */
+.modal.loc-edit-modal { max-width: 520px; width: 100%; text-align: left; max-height: 90vh; overflow-y: auto; }
+.modal.loc-edit-modal .modal-title,
+.modal.loc-edit-modal .modal-msg { text-align: center; }
+.modal.loc-edit-modal .modal-msg { margin-bottom: 16px; }
+.modal.loc-edit-modal .loc-pane { border-top: none; padding-top: 0; margin-top: 0; }
+.modal.loc-edit-modal .loc-pane-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.modal.loc-edit-modal input,
+.modal.loc-edit-modal select,
+.modal.loc-edit-modal .combo { width: 100%; }
+.modal.loc-edit-modal .combo input { min-width: 0; }
+.modal.loc-edit-modal .modal-actions { justify-content: flex-end; margin-top: 18px; }
+.loc-edit-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.loc-edit-warn { margin-top: 14px; font-size: 12px; line-height: 1.5; color: #e0a458;
+  background: rgba(224,164,88,0.10); border: 1px solid rgba(224,164,88,0.30); border-radius: 10px; padding: 10px 12px; }
+@media (max-width: 480px) { .modal.loc-edit-modal .loc-pane-row { grid-template-columns: 1fr; } }
 /* Shoe list row: thumbnail + (name/size/status) / (vin · sku). */
 .loc-item { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; border-bottom: 1px solid var(--border); transition: background 0.12s; }
 .loc-item:last-child { border-bottom: none; }
@@ -2022,13 +2038,19 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-manifest-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .po-manifest-name { font-weight: 600; flex: 1; min-width: 0; }
 .po-manifest-size { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); flex-wrap: wrap; min-height: 44px; }
-.po-manifest-size.off { opacity: 0.55; }
+/* Rows start unchecked, so unchecked is the full-strength "still to pull" state and a
+   ticked row gets the done wash — the reverse of when rows pre-filled as received. */
+.po-manifest-size.on { background: rgba(46,204,113,0.08); border-radius: 8px; padding-left: 6px; padding-right: 6px; }
+.po-manifest-progress { font-family: ui-monospace, monospace; font-size: 12px; font-weight: 700; color: var(--muted);
+  background: var(--panel-2, rgba(255,255,255,0.05)); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; margin-left: 6px; white-space: nowrap; }
+.po-manifest-progress.done { color: var(--ok); background: rgba(46,204,113,0.12); border-color: rgba(46,204,113,0.35); }
 .po-check { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 140px; min-height: 40px; cursor: pointer; }
 .po-check input { width: 22px; height: 22px; flex: none; }
 .po-manifest .qty-stepper .step { min-width: 44px; min-height: 44px; }
 .po-size-lbl { font-size: 14px; }
 .po-flag { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .po-flag.short { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }
+.po-flag.pending { color: var(--muted); background: rgba(255,255,255,0.04); border: 1px solid var(--border); font-weight: 600; }
 .po-flag.over { color: #c6871a; background: rgba(198,135,26,0.14); border: 1px solid rgba(198,135,26,0.35); }
 
 /* ---- PO Phase 3: reconciliation report ----

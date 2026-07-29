@@ -12,7 +12,7 @@
 // it, so Receiving's copy would print a generic header); the caller's lines can be
 // minutes stale after an on-behalf manifest edit; and one code path means callers pass
 // nothing but an id. The cost is one request per print, on an explicit user action.
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { buildManifestPdf } from '../lib/manifestPdf.js';
@@ -20,15 +20,16 @@ import { buildManifestPdf } from '../lib/manifestPdf.js';
 export function ManifestPrint({ poId, poCode, label = 'Manifest PDF:', onSignOut }) {
   const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole'
   const [error, setError] = useState('');
-  const cache = useRef(null);             // po/get response, fetched once per mount
 
   if (!poId) return null;
 
   const run = async (mode) => {
     setBusy(mode); setError('');
     try {
-      if (!cache.current) cache.current = await api.poGet(poId);
-      const d = cache.current;
+      // Fetched per click, not cached: the component stays mounted across `poId`
+      // changes (Reconciliation drives the open PO off a query param), and lines can
+      // be minutes stale after an on-behalf manifest edit.
+      const d = await api.poGet(poId);
       const generatedAt = `Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EST`;
       const doc = await buildManifestPdf({
         po: d.po, boxes: d.boxes, lines: d.lines, businessName: d.businessName, mode, generatedAt,
@@ -44,8 +45,6 @@ export function ManifestPrint({ poId, poCode, label = 'Manifest PDF:', onSignOut
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
-      // A failed fetch must not be cached as a good one, or every later click reuses it.
-      cache.current = null;
       if (e?.unauthorized && onSignOut) return onSignOut();
       setError(e?.message || 'Could not build the manifest.');
     } finally { setBusy(''); }

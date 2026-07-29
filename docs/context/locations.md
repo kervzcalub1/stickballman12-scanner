@@ -78,7 +78,7 @@ The tree is built client-side from one `locationList({ active, q })` fetch; ever
 tile shows a **live item_count** (folders aggregate). The last level (a shelf, or
 a whole-bay pod) loads its contents lazily (`locationItems`) and shows the shoes
 as rows with a **thumbnail** + name / `US size` chip / status pill / `vin · sku`,
-plus **Rename** / **activate-deactivate** / print that one **Label**. The thumb
+plus **Edit** / **activate-deactivate** / print that one **Label** / **Delete**. The thumb
 `photo_url` is `COALESCE(team listing photo ('side' first), items.image_url
 catalog image)` from `listItemsAtLocation` — real pair where we have one (~40%),
 catalog image otherwise (~95% coverage), logo placeholder as last resort
@@ -111,9 +111,36 @@ only). **Add** one shelf or
 **bulk-add** a site's bays (one per line, `A1 5`). Warehouse & Area pickers have a
 **"＋ Custom…"** free-text option (`ComboField`) to add a new site/area; the Area
 picker **suggests the selected site's own areas first** (`siteAreas`). Endpoints (query-param style):
-`GET /api/locations`, `GET /api/locations/items?id=`, `POST /api/locations/{create,bulk,update}`.
-db: `listLocations, getLocationByCode, createLocation, bulkCreateLocations,
-updateLocation, listItemsAtLocation, shelveItems`.
+`GET /api/locations`, `GET /api/locations/items?id=`, `POST /api/locations/{create,bulk,update,delete}`.
+db: `listLocations, getLocationByCode, getLocationById, createLocation, bulkCreateLocations,
+updateLocation, moveLocation, deleteLocation, listItemsAtLocation, shelveItems`.
+
+### Edit / move / delete a shelf
+**Edit** opens `EditShelfModal` (a form on the raw `.modal` shell, `.modal.loc-edit-modal` to
+out-specify the base rules) with **Display name + Site / Area / Bay / Shelf #**. Two shapes
+behind one endpoint (`locations/update`):
+- **label / active only** — the original cheap patch (`updateLocation`), `codeChanged: false`.
+- **any structural field** — a **move**: the patch is merged onto the current row, the
+  scannable `code` is **rebuilt server-side** from the new parts (same `buildLocationCode` as
+  create), and `items.location_code` is rewritten **for every unit on the shelf in the same
+  transaction** (`moveLocation`) — that snapshot has no FK, so leaving it behind would strand
+  the stock on a barcode that no longer resolves. A collision on the unique `code` → **409**.
+  The response carries `codeChanged` + `previousCode`; the client shows "Moved to X (was Y) —
+  reprint it" and **opens the label sheet**, then re-opens the shelf at its **new URL** (the
+  tile path is derived from site/area/bay/shelf, so the old path is dead — `pendingNav` defers
+  the navigate to an effect, after the reloaded list has rebuilt the tree). A **display name
+  still on its auto default** (`A1-03`) follows the move; a name someone typed is never
+  overwritten (`labelTouched`).
+
+**Delete** (`locations/delete`, `deleteLocation`) is a hard delete behind a confirm `Modal`.
+`items.location_id` is a real FK with **no `ON DELETE` rule**, so the check happens first and
+returns a usable reason instead of a 500: **live stock blocks it** (409, "N pairs are still
+shelved here — move them, or deactivate this one instead"), while **sold/shipped units are
+detached** (`location_id = NULL`, `location_code` kept as a historical breadcrumb, and the
+`shelved` item_event records it regardless) so a long-empty old shelf isn't held hostage by a
+closed unit. **Deactivate is still the normal way to retire a shelf** — it keeps the history
+and the put-away guard (`items/shelve` 409s on an inactive shelf); delete is for shelves that
+shouldn't exist.
 
 ## Labels (`ShelfLabelSheet`)
 Bulk-select shelves on the Locations page → **Print labels** → pick label stock.

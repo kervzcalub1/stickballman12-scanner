@@ -138,6 +138,9 @@ export const api = {
   locationBulk: (payload) => post('/api/locations/bulk', payload),
   locationUpdate: (id, patch) => post('/api/locations/update', { id, ...patch }),
   locationDelete: (id) => post('/api/locations/delete', { id }),
+  // Rename/move a whole node of the tree (site | area | row | bay). dryRun previews the
+  // barcode changes without writing.
+  locationRenameGroup: (payload) => post('/api/locations/rename-group', payload),
   itemHistory: (vins) => get(`/api/items/history?vins=${encodeURIComponent((vins || []).join(','))}`),
   itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
   rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),

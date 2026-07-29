@@ -1203,6 +1203,12 @@ body {
 .loc-edit-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .loc-edit-warn { margin-top: 14px; font-size: 12px; line-height: 1.5; color: #e0a458;
   background: rgba(224,164,88,0.10); border: 1px solid rgba(224,164,88,0.30); border-radius: 10px; padding: 10px 12px; }
+/* Nothing needs reprinting — say so without the amber alarm. */
+.loc-edit-warn.calm { color: var(--muted); background: var(--panel-2); border-color: var(--border); }
+.loc-edit-hint { font-size: 11px; color: var(--muted); line-height: 1.4; }
+.loc-edit-diff { margin: 8px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 3px;
+  font-size: 11px; color: var(--text); max-height: 150px; overflow-y: auto; }
+.loc-edit-diff .vin { font-size: 11px; }
 @media (max-width: 480px) { .modal.loc-edit-modal .loc-pane-row { grid-template-columns: 1fr; } }
 /* Shoe list row: thumbnail + (name/size/status) / (vin · sku). */
 .loc-item { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; border-bottom: 1px solid var(--border); transition: background 0.12s; }
@@ -1238,7 +1244,12 @@ body {
 .loc-tile.inactive { opacity: 0.55; }
 /* Padded label = a ≥40px tap area in the corner, so selecting doesn't mis-fire the
    full-tile navigate button beneath it. */
-.loc-tile-check { position: absolute; top: 0; right: 0; z-index: 2; padding: 10px; display: inline-flex; cursor: pointer; }
+/* Tile corner controls: pencil (rename/move this node) + print-selection checkbox. */
+.loc-tile-tools { position: absolute; top: 0; right: 0; z-index: 2; display: inline-flex; align-items: center; }
+.loc-tile-check { padding: 10px; display: inline-flex; cursor: pointer; }
+.loc-tile-edit { padding: 10px 6px 10px 10px; display: inline-flex; align-items: center; background: none; border: none;
+  color: var(--muted); cursor: pointer; border-radius: 8px; }
+.loc-tile-edit:hover { color: var(--primary); }
 .loc-tile-body { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 15px 14px; background: none; border: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .loc-tile-icon { color: var(--primary); width: 26px; height: 26px; display: inline-flex; margin-bottom: 2px; }
 .loc-tile-name { font-weight: 700; font-size: 15px; line-height: 1.2; word-break: break-word; padding-right: 18px; }

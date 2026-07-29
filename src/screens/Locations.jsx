@@ -4,8 +4,10 @@
 // no horizontal scroll); clicking a tile drills in and pushes a real URL segment
 // (/locations/manheim-main-shed/warehouse-rows/a/a2/4), so refresh + browser Back
 // work. The final level (a shelf, or a whole-bay pod) shows the shoes stored
-// there. Add / bulk-add, edit (rename + move), delete, activate-deactivate, and bulk
-// label printing all still live here.
+// there. Add / bulk-add, delete, activate-deactivate and bulk label printing all still live
+// here — plus **edit at every level**: each tile has a pencil, which for a folder (site /
+// area / row / bay) rewrites every shelf underneath it, because those levels are the shelves'
+// distinct warehouse/area/bay values rather than rows of their own. See EditGroupModal.
 import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { api } from '../api.js';
 import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox, Modal } from '../components/common.jsx';
@@ -96,6 +98,7 @@ export function Locations({ onHome, onSignOut }) {
   const [tilesRef] = useAutoAnimate();   // tiles reflow as you drill in/out
   const [contents, setContents] = useState(null);   // shoes on the open shelf | 'loading' | null
   const [editShelf, setEditShelf] = useState(null); // the location row being edited | null
+  const [editGroup, setEditGroup] = useState(null); // { kind, name, label, match, shelves } | null
   const [delShelf, setDelShelf] = useState(null);   // the location row queued for deletion | null
   const [delBusy, setDelBusy] = useState(false);
   const [pendingNav, setPendingNav] = useState(null); // location id to re-open once the list reloads
@@ -258,6 +261,18 @@ export function Locations({ onHome, onSignOut }) {
     load().then(() => setPendingNav(location.id));
     if (codeChanged) setPrintLocs([location]);
   }
+  // A folder rename rewrites every shelf under it. We're standing on the PARENT of the tile we
+  // edited, so the current URL stays valid — just reload and, if any barcode moved, put the
+  // affected labels straight on screen to reprint (they're the only thing that can't fix itself).
+  function onGroupSaved(res) {
+    setEditGroup(null); setError('');
+    const moved = (res.changes || []).filter((c) => c.from !== c.to).length;
+    setNotice(`Updated ${res.count} shelf location${res.count === 1 ? '' : 's'}.${moved
+      ? ` ${moved} barcode${moved === 1 ? '' : 's'} changed — those labels no longer scan, so reprint them.`
+      : ''}`);
+    load();
+    if (moved && res.locations?.length) setPrintLocs(res.locations);
+  }
   async function doDelete() {
     if (!delShelf) return;
     setDelBusy(true); setError('');
@@ -283,17 +298,27 @@ export function Locations({ onHome, onSignOut }) {
     finally { setBusy(false); }
   }
 
-  // Tiles for the current level.
+  // Tiles for the current level. Each folder tile carries the `match` that identifies its
+  // node to `locations/rename-group` — the folders aren't rows in the DB, they're the distinct
+  // warehouse/area/bay values on the shelves underneath, so "this tile" IS a query. `area: null`
+  // is the real "(no area)" folder, which is why the empty key is normalised to null and not
+  // left out (leaving it out would mean "any area").
   const bayVals = r.grouped ? (r.R ? r.R.bays : []) : (r.A ? [...r.A.bays.values()] : []);
+  const hereArea = r.A ? (r.A.key || null) : null;
   let tiles = [];
-  if (r.level === 'sites') tiles = [...sites.values()].map((s) => ({ key: s.name, slug: slug(s.name), name: s.name, sub: `${s.areas.size} area${s.areas.size === 1 ? '' : 's'}`, count: s.count, ids: s.ids, kind: 'site' }));
-  else if (r.level === 'areas') tiles = [...r.S.areas.values()].map((a) => ({ key: a.key, slug: slug(a.name), name: a.name, sub: `${a.bays.size} bay${a.bays.size === 1 ? '' : 's'}`, count: a.count, ids: a.ids, kind: 'area' }));
-  else if (r.level === 'rows') tiles = [...r.A.rows.values()].map((x) => ({ key: x.name, slug: slug(x.name), name: `Row ${x.name}`, sub: `${x.bays.length} bay${x.bays.length === 1 ? '' : 's'}`, count: x.count, ids: x.ids, kind: 'row' }));
+  if (r.level === 'sites') tiles = [...sites.values()].map((s) => ({ key: s.name, slug: slug(s.name), name: s.name, sub: `${s.areas.size} area${s.areas.size === 1 ? '' : 's'}`, count: s.count, ids: s.ids, kind: 'site', match: { warehouse: s.name } }));
+  else if (r.level === 'areas') tiles = [...r.S.areas.values()].map((a) => ({ key: a.key, slug: slug(a.name), name: a.name, sub: `${a.bays.size} bay${a.bays.size === 1 ? '' : 's'}`, count: a.count, ids: a.ids, kind: 'area', editName: a.key || '', match: { warehouse: r.site, area: a.key || null } }));
+  else if (r.level === 'rows') tiles = [...r.A.rows.values()].map((x) => ({ key: x.name, slug: slug(x.name), name: `Row ${x.name}`, sub: `${x.bays.length} bay${x.bays.length === 1 ? '' : 's'}`, count: x.count, ids: x.ids, kind: 'row', editName: x.name, match: { warehouse: r.site, area: hereArea, bayPrefix: x.name } }));
   else if (r.level === 'bays') tiles = bayVals.map((b) => {
     const whole = b.shelves.length === 1 && b.shelves[0].shelf == null;
-    return { key: b.name, slug: slug(b.name), name: b.name, sub: whole ? 'whole bay' : `${b.shelves.length} ${b.shelves.length === 1 ? 'shelf' : 'shelves'}`, count: b.count, ids: b.ids, kind: 'bay' };
+    return { key: b.name, slug: slug(b.name), name: b.name, sub: whole ? 'whole bay' : `${b.shelves.length} ${b.shelves.length === 1 ? 'shelf' : 'shelves'}`, count: b.count, ids: b.ids, kind: 'bay', match: { warehouse: r.site, area: hereArea, bay: b.name } };
   });
-  else if (r.level === 'shelves') tiles = r.B.shelves.map((sh) => ({ key: sh.id, slug: String(sh.shelf), name: sh.label || sh.code, sub: sh.code, count: sh.item_count, ids: [sh.id], kind: 'shelf', inactive: !sh.active }));
+  else if (r.level === 'shelves') tiles = r.B.shelves.map((sh) => ({ key: sh.id, slug: String(sh.shelf), name: sh.label || sh.code, sub: sh.code, count: sh.item_count, ids: [sh.id], kind: 'shelf', inactive: !sh.active, loc: sh }));
+
+  // A shelf tile opens the single-shelf editor; every folder tile opens the group one.
+  const openTileEdit = (t) => (t.kind === 'shelf' ? setEditShelf(t.loc) : setEditGroup({
+    kind: t.kind, name: t.editName ?? t.name, label: t.name, match: t.match, shelves: t.ids.length,
+  }));
 
   const onShelf = r.level === 'shelf';
   const levelTitle = { sites: 'Sites', areas: 'Areas', rows: 'Rows', bays: 'Bays', shelves: 'Shelves' }[r.level];
@@ -503,9 +528,17 @@ export function Locations({ onHome, onSignOut }) {
                   <div className="loc-tiles" ref={tilesRef}>
                     {tiles.map((t) => (
                       <div className={`loc-tile ${t.inactive ? 'inactive' : ''}`} key={t.key}>
-                        <label className="loc-tile-check" onClick={(e) => e.stopPropagation()}>
-                          <input type="checkbox" checked={allSel(t.ids)} onChange={() => toggleIds(t.ids)} aria-label={`Select ${t.name}`} />
-                        </label>
+                        <div className="loc-tile-tools" onClick={(e) => e.stopPropagation()}>
+                          {/* Rename/move this whole node — a site, area, row or bay is a query
+                              over its shelves, so editing it rewrites every one of them. */}
+                          <button type="button" className="loc-tile-edit" title={`Edit ${t.kind}`}
+                            aria-label={`Edit ${t.name}`} onClick={() => openTileEdit(t)}>
+                            <Icon name="pencil" />
+                          </button>
+                          <label className="loc-tile-check">
+                            <input type="checkbox" checked={allSel(t.ids)} onChange={() => toggleIds(t.ids)} aria-label={`Select ${t.name}`} />
+                          </label>
+                        </div>
                         <button className="loc-tile-body" onClick={() => navigate([...r.base, t.slug])}>
                           <span className="loc-tile-icon"><TileGlyph kind={t.kind} /></span>
                           <span className="loc-tile-name">{t.name}{t.inactive && <span className="loc-inactive-badge"> inactive</span>}</span>
@@ -525,6 +558,10 @@ export function Locations({ onHome, onSignOut }) {
         <EditShelfModal shelf={editShelf} siteAreas={siteAreas} itemCount={Array.isArray(contents) ? contents.length : editShelf.item_count}
           onSaved={onShelfSaved} onClose={() => setEditShelf(null)} onSignOut={onSignOut} />
       )}
+      {editGroup && (
+        <EditGroupModal node={editGroup} sites={[...sites.keys()]} siteAreas={siteAreas}
+          onSaved={onGroupSaved} onClose={() => setEditGroup(null)} onSignOut={onSignOut} />
+      )}
       {delShelf && (
         <Modal type="error" title={`Delete ${delShelf.label || delShelf.code}?`}
           message={`${delShelf.code} is removed for good and its barcode stops scanning. To retire a shelf but keep its history, deactivate it instead.`}
@@ -535,6 +572,138 @@ export function Locations({ onHome, onSignOut }) {
       )}
       {printLocs && <ShelfLabelSheet locations={printLocs} onClose={() => setPrintLocs(null)} />}
       {lightbox && <PhotoLightbox photos={lightbox} onClose={() => setLightbox(null)} />}
+    </div>
+  );
+}
+
+// --- Rename / move a whole node: a site, an area, a row, or a bay -------------
+// None of those is a row in the database — they're the distinct `warehouse`/`area`/`bay`
+// values on the shelves underneath (and a Row is derived from the bays' shared leading
+// letters, stored nowhere at all). So editing one rewrites EVERY shelf beneath it, and since
+// the site and area are baked into the barcode (MNH-WH-A2-04) it reissues their codes too.
+// That's what the dry-run preview is for: you see the count and a sample of from → to before
+// committing, because the printed labels are the part that can't fix itself.
+const GROUP_KIND = {
+  site: { noun: 'site', nameLabel: 'Site name' },
+  area: { noun: 'area', nameLabel: 'Area name', nameHint: 'Leave blank for “(no area)”.' },
+  row: { noun: 'row', nameLabel: 'Row name', nameHint: 'The bays’ shared prefix — renaming row A to B rewrites A1…A5 as B1…B5.' },
+  bay: { noun: 'bay', nameLabel: 'Bay name' },
+};
+
+function EditGroupModal({ node, sites = [], siteAreas = {}, onSaved, onClose, onSignOut }) {
+  const cfg = GROUP_KIND[node.kind];
+  const [name, setName] = useState(node.name || '');
+  const [warehouse, setWarehouse] = useState(node.match.warehouse);
+  const [area, setArea] = useState(node.match.area ?? '');
+  const [preview, setPreview] = useState(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const siteOptions = [...new Set([...WAREHOUSES, ...sites])];
+  const areaOptions = [...new Set([...(siteAreas[warehouse] || []), ...LOCATION_AREAS])];
+  // A site tile IS the site, and an area tile IS the area, so their name field already covers
+  // the move — only a row/bay can be relocated somewhere else.
+  const canMove = node.kind === 'row' || node.kind === 'bay';
+  const movedSite = warehouse !== node.match.warehouse;
+  const movedArea = (area.trim() || null) !== (node.match.area ?? null);
+
+  const patch = () => {
+    const p = {};
+    if (node.kind === 'site') { p.warehouse = name.trim(); return p; }
+    if (node.kind === 'area') {
+      p.area = name.trim() || null;
+      if (movedSite) p.warehouse = warehouse.trim();
+      return p;
+    }
+    if (node.kind === 'row') p.bayPrefix = name.trim();
+    else p.bay = name.trim();
+    if (movedSite) p.warehouse = warehouse.trim();
+    if (movedArea) p.area = area.trim() || null;
+    return p;
+  };
+  const dirty = name.trim() !== String(node.name || '').trim() || movedSite || (canMove && movedArea);
+  const needsName = node.kind !== 'area' && !name.trim();
+
+  // Preview through the same endpoint that will do the write, so what you're shown is what
+  // will happen — the code builder lives server-side and duplicating it here would drift.
+  useEffect(() => {
+    if (!dirty || needsName) { setPreview(null); setError(''); return undefined; }
+    let cancelled = false;
+    setPreviewBusy(true);
+    const t = setTimeout(() => {
+      api.locationRenameGroup({ match: node.match, patch: patch(), dryRun: true })
+        .then((r) => { if (!cancelled) { setPreview(r); setError(''); } })
+        .catch((e) => {
+          if (e.unauthorized) return onSignOut();
+          if (!cancelled) { setPreview(null); setError(e.message); }
+        })
+        .finally(() => { if (!cancelled) setPreviewBusy(false); });
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); setPreviewBusy(false); };
+  }, [name, warehouse, area, dirty, needsName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function save() {
+    setError(''); setBusy(true);
+    try { onSaved(await api.locationRenameGroup({ match: node.match, patch: patch() })); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  const changed = (preview?.changes || []).filter((c) => c.from !== c.to);
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <div className="modal loc-edit-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">Edit {cfg.noun}</h3>
+        <p className="modal-msg">
+          <b>{node.label}</b> · {node.shelves} shelf location{node.shelves === 1 ? '' : 's'} underneath
+        </p>
+        <div className="loc-pane">
+          <label className="loc-edit-label">{cfg.nameLabel}
+            <input value={name} autoFocus maxLength={80} onChange={(e) => setName(e.target.value)} />
+            {cfg.nameHint && <span className="loc-edit-hint">{cfg.nameHint}</span>}
+          </label>
+          {canMove && (
+            <div className="loc-pane-row">
+              <label>Move to site<ComboField value={warehouse} onChange={(w) => { setWarehouse(w); setArea(''); }} options={siteOptions} placeholder="New site name" /></label>
+              <label>Move to area<ComboField key={warehouse} value={area} onChange={setArea} options={areaOptions} allowNone placeholder="New area name" /></label>
+            </div>
+          )}
+          {node.kind === 'area' && (
+            <div className="loc-pane-row">
+              <label>Move to site<ComboField value={warehouse} onChange={setWarehouse} options={siteOptions} placeholder="New site name" /></label>
+            </div>
+          )}
+        </div>
+
+        {previewBusy && <p className="muted sm mt">Checking…</p>}
+        {!previewBusy && preview && (
+          <div className={`loc-edit-warn ${changed.length ? '' : 'calm'}`}>
+            {changed.length ? (
+              <>
+                <b>{changed.length} barcode{changed.length === 1 ? '' : 's'} will change</b> across {preview.count} shelf
+                location{preview.count === 1 ? '' : 's'} — the printed labels stop scanning, so reprint them
+                (the label sheet opens on save).
+                {preview.liveItems > 0 && <> {preview.liveItems} pair{preview.liveItems === 1 ? '' : 's'} stored here stay exactly where they are; only their codes change.</>}
+                <ul className="loc-edit-diff">
+                  {changed.slice(0, 6).map((c) => (
+                    <li key={c.id}><span className="vin">{c.from}</span> → <span className="vin">{c.to}</span></li>
+                  ))}
+                  {changed.length > 6 && <li className="muted">…and {changed.length - 6} more</li>}
+                </ul>
+              </>
+            ) : (
+              <>Renames {preview.count} shelf location{preview.count === 1 ? '' : 's'}. No barcode changes, so nothing needs reprinting.</>
+            )}
+          </div>
+        )}
+        {error && <div className="error mt">{error}</div>}
+        <div className="modal-actions">
+          <button className="btn primary" disabled={busy || !dirty || needsName || previewBusy || !!error} onClick={save}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+          <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+        </div>
+      </div>
     </div>
   );
 }

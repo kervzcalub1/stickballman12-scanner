@@ -1167,6 +1167,76 @@ export async function moveLocation(id, next) {
   return res[0]?.[0] || null;
 }
 
+// Every shelf under ONE node of the Locations tree — a site, an area, a derived row, or a
+// bay — selected by however much of the path is pinned. `area` is nullable and NULL is a real
+// folder ("(no area)"), not "any area", so it's matched through coalesce rather than `=`.
+// `bayPrefix` mirrors the UI's derived Row level (bayRowKey); the SQL repeats that rule
+// rather than importing it, so keep the two in step.
+export async function listLocationGroup({ warehouse, area, bay, bayPrefix } = {}) {
+  const hasArea = area !== undefined;
+  const hasBay = bay !== undefined;
+  const hasPrefix = bayPrefix !== undefined;
+  return await db()`
+    SELECT * FROM locations
+    WHERE warehouse = ${warehouse}
+      AND (${!hasArea}::bool   OR coalesce(area, '') = coalesce(${hasArea ? (area ?? null) : null}, ''))
+      AND (${!hasBay}::bool    OR bay = ${hasBay ? bay : null})
+      AND (${!hasPrefix}::bool OR upper(coalesce(substring(bay from '^[A-Za-z]+'), bay)) = upper(${hasPrefix ? bayPrefix : null}))
+    ORDER BY sort_order NULLS LAST, code
+  `;
+}
+
+// Shelves OUTSIDE the group whose code one of the new codes would collide with. Checked up
+// front so a bulk rename fails with "B2-04 is already taken" instead of a raw unique-violation
+// halfway through.
+export async function findLocationCodeConflicts(codes, excludeIds = []) {
+  if (!codes.length) return [];
+  return await db()`
+    SELECT id, code, label FROM locations
+    WHERE code = ANY(${codes}::text[]) AND NOT (id = ANY(${excludeIds.map(Number)}::bigint[]))
+  `;
+}
+
+// Live (unsold) pairs sitting anywhere in a set of shelves — the "this will need relabelling"
+// number on the confirm.
+export async function countLiveItemsAt(ids = []) {
+  if (!ids.length) return 0;
+  const rows = await db()`
+    SELECT count(*)::int AS n FROM items
+    WHERE location_id = ANY(${ids.map(Number)}::bigint[]) AND status NOT IN ('sold','shipped')`;
+  return rows[0]?.n || 0;
+}
+
+// Apply a computed set of moves — a whole subtree's new identity — in ONE transaction.
+// `moves`: [{ id, warehouse, area, bay, code, label }].
+//
+// Codes are written in TWO passes, and that isn't defensive padding: `locations.code` is a
+// plain (non-deferrable) UNIQUE, so Postgres checks it per statement. Any rename that shifts
+// or swaps within the group — bay A1→A2 while A2→A3, the single most likely renumbering —
+// would collide against a row that is itself about to move. Parking every affected row on a
+// throwaway code first removes the ordering problem entirely. `~` can't occur in a real code
+// (normalizeLocationCode allows only A-Z 0-9 and dashes), so the temporaries can't clash with
+// a shelf that isn't moving.
+export async function applyLocationMoves(moves = []) {
+  if (!moves.length) return 0;
+  const sql = db();
+  const queries = [
+    ...moves.map((m) => sql`UPDATE locations SET code = ${`~mv~${m.id}`} WHERE id = ${m.id}`),
+    ...moves.flatMap((m) => [
+      sql`
+        UPDATE locations SET
+          code = ${m.code}, warehouse = ${m.warehouse}, area = ${m.area ?? null},
+          bay = ${m.bay}, label = ${m.label ?? null}, updated_at = now()
+        WHERE id = ${m.id}`,
+      // The denormalized snapshot has no FK — leave it behind and every unit on the shelf
+      // points at a barcode that no longer resolves.
+      sql`UPDATE items SET location_code = ${m.code} WHERE location_id = ${m.id}`,
+    ]),
+  ];
+  await sql.transaction(queries);
+  return moves.length;
+}
+
 // Hard-delete a shelf. `items.location_id` is a real FK with no ON DELETE rule, so
 // Postgres would raise a constraint error on any referencing row — this checks first and
 // hands back a usable reason instead of a 500. Live stock BLOCKS the delete (move it or
@@ -1777,7 +1847,9 @@ export async function listPos({ uid, supplierScope }) {
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement' AND b.status <> 'pending')::int AS shipped_count,
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
-        (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+        (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l
+           LEFT JOIN po_boxes lb ON lb.id = l.po_box_id
+           WHERE l.po_id = p.id AND coalesce(lb.kind, 'original') <> 'replacement')::int AS unit_count
       FROM purchase_orders p
       WHERE p.supplier_user_id = ${uid}
       ORDER BY p.created_at DESC
@@ -1789,7 +1861,9 @@ export async function listPos({ uid, supplierScope }) {
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement' AND b.status <> 'pending')::int AS shipped_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status = 'delivered')::int AS delivered_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
-      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l
+         LEFT JOIN po_boxes lb ON lb.id = l.po_box_id
+         WHERE l.po_id = p.id AND coalesce(lb.kind, 'original') <> 'replacement')::int AS unit_count
     FROM purchase_orders p
     ORDER BY p.created_at DESC
   `;
@@ -2031,22 +2105,31 @@ export async function getPoReconciliation(poId) {
   const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
   if (!po) return null;
   // "Expected" depends on the manifest scope:
-  // - 'po' (whole-order manifest, Path C): count the ENTIRE list order-wide. The lines
-  //   have no label, so there's no per-box "already shipped?" filter to apply.
+  // - 'po' (whole-order manifest, Path C): count the ENTIRE order-level list. Those lines
+  //   have no label, so there's no per-box "already shipped?" filter to apply — hence the
+  //   explicit `po_box_id IS NULL`, which also keeps a replacement label's lines out.
   // - 'box' (per-box manifest, Paths A/B): count only the lines on labels that actually
   //   SHIPPED — a label still filling/packed hasn't left the supplier, so its contents
   //   aren't due yet and must NOT read as shortages against what arrived.
+  //
+  // EITHER WAY, a REPLACEMENT label's lines are excluded. A reship re-declares units that
+  // the ORIGINAL manifest already expected and that are already counted short; counting
+  // them again would inflate `expected` by exactly the shortage, so the order would read
+  // short by that amount forever — even after the reship landed and `received` caught up.
+  // The reship's manifest exists to tell the warehouse what to check off (and both sides
+  // what was promised), never to move this arithmetic. See `docs/context/purchase-orders.md`.
   const expected = po.manifest_scope === 'po'
     ? await sql`
         SELECT l.sku, l.size, sum(l.qty_expected)::int AS qty, max(l.name) AS name
         FROM po_lines l
-        WHERE l.po_id = ${poId}
+        WHERE l.po_id = ${poId} AND l.po_box_id IS NULL
         GROUP BY l.sku, l.size`
     : await sql`
         SELECT l.sku, l.size, sum(l.qty_expected)::int AS qty, max(l.name) AS name
         FROM po_lines l
         JOIN po_boxes b ON b.id = l.po_box_id
-        WHERE l.po_id = ${poId} AND b.status IN ('shipped', 'in_transit', 'delivered')
+        WHERE l.po_id = ${poId} AND b.kind <> 'replacement'
+          AND b.status IN ('shipped', 'in_transit', 'delivered')
         GROUP BY l.sku, l.size`;
   // Counted across EVERY batch linked to this PO, not just `received_batch_id`. An order
   // can be received in more than one batch — most obviously a replacement shipment that
@@ -2430,10 +2513,13 @@ export async function setResolutionStep({ poId, step, undo = false, outcome = nu
 }
 
 // The reship as a real label on the ORIGINAL order: same PO, next box number, tracked
-// like any other. Carries NO po_lines on purpose — those units were declared on the
-// original manifest and already counted short, so declaring them again would double the
-// expected count and make chasing a shortage look like a worse one. The box is only a
-// vehicle; when it lands, `received` climbs and the order goes clean on its own.
+// like any other. Created EMPTY — the supplier (or PH on their behalf) can then declare
+// what's actually in it, so the warehouse checks the reship off a manifest instead of
+// re-scanning it blind. Those lines are deliberately kept out of the reconciliation
+// `expected` count and the PO list's unit_count: the units were already declared on the
+// original manifest and already counted short, so counting them twice would leave the
+// order reading short forever. The box is still only a vehicle for the arithmetic — when
+// it lands, `received` climbs and the order goes clean on its own.
 export async function addReplacementBox(poId, { trackingNumber, carrierKey, createdBy }) {
   const sql = db();
   const next = (await sql`

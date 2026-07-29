@@ -228,9 +228,16 @@ export const FAQ = [
   {
     id: 'faq-po-replacement-count',
     q: 'Why does a replacement shipment not appear in "1 of 2 labels shipped"?',
-    a: 'Because that number describes the supplier\'s packing job, and a reship is one we created. Counting it would turn their completed "1 of 1" into an unfinished "1 of 2". A replacement also carries no manifest lines — those units were already declared and already counted short, so re-declaring them would make the shortage read worse than it is.',
+    a: 'Because that number describes the supplier\'s packing job, and a reship is one we created. Counting it would turn their completed "1 of 1" into an unfinished "1 of 2". The same reasoning keeps a replacement\'s declared items out of the expected count and the order\'s unit total: those pairs were already declared on the original manifest and already counted short, so counting them twice would leave the order reading short forever.',
     area: 'po', roles: ['ph_team', 'warehouse', 'admin', 'superadmin'], see: 'po-resolution',
     keywords: ['replacement', 'reship', 'label count', 'shipped count', 'excluded'],
+  },
+  {
+    id: 'faq-po-replacement-manifest',
+    q: 'Can the supplier say what is in a replacement shipment?',
+    a: 'Yes. The replacement label is fillable in the supplier portal ("List what you\'re sending"), and PH can enter it on their behalf from PO Overview if the supplier will not. The warehouse then receives the reship against a real checklist instead of scanning it blind. Unlike the supplier\'s own labels, this stays editable until the order is archived — a reship is created already-shipped, so the usual draft/pending window never applies. Declaring it cannot change the shortage on the original order.',
+    area: 'po', roles: ['ph_team', 'warehouse', 'supplier', 'admin', 'superadmin'], see: 'po-resolution',
+    keywords: ['replacement', 'reship', 'manifest', 'declare', 'on behalf', 'supplier portal', 'checklist'],
   },
   {
     id: 'faq-print-manifest',

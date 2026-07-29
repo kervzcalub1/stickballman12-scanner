@@ -4,8 +4,13 @@
 // their own manifest; PH/admin can enter it ON THEIR BEHALF when the supplier doesn't
 // (stamped entered_by + entered_on_behalf). Product details are resolved client-side
 // (reusing the UPC/SKU search); this only writes po_lines — never the receiving path.
+//
+// A REPLACEMENT label takes a different gate (`manifestEditBlock`) and skips the
+// whole-order-scope check: a reship is one specific label whatever shape the original
+// purchase was declared in, and its lines never reach the reconciliation `expected` count.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, addPoScan, dbConfigured } from '../_lib/db.js';
+import { manifestEditBlock, isReplacementBox } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -32,8 +37,10 @@ export default async function handler(req, res) {
     // A supplier is scoped to their own POs; PH/admin can fill any PO on the team's behalf.
     if (user.role === 'supplier' && !isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
-    // A PO is one manifest scope or the other — no mixing a whole-order manifest with per-box lines.
-    if (po.manifest_scope === 'po')
+    // A PO is one manifest scope or the other — no mixing a whole-order manifest with
+    // per-box lines. A reship is exempt: it's its own label regardless of how the original
+    // purchase was declared, and it can't pollute the whole-order roll-up.
+    if (po.manifest_scope === 'po' && !isReplacementBox(box))
       return send(res, 409, { ok: false, error: 'This PO uses a whole-order manifest — add items to the order, not a label.' });
     // Anyone but the supplier scanning their own order is entering it on the supplier's behalf.
     // entered_by references users(id); the env admin/superadmin have a non-numeric uid, so
@@ -41,12 +48,8 @@ export default async function handler(req, res) {
     const onBehalf = user.role !== 'supplier';
     const uidNum = Number(user.uid);
     const enteredBy = onBehalf && Number.isInteger(uidNum) ? uidNum : null;
-    if (po.status !== 'draft')
-      return send(res, 409, { ok: false, error: 'This order is already shipped — it can no longer be edited.' });
-    if (box.status === 'packed')
-      return send(res, 409, { ok: false, error: 'This label is closed — reopen it to add items.' });
-    if (box.status !== 'pending')
-      return send(res, 409, { ok: false, error: 'This label is already shipped.' });
+    const blocked = manifestEditBlock({ po, box });
+    if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
 
     const line = await addPoScan({
       poId: box.po_id, poBoxId, sku, size, qty,

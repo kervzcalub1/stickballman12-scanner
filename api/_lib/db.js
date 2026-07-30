@@ -1261,6 +1261,31 @@ export async function deleteLocation(id) {
   return { deleted: true, location: loc, detached: counts.total };
 }
 
+// Hard-delete a WHOLE NODE of the tree — every shelf under a site / area / row / bay — in
+// one transaction. Same rule as the single-shelf delete, applied to the set: live stock
+// ANYWHERE beneath BLOCKS the whole thing (nothing is deleted — a half-deleted rack is worse
+// than a refusal), while sold/shipped units are detached so an old, long-closed rack isn't
+// permanently undeletable. `dryRun` runs the counts only, so the confirm can state exactly
+// what it's about to do.
+export async function deleteLocationGroup(ids = [], { dryRun = false } = {}) {
+  const list = [...new Set(ids.map(Number).filter(Boolean))];
+  if (!list.length) return { deleted: 0, live: 0, detached: 0 };
+  const sql = db();
+  const counts = (await sql`
+    SELECT (count(*) FILTER (WHERE status NOT IN ('sold','shipped')))::int AS live,
+           count(*)::int AS total
+    FROM items WHERE location_id = ANY(${list}::bigint[])
+  `)[0] || { live: 0, total: 0 };
+  const detached = counts.total - counts.live;
+  if (counts.live > 0) return { deleted: 0, live: counts.live, detached, blocked: true };
+  if (dryRun) return { deleted: 0, live: 0, detached, dryRun: true };
+  await sql.transaction([
+    sql`UPDATE items SET location_id = NULL WHERE location_id = ANY(${list}::bigint[])`,
+    sql`DELETE FROM locations WHERE id = ANY(${list}::bigint[])`,
+  ]);
+  return { deleted: list.length, live: 0, detached };
+}
+
 // Put-away / transfer: place a set of units on a shelf. Each unit → its
 // location_id/location_code set. Status: a boxed unit (or one that now has a box)
 // becomes `in_stock`; a unit still without a box keeps `no_box` (locatable but not

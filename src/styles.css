@@ -1200,6 +1200,9 @@ body {
 .modal.loc-edit-modal .combo { width: 100%; }
 .modal.loc-edit-modal .combo input { min-width: 0; }
 .modal.loc-edit-modal .modal-actions { justify-content: flex-end; margin-top: 18px; }
+/* Delete sits apart from Save/Cancel — a destructive action shouldn't be a mis-tap away
+   from the one you came here for. Stacked on phones it drops to the bottom for the same reason. */
+.modal.loc-edit-modal .modal-actions .btn.danger { flex: 0 0 auto; margin-right: auto; }
 .loc-edit-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .loc-edit-warn { margin-top: 14px; font-size: 12px; line-height: 1.5; color: #e0a458;
   background: rgba(224,164,88,0.10); border: 1px solid rgba(224,164,88,0.30); border-radius: 10px; padding: 10px 12px; }
@@ -1210,6 +1213,8 @@ body {
   font-size: 11px; color: var(--text); max-height: 150px; overflow-y: auto; }
 .loc-edit-diff .vin { font-size: 11px; }
 @media (max-width: 480px) { .modal.loc-edit-modal .loc-pane-row { grid-template-columns: 1fr; } }
+/* Matches the breakpoint where .modal-actions stacks — keep Delete at the bottom there. */
+@media (max-width: 600px) { .modal.loc-edit-modal .modal-actions .btn.danger { order: 3; margin-right: 0; } }
 /* Shoe list row: thumbnail + (name/size/status) / (vin · sku). */
 .loc-item { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; border-bottom: 1px solid var(--border); transition: background 0.12s; }
 .loc-item:last-child { border-bottom: none; }

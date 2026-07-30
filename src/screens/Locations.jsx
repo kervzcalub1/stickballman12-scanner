@@ -758,7 +758,10 @@ function DeleteGroupModal({ node, onDeleted, onClose, onSignOut }) {
 
   return (
     <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
-      <div className="modal loc-edit-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+      {/* `loc-del-modal` is not styling — it opens ON TOP of the still-mounted editor (so
+          Cancel returns you there), and both would otherwise answer to the same selector.
+          The SOP screenshot capture anchors its callouts on this one. */}
+      <div className="modal loc-edit-modal loc-del-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">Delete {cfg.noun} “{node.label}”?</h3>
         <p className="modal-msg">
           This removes <b>every shelf location under it</b> for good and their barcodes stop

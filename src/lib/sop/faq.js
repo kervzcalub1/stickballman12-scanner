@@ -75,6 +75,27 @@ export const FAQ = [
     area: 'putaway', roles: WH, see: 'shelve-putaway',
     keywords: ['shelve', 'refused', 'no box', 'rejected', 'box found', 'blocked'],
   },
+  {
+    id: 'faq-renamed-shelf-labels-dead',
+    q: 'I renamed an area and now none of its shelf tags scan.',
+    a: 'That is expected, and the app told you so before you saved. The site and the area are part of the shelf barcode itself (MNH-WH-A2-04), so renaming either one re-issues the code on every shelf underneath. The shoes never moved and nothing is lost — the tags on the rack are just the old codes now. Reprint them from the label sheet that opens on save, or tick the level on the Locations page and use "Print labels".',
+    area: 'putaway', roles: WH, see: 'locations-edit-delete',
+    keywords: ['rename', 'area', 'site', 'labels', 'not scanning', 'dead tag', 'reprint', 'barcode changed'],
+  },
+  {
+    id: 'faq-cannot-delete-location',
+    q: 'It will not let me delete this bay / area / site.',
+    a: 'Pairs are still shelved somewhere underneath it. The refusal is all-or-nothing on purpose — it does not quietly delete the empty shelves and keep the occupied ones, because a half-deleted rack is worse than none. Move that stock to another shelf first, then delete. Sold and shipped pairs never block it. If the rack is simply out of use rather than gone, deactivate it instead and keep the history.',
+    area: 'putaway', roles: WH, see: 'locations-edit-delete',
+    keywords: ['delete', 'blocked', 'refused', 'still shelved', 'live stock', 'deactivate', 'remove'],
+  },
+  {
+    id: 'faq-delete-or-deactivate',
+    q: 'Should I delete a shelf or deactivate it?',
+    a: 'Deactivate by default. It hides the shelf from put-away and keeps every record of what sat there, so it can come back. Delete only when the shelf should never have existed or the rack is physically gone — it is permanent, and its barcode stops resolving for good. Deleting a folder (a bay, row, area or site) deletes every shelf under it, not just the folder.',
+    area: 'putaway', roles: WH, see: 'locations-edit-delete',
+    keywords: ['delete', 'deactivate', 'retire', 'inactive', 'permanent', 'difference'],
+  },
 
   // ---------------------------------------------------------------- no box --
   {

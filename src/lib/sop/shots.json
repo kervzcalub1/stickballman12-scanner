@@ -12,7 +12,7 @@
         "w": 1044,
         "h": 29,
         "side": "below",
-        "label": "Your name and role \u2014 check this is the right account before you start"
+        "label": "Your name and role — check this is the right account before you start"
       },
       {
         "n": 2,
@@ -30,7 +30,7 @@
         "w": 1044,
         "h": 30,
         "side": "right",
-        "label": "Sections follow the shoe: Receiving \u2192 In-Store \u2192 Put-away \u2192 Rescale \u2192 Sell & Ship \u2192 Browse"
+        "label": "Sections follow the shoe: Receiving → In-Store → Put-away → Rescale → Sell & Ship → Browse"
       }
     ]
   },
@@ -38,7 +38,7 @@
     "file": "/sop-shots/receiving-step1.png",
     "w": 1280,
     "h": 820,
-    "caption": "Step 1 of the receiving wizard. Supplier and tracking are both required \u2014 the server rejects a batch without them.",
+    "caption": "Step 1 of the receiving wizard. Supplier and tracking are both required — the server rejects a batch without them.",
     "hotspots": [
       {
         "n": 1,
@@ -47,7 +47,7 @@
         "w": 506,
         "h": 53,
         "side": "right",
-        "label": "Supplier \u2014 required. Pick from the list, or \"Custom\u2026\" to add a new one (it is saved for next time)."
+        "label": "Supplier — required. Pick from the list, or \"Custom…\" to add a new one (it is saved for next time)."
       },
       {
         "n": 2,
@@ -56,7 +56,7 @@
         "w": 506,
         "h": 52,
         "side": "right",
-        "label": "Tracking number \u2014 required. Type it, scan the barcode, or photograph the label."
+        "label": "Tracking number — required. Type it, scan the barcode, or photograph the label."
       },
       {
         "n": 3,
@@ -82,7 +82,7 @@
         "w": 1014,
         "h": 67,
         "side": "right",
-        "label": "Open batches are resumable \u2014 tap one to see its boxes, or to add a box that arrived late."
+        "label": "Open batches are resumable — tap one to see its boxes, or to add a box that arrived late."
       },
       {
         "n": 2,
@@ -108,7 +108,7 @@
         "w": 763,
         "h": 52,
         "side": "right",
-        "label": "Search \u2014 a VIN, SKU or name. A shelf code (MNH-WH-A2-04) returns that shelf's contents instead."
+        "label": "Search — a VIN, SKU or name. A shelf code (MNH-WH-A2-04) returns that shelf's contents instead."
       },
       {
         "n": 2,
@@ -134,7 +134,7 @@
     "file": "/sop-shots/shelve.png",
     "w": 1280,
     "h": 820,
-    "caption": "Put-away. Scan the shelf first, then each VIN onto it \u2014 or pick from the list of shoes waiting for a shelf.",
+    "caption": "Put-away. Scan the shelf first, then each VIN onto it — or pick from the list of shoes waiting for a shelf.",
     "hotspots": [
       {
         "n": 1,
@@ -169,7 +169,7 @@
         "w": 218,
         "h": 41,
         "side": "right",
-        "label": "\"Box found \u2192 With Box\" makes the pair sellable again and sends it to Needs shelf."
+        "label": "\"Box found → With Box\" makes the pair sellable again and sends it to Needs shelf."
       },
       {
         "n": 2,
@@ -178,7 +178,7 @@
         "w": 186,
         "h": 41,
         "side": "left",
-        "label": "Print box labels lives only on this page \u2014 it recreates a shoe-box label with a UPC barcode."
+        "label": "Print box labels lives only on this page — it recreates a shoe-box label with a UPC barcode."
       }
     ]
   },
@@ -195,7 +195,7 @@
         "w": 111,
         "h": 44,
         "side": "left",
-        "label": "II \u00b7 AL \u00b7 SX \u00b7 SH \u2014 a badge reads \"on\" only when every pair in the group has that flag."
+        "label": "II · AL · SX · SH — a badge reads \"on\" only when every pair in the group has that flag."
       },
       {
         "n": 2,
@@ -212,7 +212,7 @@
     "file": "/sop-shots/reconcile.png",
     "w": 1280,
     "h": 820,
-    "caption": "PO reconciliation. The chip says what is actually true \u2014 a clean order closes itself and never appears here.",
+    "caption": "PO reconciliation. The chip says what is actually true — a clean order closes itself and never appears here.",
     "hotspots": [
       {
         "n": 1,
@@ -230,7 +230,7 @@
         "w": 87,
         "h": 30,
         "side": "right",
-        "label": "The chip: Reconciled \u00b7 Receiving \u00b7 Received blind \u00b7 N discrepancies \u00b7 Boxes still out \u00b7 Matched."
+        "label": "The chip: Reconciled · Receiving · Received blind · N discrepancies · Boxes still out · Matched."
       }
     ]
   },
@@ -238,7 +238,7 @@
     "file": "/sop-shots/locations.png",
     "w": 1280,
     "h": 820,
-    "caption": "Locate Shoe. Search for a pair, or browse the tiles down Site \u2192 Area \u2192 Bay \u2192 Shelf.",
+    "caption": "Locate Shoe. Search for a pair, or browse the tiles down Site → Area → Bay → Shelf.",
     "hotspots": [
       {
         "n": 1,
@@ -247,7 +247,7 @@
         "w": 626,
         "h": 52,
         "side": "right",
-        "label": "Search by name, SKU, VIN or UPC \u2014 or scan. Results group by SKU with a shelved / not-shelved count."
+        "label": "Search by name, SKU, VIN or UPC — or scan. Results group by SKU with a shelved / not-shelved count."
       },
       {
         "n": 2,
@@ -273,7 +273,7 @@
         "w": 112,
         "h": 41,
         "side": "right",
-        "label": "Role picker \u2014 Warehouse or PH Team for staff, Supplier for an external partner."
+        "label": "Role picker — Warehouse or PH Team for staff, Supplier for an external partner."
       },
       {
         "n": 2,
@@ -299,7 +299,7 @@
         "w": 203,
         "h": 39,
         "side": "below",
-        "label": "Date range \u2014 work the intake you are pricing. Days are Eastern, wherever you are sitting."
+        "label": "Date range — work the intake you are pricing. Days are Eastern, wherever you are sitting."
       },
       {
         "n": 2,
@@ -343,7 +343,7 @@
         "w": 670,
         "h": 119,
         "side": "right",
-        "label": "Drop a labels PDF here \u2014 one label per page \u2014 and each page's tracking number and courier are read off it."
+        "label": "Drop a labels PDF here — one label per page — and each page's tracking number and courier are read off it."
       },
       {
         "n": 3,
@@ -352,7 +352,7 @@
         "w": 280,
         "h": 45,
         "side": "left",
-        "label": "One row per shipping label. Set the courier \u2014 that is what makes tracking pull from the right carrier."
+        "label": "One row per shipping label. Set the courier — that is what makes tracking pull from the right carrier."
       }
     ]
   },
@@ -369,7 +369,7 @@
         "w": 702,
         "h": 77,
         "side": "right",
-        "label": "Status chip, labels shipped, delivered count and units \u2014 then tap to expand per-label tracking."
+        "label": "Status chip, labels shipped, delivered count and units — then tap to expand per-label tracking."
       }
     ]
   },
@@ -448,7 +448,129 @@
         "w": 101,
         "h": 31,
         "side": "left",
-        "label": "The label's state: filling \u2192 packed \u2192 shipped \u2192 in transit \u2192 delivered."
+        "label": "The label's state: filling → packed → shipped → in transit → delivered."
+      }
+    ]
+  },
+  "locations-edit": {
+    "file": "/sop-shots/locations-edit.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Every tile carries a pencil. That is where renaming, moving and deleting happen — at whatever level you are standing on.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 162,
+        "y": 268,
+        "w": 38,
+        "h": 42,
+        "side": "right",
+        "label": "The pencil. On a folder tile (site / area / row / bay) it renames or deletes EVERY shelf underneath it; on a shelf tile it edits that one shelf."
+      },
+      {
+        "n": 2,
+        "x": 192,
+        "y": 261,
+        "w": 56,
+        "h": 56,
+        "side": "left",
+        "label": "The checkbox is for label printing, not editing — a folder tile rolls up every shelf inside it."
+      },
+      {
+        "n": 3,
+        "x": 74,
+        "y": 370,
+        "w": 52,
+        "h": 23,
+        "side": "right",
+        "label": "The item count. Anything above zero here means live stock that will block a delete until it is moved."
+      }
+    ]
+  },
+  "locations-edit-modal": {
+    "file": "/sop-shots/locations-edit-modal.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "Editing a site. The preview is a real dry run of the save, so the count and the new barcodes are exactly what you will get.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 401,
+        "y": 280,
+        "w": 478,
+        "h": 52,
+        "side": "right",
+        "label": "The new name. The line above says how many shelf locations sit under what you are renaming."
+      },
+      {
+        "n": 2,
+        "x": 401,
+        "y": 338,
+        "w": 478,
+        "h": 232,
+        "side": "right",
+        "label": "The preview: how many barcodes change, old → new, and how many pairs are stored under here. They do not move — only their codes change."
+      },
+      {
+        "n": 3,
+        "x": 401,
+        "y": 579,
+        "w": 117,
+        "h": 51,
+        "side": "above",
+        "label": "Delete lives in the same box but is set apart from Save, and opens its own confirm."
+      }
+    ]
+  },
+  "locations-delete-modal": {
+    "file": "/sop-shots/locations-delete-modal.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "The delete confirm. It states how many shelf locations go, counted by a dry run, before you commit.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 401,
+        "y": 412,
+        "w": 478,
+        "h": 48,
+        "side": "right",
+        "label": "The count comes from a dry run, so this is the real number — and for a folder it is every shelf underneath, not just the folder."
+      },
+      {
+        "n": 2,
+        "x": 401,
+        "y": 470,
+        "w": 209,
+        "h": 51,
+        "side": "above",
+        "label": "The button repeats the count. Deleting is permanent and the barcodes stop resolving — deactivate instead to retire a shelf you might want back."
+      }
+    ]
+  },
+  "locations-delete-blocked": {
+    "file": "/sop-shots/locations-delete-blocked.png",
+    "w": 1280,
+    "h": 820,
+    "caption": "The refusal. Pairs are still shelved underneath, so nothing at all is deleted — not even the empty shelves.",
+    "hotspots": [
+      {
+        "n": 1,
+        "x": 401,
+        "y": 415,
+        "w": 478,
+        "h": 42,
+        "side": "right",
+        "label": "Live stock refuses the WHOLE delete and removes nothing. Move those pairs to another shelf, then come back."
+      },
+      {
+        "n": 2,
+        "x": 401,
+        "y": 467,
+        "w": 117,
+        "h": 51,
+        "side": "above",
+        "label": "The confirm button stays disabled while it is refused — there is no way to force it through."
       }
     ]
   }

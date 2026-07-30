@@ -182,6 +182,11 @@ endpoint that does the write**, so the number on the button is the number that w
 - **Deactivating is still the way to retire shelves you might want back** — delete is for
   levels that shouldn't exist (a mis-typed site, a rack that was torn out).
 
+Written up for the warehouse desk as the SOP article **`locations-edit-delete`** ("Rename, move
+or delete a shelf, bay, row, area or site", `articles.warehouse.js`, shot `locations-edit`) plus
+three FAQs — dead tags after a rename, the delete refusal, and delete-vs-deactivate. Keep those
+steps in step with this section (`docs/context/sop.md`).
+
 ### Edit / move / delete a shelf
 **Edit** opens `EditShelfModal` (a form on the raw `.modal` shell, `.modal.loc-edit-modal` to
 out-specify the base rules) with **Display name + Site / Area / Bay / Shelf #**. Two shapes

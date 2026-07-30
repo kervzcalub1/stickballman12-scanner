@@ -143,6 +143,63 @@ const SHOTS = [
     ],
   },
   {
+    id: 'locations-edit',
+    role: 'warehouse',
+    path: '/locations',
+    caption: 'Every tile carries a pencil. That is where renaming, moving and deleting happen — at whatever level you are standing on.',
+    ready: '.loc-tile, .app',
+    hotspots: [
+      hot('The pencil. On a folder tile (site / area / row / bay) it renames or deletes EVERY shelf underneath it; on a shelf tile it edits that one shelf.', '.loc-tile-edit >> nth=0', 'right'),
+      hot('The checkbox is for label printing, not editing — a folder tile rolls up every shelf inside it.', '.loc-tile-check >> nth=0', 'left'),
+      hot('The item count. Anything above zero here means live stock that will block a delete until it is moved.', '.loc-tile-count >> nth=0', 'right'),
+    ],
+  },
+  {
+    // Renaming the FIRST site on purpose: it is the one with real depth (hundreds of
+    // shelves, live stock), so the preview shows the numbers that make the warning land.
+    // Nothing is saved — the modal only ever runs the dry run.
+    id: 'locations-edit-modal',
+    role: 'warehouse',
+    path: '/locations',
+    caption: 'Editing a site. The preview is a real dry run of the save, so the count and the new barcodes are exactly what you will get.',
+    prep: [
+      '.loc-tile:nth-child(1) .loc-tile-edit',
+      { sel: '.loc-edit-modal .loc-edit-label input', fill: 'Manheim Main Depot', wait: 1800 },
+    ],
+    ready: '.loc-edit-warn',
+    hotspots: [
+      hot('The new name. The line above says how many shelf locations sit under what you are renaming.', '.loc-edit-modal .loc-edit-label input', 'right'),
+      hot('The preview: how many barcodes change, old → new, and how many pairs are stored under here. They do not move — only their codes change.', '.loc-edit-warn', 'right'),
+      hot('Delete lives in the same box but is set apart from Save, and opens its own confirm.', '.loc-edit-modal .modal-actions .btn.danger', 'above'),
+    ],
+  },
+  {
+    // The SECOND site — an empty one, so the confirm shows its count rather than the
+    // refusal. The blocked case is the next shot.
+    id: 'locations-delete-modal',
+    role: 'warehouse',
+    path: '/locations',
+    caption: 'The delete confirm. It states how many shelf locations go, counted by a dry run, before you commit.',
+    prep: ['.loc-tile:nth-child(2) .loc-tile-edit', '.loc-edit-modal .modal-actions .btn.danger'],
+    ready: '.loc-del-modal',
+    hotspots: [
+      hot('The count comes from a dry run, so this is the real number — and for a folder it is every shelf underneath, not just the folder.', '.loc-del-modal .loc-edit-warn', 'right'),
+      hot('The button repeats the count. Deleting is permanent and the barcodes stop resolving — deactivate instead to retire a shelf you might want back.', '.loc-del-modal .modal-actions .btn.danger', 'above'),
+    ],
+  },
+  {
+    id: 'locations-delete-blocked',
+    role: 'warehouse',
+    path: '/locations',
+    caption: 'The refusal. Pairs are still shelved underneath, so nothing at all is deleted — not even the empty shelves.',
+    prep: ['.loc-tile:nth-child(1) .loc-tile-edit', '.loc-edit-modal .modal-actions .btn.danger'],
+    ready: '.loc-del-modal .error',
+    hotspots: [
+      hot('Live stock refuses the WHOLE delete and removes nothing. Move those pairs to another shelf, then come back.', '.loc-del-modal .error', 'right'),
+      hot('The confirm button stays disabled while it is refused — there is no way to force it through.', '.loc-del-modal .modal-actions .btn.danger', 'above'),
+    ],
+  },
+  {
     id: 'access',
     role: 'admin',
     path: '/access',
@@ -299,13 +356,20 @@ async function main() {
       if (shot.role === 'supplier') await loginSupplier(page);
       else await loginAs(page, shot.role);
       await page.goto(`${BASE}${shot.path}`, { waitUntil: 'networkidle', timeout: 20_000 });
-      // `prep` widens a date filter or opens a panel so the frame shows real rows.
-      // A screen documented in its empty state teaches nothing. Missing prep
-      // targets are ignored — the shot is still worth having.
-      for (const sel of shot.prep || []) {
+      // `prep` widens a date filter, opens a panel, or fills a field so the frame shows
+      // real state. A step is a selector to click, or { sel, fill, wait } to type into
+      // one — some screens only reveal the thing the article is about once a field is
+      // dirty (the rename preview does not exist until the name actually changes), and
+      // a screen documented in its empty state teaches nothing. Missing prep targets are
+      // ignored — the shot is still worth having.
+      for (const step of shot.prep || []) {
+        const { sel, fill, wait = 900 } = typeof step === 'string' ? { sel: step } : step;
         try {
           const loc = page.locator(sel).first();
-          if (await loc.isVisible({ timeout: 2000 })) { await loc.click(); await page.waitForTimeout(900); }
+          if (!(await loc.isVisible({ timeout: 2000 }))) continue;
+          if (fill == null) await loc.click();
+          else await loc.fill(fill);
+          await page.waitForTimeout(wait);
         } catch { /* nothing to prepare on this run */ }
       }
       if (shot.ready) await page.locator(shot.ready).first().waitFor({ state: 'visible', timeout: 10_000 });

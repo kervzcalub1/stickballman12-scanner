@@ -10,7 +10,7 @@
 //     steps: [{ do, note?, warn? }],
 //     rules?: [string],        // hard rules — the "never do this" list
 //     diagram?: <SopDiagram id>,
-//     shot?: <capture id from shots.json>,
+//     shot?: <capture id from shots.json> | [ids],   // several = a figure per screen
 //     related?: [article id],
 //     keywords: [string],      // extra search terms not present in the prose
 //   }

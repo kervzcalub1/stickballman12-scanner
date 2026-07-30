@@ -103,9 +103,17 @@ leaving it pointing at blank space — which is what always rots hand-annotated
 documentation. A hotspot whose locator no longer resolves is **skipped and
 reported**, never guessed at, so a stale callout disappears rather than lying.
 
-**15 shots:** home · receiving step 1 · batches · inventory · shelve · no-box ·
-listings · reconcile · locations · access · PH grid · PO create · PO status ·
-supplier list · supplier order.
+**19 shots:** home · receiving step 1 · batches · inventory · shelve · no-box ·
+listings · reconcile · locations · locations-edit · locations-edit-modal ·
+locations-delete-modal · locations-delete-blocked · access · PH grid · PO create ·
+PO status · supplier list · supplier order.
+
+**An article's `shot` may be one id or an array**, rendered in order. A procedure that
+moves through modals needs a figure per screen — one arrow-covered frame can't show a
+form and its confirm at once. `locations-edit-delete` uses four: the tiles, the editor
+with its live rename preview, the delete confirm, and the delete **refused** by live
+stock. Failure states are worth capturing, not just happy paths: the refusal is the
+frame people will actually be looking at when they go hunting for the SOP.
 
 - Auth for **staff** shots reuses `e2e/helpers/auth.js` `loginAs` (a minted signed
   session), so no passwords are needed. Requires the dev server on `:5189`
@@ -119,7 +127,12 @@ supplier list · supplier order.
   are **skipped with a message, not failed**, so the run still works for everyone else.
   The login host-gate exempts `localhost`, so a supplier can sign in locally.
 - `prep: [selector]` clicks a date filter or panel first — a screen documented in
-  its empty state teaches nothing.
+  its empty state teaches nothing. A step may instead be `{ sel, fill, wait }` to
+  **type** into a field: some UI only exists once a field is dirty (the rename
+  preview is computed from a dry run that never fires until the name changes), and
+  clicking alone can't reach it. Prep steps only ever open modals and fill inputs —
+  a shot of a destructive confirm is captured **without pressing the button**, which
+  is why the capture run leaves the local DB untouched.
 - Rects are read in **viewport** coordinates (the screenshot is the viewport, not
   the full page) and rejected if they fall outside the frame. Horizontal overflow
   is the common case: a wide table row inside a scroll container reports its full

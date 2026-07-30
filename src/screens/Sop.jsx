@@ -282,7 +282,9 @@ function Article({ a, onOpen, onBack, role }) {
       )}
 
       {a.diagram && hasDiagram(a.diagram) && <SopDiagram id={a.diagram} />}
-      {a.shot && hasShot(a.shot) && <SopShot id={a.shot} />}
+      {/* `shot` is one id or several — a procedure that moves through modals needs a figure
+          per screen, and one arrow-covered frame can't show a form and its confirm at once. */}
+      {[].concat(a.shot || []).filter(hasShot).map((id) => <SopShot key={id} id={id} />)}
 
       <h2 className="sop-h2">Procedure</h2>
       <ol className="sop-steps">

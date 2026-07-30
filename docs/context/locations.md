@@ -113,10 +113,11 @@ only). **Add** one shelf or
 **"＋ Custom…"** free-text option (`ComboField`) to add a new site/area; the Area
 picker **suggests the selected site's own areas first** (`siteAreas`). Endpoints (query-param style):
 `GET /api/locations`, `GET /api/locations/items?id=`,
-`POST /api/locations/{create,bulk,update,delete,rename-group}`.
+`POST /api/locations/{create,bulk,update,delete,rename-group,delete-group}`.
 db: `listLocations, getLocationByCode, getLocationById, createLocation, bulkCreateLocations,
-updateLocation, moveLocation, deleteLocation, listLocationGroup, findLocationCodeConflicts,
-countLiveItemsAt, applyLocationMoves, listItemsAtLocation, shelveItems`. Code helpers:
+updateLocation, moveLocation, deleteLocation, deleteLocationGroup, listLocationGroup,
+findLocationCodeConflicts, countLiveItemsAt, applyLocationMoves, listItemsAtLocation,
+shelveItems`. Code helpers:
 `api/_lib/locations.js` (`buildLocationCode, bayRowKey, autoLabelFor, …`).
 
 ### Edit any level of the tree (site / area / row / bay)
@@ -157,6 +158,30 @@ bay to relocate it). `bayPrefix` in the patch substitutes just the prefix, so ro
 - **Row itself stays uneditable as an entity** — renaming its bays is the only thing that can
   change it, which is exactly what the row scope does.
 
+### Delete any level of the tree (site / area / row / bay)
+`EditGroupModal` carries a **Delete {noun}** button (pushed to the far side of the footer, and
+below Save/Cancel once they stack at ≤600px — a destructive action shouldn't sit a mis-tap away
+from the one you came for). It opens `DeleteGroupModal`, a separate confirm with its own count.
+
+`POST /api/locations/delete-group` → `{ match, dryRun? }` → `{ count, deleted, liveItems,
+detached, shelves }`. `match` is scoped **exactly as in `rename-group`** (`{warehouse}` = the
+site · `+area` = one area, `area: null` being the real "(no area)" folder · `+bayPrefix` = one
+derived row · `+bay` = one bay), for the same reason: the folders aren't rows, so "delete this
+area" IS "delete the 189 shelves under it". The modal opens on a `dryRun` through the **same
+endpoint that does the write**, so the number on the button is the number that will go.
+
+- **Live stock blocks the whole thing** (409, naming the count) and **nothing is deleted** —
+  a half-deleted rack is worse than a refusal, so it's all-or-nothing rather than the empty
+  shelves going and the occupied ones staying. This is the opposite call from a rename, where
+  live stock is fine because the pairs don't move, only their codes do.
+- **Sold/shipped units are detached** (`location_id = NULL`, `location_code` kept as history) in
+  the same transaction, so an old, long-closed rack isn't permanently undeletable — same rule as
+  the single-shelf delete, applied to the set (`deleteLocationGroup(ids, { dryRun })`).
+- The print selection is cleared on success (it may have held ids that no longer exist), and the
+  URL needs no fix-up: you're standing on the **parent** of the tile you deleted.
+- **Deactivating is still the way to retire shelves you might want back** — delete is for
+  levels that shouldn't exist (a mis-typed site, a rack that was torn out).
+
 ### Edit / move / delete a shelf
 **Edit** opens `EditShelfModal` (a form on the raw `.modal` shell, `.modal.loc-edit-modal` to
 out-specify the base rules) with **Display name + Site / Area / Bay / Shelf #**. Two shapes
@@ -174,7 +199,11 @@ behind one endpoint (`locations/update`):
   still on its auto default** (`A1-03`) follows the move; a name someone typed is never
   overwritten (`labelTouched`).
 
-**Delete** (`locations/delete`, `deleteLocation`) is a hard delete behind a confirm `Modal`.
+**Delete** (`locations/delete`, `deleteLocation`) is a hard delete behind a confirm `Modal`,
+reachable both from the open shelf's detail view and from `EditShelfModal` (the tile's pencil),
+so removing a shelf doesn't mean drilling into it first. The confirm only steps the URL back to
+the parent when you're **standing on** that shelf — from a tile you're already on the parent
+level, and navigating up again would overshoot.
 `items.location_id` is a real FK with **no `ON DELETE` rule**, so the check happens first and
 returns a usable reason instead of a 500: **live stock blocks it** (409, "N pairs are still
 shelved here — move them, or deactivate this one instead"), while **sold/shipped units are

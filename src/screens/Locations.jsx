@@ -4,10 +4,11 @@
 // no horizontal scroll); clicking a tile drills in and pushes a real URL segment
 // (/locations/manheim-main-shed/warehouse-rows/a/a2/4), so refresh + browser Back
 // work. The final level (a shelf, or a whole-bay pod) shows the shoes stored
-// there. Add / bulk-add, delete, activate-deactivate and bulk label printing all still live
-// here — plus **edit at every level**: each tile has a pencil, which for a folder (site /
-// area / row / bay) rewrites every shelf underneath it, because those levels are the shelves'
-// distinct warehouse/area/bay values rather than rows of their own. See EditGroupModal.
+// there. Add / bulk-add, activate-deactivate and bulk label printing all still live
+// here — plus **edit and delete at every level**: each tile has a pencil, which for a folder
+// (site / area / row / bay) rewrites or removes every shelf underneath it, because those levels
+// are the shelves' distinct warehouse/area/bay values rather than rows of their own. See
+// EditGroupModal / DeleteGroupModal.
 import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { api } from '../api.js';
 import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox, Modal } from '../components/common.jsx';
@@ -100,6 +101,7 @@ export function Locations({ onHome, onSignOut }) {
   const [editShelf, setEditShelf] = useState(null); // the location row being edited | null
   const [editGroup, setEditGroup] = useState(null); // { kind, name, label, match, shelves } | null
   const [delShelf, setDelShelf] = useState(null);   // the location row queued for deletion | null
+  const [delGroup, setDelGroup] = useState(null);   // { kind, name, label, match, shelves } queued for deletion | null
   const [delBusy, setDelBusy] = useState(false);
   const [pendingNav, setPendingNav] = useState(null); // location id to re-open once the list reloads
   const [busy, setBusy] = useState(false);
@@ -273,15 +275,26 @@ export function Locations({ onHome, onSignOut }) {
     load();
     if (moved && res.locations?.length) setPrintLocs(res.locations);
   }
+  // A folder delete removes every shelf beneath it. Like a rename, we're standing on the
+  // PARENT of the tile, so the URL stays valid — just reload and say what went.
+  function onGroupDeleted(res) {
+    setDelGroup(null); setEditGroup(null); setError('');
+    setSel(new Set()); // the print selection may have held ids that no longer exist
+    load();
+    setNotice(`Deleted ${res.count} shelf location${res.count === 1 ? '' : 's'}.${res.detached
+      ? ` ${res.detached} closed unit${res.detached === 1 ? '' : 's'} kept the code as history.` : ''}`);
+  }
   async function doDelete() {
     if (!delShelf) return;
     setDelBusy(true); setError('');
-    // Step back to the parent level first — the shelf we're standing on is about to stop existing.
+    // Only step back if we're STANDING on the shelf that's about to stop existing; deleting
+    // from a tile's pencil means we're already on the parent level, where the URL stays valid.
+    const onIt = r.level === 'shelf' && String(r.shelfId) === String(delShelf.id);
     const parent = r.trail[r.trail.length - 2]?.segs || [];
     try {
       const { location, detached } = await api.locationDelete(delShelf.id);
-      setDelShelf(null);
-      navigate(parent);
+      setDelShelf(null); setEditShelf(null);
+      if (onIt) navigate(parent);
       await load();
       setNotice(`Deleted ${location.label || location.code} (${location.code}).${detached ? ` ${detached} closed unit${detached === 1 ? '' : 's'} kept the code as history.` : ''}`);
     } catch (err) {
@@ -556,11 +569,14 @@ export function Locations({ onHome, onSignOut }) {
       </div>
       {editShelf && (
         <EditShelfModal shelf={editShelf} siteAreas={siteAreas} itemCount={Array.isArray(contents) ? contents.length : editShelf.item_count}
-          onSaved={onShelfSaved} onClose={() => setEditShelf(null)} onSignOut={onSignOut} />
+          onSaved={onShelfSaved} onDelete={() => setDelShelf(editShelf)} onClose={() => setEditShelf(null)} onSignOut={onSignOut} />
       )}
       {editGroup && (
         <EditGroupModal node={editGroup} sites={[...sites.keys()]} siteAreas={siteAreas}
-          onSaved={onGroupSaved} onClose={() => setEditGroup(null)} onSignOut={onSignOut} />
+          onSaved={onGroupSaved} onDelete={() => setDelGroup(editGroup)} onClose={() => setEditGroup(null)} onSignOut={onSignOut} />
+      )}
+      {delGroup && (
+        <DeleteGroupModal node={delGroup} onDeleted={onGroupDeleted} onClose={() => setDelGroup(null)} onSignOut={onSignOut} />
       )}
       {delShelf && (
         <Modal type="error" title={`Delete ${delShelf.label || delShelf.code}?`}
@@ -590,7 +606,7 @@ const GROUP_KIND = {
   bay: { noun: 'bay', nameLabel: 'Bay name' },
 };
 
-function EditGroupModal({ node, sites = [], siteAreas = {}, onSaved, onClose, onSignOut }) {
+function EditGroupModal({ node, sites = [], siteAreas = {}, onSaved, onDelete, onClose, onSignOut }) {
   const cfg = GROUP_KIND[node.kind];
   const [name, setName] = useState(node.name || '');
   const [warehouse, setWarehouse] = useState(node.match.warehouse);
@@ -698,8 +714,67 @@ function EditGroupModal({ node, sites = [], siteAreas = {}, onSaved, onClose, on
         )}
         {error && <div className="error mt">{error}</div>}
         <div className="modal-actions">
+          {/* Deleting the node deletes every shelf under it, so it gets its own confirm with
+              its own count — never a second click away from Save. */}
+          <button className="btn danger" disabled={busy} onClick={onDelete}>Delete {cfg.noun}</button>
           <button className="btn primary" disabled={busy || !dirty || needsName || previewBusy || !!error} onClick={save}>
             {busy ? 'Saving…' : 'Save'}
+          </button>
+          <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Delete a whole node: a site, an area, a row, or a bay --------------------
+// Same "the folders aren't rows" reality as the rename: deleting an area IS deleting every
+// shelf underneath it, so the confirm leads with that count rather than the folder's name.
+// The count comes from a dry run through the SAME endpoint that does the write, so what it
+// says is what will happen — including the refusal when pairs are still shelved down there
+// (the server deletes nothing in that case, rather than clearing out the empty half).
+function DeleteGroupModal({ node, onDeleted, onClose, onSignOut }) {
+  const cfg = GROUP_KIND[node.kind];
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    api.locationDeleteGroup({ match: node.match, dryRun: true })
+      .then((r) => { if (!cancelled) setPreview(r); })
+      .catch((e) => {
+        if (e.unauthorized) return onSignOut();
+        if (!cancelled) setError(e.message);
+      });
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function confirm() {
+    setError(''); setBusy(true);
+    try { onDeleted(await api.locationDeleteGroup({ match: node.match })); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); setBusy(false); }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <div className="modal loc-edit-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">Delete {cfg.noun} “{node.label}”?</h3>
+        <p className="modal-msg">
+          This removes <b>every shelf location under it</b> for good and their barcodes stop
+          scanning. To retire shelves but keep their history, deactivate them instead.
+        </p>
+        {!preview && !error && <p className="muted sm mt">Checking…</p>}
+        {preview && (
+          <div className="loc-edit-warn">
+            <b>{preview.count} shelf location{preview.count === 1 ? '' : 's'} will be deleted.</b>
+            {preview.detached > 0 && <> {preview.detached} sold/shipped unit{preview.detached === 1 ? '' : 's'} stored here keep their code as history.</>}
+          </div>
+        )}
+        {error && <div className="error mt">{error}</div>}
+        <div className="modal-actions">
+          <button className="btn danger" disabled={busy || !preview} onClick={confirm}>
+            {busy ? 'Deleting…' : `Delete ${preview ? `${preview.count} shelf location${preview.count === 1 ? '' : 's'}` : cfg.noun}`}
           </button>
           <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
         </div>
@@ -711,7 +786,7 @@ function EditGroupModal({ node, sites = [], siteAreas = {}, onSaved, onClose, on
 // --- Edit one shelf: rename, and/or move it to another site/area/bay/shelf # ---
 // The scannable `code` is derived from those parts server-side, so moving a shelf
 // re-issues its barcode — hence the warning, and the label sheet that opens on save.
-function EditShelfModal({ shelf, siteAreas = {}, itemCount = 0, onSaved, onClose, onSignOut }) {
+function EditShelfModal({ shelf, siteAreas = {}, itemCount = 0, onSaved, onDelete, onClose, onSignOut }) {
   const [warehouse, setWarehouse] = useState(shelf.warehouse);
   const [area, setArea] = useState(shelf.area || '');
   const [bay, setBay] = useState(shelf.bay || '');
@@ -775,6 +850,9 @@ function EditShelfModal({ shelf, siteAreas = {}, itemCount = 0, onSaved, onClose
         )}
         {error && <div className="error mt">{error}</div>}
         <div className="modal-actions">
+          {/* Same delete as the shelf detail view, reachable from the tile's pencil so you
+              don't have to drill into a shelf to remove it. */}
+          <button className="btn danger" disabled={busy} onClick={onDelete}>Delete</button>
           <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
           <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
         </div>

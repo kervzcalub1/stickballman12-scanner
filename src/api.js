@@ -141,6 +141,9 @@ export const api = {
   // Rename/move a whole node of the tree (site | area | row | bay). dryRun previews the
   // barcode changes without writing.
   locationRenameGroup: (payload) => post('/api/locations/rename-group', payload),
+  // Delete a whole node of the tree (site | area | row | bay) — every shelf under it.
+  // dryRun counts what would go without writing; live stock 409s and deletes nothing.
+  locationDeleteGroup: (payload) => post('/api/locations/delete-group', payload),
   itemHistory: (vins) => get(`/api/items/history?vins=${encodeURIComponent((vins || []).join(','))}`),
   itemEvent: (vin, type, details) => post('/api/items/event', { vin, type, details }),
   rescaleItem: (vin, status, note, reason) => post('/api/items/rescale', { vin, status, note, reason }),

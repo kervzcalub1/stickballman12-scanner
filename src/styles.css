@@ -2551,3 +2551,21 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   background: var(--primary); color: #fff; font-variant-numeric: tabular-nums;
 }
 .ss-cap { font-size: 12px; color: var(--muted); margin-top: 10px; font-style: italic; }
+
+/* ------------------------------------------------------- screen tutorials ---- */
+/* Matches the annotated-screenshot frame so an article reads as one set of figures.
+   The clip streams from R2 and is never preloaded — see SopVideo.jsx. */
+.sop-video { margin: 0 0 24px; }
+.sop-video-el {
+  display: block; width: 100%; height: auto; background: #000;
+  border: 1px solid var(--border); border-radius: 12px;
+}
+.sop-video-cap { font-size: 12px; color: var(--muted); margin-top: 10px; display: flex;
+  align-items: center; gap: 8px; flex-wrap: wrap; }
+.sop-video-badge {
+  flex: none; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+  background: var(--primary); color: #fff; border-radius: 999px; padding: 3px 9px;
+}
+.sop-video-len { font-variant-numeric: tabular-nums; }
+/* Says the quiet part out loud: there is no audio track, so nobody hunts for the volume. */
+.sop-video-note { font-style: italic; opacity: .8; }

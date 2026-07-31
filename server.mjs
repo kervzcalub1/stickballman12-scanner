@@ -33,6 +33,13 @@ const distDir = path.join(__dirname, 'dist');
 const app = express();
 app.disable('x-powered-by');
 
+// Origin (scheme + host, no path) of the public R2 bucket the SOP tutorials stream from.
+// Derived from the same env var the uploader writes into videos.json, so the CSP can never
+// drift from where the videos actually live. Empty/unset simply omits it.
+const r2MediaOrigin = (() => {
+  try { return new URL(process.env.R2_PUBLIC_BASE_URL).origin; } catch { return ''; }
+})();
+
 // Security headers on every response (the Express host replaces Vercel's
 // vercel.json headers). CSP allows: same-origin everything; images over https;
 // blob workers + https fetch for the lazy Tesseract OCR fallback; camera for
@@ -50,7 +57,12 @@ app.use((req, res, next) => {
     "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
     "connect-src 'self' https:",
-    "media-src 'self' blob:",
+    // SOP tutorials stream from the R2 public bucket, so media must allow that origin —
+    // without it the <video> is blocked by CSP, SopVideo's onError guard fires, and the
+    // player renders NOTHING, which is indistinguishable from "no video was ever added".
+    // Scoped to the configured host rather than a blanket `https:` (which is what img-src
+    // uses) because media is the one thing here that comes from exactly one known origin.
+    `media-src 'self' blob:${r2MediaOrigin ? ` ${r2MediaOrigin}` : ''}`,
     "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'",
   ].join('; '));
   next();

@@ -38,3 +38,11 @@ version-4.md
 june22-progress.md
 # Auto-downloaded ONNX cutout model (fetched on first use)
 assets/branding/models/
+
+# Recorded SOP tutorials — hosted on R2, never committed (see scripts/upload-sop-videos.mjs).
+# ~20 MB of mp4/webm that changes independently of the code; videos.json holds the URLs.
+sop-videos/
+
+# Local intake/scratch notes — may hold prod credentials or API keys. NEVER commit.
+# (Root .md files were scrubbed from history once already; keep them out.)
+*.local.md

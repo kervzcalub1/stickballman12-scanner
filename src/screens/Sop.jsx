@@ -10,6 +10,7 @@ import { TopBar } from '../components/common.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { SopDiagram, hasDiagram } from '../components/SopDiagram.jsx';
 import { SopShot, hasShot } from '../components/SopShot.jsx';
+import { SopVideo, hasVideo } from '../components/SopVideo.jsx';
 import { useMediaQuery } from '../hooks.js';
 import { readParam, writeParam } from '../lib/urlstate.js';
 import {
@@ -282,6 +283,9 @@ function Article({ a, onOpen, onBack, role }) {
       )}
 
       {a.diagram && hasDiagram(a.diagram) && <SopDiagram id={a.diagram} />}
+      {/* Watch-first, then read. A tutorial is keyed by the article's own id unless the
+          article names another (`video`), so a recording never drifts from its procedure. */}
+      {hasVideo(a.video || a.id) && <SopVideo id={a.video || a.id} />}
       {/* `shot` is one id or several — a procedure that moves through modals needs a figure
           per screen, and one arrow-covered frame can't show a form and its confirm at once. */}
       {[].concat(a.shot || []).filter(hasShot).map((id) => <SopShot key={id} id={id} />)}

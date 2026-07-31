@@ -13,6 +13,8 @@
     "db:reset": "node scripts/db-reset.mjs",
     "db:seed-manheim": "node scripts/seed-manheim-locations.mjs",
     "sop:shots": "node scripts/capture-sop-shots.mjs",
+    "sop:videos": "node scripts/capture-sop-video.mjs",
+    "sop:videos:publish": "node --env-file=.env scripts/upload-sop-videos.mjs",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui"
   },

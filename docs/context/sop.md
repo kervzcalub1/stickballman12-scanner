@@ -145,6 +145,41 @@ frame people will actually be looking at when they go hunting for the SOP.
 - Missing shot or a pruned PNG → renders nothing (`hasShot`, plus an `onError`
   guard), so an article never shows a broken frame.
 
+## Screen tutorials (video)
+`npm run sop:videos` (`scripts/capture-sop-video.mjs`) drives the **real app** in Playwright
+with `recordVideo`, then `npm run sop:videos:publish` pushes the mp4s to **R2** and writes
+`src/lib/sop/videos.json`. `SopVideo` renders one on an article, keyed by the article's own
+id (or `video:` if it points elsewhere). **23 warehouse flows, ~17½ minutes.**
+
+- **Not in the repo.** ~1 MB per minute would land in git history *and* in every Railway
+  image, for assets that change independently of the code. R2 already backs listing photos,
+  so the bucket, credentials and `cdn.stickballman12.com` all existed. `sop-videos/` is
+  git-ignored; `videos.json` (public CDN URLs, not secrets) is committed, which keeps the
+  SOP page's "static data, no API call" property — only the bytes are fetched, on play.
+- **`preload="none"`.** These are read on warehouse phones on mobile data and an article can
+  carry several tutorials. Nothing downloads until someone presses play.
+- **No voice track.** There is no TTS tool in this environment, so narration is burnt-in
+  captions — which also survive a muted autoplay and a noisy warehouse, and can be read by
+  someone who has the volume off. The player says so, rather than leaving people hunting.
+- **Three things raw Playwright video lacks**, all added by the harness: a **cursor** (the
+  recording otherwise shows clicks landing with nothing doing the clicking), **captions**,
+  and **pacing** (automation acts instantly; every beat holds long enough to read).
+- **A flow is DATA**, like an article: `beats: [{ say, at?, click?, type?, waitFor?, hold? }]`.
+  A beat whose selector misses **still plays its caption** and is reported — same skip-and-
+  report rule as a stale screenshot hotspot, so a UI change costs a cursor move, not a broken
+  video. `run(page)` is the escape hatch for flows CSS can't express (batches-manage has to
+  pick the batch that *has* boxes; a tutorial narrating "expand a box row" over "No boxes
+  yet" teaches nothing).
+- **`prep: [selector]`** puts the screen into the right state before the first caption, and
+  is not narrated. Mostly widening a date filter: several pages open on *today*, and
+  `rescale-requests-audit` first recorded "No requests in this range".
+- **Non-destructive by construction** — the recordings open confirms to show what they say,
+  then cancel. Verified: the local DB is byte-identical before and after a full run. Filming
+  a real write needs a throwaway seeded DB, which is a deliberate future decision.
+- `--reindex` rebuilds `index.json` from the mp4s on disk, so recovering a lost manifest
+  does not cost a 20-minute re-record. Both the recorder and the uploader **merge**, so
+  re-doing one flow never drops the other 22.
+
 ## Working on it
 - Adding a procedure: add the object to the right `articles.*.js` file. Nothing
   else to register — it appears in the index, the search index and the role filter.
@@ -153,5 +188,8 @@ frame people will actually be looking at when they go hunting for the SOP.
 - Re-capture after a visual change: `npm run dev -- --port 5189 --strictPort`, then
   `npm run sop:shots` (or `npm run sop:shots -- inventory batches` for a subset).
   Re-runs merge, so a partial run does not wipe the other shots.
+- Re-record a tutorial the same way: `npm run sop:videos -- shelve-putaway`, then
+  `npm run sop:videos:publish -- shelve-putaway`. Read the run's "beat target did not
+  resolve" list — those are captions that lost their cursor move.
 - Smoke coverage in `e2e/smoke.spec.js` asserts the **wiring** (routing, search,
   role filtering, deep links) — the prose is reviewed, not tested.

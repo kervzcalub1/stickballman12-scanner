@@ -1,0 +1,272 @@
+{
+  "locations-edit-delete": {
+    "url": "https://cdn.stickballman12.com/sop-videos/locations-edit-delete.mp4",
+    "title": "Rename, move or delete a location",
+    "seconds": 72
+  },
+  "receive-single": {
+    "url": "https://cdn.stickballman12.com/sop-videos/receive-single.mp4",
+    "title": "Receive a shipment (one box)",
+    "seconds": 101
+  },
+  "receive-multibox": {
+    "url": "https://cdn.stickballman12.com/sop-videos/receive-multibox.mp4",
+    "title": "Receive a multi-box shipment",
+    "seconds": 71
+  },
+  "receive-against-po": {
+    "url": "https://cdn.stickballman12.com/sop-videos/receive-against-po.mp4",
+    "title": "Receive against a purchase order",
+    "seconds": 71
+  },
+  "receiving-issues": {
+    "url": "https://cdn.stickballman12.com/sop-videos/receiving-issues.mp4",
+    "title": "Flag damage and defects at intake",
+    "seconds": 93
+  },
+  "listing-photos-intake": {
+    "url": "https://cdn.stickballman12.com/sop-videos/listing-photos-intake.mp4",
+    "title": "Shoot listing photos at intake",
+    "seconds": 98
+  },
+  "batches-manage": {
+    "url": "https://cdn.stickballman12.com/sop-videos/batches-manage.mp4",
+    "title": "Work with batches (open, resume, finish)",
+    "seconds": 46
+  },
+  "instore-buying": {
+    "url": "https://cdn.stickballman12.com/sop-videos/instore-buying.mp4",
+    "title": "In-store buying",
+    "seconds": 56
+  },
+  "instore-listing": {
+    "url": "https://cdn.stickballman12.com/sop-videos/instore-listing.mp4",
+    "title": "In-store listing",
+    "seconds": 46
+  },
+  "shelve-putaway": {
+    "url": "https://cdn.stickballman12.com/sop-videos/shelve-putaway.mp4",
+    "title": "Shelve / put-away",
+    "seconds": 94
+  },
+  "nobox-resolve": {
+    "url": "https://cdn.stickballman12.com/sop-videos/nobox-resolve.mp4",
+    "title": "Resolve the No Box queue",
+    "seconds": 80
+  },
+  "locate-shoe": {
+    "url": "https://cdn.stickballman12.com/sop-videos/locate-shoe.mp4",
+    "title": "Locate a shoe",
+    "seconds": 128
+  },
+  "locations-manage": {
+    "url": "https://cdn.stickballman12.com/sop-videos/locations-manage.mp4",
+    "title": "Manage shelves and print shelf labels",
+    "seconds": 88
+  },
+  "rescale-stock": {
+    "url": "https://cdn.stickballman12.com/sop-videos/rescale-stock.mp4",
+    "title": "Rescale stock",
+    "seconds": 57
+  },
+  "rescale-requests-audit": {
+    "url": "https://cdn.stickballman12.com/sop-videos/rescale-requests-audit.mp4",
+    "title": "Audit a rescale request from PH",
+    "seconds": 57
+  },
+  "inventory-browse": {
+    "url": "https://cdn.stickballman12.com/sop-videos/inventory-browse.mp4",
+    "title": "Browse and search inventory",
+    "seconds": 88
+  },
+  "inventory-bulk-status": {
+    "url": "https://cdn.stickballman12.com/sop-videos/inventory-bulk-status.mp4",
+    "title": "Change status in bulk",
+    "seconds": 64
+  },
+  "inventory-move-shelf": {
+    "url": "https://cdn.stickballman12.com/sop-videos/inventory-move-shelf.mp4",
+    "title": "Move to shelf without leaving Inventory",
+    "seconds": 49
+  },
+  "print-labels": {
+    "url": "https://cdn.stickballman12.com/sop-videos/print-labels.mp4",
+    "title": "Print labels (VIN, box and shelf)",
+    "seconds": 104
+  },
+  "mark-sold": {
+    "url": "https://cdn.stickballman12.com/sop-videos/mark-sold.mp4",
+    "title": "Mark pairs sold",
+    "seconds": 105
+  },
+  "mark-shipped": {
+    "url": "https://cdn.stickballman12.com/sop-videos/mark-shipped.mp4",
+    "title": "Mark pairs shipped",
+    "seconds": 68
+  },
+  "listings-sync-warehouse": {
+    "url": "https://cdn.stickballman12.com/sop-videos/listings-sync-warehouse.mp4",
+    "title": "Read the Listings & Sync grid",
+    "seconds": 81
+  },
+  "reconcile-warehouse": {
+    "url": "https://cdn.stickballman12.com/sop-videos/reconcile-warehouse.mp4",
+    "title": "Reconcile a purchase order",
+    "seconds": 83
+  },
+  "sign-in": {
+    "url": "https://cdn.stickballman12.com/sop-videos/sign-in.mp4",
+    "title": "Signing in",
+    "seconds": 43
+  },
+  "password-reset": {
+    "url": "https://cdn.stickballman12.com/sop-videos/password-reset.mp4",
+    "title": "Forgotten password",
+    "seconds": 34
+  },
+  "scan-guide": {
+    "url": "https://cdn.stickballman12.com/sop-videos/scan-guide.mp4",
+    "title": "What scans as what",
+    "seconds": 69
+  },
+  "statuses-explained": {
+    "url": "https://cdn.stickballman12.com/sop-videos/statuses-explained.mp4",
+    "title": "Statuses and what they mean",
+    "seconds": 49
+  },
+  "sync-flags": {
+    "url": "https://cdn.stickballman12.com/sop-videos/sync-flags.mp4",
+    "title": "The four store flags",
+    "seconds": 45
+  },
+  "home-badges": {
+    "url": "https://cdn.stickballman12.com/sop-videos/home-badges.mp4",
+    "title": "Reading the home screen",
+    "seconds": 44
+  },
+  "roles-map": {
+    "url": "https://cdn.stickballman12.com/sop-videos/roles-map.mp4",
+    "title": "Who can do what",
+    "seconds": 39
+  },
+  "dates-est": {
+    "url": "https://cdn.stickballman12.com/sop-videos/dates-est.mp4",
+    "title": "Dates and time zones",
+    "seconds": 39
+  },
+  "troubleshooting": {
+    "url": "https://cdn.stickballman12.com/sop-videos/troubleshooting.mp4",
+    "title": "When something goes wrong",
+    "seconds": 55
+  },
+  "ph-new-inventory": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-new-inventory.mp4",
+    "title": "New Inventory — what just arrived",
+    "seconds": 55
+  },
+  "ph-grid-editing": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-grid-editing.mp4",
+    "title": "Edit the grid, size by size",
+    "seconds": 55
+  },
+  "ph-refresh-prices": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-refresh-prices.mp4",
+    "title": "Refresh Global Indicator prices",
+    "seconds": 53
+  },
+  "ph-rescale": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-rescale.mp4",
+    "title": "Work the Rescale worklist",
+    "seconds": 43
+  },
+  "ph-request-rescale": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-request-rescale.mp4",
+    "title": "Ask the warehouse to recount a SKU",
+    "seconds": 50
+  },
+  "ph-price-inquiry": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-price-inquiry.mp4",
+    "title": "Price inquiry — check a shoe before committing",
+    "seconds": 56
+  },
+  "ph-image-finder": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-image-finder.mp4",
+    "title": "Find listing images for a SKU",
+    "seconds": 48
+  },
+  "ph-edited-photos": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-edited-photos.mp4",
+    "title": "Upload edited listing photos",
+    "seconds": 40
+  },
+  "ph-history": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-history.mp4",
+    "title": "Read the history on a size",
+    "seconds": 40
+  },
+  "ph-nobox-view": {
+    "url": "https://cdn.stickballman12.com/sop-videos/ph-nobox-view.mp4",
+    "title": "Why stock is missing — the No Box view",
+    "seconds": 41
+  },
+  "po-create": {
+    "url": "https://cdn.stickballman12.com/sop-videos/po-create.mp4",
+    "title": "Create a purchase order",
+    "seconds": 45
+  },
+  "po-overview": {
+    "url": "https://cdn.stickballman12.com/sop-videos/po-overview.mp4",
+    "title": "Track orders in flight",
+    "seconds": 46
+  },
+  "po-onbehalf": {
+    "url": "https://cdn.stickballman12.com/sop-videos/po-onbehalf.mp4",
+    "title": "Enter a manifest on the supplier's behalf",
+    "seconds": 46
+  },
+  "po-resolution": {
+    "url": "https://cdn.stickballman12.com/sop-videos/po-resolution.mp4",
+    "title": "Resolve a discrepancy",
+    "seconds": 58
+  },
+  "supplier-portal-read": {
+    "url": "https://cdn.stickballman12.com/sop-videos/supplier-portal-read.mp4",
+    "title": "Your portal — what you can see",
+    "seconds": 48
+  },
+  "supplier-scanout": {
+    "url": "https://cdn.stickballman12.com/sop-videos/supplier-scanout.mp4",
+    "title": "Scan out what you are shipping",
+    "seconds": 51
+  },
+  "supplier-close-ship": {
+    "url": "https://cdn.stickballman12.com/sop-videos/supplier-close-ship.mp4",
+    "title": "Close a box and ship it",
+    "seconds": 42
+  },
+  "supplier-tracking": {
+    "url": "https://cdn.stickballman12.com/sop-videos/supplier-tracking.mp4",
+    "title": "Tracking numbers",
+    "seconds": 45
+  },
+  "supplier-signup": {
+    "url": "https://cdn.stickballman12.com/sop-videos/supplier-signup.mp4",
+    "title": "Getting your account",
+    "seconds": 35
+  },
+  "admin-check-access": {
+    "url": "https://cdn.stickballman12.com/sop-videos/admin-check-access.mp4",
+    "title": "Approve accounts and set roles",
+    "seconds": 54
+  },
+  "admin-settings": {
+    "url": "https://cdn.stickballman12.com/sop-videos/admin-settings.mp4",
+    "title": "Settings — the margin",
+    "seconds": 38
+  },
+  "superadmin-ph": {
+    "url": "https://cdn.stickballman12.com/sop-videos/superadmin-ph.mp4",
+    "title": "Superadmin — admin plus the PH workspace",
+    "seconds": 33
+  }
+}

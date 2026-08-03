@@ -245,6 +245,11 @@ source, no schema change — so found images behave exactly like hand-edited upl
    - **KicksDB** (`api/_lib/kicksdb.js`, `KICKSDB_KEY`) — unchanged cascade: **GOAT curated
      gallery** → **StockX 360° spin** (36 frames, rotational only) → **hero image(s)**. Still the
      only source for everything else. Note **GOAT has no top-down at all** — the asset isn't shot.
+     It's the only **metered** source, so it is **skipped whenever Nike or adidas answered**
+     (they self-gate on the code pattern before any network call, so the check is free). PH gets
+     an **"Also search GOAT/StockX"** button when it was skipped → `?all=1`: extra strips are
+     appended and only **empty** slots are topped up, so nothing already picked moves. Results
+     are cached 12 h per SKU and shared with the spec slide. Details → `integrations.md`.
    A missing `KICKSDB_KEY` no longer fails the search; it just means one fewer source.
 2. **Slots** are the 5 standard `product_photos` angles: side · diagonal · **top** · **outsole** ·
    rear. Each slot is seeded from the **first source that can fill it**, so Nike/adidas labelled
@@ -278,7 +283,11 @@ source, no schema change — so found images behave exactly like hand-edited upl
      authoritative for what's printed verbatim (official colourway naming/order, and `subtitle`
      as the product category, e.g. "Men's Road Racing Shoes"); the keyword inference reads
      **both** descriptions because Nike's copy is shorter and often omits the upper material
-     (only GOAT's prose says "leather" for the Air Jordan 1). Nike's `techSpec`/`bestFor`/
+     (only GOAT's prose says "leather" for the Air Jordan 1). The GOAT half is now fetched
+     **on demand**: KicksDB is only called when Nike's description matches no material keyword
+     (`MATERIAL_RE`, exported from `branding.js` and kept in sync with the "Upper" branch of
+     `specBulletsFromDescription`) or when neither Nike nor Alias has a colourway — i.e. exactly
+     when the merge would have changed the bullets. Nike's `techSpec`/`bestFor`/
      `widths` are **always empty** — don't build on them. `specBulletsFromDescription` no longer
      asserts "Regular Fit"/"Rubber Outsole" unconditionally: with no description text those
      defaults are skipped rather than printing unsupported claims on a listing.

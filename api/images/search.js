@@ -26,29 +26,42 @@ export default async function handler(req, res) {
   if (!rateLimit(req, { windowMs: 60_000, max: 40 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
 
-  const sku = normSku(new URL(req.url, 'http://x').searchParams.get('sku'));
+  const url = new URL(req.url, 'http://x');
+  const sku = normSku(url.searchParams.get('sku'));
   if (!sku) return send(res, 400, { ok: false, error: 'A valid SKU is required.' });
+  // ?all=1 → PH explicitly asked for the wider gallery, so query KicksDB even when a brand
+  // source already answered (the "Also search GOAT/StockX" button).
+  const wantAll = /^(1|true|yes)$/i.test(url.searchParams.get('all') || '');
 
   try {
-    // Query the sources concurrently — a slow catalogue shouldn't hold up the others.
+    // Query the FREE sources concurrently — a slow catalogue shouldn't hold up the others.
     // Nike needs no API key, so a missing KICKSDB_KEY no longer fails the whole search:
     // it just means one fewer source. All are best-effort and resolve to null on miss.
     // Alias is queried purely for the canonical NAME (not imagery); wrap it so a network
     // error keeps the search best-effort like the others instead of 502-ing the whole call.
-    const [kicks, nike, adidas, alias] = await Promise.all([
-      kicksdbConfigured() ? kicksdbImagesBySku(sku) : Promise.resolve(null),
+    const [nike, adidas, alias] = await Promise.all([
       nikeImagesBySku(sku),
       adidasImagesBySku(sku),
       aliasCatalogBySku(sku).catch(() => null),
     ]);
+
+    // KicksDB is the only METERED source, and it's also the one we rank last — its angles
+    // are unlabelled. So don't pay for it when a brand feed already answered: Nike and
+    // adidas both self-gate on the style-code pattern before any network call, which makes
+    // this test free (no Alias brand lookup needed). Non-brand SKUs behave exactly as before.
+    const brandHit = Boolean(nike || adidas);
+    const kicks = (!brandHit || wantAll) && kicksdbConfigured() ? await kicksdbImagesBySku(sku) : null;
 
     // Brand-official sources lead: their angles are LABELLED (Nike by view letter,
     // adidas by filename), so their suggestions actually land in the right slots.
     // KicksDB stays as the fallback and the wider gallery. Only one brand source can
     // match a given code, so the order between them doesn't matter.
     const sources = [nike, adidas, kicks].filter(Boolean);
+    // Tell the client a wider gallery is still one (metered) call away, so it can offer it
+    // on demand instead of us fetching it speculatively for every search.
+    const more = !kicks && !wantAll && kicksdbConfigured();
     if (!sources.length)
-      return send(res, 200, { ok: true, configured: true, product: null, sources: [] });
+      return send(res, 200, { ok: true, configured: true, product: null, sources: [], more: false });
 
     // NAMING is standardized on the official Alias catalog everywhere (inbound, price
     // inquiry, PO), so the listing title stamped on each branded slide must match. The
@@ -58,7 +71,7 @@ export default async function handler(req, res) {
     // + slot seeding rely on its shape); only its title is overridden.
     const title = alias?.name || sources[0].title || null;
     const product = { ...sources[0], title };
-    return send(res, 200, { ok: true, configured: true, product, sources });
+    return send(res, 200, { ok: true, configured: true, product, sources, more });
   } catch (e) {
     console.error('[images/search]', e.message);
     return send(res, 502, { ok: false, error: 'Image lookup failed.' });

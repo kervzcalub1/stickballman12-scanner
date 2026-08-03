@@ -21,7 +21,14 @@ add-on. Full guide: `RAILWAY.md`. Hosting overview: `DEPLOYMENT.md`.
 - `ALIAS_API_KEY` = the GOAT/Alias key for the **official `api.alias.org`** API
   (Global Indicator pricing + SKU catalog search). Without it, GI stays null and
   SKU search fails — see `integrations.md`.
-- `KICKSDB_KEY` is **no longer used** (SKU search moved to Alias) — safe to remove.
+- `KICKSDB_KEY` is **still required for imagery/spec copy** (Image Finder's GOAT/StockX
+  fallback + the spec slide + the eBay listing) — SKU *search* moved to Alias, but the key
+  is **not** safe to remove. It's the only **metered** source, so calls are gated (brand
+  feeds first) and cached 12 h — see `integrations.md`.
+- `KICKSDB_KEY_2` (optional) = **backup KicksDB key**. A key that hits its plan limit is
+  deactivated and returns **401 "Key is not active"** (not 429), so the server fails over to
+  the backup automatically and cools the spent key down for 30 min. Set it on Railway too —
+  with only the primary set, a spent key means no GOAT/StockX imagery at all.
 - **Cloudflare R2** (V6 listing/defect photos) — `R2_ACCOUNT_ID`,
   `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (all four required for
   `r2Configured()` → photo upload/display) + `R2_PUBLIC_BASE_URL` (the read URL,

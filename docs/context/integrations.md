@@ -107,6 +107,29 @@ server-side image fetch is unioned in **`api/_lib/imgsources.js`**.
 - **KicksDB** (`api/_lib/kicksdb.js`, `KICKSDB_KEY`) — GOAT curated gallery → StockX 360° spin
   → hero. Covers everything else. **GOAT has no top-down at all** (the asset isn't shot), so
   outside Nike/adidas that angle stays manual.
+  **The only METERED source** (Nike + adidas are keyless), so it's called as little as possible:
+  - **⚠️ A spent key answers `401 {"detail":"Key is not active"}`, NOT 429.** Hitting the plan
+    limit *deactivates* the key, so exhaustion is indistinguishable from a typo'd key — don't
+    read a 401 here as "wrong credentials". **`KICKSDB_KEY_2` is an optional backup**:
+    `kicksdbKeys()` returns the list, and `fetchProduct` fails over on 401/402/403/429, marks
+    the spent key for a **30-min cooldown** (then re-probes, so topping the plan up recovers
+    with no redeploy), and `console.warn`s each failover. A 5xx/timeout is **not** treated as a
+    key failure — the backup isn't burned on a transient blip. When every key is spent, an
+    all-dead state costs **one probe per catalog**, not one per key. `kicksdbKeyHealth()`
+    reports which key is live. Both `scripts/probe-apis.mjs` and `scripts/backfill-upc.mjs`
+    walk the same list.
+  - **Gated, not speculative.** `images/search` runs Nike/adidas/Alias first and calls KicksDB
+    **only when neither brand feed answered**. Both brand sources self-gate on the style-code
+    pattern *before* any network call, so the test costs nothing — no Alias brand lookup needed.
+    PH can still pull the wider gallery on demand: **"Also search GOAT/StockX"** → `?all=1`
+    (the response's `more` flag says whether that button is worth showing).
+  - **Spec copy is gated too.** `images/brand` + `listing/ebay` only ask KicksDB when Nike's
+    prose names no upper material (`MATERIAL_RE` in `branding.js`) or nothing has a colourway —
+    those are the only things GOAT reliably adds.
+  - **Cached 12 h per catalog+SKU** inside `fetchProduct` (`cacheGet/cacheSet`), so the GOAT hit
+    from Image Finder is reused by the spec slide and the eBay listing. One PH session on a SKU
+    used to cost up to 4 calls; it's now 1 (0 on a Nike/adidas SKU). Misses are cached too;
+    timeouts/5xx are **not** (a transient failure isn't a fact about the SKU).
 - ⚖️ **Licensing:** this is brand-owned imagery from undocumented endpoints. Nike's ToS grants
   a personal/noncommercial licence only; the adidas set is third-party republished. Compositing
   into Brand & Fill carries the same exposure as direct use. Unresolved — a business decision.
@@ -135,7 +158,8 @@ server-side image fetch is unioned in **`api/_lib/imgsources.js`**.
 `ALIAS_EMAIL, ALIAS_PASSWORD, ALIAS_API_KEY` (+ `ADMIN_PASSWORD, SESSION_SECRET,
 DATABASE_URL`) and the **R2** keys above. `ALIAS_API_KEY` is the GOAT/Alias key for
 the official API (Global Indicator pricing + SKU catalog search). `KICKSDB_KEY` is
-**no longer used** (SKU search moved to Alias) — safe to remove. Never hardcode;
+**still in use for imagery + spec copy** (SKU *search* moved to Alias, the key did not
+go away) — see the metered-source notes above. Never hardcode;
 `.env` is git-ignored.
 Railway: use the single-variable field and alphanumeric passwords (special chars
 get mangled).

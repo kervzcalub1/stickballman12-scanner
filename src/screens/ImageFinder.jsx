@@ -44,6 +44,11 @@ export function ImageFinder({ onHome, onSignOut }) {
   // Every source that matched the SKU (Nike, GOAT, StockX…) — the gallery lists them
   // all so PH can pick the angle they want rather than trusting one catalogue's order.
   const [sources, setSources] = useState([]);
+  // The SKU the current gallery was searched with, plus whether the metered GOAT/StockX
+  // catalogue is still unqueried (a brand feed answered, so the server skipped it).
+  const [searchedSku, setSearchedSku] = useState('');
+  const [moreAvailable, setMoreAvailable] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   // `?sku=` restores the LOADED SKU on refresh — i.e. you land back on that shoe's
   // photo manager instead of an empty form. Nothing else from this screen is
   // URL-restored, and that's deliberate: `preview` holds full-size rendered slides as
@@ -100,24 +105,52 @@ export function ImageFinder({ onHome, onSignOut }) {
     if (!sku) return;
     setError(''); setNotice(''); setNotConfigured(false);
     setProduct(null); setPicks({}); setUploaded({}); resetPreview(); setActiveSlot(SLOTS[0].angle);
+    setSources([]); setMoreAvailable(false); setSearchedSku('');
     setManagedSku(sku);
   }
 
+  // Fill any slot a source can that isn't already picked. Used both to seed a fresh search
+  // and to top up from a gallery loaded later — never overwrites what PH already chose.
+  const seedFrom = (list, existing = {}) => {
+    const seeded = { ...existing };
+    for (const src of list) {
+      for (const s of (src.suggestions || [])) if (!seeded[s.angle]) seeded[s.angle] = s.url;
+    }
+    return seeded;
+  };
+
   // Run the marketplace image search + seed the angle slots (the Brand & Fill entry point).
   async function runSearch(sku) {
-    const { configured, product: p, sources: srcs } = await api.imageFinderSearch(sku);
+    const { configured, product: p, sources: srcs, more } = await api.imageFinderSearch(sku);
     if (configured === false) { setNotConfigured(true); return; }
     if (!p) { setError('No match found for that SKU.'); return; }
     const list = Array.isArray(srcs) && srcs.length ? srcs : [p];
     setProduct(p); setSources(list); setTitle(p.title || '');
+    setSearchedSku(sku); setMoreAvailable(Boolean(more));
     // Seed each slot from the first source that can fill it — sources are ordered
     // best-first (Nike's labelled angles lead), so an unlabelled gallery only fills
     // the slots the labelled one couldn't.
-    const seeded = {};
-    for (const src of list) {
-      for (const s of (src.suggestions || [])) if (!seeded[s.angle]) seeded[s.angle] = s.url;
-    }
-    setPicks(seeded);
+    setPicks(seedFrom(list));
+  }
+
+  // "Also search GOAT/StockX" — the default search skips that (metered) catalogue whenever
+  // a brand feed answered, since Nike/adidas angles are labelled and land in the right
+  // slots. This pulls it in on demand: extra strips are appended and only EMPTY slots are
+  // topped up, so nothing PH already picked moves.
+  async function loadMoreSources() {
+    if (!searchedSku) return;
+    setLoadingMore(true); setError('');
+    try {
+      const { sources: srcs } = await api.imageFinderSearch(searchedSku, true);
+      const extra = (Array.isArray(srcs) ? srcs : []).filter((s) => !sources.some((x) => x.source === s.source));
+      setMoreAvailable(false);
+      if (!extra.length) { setNotice('No extra photos found on GOAT/StockX for this SKU.'); return; }
+      setSources((prev) => [...prev, ...extra]);
+      setPicks((p) => seedFrom(extra, p));
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setError(err.message);
+    } finally { setLoadingMore(false); }
   }
 
   // "Build from template" → open the marketplace search + Brand & Fill canvas.
@@ -129,7 +162,10 @@ export function ImageFinder({ onHome, onSignOut }) {
   }
 
   // Leave the generate flow → back to the photo manager, reloading it so any just-saved slides show.
-  function backToPhotos() { setProduct(null); setSources([]); resetPreview(); setPanelReload((k) => k + 1); }
+  function backToPhotos() {
+    setProduct(null); setSources([]); setMoreAvailable(false); setSearchedSku('');
+    resetPreview(); setPanelReload((k) => k + 1);
+  }
 
   function assignFrame(url) {
     setPicks((p) => ({ ...p, [activeSlot]: url }));
@@ -498,6 +534,14 @@ export function ImageFinder({ onHome, onSignOut }) {
                     </div>
                   </div>
                 ))}
+                {/* The GOAT/StockX catalogue is metered, so a search that a brand feed
+                    already answered skips it. Offer it on demand — extra angles are one
+                    tap away without every search paying for them. */}
+                {moreAvailable && (
+                  <button type="button" className="btn sm mt" disabled={loadingMore} onClick={loadMoreSources}>
+                    <Icon name="search" /> {loadingMore ? 'Searching…' : 'Also search GOAT/StockX'}
+                  </button>
+                )}
               </div>
             )}
 

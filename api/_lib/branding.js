@@ -370,6 +370,12 @@ export async function welcomeSlide({ outSize = W } = {}) {
   return encodeJpeg(canvas, outSize);
 }
 
+// Every upper-material keyword the bullet inference below can act on. Callers use it to
+// decide whether prose they ALREADY have is rich enough, so they can skip a metered
+// second lookup (KicksDB/GOAT) whose only real contribution is naming the material.
+// Keep in sync with the "Upper" branch of specBulletsFromDescription().
+export const MATERIAL_RE = /(leather|full-grain|suede|synthetic|primeknit|flyknit|knit|woven|mesh|canvas|nubuck|textile)/i;
+
 // Best-effort spec bullets from the marketplace description + colorway. No structured
 // spec feed exists, so keyword-match the prose into the standard bullet vocabulary.
 // Colour always comes through (from the API colorway).

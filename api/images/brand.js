@@ -17,7 +17,7 @@ import { nikeSpecData } from '../_lib/nike.js';
 import { isAllowedSourceImageUrl, hiResSourceUrl } from '../_lib/imgsources.js';
 import {
   brandPhoto, brandSpec, welcomeSlide, cutoutForEditMaybePreCut, specBulletsFromDescription,
-  ANGLE_TEMPLATE,
+  ANGLE_TEMPLATE, MATERIAL_RE,
 } from '../_lib/branding.js';
 import { cutoutProvider } from '../_lib/cutout.js';
 import { normalizeSourceImage } from '../_lib/imgformat.js';
@@ -174,9 +174,17 @@ export default async function handler(req, res) {
         // from — so adidas/other brands (no direct spec API) match the rest of the app;
         // KicksDB stays as a last-resort net for anything Alias misses. Alias is wrapped
         // best-effort so a network hiccup can't fail the whole spec slide.
-        const [nike, kicks, alias] = await Promise.all([
-          nikeSpecData(sku), kicksdbSpecData(sku), aliasCatalogBySku(sku).catch(() => null),
+        // KicksDB is the only metered source here, so it's now asked for ON DEMAND rather
+        // than always: only when Nike's prose doesn't already name an upper material (the
+        // one thing GOAT reliably adds — see MATERIAL_RE) or when nothing has a colourway.
+        // On a Nike SKU with full copy that's zero KicksDB calls; every other case is
+        // unchanged, and the merge below still reads both descriptions when we did fetch.
+        const [nike, alias] = await Promise.all([
+          nikeSpecData(sku), aliasCatalogBySku(sku).catch(() => null),
         ]);
+        const needsMaterial = !MATERIAL_RE.test(nike?.description || '');
+        const needsColorway = !(nike?.colorway || alias?.colorway);
+        const kicks = (needsMaterial || needsColorway) ? await kicksdbSpecData(sku).catch(() => null) : null;
         const description = [nike?.description, kicks?.description].filter(Boolean).join(' ');
         const colorway = nike?.colorway || alias?.colorway || kicks?.colorway || '';
         const bullets = specBulletsFromDescription(description, colorway, { subtitle: nike?.subtitle });

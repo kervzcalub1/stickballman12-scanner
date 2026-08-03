@@ -116,7 +116,10 @@ export const api = {
   photoRemove: (sku, angle, source) => post('/api/photos/remove', { sku, angle, source }),
   // Image Finder — source StockX renders (hero + 360° spin) for a SKU, then import
   // the picked angles into R2 as ph_edited listing photos.
-  imageFinderSearch: (sku) => get(`/api/images/search?sku=${encodeURIComponent(sku)}`),
+  // `all` = also query the metered GOAT/StockX catalogue even when a brand feed answered
+  // (the "Also search GOAT/StockX" button). The default search skips it to save calls.
+  imageFinderSearch: (sku, all = false) =>
+    get(`/api/images/search?sku=${encodeURIComponent(sku)}${all ? '&all=1' : ''}`),
   imageFinderImport: (sku, picks) => post('/api/images/import', { sku, picks }),
   // Cut a shoe out for the live position/resize editor → { cutoutUrl, bbox, width, height }.
   imageFinderCutout: (sku, url) => post('/api/images/cutout', { sku, url }),

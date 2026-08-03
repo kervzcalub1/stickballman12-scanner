@@ -43,12 +43,23 @@ function variantUpc(v) {
   return null;
 }
 
+// Same key list + failover as api/_lib/kicksdb.js: a key that has hit its plan limit is
+// deactivated and answers 401, so walk to the backup instead of aborting the whole backfill.
+const KICKS_KEYS = [...new Set([process.env.KICKSDB_KEY, process.env.KICKSDB_KEY_2].filter(Boolean))];
+let keyIdx = 0;
+
 async function fetchProduct(sku) {
   const url = `${KICKS}?query=${encodeURIComponent(sku)}&display[variants]=true&limit=1`;
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${process.env.KICKSDB_KEY}` } });
-  if (!r.ok) throw new Error(`KicksDB ${r.status}`);
-  const data = await r.json();
-  return Array.isArray(data?.data) ? data.data[0] : null;
+  for (; keyIdx < KICKS_KEYS.length; keyIdx++) {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${KICKS_KEYS[keyIdx]}` } });
+    if (r.ok) {
+      const data = await r.json();
+      return Array.isArray(data?.data) ? data.data[0] : null;
+    }
+    if (![401, 402, 403, 429].includes(r.status)) throw new Error(`KicksDB ${r.status}`);
+    console.warn(`  key #${keyIdx + 1} rejected (HTTP ${r.status}) — switching to the next key.`);
+  }
+  throw new Error('KicksDB: every key is spent (401/429).');
 }
 
 const rows = (await pool.query(

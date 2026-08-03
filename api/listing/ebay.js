@@ -15,7 +15,7 @@ import { send, applySecurity, rateLimit, cleanSku } from '../_lib/util.js';
 import { aliasCatalogBySku } from '../_lib/alias.js';
 import { nikeSpecData } from '../_lib/nike.js';
 import { kicksdbSpecData } from '../_lib/kicksdb.js';
-import { specBulletsFromDescription } from '../_lib/branding.js';
+import { specBulletsFromDescription, MATERIAL_RE } from '../_lib/branding.js';
 
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
 
@@ -216,11 +216,16 @@ export default async function handler(req, res) {
   const styleToken = /^(1|true|yes)$/i.test(url.searchParams.get('token') || '');
 
   try {
-    const [alias, nike, kicks] = await Promise.all([
+    // Alias + Nike first (unmetered); KicksDB is metered and only ever a FALLBACK here —
+    // it feeds `colorway` last and adds prose. So only pay for it when Nike's copy names
+    // no material (the bullets/features would otherwise come out thin) or nothing has a
+    // colourway. Nike SKUs with full copy now make zero KicksDB calls.
+    const [alias, nike] = await Promise.all([
       aliasCatalogBySku(skuIn).catch(() => null),
       nikeSpecData(skuIn).catch(() => null),
-      kicksdbSpecData(skuIn).catch(() => null),
     ]);
+    const needsKicks = !MATERIAL_RE.test(nike?.description || '') || !(nike?.colorway || alias?.colorway);
+    const kicks = needsKicks ? await kicksdbSpecData(skuIn).catch(() => null) : null;
     const listing = buildEbayListing({ sku: skuIn, alias, nike, kicks, styleToken });
     if (!listing) return send(res, 404, { ok: false, error: `No catalogue match for "${skuIn}".` });
     return send(res, 200, { ok: true, ...listing });

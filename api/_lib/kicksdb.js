@@ -8,7 +8,7 @@
 // maps to the same physical angle across silhouettes. That's what lets us suggest
 // the 5 listing angles below by index. (Top-down + outsole are NOT in a horizontal
 // spin — those stay manual on the Edited-Photos page.)
-import { fetchWithTimeout } from './util.js';
+import { fetchWithTimeout, cacheGet, cacheSet } from './util.js';
 
 const GOAT_BASE = 'https://api.kicks.dev/v3/goat/products';
 const STOCKX_BASE = 'https://api.kicks.dev/v3/stockx/products';
@@ -31,8 +31,51 @@ export const STOCKX_360_SUGGESTIONS = [
   { angle: 'rear', index: 27, label: 'Heel' },
 ];
 
+// Keys in priority order: the primary, then any backups. A KicksDB key that has hit its
+// plan limit is DEACTIVATED, and a deactivated key answers `401 {"detail":"Key is not
+// active"}` — indistinguishable from a typo'd key. So 401 has to be treated as "this key
+// is spent, try the next one" rather than a hard error, which is the whole reason this
+// list exists. Read from env every call so a Railway var change takes effect on the next
+// request, with no redeploy.
+export function kicksdbKeys() {
+  return [...new Set([process.env.KICKSDB_KEY, process.env.KICKSDB_KEY_2].filter(Boolean))];
+}
+
 export function kicksdbConfigured() {
-  return Boolean(process.env.KICKSDB_KEY);
+  return kicksdbKeys().length > 0;
+}
+
+// Statuses that mean "the KEY is the problem", not the request: deactivated/limit-hit
+// (401), payment required (402), forbidden (403), rate-limited (429). Anything else is a
+// real failure and failing over would just burn the backup key for nothing.
+const KEY_FAILURE_STATUS = new Set([401, 402, 403, 429]);
+// How long a spent key is skipped before we probe it again. Long enough that a dead key
+// isn't re-tried on every request, short enough that topping the plan back up recovers on
+// its own without a redeploy.
+const KEY_COOLDOWN_MS = 30 * 60 * 1000;
+const spentKeys = new Map(); // key -> timestamp it may be retried
+
+const keyLabel = (k) => `#${kicksdbKeys().indexOf(k) + 1}`;  // never log the key itself
+
+// The keys worth spending a call on, best first. When every key is in cooldown we return
+// exactly ONE — the closest to recovery — so an all-dead state costs a single probe per
+// request instead of one per key.
+function keysToTry() {
+  const all = kicksdbKeys();
+  const now = Date.now();
+  const live = all.filter((k) => !(spentKeys.get(k) > now));
+  if (live.length) return live;
+  return all.length ? [all.reduce((a, b) => ((spentKeys.get(a) ?? 0) <= (spentKeys.get(b) ?? 0) ? a : b))] : [];
+}
+
+// Exported for diagnostics/tests: which keys are configured and which are in cooldown.
+export function kicksdbKeyHealth() {
+  const now = Date.now();
+  return kicksdbKeys().map((k, i) => ({
+    key: `#${i + 1}`,
+    spent: spentKeys.get(k) > now,
+    retryInMs: spentKeys.get(k) > now ? spentKeys.get(k) - now : 0,
+  }));
 }
 
 const hostIs = (url, host) => {
@@ -61,17 +104,46 @@ export function hiResSourceUrl(url) {
 }
 const uniq = (arr) => [...new Set(arr.filter(Boolean))];
 
-// GET one KicksDB catalog and return its first product, or null. Best-effort.
+// KicksDB is the only METERED image/spec source (Nike + adidas are keyless), so every
+// call is cached per catalog+SKU. Caching here rather than in the two exported functions
+// means the GOAT hit that images/search made is reused by the spec slide and the eBay
+// listing for the same shoe — one PH session on a SKU used to cost up to 4 calls. Product
+// copy is effectively immutable, so a long TTL is safe; misses are cached too (wrapped, so
+// `null` is representable) to stop a SKU KicksDB doesn't carry from being re-asked all day.
+const CATALOG_TTL_MS = 12 * 60 * 60 * 1000;
+
+// GET one KicksDB catalog and return its first product, or null. Best-effort: walks the
+// key list, failing over to the backup when a key comes back spent (see KEY_FAILURE_STATUS).
 async function fetchProduct(base, query, extraQs = '') {
-  if (!kicksdbConfigured() || !query) return null;
-  const key = process.env.KICKSDB_KEY;
+  if (!query) return null;
   const url = `${base}?query=${encodeURIComponent(String(query))}${extraQs}&limit=1`;
-  let r;
-  try {
-    r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${key}`, accept: 'application/json' } }, 12000);
-  } catch { return null; }
-  if (!r.ok) return null;
-  try { return (await r.json())?.data?.[0] || null; } catch { return null; }
+  const ck = `kicksdb:${url}`;
+  const hit = cacheGet(ck);
+  if (hit) return hit.product;
+
+  for (const key of keysToTry()) {
+    let r;
+    try {
+      r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${key}`, accept: 'application/json' } }, 12000);
+    } catch { return null; }  // network/timeout — not the key's fault, don't burn the backup
+
+    if (KEY_FAILURE_STATUS.has(r.status)) {
+      spentKeys.set(key, Date.now() + KEY_COOLDOWN_MS);
+      // Loud on purpose: a silent failover means nobody notices the plan ran out until the
+      // LAST key dies and imagery quietly disappears.
+      console.warn(`[kicksdb] key ${keyLabel(key)} rejected (HTTP ${r.status}) — trying the next key. Top up or rotate KICKSDB_KEY.`);
+      continue;
+    }
+    // Only cache a real answer (200 or an honest empty result). A timeout/5xx is a transient
+    // failure, not a fact about the SKU — caching it would blank the shoe for the next 12 h.
+    if (!r.ok) return null;
+    let product = null;
+    try { product = (await r.json())?.data?.[0] || null; } catch { return null; }
+    spentKeys.delete(key);  // it answered — clear any stale cooldown
+    cacheSet(ck, { product }, CATALOG_TTL_MS);
+    return product;
+  }
+  return null;  // no key left with credit
 }
 
 const buildSuggestions = (defs, images) =>

@@ -15,8 +15,10 @@ import {
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
+  getLocationByCode, shelveItems, PH_EXCLUDED_KINDS,
 } from '../_lib/db.js';
 import { enrichGlobalIndicators } from '../_lib/intake.js';
+import { normalizeLocationCode } from '../_lib/locations.js';
 
 const MAX_ITEMS = 2000;
 
@@ -45,10 +47,14 @@ export default async function handler(req, res) {
   // 'instore' = pairs bought at a retail store: no shipment (like rescale), but
   // it keeps `origin` (store name) and, unlike rescale, lands as fresh received
   // stock. admin/warehouse only — ph_team is already blocked by requireRole below.
-  const kind = body.kind === 'rescale' ? 'rescale' : body.kind === 'instore' ? 'instore' : 'receiving';
-  // Rescale carries no issues; receiving and in-store both can (in-store reuses the
-  // full Review + Issues flow, e.g. no-box auto-issues and per-unit defect flags).
-  const issues = kind === 'rescale' ? [] : (Array.isArray(body.issues) ? body.issues : []);
+  // 'existing' = old stock that predates this system: no shipment, already sitting
+  // on a shelf, and already listed to II + the stores. Counted in via the Existing
+  // Stock screen, which sends a `locationCode` so each pair is shelved on commit.
+  const KINDS = ['rescale', 'instore', 'existing'];
+  const kind = KINDS.includes(body.kind) ? body.kind : 'receiving';
+  // Rescale and existing carry no issues; receiving and in-store both can (in-store
+  // reuses the full Review + Issues flow — no-box auto-issues, per-unit defect flags).
+  const issues = (kind === 'rescale' || kind === 'existing') ? [] : (Array.isArray(body.issues) ? body.issues : []);
   // Per-unit defect issues flagged on the Review screen (V6 Feature 4):
   // [{ vin, type, note, photos:[https…] }]. Mapped to item ids after insert.
   const VIN_RE = /^SBM-\d{6}-\d{6}$/;
@@ -76,6 +82,19 @@ export default async function handler(req, res) {
   const isNegCost = (v) => v !== '' && v != null && Number.isFinite(Number(v)) && Number(v) < 0;
   if (isNegCost(header.defaultCost) || rawItems.some((it) => isNegCost(it?.cost)))
     return send(res, 400, { ok: false, error: 'Cost can’t be negative.' });
+
+  // Existing stock is counted shelf by shelf — the pairs are already physically on
+  // the shelf, so the location is part of the count, not a later put-away chore.
+  // Resolve it BEFORE creating the batch: failing afterwards would leave a committed
+  // batch of unshelved pairs with no obvious way to tell they never got placed.
+  let existingLocation = null;
+  if (kind === 'existing') {
+    const code = normalizeLocationCode(body.locationCode);
+    if (!code) return send(res, 400, { ok: false, error: 'Scan a shelf before counting existing stock onto it.' });
+    existingLocation = await getLocationByCode(code);
+    if (!existingLocation) return send(res, 404, { ok: false, error: `Unknown shelf “${code}”.` });
+    if (!existingLocation.active) return send(res, 409, { ok: false, error: `Shelf “${code}” is inactive.` });
+  }
 
   const createdBy = user.name || user.username || '';
   const defaultCost = toCost(header.defaultCost);
@@ -154,6 +173,25 @@ export default async function handler(req, res) {
     await insertIntakeEvents(created.map((r) => r.id), createdBy, kind);
     await insertIssues(batch.id, issues, createdBy);
 
+    // Existing stock: place every counted pair on the shelf it was scanned against,
+    // reusing the normal put-away path so status/location_id/location_code and the
+    // 'shelved' event all stay consistent with a hand put-away. No-box pairs are
+    // refused by shelveItems (a boxless shoe isn't sellable) and stay in the No-Box
+    // queue — surfaced below so the screen can say how many need a box first.
+    let shelved = null;
+    if (kind === 'existing' && existingLocation) {
+      const placed = await shelveItems({
+        location: existingLocation,
+        units: created.map((r) => ({ vin: r.vin, nowHasBox: false })),
+        createdBy,
+      });
+      shelved = {
+        updated: placed.updated,
+        noBoxBlocked: placed.results.filter((r) => r.reason === 'no_box').length,
+        location: { code: existingLocation.code, label: existingLocation.label },
+      };
+    }
+
     // Per-unit defect issues → an 'issue' event on the matching unit (by VIN).
     if (unitIssues.length) {
       const idByVin = new Map(created.map((r) => [r.vin, r.id]));
@@ -178,13 +216,15 @@ export default async function handler(req, res) {
       count: created.length,
       vins: created.map((r) => r.vin),
       reconcile,
+      shelved,
     });
 
     // Best-effort, AFTER responding (slow/flaky Alias must never delay the
     // commit): pull each unit's global indicator price and seed the final price.
-    // A failure just leaves GI null for PH to fill in by hand. Skipped for
-    // in-store — those bypass PH entirely and are listed to Alias by hand.
-    if (kind !== 'instore') {
+    // A failure just leaves GI null for PH to fill in by hand. Skipped for in-store
+    // and existing stock — both bypass PH entirely, and existing stock is already
+    // priced on the stores, so re-deriving a GI here would be meaningless noise.
+    if (!PH_EXCLUDED_KINDS.includes(kind)) {
       enrichGlobalIndicators(created, items)
         .catch((e) => console.warn('[batches/commit] GI enrichment failed:', e.message));
     }

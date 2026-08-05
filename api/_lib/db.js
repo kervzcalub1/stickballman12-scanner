@@ -77,6 +77,20 @@ export function dbConfigured() {
   return Boolean(process.env.DATABASE_URL);
 }
 
+// Batch kinds the PH team must NEVER see. Both bypass PH entirely but for
+// different reasons: 'instore' is listed to the stores by hand off the In-Store
+// Listing page, and 'existing' is old stock that was already synced to II and the
+// stores long before this system existed. Kept as ONE list because the exclusion
+// has to hold at every PH read/write path — phListItems (both branches),
+// pendingCounts, phUpdateGroup, getItemsForGiRefresh, recomputeUnlistedPrices and
+// rescaleItem. Guarding only the obvious one is how in-store leaked onto the PH
+// Rescale grid before (see docs/context/in-store.md).
+//
+// Use as: (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
+// The IS NULL half is required — these are LEFT JOINs, and `NULL <> ALL(...)` is
+// NULL, which would silently drop every batchless row.
+export const PH_EXCLUDED_KINDS = ['instore', 'existing'];
+
 /* ------------------------------- Users -------------------------------- */
 
 // Create a pending account with the requested role. Throws { code:
@@ -282,7 +296,7 @@ export async function recomputeUnlistedPrices(oldMult, newMult) {
       AND synced_alias = false AND synced_stockx = false AND synced_shopify = false
       AND status NOT IN ('sold', 'shipped')
       AND (price IS NULL OR abs(price - round(global_indicator * ${om})) < 0.51)
-      AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.id = items.batch_id AND b.kind = 'instore')
+      AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.id = items.batch_id AND b.kind = ANY(${PH_EXCLUDED_KINDS}))
     RETURNING id
   `;
   return rows.length;
@@ -390,7 +404,7 @@ export async function createBatch(h, createdBy) {
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
-       ${h.specialRules || null}, ${['receiving', 'rescale', 'instore'].includes(h.kind) ? h.kind : 'receiving'},
+       ${h.specialRules || null}, ${['receiving', 'rescale', 'instore', 'existing'].includes(h.kind) ? h.kind : 'receiving'},
        ${h.origin || null}, ${h.duplicateOf ?? null}, ${h.poId ?? null}, 'committed', ${createdBy || null}, now())
     RETURNING id, batch_code
   `;
@@ -454,9 +468,17 @@ export async function setItemGlobalIndicators(updates) {
       + (u.price != null ? ` · Final price $${Number(u.price).toFixed(2)}` : '')
       + (u.gi_basis === 'with_you' ? ' (With You)' : '')
       + ' (auto from Alias)';
+    // INSERT … SELECT … WHERE EXISTS, not VALUES: enrichment is fire-and-forget
+    // AFTER the commit responds, so a unit can be deleted (batch scrapped after a
+    // mis-scan) while Alias is still answering. A plain VALUES insert then raises a
+    // FK violation, and because every item shares ONE transaction that rolled back
+    // the whole batch's GI — the other units silently lost their price with only a
+    // console.warn to show for it. The guard makes a vanished unit a no-op, which
+    // matches the UPDATE above (it already no-ops on a missing id).
     queries.push(sql`
       INSERT INTO item_events (item_id, type, details, created_by)
-      VALUES (${u.id}, 'ph_update', ${JSON.stringify({ text, system: true })}::jsonb, NULL)
+      SELECT ${u.id}::bigint, 'ph_update', ${JSON.stringify({ text, system: true })}::jsonb, NULL
+      WHERE EXISTS (SELECT 1 FROM items WHERE id = ${u.id})
     `);
   }
   await sql.transaction(queries);
@@ -489,9 +511,13 @@ export async function refreshItemGi(updates) {
         : '')
       + (u.gi_basis === 'with_you' ? ' (With You)' : '')
       + ' (re-fetched from Alias)';
+    // Guarded insert for the same reason as setItemGlobalIndicators: a unit deleted
+    // between getItemsForGiRefresh and this write would FK-violate and roll back the
+    // ENTIRE refresh, so one stale VIN could silently undo a whole range's re-pricing.
     queries.push(sql`
       INSERT INTO item_events (item_id, type, details, created_by)
-      VALUES (${u.id}, 'ph_update', ${JSON.stringify({ text, system: true })}::jsonb, NULL)
+      SELECT ${u.id}::bigint, 'ph_update', ${JSON.stringify({ text, system: true })}::jsonb, NULL
+      WHERE EXISTS (SELECT 1 FROM items WHERE id = ${u.id})
     `);
   }
   await sql.transaction(queries);
@@ -509,7 +535,7 @@ export async function getItemsForGiRefresh(vins) {
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE i.vin = ANY(${list}) AND i.status NOT IN ('sold', 'shipped')
-      AND (b.kind IS DISTINCT FROM 'instore')  -- in-store bypasses PH/GI pricing
+      AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH/GI pricing
   `;
 }
 
@@ -597,7 +623,10 @@ export async function insertIssueEvents(entries, createdBy) {
 export async function insertIntakeEvents(itemIds, createdBy, kind = 'receiving') {
   if (!itemIds.length) return;
   const sql = db();
-  const intakeType = kind === 'rescale' ? 'rescaled' : 'received';
+  // 'existing' stock was never received — it was already on the shelves and already
+  // listed. Give it its own event so the history doesn't claim a delivery that never
+  // happened ("Counted into existing stock" vs "Received into inventory").
+  const intakeType = kind === 'rescale' ? 'rescaled' : kind === 'existing' ? 'counted' : 'received';
   const queries = [];
   for (const id of itemIds) {
     queries.push(sql`
@@ -611,6 +640,17 @@ export async function insertIntakeEvents(itemIds, createdBy, kind = 'receiving')
   }
   // Rescaled stock starts restock-pending so it surfaces in the Rescale worklist.
   if (kind === 'rescale') queries.push(sql`UPDATE items SET restock_pending = true WHERE id = ANY(${itemIds})`);
+  // Existing (old) stock is already live on II and the stores — that's the whole
+  // premise of counting it in. Recording that up front keeps Inventory honest, and
+  // doubles as a backstop: even if a PH query were ever to miss PH_EXCLUDED_KINDS,
+  // these units read as fully synced and so can't inflate the pending badges.
+  if (kind === 'existing') {
+    queries.push(sql`
+      UPDATE items SET added_to_intel_inv = true, synced_alias = true,
+             synced_stockx = true, synced_shopify = true, updated_at = now()
+      WHERE id = ANY(${itemIds})
+    `);
+  }
   await sql.transaction(queries);
 }
 
@@ -883,7 +923,7 @@ export async function phListItems(from, to, kind = null) {
       ) ev ON true
       WHERE i.restock_pending = true  -- pending worklist; cleared on "Mark restocked"
         AND i.status <> 'no_box'      -- no-box units aren't postable; PH never lists them
-        AND (b.kind IS DISTINCT FROM 'instore')  -- in-store bypasses PH entirely
+        AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH entirely
         AND (${from}::date IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
         AND (${to}::date   IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
       ORDER BY created_at DESC, i.id
@@ -902,9 +942,11 @@ export async function phListItems(from, to, kind = null) {
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
       AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
-      -- In-store buys never enter the PH team's world (New Inventory OR the admin
-      -- Report): they're listed to Alias by hand off the In-Store Listing page.
-      AND (b.kind IS DISTINCT FROM 'instore')
+      -- In-store buys and existing (old) stock never enter the PH team's world
+      -- (New Inventory OR the admin Report): in-store is listed to Alias by hand
+      -- off the In-Store Listing page, and existing stock was already synced to II
+      -- and the stores before this system existed.
+      AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
       AND (${kind}::text IS NULL OR b.kind = 'receiving' OR b.kind IS NULL)
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
       -- Report (kind IS NULL) for oversight.
@@ -990,15 +1032,18 @@ export async function setInstoreListed(vins, flags, by) {
 export async function pendingCounts() {
   const rows = await db()`
     SELECT
-      count(*) FILTER (WHERE listable AND not_instore AND NOT added_to_intel_inv)::int AS not_ii,
-      count(*) FILTER (WHERE listable AND not_instore AND NOT synced_alias)::int       AS not_alias,
-      count(*) FILTER (WHERE listable AND not_instore AND NOT goat_only AND NOT synced_stockx)::int  AS not_stockx,
-      count(*) FILTER (WHERE listable AND not_instore AND NOT goat_only AND NOT synced_shopify)::int AS not_shopify,
+      count(*) FILTER (WHERE listable AND ph_managed AND NOT added_to_intel_inv)::int AS not_ii,
+      count(*) FILTER (WHERE listable AND ph_managed AND NOT synced_alias)::int       AS not_alias,
+      count(*) FILTER (WHERE listable AND ph_managed AND NOT goat_only AND NOT synced_stockx)::int  AS not_stockx,
+      count(*) FILTER (WHERE listable AND ph_managed AND NOT goat_only AND NOT synced_shopify)::int AS not_shopify,
       count(*) FILTER (WHERE status = 'needs_shelf')::int              AS needs_shelf,
       count(*) FILTER (WHERE status = 'no_box')::int                   AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
       -- In-store pairs still needing manual store listing (sellable, not fully ticked).
-      count(*) FILTER (WHERE NOT not_instore AND status NOT IN ('sold','shipped','missing','issue','no_box')
+      -- Keyed on is_instore, NOT on "NOT ph_managed": that flag now also covers
+      -- existing (old) stock, which would otherwise pour into Brent's In-Store
+      -- Listing worklist for pairs that were listed years ago.
+      count(*) FILTER (WHERE is_instore AND status NOT IN ('sold','shipped','missing','issue','no_box')
         AND NOT (instore_listed_alias AND instore_listed_stockx AND instore_listed_shopify))::int AS instore_unlisted,
       (SELECT count(*) FROM rescale_requests WHERE status = 'open')::int     AS rescale_requests,
       (SELECT count(*) FROM rescale_requests WHERE status = 'audited')::int  AS rescale_requests_audited,
@@ -1017,12 +1062,15 @@ export async function pendingCounts() {
          LEFT JOIN batches b ON b.id = p.received_batch_id
         WHERE p.status = 'receiving' AND b.status IS DISTINCT FROM 'committed')::int AS po_receiving
     FROM (
-      -- not_instore gates the PH store-sync badges only: in-store buys bypass
-      -- PH, so they must NOT inflate not_ii/alias/stockx/shopify. needs_shelf /
-      -- no_box still include them — warehouse shelves & resolves in-store pairs.
+      -- ph_managed gates the PH store-sync badges only: in-store buys and existing
+      -- (old) stock bypass PH, so they must NOT inflate not_ii/alias/stockx/shopify.
+      -- needs_shelf / no_box still include them — warehouse shelves & resolves those
+      -- pairs. is_instore is kept separate because the In-Store Listing badge below
+      -- means specifically in-store, not "everything PH ignores".
       SELECT it.*,
              (it.with_box AND it.status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable,
-             (b.kind IS DISTINCT FROM 'instore') AS not_instore
+             (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})) AS ph_managed,
+             (b.kind = 'instore') AS is_instore
       FROM items it
       LEFT JOIN batches b ON b.id = it.batch_id
     ) i
@@ -1344,6 +1392,7 @@ export async function listItemsAtLocation(locationId) {
   // fall back to the catalog/API image (near-universal coverage) for a thumbnail.
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.status, i.with_box, i.location_code,
+           b.kind,  -- so the shelf view can flag existing/in-store stock as it's pulled
            COALESCE(
              (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
                 ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2
@@ -1351,6 +1400,7 @@ export async function listItemsAtLocation(locationId) {
              NULLIF(i.image_url, '')
            ) AS photo_url
     FROM items i
+    LEFT JOIN batches b ON b.id = i.batch_id
     WHERE i.location_id = ${locationId} AND i.status NOT IN ('sold','shipped')
     ORDER BY i.name, i.size, i.vin
   `;
@@ -1472,7 +1522,7 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
            i.ph_note, i.last_edit_at, i.last_edit_by
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
-    WHERE i.vin = ANY(${allVins}) AND (b.kind IS DISTINCT FROM 'instore')
+    WHERE i.vin = ANY(${allVins}) AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
   `;
   if (!curRows.length) return [];
   const curByVin = new Map(curRows.map((r) => [r.vin, r]));

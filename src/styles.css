@@ -750,6 +750,13 @@ body {
   padding: 1px 6px; border-radius: 5px;
   color: #c9a24f; border: 1px solid rgba(201,162,79,0.5); background: rgba(201,162,79,0.12);
 }
+/* Existing (old) stock — same chip shape as in-store (both replace the PH sync
+   badges, which don't apply), in a cooler hue so the two don't read as one thing. */
+.inv-existing-chip {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 5px;
+  color: #7f9bd1; border: 1px solid rgba(127,155,209,0.5); background: rgba(127,155,209,0.12);
+}
 
 /* In-Store Listing worklist */
 .istore-filterbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; }
@@ -1287,8 +1294,15 @@ body {
 .loc-group-rows .loc-unit-row:last-child { border-bottom: none; }
 .loc-unit-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; margin: 0 -10px; border-radius: 8px; border-bottom: 1px solid var(--border); transition: background 0.12s; }
 .loc-unit-row:hover { background: var(--panel-2); }
-.loc-unit-left { flex: 1; min-width: 0; }
-.loc-unit-vin { display: block; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* VIN + an optional intake chip share this cell. STACKED, not side by side: this
+   column is narrow on a phone, and inline the chip ellipsed the VIN clean away —
+   losing the number you actually scan is worse than losing the chip. Kept OUT of
+   .loc-unit-status so the fixed-width status/where columns stay aligned. */
+.loc-unit-left { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.loc-unit-vin { max-width: 100%; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.loc-unit-left .inv-existing-chip, .loc-unit-left .inv-instore-chip { flex: none; }
+.loc-group-name .inv-existing-chip, .loc-group-name .inv-instore-chip { flex: none; margin-left: 8px; vertical-align: middle; }
+.loc-item-top .inv-existing-chip, .loc-item-top .inv-instore-chip { flex: none; }
 .loc-unit-size { flex: none; min-width: 58px; display: flex; justify-content: center; }
 .loc-unit-status { flex: none; min-width: 92px; display: flex; justify-content: center; }
 .loc-unit-loc { flex: none; min-width: 116px; display: flex; justify-content: flex-end; }
@@ -1421,8 +1435,20 @@ body {
 
 /* VIN labels + print (Rollo / Dymo rolls — one label per page) */
 .label-overlay { position: fixed; inset: 0; z-index: 200; background: var(--bg); overflow: auto; }
-.label-toolbar { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+/* flex-wrap is load-bearing: unwrapped, the count + stock picker + Print/Close ran
+   to 496px inside a 390px phone and pushed **Print entirely off-screen** — the label
+   sheet was unusable on the device the warehouse actually holds. Wrapping keeps
+   every control reachable; on a wide screen it still sits on one row. */
+.label-toolbar { position: sticky; top: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .label-tools { display: flex; gap: 8px; align-items: center; }
+@media (max-width: 480px) {
+  /* Count on the first row; the stock picker + Close + Print share the second.
+     The picker must be allowed to SHRINK (min-width:0 — a select's intrinsic width
+     otherwise wins and bumps Print onto a third row), while the buttons hold size. */
+  .label-tools { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-end; }
+  .label-tools select { flex: 1 1 100%; min-width: 0; }
+  .label-tools .btn { flex: none; }
+}
 .label-roll { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; justify-content: center; }
 
 /* one label = the chosen stock size; white like the printed sticker */

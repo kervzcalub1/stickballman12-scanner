@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -106,6 +106,11 @@ export const HOME_SECTIONS = [
   { title: 'In-Store Mode', accent: 'inventory', cards: [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },
     { key: 'instore-listing', icon: '🏷️', title: 'In-Store Listing', sub: 'Mark in-store buys listed to Alias/StockX/Shopify' },
+  ] },
+  // A one-off migration mode, not part of the daily loop — its own section so it
+  // reads as "the project of getting old stock into the system", not as receiving.
+  { title: 'Existing Stock', accent: 'inventory', cards: [
+    { key: 'existing-stock', icon: '📦', title: 'Count Existing Stock', sub: 'Scan a shelf, then the pairs already on it (never reaches the PH team)' },
   ] },
   { title: 'Put-away', accent: 'orders', cards: [
     { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },

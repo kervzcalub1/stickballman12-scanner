@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   const supplier = p.get('supplier') || null;
   const status = p.get('status') || null;
   const kindParam = p.get('kind');
-  const kind = ['receiving', 'rescale', 'instore'].includes(kindParam) ? kindParam : null;
+  const kind = ['receiving', 'rescale', 'instore', 'existing'].includes(kindParam) ? kindParam : null;
 
   try {
     const rows = await queryItems({ q, from, to, supplier, status, kind });

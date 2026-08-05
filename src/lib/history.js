@@ -14,6 +14,7 @@ export function eventLabel(e) {
   const by = e.created_by || '—';
   if (e.type === 'scanned') return `Scanned by ${e.details?.by || by}`;
   if (e.type === 'received') return `Received into inventory (by ${by})`;
+  if (e.type === 'counted') return `Counted into existing stock (by ${by})`;
   if (e.type === 'rescaled') return `Rescaled${e.details?.reason ? ` (${e.details.reason})` : ''}${e.details?.note ? ` — ${e.details.note}` : ''} (by ${by})`;
   if (e.type === 'status_change') return `Status → ${statusLabel(e.details?.status)}${e.details?.note ? ` — ${e.details.note}` : ''} (marked by: ${by})`;
   if (e.type === 'shelved') return `Shelved at ${e.details?.label || e.details?.locationCode || '—'}${e.details?.gotBox ? ' (box found → With Box)' : ''} (by ${by})`;

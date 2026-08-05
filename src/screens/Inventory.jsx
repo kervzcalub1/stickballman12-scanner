@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
-import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb } from '../components/common.jsx';
+import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
@@ -17,6 +17,15 @@ import { SUPPLIERS } from '../lib/constants.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
+
+// What sits next to the status pill. The PH sync badges only mean something for
+// PH-managed stock: in-store is listed to the stores by hand, and existing (old)
+// stock was already listed long before this system — so both show a chip naming
+// where the pair came from instead of four badges that would always read the same.
+function intakeChip(g) {
+  if (g.kind === 'instore' || g.kind === 'existing') return <IntakeChip kind={g.kind} />;
+  return <SyncBadges item={g} />;
+}
 
 export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
   const today = estToday();
@@ -407,7 +416,8 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                       : <span className="muted">Not shelved</span>}</dd></div>
                     <div><dt>Batch</dt><dd>{it.batch_code || '—'}</dd></div>
                     <div><dt>Intake</dt><dd>{it.kind === 'rescale' ? `Rescaled${it.origin ? ` (${it.origin})` : ''}`
-                      : it.kind === 'instore' ? `In-store${it.origin ? ` (${it.origin})` : ''}` : 'Received'}</dd></div>
+                      : it.kind === 'instore' ? `In-store${it.origin ? ` (${it.origin})` : ''}`
+                        : it.kind === 'existing' ? `Existing stock${it.origin ? ` (${it.origin})` : ''}` : 'Received'}</dd></div>
                     <div><dt>Supplier</dt><dd>{it.supplier_name || '—'}</dd></div>
                     <div><dt>Received</dt><dd>{(it.date_received || '').slice(0, 10) || '—'}</dd></div>
                     <div><dt>Price</dt><dd>{it.price != null ? `$${Number(it.price).toFixed(2)}` : '—'}</dd></div>
@@ -635,6 +645,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
               <option value="receiving">Received</option>
               <option value="rescale">Rescaled</option>
               <option value="instore">In-store</option>
+              <option value="existing">Existing stock</option>
             </select>
           </label>
           <button className="btn primary" onClick={() => load()} disabled={loading}>{loading ? '…' : 'Apply filters'}</button>
@@ -683,7 +694,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                       <button className="dcard-main" onClick={() => toggleRow(g.key)}>
                         <div className="dcard-line"><span className="muted">{g.sku || '—'}</span><span>×{g.qty}</span></div>
                         <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} /></span></div>
-                        <div className="inv-status"><StatusPill status={g.status} />{g.kind === 'instore' ? <span className="inv-instore-chip" title="Bought in-store — listed to Alias by hand">In-store</span> : <SyncBadges item={g} />}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</div>
+                        <div className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</div>
                       </button>
                       {open && invDetail(g)}
                     </div>
@@ -718,7 +729,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                           <td className="inv-col-sku">{g.sku || '—'}</td>
                           <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>
-                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} />{g.kind === 'instore' ? <span className="inv-instore-chip" title="Bought in-store — listed to Alias by hand">In-store</span> : <SyncBadges item={g} />}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</span></td>
+                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</span></td>
                         </tr>
                         {open && (
                           <tr className="inv-drow">

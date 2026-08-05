@@ -45,6 +45,26 @@ export function SyncBadges({ item, compact, goatOnly }) {
   );
 }
 
+// Where a pair came from, when that changes how it's handled. Only the two
+// PH-excluded kinds get a chip — ordinary received/rescaled stock is the 95% case
+// and tagging it too would just add noise to every row. So no chip = normal stock.
+// `mixed` is for a grouped row where only SOME of the units are that kind.
+export function IntakeChip({ kind, mixed }) {
+  if (kind === 'existing')
+    return (
+      <span className="inv-existing-chip" title="Existing stock — counted in from the shelves, predates this system and was already listed to II and the stores">
+        {mixed ? 'Part existing' : 'Existing'}
+      </span>
+    );
+  if (kind === 'instore')
+    return (
+      <span className="inv-instore-chip" title="Bought in-store — listed to Alias by hand, never through the PH team">
+        {mixed ? 'Part in-store' : 'In-store'}
+      </span>
+    );
+  return null;
+}
+
 // Full-screen viewer for one or more photos (defect-issue photos in history).
 export function PhotoLightbox({ photos, onClose }) {
   if (!photos?.length) return null;

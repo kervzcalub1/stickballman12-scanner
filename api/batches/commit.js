@@ -87,8 +87,13 @@ export default async function handler(req, res) {
   // the shelf, so the location is part of the count, not a later put-away chore.
   // Resolve it BEFORE creating the batch: failing afterwards would leave a committed
   // batch of unshelved pairs with no obvious way to tell they never got placed.
+  // The Box Labels tool is the one exception: it mints a single old-stock pair that
+  // is IN HAND being re-boxed, not standing on a shelf, so it opts out explicitly
+  // (`noShelf`) and lands in the normal needs-shelf queue. Everything else counting
+  // existing stock is AT the shelf — keep the guard there, so a dropped locationCode
+  // fails loudly instead of silently producing a batch of unshelved pairs.
   let existingLocation = null;
-  if (kind === 'existing') {
+  if (kind === 'existing' && !(body.noShelf === true && !body.locationCode)) {
     const code = normalizeLocationCode(body.locationCode);
     if (!code) return send(res, 400, { ok: false, error: 'Scan a shelf before counting existing stock onto it.' });
     existingLocation = await getLocationByCode(code);

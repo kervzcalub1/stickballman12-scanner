@@ -867,6 +867,40 @@ export async function setBatchStatus(id, status) {
   }
 }
 
+// Exact UPC / SKU lookup against OUR OWN stock — the Box Labels tool asks this
+// before any third-party catalogue, because a pair we've already handled is the
+// authoritative record (and the one the catalogue is least likely to know about:
+// old stock, in-store buys, anything hand-entered). Newest first, and never more
+// than a screenful. Returns the raw units; the caller folds them into a product.
+export async function findStockByCode(code, limit = 25) {
+  const raw = String(code || '').trim();
+  if (!raw) return [];
+  const lim = Math.min(100, Math.max(1, Number(limit) || 25));
+  // UPC only if the code is digits END TO END — deriving it from "digits found
+  // anywhere" would read a SKU like "MQA-NOBOX-1785906559725" as a 13-digit UPC.
+  const bare = raw.replace(/\s/g, '');
+  const upc = /^\d{8,14}$/.test(bare) ? bare : null;
+  // A SKU is written both "DQ8426-109" and "DQ8426 109" depending on the source;
+  // compare with spaces and dashes stripped so either form matches either form.
+  const sku = upc ? null : raw.toUpperCase().replace(/[\s-]/g, '');
+  if (upc) {
+    return await db()`
+      SELECT i.vin, i.name, i.sku, i.size, i.upc, i.colorway, i.gender, i.status,
+             i.with_box, i.location_code, i.created_at
+        FROM items i
+       WHERE regexp_replace(coalesce(i.upc, ''), '\\D', '', 'g') = ${upc}
+       ORDER BY i.created_at DESC, i.vin DESC
+       LIMIT ${lim}`;
+  }
+  return await db()`
+    SELECT i.vin, i.name, i.sku, i.size, i.upc, i.colorway, i.gender, i.status,
+           i.with_box, i.location_code, i.created_at
+      FROM items i
+     WHERE upper(replace(replace(coalesce(i.sku, ''), ' ', ''), '-', '')) = ${sku}
+     ORDER BY i.created_at DESC, i.vin DESC
+     LIMIT ${lim}`;
+}
+
 // Unified inventory query — powers the merged Inventory page (browse + report).
 // Any combination of: text search (q over vin/sku/name), received-date range
 // (from/to), supplier, status. Nulls are ignored. Received date = the batch's

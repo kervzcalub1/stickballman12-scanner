@@ -18,6 +18,7 @@ import { BatchPage } from './screens/BatchPage.jsx';
 import { Inventory } from './screens/Inventory.jsx';
 import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { NoBoxReport } from './screens/NoBoxReport.jsx';
+import { BoxLabels } from './screens/BoxLabels.jsx';
 import { StatusScanPage } from './screens/StatusScanPage.jsx';
 import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
 import { ShelvePage } from './screens/ShelvePage.jsx';
@@ -159,6 +160,8 @@ export default function App() {
   if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'settings') return <Settings onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'nobox') return <NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  // Replacement box labels — admin/warehouse (ph_team short-circuits to PHTeamApp above).
+  if (view === 'box-labels') return <BoxLabels navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'sold') return <StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'shipped') return <StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'rescalereq') return <RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />;

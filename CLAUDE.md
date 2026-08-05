@@ -39,7 +39,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Inventory browse, SKU-merge, bulk status, labels | `docs/context/inventory.md` |
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
-| No Box queue, Box-found, UPC box labels | `docs/context/no-box.md` |
+| No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
 | Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
 | Purchase Orders: supplier scan-out, PO/label schema, `supplier` role (Phase 0) | `docs/context/purchase-orders.md` |

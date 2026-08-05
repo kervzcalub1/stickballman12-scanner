@@ -32,6 +32,8 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   `CopyText` (`common.jsx`) — clicking either copies it to the clipboard (brief
   "Copied ✓" cue) and `stopPropagation`s so the row doesn't expand. Gated by
   `canCopy` (excludes the admin/warehouse `kind=null` "Listings & Sync" grid).
+  Admin/warehouse get the same affordance on **Inventory** and **Box Labels**
+  (`inventory.md`, `no-box.md`), not on this grid.
 - **Frozen columns** (`ph.js` `frozenStyle`/`rightStyle`): left = Date/Title/SKU/Qty;
   right = **Action + Added by** (both sticky, kept together). Their contents **wrap**
   inside the fixed column width (`.ph-addedby`, `.ph-rfrozen-first`) rather than

@@ -132,6 +132,8 @@ export const api = {
   batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
+  // Exact UPC/SKU match against our own stock (Box Labels asks this before the catalogue).
+  itemsFind: (code) => get(`/api/items/find?code=${encodeURIComponent(code)}`),
   // Shelf locations (put-away + management)
   locationLookup: (code) => get(`/api/locations/lookup?code=${encodeURIComponent(code)}`),
   shelveItems: (locationCode, units) => post('/api/items/shelve', { locationCode, units }),

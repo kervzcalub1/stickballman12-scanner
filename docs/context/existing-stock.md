@@ -8,6 +8,11 @@ warehouse can locate / label / sell-and-ship it like anything else — but it is
 table would mean re-implementing shelve/locate/labels/no-box/sold-shipped). See also
 `in-store.md`, `locations.md`, `statuses.md`, `data-model.md`.
 
+> The **Box Labels** tool (`no-box.md`) is the other producer of `kind='existing'`
+> units — one at a time, sending `noShelf: true` with no `locationCode`, for a pair
+> being re-boxed in hand. It's the only caller allowed to skip the shelf; the
+> shelf-by-shelf count below still requires one.
+
 ## The surface
 **Count Existing Stock** (`/existing-stock`, `src/screens/ExistingStock.jsx`) —
 Home → its own *Existing Stock* section. **admin + warehouse only** (`ph_team`

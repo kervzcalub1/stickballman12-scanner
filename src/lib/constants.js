@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -115,6 +115,7 @@ export const HOME_SECTIONS = [
   { title: 'Put-away', accent: 'orders', cards: [
     { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },
     { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Resolve units bought without a box' },
+    { key: 'box-labels', icon: '🏷️', title: 'Box Labels', sub: 'Replacement box label for a pair with no box — by VIN, UPC or SKU' },
   ] },
   { title: 'Rescale', accent: 'requests', cards: [
     { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },

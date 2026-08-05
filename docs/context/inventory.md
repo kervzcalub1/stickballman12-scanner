@@ -22,6 +22,15 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 - **In-store** units (`b.kind='instore'`) show an **"In-store" chip** in place of
   the PH sync badges (they bypass PH); detail shows "Intake: In-store (store)".
   See `in-store.md`.
+- **Click-to-copy** (`CopyText`, same component the PH grid uses — see
+  `ph-report.md`): shoe **name** + **SKU** on the list row (desktop table and
+  mobile card), **VIN** + **UPC** on each unit in the expanded Units list, and
+  name/VIN/SKU/UPC in the single-item detail. UPC is shown **per unit**, never on
+  the SKU group — UPCs are per size, and a merged group only carries its first
+  unit's. `CopyText` `stopPropagation`s, so **clicking the name copies instead of
+  expanding** the row; the caret (and the rest of the row) still expands. On the
+  mobile card the SKU line sits *outside* the expand `<button>` — a `role=button`
+  can't be nested inside one.
 - Bulk **Edit status** → `api/items/bulk-status.js` (`bulkSetStatus`), one
   `status_change` event per VIN; sold/shipped cascades clear sync flags.
 - **Print labels** → `LabelSheet` (VIN barcodes, `jsbarcode` CODE128). Builds an

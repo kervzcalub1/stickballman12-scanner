@@ -697,6 +697,12 @@ body {
 .nobox-upc-input { width: 100%; margin-top: 8px; text-align: left; }
 .nobox-noupc-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; cursor: pointer; text-align: left; }
 .nobox-noupc-check input { width: 18px; height: 18px; flex: none; }
+/* Box Labels: pairs already in stock for the scanned UPC/SKU. One row per unit so
+   staff can pick the pair in their hand instead of minting a duplicate VIN. */
+.boxlbl-units { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.boxlbl-unit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+.boxlbl-unit .btn { margin-left: auto; }
+@media (max-width: 768px) { .boxlbl-unit .btn { margin-left: 0; width: 100%; justify-content: center; } }
 
 /* Generic mobile data cards (No Box, Inventory, Mark Sold/Shipped) */
 .dcards { display: flex; flex-direction: column; gap: 10px; }

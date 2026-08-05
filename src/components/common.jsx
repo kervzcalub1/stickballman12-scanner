@@ -494,10 +494,10 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
         </span>
       </div>
       <div className="label-roll">
-        {list.map((it) => (mode === 'upc' ? (
+        {list.map((it, i) => (mode === 'upc' ? (
           upcDigits(it.upc) ? (
             // Box-style label: vertical UPC barcode (left) + text block (right).
-            <div className="rlabel boxlabel" key={it.vin}>
+            <div className="rlabel boxlabel" key={it.vin || i}>
               <div className="blabel-bc"><Barcode value={upcDigits(it.upc)} format={upcFormat(it.upc)} displayValue height={44} /></div>
               <div className="blabel-text">
                 <div className="blabel-name">{(it.name || '—').toUpperCase()}</div>
@@ -507,17 +507,17 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
               </div>
             </div>
           ) : (
-            <div className="rlabel boxlabel missing" key={it.vin}>
+            <div className="rlabel boxlabel missing" key={it.vin || i}>
               <div className="blabel-text">
                 <div className="blabel-name">{(it.name || '—').toUpperCase()}</div>
                 <div className="blabel-size">{it.size || '—'}</div>
                 <div className="blabel-sku">{it.sku || '—'}</div>
-                <div className="rlabel-vinlabel">No UPC on file — {it.vin}</div>
+                <div className="rlabel-vinlabel">No UPC on file{it.vin ? ` — ${it.vin}` : ''}</div>
               </div>
             </div>
           )
         ) : (
-          <div className="rlabel" key={it.vin}>
+          <div className="rlabel" key={it.vin || i}>
             {it.name ? <div className="rlabel-name">{String(it.name).toUpperCase()}</div> : null}
             <div className="rlabel-top">
               <span className="rlabel-sku">{it.sku || '—'}</span>

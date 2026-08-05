@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
-import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip } from '../components/common.jsx';
+import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip, CopyText } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
@@ -404,10 +404,11 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
               <div className="result-grid">
                 {it.image_url ? <img className="shoe-img" src={it.image_url} alt="" loading="lazy" /> : <div className="shoe-img placeholder">No image</div>}
                 <div className="details">
-                  <h2>{it.name}</h2>
+                  <h2><CopyText text={it.name}>{it.name}</CopyText></h2>
                   <dl>
-                    <div><dt>VIN</dt><dd><span className="vin">{it.vin}</span></dd></div>
-                    <div><dt>SKU</dt><dd>{it.sku || '—'}</dd></div>
+                    <div><dt>VIN</dt><dd><CopyText text={it.vin} className="vin">{it.vin}</CopyText></dd></div>
+                    <div><dt>SKU</dt><dd><CopyText text={it.sku}>{it.sku || '—'}</CopyText></dd></div>
+                    <div><dt>UPC</dt><dd><CopyText text={it.upc}>{it.upc || '—'}</CopyText></dd></div>
                     <div><dt>Size</dt><dd>{it.size || '—'}</dd></div>
                     <div><dt>Cost</dt><dd>${Number(it.cost || 0).toFixed(2)}</dd></div>
                     <div><dt>Status</dt><dd><StatusPill status={it.status} /></dd></div>
@@ -575,8 +576,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
         <div className="inv-history-title">Units</div>
         {gItems.map((r) => (
           <div className="inv-unit-row" key={r.vin}>
-            <span className="vin">{r.vin}</span>
+            <CopyText text={r.vin} className="vin">{r.vin}</CopyText>
             <span className="muted sm">{r.size ? `US ${r.size}` : '—'}</span>
+            {/* UPC lives on the UNIT, not the SKU group — it's per size. */}
+            {r.upc ? <CopyText text={r.upc} className="muted sm" title={`Copy UPC ${r.upc}`}>UPC {r.upc}</CopyText> : null}
             {r.location_code ? <span className="loc-chip sm" title={r.location_code}><Icon name="pin" /> {r.location_code}</span> : <span className="muted sm">unshelved</span>}
             {shelvable(r) && <button className="btn sm ghost" onClick={() => openShelve([r], r.name || g.name)} title="Place this unit on a shelf"><Icon name="pin" /> Shelve</button>}
             <button className="btn sm ghost" onClick={() => openDetail(r.vin)}>Details →</button>
@@ -688,11 +691,12 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                   return (
                     <div className={`dcard ${open ? 'open' : ''}`} key={g.key}>
                       <div className="dcard-top">
-                        <label onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} /> <ShoeThumb url={g.photo_url} size={34} /> <span className="dcard-name">{g.name}</span></label>
+                        <label onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} /> <ShoeThumb url={g.photo_url} size={34} /> <CopyText text={g.name} className="dcard-name">{g.name}</CopyText></label>
                         <button className="btn icon ghost sm" onClick={() => toggleRow(g.key)} aria-expanded={open}>{open ? '▾' : '▸'}</button>
                       </div>
+                      {/* SKU sits OUTSIDE the expand button — click-to-copy can't be nested in one. */}
+                      <div className="dcard-line"><CopyText text={g.sku} className="muted">{g.sku || '—'}</CopyText><span>×{g.qty}</span></div>
                       <button className="dcard-main" onClick={() => toggleRow(g.key)}>
-                        <div className="dcard-line"><span className="muted">{g.sku || '—'}</span><span>×{g.qty}</span></div>
                         <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} /></span></div>
                         <div className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</div>
                       </button>
@@ -725,8 +729,8 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                           <td className="inv-col-check" onClick={(e) => e.stopPropagation()}>
                             <input type="checkbox" checked={groupChecked(g)} onChange={() => toggleGroup(g)} aria-label={`Select ${g.sku}`} />
                           </td>
-                          <td className="inv-name" title={g.name}><span className="inv-name-inner"><span className="inv-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={28} /><span className="inv-name-text">{g.name}</span></span></td>
-                          <td className="inv-col-sku">{g.sku || '—'}</td>
+                          <td className="inv-name" title={g.name}><span className="inv-name-inner"><span className="inv-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={28} /><CopyText text={g.name} className="inv-name-text">{g.name}</CopyText></span></td>
+                          <td className="inv-col-sku"><CopyText text={g.sku}>{g.sku || '—'}</CopyText></td>
                           <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>
                           <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</span></td>

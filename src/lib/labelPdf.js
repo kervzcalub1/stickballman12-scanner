@@ -127,7 +127,9 @@ function drawBoxLabel(doc, JsBarcode, pw, ph, it) {
       { kind: 'text', text: String(it.name || '—').toUpperCase(), pt0: 10, bold: true, clamp: 2 },
       { kind: 'text', text: String(it.size || '—'), pt0: 20, bold: true },
       { kind: 'text', text: String(it.sku || '—'), pt0: 12, bold: true },
-      { kind: 'text', text: `No UPC on file — ${it.vin}`, pt0: 8 },
+      // A box label can be printed for a catalogue hit with no unit behind it
+      // (Box Labels tool, "label only") — then there's no VIN to name.
+      { kind: 'text', text: it.vin ? `No UPC on file — ${it.vin}` : 'No UPC on file', pt0: 8 },
     ];
     drawStack(doc, pw, ph, blocks);
     return;

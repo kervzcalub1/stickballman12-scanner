@@ -29,11 +29,17 @@ const show = (label, obj, keys) => {
 
 async function probeKicks() {
   console.log('\n=== KicksDB (SKU search) ===  sku=', SKU);
-  const key = process.env.KICKSDB_KEY;
-  if (!key) return console.log('  KICKSDB_KEY missing');
+  // Same key list + failover as api/_lib/kicksdb.js. A spent key answers 401 "Key is not
+  // active", so the probe reports each key's status — that's usually WHY you ran the probe.
+  const keys = [...new Set([process.env.KICKSDB_KEY, process.env.KICKSDB_KEY_2].filter(Boolean))];
+  if (!keys.length) return console.log('  KICKSDB_KEY missing');
   const url = `${KICKS_BASE}?query=${encodeURIComponent(SKU)}&display[variants]=true&limit=1`;
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${key}` } });
-  console.log('  status', r.status);
+  let r = null;
+  for (let i = 0; i < keys.length; i++) {
+    r = await fetch(url, { headers: { Authorization: `Bearer ${keys[i]}` } });
+    console.log(`  key #${i + 1} status`, r.status, r.ok ? '' : '(spent/rejected — failing over)');
+    if (r.ok) break;
+  }
   const data = await r.json().catch(() => null);
   const item = Array.isArray(data?.data) ? data.data[0] : null;
   if (item) console.log('  raw keys:', Object.keys(item).join(', '));

@@ -1073,6 +1073,10 @@ export async function pendingCounts() {
       count(*) FILTER (WHERE status = 'needs_shelf')::int              AS needs_shelf,
       count(*) FILTER (WHERE status = 'no_box')::int                   AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
+      -- Sold but not yet handed to the carrier — the scan-out backlog. This is the
+      -- only real "still to ship" queue we have: sold and shipped are both terminal,
+      -- and sold→shipped is the one transition Mark Shipped performs.
+      count(*) FILTER (WHERE status = 'sold')::int                     AS awaiting_shipment,
       -- In-store pairs still needing manual store listing (sellable, not fully ticked).
       -- Keyed on is_instore, NOT on "NOT ph_managed": that flag now also covers
       -- existing (old) stock, which would otherwise pour into Brent's In-Store

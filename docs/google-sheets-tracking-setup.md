@@ -130,15 +130,40 @@ function doPost(e) {
 
 // ── ① Send label numbers to the server for registration ──
 // Call this with an array of tracking-number strings when labels go into service.
+// Send them in ONE call — the server chunks to 17TRACK's 40-per-call cap itself,
+// so a call per row just burns quota and execution time.
+//
+// The response MUST be checked. `muteHttpExceptions: true` means a 401 does not
+// throw, so a script that only logs the body prints something that looks like a
+// success while registering nothing. This has bitten us: check the status AND
+// `ok`, and throw, or a wrong/rotated secret fails silently for weeks.
 function registerNumbers(numbers) {
-  var res = UrlFetchApp.fetch(REGISTER_URL + '?secret=' + SHARED_SECRET, {
+  var res = UrlFetchApp.fetch(REGISTER_URL, {
     method: 'post',
     contentType: 'application/json',
+    // Header rather than ?secret= — query strings land in access logs.
+    headers: { 'X-Webhook-Secret': SHARED_SECRET },
     payload: JSON.stringify({ trackingNumbers: numbers }),
     muteHttpExceptions: true
   });
-  Logger.log(res.getResponseCode() + ' ' + res.getContentText());   // { ok, accepted, rejected, … }
-  return JSON.parse(res.getContentText());
+  var code = res.getResponseCode();
+  var text = res.getContentText();
+  var out = {};
+  try { out = JSON.parse(text); } catch (e) { /* non-JSON error page */ }
+
+  if (code === 401) throw new Error('401 — SHARED_SECRET does not match the server\'s '
+    + 'TRACKING_WEBHOOK_SECRET. Nothing was registered.');
+  if (code !== 200 || !out.ok) throw new Error('Registration failed (HTTP ' + code + '): '
+    + (out.error || text));
+
+  // A number 17TRACK already tracks comes back in `rejectedDetail` — that is NOT a
+  // failure. Anything else is.
+  var detail = out.rejectedDetail || [];
+  var failed = detail.filter(function (r) { return !/already|registered|repeat/i.test(r.error || ''); });
+  Logger.log('sent %s · accepted %s · rejected %s', out.received, out.accepted, out.rejected);
+  if (failed.length) throw new Error(failed.length + ' rejected: '
+    + failed.map(function (f) { return f.number + ' (' + f.error + ')'; }).join(', '));
+  return out;
 }
 
 // ── helpers ───────────────────────────────────────────────
@@ -220,6 +245,7 @@ The **17TRACK Package Webhook** points at the **server**
 
 | Symptom | Likely cause / fix |
 |---|---|
+| **"I sent numbers but nothing is on 17TRACK", and the script logged no error** | **The single most likely cause, and it is invisible by design.** `muteHttpExceptions: true` makes a 401 return normally instead of throwing, so a script that only does `console.log(result)` prints a line that reads like success while registering nothing. Log `res.getResponseCode()` — if it's 401 the secret is wrong/missing/rotated (the endpoint answers `{"ok":false,"error":"Unauthorized."}`). Never call the endpoint without checking the status **and** `ok`. |
 | Registration returns `rejected > 0` | Check `rejectedDetail`. "Already registered" is fine; other errors mean a bad number or a plan/quota limit. |
 | `{ ok:false, error:"unauthorized" }` | `?secret=` doesn't match: for ① the Apps Script `SHARED_SECRET` ≠ server `TRACKING_WEBHOOK_SECRET`; for ② the server's `GOOGLE_SHEETS_TRACKING_URL` secret ≠ the script's `SHARED_SECRET`. |
 | Ledger stops updating | `GOOGLE_SHEETS_TRACKING_URL` unset/wrong, or the Web App wasn't redeployed after a code change. |

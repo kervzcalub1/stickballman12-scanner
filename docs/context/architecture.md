@@ -89,6 +89,17 @@ skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
   `LabelSheet`, `Barcode`, `PreferencesModal`, `RescaleCompare`, `EstClock`.
 
 ## Conventions
+- **`<Modal>` children all land in `.modal-actions`, which is a flex ROW.** So a
+  preview list (or any non-button node) passed alongside Confirm/Cancel becomes a
+  *column* next to the buttons — that's how "Confirm — Mark Sold" ended up wrapped
+  mid-word in three squeezed columns. CSS now stacks the row automatically when it
+  holds a **non-button child** or **3+ items** (`:has()` in `styles.css`), so a
+  plain button pair keeps sitting side by side and everything else goes one per
+  line, full width. Nothing to remember per-modal — but don't fight it by adding
+  widths to children. Affects: bulk Sold/Shipped + Shelve + Existing-Stock
+  confirms, their 3-button success modals, the temp-password modal, the Receiving
+  result when a PO is short (`ReconcileAlert` + buttons), and the shelf-tile edit
+  modal (whose Delete stays last when stacked).
 - Every endpoint: `applySecurity` → `requireAuth`/`requireRole`/`requireAdmin`
   → `rateLimit` → `getJsonBody` (256 KB cap). Helpers in `api/_lib/util.js`.
 - A 401 from any API → client clears session, returns to login (`err.unauthorized`).

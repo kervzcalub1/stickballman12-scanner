@@ -697,6 +697,28 @@ body {
 .nobox-upc-input { width: 100%; margin-top: 8px; text-align: left; }
 .nobox-noupc-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; cursor: pointer; text-align: left; }
 .nobox-noupc-check input { width: 18px; height: 18px; flex: none; }
+/* Bulk scan-out (Mark Sold / Mark Shipped): the run's numbers, sized to be read
+   at arm's length while holding a box, plus the persistent failed-scan log. */
+.scanout-stats { display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.scanout-stat { flex: 0 0 auto; min-width: 84px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); text-align: center; }
+.scanout-stat.bad { border-color: rgba(224, 143, 143, 0.55); }
+.scanout-num { display: block; font-size: 26px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.scanout-stat.bad .scanout-num { color: #e08f8f; }
+.scanout-lbl { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.scanout-last { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); overflow: hidden; }
+.scanout-fails { border-color: rgba(224, 143, 143, 0.45); }
+.scanout-fails-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: #e08f8f; }
+.scanout-fail { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--border); }
+.scanout-fail-t { margin-left: auto; white-space: nowrap; }
+@media (max-width: 768px) {
+  .scanout-stat { min-width: 72px; padding: 6px 10px; }
+  .scanout-num { font-size: 22px; }
+  /* Undo makes the sticky action bar a 4-up; on a phone it wraps, so let the
+     buttons share a row rather than stacking the bar three rows tall. */
+  .batch-bar .btn { flex: 1 1 auto; justify-content: center; }
+  .batch-bar .batch-totals { flex: 1 0 100%; text-align: center; }
+}
+
 /* Box Labels: pairs already in stock for the scanned UPC/SKU. One row per unit so
    staff can pick the pair in their hand instead of minting a duplicate VIN. */
 .boxlbl-units { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
@@ -1226,8 +1248,11 @@ body {
   font-size: 11px; color: var(--text); max-height: 150px; overflow-y: auto; }
 .loc-edit-diff .vin { font-size: 11px; }
 @media (max-width: 480px) { .modal.loc-edit-modal .loc-pane-row { grid-template-columns: 1fr; } }
-/* Matches the breakpoint where .modal-actions stacks — keep Delete at the bottom there. */
+/* Whenever these actions stack — narrow screens, or a 3-button set that now stacks
+   at every width — Delete belongs at the BOTTOM, not the top, for the same reason
+   it's pushed left in a row: a destructive action shouldn't be a mis-tap away. */
 @media (max-width: 600px) { .modal.loc-edit-modal .modal-actions .btn.danger { order: 3; margin-right: 0; } }
+.modal.loc-edit-modal .modal-actions:has(> :nth-child(3)) .btn.danger { order: 3; margin-right: 0; }
 /* Shoe list row: thumbnail + (name/size/status) / (vin · sku). */
 .loc-item { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; border-bottom: 1px solid var(--border); transition: background 0.12s; }
 .loc-item:last-child { border-bottom: none; }
@@ -1675,6 +1700,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .modal-msg { margin: 0 0 20px; color: var(--muted); font-size: 14px; line-height: 1.5; }
 .modal-actions { display: flex; gap: 8px; justify-content: center; }
 .modal-actions .btn { flex: 1; }
+/* `<Modal>` drops ALL its children into .modal-actions, which is a ROW — so a
+   preview list plus Confirm/Cancel came out as three squeezed columns with the
+   labels wrapping mid-word ("Confirm / — Mark / Sold"). It only stacked below
+   600px, so every tablet and desktop got the cramped version.
+   A plain pair of buttons is fine side by side; anything else is not. Stack
+   whenever the row holds a NON-button child (mixed content) or THREE or more
+   items — one per line, full width, in DOM order. */
+.modal-actions:has(> :not(.btn)),
+.modal-actions:has(> :nth-child(3)) { flex-direction: column; align-items: stretch; }
+/* In a column `flex: 1` would stretch buttons vertically instead of widthways. */
+.modal-actions:has(> :not(.btn)) > .btn,
+.modal-actions:has(> :nth-child(3)) > .btn { flex: 0 0 auto; width: 100%; }
 
 @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modal-in {

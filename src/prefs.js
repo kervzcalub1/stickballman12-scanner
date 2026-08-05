@@ -6,6 +6,7 @@ const KEY = 'sb_prefs';
 
 export const DEFAULTS = {
   cameraZoom: 1, // 1 = normal, 2 = zoomed in (scan from farther away)
+  scanSound: true, // audible ok/error tones on the bulk scan-out screens
 };
 
 export function loadPrefs() {

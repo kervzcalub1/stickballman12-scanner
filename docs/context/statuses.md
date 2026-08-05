@@ -61,3 +61,31 @@ Move-to-shelf scanner** instead of a doomed status write. `getItemStatesByVins`
 - No Box: "Box found → With Box" (`box-found.js`) or other status (`event.js`).
 - Mark Sold / Mark Shipped: `StatusScanPage` scans VINs → `bulk-status.js`.
 - Every change writes an `item_events` row (audit trail).
+
+## Bulk scan-out (`/shipped`, `/sold` — `StatusScanPage`)
+Built for 150–300+ pairs a shift. The loop is **scan → scan → scan → review →
+submit**: the scanner never closes, nothing pops up mid-run, and one deliberate
+submit commits the reviewed list via `bulk-status.js`. (Per-scan auto-commit was
+considered and rejected — the reviewable list is what makes a stray scan
+recoverable.)
+- **Two answers per scan:** a colour banner *and* a tone (`src/lib/beep.js`,
+  WebAudio — no assets, no CSP risk). Staff watch the box, not the screen, so the
+  tone is the primary signal. Muted via the 🔊 TopBar toggle (`prefs.scanSound`).
+- **Failures are kept, not overwritten.** A scan that doesn't make the list
+  (non-VIN, unknown VIN, duplicate, already at the target status) is appended to a
+  persistent failure log with its reason + time. The old single `error` line was
+  wiped by the next scan — useless on a 300-pair run. `error` now only carries
+  save/system failures.
+- **Duplicates:** a re-read of the same code inside the **1.2 s cooldown** is a gun
+  double-trigger — swallowed silently. A deliberate re-scan after it is a real
+  duplicate and is logged as one.
+- **Undo last** pops the newest row and clears its cooldown so it can be
+  re-scanned immediately.
+- **Counters:** Scanned · Remaining · Errors · Last scanned. **Remaining** =
+  `pendingCounts().awaiting_shipment` (units in `sold`) minus what's staged — the
+  only genuine "still to ship" queue in the data. **Shipped only**; Mark Sold has
+  no pending queue, so it hides that counter.
+- Submitting shows an end-of-session summary ("N pairs scanned out successfully,
+  M errors") and refetches the backlog.
+- The failure card sits **below** the sticky `.batch-bar`: a card directly above it
+  gets covered once the bar wraps to two rows on a phone.

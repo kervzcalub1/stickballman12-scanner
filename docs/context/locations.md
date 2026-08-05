@@ -103,6 +103,15 @@ chip already says it), and on ≤480px the empty status column collapses. When e
 a size-specific UPC scan), a **"↕ Show all sizes of {SKU}"** button re-runs the
 search by SKU to surface all sizes.
 
+**Intake indicator** — pairs from a PH-excluded batch carry an `IntakeChip`
+(`common.jsx`): **Existing** for old pre-system stock, **In-store** for in-store
+buys, and nothing for ordinary received stock. It shows on the **SKU group header**
+(with "Part existing" when only some units in the group are), on each **unit row**,
+and in the **shelf contents** list — so someone knows what they're pulling before
+they pull it. In the unit row it's **stacked under the VIN**: inline it ellipsed the
+VIN away at 390px. `listItemsAtLocation` returns `b.kind` for the shelf view. See
+`existing-stock.md`.
+
 **Camera scan** — a **📷 Scan** button opens the lazy `CameraScanner`
 (`mode='rescale'` reads both **CODE-128 VINs and UPC/EAN**); `routeScan` feeds the
 decoded value into the same shoe search, so scanning a VIN label *or* a box UPC

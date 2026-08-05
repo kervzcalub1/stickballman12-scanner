@@ -30,11 +30,14 @@ export default async function handler(req, res) {
   try {
     const found = await getItemByVin(vin);
     if (!found) return send(res, 404, { ok: false, error: `No item found for ${vin}.` });
-    // Guard: in-store buys bypass the PH team entirely. Rescale sets restock_pending,
-    // which surfaces a unit on PH's Rescale worklist — so an in-store VIN must never
-    // be rescaled (it's listed to Alias by hand, never through PH).
+    // Guard: in-store buys and existing (old) stock bypass the PH team entirely.
+    // Rescale sets restock_pending, which surfaces a unit on PH's Rescale worklist —
+    // so neither kind may ever be rescaled. Re-shelving one is "Move to shelf"
+    // (a transfer), which is a different path and stays allowed.
     if (found.item.kind === 'instore')
       return send(res, 409, { ok: false, error: `${vin} is an in-store pair — in-store buys are listed to Alias by hand and don't go through Rescale or the PH team.` });
+    if (found.item.kind === 'existing')
+      return send(res, 409, { ok: false, error: `${vin} is existing stock — it was already listed to II and the stores, so it doesn't go through Rescale or the PH team. Use "Move to shelf" to change its location.` });
     // Guard: a sold/shipped unit has left inventory — don't rescan it back into
     // stock (double-sell risk). Requires a deliberate status change, not a rescale.
     if (isTerminalStatus(found.item.status))

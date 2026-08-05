@@ -34,11 +34,21 @@ date, cost, notes. No supplier / buyer / tracking / dup-check / multi-box.
 ## PH exclusion (the hard invariant — guard in ALL of these)
 Excluding in-store from `phListItems` alone is **not enough**. A warehouse rescale of an
 in-store VIN sets `restock_pending`, which surfaced it on the PH **Rescale** grid, and
-`ph/update` then wrote II/sync flags. In-store is guarded in every PH path:
-- `phListItems` — receiving/admin branch **and** the rescale branch both exclude
-  `b.kind IS DISTINCT FROM 'instore'`.
+`ph/update` then wrote II/sync flags.
+
+**This is now a shared list**: `api/_lib/db.js` exports
+`PH_EXCLUDED_KINDS = ['instore','existing']` (existing = old stock, see
+`existing-stock.md`), used as
+`(b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))`. The `IS NULL` half is
+required — these are `LEFT JOIN`s and `NULL <> ALL(...)` is `NULL`. In-store is
+guarded in every PH path:
+- `phListItems` — receiving/admin branch **and** the rescale branch.
 - `pendingCounts` — the PH store-sync badges (`not_ii/alias/stockx/shopify`) exclude
-  in-store via a `not_instore` flag; `needs_shelf`/`no_box` still include it.
+  it via the `ph_managed` flag; `needs_shelf`/`no_box` still include it.
+  ⚠️ The In-Store Listing badge is keyed on a **separate `is_instore` flag**, not on
+  `NOT ph_managed` — otherwise every counted existing pair would land in this
+  worklist.
+- `recomputeUnlistedPrices` — a margin change must not re-price it.
 - `rescaleItem` / `POST /api/items/rescale` — **rejects** an in-store VIN (409, root
   cause: in-store must never enter `restock_pending`).
 - `phUpdateGroup` — its current-row query excludes in-store, so a PH write to an

@@ -35,6 +35,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Login/signup, roles, sessions, security/throttling | `docs/context/auth-roles.md` |
 | Receiving wizard, VINs, batches, intake | `docs/context/receiving.md` |
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
+| Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
 | Inventory browse, SKU-merge, bulk status, labels | `docs/context/inventory.md` |
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
@@ -60,9 +61,14 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
 - Alias has **auto-relogin on 401; StockX does NOT**.
 - VINs (`SBM-YYMMDD-######`) are never reused; numbering gaps are fine.
 - Times/filters are EST (`AT TIME ZONE 'America/New_York'`).
-- **In-store (`kind='instore'`) must NEVER touch the PH team** — guard every PH path
-  (phListItems both branches, pendingCounts badges, rescaleItem, phUpdateGroup,
-  getItemsForGiRefresh), not just the New Inventory query (`docs/context/in-store.md`).
+- **`PH_EXCLUDED_KINDS` (`instore` + `existing`) must NEVER touch the PH team** —
+  guard every PH path (phListItems both branches, pendingCounts badges, rescaleItem,
+  phUpdateGroup, getItemsForGiRefresh, recomputeUnlistedPrices), not just the New
+  Inventory query. Use `(b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))` —
+  the `IS NULL` half matters on the LEFT JOINs. Adding a kind to that list is NOT
+  enough on its own: check anything keyed on the *inverse* of the flag too (the
+  In-Store Listing badge is keyed on `is_instore`, deliberately)
+  (`docs/context/in-store.md`, `docs/context/existing-stock.md`).
 - After a rebuild, hard-refresh the browser (stale cached bundle).
 
 ## Working agreements

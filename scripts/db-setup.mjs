@@ -119,13 +119,15 @@ await sql(`
     committed_at    TIMESTAMPTZ
   )
 `);
-// Intake type: 'receiving' (a shipment), 'rescale' (already-in-hand stock), or
+// Intake type: 'receiving' (a shipment), 'rescale' (already-in-hand stock),
 // 'instore' (pairs bought at a retail store — no shipment; admin/warehouse only,
-// never enters the PH-team / Intelligent-Inventory flow; `origin` = store name).
+// never enters the PH-team / Intelligent-Inventory flow; `origin` = store name), or
+// 'existing' (old stock that predates this system — already synced to II and the
+// stores, so it also bypasses PH entirely; `origin` = where it was counted from).
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS kind   TEXT NOT NULL DEFAULT 'receiving'`);
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS origin TEXT`);
 await sql(`ALTER TABLE batches DROP CONSTRAINT IF EXISTS batches_kind_check`);
-await sql(`ALTER TABLE batches ADD CONSTRAINT batches_kind_check CHECK (kind IN ('receiving','rescale','instore'))`);
+await sql(`ALTER TABLE batches ADD CONSTRAINT batches_kind_check CHECK (kind IN ('receiving','rescale','instore','existing'))`);
 
 await sql(`
   CREATE TABLE IF NOT EXISTS items (

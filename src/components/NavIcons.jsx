@@ -92,6 +92,12 @@ const PATHS = {
     <path d="M6 8h12l1 12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
     <path d="M9 8V6a3 3 0 0 1 6 0v2" />
   </>),
+  // Existing Stock — a shelf unit with a counted tick (shelf-driven stock count)
+  'existing-stock': (<>
+    <rect x="3" y="3.5" width="18" height="17" rx="1.5" />
+    <path d="M3 9.5h18M3 15h18" />
+    <path d="M6.5 12.2l1.6 1.6 3.4-3.4" />
+  </>),
   // PH Team Workspace — a receipt / document
   ph: (<>
     <path d="M6 3h9l3 3v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />

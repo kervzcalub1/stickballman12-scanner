@@ -11,7 +11,7 @@
 // EditGroupModal / DeleteGroupModal.
 import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { api } from '../api.js';
-import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox, Modal } from '../components/common.jsx';
+import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox, Modal, IntakeChip } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { WAREHOUSES, LOCATION_AREAS } from '../lib/constants.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
@@ -407,9 +407,18 @@ export function Locations({ onHome, onSignOut }) {
                   const shelved = g.units.filter((u) => u.location_code).length;
                   const unshelved = g.units.length - shelved;
                   const open = !collapsible || expandedSkus.has(key);
+                  // Flag existing/in-store stock on the HEADER, not just the unit rows:
+                  // with several hits the group is collapsed by default, so a chip that
+                  // only lives on the rows would be invisible exactly when someone is
+                  // scanning the list to decide what to pull.
+                  const oddKind = ['existing', 'instore'].find((k) => g.units.some((u) => u.kind === k));
+                  const oddCount = oddKind ? g.units.filter((u) => u.kind === oddKind).length : 0;
                   const info = (
                     <div className="loc-group-info">
-                      <span className="loc-group-name">{g.sample.name || '—'}</span>
+                      <span className="loc-group-name">
+                        {g.sample.name || '—'}
+                        {oddKind && <IntakeChip kind={oddKind} mixed={oddCount < g.units.length} />}
+                      </span>
                       <span className="loc-group-meta">
                         {g.sample.sku || '—'} · {g.units.length} pair{g.units.length === 1 ? '' : 's'}
                         {shelved > 0 && <> · <span className="ok-txt">{shelved} shelved</span></>}
@@ -434,7 +443,10 @@ export function Locations({ onHome, onSignOut }) {
                           const loc = u.location_code ? list.find((l) => l.code === u.location_code) : null;
                           return (
                             <div className="loc-unit-row" key={u.vin}>
-                              <span className="loc-unit-left"><span className="loc-unit-vin vin">{u.vin}</span></span>
+                              <span className="loc-unit-left">
+                                <span className="loc-unit-vin vin">{u.vin}</span>
+                                <IntakeChip kind={u.kind} />
+                              </span>
                               <span className="loc-unit-size">{u.size && <span className="loc-size-chip">US {u.size}</span>}</span>
                               <span className="loc-unit-status">{u.status !== 'needs_shelf' && <StatusPill status={u.status} />}</span>
                               <span className="loc-unit-loc">
@@ -514,6 +526,7 @@ export function Locations({ onHome, onSignOut }) {
                             <div className="loc-item-top">
                               <span className="loc-item-name">{it.name || '—'}</span>
                               {it.size && <span className="loc-size-chip">US {it.size}</span>}
+                              <IntakeChip kind={it.kind} />
                               <StatusPill status={it.status} />
                             </div>
                             <div className="loc-item-meta muted sm">

@@ -109,7 +109,7 @@ export const HOME_SECTIONS = [
   ] },
   // A one-off migration mode, not part of the daily loop — its own section so it
   // reads as "the project of getting old stock into the system", not as receiving.
-  { title: 'Existing Stock', accent: 'inventory', cards: [
+  { title: 'Existing Stock', accent: 'existing', cards: [
     { key: 'existing-stock', icon: '📦', title: 'Count Existing Stock', sub: 'Scan a shelf, then the pairs already on it (never reaches the PH team)' },
   ] },
   { title: 'Put-away', accent: 'orders', cards: [
@@ -136,7 +136,7 @@ export const HOME_SECTIONS = [
   // Last, and for everyone: the written procedures are a reference you go to
   // deliberately, not a queue — so it sits below the work rather than competing
   // with it. No badge, ever.
-  { title: 'Help', accent: 'listing', cards: [
+  { title: 'Help', accent: 'help', cards: [
     { key: 'sop', icon: '📖', title: 'SOP & Help', sub: 'Step-by-step procedures for every screen, searchable, plus FAQ' },
   ] },
   { title: 'Administration', adminOnly: true, accent: 'orders', cards: [

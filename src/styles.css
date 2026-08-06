@@ -25,6 +25,15 @@
 [data-accent="requests"]  { --accent: #8b7cf6; --accent-tint: rgba(139, 124, 246, 0.12); --accent-edge: rgba(139, 124, 246, 0.26); }
 [data-accent="inventory"] { --accent: #e0729b; --accent-tint: rgba(224, 114, 155, 0.12); --accent-edge: rgba(224, 114, 155, 0.26); }
 [data-accent="shipping"]  { --accent: #4bb3d9; --accent-tint: rgba(75, 179, 217, 0.12); --accent-edge: rgba(75, 179, 217, 0.26); }
+/* Existing Stock sits directly under In-Store Mode, so it can't share a hue with
+   it — adjacent sections in the same colour read as one section. Olive-green:
+   clear of the teal `orders` and far enough from --ok (#2ecc71) that a card
+   doesn't read as a success state. */
+[data-accent="existing"]  { --accent: #74b357; --accent-tint: rgba(116, 179, 87, 0.12); --accent-edge: rgba(116, 179, 87, 0.26); }
+/* Help sat in the same blue as Browse & Listings directly above it. Deliberately
+   the quietest accent in the set: it's a reference you go to on purpose, not a
+   queue competing for attention (see the Help section note in constants.js). */
+[data-accent="help"]      { --accent: #8a93a6; --accent-tint: rgba(138, 147, 166, 0.12); --accent-edge: rgba(138, 147, 166, 0.26); }
 
 * { box-sizing: border-box; }
 button { -webkit-tap-highlight-color: transparent; }

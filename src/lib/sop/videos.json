@@ -52,7 +52,7 @@
   "nobox-resolve": {
     "url": "https://cdn.stickballman12.com/sop-videos/nobox-resolve.mp4",
     "title": "Resolve the No Box queue",
-    "seconds": 80
+    "seconds": 87
   },
   "locate-shoe": {
     "url": "https://cdn.stickballman12.com/sop-videos/locate-shoe.mp4",
@@ -101,8 +101,8 @@
   },
   "mark-shipped": {
     "url": "https://cdn.stickballman12.com/sop-videos/mark-shipped.mp4",
-    "title": "Mark pairs shipped",
-    "seconds": 68
+    "title": "Mark pairs shipped (bulk scan-out)",
+    "seconds": 144
   },
   "listings-sync-warehouse": {
     "url": "https://cdn.stickballman12.com/sop-videos/listings-sync-warehouse.mp4",
@@ -268,5 +268,10 @@
     "url": "https://cdn.stickballman12.com/sop-videos/superadmin-ph.mp4",
     "title": "Superadmin — admin plus the PH workspace",
     "seconds": 33
+  },
+  "box-labels": {
+    "url": "https://cdn.stickballman12.com/sop-videos/box-labels.mp4",
+    "title": "Print a box label for a pair with no box",
+    "seconds": 173
   }
 }

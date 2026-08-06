@@ -108,9 +108,53 @@ export const FAQ = [
   {
     id: 'faq-box-label-blank',
     q: 'A box label printed with no barcode.',
-    a: 'That pair has no UPC on its record — usually an older item scanned by SKU only. A UPC cannot be worked backwards from a SKU because it differs per size, so the label falls back to text only. It needs the UPC entering by hand.',
-    area: 'putaway', roles: WH, see: 'nobox-resolve',
-    keywords: ['box label', 'no barcode', 'upc missing', 'blank', 'text only', 'legacy'],
+    a: 'That pair has no UPC on its record — usually an older item scanned by SKU only, and a UPC cannot be worked backwards from a SKU because it differs per size. You should have been asked for one before it printed: read the UPC off the tongue label inside the shoe and type it in, and it is saved to the pair for next time. A label only comes out text-only if that prompt was skipped with "No UPC found".',
+    area: 'putaway', roles: WH, see: 'box-labels',
+    keywords: ['box label', 'no barcode', 'upc missing', 'blank', 'text only', 'legacy', 'tongue label'],
+  },
+  {
+    id: 'faq-box-label-not-found',
+    q: 'Box Labels says "No product found" for a shoe I know we have.',
+    a: 'Scan its VIN sticker instead of the UPC. The page checks our own stock first and then an outside catalogue, and the catalogue has never heard of old stock, in-store buys, or anything typed in by hand. If the pair is in our system the VIN always finds it. If it has no VIN yet, type the SKU instead of scanning the UPC.',
+    area: 'putaway', roles: WH, see: 'box-labels',
+    keywords: ['no product found', 'not found', 'box labels', 'upc', 'catalogue', 'old stock'],
+  },
+  {
+    id: 'faq-box-label-give-vin',
+    q: 'Should I use "Give it a VIN + print both"?',
+    a: 'Only if the pair genuinely is not in the system yet. If the page lists matching pairs under "already in inventory", one of them is the shoe in your hand — tap "Use this VIN" instead. Creating a second VIN for a pair we already hold counts the same shoe twice and it will read as stock we do not have.',
+    area: 'putaway', roles: WH, see: 'box-labels',
+    keywords: ['give it a vin', 'duplicate', 'double count', 'box labels', 'new vin'],
+  },
+
+  // ------------------------------------------------------------ scan-out ----
+  {
+    id: 'faq-scanout-not-saved',
+    q: 'I scanned 60 pairs out and none of them are marked shipped.',
+    a: 'Scanning builds a list; nothing is written until you tap "Save → Shipped" and confirm. That is deliberate — it is what makes a mis-scan harmless. If you left the page without submitting, the list is gone and the pairs are untouched. Scan them again and submit this time.',
+    area: 'fulfil', roles: WH, see: 'mark-shipped',
+    keywords: ['not saved', 'scan out', 'shipped', 'lost', 'submit', 'confirm'],
+  },
+  {
+    id: 'faq-scanout-two-buzzes',
+    q: 'What do the two low buzzes mean?',
+    a: 'That scan did not go on the list. The banner names the reason and it is also written to the "failed scans" panel, which keeps every failure for the whole session instead of being wiped by the next scan. Usual causes: you scanned the product UPC instead of the VIN, the pair is already shipped, or you scanned the same box twice. One short high blip is the good sound.',
+    area: 'fulfil', roles: WH, see: 'mark-shipped',
+    keywords: ['buzz', 'beep', 'sound', 'error', 'failed scan', 'red', 'noise'],
+  },
+  {
+    id: 'faq-scanout-remaining',
+    q: 'What is the "Remaining" number counting?',
+    a: 'Pairs marked Sold that have not been shipped yet — the backlog still waiting to go out. It drops as you scan, before you submit, so it shows what will be left when you finish this trolley. Mark Sold has no equivalent, because there is no queue of pairs waiting to be sold.',
+    area: 'fulfil', roles: WH, see: 'mark-shipped',
+    keywords: ['remaining', 'counter', 'backlog', 'awaiting shipment', 'sold'],
+  },
+  {
+    id: 'faq-scanout-double-scan',
+    q: 'I scanned the same box twice and got nothing the second time.',
+    a: 'Within about a second, a repeat of the same barcode is treated as the scanner gun double-triggering and is ignored on purpose — otherwise every gun bounce would fill the error list. Scan it again a moment later and you will get a proper duplicate warning. Either way it is only ever counted once.',
+    area: 'fulfil', roles: WH, see: 'mark-shipped',
+    keywords: ['double scan', 'duplicate', 'twice', 'ignored', 'cooldown', 'gun'],
   },
 
   // -------------------------------------------------------------- receiving --

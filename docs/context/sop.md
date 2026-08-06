@@ -149,7 +149,7 @@ frame people will actually be looking at when they go hunting for the SOP.
 `npm run sop:videos` (`scripts/capture-sop-video.mjs`) drives the **real app** in Playwright
 with `recordVideo`, then `npm run sop:videos:publish` pushes the mp4s to **R2** and writes
 `src/lib/sop/videos.json`. `SopVideo` renders one on an article, keyed by the article's own
-id (or `video:` if it points elsewhere). **23 warehouse flows, ~17½ minutes.**
+id (or `video:` if it points elsewhere). **26 warehouse flows, ~24 minutes** (55 tutorials in all).
 
 - **Not in the repo.** ~1 MB per minute would land in git history *and* in every Railway
   image, for assets that change independently of the code. R2 already backs listing photos,
@@ -191,5 +191,16 @@ id (or `video:` if it points elsewhere). **23 warehouse flows, ~17½ minutes.**
 - Re-record a tutorial the same way: `npm run sop:videos -- shelve-putaway`, then
   `npm run sop:videos:publish -- shelve-putaway`. Read the run's "beat target did not
   resolve" list — those are captions that lost their cursor move.
+- **Specimen data is env-overridable and DOES go stale.** `SOP_SPEC_VIN` /
+  `SOP_SPEC_SKU` / `SOP_SPEC_NOBOX_UPC` name real rows in the local DB; when the
+  data changes, the default silently points at nothing and the flow records "no
+  item found" instead of the procedure. Check the specimen exists before recording.
+- **"Target too large to fit" is a zoom that was skipped, not a broken beat.** A
+  full-width row or counter strip cannot be magnified without cropping its ends —
+  declare those `zoom: false` so the intent is explicit rather than reported as a
+  near-miss on every run.
+- **Pick the specimen that matches the lesson.** The box-labels flow clicks
+  `.boxlbl-unit:has-text("Bought Without Box")`, not the first row: a tutorial about
+  no-box pairs that demonstrates on a with-box pair teaches the wrong thing.
 - Smoke coverage in `e2e/smoke.spec.js` asserts the **wiring** (routing, search,
   role filtering, deep links) — the prose is reviewed, not tested.

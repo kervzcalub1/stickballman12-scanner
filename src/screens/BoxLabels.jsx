@@ -17,7 +17,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 import { TopBar, Modal, LabelSheet, StatusPill, CopyText } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useMediaQuery } from '../hooks.js';
-import { isUpcCode, isVinCode, upcDigits, compareSizes } from '../lib/codes.js';
+import { isUpcCode, isVinCode, upcDigits, compareSizes, sizeLabel } from '../lib/codes.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -84,7 +84,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       if (isVinCode(code)) {
         const { item } = await api.itemLookup(code.toUpperCase());
         setFound({ kind: 'item', item });
-        pulse('vin', `${item.name || item.sku || item.vin}${item.size ? ` · US ${item.size}` : ''}`);
+        pulse('vin', `${item.name || item.sku || item.vin}${item.size ? ` · US ${sizeLabel(item.size, item.gender, item.name)}` : ''}`);
         return;
       }
 
@@ -94,7 +94,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
         const p = local.product;
         setFound({
           kind: 'product', from: 'inventory', name: p.name || code, sku: p.sku || (upc ? '' : code),
-          upc: p.upc || (upc ? code : ''), colorway: p.colorway || '', image: '',
+          upc: p.upc || (upc ? code : ''), colorway: p.colorway || '', gender: p.gender || '', image: '',
           // One size in stock → it's almost certainly the pair in hand; preselect it.
           size: p.sizes?.length === 1 ? p.sizes[0] : '',
           sizeOptions: (p.sizes || []).slice().sort(compareSizes),
@@ -109,12 +109,12 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       const { product: p } = upc ? await api.searchUpc(code) : await api.searchSku(code);
       setFound({
         kind: 'product', from: 'catalogue', name: p.name || code, sku: p.sku || (upc ? '' : code),
-        upc: upc ? code : '', colorway: p.colorway || '', image: p.image || '',
+        upc: upc ? code : '', colorway: p.colorway || '', gender: p.gender || '', image: p.image || '',
         size: p.scannedSize || '', sizeOptions: (p.sizes || []).slice().sort(compareSizes),
         units: [],
       });
       pulse(p.scannedSize ? 'vin' : 'dup', p.scannedSize
-        ? `${p.name || p.sku} · US ${p.scannedSize}`
+        ? `${p.name || p.sku} · US ${sizeLabel(p.scannedSize, p.gender, p.name)}`
         : `${p.name || p.sku} — pick the size below.`);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
@@ -182,7 +182,8 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
     try {
       const item = {
         name: p.name, sku: p.sku, size: p.size, upc: upcDigits(p.upc) || '',
-        image: p.image, colorway: p.colorway, withBox: true, source: 'manual',
+        image: p.image, colorway: p.colorway, gender: p.gender || null,
+        withBox: true, source: 'manual',
       };
       const res = await api.batchCommit({
         kind: 'existing', noShelf: true,
@@ -248,7 +249,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
           </div>
           <CopyText text={it.name} className="dcard-name">{it.name || '—'}</CopyText>
           <div className="dcard-line">
-            <span>Size {it.size ? `US ${it.size}` : '—'}</span>
+            <span>Size {it.size ? `US ${sizeLabel(it.size, it.gender, it.name)}` : '—'}</span>
             <CopyText text={it.sku} className="muted">{it.sku || '—'}</CopyText>
           </div>
           <div className="muted sm">
@@ -294,7 +295,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
               {p.units.map((u) => (
                 <div className="boxlbl-unit" key={u.vin}>
                   <span className="vin">{u.vin}</span>
-                  <span>{u.size ? `US ${u.size}` : '—'}</span>
+                  <span>{u.size ? `US ${sizeLabel(u.size, p.gender, p.name)}` : '—'}</span>
                   <StatusPill status={u.status} />
                   <span className="muted sm">{u.locationCode || 'unshelved'}</span>
                   <button className="btn sm ghost" disabled={busy} onClick={() => useUnit(u.vin)}>Use this VIN</button>
@@ -307,7 +308,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
               {p.sizeOptions?.length ? (
                 <select value={p.size} onChange={(e) => setFound((f) => ({ ...f, size: e.target.value }))}>
                   <option value="">— pick —</option>
-                  {p.sizeOptions.map((s) => <option key={s} value={s}>US {s}</option>)}
+                  {p.sizeOptions.map((s) => <option key={s} value={s}>US {sizeLabel(s, p.gender, p.name)}</option>)}
                 </select>
               ) : (
                 <input className="sz-input" value={p.size} placeholder="US"
@@ -334,7 +335,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       )}
 
       {showConfirm && p && (
-        <Modal type="warn" title={`Count ${p.name} · US ${p.size} into inventory?`}
+        <Modal type="warn" title={`Count ${p.name} · US ${sizeLabel(p.size, p.gender, p.name)} into inventory?`}
           message={'This creates ONE new unit with its own VIN, recorded as existing stock already listed on II and the stores — the PH team never sees it. Only do this if the pair isn’t in the system yet: if it already has a VIN sticker, scan that instead.'
             + (p.units?.length ? ` Heads up: ${p.units.length} pair${p.units.length === 1 ? '' : 's'} with this code ${p.units.length === 1 ? 'is' : 'are'} already in inventory — creating another will double-count it.` : '')}
           onClose={() => setShowConfirm(false)}>
@@ -348,7 +349,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
           <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <h3 className="modal-title">Box label — UPC needed</h3>
             <p className="modal-msg">
-              <b>{upcPrompt.name || upcPrompt.sku || upcPrompt.vin}</b>{upcPrompt.size ? ` · US ${upcPrompt.size}` : ''} has no UPC on file.
+              <b>{upcPrompt.name || upcPrompt.sku || upcPrompt.vin}</b>{upcPrompt.size ? ` · US ${sizeLabel(upcPrompt.size, upcPrompt.gender, upcPrompt.name)}` : ''} has no UPC on file.
               Read it off the <b>tongue label inside the shoe</b> (or the old box) so the new label scans normally.
               {upcPrompt.vin ? ' It’s saved to this pair for next time.' : ''}
             </p>

@@ -9,6 +9,8 @@
 // browser chrome, batches naturally as a multi-page document, and behaves the
 // same on iOS and desktop. jsPDF + jsbarcode are both lazy-loaded on print.
 
+import { sizeParts } from './codes.js';
+
 const PT_PER_MM = 72 / 25.4; // 2.8346 — jsPDF font sizes are in points
 
 // Label stock, keyed for the size <select>. `long`/`short` are the die-cut
@@ -117,20 +119,26 @@ function drawVinLabel(doc, JsBarcode, pw, ph, it, showName) {
 }
 
 // One box-style label (No-Box UPC): vertical UPC barcode on the left, text block
-// (name / big size / colorway / SKU) on the right — mirrors a real shoe box. If
-// there's no UPC on file we fall back to a centered text-only label.
+// on the right — mirrors a real shoe box, so the rows run in the same order Nike
+// prints them: NAME, colorway (lighter/narrower, directly under the name), then
+// the big size, then the SKU. The size carries the men's/women's marker
+// ("9 W" / "11.5 M") set small next to the number, since a bare "9" on a
+// replacement box doesn't say which it is. If there's no UPC on file we fall
+// back to a centered text-only label with the same row order.
 function drawBoxLabel(doc, JsBarcode, pw, ph, it) {
+  const sz = sizeParts(it.size, it.gender, it.name);
   const upc = it.upc ? String(it.upc).replace(/\D/g, '') : '';
   const bc = upc ? barcodeCanvas(JsBarcode, upc, { format: upc.length === 12 ? 'UPC' : upc.length === 13 ? 'EAN13' : 'CODE128' }) : null;
   if (!bc) {
     const blocks = [
       { kind: 'text', text: String(it.name || '—').toUpperCase(), pt0: 10, bold: true, clamp: 2 },
-      { kind: 'text', text: String(it.size || '—'), pt0: 20, bold: true },
-      { kind: 'text', text: String(it.sku || '—'), pt0: 12, bold: true },
-      // A box label can be printed for a catalogue hit with no unit behind it
-      // (Box Labels tool, "label only") — then there's no VIN to name.
-      { kind: 'text', text: it.vin ? `No UPC on file — ${it.vin}` : 'No UPC on file', pt0: 8 },
     ];
+    if (it.colorway) blocks.push({ kind: 'text', text: String(it.colorway).toUpperCase(), pt0: 7, clamp: 2 });
+    blocks.push({ kind: 'text', text: sz.num ? `${sz.num}${sz.suffix ? ` ${sz.suffix}` : ''}` : '—', pt0: 20, bold: true });
+    blocks.push({ kind: 'text', text: String(it.sku || '—'), pt0: 12, bold: true });
+    // A box label can be printed for a catalogue hit with no unit behind it
+    // (Box Labels tool, "label only") — then there's no VIN to name.
+    blocks.push({ kind: 'text', text: it.vin ? `No UPC on file — ${it.vin}` : 'No UPC on file', pt0: 8 });
     drawStack(doc, pw, ph, blocks);
     return;
   }
@@ -147,21 +155,39 @@ function drawBoxLabel(doc, JsBarcode, pw, ph, it) {
   const rows = [];
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  const nameLines = doc.splitTextToSize(String(it.name || '—').toUpperCase(), tw).slice(0, 2);
-  rows.push({ lines: nameLines, pt: 11 });
-  rows.push({ lines: [String(it.size || '—')], pt: 22 });
-  if (it.colorway) rows.push({ lines: doc.splitTextToSize(String(it.colorway).toUpperCase(), tw).slice(0, 1), pt: 8 });
-  rows.push({ lines: [String(it.sku || '—')], pt: 13 });
-  const heights = rows.map((r) => r.lines.length * (r.pt / PT_PER_MM * 1.12));
+  rows.push({ lines: doc.splitTextToSize(String(it.name || '—').toUpperCase(), tw).slice(0, 2), pt: 11, bold: true });
+  if (it.colorway) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    rows.push({ lines: doc.splitTextToSize(String(it.colorway).toUpperCase(), tw).slice(0, 2), pt: 8, bold: false });
+  }
+  // Size and its M/W marker are ONE string at ONE size — same weight, same
+  // baseline, no chance of them drifting apart. `fit` shrinks the row if a long
+  // one ("10.5 W") would run past the label edge on small stock.
+  rows.push({ lines: [sz.num ? `${sz.num}${sz.suffix ? ` ${sz.suffix}` : ''}` : '—'], pt: 22, bold: true, fit: true });
+  rows.push({ lines: [String(it.sku || '—')], pt: 13, bold: true });
   const gap = ph * 0.03;
-  const totalH = heights.reduce((s, h) => s + h, 0) + gap * (rows.length - 1);
+  const measure = (k) => rows.map((r) => r.lines.length * (r.pt * k / PT_PER_MM * 1.12));
+  // A two-line name AND a two-line colorway can outgrow a small stock, so scale
+  // the whole column down to fit rather than letting rows run off the label.
+  const total1 = measure(1).reduce((s, h) => s + h, 0) + gap * (rows.length - 1);
+  const k = Math.min(1, (ph * 0.94) / total1);
+  const heights = measure(k);
+  const totalH = heights.reduce((s, h) => s + h, 0) + gap * k * (rows.length - 1);
   let ty = (ph - totalH) / 2;
   rows.forEach((r, ri) => {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(r.pt);
-    const lh = r.pt / PT_PER_MM * 1.12;
+    let pt = r.pt * k;
+    doc.setFont('helvetica', r.bold ? 'bold' : 'normal');
+    doc.setFontSize(pt);
+    // Unwrapped rows (the size) would run off the edge rather than wrap — pull
+    // them back to the column width instead.
+    if (r.fit) {
+      const w = doc.getTextWidth(r.lines[0]);
+      if (w > tw) { pt *= tw / w; doc.setFontSize(pt); }
+    }
+    const lh = pt / PT_PER_MM * 1.12;
     r.lines.forEach((ln, i) => doc.text(ln, tx, ty + i * lh, { align: 'left', baseline: 'top' }));
-    ty += heights[ri] + gap;
+    ty += heights[ri] + gap * k;
   });
 }
 

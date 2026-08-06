@@ -8,7 +8,7 @@ import { TopBar, StatusPill, DateRangeBar, LabelSheet } from '../components/comm
 import { Icon } from '../components/NavIcons.jsx';
 import { useMediaQuery } from '../hooks.js';
 import { rangeOf } from '../lib/format.js';
-import { upcDigits } from '../lib/codes.js';
+import { upcDigits, sizeLabel } from '../lib/codes.js';
 
 export function NoBoxReport({ user, onHome, onSignOut }) {
   const canEdit = user.role === 'admin' || user.role === 'superadmin' || user.role === 'warehouse';
@@ -130,7 +130,7 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
               <div className="dcard" key={r.vin}>
                 <div className="dcard-top"><span className="vin">{r.vin}</span>{!canEdit && <StatusPill status={r.status} />}</div>
                 <div className="dcard-name">{r.name || '—'}</div>
-                <div className="dcard-line"><span>Size {r.size ? `US ${r.size}` : '—'}</span><span className="muted">{r.sku || '—'}</span></div>
+                <div className="dcard-line"><span>Size {r.size ? `US ${sizeLabel(r.size, r.gender, r.name)}` : '—'}</span><span className="muted">{r.sku || '—'}</span></div>
                 <div className="dcard-line muted sm">{(r.created_at || '').slice(0, 10)}{r.created_by ? ` · ${r.created_by}` : ''}</div>
                 {canEdit && <div className="dcard-actions">{resolveCtl(r)}</div>}
               </div>
@@ -154,7 +154,7 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
                   <tr key={r.vin}>
                     <td className="inv-col-vin"><span className="vin">{r.vin}</span></td>
                     <td className="nobox-name" title={r.name}>{r.name}</td>
-                    <td className="inv-col-size">{r.size ? `US ${r.size}` : '—'}</td>
+                    <td className="inv-col-size">{r.size ? `US ${sizeLabel(r.size, r.gender, r.name)}` : '—'}</td>
                     <td className="inv-col-sku">{r.sku || '—'}</td>
                     <td className="muted sm" style={{ whiteSpace: 'nowrap' }}>{(r.created_at || '').slice(0, 10)}{r.created_by ? ` · ${r.created_by}` : ''}</td>
                     <td className="nobox-col-actions">{resolveCtl(r)}</td>
@@ -172,7 +172,7 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
           <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <h3 className="modal-title">Box label — UPC needed</h3>
             <p className="modal-msg">
-              <b>{upcPrompt.name || upcPrompt.sku || upcPrompt.vin}</b>{upcPrompt.size ? ` · US ${upcPrompt.size}` : ''} has no UPC on file.
+              <b>{upcPrompt.name || upcPrompt.sku || upcPrompt.vin}</b>{upcPrompt.size ? ` · US ${sizeLabel(upcPrompt.size, upcPrompt.gender, upcPrompt.name)}` : ''} has no UPC on file.
               Scan or enter the shoe’s box UPC so the label scans normally — it’s saved to this pair for next time.
             </p>
             <input className="nobox-upc-input" autoFocus={!isMobile} inputMode="numeric" autoComplete="off"

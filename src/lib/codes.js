@@ -68,6 +68,47 @@ export function upcFormat(u) {
   return 'CODE128';
 }
 
+// Split a size into the number and the men's/women's marker a shoe box prints
+// ("11.5 M", "9 W") — warehouse can't tell a women's 9 from a men's 9 on a
+// replacement box otherwise. Three sources, in order of how much we trust them:
+//   1. the size string's own suffix — StockX and our own records write "8.5W" /
+//      "10Y", and that came off the actual pair;
+//   2. `items.gender` / the catalogue's gender (Men/Women/Youth/Toddler/Unisex,
+//      per normalizeGender in api/_lib/util.js) — only set when the lookup that
+//      created the unit knew it, so plenty of older rows are NULL;
+//   3. the product name, which is where the brand puts it when nothing else does
+//      ("Nike Wmns Air Force 1", "Dunk Low (GS)") — same heuristics as the
+//      server's title branch.
+// Unisex and unknown stay BARE — a wrong letter on the box is worse than none.
+const SUFFIX_FROM_SIZE = { W: 'W', M: 'M', Y: 'Y', GS: 'Y', K: 'Y', C: 'C', TD: 'C', PS: 'C' };
+export function sizeParts(size, gender, name) {
+  const raw = String(size ?? '').trim();
+  if (!raw) return { num: '', suffix: '' };
+  // Anything that isn't "<number><optional suffix>" is a hand-typed custom size —
+  // pass it through untouched rather than guessing at it.
+  const m = raw.match(/^([\d.]+)\s*(W|M|Y|GS|K|C|TD|PS)?$/i);
+  if (!m) return { num: raw, suffix: '' };
+  const fromSize = SUFFIX_FROM_SIZE[(m[2] || '').toUpperCase()] || '';
+  const g = String(gender || '').trim();
+  const fromGender = /^wom/i.test(g) ? 'W'
+    : /^men/i.test(g) ? 'M'
+      : /^(youth|grade|kid)/i.test(g) ? 'Y'
+        : /^(toddler|infant)/i.test(g) ? 'C' : '';
+  const t = String(name || '');
+  const fromName = /wmns|women|\(w\)/i.test(t) ? 'W'
+    : /\(td\)|toddler|\(ps\)/i.test(t) ? 'C'
+      : /\(gs\)|grade school|youth|\bkids?\b/i.test(t) ? 'Y'
+        : /\bmens?\b/i.test(t) ? 'M' : '';
+  return { num: m[1], suffix: fromSize || fromGender || fromName };
+}
+
+// The same thing as one string, for on-screen text ("9 W", "11.5 M", "10").
+export function sizeLabel(size, gender, name) {
+  const { num, suffix } = sizeParts(size, gender, name);
+  if (!num) return '';
+  return suffix ? `${num} ${suffix}` : num;
+}
+
 // Numeric value of a size string ("9.5W" -> 9.5) for sorting; NaN if none.
 export const sizeNum = (s) => { const m = String(s).match(/[\d.]+/); return m ? parseFloat(m[0]) : NaN; };
 

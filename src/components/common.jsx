@@ -10,7 +10,7 @@ import { EST_FMT, PH_DATETIME, periodLabel, shiftAnchor } from '../lib/format.js
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
-import { upcDigits, upcFormat, sizeNum } from '../lib/codes.js';
+import { upcDigits, upcFormat, sizeNum, sizeParts } from '../lib/codes.js';
 import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint } from '../lib/labelPdf.js';
 
 // Live clock, always rendered in US Eastern with a literal "EST" suffix so the
@@ -467,6 +467,16 @@ export function CopyText({ text, children, className = '', title }) {
 // Printing generates an exact-size, one-label-per-page PDF (see lib/labelPdf.js) —
 // this is what makes labels come out at the right scale, without the browser's
 // url/date footer, on the warehouse's iPhone → Brother QL label printers.
+// Big size with the men's/women's marker beside it ("9 W"), mirroring the PDF.
+function BoxLabelSize({ item }) {
+  const { num, suffix } = sizeParts(item.size, item.gender, item.name);
+  return (
+    <div className="blabel-size">
+      {num || '—'}{suffix ? <span className="blabel-size-g">{suffix}</span> : null}
+    </div>
+  );
+}
+
 export function LabelSheet({ items, onClose, mode = 'vin' }) {
   const list = items || [];
   const [size, setSize] = useState(mode === 'upc' ? 'box' : 'rollo');
@@ -501,8 +511,8 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
               <div className="blabel-bc"><Barcode value={upcDigits(it.upc)} format={upcFormat(it.upc)} displayValue height={44} /></div>
               <div className="blabel-text">
                 <div className="blabel-name">{(it.name || '—').toUpperCase()}</div>
-                <div className="blabel-size">{it.size || '—'}</div>
                 {it.colorway ? <div className="blabel-cw">{String(it.colorway).toUpperCase()}</div> : null}
+                <BoxLabelSize item={it} />
                 <div className="blabel-sku">{it.sku || '—'}</div>
               </div>
             </div>
@@ -510,7 +520,8 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
             <div className="rlabel boxlabel missing" key={it.vin || i}>
               <div className="blabel-text">
                 <div className="blabel-name">{(it.name || '—').toUpperCase()}</div>
-                <div className="blabel-size">{it.size || '—'}</div>
+                {it.colorway ? <div className="blabel-cw">{String(it.colorway).toUpperCase()}</div> : null}
+                <BoxLabelSize item={it} />
                 <div className="blabel-sku">{it.sku || '—'}</div>
                 <div className="rlabel-vinlabel">No UPC on file{it.vin ? ` — ${it.vin}` : ''}</div>
               </div>

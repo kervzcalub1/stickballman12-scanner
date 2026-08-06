@@ -25,17 +25,31 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
 
 ## UPC box labels
 - **Print box labels** (`LabelSheet mode` box-style): recreates a real shoe-box
-  label — vertical UPC barcode + name/size/colorway/SKU — so no-box pairs scan
-  normally. Accessible **only on this page**. Emitted as an exact-size PDF
+  label — vertical UPC barcode on the left, then **NAME → colorway → size → SKU**
+  down the right, the order and weighting a Nike box label uses (colorway sits
+  directly under the name in a lighter/narrower face, 2-line clamp). So no-box
+  pairs scan and read like a normal boxed pair. Accessible **only on this page**
+  and from the Box Labels tool. Emitted as an exact-size PDF
   (`src/lib/labelPdf.js`, `drawBoxLabel`); no-UPC records fall back to a
-  centered text-only label. See `docs/context/locations.md` "Labels" for the
-  why (iOS AirPrint scaling/footer fix).
+  centered text-only label with the same row order. The whole text column
+  auto-scales to fit, so a 2-line name + 2-line colorway still fits small stock.
+  See `docs/context/locations.md` "Labels" for the why (iOS AirPrint
+  scaling/footer fix).
 - Uses `items.upc` (+ colorway). UPC must be on the record (captured at
   scan/lookup). Legacy items without a UPC can't be backfilled by SKU (per-size
   UPCs aren't in the SKU lookup) → the label sheet **prompts** for one, typed off
   the tongue label inside the shoe, and saves it to the unit
   (`api/items/set-upc.js`). No reverse-lookup endpoint — deliberate.
-- Sizes on the label use the API's value as-is (no gender suffix appended).
+- **Sizes carry a men's/women's marker** — "9 W", "11.5 M", drawn as ONE string
+  at the size's own font size (warehouse feedback: a bare "9" doesn't say which
+  it is, and the marker should read as big as the number).
+  `sizeParts()`/`sizeLabel()` in `src/lib/codes.js` resolve it in order:
+  the size string's own suffix ("8.5W"/"10Y") → `items.gender` (Men/Women/
+  Youth/Toddler/Unisex, set by `normalizeGender`) → the product name
+  ("Wmns …", "(GS)"). **Unisex and unknown print BARE** — a wrong letter on the
+  box is worse than none. Most older rows have `gender` NULL, which is why the
+  name fallback matters; the Box Labels tool now stores the catalogue's gender on
+  units it mints. Same helper drives the on-screen size text on both pages.
 
 ## Box Labels tool (`/box-labels`)
 

@@ -72,6 +72,21 @@ run the migration after schema changes, on every environment.**
 - On Railway: Data-tab `TRUNCATE … RESTART IDENTITY CASCADE` SQL, or
   `railway ssh` → `npm run db:reset`.
 
+### Go-live reset (end of beta → production)
+- `npm run db:go-live` (script `scripts/db-go-live.mjs`) — the wider reset:
+  everything `db:reset` clears **plus** `batch_boxes`, `edit_locks` and the whole
+  PO side (`purchase_orders`, `po_boxes`, `po_lines`, `po_resolutions`,
+  `po_comments`); rewinds vin/batch/**po** sequences.
+- Keeps `users`, `product_photos` (the team's shots + PH edits), `locations`,
+  `suppliers`, `products` (cached UPC catalogue), `app_settings`.
+- Flags: `--dry-run` (report only), `--yes` (skip the typed `GO LIVE` prompt —
+  needed when stdin isn't a TTY), `--catalog` / `--photos` to also drop those.
+- Runs in one transaction, and **aborts** if a kept table has an FK into a wiped
+  one (a `CASCADE` would silently empty it). Prints the target host first —
+  check it says the prod DB before typing `GO LIVE`.
+- On Railway: `railway ssh` → `npm run db:go-live`, or locally against
+  `DATABASE_PUBLIC_URL`. Snapshot the DB first; there is no undo.
+
 ## Notes
 - Railway CLI is not installed locally by default: `npm i -g @railway/cli`,
   `railway login`, `railway link`, then `railway ssh`.

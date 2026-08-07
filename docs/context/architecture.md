@@ -30,6 +30,7 @@ npm run build      # production build to dist/
 npm start          # node server.mjs (serves dist/ + /api)
 npm run db:setup   # idempotent schema migrate (CREATE/ALTER IF NOT EXISTS)
 npm run db:reset   # wipe inventory data, KEEP accounts (destructive)
+npm run db:go-live # beta→prod reset: inventory + PO side (see deploy.md)
 npm run e2e        # Playwright E2E (auto-starts dev on :5189); npm run e2e:ui for the UI
 ```
 

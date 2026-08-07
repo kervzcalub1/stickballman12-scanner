@@ -11,6 +11,7 @@
     "serve": "vite build && node server.mjs",
     "db:setup": "node scripts/db-setup.mjs",
     "db:reset": "node scripts/db-reset.mjs",
+    "db:go-live": "node scripts/db-go-live.mjs",
     "db:seed-manheim": "node scripts/seed-manheim-locations.mjs",
     "sop:shots": "node scripts/capture-sop-shots.mjs",
     "sop:videos": "node scripts/capture-sop-video.mjs",

@@ -6,14 +6,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
-import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, HistoryModal, DateRangeBar, ShoeThumb, CopyText } from '../components/common.jsx';
+import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText } from '../components/common.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
 import { rangeOf, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
 import {
-  frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized,
+  frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized, PRICE_BASES,
   phListingStatus, PH_LISTING_STATUSES,
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
 } from '../lib/ph.js';
@@ -26,14 +26,6 @@ import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
 import { Sop } from './Sop.jsx';
-
-// Small "WY" chip shown beside a GI that came from the Alias "With You" basis
-// (the consigned GI was empty/0, so we fell back). Nothing renders for consigned
-// or manual (null) values. See docs/context/ph-report.md.
-function WyChip({ basis }) {
-  if (basis !== 'with_you') return null;
-  return <span className="ph-wy-chip" title="Consigned GI was empty — showing the With You price">WY</span>;
-}
 
 // PH Team home: pick which report to work — New Inventory (newly received stock)
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
@@ -454,9 +446,14 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       if (res.configured === false) {
         setNotice('Alias pricing isn’t configured, so prices can’t be refreshed.');
       } else {
-        const wy = res.withYou ? ` — ${res.withYou} used With You (Consigned was empty)` : '';
+        // Spell out how many sizes fell below the consigned Global Indicator and to
+        // which levels — a soft SKU is worth knowing about, not just a chip in a row.
+        const parts = Object.entries(res.byBasis || {})
+          .sort((a, b) => (PRICE_BASES[a[0]]?.rank || 99) - (PRICE_BASES[b[0]]?.rank || 99))
+          .map(([k, n]) => `${n} ${PRICE_BASES[k]?.label || k}`);
+        const fell = parts.length ? ` — ${parts.join(', ')}` : '';
         setNotice(res.updated
-          ? `Refreshed ${res.updated} price${res.updated === 1 ? '' : 's'} from Alias (checked ${res.checked})${wy}.`
+          ? `Refreshed ${res.updated} price${res.updated === 1 ? '' : 's'} from Alias (checked ${res.checked})${fell}.`
           : `Prices are already up to date (checked ${res.checked}).`);
         await load();
       }
@@ -591,8 +588,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                             <span className="ph-sizedetail-size">US {s.size} <span className="muted">×{s.qty}</span></span>
                             <span className="muted sm">Cost {s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</span>
                             {showPricing && <span className="ph-card-price">GI {ed
-                              ? <><PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} /><WyChip basis={sd.gi_basis} /></>
-                              : <><b>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}</b><WyChip basis={s.gi_basis} /></>}</span>}
+                              ? <><PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} /><BasisChip basis={sd.gi_basis} /></>
+                              : <><b>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}</b><BasisChip basis={s.gi_basis} /></>}</span>}
                             {showPricing && <span className="ph-card-price">Final {ed
                               ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
                               : <><b>{s.price != null ? `${s.priceMixed ? '~' : ''}$${fmtPrice(s.price)}` : '—'}</b>{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${fmtPrice(s.listed_price)}</span>}</>}</span>}
@@ -737,8 +734,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                         <td>{s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</td>
                                         {showPricing && (
                                           <td>{ed
-                                            ? <><PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} /><WyChip basis={sd.gi_basis} /></>
-                                            : <>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}<WyChip basis={s.gi_basis} /></>}</td>
+                                            ? <><PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} /><BasisChip basis={sd.gi_basis} /></>
+                                            : <>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}<BasisChip basis={s.gi_basis} /></>}</td>
                                         )}
                                         {showPricing && (
                                           <td>{ed

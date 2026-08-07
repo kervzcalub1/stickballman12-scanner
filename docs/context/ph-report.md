@@ -51,12 +51,21 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   All "GI + N%" labels render `markupSuffix()`. Final price stays editable so it can
   be overridden (a manual override may carry cents; `fmtPrice` in format.js shows
   whole dollars without a trailing `.00` and keeps real cents).
-- **GI basis (Consigned vs "With You") + "WY" chip**: GI fetches are consigned-first
-  with an automatic With-You fallback when consigned is empty/0 (`aliasGiWithBasis`,
-  `integrations.md`). The basis is persisted on `items.gi_basis` and surfaced beside
-  the GI as a small amber **WY** chip (`WyChip` in PHTeam.jsx) when the value came from
-  With You. A hand-typed GI clears the basis (`setSizeGI` sends `gi_basis:null`). The
-  bulk "Refresh prices" notice reports how many sizes used With You.
+- **Pricing hierarchy + basis chip**: every automatic price walks the 8-level
+  `PRICE_HIERARCHY` — Global Indicator → Lowest → Last Sold → Highest, consigned
+  before "With You" — and takes the first level Alias has a real price for
+  (`aliasPriceWithBasis`; full table in `integrations.md`). The level is persisted
+  on `items.gi_basis` and shown beside the value as a small chip (`BasisChip` in
+  `components/common.jsx`, labels in `src/lib/ph.js` `PRICE_BASES` — a mirror of the
+  server table, keep them in step): nothing for rank 1, then **WY / LOW / LOW·WY**
+  in amber and **LAST / LAST·WY / HIGH / HIGH·WY** in rose (the far levels are a
+  past sale or a bid, so they want a second look). Hover gives the full label + rank.
+  A hand-typed GI clears the basis (`setSizeGI` sends `gi_basis:null`), so the chip
+  means "Alias priced this, at that level" and no chip on a filled row means a
+  person did. The bulk "Refresh prices" notice breaks down how many sizes landed on
+  each level. **The margin applies at every level** — see the under-cost warning in
+  `integrations.md`. The same chip shows in the Rescale Requests listing editor,
+  where the basis rides along in the request's jsonb `listing` blob.
 - Plus **II / AL / SX / SH** Yes/No toggles per size (soft blue =
   yes, soft red = no — rendered as a colored **checkbox** in edit mode) plus a
   per-size **Note**. Persist to `items` (`global_indicator`, `gi_basis`, `price`, sync flags, `ph_note`).

@@ -447,9 +447,11 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   return results.map((r) => r[0]);
 }
 
-// Store the Alias-fetched global indicator on freshly received items, and seed
-// the final price (= GI + 20%). Best-effort enrichment at intake; `updates` is
-// [{ id, global_indicator, price }]. Skips rows with a null GI. Logs a
+// Store the Alias-resolved indicator on freshly received items, and seed the
+// final price (= value + 20%). Best-effort enrichment at intake; `updates` is
+// [{ id, global_indicator, price, gi_basis, basis_label }] — `gi_basis` is the
+// PRICE_HIERARCHY level that priced it and `basis_label` its human name, blank
+// for the rank-1 consigned GI (`pricing.js`). Skips rows with a null value. Logs a
 // SYSTEM-GENERATED ph_update event per item so the history shows the auto-fetched
 // GI as "system-generated" (not a person) — a later manual change is attributed
 // to the editor by name.
@@ -466,7 +468,7 @@ export async function setItemGlobalIndicators(updates) {
     `);
     const text = `Global indicator $${Number(u.global_indicator).toFixed(2)}`
       + (u.price != null ? ` · Final price $${Number(u.price).toFixed(2)}` : '')
-      + (u.gi_basis === 'with_you' ? ' (With You)' : '')
+      + (u.basis_label ? ` (${u.basis_label})` : '')
       + ' (auto from Alias)';
     // INSERT … SELECT … WHERE EXISTS, not VALUES: enrichment is fire-and-forget
     // AFTER the commit responds, so a unit can be deleted (batch scrapped after a
@@ -509,7 +511,7 @@ export async function refreshItemGi(updates) {
           ? ` · Final price kept at $${Number(u.price).toFixed(2)} (manual override)`
           : ` · Final price $${Number(u.price).toFixed(2)}`)
         : '')
-      + (u.gi_basis === 'with_you' ? ' (With You)' : '')
+      + (u.basis_label ? ` (${u.basis_label})` : '')
       + ' (re-fetched from Alias)';
     // Guarded insert for the same reason as setItemGlobalIndicators: a unit deleted
     // between getItemsForGiRefresh and this write would FK-violate and roll back the

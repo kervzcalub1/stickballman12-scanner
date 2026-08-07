@@ -11,6 +11,7 @@ import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
 import { upcDigits, upcFormat, sizeNum, sizeParts } from '../lib/codes.js';
+import { priceBasisChip } from '../lib/ph.js';
 import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint } from '../lib/labelPdf.js';
 
 // Live clock, always rendered in US Eastern with a literal "EST" suffix so the
@@ -295,6 +296,17 @@ export function PriceInput({ value, onChange, className = '', ...rest }) {
       />
     </span>
   );
+}
+
+// Small chip beside an indicator that came from below rank 1 of the pricing
+// hierarchy — "WY", "LOW", "LAST·WY" and so on, so PH can see at a glance WHICH
+// level priced the size. Nothing renders for the plain consigned Global Indicator
+// (the normal case) or for a hand-typed price. Shared by the PH grid and the
+// Rescale Requests listing editor. See docs/context/ph-report.md.
+export function BasisChip({ basis }) {
+  const chip = priceBasisChip(basis);
+  if (!chip) return null;
+  return <span className={`ph-basis-chip ph-basis-${chip.tone}`} title={chip.title}>{chip.short}</span>;
 }
 
 export function YesNo({ value, editing, onChange }) {

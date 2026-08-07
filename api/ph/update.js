@@ -12,6 +12,7 @@
 // see `phUpdateGroup` in db.js). Restricted to the ph_team and admin roles.
 import { getJsonBody, send, applySecurity, rateLimit, requireAuth } from '../_lib/util.js';
 import { phUpdateItems, phUpdateGroup, dbConfigured } from '../_lib/db.js';
+import { isPriceBasis } from '../_lib/pricing.js';
 
 const BOOL_FIELDS = ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify'];
 
@@ -30,8 +31,9 @@ function sanitizeFields(raw) {
     if (n != null && (!Number.isFinite(n) || n < 0 || n > 1_000_000)) return { error: 'Invalid global indicator.' };
     fields.global_indicator = n;
   }
-  // Pricing basis marker ('consigned' | 'with_you'); anything else → null (manual).
-  if ('gi_basis' in src) fields.gi_basis = (src.gi_basis === 'consigned' || src.gi_basis === 'with_you') ? src.gi_basis : null;
+  // Which PRICE_HIERARCHY level priced this size (see api/_lib/pricing.js).
+  // Anything outside that list → null, i.e. "a person typed this price".
+  if ('gi_basis' in src) fields.gi_basis = isPriceBasis(src.gi_basis) ? src.gi_basis : null;
   for (const k of BOOL_FIELDS) if (k in src) fields[k] = Boolean(src[k]);
   if ('ph_note' in src) fields.ph_note = String(src.ph_note ?? '').slice(0, 2000);
   return { fields };

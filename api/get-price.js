@@ -12,6 +12,7 @@
 
 import { getJsonBody, send, applySecurity, rateLimit, cleanSku } from './_lib/util.js';
 import { aliasCatalogBySku, aliasPriceInsights } from './_lib/alias.js';
+import { PRICE_HIERARCHY } from './_lib/pricing.js';
 
 // A price of 0 (or missing) from Alias means "no data for that basis" (e.g. no last
 // sale / no live offer) — treat it as an empty price so "all available prices" only
@@ -29,21 +30,21 @@ function priceBlock(p) {
   };
 }
 
-// The requested pricing hierarchy (1 = most preferred), flattened per size so a
-// consumer can read it in priority order. `resolved` is the first non-empty price
-// down that list — the "best available price" per the hierarchy.
+// aliasPriceInsights field -> the key it takes in the blocks above.
+const BLOCK_FIELD = { globalIndicator: 'global', lowestListing: 'lowest', lastSold: 'last_sold', highestOffer: 'highest' };
+
+// The pricing hierarchy (1 = most preferred), flattened per size so a consumer can
+// read it in priority order. Walks the SAME PRICE_HIERARCHY the PH listing paths
+// price off (api/_lib/pricing.js), so this endpoint and the app can never drift.
+// `resolved` is the first non-empty price down that list — the price PH would list
+// at, before margin.
 function hierarchy(consigned, with_you) {
-  const order = [
-    ['Global Indicator - Consigned', consigned.global],
-    ['Global Indicator - With You', with_you.global],
-    ['Lowest - Consigned', consigned.lowest],
-    ['Lowest - With You', with_you.lowest],
-    ['Last Sold - Consigned', consigned.last_sold],
-    ['Last Sold - With You', with_you.last_sold],
-    ['Highest - Consigned', consigned.highest],
-    ['Highest - With You', with_you.highest],
-  ];
-  const prices = order.map(([label, value], i) => ({ rank: i + 1, label, value }));
+  const prices = PRICE_HIERARCHY.map((h) => ({
+    rank: h.rank,
+    label: h.label,
+    basis: h.key,
+    value: (h.consigned ? consigned : with_you)[BLOCK_FIELD[h.field]],
+  }));
   const resolved = prices.find((p) => p.value != null) || null;
   return { prices, resolved };
 }

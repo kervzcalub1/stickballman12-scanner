@@ -31,9 +31,10 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   sub‑queries order angle‑first then `(source='ph_edited') DESC`, and exclude `extra*`).
   PH manages `ph_edited`, warehouse manages `warehouse`, admin both — see `ph-report.md`.
   (Defect photos are NOT here — they ride per-unit `item_events(type='issue')`.)
-- **items** — one row per physical unit. Key columns:
+- **items** — one row per physical unit (`gi_basis` = which of the 8 pricing-hierarchy
+  levels priced this size, NULL = a person typed it; `integrations.md`). Key columns:
   `id, vin UNIQUE NOT NULL, batch_id, box_id, name, sku, size, status, cost, price,
-  global_indicator, with_box, upc, gender, colorway, restock_pending,
+  global_indicator, gi_basis, with_box, upc, gender, colorway, restock_pending,
   added_to_intel_inv, synced_alias, synced_stockx, synced_shopify,
   ph_note, first_edit_by, first_edit_at, last_edit_by, last_edit_at,
   instore_listed_alias, instore_listed_stockx, instore_listed_shopify,
@@ -65,8 +66,8 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
 - **rescale_requests** — PH→warehouse audit. `id, sku, name, sizes JSONB
   [{size,qty}], actual_sizes JSONB, audit_note, price, reason, note, status
   (open|audited), requested_by, resolved_by, resolved_at, created_at`. Plus PH's
-  post-audit listing decision: `listing JSONB` (`[{size, global_indicator, price,
-  added_to_intel_inv, synced_alias, synced_stockx, synced_shopify}]`), `listed_by`,
+  post-audit listing decision: `listing JSONB` (`[{size, global_indicator, gi_basis,
+  price, added_to_intel_inv, synced_alias, synced_stockx, synced_shopify}]`), `listed_by`,
   `listed_at`. Requests aren't tied to VINs → the listing lives on the request.
 
 ## Sequences (never reused → gaps are fine)

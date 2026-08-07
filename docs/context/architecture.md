@@ -19,6 +19,10 @@ React (Vite) SPA + Express server + local/managed PostgreSQL. No Google Sheets.
 - **Backend:** plain Node handlers in `api/**/*.js`, each `export default
   (req,res)`. `server.mjs` (Express) serves built `dist/` + mounts every
   `api/**/*.js` at its path. Vite dev middleware mirrors this for `npm run dev`.
+  The history fallback serves `index.html` for extensionless app routes but
+  **404s anything under `/assets/`** — handing a stale hashed chunk the HTML
+  shell makes the browser fail on MIME type instead of on the real cause
+  (`docs/context/locations.md` "Labels").
 - **DB:** PostgreSQL via `pg` Pool behind a tagged-template shim in
   `api/_lib/db.js` (`` sql`… ${v} …` `` → `$1,$2…`; `sql.transaction([…])`).
   Shim has **no nested-fragment support** — branch with if/else, not nested `sql`.

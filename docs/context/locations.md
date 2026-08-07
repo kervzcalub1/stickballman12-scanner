@@ -255,7 +255,13 @@ button. `dispatchPdf` in `src/lib/labelPdf.js`.
 **Lazy chunks die in tabs left open across a deploy.** `jsbarcode`/`jspdf` are
 dynamically imported, and every deploy renames those chunks (each embeds the main
 bundle's hash in its own content, so its filename hash moves too) — the old tab
-requests a filename that 404s. That used to surface as a **blank barcode column
+requests a filename we no longer have. Worse, the SPA history fallback used to
+answer it with `index.html`, so the browser got **`200 text/html`** and rejected
+it as *"'text/html' is not a valid JavaScript MIME type"* — a MIME error that is
+really a stale-tab error, reported from the warehouse as "labels won't print".
+`server.mjs` now 404s anything under `/assets/` instead of falling back (app
+routes have no extension and still fall through, so client routing is
+unaffected). That used to surface as a **blank barcode column
 and a dead Print button**, with nothing on screen to suggest a reload. Now the
 loaders throw `ChunkLoadError`, `<Barcode>` renders "Barcode didn't load — reload
 the page" in place of an empty `<svg>`, and the preview shows an error bar with a

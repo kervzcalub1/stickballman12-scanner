@@ -1494,6 +1494,11 @@ body {
   .label-tools select { flex: 1 1 100%; min-width: 0; }
   .label-tools .btn { flex: none; }
 }
+/* Why Print failed, sat directly under the toolbar so it can't be missed the way
+   an alert() can. */
+.label-error { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin: 12px 16px 0; padding: 10px 12px; border-radius: 8px;
+  background: #fdecea; border: 1px solid #f3b4ad; color: #7a1d13; font-size: 13px; }
 .label-roll { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; justify-content: center; }
 
 /* one label = the chosen stock size; white like the printed sticker */
@@ -1513,6 +1518,10 @@ body {
 .rlabel-vinlabel { font-size: 8.5pt; }
 .rlabel-vinlabel b { font-weight: 700; }
 .barcode-svg { width: 96%; height: 0.42in; display: block; }
+/* Stands in for a barcode that couldn't be drawn — red on the white label so it
+   reads as "this label is broken", not as "this product has no barcode". */
+.barcode-fail { display: block; font-size: 6.5pt; line-height: 1.15; font-weight: 700;
+  color: #b42318; text-align: center; }
 .rlabel-vin { font-family: ui-monospace, Menlo, monospace; font-size: 8pt; letter-spacing: 0.5px; }
 /* Box-style label (no-box): vertical UPC barcode on the left, text on the right,
    matching a real shoe-box label. */
@@ -1521,6 +1530,13 @@ body {
 .blabel-bc .barcode-svg {
   position: absolute; top: 50%; left: 50%;
   width: calc(var(--lh) - 0.2in); height: 0.46in;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+/* Same vertical slot the barcode would have occupied, so the message is legible
+   in a 0.5in-wide column instead of wrapping one letter per line. */
+.blabel-bc .barcode-fail {
+  position: absolute; top: 50%; left: 50%;
+  width: calc(var(--lh) - 0.2in);
   transform: translate(-50%, -50%) rotate(90deg);
 }
 .blabel-text { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 0.04in; text-align: left; }

@@ -63,6 +63,13 @@ app.use((req, res, next) => {
     // Scoped to the configured host rather than a blanket `https:` (which is what img-src
     // uses) because media is the one thing here that comes from exactly one known origin.
     `media-src 'self' blob:${r2MediaOrigin ? ` ${r2MediaOrigin}` : ''}`,
+    // Label printing builds the PDF in the browser and prints it from a hidden
+    // `blob:` iframe (lib/labelPdf.js). `frame-src` falls back to `default-src`
+    // when unset, so without this the frame is blocked, `.print()` throws a
+    // SecurityError, and the Print button silently does NOTHING on desktop —
+    // which reads as "stuck on the preview". `frame-ancestors 'none'` still
+    // stops anyone embedding US; this only governs what WE embed.
+    "frame-src 'self' blob:",
     "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'",
   ].join('; '));
   next();
@@ -97,6 +104,17 @@ app.all(/^\/api\//, async (req, res) => {
 
 // Static SPA + history fallback (final middleware serves index.html).
 app.use(express.static(distDir));
+// A build asset that no longer exists must 404 — NOT get handed the HTML shell.
+// Vite's lazy chunks are content-hashed and every deploy renames them, so a tab
+// left open across a deploy imports a filename we no longer have. Falling back
+// to index.html answered that import with `200 text/html`, and the browser
+// rejected it as "'text/html' is not a valid JavaScript MIME type" — an error
+// about MIME types that is really an error about a stale tab, reported from the
+// warehouse as "labels won't print". A 404 says what actually happened, and the
+// client turns it into a "reload the page" prompt (src/lib/labelPdf.js).
+// Only /assets/ is treated this way: app ROUTES have no extension and must keep
+// falling through to index.html for client-side routing to work.
+app.use('/assets', (req, res) => res.status(404).type('text/plain').send('Not found'));
 app.use((req, res) => res.sendFile(path.join(distDir, 'index.html')));
 
 // --- Server start: HTTPS when TLS certs are provided, else plain HTTP --------

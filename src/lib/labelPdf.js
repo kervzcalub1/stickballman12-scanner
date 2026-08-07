@@ -32,13 +32,39 @@ export const LABEL_STOCKS = {
 // bits that actually get scanned/read. Threshold keyed on the short side.
 const NAME_MIN_SHORT_MM = 62;
 
-async function loadJsPDF() {
-  const mod = await import('jspdf');
-  return mod.jsPDF || mod.default;
+// A lazily-imported vendor chunk that fails to load is almost always a STALE TAB,
+// not a broken build: every deploy renames the lazy chunks (each one embeds the
+// main bundle's hash in its own content, so its filename hash moves too), and a
+// tab left open across a deploy asks the server for a filename that no longer
+// exists. The warehouse keeps the app open all shift, so this is routine. Tag the
+// failure so the UI can say "reload" — swallowing it is what made a box label
+// render with a blank barcode column and a Print button that did nothing.
+export class ChunkLoadError extends Error {
+  constructor(cause) {
+    super('The app was updated while this tab was open. Reload the page, then print again.');
+    this.name = 'ChunkLoadError';
+    this.cause = cause;
+  }
 }
-async function loadJsBarcode() {
-  const mod = await import('jsbarcode');
-  return mod.default || mod;
+export const isChunkLoadError = (e) => e?.name === 'ChunkLoadError';
+
+async function lazy(load) {
+  try { return await load(); }
+  catch (e) { throw new ChunkLoadError(e); }
+}
+async function loadJsPDF() {
+  return lazy(async () => {
+    const mod = await import('jspdf');
+    return mod.jsPDF || mod.default;
+  });
+}
+// Shared with the on-screen <Barcode> preview so both halves of a label fail the
+// same way — and say the same thing — when the chunk is gone.
+export async function loadJsBarcode() {
+  return lazy(async () => {
+    const mod = await import('jsbarcode');
+    return mod.default || mod;
+  });
 }
 
 // Render a barcode onto a canvas at generous pixel density so it stays sharp and
@@ -112,8 +138,11 @@ function drawVinLabel(doc, JsBarcode, pw, ph, it, showName) {
   if (showName && it.name) blocks.push({ kind: 'text', text: String(it.name).toUpperCase(), pt0: 8, bold: true, clamp: 2 });
   blocks.push({ kind: 'text', text: `${it.sku || '—'}   |   ${it.size || '—'}`, pt0: 14, bold: true });
   blocks.push({ kind: 'text', text: `VIN: ${it.vin}`, pt0: 8, bold: true });
+  // A tracking label whose barcode didn't encode is just a sticker — it can't be
+  // scanned, and nobody notices until the pair is on a shelf. Fail the print.
   const bc = barcodeCanvas(JsBarcode, it.vin, { format: 'CODE128' });
-  if (bc) blocks.push({ kind: 'img', dataUrl: bc.toDataURL('image/png'), h0: 9, fill: true });
+  if (!bc) throw new Error(`Couldn’t build the barcode for ${it.vin}.`);
+  blocks.push({ kind: 'img', dataUrl: bc.toDataURL('image/png'), h0: 9, fill: true });
   blocks.push({ kind: 'text', text: it.vin, pt0: 7.5, mono: true });
   drawStack(doc, pw, ph, blocks);
 }
@@ -129,6 +158,11 @@ function drawBoxLabel(doc, JsBarcode, pw, ph, it) {
   const sz = sizeParts(it.size, it.gender, it.name);
   const upc = it.upc ? String(it.upc).replace(/\D/g, '') : '';
   const bc = upc ? barcodeCanvas(JsBarcode, upc, { format: upc.length === 12 ? 'UPC' : upc.length === 13 ? 'EAN13' : 'CODE128' }) : null;
+  // "No UPC on file" is a truthful label for a pair we never got a UPC for. It is
+  // a LIE when we have one and merely failed to encode it — that prints a label
+  // the warehouse believes is the best we could do, when a reload would have
+  // produced a scannable one. Only the genuinely-empty case falls back.
+  if (upc && !bc) throw new Error(`Couldn’t build the barcode for UPC ${upc}.`);
   if (!bc) {
     const blocks = [
       { kind: 'text', text: String(it.name || '—').toUpperCase(), pt0: 10, bold: true, clamp: 2 },
@@ -200,7 +234,8 @@ function drawShelfLabel(doc, JsBarcode, pw, ph, loc) {
   const sub = `${loc.warehouse || ''}${loc.area ? ` · ${loc.area}` : ''}`.trim();
   if (sub) blocks.push({ kind: 'text', text: sub.toUpperCase(), pt0: 7 });
   const bc = barcodeCanvas(JsBarcode, loc.code, { format: 'CODE128' });
-  if (bc) blocks.push({ kind: 'img', dataUrl: bc.toDataURL('image/png'), h0: 9, fill: true });
+  if (!bc) throw new Error(`Couldn’t build the barcode for ${loc.code}.`);
+  blocks.push({ kind: 'img', dataUrl: bc.toDataURL('image/png'), h0: 9, fill: true });
   blocks.push({ kind: 'text', text: String(loc.code), pt0: 9, mono: true });
   drawStack(doc, pw, ph, blocks);
 }
@@ -239,19 +274,51 @@ export function isTouchPrint() {
 // Hand a built PDF to the OS. On touch devices pass a `preWin` opened
 // synchronously in the click handler (so it isn't popup-blocked); we set its
 // location to the PDF. On desktop we print via a hidden iframe.
-export function dispatchPdf(doc, preWin) {
-  const blob = doc.output('blob');
-  const url = URL.createObjectURL(blob);
-  if (preWin) {
-    preWin.location.href = url;
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-    return;
-  }
+//
+// Every path here has a way to fail that leaves the user staring at the preview
+// with nothing happening — a blocked popup, a `frame-src` that won't allow a
+// `blob:` frame, an `onload` that never comes. So each one falls back to simply
+// downloading the PDF: an extra tap to open it, but never a dead button.
+export function dispatchPdf(doc, preWin, filename = 'labels.pdf') {
+  const url = URL.createObjectURL(doc.output('blob'));
+  const release = () => setTimeout(() => URL.revokeObjectURL(url), 60000);
+  let settled = false;
+  const download = () => {
+    if (settled) return;
+    settled = true;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    release();
+  };
+
+  if (preWin) { settled = true; preWin.location.href = url; release(); return; }
+  // Touch with no window means the popup was blocked — iOS won't print a hidden
+  // iframe either, so go straight to the file.
+  if (isTouchPrint()) { download(); return; }
+
   const iframe = document.createElement('iframe');
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
   iframe.src = url;
+  // A CSP-blocked frame still fires `load` — but on an opaque about:blank, where
+  // touching contentWindow throws SecurityError. That throw is the signal that
+  // the frame never got the PDF, so treat it as a failure rather than a
+  // shrugged-off "ignore" that prints nothing.
+  const timer = setTimeout(() => { iframe.remove(); download(); }, 4000);
   iframe.onload = () => {
-    try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch { /* ignore */ }
+    clearTimeout(timer);
+    try {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } catch {
+      iframe.remove();
+      download();
+      return;
+    }
+    settled = true;
     setTimeout(() => { URL.revokeObjectURL(url); iframe.remove(); }, 60000);
   };
   document.body.appendChild(iframe);

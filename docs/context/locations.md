@@ -244,6 +244,31 @@ iPhone → Brother QL as well as desktop. Same mechanism backs `LabelSheet` (VIN
 box labels). On touch devices we open the PDF in a new tab (share → Print); on
 desktop we auto-print via a hidden iframe.
 
+**The iframe needs `frame-src 'self' blob:` in the CSP** (`server.mjs`).
+`frame-src` falls back to `default-src 'self'` when unset, which does **not**
+cover `blob:` — the frame is blocked, `.print()` throws `SecurityError`, and
+Print silently does nothing while the user sits on the preview. Every dispatch
+path now falls back to **downloading** the PDF (blocked frame, blocked popup, or
+no `load` within 4 s), so a print can degrade to an extra tap but never to a dead
+button. `dispatchPdf` in `src/lib/labelPdf.js`.
+
+**Lazy chunks die in tabs left open across a deploy.** `jsbarcode`/`jspdf` are
+dynamically imported, and every deploy renames those chunks (each embeds the main
+bundle's hash in its own content, so its filename hash moves too) — the old tab
+requests a filename we no longer have. Worse, the SPA history fallback used to
+answer it with `index.html`, so the browser got **`200 text/html`** and rejected
+it as *"'text/html' is not a valid JavaScript MIME type"* — a MIME error that is
+really a stale-tab error, reported from the warehouse as "labels won't print".
+`server.mjs` now 404s anything under `/assets/` instead of falling back (app
+routes have no extension and still fall through, so client routing is
+unaffected). That used to surface as a **blank barcode column
+and a dead Print button**, with nothing on screen to suggest a reload. Now the
+loaders throw `ChunkLoadError`, `<Barcode>` renders "Barcode didn't load — reload
+the page" in place of an empty `<svg>`, and the preview shows an error bar with a
+**Reload** button. Relatedly, a barcode that can't be encoded now **fails the
+print** instead of quietly emitting a label — a box label saying "No UPC on file"
+when we *have* the UPC is worse than an error.
+
 ## Seed / deploy
 `scripts/seed-manheim-locations.mjs` (`npm run db:seed-manheim`) generates the
 **253** Manheim locations (Warehouse Rows 189 · Pods 4 · Office 8 · Basement 52),

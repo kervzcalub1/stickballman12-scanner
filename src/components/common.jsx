@@ -12,7 +12,7 @@ import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
 import { upcDigits, upcFormat, sizeNum, sizeParts } from '../lib/codes.js';
 import { priceBasisChip } from '../lib/ph.js';
-import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint } from '../lib/labelPdf.js';
+import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint, loadJsBarcode, isChunkLoadError } from '../lib/labelPdf.js';
 
 // Live clock, always rendered in US Eastern with a literal "EST" suffix so the
 // PH team (in PH time) is never confused about which timezone a time is in.
@@ -327,20 +327,29 @@ export function YesNo({ value, editing, onChange }) {
 // Barcode via jsbarcode (lazy-loaded). `format` defaults to CODE128 (our VIN);
 // for product UPCs pass a retail format — falls back to CODE128 if the value
 // doesn't satisfy that symbology (wrong length / bad check digit).
+// A barcode that can't be drawn used to leave an EMPTY <svg> behind — on a box
+// label that's a blank barcode column, which looks like a label with no barcode
+// rather than a broken page, so the fix (reload) is invisible. Say it instead.
 export function Barcode({ value, format = 'CODE128', displayValue = false, height = 42 }) {
   const ref = useRef(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    import('jsbarcode').then(({ default: JsBarcode }) => {
+    setFailed(false);
+    loadJsBarcode().then((JsBarcode) => {
       if (cancelled || !ref.current) return;
       const opts = { displayValue, height, width: 1.6, margin: 0, fontSize: 13 };
+      // CODE128 encodes anything the retail symbologies reject (wrong length, bad
+      // check digit), so the fallback all but always draws.
       try { JsBarcode(ref.current, value, { format, ...opts }); }
       catch {
-        try { JsBarcode(ref.current, value, { format: 'CODE128', ...opts }); } catch { /* ignore */ }
+        try { JsBarcode(ref.current, value, { format: 'CODE128', ...opts }); }
+        catch { setFailed(true); }
       }
-    });
+    }).catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
   }, [value, format, displayValue, height]);
+  if (failed) return <span className="barcode-fail">Barcode didn’t load — reload the page</span>;
   return <svg ref={ref} className="barcode-svg" />;
 }
 
@@ -480,6 +489,21 @@ export function CopyText({ text, children, className = '', title }) {
 // this is what makes labels come out at the right scale, without the browser's
 // url/date footer, on the warehouse's iPhone → Brother QL label printers.
 // Big size with the men's/women's marker beside it ("9 W"), mirroring the PDF.
+// Why the Print button did nothing, shown ON the preview — the one place the
+// user is looking. A stale chunk is the common cause and the fix is a reload, so
+// offer the reload rather than making them work that out.
+function PrintError({ error }) {
+  if (!error) return null;
+  return (
+    <div className="label-error no-print" role="alert">
+      <span>{error.message || String(error)}</span>
+      {isChunkLoadError(error)
+        ? <button className="btn sm" onClick={() => window.location.reload()}>Reload</button>
+        : null}
+    </div>
+  );
+}
+
 function BoxLabelSize({ item }) {
   const { num, suffix } = sizeParts(item.size, item.gender, item.name);
   return (
@@ -493,14 +517,16 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
   const list = items || [];
   const [size, setSize] = useState(mode === 'upc' ? 'box' : 'rollo');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
   const s = LABEL_STOCKS[size];
   const doPrint = () => {
     if (busy) return;
     setBusy(true);
+    setError(null);
     const preWin = isTouchPrint() ? window.open('', '_blank') : null;
     buildLabelPdf({ kind: mode === 'upc' ? 'box' : 'vin', items: list, stock: size })
-      .then((doc) => dispatchPdf(doc, preWin))
-      .catch((e) => { if (preWin) preWin.close(); alert('Could not build labels: ' + (e?.message || e)); })
+      .then((doc) => dispatchPdf(doc, preWin, `${mode === 'upc' ? 'box' : 'vin'}-labels.pdf`))
+      .catch((e) => { if (preWin) preWin.close(); setError(e); })
       .finally(() => setBusy(false));
   };
   return createPortal(
@@ -515,6 +541,7 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
           <button className="btn primary sm" onClick={doPrint} disabled={busy}><Icon name="print" /> {busy ? 'Building…' : 'Print'}</button>
         </span>
       </div>
+      <PrintError error={error} />
       <div className="label-roll">
         {list.map((it, i) => (mode === 'upc' ? (
           upcDigits(it.upc) ? (
@@ -566,14 +593,16 @@ export function ShelfLabelSheet({ locations, onClose }) {
   const list = locations || [];
   const [size, setSize] = useState('cr80');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
   const s = LABEL_STOCKS[size];
   const doPrint = () => {
     if (busy) return;
     setBusy(true);
+    setError(null);
     const preWin = isTouchPrint() ? window.open('', '_blank') : null;
     buildLabelPdf({ kind: 'shelf', items: list, stock: size })
-      .then((doc) => dispatchPdf(doc, preWin))
-      .catch((e) => { if (preWin) preWin.close(); alert('Could not build labels: ' + (e?.message || e)); })
+      .then((doc) => dispatchPdf(doc, preWin, 'shelf-labels.pdf'))
+      .catch((e) => { if (preWin) preWin.close(); setError(e); })
       .finally(() => setBusy(false));
   };
   return createPortal(
@@ -588,6 +617,7 @@ export function ShelfLabelSheet({ locations, onClose }) {
           <button className="btn primary sm" onClick={doPrint} disabled={busy}><Icon name="print" /> {busy ? 'Building…' : 'Print'}</button>
         </span>
       </div>
+      <PrintError error={error} />
       <div className="shelf-sheet">
         {list.map((loc) => (
           <div className="shelf-label" key={loc.code}>

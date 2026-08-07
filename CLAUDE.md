@@ -23,6 +23,7 @@ React 18 + Vite — UI split into `src/screens/*` (one per page), shared
 npm run dev   # localhost:5173 (app + /api)      npm run build  # -> dist/
 npm start     # node server.mjs (prod)           npm run db:setup  # migrate (idempotent)
 npm run db:reset  # wipe inventory, KEEP accounts (destructive)
+npm run db:go-live  # beta→prod reset: inventory + PO side, KEEP accounts/photos/locations
 npm run sop:shots # re-capture the SOP screenshots (needs dev on :5189 + local data)
 ```
 Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).

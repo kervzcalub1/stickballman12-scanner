@@ -63,6 +63,13 @@ app.use((req, res, next) => {
     // Scoped to the configured host rather than a blanket `https:` (which is what img-src
     // uses) because media is the one thing here that comes from exactly one known origin.
     `media-src 'self' blob:${r2MediaOrigin ? ` ${r2MediaOrigin}` : ''}`,
+    // Label printing builds the PDF in the browser and prints it from a hidden
+    // `blob:` iframe (lib/labelPdf.js). `frame-src` falls back to `default-src`
+    // when unset, so without this the frame is blocked, `.print()` throws a
+    // SecurityError, and the Print button silently does NOTHING on desktop —
+    // which reads as "stuck on the preview". `frame-ancestors 'none'` still
+    // stops anyone embedding US; this only governs what WE embed.
+    "frame-src 'self' blob:",
     "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'",
   ].join('; '));
   next();

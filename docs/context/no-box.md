@@ -34,7 +34,11 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
   centered text-only label with the same row order. The whole text column
   auto-scales to fit, so a 2-line name + 2-line colorway still fits small stock.
   See `docs/context/locations.md` "Labels" for the why (iOS AirPrint
-  scaling/footer fix).
+  scaling/footer fix) — and for the two ways this went wrong in the field: a CSP
+  that blocked the print iframe, and lazy chunks that 404 in a tab left open
+  across a deploy (blank barcode column + dead Print button). Only a record with
+  **no UPC at all** gets the text-only label; a UPC we hold but fail to encode
+  now fails the print loudly rather than printing "No UPC on file".
 - Uses `items.upc` (+ colorway). UPC must be on the record (captured at
   scan/lookup). Legacy items without a UPC can't be backfilled by SKU (per-size
   UPCs aren't in the SKU lookup) → the label sheet **prompts** for one, typed off

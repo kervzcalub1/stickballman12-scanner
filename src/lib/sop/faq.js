@@ -213,10 +213,17 @@ export const FAQ = [
   // --------------------------------------------------------------- listing --
   {
     id: 'faq-wy-chip',
-    q: 'What is the amber "WY" chip beside a price?',
-    a: 'The consigned Global Indicator came back empty or zero, so the "With You" price was used instead. It is telling you the number came from a different basis than usual, so you can sanity-check it. Typing a GI by hand clears the chip.',
-    area: 'listing', roles: PH, see: 'ph-refresh-prices',
-    keywords: ['WY', 'with you', 'consigned', 'GI', 'basis', 'chip', 'amber'],
+    q: 'What is the chip beside a price — WY, LOW, LAST, HIGH?',
+    a: 'It says which Alias number priced that size. The app takes the first one that exists, in this order: Global Indicator, then Lowest, then Last Sold, then Highest — consigned before "With You" at each step. No chip means the normal consigned Global Indicator. WY = With You. LOW = Lowest ask, LAST = Last sold, HIGH = Highest offer, each with ·WY when it came off the With You basis. Amber chips are still a live asking price; rose ones (LAST, HIGH) are a past sale or somebody\'s bid, so check them against cost before listing. Typing a price by hand clears the chip.',
+    area: 'listing', roles: PH, see: 'ph-pricing-hierarchy',
+    keywords: ['WY', 'with you', 'consigned', 'GI', 'basis', 'chip', 'amber', 'rose', 'LOW', 'LAST', 'HIGH', 'hierarchy', 'lowest', 'last sold', 'highest'],
+  },
+  {
+    id: 'faq-price-below-cost',
+    q: 'A size came back priced way below what we paid for it.',
+    a: 'Look at the chip. If it is rose (LAST or HIGH) Alias had no Global Indicator and no live ask for that size, so the price came off a past sale or somebody\'s offer — on odd sizes that can be a fraction of cost. The app does not floor it at cost; it marks up whatever it found. Type the price you actually want and the chip clears.',
+    area: 'listing', roles: PH, see: 'ph-pricing-hierarchy',
+    keywords: ['below cost', 'too cheap', 'wrong price', 'highest offer', 'bid', 'last sold', 'loss', 'odd size'],
   },
   {
     id: 'faq-goat-only',

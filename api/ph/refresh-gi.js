@@ -1,6 +1,9 @@
-// POST /api/ph/refresh-gi  { vins:[…] }  ->  { ok, updated, checked, configured }
-// Re-fetches the Alias Global Indicator for the given items and recomputes each
-// Final price (GI + 20%), preserving PH-typed manual price overrides. Powers the
+// POST /api/ph/refresh-gi  { vins:[…] }
+//   ->  { ok, updated, checked, configured, fallbacks, byBasis }
+// Re-prices the given items off the Alias hierarchy (Global Indicator → Lowest →
+// Last Sold → Highest, consigned before "With You"; see api/_lib/pricing.js) and
+// recomputes each Final price (value + 20%), preserving PH-typed manual price
+// overrides. Powers the
 // "Refresh prices" button on the PH Report / New Inventory grid. PH Team + admin
 // only (pricing is hidden from warehouse). Alias calls are deduped by catalog+size.
 import { getJsonBody, send, applySecurity, rateLimit, requireAuth } from '../_lib/util.js';
@@ -31,7 +34,12 @@ export default async function handler(req, res) {
     const result = await refreshGiForItems(rows, { preserveOverrides: true });
     if (!result.configured)
       return send(res, 200, { ok: true, configured: false, updated: 0, checked: 0 });
-    return send(res, 200, { ok: true, configured: true, updated: result.updated, checked: result.checked });
+    // `fallbacks`/`byBasis` tell the grid how many sizes were priced below the
+    // rank-1 consigned Global Indicator, and off which levels.
+    return send(res, 200, {
+      ok: true, configured: true, updated: result.updated, checked: result.checked,
+      fallbacks: result.fallbacks, byBasis: result.byBasis,
+    });
   } catch (e) {
     console.error('[ph/refresh-gi]', e.message);
     return send(res, 500, { ok: false, error: 'Could not refresh prices. Please try again.' });

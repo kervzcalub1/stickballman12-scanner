@@ -966,14 +966,19 @@ body {
 /* Price Inquiry — "Price all" button (prominent) */
 .pi-priceall { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 
-/* "With You" basis chip beside a GI that fell back from an empty consigned price. */
-.ph-wy-chip {
+/* Pricing-hierarchy chip beside an indicator that came from below rank 1 (the
+   consigned Global Indicator) — WY / LOW / LAST / HIGH, ±·WY. Amber for the near
+   levels (still a live ask), rose for the far ones (a past sale or a bid). */
+.ph-basis-chip {
   display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px;
   font-size: 10px; font-weight: 700; line-height: 16px; vertical-align: middle;
-  letter-spacing: 0.3px; color: #92400e; background: #fef3c7; border: 1px solid #fcd34d;
+  letter-spacing: 0.3px; white-space: nowrap;
+  color: #92400e; background: #fef3c7; border: 1px solid #fcd34d;
 }
+.ph-basis-far { color: #9f1239; background: #ffe4e6; border-color: #fda4af; }
 @media (prefers-color-scheme: dark) {
-  .ph-wy-chip { color: #fde68a; background: rgba(180, 130, 20, 0.22); border-color: rgba(252, 211, 77, 0.5); }
+  .ph-basis-chip { color: #fde68a; background: rgba(180, 130, 20, 0.22); border-color: rgba(252, 211, 77, 0.5); }
+  .ph-basis-far { color: #fecdd3; background: rgba(190, 60, 90, 0.22); border-color: rgba(253, 164, 175, 0.5); }
 }
 /* Refresh / re-fetch buttons — accent-colored so they read clearly as "refresh". */
 .ph-gi-refresh { line-height: 1; padding: 3px 6px; min-width: 0; color: #6b96ff;

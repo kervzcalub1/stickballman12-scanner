@@ -44,15 +44,43 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
 - **Pricing BASIS — `consigned`** (param on `aliasPriceInsights`, default `true`):
   `true` = **consigned** (matches our daily-ops pricing on sell.alias.org);
   `false` = **"With You"** (seller-side non-consigned). Some SKUs return an empty/0
-  consigned GI while With You has a real price (e.g. `FN6931-100`). `aliasGiWithBasis`
-  tries consigned first and falls back to With You when the GI is empty/0, returning
-  `{ globalIndicator, basis }` (`'consigned'|'with_you'|null`). Used by all New-Inventory
-  GI paths (`enrichGlobalIndicators`, `refreshGiForItems`, `giForSkuSizes`); the basis
-  is persisted on `items.gi_basis` and shown as a "WY" chip on the PH grid. **Price
-  Inquiry** uses an EXPLICIT basis (its Consigned/With You toggle) — no fallback.
+  consigned GI while With You has a real price (e.g. `FN6931-100`).
+- **THE PRICING HIERARCHY** (`api/_lib/pricing.js`, `PRICE_HIERARCHY`) — the single
+  canonical order every listing path prices by. A size takes the **first** level
+  Alias has a real price for (`"0"`/absent = no price):
+
+  | # | `gi_basis` key | Alias field | basis | chip |
+  |---|---|---|---|---|
+  | 1 | `consigned` | `globalIndicator` | consigned | *(none)* |
+  | 2 | `with_you` | `globalIndicator` | With You | `WY` |
+  | 3 | `lowest_consigned` | `lowestListing` | consigned | `LOW` |
+  | 4 | `lowest_with_you` | `lowestListing` | With You | `LOW·WY` |
+  | 5 | `last_sold_consigned` | `lastSold` | consigned | `LAST` |
+  | 6 | `last_sold_with_you` | `lastSold` | With You | `LAST·WY` |
+  | 7 | `highest_consigned` | `highestOffer` | consigned | `HIGH` |
+  | 8 | `highest_with_you` | `highestOffer` | With You | `HIGH·WY` |
+
+  `aliasPriceWithBasis` walks it and returns `{ value, basis, rank }` (all null when
+  no level had a price — PH types one by hand). **Costs at most 2 Alias calls per
+  size**, same as the old consigned-first GI fallback: one response carries all four
+  price fields, so one call covers every consigned level and a second (fired only
+  when the consigned GI is empty) covers every With-You level. The pure walk is
+  `resolveFromInsights` in `pricing.js` — test it there, not through the network.
+- **The same margin applies at EVERY level** — `Final = value × price_markup_pct`.
+  Nothing special-cases a fallback level, so a size priced off `highestOffer` (a
+  *bid*) is marked up like a GI. ⚠️ That can land well under cost on odd sizes
+  (real example: `DQ8426-109` size 15 → `highest_consigned` $25). The chip is the
+  only guard — there is no cost floor.
+- Ranks 1–2 keep the `'consigned'`/`'with_you'` keys `items.gi_basis` already held,
+  so rows priced before the full hierarchy shipped still read correctly — **no
+  backfill needed**. `isPriceBasis` gates what the endpoints will persist.
+- Used by all New-Inventory pricing paths (`enrichGlobalIndicators`,
+  `refreshGiForItems`, `giForSkuSizes`) and by the public `/api/get-price`, which
+  returns the whole ranked list. **Price Inquiry** is the exception: it uses an
+  EXPLICIT basis (its Consigned/With You toggle) and does not walk the hierarchy.
 - `aliasGlobalIndicator` is a thin wrapper → `aliasPriceInsights(...).globalIndicator`.
-  The lowest/highest/last-sold fields feed the PH **Price Inquiry** page
-  (`priceInquiryForSkuSizes`, `ph-report.md`); receiving/GI-refresh use only the GI.
+  The lowest/highest/last-sold fields also feed the PH **Price Inquiry** page
+  (`priceInquiryForSkuSizes`, `ph-report.md`) as read-only reference numbers.
 - ⚠️ **Auth is the static GOAT/Alias API key `ALIAS_API_KEY` as a Bearer token** —
   the bypass-login `access_token` is **rejected here (401)**. Verified live: key →
   200 with real pricing; GI is `"0"` for low-demand products (a genuine value).

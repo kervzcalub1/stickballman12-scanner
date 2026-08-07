@@ -8,6 +8,7 @@
 //
 // Credentials come from env (ALIAS_EMAIL / ALIAS_PASSWORD) — never hardcode them.
 import { fetchWithTimeout } from './util.js';
+import { hasPrice, resolveFromInsights } from './pricing.js';
 
 export const ALIAS_BASE = 'https://bypass-alias-host-railway-alias.up.railway.app';
 
@@ -181,7 +182,7 @@ const centsToDollars = (c) => {
 // `consigned` picks the pricing BASIS: true = consigned (matches our daily-ops
 // pricing on sell.alias.org, the default); false = "With You" (the seller-side
 // non-consigned basis). Some SKUs return an empty/0 consigned GI while With You
-// has a real price — see aliasGiWithBasis for the consigned-first fallback.
+// has a real price — see aliasPriceWithBasis for the full fallback hierarchy.
 export async function aliasPriceInsights({ catalogId, size, productCondition = DEFAULT_PRODUCT_CONDITION, packagingCondition = DEFAULT_PACKAGING_CONDITION, consigned = true }) {
   const apiKey = process.env.ALIAS_API_KEY;
   // The API's `size` is a number (TYPE_DOUBLE) — strip any gender/age suffix
@@ -209,20 +210,23 @@ export async function aliasPriceInsights({ catalogId, size, productCondition = D
   };
 }
 
-// A usable GI value = a positive number. Alias reports 0 cents (→ 0 here) for a
-// size with no consigned demand, which reads as "no price" — treat 0 as empty.
-const hasGi = (v) => v != null && Number(v) > 0;
-
-// Consigned-first GI with an automatic "With You" fallback, for the New-Inventory
-// pricing paths. Tries consigned; if its GI is empty/0, refetches With You. Returns
-// { globalIndicator, basis } where basis ∈ 'consigned' | 'with_you' | null (neither
-// had a value). The 2nd call only fires on the empty-consigned minority.
-export async function aliasGiWithBasis({ catalogId, size }) {
+// Resolve a size's listing price by walking PRICE_HIERARCHY — Global Indicator,
+// then Lowest, then Last Sold, then Highest, each consigned before "With You" —
+// and return the FIRST level that has a real price. Used by every New-Inventory
+// pricing path. Returns { value, basis, rank }, all null when no level had one
+// (PH types the price by hand then).
+//
+// Costs one Alias call in the common case and two otherwise, exactly as the old
+// consigned-first GI fallback did: each `aliasPriceInsights` response carries all
+// four price fields, so one call covers every consigned level and the second
+// covers every "With You" level. The 2nd call only fires when the consigned GI is
+// empty — i.e. only for the sizes that actually need a fallback.
+export async function aliasPriceWithBasis({ catalogId, size }) {
   const consignedP = await aliasPriceInsights({ catalogId, size, consigned: true });
-  if (hasGi(consignedP?.globalIndicator)) return { globalIndicator: consignedP.globalIndicator, basis: 'consigned' };
+  if (hasPrice(consignedP?.globalIndicator))
+    return { value: Number(consignedP.globalIndicator), basis: 'consigned', rank: 1 };
   const withYouP = await aliasPriceInsights({ catalogId, size, consigned: false });
-  if (hasGi(withYouP?.globalIndicator)) return { globalIndicator: withYouP.globalIndicator, basis: 'with_you' };
-  return { globalIndicator: null, basis: null };
+  return resolveFromInsights(consignedP, withYouP);
 }
 
 // Global indicator price (in dollars) for one catalog_id + size, or null. Thin

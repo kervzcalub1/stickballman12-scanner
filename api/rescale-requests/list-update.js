@@ -6,6 +6,7 @@
 // VINs). PH Team + admin only; warehouse never lists.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { updateRescaleRequestListing, dbConfigured } from '../_lib/db.js';
+import { isPriceBasis } from '../_lib/pricing.js';
 
 const numOrNull = (v) => {
   if (v === '' || v == null) return null;
@@ -30,6 +31,9 @@ export default async function handler(req, res) {
     .map((e) => ({
       size: String(e.size ?? '').trim().slice(0, 24),
       global_indicator: numOrNull(e.global_indicator),
+      // Which PRICE_HIERARCHY level priced this size, so the chip survives a reload
+      // (the listing is a jsonb blob on the request — no column to add).
+      gi_basis: isPriceBasis(e.gi_basis) ? e.gi_basis : null,
       price: numOrNull(e.price),
       added_to_intel_inv: !!e.added_to_intel_inv,
       synced_alias: !!e.synced_alias,

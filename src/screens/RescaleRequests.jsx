@@ -3,7 +3,7 @@
 // + creates).
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, DateRangeBar, RescaleCompare, YesNo, PriceInput } from '../components/common.jsx';
+import { TopBar, DateRangeBar, RescaleCompare, YesNo, PriceInput, BasisChip } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { rangeOf, fmtPrice } from '../lib/format.js';
@@ -190,7 +190,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
       const ex = saved.get(String(s.size)) || {};
       return {
         size: String(s.size), qty: s.qty,
-        global_indicator: ex.global_indicator ?? '', price: ex.price ?? '',
+        global_indicator: ex.global_indicator ?? '', price: ex.price ?? '', gi_basis: ex.gi_basis ?? null,
         added_to_intel_inv: !!ex.added_to_intel_inv, synced_alias: !!ex.synced_alias,
         synced_stockx: !!ex.synced_stockx, synced_shopify: !!ex.synced_shopify,
       };
@@ -200,7 +200,8 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
     setListDrafts((d) => ({ ...d, [reqId]: (d[reqId] || []).map((x) => (x.size === size ? { ...x, ...patch } : x)) }));
     setListDirty(true);
   };
-  const setListGI = (reqId, size, v) => setListRow(reqId, size, { global_indicator: v, price: calcFinalPrice(v) });
+  // A hand-typed indicator came off no hierarchy level, so drop the basis (and its chip).
+  const setListGI = (reqId, size, v) => setListRow(reqId, size, { global_indicator: v, price: calcFinalPrice(v), gi_basis: null });
 
   async function fetchGi(r) {
     setGiBusyId(r.id); setError('');
@@ -211,7 +212,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
       const bySize = new Map((results || []).map((x) => [String(x.size), x]));
       setListDrafts((d) => ({ ...d, [r.id]: (d[r.id] || []).map((x) => {
         const g = bySize.get(String(x.size));
-        return g ? { ...x, global_indicator: g.global_indicator, price: g.price } : x;
+        return g ? { ...x, global_indicator: g.global_indicator, price: g.price, gi_basis: g.basis ?? null } : x;
       }) }));
       setListDirty(true);
       if (!results?.length) setError('No Alias prices found for this SKU’s sizes.');
@@ -224,6 +225,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
     const listing = (listDrafts[r.id] || []).map((x) => ({
       size: x.size,
       global_indicator: x.global_indicator === '' || x.global_indicator == null ? null : Number(x.global_indicator),
+      gi_basis: x.gi_basis ?? null,
       price: x.price === '' || x.price == null ? null : Number(x.price),
       added_to_intel_inv: x.added_to_intel_inv, synced_alias: x.synced_alias,
       synced_stockx: x.synced_stockx, synced_shopify: x.synced_shopify,
@@ -327,12 +329,12 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                                 <td>×{row.qty}</td>
                                 {showPricing && (editable ? (
                                   <>
-                                    <td><PriceInput value={row.global_indicator} onChange={(e) => setListGI(r.id, row.size, e.target.value)} /></td>
+                                    <td><PriceInput value={row.global_indicator} onChange={(e) => setListGI(r.id, row.size, e.target.value)} /><BasisChip basis={row.gi_basis} /></td>
                                     <td><PriceInput value={row.price} onChange={(e) => setListRow(r.id, row.size, { price: e.target.value })} /></td>
                                   </>
                                 ) : (
                                   <>
-                                    <td>{row.global_indicator !== '' && row.global_indicator != null ? `$${Number(row.global_indicator).toFixed(2)}` : '—'}</td>
+                                    <td>{row.global_indicator !== '' && row.global_indicator != null ? `$${Number(row.global_indicator).toFixed(2)}` : '—'}<BasisChip basis={row.gi_basis} /></td>
                                     <td>{row.price !== '' && row.price != null ? `$${fmtPrice(row.price)}` : '—'}</td>
                                   </>
                                 ))}

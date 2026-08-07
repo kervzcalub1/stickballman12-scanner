@@ -24,9 +24,34 @@ export const PH_FLAGS = [
 ];
 export const FLAG_KEYS = ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify'];
 
-// Final price auto-derives from the global indicator: entered amount × markup
+// Display mirror of the server's PRICE_HIERARCHY (api/_lib/pricing.js) — keep the
+// keys and order in step with it. A size takes the first level Alias has a real
+// price for, and `items.gi_basis` records which one, so the grid can say what
+// priced it. Rank 1 (the consigned Global Indicator) is the normal case and shows
+// no chip; everything below it does. `tone` splits the near fallbacks (still a
+// live ask) from the far ones (a past sale or a bid, so worth a second look).
+export const PRICE_BASES = {
+  consigned:           { rank: 1, label: 'Global Indicator - Consigned', short: null,       tone: null },
+  with_you:            { rank: 2, label: 'Global Indicator - With You',  short: 'WY',       tone: 'near' },
+  lowest_consigned:    { rank: 3, label: 'Lowest - Consigned',           short: 'LOW',      tone: 'near' },
+  lowest_with_you:     { rank: 4, label: 'Lowest - With You',            short: 'LOW·WY',   tone: 'near' },
+  last_sold_consigned: { rank: 5, label: 'Last Sold - Consigned',        short: 'LAST',     tone: 'far' },
+  last_sold_with_you:  { rank: 6, label: 'Last Sold - With You',         short: 'LAST·WY',  tone: 'far' },
+  highest_consigned:   { rank: 7, label: 'Highest - Consigned',          short: 'HIGH',     tone: 'far' },
+  highest_with_you:    { rank: 8, label: 'Highest - With You',           short: 'HIGH·WY',  tone: 'far' },
+};
+// What the chip beside a price should say, or null when nothing should render
+// (rank 1, or a hand-typed price with no basis at all).
+export function priceBasisChip(basis) {
+  const b = PRICE_BASES[basis];
+  if (!b || !b.short) return null;
+  return { short: b.short, tone: b.tone, title: `Priced off ${b.label} — #${b.rank} in the pricing hierarchy` };
+}
+
+// Final price auto-derives from the resolved indicator: entered amount × markup
 // (the configurable price margin, default +20%; see src/lib/config.js), rounded
-// to the nearest whole dollar. Empty/non-numeric global indicator clears it.
+// to the nearest whole dollar. The SAME markup applies at every level of the
+// hierarchy. Empty/non-numeric indicator clears it.
 export function calcFinalPrice(globalIndicator) {
   if (globalIndicator === '' || globalIndicator == null) return '';
   const n = Number(globalIndicator);

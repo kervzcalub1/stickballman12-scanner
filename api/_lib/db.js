@@ -262,6 +262,41 @@ export async function getBusinessName() {
   } catch { return DEFAULT_BUSINESS_NAME; }
 }
 
+// Ship-to: where suppliers send their boxes. Shown in the supplier portal and printed
+// as the SHIP TO block on the manifest, so a box separated from its paperwork can still
+// be addressed. Stored as app_settings keys (admin-editable in Settings); the defaults
+// below are the live address, so it's correct with nothing configured.
+const DEFAULT_SHIP_TO = {
+  name: 'Alex Tornabe',
+  street: '1828 Shumaker Rd',
+  city: 'Manheim',
+  state: 'PA',
+  zip: '17545',
+  phone: '(717) 368-3333',
+  email: 'alext@stickballman12llc.com',
+};
+export const SHIP_TO_FIELDS = Object.keys(DEFAULT_SHIP_TO);
+export async function getShipTo() {
+  const out = { ...DEFAULT_SHIP_TO };
+  try {
+    for (const f of SHIP_TO_FIELDS) {
+      const raw = await getSetting(`ship_to_${f}`);
+      // An explicitly BLANK saved value means "leave this line off" — only a missing key
+      // falls back to the default, or clearing a line you don't want would keep undoing
+      // itself on every read.
+      if (raw != null) out[f] = String(raw).trim();
+    }
+  } catch { /* settings unreadable — the defaults are still a usable address */ }
+  return out;
+}
+export async function setShipTo(patch, updatedBy) {
+  for (const f of SHIP_TO_FIELDS) {
+    if (patch[f] === undefined) continue;
+    await setSetting(`ship_to_${f}`, String(patch[f] ?? '').trim().slice(0, 120), updatedBy);
+  }
+  return getShipTo();
+}
+
 // Price markup percent (GI → Final). Default 20 (= +20%). Cached ~30s.
 const DEFAULT_MARKUP_PCT = 20;
 let markupCache = { pct: null, expires: 0 };
@@ -1989,16 +2024,18 @@ export async function listPos({ uid, supplierScope }) {
 // enteredBy/enteredOnBehalf record who typed it — NULL/false for a supplier scanning
 // their own manifest, the staff uid + true when PH/admin enters it on their behalf.
 // Both insert and the re-scan UPDATE stamp the latest actor (last-editor semantics).
-export async function addPoScan({ poId, poBoxId, sku, size, qty, name, upc, colorway, gender, unitCost, enteredBy = null, enteredOnBehalf = false }) {
+export async function addPoScan({ poId, poBoxId, sku, size, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false }) {
   const sql = db();
   const rows = await sql`
-    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, entered_by, entered_on_behalf)
+    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
     VALUES (${poId}, ${poBoxId}, ${sku}, ${size}, ${name || null}, ${upc || null},
-            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null},
+            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
             ${enteredBy ?? null}, ${!!enteredOnBehalf})
     ON CONFLICT (po_box_id, sku, size) DO UPDATE
       SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
+          -- A re-scan that carries no money must never wipe money already declared.
           unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+          tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
           name              = COALESCE(EXCLUDED.name, po_lines.name),
           entered_by        = EXCLUDED.entered_by,
           entered_on_behalf = EXCLUDED.entered_on_behalf,
@@ -2010,16 +2047,17 @@ export async function addPoScan({ poId, poBoxId, sku, size, qty, name, upc, colo
 
 // Whole-order manifest (Path C): add/increment a line against the PO itself (no label).
 // Conflict target is the partial unique index on (po_id, sku, size) WHERE po_box_id IS NULL.
-export async function addPoOrderScan({ poId, sku, size, qty, name, upc, colorway, gender, unitCost, enteredBy = null, enteredOnBehalf = false }) {
+export async function addPoOrderScan({ poId, sku, size, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false }) {
   const sql = db();
   const rows = await sql`
-    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, entered_by, entered_on_behalf)
+    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
     VALUES (${poId}, NULL, ${sku}, ${size}, ${name || null}, ${upc || null},
-            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null},
+            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
             ${enteredBy ?? null}, ${!!enteredOnBehalf})
     ON CONFLICT (po_id, sku, size) WHERE po_box_id IS NULL DO UPDATE
       SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
           unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+          tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
           name              = COALESCE(EXCLUDED.name, po_lines.name),
           entered_by        = EXCLUDED.entered_by,
           entered_on_behalf = EXCLUDED.entered_on_behalf,
@@ -2056,13 +2094,17 @@ export async function setPoLineQty(lineId, qtyExpected) {
 // the size can collide with an existing line of the same SKU+size on the label
 // (unique po_box_id,sku,size) — in that case the two are MERGED (qtys summed) and
 // this line is deleted. Returns { line, removed, merged }.
-export async function updatePoLine(lineId, { size, qty, enteredBy = null, enteredOnBehalf = false } = {}) {
+export async function updatePoLine(lineId, { size, qty, unitCost, tip, enteredBy = null, enteredOnBehalf = false } = {}) {
   const sql = db();
   const line = (await sql`SELECT * FROM po_lines WHERE id = ${lineId}`)[0];
   if (!line) return { line: null, removed: false, merged: false };
   const newQty = qty === undefined ? line.qty_expected : qty;
   if (newQty <= 0) { await sql`DELETE FROM po_lines WHERE id = ${lineId}`; return { line: null, removed: true, merged: false }; }
   const newSize = size === undefined ? line.size : String(size).trim();
+  // `undefined` = not editing that field; an explicit null CLEARS it (an emptied field
+  // means "I don't know what this cost", which is not the same as $0).
+  const newCost = unitCost === undefined ? line.unit_cost : (unitCost ?? null);
+  const newTip = tip === undefined ? line.tip : (tip ?? null);
   if (newSize && newSize !== line.size) {
     // Find a sibling line that a size change would collide with. Order-scoped lines have
     // no box, so match them within the PO (po_box_id IS NULL); box lines match within the
@@ -2078,8 +2120,13 @@ export async function updatePoLine(lineId, { size, qty, enteredBy = null, entere
         `))[0];
     if (sib) {
       const mergedQty = Math.min(999, sib.qty_expected + newQty); // same 999 cap as a direct edit
+      // The surviving row keeps money either way: the edited line's if it has any,
+      // else the sibling's — merging must never silently blank a declared cost or tip.
+      const mergedCost = newCost ?? sib.unit_cost ?? null;
+      const mergedTip = newTip ?? sib.tip ?? null;
       const merged = (await sql`
-        UPDATE po_lines SET qty_expected = ${mergedQty}, entered_by = ${enteredBy ?? null},
+        UPDATE po_lines SET qty_expected = ${mergedQty}, unit_cost = ${mergedCost}, tip = ${mergedTip},
+          entered_by = ${enteredBy ?? null},
           entered_on_behalf = ${!!enteredOnBehalf}, updated_at = now()
         WHERE id = ${sib.id} RETURNING *
       `)[0];
@@ -2088,7 +2135,8 @@ export async function updatePoLine(lineId, { size, qty, enteredBy = null, entere
     }
   }
   const updated = (await sql`
-    UPDATE po_lines SET size = ${newSize}, qty_expected = ${newQty}, entered_by = ${enteredBy ?? null},
+    UPDATE po_lines SET size = ${newSize}, qty_expected = ${newQty}, unit_cost = ${newCost}, tip = ${newTip},
+      entered_by = ${enteredBy ?? null},
       entered_on_behalf = ${!!enteredOnBehalf}, updated_at = now()
     WHERE id = ${lineId} RETURNING *
   `)[0] || null;

@@ -36,7 +36,7 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       const generatedAt = `Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EST`;
       const doc = await buildManifestPdf({
         po: d.po, boxes: d.boxes, lines: d.lines, businessName: d.businessName, mode, generatedAt,
-        boxId: mode === 'perbox' ? boxId : null,
+        boxId: mode === 'perbox' ? boxId : null, shipTo: d.shipTo,
       });
       // Download rather than auto-print: the thermal-label iframe trick fires .print()
       // before a multi-page PDF viewer has rendered, and navigating a popup to a blob

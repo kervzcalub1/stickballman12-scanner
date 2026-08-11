@@ -56,9 +56,34 @@ function metaCell(doc, x, y, w, label, value) {
   return y + 5 + lines.length * 5;
 }
 
-// Shared page header: accent bar + title + the five key fields + optional tracking list.
-// Returns the y-coordinate where body content can start.
-function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle }) {
+// SHIP TO — where the box is headed. Boxed off under the meta grid so it reads as an
+// address rather than another PO field, and drawn on EVERY page: a page separated from
+// the rest of the stack still has to be routable. Returns the y it ended at.
+function drawShipTo(doc, x, y, w, shipTo) {
+  if (!shipTo || !String(shipTo.street || '').trim()) return y;
+  const cityLine = [[shipTo.city, shipTo.state].filter(Boolean).join(', '), shipTo.zip]
+    .filter(Boolean).join(' ');
+  const rows = [shipTo.name, shipTo.street, cityLine, shipTo.phone, shipTo.email]
+    .map((s) => String(s || '').trim()).filter(Boolean);
+  const h = 6 + rows.length * 4.6 + 2;
+  doc.setDrawColor(...HAIR); doc.setLineWidth(0.3);
+  doc.roundedRect(x, y - 4, w, h, 1.5, 1.5, 'S');
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...MUTED);
+  doc.text('SHIP TO', x + 3, y + 0.5);
+  let ty = y + 5;
+  rows.forEach((r, i) => {
+    doc.setFont('helvetica', i === 0 ? 'bold' : 'normal');
+    doc.setFontSize(i < 3 ? 9.5 : 8);
+    doc.setTextColor(...(i < 3 ? INK : MUTED));
+    doc.text(doc.splitTextToSize(r, w - 6)[0], x + 3, ty);
+    ty += 4.6;
+  });
+  return y - 4 + h;
+}
+
+// Shared page header: accent bar + title + the key fields + ship-to + optional tracking
+// list. Returns the y-coordinate where body content can start.
+function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle, shipTo }) {
   // Accent bar
   doc.setFillColor(...ACCENT);
   doc.rect(0, 0, PAGE_W, 4, 'F');
@@ -83,6 +108,10 @@ function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle })
   metaCell(doc, x0, y, colW, 'Date of Purchase', fmtDate(po.date_of_purchase));
   if (subtitle) metaCell(doc, x1, y, colW * 2 + 6, subtitle.label, subtitle.value);
   y += 16;
+
+  // Where it's going, boxed, above the tracking numbers.
+  const shipEnd = drawShipTo(doc, MARGIN, y, colW * 1.6, shipTo);
+  if (shipEnd !== y) y = shipEnd + 6;
 
   // Tracking numbers block (whole-order manifest lists them all here).
   if (trackingNumbers && trackingNumbers.length) {
@@ -201,7 +230,7 @@ function drawNote(doc, y, text) {
 // `boxId` narrows 'perbox' to ONE label — the sheet a supplier prints for the box they
 // just closed, to tape to that box before sealing it. The "Box N of M" denominator still
 // counts every label on the order, so a single sheet says which box of the shipment it is.
-export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null }) {
+export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null }) {
   const jsPDF = await loadJsPDF();
   const doc = new jsPDF({ unit: 'mm', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
   const stamp = generatedAt || '';
@@ -229,7 +258,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
         ? { label: 'Shipment', value: 'Replacement shipment' }
         : { label: 'Box', value: `Box ${box.box_number} of ${supplierBoxes.length}` };
       const header = () => drawHeader(doc, {
-        businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: tn, subtitle,
+        businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: tn, subtitle, shipTo,
       });
       const startY = header();
       const items = sortLines(linesForBox(lines, box.id));
@@ -242,7 +271,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
     if (orderLines.length) {
       newPage();
       const header = () => drawHeader(doc, {
-        businessName, title: 'Inbound Shipment Manifest - Whole Order', po,
+        businessName, title: 'Inbound Shipment Manifest - Whole Order', po, shipTo,
         trackingNumbers: trackingList(boxes),
         subtitle: { label: 'Scope', value: 'Whole order - not broken out by box' },
       });
@@ -251,14 +280,14 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
 
     // No labels and nothing manifested — still produce a readable sheet.
     if (!drawn) {
-      const startY = drawHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: [] });
+      const startY = drawHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: [], shipTo });
       drawNote(doc, startY, 'No labels or items recorded on this order yet.');
     }
   } else {
     // Whole order — every line (box lines + order-level Path-C lines), all tracking up top.
     const tns = trackingList(boxes);
     const header = () => drawHeader(doc, {
-      businessName, title: 'Inbound Shipment Manifest - Whole Order', po, trackingNumbers: tns,
+      businessName, title: 'Inbound Shipment Manifest - Whole Order', po, trackingNumbers: tns, shipTo,
       subtitle: { label: 'Labels', value: plural((boxes || []).filter((b) => b.kind !== 'replacement').length, 'box') },
     });
     const startY = header();

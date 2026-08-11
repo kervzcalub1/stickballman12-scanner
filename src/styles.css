@@ -269,6 +269,14 @@ body {
 .settings-form { margin-top: 14px; }
 .settings-field { display: flex; flex-direction: column; gap: 6px; max-width: 160px; }
 .settings-field span { font-weight: 600; font-size: 13px; }
+/* The address fields are text, not a lone number — let them use the card's width, and
+   sit city/state/zip on one line the way an address is actually written. */
+.settings-form .settings-field:not(.sm) { max-width: 340px; }
+.settings-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.settings-row .settings-field { flex: 1 1 140px; }
+.settings-row .settings-field.sm { flex: 0 0 84px; max-width: 84px; }
+.settings-form .settings-field + .settings-field,
+.settings-form .settings-row { margin-top: 10px; }
 .settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
 .settings-saved { color: var(--primary); font-weight: 600; }
 
@@ -2119,6 +2127,45 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-box-actions > .mf-print .btn,
 .modal-actions > .mf-print .btn { flex: 1; width: 100%; }
 .po-shipped-note { color: var(--ok); font-size: 14px; margin: 8px 0 0; font-weight: 600; }
+/* Money on a label: cost per pair on each line, one tip per pickup, and the total.
+   `$` sits inside the field so a bare number never reads as a quantity. */
+.po-money-input { display: inline-flex; align-items: center; gap: 4px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 0 8px; }
+.po-money-input:focus-within { border-color: var(--primary); }
+.po-money-sym { color: var(--muted); font-size: 13px; }
+.po-money-input input { border: 0; background: transparent; padding: 8px 0; width: 74px; min-width: 0;
+  color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+.po-money-input input:focus { outline: none; }
+.po-line-cost, .po-size-money { display: flex; flex-direction: column; gap: 4px; }
+.po-line-cost .po-money-input input, .po-size-money .po-money-input input { width: 58px; }
+.po-draft-total { margin-top: 14px; }
+/* The PO modal's size row carries twice what the warehouse one does — size + qty + remove,
+   then cost + tip — so it stacks into two labelled lines instead of squeezing six controls
+   onto one. Scoped to `.po-size-line`: `.size-line` is also the warehouse Add-Item and
+   Rescale row, which must keep its single-line layout. */
+.po-size-line { flex-direction: column; align-items: stretch; gap: 8px;
+  padding: 10px 0; border-bottom: 1px solid var(--border); }
+.po-size-line:last-of-type { border-bottom: 0; }
+.po-size-line-top { display: flex; align-items: center; gap: 6px; }
+.po-size-line-top .sz { flex: 1; min-width: 0; }
+.po-size-line-top .remove { margin-left: auto; }
+.po-size-line-money { display: flex; gap: 10px; }
+.po-size-line-money .po-size-money { flex: 1; }
+.po-size-line-money .po-money-input { width: 100%; }
+.po-size-line-money .po-money-input input { width: 100%; }
+.po-box-total { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.po-box-total-n { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.po-review-money { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  margin: 12px 0; padding-top: 12px; border-top: 1px solid var(--border); text-align: left; }
+
+/* Ship-to: the address suppliers send boxes to. */
+.po-shipto { border-left: 3px solid var(--primary); }
+.po-shipto-h { letter-spacing: 0.08em; }
+.po-shipto-body { margin-top: 6px; line-height: 1.5; }
+.po-shipto-contact { margin-top: 6px; }
+.po-shipto-contact a { color: var(--primary); text-decoration: none; }
+
 /* "Print, attach, seal" — the physical steps after a label is closed. */
 .po-pack-steps { margin: 10px 0 12px; padding-left: 22px; text-align: left; line-height: 1.7; }
 .po-pack-steps li { margin: 2px 0; }

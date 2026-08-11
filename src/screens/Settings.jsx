@@ -1,7 +1,10 @@
-// App settings (admin / superadmin). Currently the price margin percent — the
-// GI → Final markup applied across intake, GI refresh, and PH edits. Changing it
-// is forward-only: new pricing uses the new %; existing Final prices update when
-// their SKU is next refreshed / re-priced.
+// App settings (admin / superadmin):
+//  • the price margin percent — the GI → Final markup applied across intake, GI
+//    refresh, and PH edits. Forward-only: new pricing uses the new %; existing Final
+//    prices update when their SKU is next refreshed / re-priced.
+//  • the ship-to address — where suppliers send their boxes. Read by every signed-in
+//    user (suppliers see it on their order, and it prints as the SHIP TO block on the
+//    manifest), so changing it here changes both at once.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
@@ -14,13 +17,37 @@ export function Settings({ onHome, onSignOut }) {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [repriced, setRepriced] = useState(null); // # unlisted items re-priced on the last save
+  const BLANK_SHIP_TO = { name: '', street: '', city: '', state: '', zip: '', phone: '', email: '' };
+  const [shipTo, setShipTo] = useState(BLANK_SHIP_TO);
+  const [shipBusy, setShipBusy] = useState(false);
+  const [shipSaved, setShipSaved] = useState(false);
+  const [shipError, setShipError] = useState('');
 
   useEffect(() => {
     api.getSettings()
-      .then((r) => { if (r?.priceMarkupPct != null) { setMarkupPct(r.priceMarkupPct); setPct(String(r.priceMarkupPct)); } })
+      .then((r) => {
+        if (r?.priceMarkupPct != null) { setMarkupPct(r.priceMarkupPct); setPct(String(r.priceMarkupPct)); }
+        if (r?.shipTo) setShipTo({ ...BLANK_SHIP_TO, ...r.shipTo });
+      })
       .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); })
       .finally(() => setLoaded(true));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveShipTo(e) {
+    e.preventDefault();
+    setShipBusy(true); setShipError(''); setShipSaved(false);
+    try {
+      const r = await api.setShipTo(shipTo);
+      if (r?.shipTo) setShipTo({ ...BLANK_SHIP_TO, ...r.shipTo });
+      setShipSaved(true);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setShipError(err.message); }
+    finally { setShipBusy(false); }
+  }
+  const shipField = (k) => ({
+    value: shipTo[k] ?? '',
+    disabled: !loaded || shipBusy,
+    onChange: (e) => { setShipTo((s) => ({ ...s, [k]: e.target.value })); setShipSaved(false); },
+  });
 
   async function save(e) {
     e.preventDefault();
@@ -64,6 +91,33 @@ export function Settings({ onHome, onSignOut }) {
           <div className="settings-actions">
             <button className="btn primary" disabled={!loaded || busy}>{busy ? 'Saving…' : 'Save margin'}</button>
             {saved && <span className="settings-saved">✓ Saved{repriced != null ? ` — re-priced ${repriced} unlisted item${repriced === 1 ? '' : 's'}` : ''}</span>}
+          </div>
+        </form>
+      </div>
+
+      <div className="card settings-card">
+        <h3 className="settings-h">Shipping address</h3>
+        <p className="muted sm">
+          Where suppliers send their boxes. It shows on their order in the supplier portal
+          and prints as the <b>SHIP TO</b> block on every page of the manifest, so a sheet
+          separated from the rest still says where the box is going.
+        </p>
+        {shipError && <div className="error mt">{shipError}</div>}
+        <form onSubmit={saveShipTo} className="settings-form">
+          <label className="settings-field"><span>Name</span><input {...shipField('name')} /></label>
+          <label className="settings-field"><span>Street</span><input {...shipField('street')} /></label>
+          <div className="settings-row">
+            <label className="settings-field"><span>City</span><input {...shipField('city')} /></label>
+            <label className="settings-field sm"><span>State</span><input maxLength={2} {...shipField('state')} /></label>
+            <label className="settings-field sm"><span>ZIP</span><input inputMode="numeric" {...shipField('zip')} /></label>
+          </div>
+          <div className="settings-row">
+            <label className="settings-field"><span>Phone</span><input inputMode="tel" {...shipField('phone')} /></label>
+            <label className="settings-field"><span>Email</span><input inputMode="email" {...shipField('email')} /></label>
+          </div>
+          <div className="settings-actions">
+            <button className="btn primary" disabled={!loaded || shipBusy}>{shipBusy ? 'Saving…' : 'Save address'}</button>
+            {shipSaved && <span className="settings-saved">✓ Saved</span>}
           </div>
         </form>
       </div>

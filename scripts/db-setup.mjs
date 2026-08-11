@@ -506,6 +506,7 @@ await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS tracking_sub_status_des
 await sql(`ALTER TABLE po_boxes DROP CONSTRAINT IF EXISTS po_boxes_status_check`);
 await sql(`ALTER TABLE po_boxes ADD CONSTRAINT po_boxes_status_check CHECK (status IN ('pending','packed','pre_transit','shipped','in_transit','delivered'))`);
 
+
 // The "what the supplier says he shipped" lines — one per SKU+size PER LABEL, so the
 // same SKU+size can appear under different labels. Re-scanning a SKU/size increments
 // qty_expected (mirrors receiving's per-size auto-increment).
@@ -534,6 +535,12 @@ await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_box_sku_size_idx ON po_lin
 // the line (NULL when the supplier scanned it themselves); entered_on_behalf flags a
 // staff-entered line — the supplier sees a generic "<business> Staff" attribution while
 // warehouse/PH see the real person (docs/context/purchase-orders.md).
+// What the supplier paid, per pair, on the line it was paid for. A po_line is one
+// SKU+SIZE, so both of these are per size: the same shoe can cost (and be tipped)
+// differently in a 9 than in an 11. `unit_cost` already existed; `tip` is the money paid
+// on top to get that pair — kept as its own column rather than folded into the cost so
+// the two stay separately reportable.
+await sql(`ALTER TABLE po_lines ADD COLUMN IF NOT EXISTS tip NUMERIC(12,2)`);
 await sql(`ALTER TABLE po_lines ADD COLUMN IF NOT EXISTS entered_by BIGINT REFERENCES users(id)`);
 await sql(`ALTER TABLE po_lines ADD COLUMN IF NOT EXISTS entered_on_behalf BOOLEAN NOT NULL DEFAULT FALSE`);
 

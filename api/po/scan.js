@@ -1,5 +1,5 @@
 // POST /api/po/scan  (supplier / ph_team / admin)
-//   { poBoxId, sku, size, qty?, name?, upc?, colorway?, gender?, unitCost? }
+//   { poBoxId, sku, size, qty?, name?, upc?, colorway?, gender?, unitCost?, tip? }
 // Adds/increments an expected line under one label of a DRAFT PO. The supplier scans
 // their own manifest; PH/admin can enter it ON THEIR BEHALF when the supplier doesn't
 // (stamped entered_by + entered_on_behalf). Product details are resolved client-side
@@ -10,7 +10,7 @@
 // purchase was declared in, and its lines never reach the reconciliation `expected` count.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, addPoScan, dbConfigured } from '../_lib/db.js';
-import { manifestEditBlock, isReplacementBox } from '../_lib/po-manifest.js';
+import { manifestEditBlock, isReplacementBox, money } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -57,7 +57,8 @@ export default async function handler(req, res) {
       upc: String(body.upc ?? '').trim().slice(0, 40) || null,
       colorway: String(body.colorway ?? '').trim().slice(0, 120) || null,
       gender: String(body.gender ?? '').trim().slice(0, 20) || null,
-      unitCost: body.unitCost != null && body.unitCost !== '' ? Number(body.unitCost) : null,
+      unitCost: money(body.unitCost),
+      tip: money(body.tip),
       enteredBy,
       enteredOnBehalf: onBehalf,
     });

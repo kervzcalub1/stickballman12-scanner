@@ -137,12 +137,16 @@ export function PoOverview({ onHome, onSignOut }) {
                             <ManifestPrint poId={p.id} poCode={p.po_code} onSignOut={onSignOut} />
                             {(() => {
                               // Whole-order manifest (Path C): one list for the whole purchase, no per-box
-                              // breakdown. Shown when it's already in use, or available (draft PO with no
-                              // per-box lines yet). Receiving still happens per box, like a blind receive.
+                              // breakdown. Shown when it's already in use, or available. Receiving still
+                              // happens per box, like a blind receive.
+                              //
+                              // Enterable while the order is DRAFT *or* being RECEIVED: a supplier who
+                              // doesn't use the portal often sends their list after the boxes land, and
+                              // draft-only meant that list could never be entered at all.
                               const orderLines = (detail.lines || []).filter((l) => l.po_box_id == null);
                               const hasBoxLines = (detail.lines || []).some((l) => l.po_box_id != null);
-                              const isDraft = detail.po.status === 'draft';
-                              if (!orderLines.length && (!isDraft || hasBoxLines)) return null;
+                              const canEnter = ['draft', 'receiving'].includes(detail.po.status) && !hasBoxLines;
+                              if (!orderLines.length && !canEnter) return null;
                               return (
                                 <div className="po-ov-order">
                                   <div className="po-ov-order-head">
@@ -164,10 +168,18 @@ export function PoOverview({ onHome, onSignOut }) {
                                       ))}
                                     </ul>
                                   )}
-                                  {isDraft && !hasBoxLines && (
-                                    <button className="btn sm po-ov-fill-btn" onClick={() => setScanOrderPo(detail.po)}>
-                                      <Icon name="camera" /> {orderLines.length ? 'Add more to the order manifest' : 'Add whole-order manifest'}
-                                    </button>
+                                  {canEnter && (
+                                    <>
+                                      <button className="btn sm po-ov-fill-btn" onClick={() => setScanOrderPo(detail.po)}>
+                                        <Icon name="camera" /> {orderLines.length ? 'Add more to the order manifest' : 'Add whole-order manifest'}
+                                      </button>
+                                      {detail.po.status === 'receiving' && (
+                                        <p className="muted xs po-ov-fill-hint">
+                                          The boxes are already being received — entering the supplier's list now still
+                                          works. It only sets what was expected; it can't change what the warehouse counted.
+                                        </p>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                               );

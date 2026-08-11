@@ -264,11 +264,51 @@ Two escape hatches for when a supplier won't use the scan-out portal:
   keeps the shipped-labels-only filter. **Receiving is unchanged — still per box, exactly like a
   blind receive** (the manifest just isn't per-box, so there's no per-label checklist). `updatePoLine`
   branches its size-merge sibling lookup for null-box lines (match within the PO, not the label).
+  **Enterable while the PO is `draft` OR `receiving`** — not draft-only. The whole premise of
+  Path C is a supplier who doesn't use the portal, so their list routinely arrives *after*
+  the boxes: draft-only meant a list that turned up an hour late could never be entered at
+  all, and the order reconciled "received blind" with every pair reading as an overage.
+  These lines only feed `expected`; the warehouse's count is recorded independently, so a
+  late manifest can't rewrite what was received.
   **UI:** shared `PoScanModal` gains an order mode (`po` prop instead of `box`) → `api.poScanOrder`;
   `PoOverview` shows a **"Whole-order manifest"** block with an **"Add whole-order manifest"** button
   (draft PO, no per-box lines) + internal attribution; `SupplierApp` shows a read-only **"Order
   manifest"** card with the "…'s Staff" note. **Schema-touch: `po_box_id` nullable + `manifest_scope`
   + partial index → run `db:setup`.**
+
+## Receiving a whole-order (Path C) PO, and our own per-box count
+Receiving is per box on a Path C order exactly as it is on any other — the manifest just
+isn't broken out per label, so there's no per-label checklist to tick.
+
+- **The receiving screen knows the difference.** `ManifestChecklist` takes `wholeOrder`
+  (from `po.manifest_scope`) plus `orderSkus` (the SKUs on the order-level list). Without
+  it, every label showed "This label had no expected items", the progress read
+  **"0 of 0 checked"**, and **every pair the warehouse scanned was chipped "Overage · not
+  on PO"** — for the entire job, on stock that *was* on the supplier's list. Now the header
+  reads "Box N · contents — X counted", the button is "+ Add item" (not "+ Add
+  unexpected"), a banner says the order was manifested as one whole-order list, and a SKU
+  on that list is chipped **"On the order list"**. A SKU that genuinely isn't still reads
+  "Overage · not on PO" — that distinction is the whole point.
+- **`getPoReceivedBoxes(poId)` = what WE counted, box by box.** Built from `items.box_id`
+  (receiving already sets it per box) across **every** batch linked to the PO. Units with a
+  NULL `box_id` — a single-box or pre-multi-box receive never set one — come back as a
+  box-less group rather than vanishing, so the totals still add up. Served on
+  `po/reconciliation` as `received_boxes`.
+- **"What we received" (PDF, `mode: 'received'`).** One page per box we opened, with that
+  box's tracking number and what came out of it, then **one** reconciliation page: their
+  list vs our count, per SKU+size, with a plain-word verdict ("Match", "Short 1",
+  "Not on their list") and totals. This is the sheet you send a supplier when a shipment is
+  short. Deliberately **not** expected-vs-received *per box*: on a whole-order manifest
+  there is no per-box expectation, and inventing one would be us fabricating a claim the
+  supplier never made. Per box we state only what we counted; the comparison happens once,
+  at the order level, where their list actually lives. Offered on `Reconciliation` next to
+  the supplier's manifest, and it's the one printable that **is** offered on a blind
+  receipt — there's no manifest to print, but our count is the only record of the shipment.
+- **Known friction:** `listOpenPos` (the Receiving "Open shipments" picker) lists only
+  `shipped`/`receiving` POs. A supplier who never touches the portal leaves the PO `draft`,
+  so it is NOT in that list — the warehouse pulls it up by **scanning a label** or typing
+  the PO code (`po/lookup` has no status filter). That's the intended flow, but it means
+  the picker looks empty for exactly these suppliers.
 
 ## What the shipment cost the supplier (cost + tip, both per pair per size)
 - **Both are per pair, on the line** — `po_lines.unit_cost` (the column pre-dated any UI)

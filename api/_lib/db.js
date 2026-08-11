@@ -2236,6 +2236,54 @@ export async function lookupPoByCodeOrTracking(q) {
 // Idempotent: keeps the first received_batch_id. Advances a draft/shipped PO to
 // 'receiving' (a box can arrive before every label is marked shipped); never
 // downgrades a reconciled/closed PO.
+// WHAT WE ACTUALLY RECEIVED, BOX BY BOX — our own count, the mirror of the supplier's
+// manifest. It's the evidence in a shortage conversation: "here is each box we opened,
+// its tracking number, and what came out of it." Built from `items.box_id`, which
+// receiving already sets per box, across EVERY batch linked to the PO (an order can be
+// received in more than one — most obviously a replacement weeks later).
+//
+// Units with no box_id are real and must not vanish from the count: a single-box or
+// pre-multi-box receive never set one. They're returned as a box-less group so the
+// totals still add up, the same discipline the whole-order manifest page uses.
+export async function getPoReceivedBoxes(poId) {
+  const sql = db();
+  const boxes = await sql`
+    SELECT bx.id, bx.box_number, bx.tracking_number, bx.status, bx.received_at, bx.received_by,
+           b.batch_code, b.id AS batch_id
+    FROM batch_boxes bx
+    JOIN batches b ON b.id = bx.batch_id
+    WHERE b.po_id = ${poId}
+    ORDER BY b.id, bx.box_number
+  `;
+  const rows = await sql`
+    SELECT i.box_id, i.sku, i.size, max(i.name) AS name, count(*)::int AS qty
+    FROM items i
+    JOIN batches b ON b.id = i.batch_id
+    WHERE b.po_id = ${poId}
+    GROUP BY i.box_id, i.sku, i.size
+    ORDER BY i.sku, i.size
+  `;
+  const byBox = new Map();
+  for (const r of rows) {
+    const k = r.box_id == null ? 'none' : String(r.box_id);
+    if (!byBox.has(k)) byBox.set(k, []);
+    byBox.get(k).push({ sku: r.sku, size: r.size, name: r.name, qty: r.qty });
+  }
+  const out = boxes.map((b) => {
+    const items = byBox.get(String(b.id)) || [];
+    return { ...b, items, units: items.reduce((n, i) => n + i.qty, 0) };
+  });
+  const loose = byBox.get('none') || [];
+  if (loose.length) {
+    out.push({
+      id: null, box_number: null, tracking_number: null, status: 'received',
+      received_at: null, received_by: null, batch_code: out[0]?.batch_code || null, batch_id: null,
+      items: loose, units: loose.reduce((n, i) => n + i.qty, 0),
+    });
+  }
+  return out;
+}
+
 export async function markPoReceiving(poId, batchId) {
   const sql = db();
   await sql`

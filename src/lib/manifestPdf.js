@@ -198,7 +198,10 @@ function drawNote(doc, y, text) {
 }
 
 // Build the manifest PDF. `mode`: 'perbox' | 'whole'. Returns a jsPDF doc.
-export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '' }) {
+// `boxId` narrows 'perbox' to ONE label — the sheet a supplier prints for the box they
+// just closed, to tape to that box before sealing it. The "Box N of M" denominator still
+// counts every label on the order, so a single sheet says which box of the shipment it is.
+export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null }) {
   const jsPDF = await loadJsPDF();
   const doc = new jsPDF({ unit: 'mm', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
   const stamp = generatedAt || '';
@@ -209,7 +212,10 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
     // a reship the WAREHOUSE raised, not one of the supplier's — so it doesn't count
     // towards "box N of M", same rule the PO roll-ups use.
     const supplierBoxes = (boxes || []).filter((b) => b.kind !== 'replacement');
-    const list = [...supplierBoxes, ...(boxes || []).filter((b) => b.kind === 'replacement')];
+    const all = [...supplierBoxes, ...(boxes || []).filter((b) => b.kind === 'replacement')];
+    // One label only, when asked for — but numbered against the whole order (above).
+    const only = boxIdOf(boxId);
+    const list = only == null ? all : all.filter((b) => boxIdOf(b.id) === only);
     const orderLines = sortLines(orderLevelLines(lines));
     let drawn = 0;
     const newPage = () => { if (drawn++) doc.addPage(); };

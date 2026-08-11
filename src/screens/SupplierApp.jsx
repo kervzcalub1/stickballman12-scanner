@@ -12,6 +12,7 @@ import { carrierName } from '../lib/carriers.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoScanModal, PoLineRow } from '../components/PoScanModal.jsx';
+import { ManifestPrint } from '../components/ManifestPrint.jsx';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',     cls: 'draft' },
@@ -37,6 +38,10 @@ export function SupplierApp({ user, onSignOut }) {
   const staffLabel = `${businessName || 'Stickballman12 LLC'}'s Staff`;
   const [scanBox, setScanBox] = useState(null); // po_box currently being scanned into
   const [closeReview, setCloseReview] = useState(null); // po_box being reviewed before closing
+  // The box that was just closed — drives the "print the manifest, tape it on, seal it"
+  // step. Closing is the moment the contents are final, so it's the only moment the
+  // printed sheet is guaranteed to match what's in the box.
+  const [packedBox, setPackedBox] = useState(null);
   const [busy, setBusy] = useState(false);
   const [lineBusy, setLineBusy] = useState(null); // po_line id currently being saved
   // Written procedures. Suppliers have no home screen to hang a card on, so Help
@@ -99,6 +104,7 @@ export function SupplierApp({ user, onSignOut }) {
       const r = await api.poCloseBox(Number(box.id));
       setDetail({ po: r.po, boxes: r.boxes, lines: r.lines });
       setCloseReview(null);
+      setPackedBox(box);
     } catch (e) {
       if (e.unauthorized) return onSignOut();
       setError(e.message);
@@ -329,7 +335,17 @@ export function SupplierApp({ user, onSignOut }) {
                   {isPacked && (
                     <div className="po-box-actions">
                       <button className="btn sm ghost" disabled={busy} onClick={() => reopenBox(box)}>Reopen to edit</button>
+                      {/* Reprint: the sheet gets torn, soaked, or printed before a late edit. */}
+                      <ManifestPrint poId={Number(po.id)} poCode={po.po_code} boxId={Number(box.id)}
+                        boxNumber={box.box_number} buttonLabel="Print manifest" onSignOut={onSignOut} />
                       <button className="btn sm primary" disabled={busy} onClick={() => shipLabel(box)}>Ship label</button>
+                    </div>
+                  )}
+                  {/* Once it's gone, the sheet is only useful as a copy of what was sent. */}
+                  {isShipped && !isReplacement && (
+                    <div className="po-box-actions">
+                      <ManifestPrint poId={Number(po.id)} poCode={po.po_code} boxId={Number(box.id)}
+                        boxNumber={box.box_number} buttonLabel="Print manifest copy" onSignOut={onSignOut} />
                     </div>
                   )}
                 </div>
@@ -369,6 +385,38 @@ export function SupplierApp({ user, onSignOut }) {
           onAdded={refreshDetail} onSignOut={onSignOut} />
       )}
 
+      {/* The physical half of closing a box: the sheet only matches the contents at this
+          exact moment (reopening to edit is what makes a printed one stale), so the print
+          step is put in front of them here rather than left to be remembered. */}
+      {packedBox && detail?.po && (() => {
+        const lines = linesFor(packedBox.id);
+        const units = lines.reduce((n, l) => n + (l.qty_expected || 0), 0);
+        return (
+          <div className="modal-overlay" onClick={() => setPackedBox(null)}>
+            <div className="modal confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+              <h3 className="modal-title">Label {packedBox.box_number} is closed</h3>
+              <p className="modal-msg">
+                <b>{units}</b> unit{units === 1 ? '' : 's'} on this label. Finish the box:
+              </p>
+              <ol className="po-pack-steps">
+                <li>Print the manifest below (plain <b>Letter</b> paper).</li>
+                <li>Attach it to the box.</li>
+                <li>Seal the box.</li>
+              </ol>
+              <p className="muted sm">
+                Reopening the label to edit it makes a printed sheet wrong — print again if you do.
+              </p>
+              <div className="modal-actions">
+                <ManifestPrint poId={Number(detail.po.id)} poCode={detail.po.po_code}
+                  boxId={Number(packedBox.id)} boxNumber={packedBox.box_number}
+                  buttonLabel="Print manifest" primary onSignOut={onSignOut} />
+                <button type="button" className="btn ghost" onClick={() => setPackedBox(null)}>Done</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {closeReview && (() => {
         const lines = linesFor(closeReview.id);
         const units = lines.reduce((n, l) => n + (l.qty_expected || 0), 0);
@@ -376,7 +424,7 @@ export function SupplierApp({ user, onSignOut }) {
           <div className="modal-overlay" onClick={() => setCloseReview(null)}>
             <div className="modal confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <h3 className="modal-title">Review Label {closeReview.box_number}</h3>
-              <p className="modal-msg">Check everything you’re shipping under this label. Closing it marks the box <b>ready to ship</b> — you can still reopen it to edit until you actually ship.</p>
+              <p className="modal-msg">Check everything you’re shipping under this label. Closing it marks the box <b>ready to ship</b> and gives you the manifest to print and attach — you can still reopen it to edit until you actually ship.</p>
               {lines.length === 0 ? <p className="muted">No items scanned yet.</p> : (
                 <ul className="po-lines po-review-lines">
                   {lines.map((l) => (

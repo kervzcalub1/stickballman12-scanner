@@ -2110,9 +2110,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-line-edit .qty-stepper .step { min-width: 44px; min-height: 44px; }
 .po-line-edit .qty-val { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
 .po-line-edit .remove { margin-left: auto; min-width: 40px; min-height: 40px; }
-.po-box-actions { display: flex; gap: 8px; margin-top: 12px; }
+.po-box-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .po-box-actions .btn { flex: 1; }
+/* ManifestPrint drops a <div class="mf-print"> wrapper into these button rows — it needs
+   to behave like the buttons around it (share the row, no stacking margin of its own). */
+.po-box-actions > .mf-print,
+.modal-actions > .mf-print { margin: 0; flex: 1; }
+.po-box-actions > .mf-print .btn,
+.modal-actions > .mf-print .btn { flex: 1; width: 100%; }
 .po-shipped-note { color: var(--ok); font-size: 14px; margin: 8px 0 0; font-weight: 600; }
+/* "Print, attach, seal" — the physical steps after a label is closed. */
+.po-pack-steps { margin: 10px 0 12px; padding-left: 22px; text-align: left; line-height: 1.7; }
+.po-pack-steps li { margin: 2px 0; }
 
 .po-scan { max-width: 460px; width: 100%; max-height: 90vh; overflow-y: auto; text-align: left; }
 /* Match .modal.additem's spacing: give the size rows breathing room and pin the

@@ -329,11 +329,32 @@ order-level line "match" a null/0-id box), and **replacement labels** are exclud
 the supplier's packing job). Everything the PDF draws is **plain ASCII** — jsPDF's built-in
 Helvetica silently drops em-dashes, which is why "Tag / Code —" printed as a blank cell.
 
-**Available on three surfaces, one component:**
+**A third shape: ONE box.** `buildManifestPdf({ mode: 'perbox', boxId })` renders just that
+label's page — the sheet the SUPPLIER tapes to the box they've packed. The `Box N of M`
+denominator still counts every supplier label on the order, so a loose single sheet still
+says which box of the shipment it is. Path C order-level lines still get their back page
+(the box page points at it), so a single-box print of a whole-order manifest isn't empty.
+`ManifestPrint` takes `boxId`/`boxNumber` and collapses to one button; the file is named
+`manifest-<po_code>-box-<n>.pdf`.
+
+**The supplier's pack-out loop:** scan items in → **Review & close box** (`pending → packed`)
+→ the close puts a **"Label N is closed"** step in front of them — *print the manifest
+(Letter) → attach it to the box → seal it* — with the print button right there. Closing is
+the only moment the sheet is guaranteed to match the contents, which is why the step is
+attached to it rather than left to be remembered; the modal says so, because **reopening the
+label to edit invalidates a printed sheet**. A packed box also carries a standalone **Print
+manifest** button (reprints — torn, soaked, or printed before a late edit) and a shipped one
+keeps **Print manifest copy** as a record of what went out. Replacement labels don't get it:
+the warehouse raised those, the supplier never packed them.
+
+**Available on four surfaces, one component:**
 - **PH** — `PoOverview` (`/ph/po-status`), per expanded PO.
 - **Warehouse** — `Reconciliation` (`/reconcile`) detail header, and the **Receiving PO
   banner** (Step 1, once a PO is linked) so the sheet can be printed *before* unpacking and
   pairs ticked off on paper.
+- **Supplier** — `SupplierApp`, per box, single-box mode (see the pack-out loop above).
+  `po/get` already allows the `supplier` role (scoped to their own POs) and returns
+  `businessName`, so the letterhead is right with no new endpoint.
 
 **It re-fetches `po/get` on every click** — no caching — rather than using a `detail` the
 caller already holds. `po/get` is the only endpoint returning **`businessName`** (the PDF

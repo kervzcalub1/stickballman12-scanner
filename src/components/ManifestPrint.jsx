@@ -17,7 +17,10 @@ import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { buildManifestPdf } from '../lib/manifestPdf.js';
 
-export function ManifestPrint({ poId, poCode, label = 'Manifest PDF:', onSignOut }) {
+// `boxId` switches this to the SUPPLIER's one-box sheet: a single button that builds the
+// page for the label they just closed, so it can be taped to that box before it's sealed.
+// Everything else (fetch, Letter size, download-don't-print) is the same code path.
+export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Manifest PDF:', buttonLabel = 'Print box manifest', primary = false, onSignOut }) {
   const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole'
   const [error, setError] = useState('');
 
@@ -33,6 +36,7 @@ export function ManifestPrint({ poId, poCode, label = 'Manifest PDF:', onSignOut
       const generatedAt = `Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EST`;
       const doc = await buildManifestPdf({
         po: d.po, boxes: d.boxes, lines: d.lines, businessName: d.businessName, mode, generatedAt,
+        boxId: mode === 'perbox' ? boxId : null,
       });
       // Download rather than auto-print: the thermal-label iframe trick fires .print()
       // before a multi-page PDF viewer has rendered, and navigating a popup to a blob
@@ -41,7 +45,10 @@ export function ManifestPrint({ poId, poCode, label = 'Manifest PDF:', onSignOut
       const url = URL.createObjectURL(doc.output('blob'));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `manifest-${d.po?.po_code || poCode || poId}-${mode === 'perbox' ? 'per-box' : 'whole-order'}.pdf`;
+      const which = boxId != null && mode === 'perbox'
+        ? `box-${boxNumber ?? boxId}`
+        : (mode === 'perbox' ? 'per-box' : 'whole-order');
+      a.download = `manifest-${d.po?.po_code || poCode || poId}-${which}.pdf`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
@@ -49,6 +56,17 @@ export function ManifestPrint({ poId, poCode, label = 'Manifest PDF:', onSignOut
       setError(e?.message || 'Could not build the manifest.');
     } finally { setBusy(''); }
   };
+
+  if (boxId != null) {
+    return (
+      <div className="mf-print">
+        <button className={`btn sm ${primary ? 'primary' : ''}`} disabled={!!busy} onClick={() => run('perbox')}>
+          <Icon name="download" /> {busy ? 'Building…' : buttonLabel}
+        </button>
+        {error && <span className="mf-print-err sm">{error}</span>}
+      </div>
+    );
+  }
 
   return (
     <div className="mf-print">

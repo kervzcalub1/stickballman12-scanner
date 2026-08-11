@@ -1,10 +1,11 @@
 // GET /api/po/reconciliation?poId=  (warehouse / ph_team / admin)
-// The expected-vs-received table + summary for a PO (computed on demand). If the
-// PO is already reconciled, the frozen snapshot is on the PO too (po.reconciliation).
+// The expected-vs-received table + summary for a PO (computed on demand), plus what we
+// counted BOX BY BOX (`received_boxes`) for the shortage evidence. If the PO is already
+// reconciled, the frozen snapshot is on the PO too (po.reconciliation).
 import { send, applySecurity, requireRole } from '../_lib/util.js';
 import {
   getPoReconcileState, getPoResolution, listPoComments, resolutionView,
-  stepsFor, dbConfigured,
+  stepsFor, getPoReceivedBoxes, dbConfigured,
 } from '../_lib/db.js';
 
 export default async function handler(req, res) {
@@ -24,9 +25,12 @@ export default async function handler(req, res) {
     const { intakeDone, awaitingBoxes, ...data } = st;
     // Resolution + thread ride along on the screen's existing fetch rather than adding
     // two more round trips. Both are cheap and only ever load when an order is opened.
-    const [resolution, comments] = await Promise.all([
+    // `receivedBoxes` = our own per-box count, for the "this is what we opened" evidence
+    // (and the PDF built from it). Same fetch, since it's only ever read on this screen.
+    const [resolution, comments, receivedBoxes] = await Promise.all([
       getPoResolution(poId),
       listPoComments(poId, { limit: 50 }),
+      getPoReceivedBoxes(poId),
     ]);
     return send(res, 200, {
       ok: true, ...data,
@@ -34,6 +38,7 @@ export default async function handler(req, res) {
       resolution: resolutionView(resolution),
       steps: stepsFor(resolution?.outcome),
       comments,
+      received_boxes: receivedBoxes,
     });
   } catch (e) {
     console.error('[po/reconciliation]', e.message);

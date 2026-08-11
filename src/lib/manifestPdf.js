@@ -220,6 +220,56 @@ const trackingList = (boxes) => (boxes || [])
   .filter((b) => b.tracking_number)
   .map((b) => ({ number: b.tracking_number, carrier: carrierName(b.carrier || b.carrier_key) }));
 
+// Their list vs our count, one row per SKU+size. Same paginating shape as the item
+// table, but four number columns and a plain-word verdict — the sheet gets read by
+// someone who didn't build the software, so "Short 1" beats a colour or a minus sign.
+function drawCompareTable(doc, startY, rows, headerFn) {
+  const left = MARGIN + 3;
+  const right = PAGE_W - MARGIN - 3;
+  const cols = [
+    { label: 'ITEM', x: left, w: 66 },
+    { label: 'SKU', x: left + 70, w: 32 },
+    { label: 'SIZE', x: left + 106, w: 14 },
+    { label: 'THEIRS', x: left + 132, w: 0, align: 'right' },
+    { label: 'OURS', x: left + 152, w: 0, align: 'right' },
+    { label: 'RESULT', x: right, w: 0, align: 'right' },
+  ];
+  let y = drawTableHead(doc, startY, cols);
+  const rowH = 7;
+  let theirs = 0; let ours = 0;
+  rows.forEach((r, i) => {
+    if (y + rowH > PAGE_H - 20) { doc.addPage(); y = drawTableHead(doc, headerFn(), cols); }
+    if (i % 2 === 1) { doc.setFillColor(...ZEBRA); doc.rect(MARGIN, y, PAGE_W - MARGIN * 2, rowH, 'F'); }
+    const exp = Number(r.expected) || 0; const rec = Number(r.received) || 0;
+    theirs += exp; ours += rec;
+    const verdict = exp === rec ? 'Match'
+      : rec < exp ? `Short ${exp - rec}`
+        : exp === 0 ? 'Not on their list' : `Extra ${rec - exp}`;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...INK);
+    doc.text(doc.splitTextToSize(String(r.name || r.sku || '-'), cols[0].w)[0] || '-', cols[0].x, y + 4.8);
+    doc.setFont('courier', 'normal'); doc.setFontSize(8.5);
+    doc.text(doc.splitTextToSize(String(r.sku || '-'), cols[1].w)[0] || '-', cols[1].x, y + 4.8);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    doc.text(String(r.size ?? '-'), cols[2].x, y + 4.8);
+    doc.text(String(exp), cols[3].x, y + 4.8, { align: 'right' });
+    doc.text(String(rec), cols[4].x, y + 4.8, { align: 'right' });
+    doc.setFont('helvetica', exp === rec ? 'normal' : 'bold');
+    doc.setTextColor(...(exp === rec ? MUTED : INK));
+    doc.text(verdict, cols[5].x, y + 4.8, { align: 'right' });
+    y += rowH;
+  });
+  doc.setDrawColor(...HAIR); doc.setLineWidth(0.4);
+  doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+  y += 6;
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...INK);
+  doc.text('TOTALS', MARGIN + 3, y);
+  doc.text(String(theirs), cols[3].x, y, { align: 'right' });
+  doc.text(String(ours), cols[4].x, y, { align: 'right' });
+  const diff = ours - theirs;
+  doc.text(diff === 0 ? 'Match' : diff < 0 ? `Short ${-diff}` : `Extra ${diff}`, cols[5].x, y, { align: 'right' });
+  return y;
+}
+
 // An italic "nothing here" note under a header.
 function drawNote(doc, y, text) {
   doc.setFont('helvetica', 'italic'); doc.setFontSize(10); doc.setTextColor(...MUTED);
@@ -230,7 +280,7 @@ function drawNote(doc, y, text) {
 // `boxId` narrows 'perbox' to ONE label — the sheet a supplier prints for the box they
 // just closed, to tape to that box before sealing it. The "Box N of M" denominator still
 // counts every label on the order, so a single sheet says which box of the shipment it is.
-export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null }) {
+export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null, receivedBoxes = null, compare = null }) {
   const jsPDF = await loadJsPDF();
   const doc = new jsPDF({ unit: 'mm', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
   const stamp = generatedAt || '';
@@ -282,6 +332,48 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
     if (!drawn) {
       const startY = drawHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: [], shipTo });
       drawNote(doc, startY, 'No labels or items recorded on this order yet.');
+    }
+  } else if (mode === 'received') {
+    // WHAT WE RECEIVED, box by box — our own count, not the supplier's claim. This is the
+    // sheet that settles a shortage: every box we opened, its tracking number, and what
+    // came out of it, then a reconciliation page putting their list next to our count.
+    //
+    // Deliberately NOT "expected vs received" per box: on a whole-order manifest there is
+    // no per-box expectation, and inventing one would be us making up a claim the supplier
+    // never made. Per box we state only what we counted; the comparison happens once, at
+    // the order level, where their list actually lives.
+    const list = (receivedBoxes || []);
+    let drawn = 0;
+    list.forEach((box) => {
+      if (drawn++) doc.addPage();
+      const tn = box.tracking_number
+        ? [{ number: box.tracking_number, carrier: carrierName(box.carrier || box.carrier_key) }]
+        : [];
+      const header = () => drawHeader(doc, {
+        businessName, title: 'Received - Our Count', po, trackingNumbers: tn, shipTo,
+        subtitle: box.box_number
+          ? { label: 'Box', value: `Box ${box.box_number} of ${list.filter((b) => b.box_number).length}` }
+          : { label: 'Box', value: 'Not recorded against a box' },
+      });
+      const startY = header();
+      const items = sortLines((box.items || []).map((i) => ({ ...i, qty_expected: i.qty })));
+      if (items.length) drawItemTable(doc, startY, items, header);
+      else drawNote(doc, startY, 'This box was opened and nothing was in it.');
+    });
+
+    // The comparison, once, at the order level.
+    if (compare && compare.rows && compare.rows.length) {
+      if (drawn++) doc.addPage();
+      const header = () => drawHeader(doc, {
+        businessName, title: 'Received - Reconciliation', po, trackingNumbers: trackingList(boxes), shipTo,
+        subtitle: { label: 'Scope', value: 'Their list vs our count, whole order' },
+      });
+      drawCompareTable(doc, header(), compare.rows, header);
+    }
+
+    if (!drawn) {
+      const startY = drawHeader(doc, { businessName, title: 'Received - Our Count', po, trackingNumbers: [], shipTo });
+      drawNote(doc, startY, 'Nothing has been received against this order yet.');
     }
   } else {
     // Whole order — every line (box lines + order-level Path-C lines), all tracking up top.

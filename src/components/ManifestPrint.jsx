@@ -20,8 +20,12 @@ import { buildManifestPdf } from '../lib/manifestPdf.js';
 // `boxId` switches this to the SUPPLIER's one-box sheet: a single button that builds the
 // page for the label they just closed, so it can be taped to that box before it's sealed.
 // Everything else (fetch, Letter size, download-don't-print) is the same code path.
-export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Manifest PDF:', buttonLabel = 'Print box manifest', primary = false, onSignOut }) {
-  const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole'
+// `received` switches it to OUR count: what the warehouse actually pulled out of each
+// box, plus a their-list-vs-our-count page. That's the sheet you send a supplier when a
+// shipment is short, so it's driven by the reconciliation data the caller already has
+// (`receivedBoxes` / `compare`) rather than the supplier's manifest.
+export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Manifest PDF:', buttonLabel = 'Print box manifest', primary = false, received = null, compare = null, onSignOut }) {
+  const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole' | 'received'
   const [error, setError] = useState('');
 
   if (!poId) return null;
@@ -37,6 +41,7 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       const doc = await buildManifestPdf({
         po: d.po, boxes: d.boxes, lines: d.lines, businessName: d.businessName, mode, generatedAt,
         boxId: mode === 'perbox' ? boxId : null, shipTo: d.shipTo,
+        receivedBoxes: received, compare,
       });
       // Download rather than auto-print: the thermal-label iframe trick fires .print()
       // before a multi-page PDF viewer has rendered, and navigating a popup to a blob
@@ -47,8 +52,9 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       a.href = url;
       const which = boxId != null && mode === 'perbox'
         ? `box-${boxNumber ?? boxId}`
-        : (mode === 'perbox' ? 'per-box' : 'whole-order');
-      a.download = `manifest-${d.po?.po_code || poCode || poId}-${which}.pdf`;
+        : mode === 'received' ? 'received'
+          : (mode === 'perbox' ? 'per-box' : 'whole-order');
+      a.download = `${mode === 'received' ? 'received' : 'manifest'}-${d.po?.po_code || poCode || poId}-${which}.pdf`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
@@ -77,6 +83,13 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       <button className="btn ghost sm" disabled={!!busy} onClick={() => run('whole')}>
         <Icon name="download" /> {busy === 'whole' ? 'Building…' : 'Whole order'}
       </button>
+      {/* Only once something has actually been received — an empty "here's what we got"
+          sheet is worse than no sheet in a dispute. */}
+      {received?.length > 0 && (
+        <button className="btn ghost sm" disabled={!!busy} onClick={() => run('received')}>
+          <Icon name="download" /> {busy === 'received' ? 'Building…' : 'What we received'}
+        </button>
+      )}
       {error && <span className="mf-print-err sm">{error}</span>}
     </div>
   );

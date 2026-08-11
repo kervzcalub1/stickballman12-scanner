@@ -136,6 +136,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // the screen into something you skim past — a shortage only got caught if someone
   // remembered to untick it.
   const manifestLinesFor = (poBoxId) => (receivingPo?.lines || []).filter((l) => Number(l.po_box_id) === Number(poBoxId));
+  // A WHOLE-ORDER (Path C) PO declares one list against the purchase, not per label — so
+  // every label legitimately has an empty checklist and everything comes out of the box
+  // "unexpected". Without knowing that, the screen chips every single pair "not on PO"
+  // for the entire job and reads as if the whole shipment were a surprise. The SKUs that
+  // ARE on the order-level list are what tells the two apart.
+  const isWholeOrderPo = receivingPo?.po?.manifest_scope === 'po';
+  const orderManifestSkus = React.useMemo(() => new Set(
+    (receivingPo?.lines || []).filter((l) => l.po_box_id == null)
+      .map((l) => String(l.sku || '').toUpperCase().replace(/[\s-]/g, '')),
+  ), [receivingPo]);
   function buildManifestItems(poBoxId) {
     const bySku = new Map();
     for (const l of manifestLinesFor(poBoxId)) {
@@ -722,7 +732,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // IS a legitimate outcome (the whole label came up short), just never a silent one.
     if (isPoReceive && totalItems === 0 && !emptyBoxAck.current) {
       emptyBoxAck.current = true;
-      setError(`Nothing is checked off — tick each pair as you pull it from the box. If this label really arrived empty, press Review again to record all ${manifestExpected} pair${manifestExpected === 1 ? '' : 's'} as short.`);
+      setError(isWholeOrderPo
+        // Nothing to tick off on a whole-order PO, so the "as short" wording would be
+        // wrong — there's no per-label expectation to fall short of.
+        ? 'Nothing counted in this box — add each pair you pulled out. If the box really was empty, press Review again to record it as received with nothing in it.'
+        : `Nothing is checked off — tick each pair as you pull it from the box. If this label really arrived empty, press Review again to record all ${manifestExpected} pair${manifestExpected === 1 ? '' : 's'} as short.`);
       return;
     }
     // PO-manifest: reserve VINs for the received units so each shoe is flaggable.
@@ -1060,7 +1074,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               )}
               {isPoReceive && activeSlot != null ? (
                 <ManifestChecklist boxNumber={activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
-                  kind={boxSlots[activeSlot]?.kind}
+                  kind={boxSlots[activeSlot]?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
                   items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
                   onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} />
               ) : (
@@ -1575,8 +1589,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
    list is the picking guide and whatever stays unticked is the shortage. Adjust the
    "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
    issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem }) {
+function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem, wholeOrder = false, orderSkus }) {
   const done = expectedUnits > 0 && totalItems >= expectedUnits;
+  // On a whole-order PO there is no per-label expectation to count against, so "0 of 0
+  // checked" is noise; what matters is the running count of what came out of this box.
+  const onOrder = (sku) => !!orderSkus?.has(String(sku || '').toUpperCase().replace(/[\s-]/g, ''));
   // A reship isn't one of the supplier's numbered boxes — every other screen calls it
   // the replacement shipment, and "Box 4" here would read as a fourth original label.
   const title = kind === 'replacement' ? 'Replacement shipment' : `Box ${boxNumber}`;
@@ -1584,25 +1601,35 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
     <div className="card po-manifest">
       <div className="step-head">
         <h3 className="rows-title">
-          {title} · manifest{' '}
+          {title} · {wholeOrder ? 'contents' : 'manifest'}{' '}
           <span className={`po-manifest-progress ${done ? 'done' : ''}`}>
-            {totalItems} of {expectedUnits} checked
+            {wholeOrder ? `${totalItems} counted` : `${totalItems} of ${expectedUnits} checked`}
           </span>
         </h3>
-        <button className="btn sm" onClick={onAddUnexpected}>+ Add unexpected</button>
+        <button className="btn sm" onClick={onAddUnexpected}>+ Add {wholeOrder ? 'item' : 'unexpected'}</button>
       </div>
       {tracking ? <div className="muted sm po-manifest-track"><Icon name="tag" /> {tracking}</div> : null}
+      {wholeOrder && (
+        <p className="muted sm po-manifest-whole">
+          This order was manifested as <b>one whole-order list</b>, not box by box — so there's nothing
+          to tick off per label. Scan everything you pull out of this box; it's checked against the
+          supplier's list for the order as a whole once every box is in.
+        </p>
+      )}
       {items.length === 0 ? (
-        <p className="muted">This label had no expected items. Use “Add unexpected” for anything found in the box.</p>
+        <p className="muted">{wholeOrder
+          ? 'Nothing counted in this box yet — tap “Add item” for each pair you pull out.'
+          : 'This label had no expected items. Use “Add unexpected” for anything found in the box.'}</p>
       ) : (
         <div className="po-manifest-list">
           {items.map((it) => (
-            <div className={`po-manifest-item ${it.expected ? '' : 'overage'}`} key={it.key}>
+            <div className={`po-manifest-item ${it.expected || (wholeOrder && onOrder(it.sku)) ? '' : 'overage'}`} key={it.key}>
               <div className="po-manifest-head">
                 <span className="po-manifest-name">{it.name} <span className="muted">— {it.sku || '—'}</span></span>
-                {it.expected
-                  ? null
-                  : <span className="po-chip receiving">Overage · not on PO</span>}
+                {it.expected ? null
+                  : wholeOrder && onOrder(it.sku)
+                    ? <span className="po-chip ok">On the order list</span>
+                    : <span className="po-chip receiving">Overage · not on PO</span>}
                 {!it.expected && <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => onRemoveItem(it.key)}>×</button>}
               </div>
               {[...it.sizes].sort((a, b) => compareSizes(a.size, b.size)).map((s) => {

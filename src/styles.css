@@ -2159,6 +2159,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-review-money { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
   margin: 12px 0; padding-top: 12px; border-top: 1px solid var(--border); text-align: left; }
 
+/* "What we received, box by box" — our own count on the reconciliation screen. */
+.rcn-rbox { padding: 10px 0; border-top: 1px solid var(--border); }
+.rcn-rbox:first-of-type { border-top: 0; }
+.rcn-rbox-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.rcn-rbox-units { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+.rcn-rbox-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.rcn-rbox-list li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; flex-wrap: wrap; }
+.rcn-rbox-name { font-weight: 600; }
+.rcn-rbox-qty { margin-left: auto; font-variant-numeric: tabular-nums; }
+
 /* Ship-to: the address suppliers send boxes to. */
 .po-shipto { border-left: 3px solid var(--primary); }
 .po-shipto-h { letter-spacing: 0.08em; }

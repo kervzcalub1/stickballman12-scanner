@@ -155,6 +155,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
           po: r.po, rows: r.rows, summary: r.summary,
           intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
           resolution: r.resolution, steps: r.steps, comments: r.comments || [],
+          receivedBoxes: r.received_boxes || [],
         });
         setNote(r.po.reconcile_note || ''); setNoteSaved(r.po.reconcile_note || '');
       })
@@ -186,6 +187,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
         ...d, po: r.po, rows: r.rows, summary: r.summary,
         intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
         resolution: r.resolution, steps: r.steps, comments: r.comments || [],
+        receivedBoxes: r.received_boxes || d.receivedBoxes,
       }));
       loadList();
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
@@ -231,7 +233,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
     setBusy(true);
     try {
       const r = await api.poReconcile(openId);
-      setDetail((d) => ({ ...d, po: r.po, rows: r.rows, summary: r.summary }));
+      setDetail((d) => ({ ...d, po: r.po, rows: r.rows, summary: r.summary, receivedBoxes: r.received_boxes || d.receivedBoxes }));
       loadList();
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
@@ -414,8 +416,56 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                   Hidden on a blind receipt: there is no manifest to print, and an empty
                   slip would read as "the supplier declared nothing" rather than "nobody
                   ever entered one". */}
-              {!blind && <ManifestPrint poId={openId} poCode={po.po_code} onSignOut={onSignOut} />}
+              {!blind && (
+                <ManifestPrint poId={openId} poCode={po.po_code}
+                  received={detail.receivedBoxes} compare={{ rows: detail.rows }} onSignOut={onSignOut} />
+              )}
+              {/* On a blind receipt there's no manifest to print, but "what we received"
+                  is exactly what's worth sending — it's the only record of the shipment. */}
+              {blind && detail.receivedBoxes?.length > 0 && (
+                <ManifestPrint poId={openId} poCode={po.po_code} label="Our count:"
+                  received={detail.receivedBoxes} compare={{ rows: detail.rows }} onSignOut={onSignOut} />
+              )}
             </div>
+
+            {/* OUR count, box by box — the evidence in a shortage conversation. The
+                supplier's manifest says what they claim they sent; this says what came
+                out of each box we opened, with that box's tracking number on it. */}
+            {detail.receivedBoxes?.length > 0 && (
+              <div className="card rcn-received">
+                <div className="step-head">
+                  <h3 className="rows-title">
+                    What we received, box by box{' '}
+                    <span className="muted">
+                      ({detail.receivedBoxes.reduce((n, b) => n + b.units, 0)} unit
+                      {detail.receivedBoxes.reduce((n, b) => n + b.units, 0) === 1 ? '' : 's'})
+                    </span>
+                  </h3>
+                </div>
+                {detail.receivedBoxes.map((b, i) => (
+                  <div className="rcn-rbox" key={b.id ?? `loose-${i}`}>
+                    <div className="rcn-rbox-head">
+                      <b>{b.box_number ? `Box ${b.box_number}` : 'Not recorded against a box'}</b>
+                      {b.tracking_number && <span className="muted sm"> · {b.tracking_number}</span>}
+                      <span className="rcn-rbox-units">{b.units} unit{b.units === 1 ? '' : 's'}</span>
+                    </div>
+                    {b.items.length === 0 ? (
+                      <p className="muted xs">Opened, nothing in it.</p>
+                    ) : (
+                      <ul className="rcn-rbox-list">
+                        {b.items.map((it) => (
+                          <li key={`${it.sku}|${it.size}`}>
+                            <span className="rcn-rbox-name">{it.name || it.sku}</span>
+                            <span className="muted xs">{it.sku} · size {it.size}</span>
+                            <span className="rcn-rbox-qty">×{it.qty}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="card">
               <div className="rcn-toolbar">

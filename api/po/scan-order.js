@@ -28,8 +28,15 @@ export default async function handler(req, res) {
   try {
     const po = await getPo(poId);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
-    if (po.status !== 'draft')
-      return send(res, 409, { ok: false, error: 'This order is already shipped — it can no longer be edited.' });
+    // Editable while the order is still coming AND while it's being received. The whole
+    // premise of a whole-order manifest is a supplier who doesn't use the portal, so their
+    // list routinely turns up after the boxes do — locking it at `draft` meant a list that
+    // arrived an hour late could never be entered, and the order reconciled "received
+    // blind" with every pair reading as an overage. These lines only feed `expected`; the
+    // warehouse's own count is recorded independently, so a late manifest can't rewrite
+    // what was received.
+    if (po.status !== 'draft' && po.status !== 'receiving')
+      return send(res, 409, { ok: false, error: 'This order is already closed — it can no longer be edited.' });
     if (await poHasBoxLines(poId))
       return send(res, 409, { ok: false, error: 'This PO already has a per-box manifest — add items to a label instead.' });
 

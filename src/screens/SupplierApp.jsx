@@ -27,12 +27,37 @@ function PoStatusChip({ status }) {
   return <span className={`po-chip ${s.cls}`}>{s.label}</span>;
 }
 
+// Where the boxes go. Shown on the supplier's order and printed on the manifest, so a
+// box and its paperwork carry the same address.
+function ShipToCard({ shipTo }) {
+  if (!shipTo || !String(shipTo.street || '').trim()) return null;
+  const cityLine = [shipTo.city, shipTo.state].filter(Boolean).join(', ');
+  return (
+    <div className="card po-shipto">
+      <div className="po-shipto-h muted xs">SHIP TO</div>
+      <div className="po-shipto-body">
+        <b>{shipTo.name}</b>
+        <div>{shipTo.street}</div>
+        <div>{[cityLine, shipTo.zip].filter(Boolean).join(' ')}</div>
+        {(shipTo.phone || shipTo.email) && (
+          <div className="po-shipto-contact muted sm">
+            {shipTo.phone && <a href={`tel:${String(shipTo.phone).replace(/[^\d+]/g, '')}`}>{shipTo.phone}</a>}
+            {shipTo.phone && shipTo.email ? ' · ' : ''}
+            {shipTo.email && <a href={`mailto:${shipTo.email}`}>{shipTo.email}</a>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function SupplierApp({ user, onSignOut }) {
   const [pos, setPos] = useState(null);
   const [error, setError] = useState('');
   const [openId, setOpenId] = useState(null);
   const [detail, setDetail] = useState(null); // { po, boxes, lines }
   const [businessName, setBusinessName] = useState(''); // for "…'s Staff" on-behalf attribution
+  const [shipTo, setShipTo] = useState(null); // where to send the boxes (from po/get)
   // The supplier only ever sees that a line was entered by the business's staff — never
   // which staff member (the server strips the identity from their /po/get response).
   const staffLabel = `${businessName || 'Stickballman12 LLC'}'s Staff`;
@@ -71,7 +96,7 @@ export function SupplierApp({ user, onSignOut }) {
   const openPo = (id) => {
     setOpenId(id); setDetail(null); setError('');
     api.poGet(id)
-      .then((r) => { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); setBusinessName(r.businessName || ''); })
+      .then((r) => { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); setBusinessName(r.businessName || ''); setShipTo(r.shipTo || null); })
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
   const refreshDetail = () => { if (openId) openPo(openId); };
@@ -175,6 +200,21 @@ export function SupplierApp({ user, onSignOut }) {
   // ---- Detail view --------------------------------------------------------
   const po = detail?.po;
   const linesFor = (boxId) => (detail?.lines || []).filter((l) => Number(l.po_box_id) === Number(boxId));
+  const money = (n) => `$${Number(n || 0).toFixed(2)}`;
+  // What a label cost: cost and tip are both PER PAIR on each size's line, so this is
+  // qty × cost and qty × tip summed. Pairs with nothing declared contribute nothing and
+  // are counted separately, so a partial total is never passed off as the whole number.
+  const boxMoney = (boxId) => {
+    let items = 0; let tips = 0; let declared = 0; let blank = 0;
+    for (const l of linesFor(boxId)) {
+      const q = l.qty_expected || 0;
+      const c = l.unit_cost == null || l.unit_cost === '' ? null : Number(l.unit_cost);
+      const t = l.tip == null || l.tip === '' ? null : Number(l.tip);
+      if (c == null && t == null) { blank += q; continue; }
+      items += (c || 0) * q; tips += (t || 0) * q; declared += q;
+    }
+    return { items, tips, total: items + tips, blank, any: declared > 0 };
+  };
   return (
     <div className="app">
       <TopBar title={po ? po.po_code : 'Shipment'} onSignOut={onSignOut}
@@ -213,9 +253,18 @@ export function SupplierApp({ user, onSignOut }) {
               )}
             </div>
 
+            {/* Only while a box still has to go out. Keyed on the LABELS, not the PO
+                status: an order can be part-received while one label is still being
+                filled, and that label's box still needs an address. Once everything has
+                shipped the block is noise on screen (it stays on the printed manifest). */}
+            {detail.boxes.some((b) => b.status === 'pending' || b.status === 'packed') && (
+              <ShipToCard shipTo={shipTo} />
+            )}
+
             {detail.boxes.map((box) => {
               const lines = linesFor(box.id);
               const units = lines.reduce((n, l) => n + (l.qty_expected || 0), 0);
+              const m = boxMoney(box.id);
               // A replacement label was added by the warehouse to cover a shortage on this
               // order — the supplier never packed it. Without saying so it reads as a box
               // they forgot to fill: numbered like their own, and empty.
@@ -314,6 +363,18 @@ export function SupplierApp({ user, onSignOut }) {
                         ))}
                       </ul>
                     )
+                  )}
+
+                  {/* What this label cost — the per-pair costs and tips added up. The
+                      fields themselves are on each line, where the money was spent. */}
+                  {!isReplacement && (m.any || m.blank > 0) && (
+                    <div className="po-box-total">
+                      <span className="muted xs">
+                        {m.any ? `Cost ${money(m.items)}${m.tips > 0 ? ` + tips ${money(m.tips)}` : ''}` : ''}
+                        {m.blank > 0 ? `${m.any ? ' · ' : ''}${m.blank} pair${m.blank === 1 ? '' : 's'} with nothing entered` : ''}
+                      </span>
+                      {m.any && <span className="po-box-total-n">{money(m.total)}</span>}
+                    </div>
                   )}
 
                   {isFilling && (
@@ -420,6 +481,7 @@ export function SupplierApp({ user, onSignOut }) {
       {closeReview && (() => {
         const lines = linesFor(closeReview.id);
         const units = lines.reduce((n, l) => n + (l.qty_expected || 0), 0);
+        const m = boxMoney(closeReview.id);
         return (
           <div className="modal-overlay" onClick={() => setCloseReview(null)}>
             <div className="modal confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
@@ -436,6 +498,17 @@ export function SupplierApp({ user, onSignOut }) {
                 </ul>
               )}
               <p className="po-review-total"><b>{units}</b> unit{units === 1 ? '' : 's'} · <b>{lines.length}</b> line{lines.length === 1 ? '' : 's'}</p>
+              {/* The money as it stands. Anything missing is still fixable — "Keep
+                  editing" goes back to the lines, and a closed label can be reopened. */}
+              {(m.any || m.blank > 0) && (
+                <div className="po-review-money">
+                  <span className="muted xs">
+                    {m.any ? `Cost ${money(m.items)}${m.tips > 0 ? ` + tips ${money(m.tips)}` : ''}` : ''}
+                    {m.blank > 0 ? `${m.any ? ' · ' : ''}${m.blank} pair${m.blank === 1 ? '' : 's'} with no cost or tip` : ''}
+                  </span>
+                  {m.any && <span className="po-box-total-n">{money(m.total)}</span>}
+                </div>
+              )}
               <div className="modal-actions">
                 <button type="button" className="btn ghost" disabled={busy} onClick={() => setCloseReview(null)}>Keep editing</button>
                 <button type="button" className="btn primary" disabled={busy || units < 1} onClick={() => doCloseBox(closeReview)}>Close box for shipment</button>

@@ -1,12 +1,13 @@
-// GET  /api/settings           (any authenticated user) -> { ok, priceMarkupPct }
-// POST /api/settings { priceMarkupPct }  (admin / superadmin) -> { ok, priceMarkupPct }
+// GET  /api/settings           (any authenticated user) -> { ok, priceMarkupPct, shipTo }
+// POST /api/settings { priceMarkupPct? , shipTo? }  (admin / superadmin)
 //
-// App-wide settings. Currently just the price margin percent (GI → Final markup),
-// which every logged-in user needs to read (to render "GI + N%" and compute Final)
-// but only admin/superadmin can change.
+// App-wide settings: the price margin percent (GI → Final markup), which every logged-in
+// user needs to read but only admin/superadmin can change, and the ship-to address —
+// where suppliers send their boxes, printed on the manifest. Suppliers read this one
+// (requireAuth covers them), which is the point of it living here.
 
 import { getJsonBody, send, applySecurity, rateLimit, requireAuth, requireAdmin } from './_lib/util.js';
-import { getPriceMarkupPct, setSetting, recomputeUnlistedPrices, dbConfigured } from './_lib/db.js';
+import { getPriceMarkupPct, setSetting, recomputeUnlistedPrices, getShipTo, setShipTo, SHIP_TO_FIELDS, dbConfigured } from './_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -16,7 +17,8 @@ export default async function handler(req, res) {
     const user = requireAuth(req, res);
     if (!user) return;
     const priceMarkupPct = await getPriceMarkupPct();
-    return send(res, 200, { ok: true, priceMarkupPct });
+    const shipTo = await getShipTo();
+    return send(res, 200, { ok: true, priceMarkupPct, shipTo });
   }
 
   if (req.method === 'POST') {
@@ -25,13 +27,34 @@ export default async function handler(req, res) {
     if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
       return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
     const body = await getJsonBody(req);
+    const who = admin.name || admin.username || 'admin';
+
+    // Ship-to is saved on its own — the two settings live on separate forms and a save of
+    // one must not require (or silently rewrite) the other.
+    if (body.shipTo !== undefined) {
+      if (!body.shipTo || typeof body.shipTo !== 'object')
+        return send(res, 400, { ok: false, error: 'Invalid shipping address.' });
+      const patch = {};
+      for (const f of SHIP_TO_FIELDS) if (body.shipTo[f] !== undefined) patch[f] = body.shipTo[f];
+      if (!Object.keys(patch).length) return send(res, 400, { ok: false, error: 'Nothing to update.' });
+      // The street and the city/state/zip line are what make a parcel deliverable; a
+      // manifest that prints a name over a blank address is worse than no block at all.
+      const next = { ...(await getShipTo()), ...patch };
+      for (const f of ['name', 'street', 'city', 'state', 'zip']) {
+        if (!String(next[f] ?? '').trim())
+          return send(res, 400, { ok: false, error: 'Name, street, city, state and ZIP are all required.' });
+      }
+      const shipTo = await setShipTo(patch, who);
+      return send(res, 200, { ok: true, shipTo });
+    }
+
     const pct = Number(body.priceMarkupPct);
     if (!Number.isFinite(pct) || pct < 0 || pct > 200)
       return send(res, 400, { ok: false, error: 'Enter a margin between 0 and 200%.' });
     // Store a tidy number (drop trailing .0), e.g. 20, 22.5.
     const newPct = Math.round(pct * 100) / 100;
     const oldPct = await getPriceMarkupPct(); // before the write, to re-price unlisted items
-    await setSetting('price_markup_pct', String(newPct), admin.name || admin.username || 'admin');
+    await setSetting('price_markup_pct', String(newPct), who);
     // Apply the new margin to still-unlisted items (off II + off every store),
     // preserving manual overrides. Best-effort — never fail the save on this.
     let repriced = 0;

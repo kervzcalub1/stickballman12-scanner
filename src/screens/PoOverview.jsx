@@ -242,7 +242,11 @@ export function PoOverview({ onHome, onSignOut }) {
                                           {lines.map((l) => (
                                             <li key={l.id}>
                                               <span className="po-line-name">{l.name || l.sku}</span>
-                                              <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                                              <span className="po-line-meta">
+                                                {l.sku} · size {l.size} · ×{l.qty_expected}
+                                                {l.unit_cost != null && l.unit_cost !== '' && ` · $${Number(l.unit_cost).toFixed(2)} ea`}
+                                                {l.tip != null && l.tip !== '' && ` · tip $${Number(l.tip).toFixed(2)} ea`}
+                                              </span>
                                               {l.entered_on_behalf && (
                                                 <span className="po-line-attribution muted xs">
                                                   Entered by {l.entered_by_name || l.entered_by_username || 'staff'} · on supplier’s behalf
@@ -252,6 +256,31 @@ export function PoOverview({ onHome, onSignOut }) {
                                           ))}
                                         </ul>
                                       )}
+                                      {/* What the supplier says this box cost them — cost and tip are
+                                          both per pair, on the line for that size. Read-only here (the
+                                          supplier enters it in their own portal), but staff need to see
+                                          it and this is the only place they can. */}
+                                      {(() => {
+                                        let items = 0; let tips = 0; let blank = 0; let any = false;
+                                        for (const l of lines) {
+                                          const q = l.qty_expected || 0;
+                                          const c = l.unit_cost == null || l.unit_cost === '' ? null : Number(l.unit_cost);
+                                          const t = l.tip == null || l.tip === '' ? null : Number(l.tip);
+                                          if (c == null && t == null) { blank += q; continue; }
+                                          items += (c || 0) * q; tips += (t || 0) * q; any = true;
+                                        }
+                                        if (!any) return null;
+                                        const usd = (n) => `$${Number(n || 0).toFixed(2)}`;
+                                        return (
+                                          <div className="po-box-total">
+                                            <span className="muted xs">
+                                              Cost {usd(items)}{tips > 0 ? ` + tips ${usd(tips)}` : ''}
+                                              {blank > 0 ? ` · ${blank} pair${blank === 1 ? '' : 's'} with nothing entered` : ''}
+                                            </span>
+                                            <span className="po-box-total-n">{usd(items + tips)}</span>
+                                          </div>
+                                        );
+                                      })()}
                                       {canFill && lines.length === 0 && (
                                         <p className="muted xs po-ov-fill-hint">{isReplacement
                                           ? 'No items declared yet — enter what the supplier says they’re reshipping so the warehouse can check the box off against it. It won’t change the shortage on the original order.'

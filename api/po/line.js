@@ -1,12 +1,12 @@
-// POST /api/po/line  (supplier / ph_team / admin)  { lineId, qty?, size? }
-// Edits an expected line's quantity and/or size; qty <= 0 removes the line. Only on a
+// POST /api/po/line  (supplier / ph_team / admin)  { lineId, qty?, size?, unitCost?, tip? }
+// Edits an expected line's quantity, size, cost and/or tip per pair; qty <= 0 removes the line. Only on a
 // DRAFT PO while its label is still pending — or, for a REPLACEMENT label, any time before
 // the order is archived (`manifestEditBlock`). Changing the size into an existing
 // SKU+size line on the same label merges the two. The supplier edits their own manifest;
 // PH/admin edit ON THEIR BEHALF (re-stamps entered_by + entered_on_behalf on the surviving row).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoLine, getPoBox, getPo, updatePoLine, dbConfigured } from '../_lib/db.js';
-import { manifestEditBlock } from '../_lib/po-manifest.js';
+import { manifestEditBlock, parseMoney } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -22,7 +22,15 @@ export default async function handler(req, res) {
   if (!Number.isInteger(lineId)) return send(res, 400, { ok: false, error: 'A valid line is required.' });
   const hasQty = body.qty !== undefined;
   const hasSize = body.size !== undefined;
-  if (!hasQty && !hasSize) return send(res, 400, { ok: false, error: 'Nothing to update.' });
+  // An emptied money field CLEARS it (null) rather than storing $0 — "I don't know what
+  // this pair cost" and "this pair was free" are different claims. A junk value is
+  // rejected here (unlike at scan time) because this edit is the whole request.
+  const unitCost = parseMoney(body.unitCost);
+  const tip = parseMoney(body.tip);
+  if (Number.isNaN(unitCost)) return send(res, 400, { ok: false, error: 'Enter a cost between 0 and 10,000,000.' });
+  if (Number.isNaN(tip)) return send(res, 400, { ok: false, error: 'Enter a tip between 0 and 10,000,000.' });
+  if (!hasQty && !hasSize && unitCost === undefined && tip === undefined)
+    return send(res, 400, { ok: false, error: 'Nothing to update.' });
   const qty = hasQty ? Math.min(999, Math.max(0, parseInt(body.qty, 10) || 0)) : undefined;
   const size = hasSize ? String(body.size ?? '').trim().slice(0, 20) : undefined;
   if (hasSize && !size) return send(res, 400, { ok: false, error: 'Size can’t be blank.' });
@@ -45,7 +53,7 @@ export default async function handler(req, res) {
     if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
 
     const { line: updated, removed, merged } = await updatePoLine(lineId, {
-      size, qty, enteredBy, enteredOnBehalf: onBehalf,
+      size, qty, unitCost, tip, enteredBy, enteredOnBehalf: onBehalf,
     });
     return send(res, 200, { ok: true, line: updated, removed, merged });
   } catch (e) {

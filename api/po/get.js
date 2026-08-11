@@ -1,7 +1,7 @@
 // GET /api/po/get?id=  — full PO (header + labels + expected lines).
 // A supplier is restricted to their own POs; staff/admin see any.
 import { send, applySecurity, requireRole, isPrivileged } from '../_lib/util.js';
-import { getPoFull, getBusinessName, dbConfigured } from '../_lib/db.js';
+import { getPoFull, getBusinessName, getShipTo, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -20,6 +20,9 @@ export default async function handler(req, res) {
         && Number(data.po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
     const businessName = await getBusinessName();
+    // Where the supplier sends the box. Served here so the manifest PDF and the supplier
+    // portal both get it from the fetch they already make.
+    const shipTo = await getShipTo();
     // The supplier must never see WHICH staff member entered a line on their behalf —
     // only that it was entered by the business's staff. Strip the identity but keep the
     // on-behalf flag so their portal can show the generic "<business>'s Staff" note.
@@ -31,7 +34,7 @@ export default async function handler(req, res) {
       const { reconcile_note_by, ...po } = data.po;
       data.po = po;
     }
-    return send(res, 200, { ok: true, businessName, ...data });
+    return send(res, 200, { ok: true, businessName, shipTo, ...data });
   } catch (e) {
     console.error('[po/get]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load the purchase order.' });

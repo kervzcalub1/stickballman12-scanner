@@ -1,11 +1,12 @@
 // POST /api/po/scan-order  (ph_team / admin)
-//   { poId, sku, size, qty?, name?, upc?, colorway?, gender?, unitCost? }
+//   { poId, sku, size, qty?, name?, upc?, colorway?, gender?, unitCost?, tip? }
 // Whole-order manifest (Path C): the supplier gave ONE list for the whole purchase with no
 // per-box breakdown, so PH enters it against the PO itself (a po_line with po_box_id NULL)
 // rather than a specific label. Flips the PO to manifest_scope='po'. Always on-behalf.
 // A PO can't mix a per-box manifest and a whole-order one. Writes only po_lines.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getPo, poHasBoxLines, addPoOrderScan, setPoManifestScope, dbConfigured } from '../_lib/db.js';
+import { money } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -42,7 +43,8 @@ export default async function handler(req, res) {
       upc: String(body.upc ?? '').trim().slice(0, 40) || null,
       colorway: String(body.colorway ?? '').trim().slice(0, 120) || null,
       gender: String(body.gender ?? '').trim().slice(0, 20) || null,
-      unitCost: body.unitCost != null && body.unitCost !== '' ? Number(body.unitCost) : null,
+      unitCost: money(body.unitCost),
+      tip: money(body.tip),
       enteredBy,
       enteredOnBehalf: true,
     });

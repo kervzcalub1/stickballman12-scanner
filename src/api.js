@@ -90,6 +90,8 @@ export const api = {
   // App settings (price margin, …). GET is any authed user; POST is admin/superadmin.
   getSettings: () => get('/api/settings'),
   setPriceMarkup: (priceMarkupPct) => post('/api/settings', { priceMarkupPct }),
+  // Where suppliers send their boxes (also printed on the manifest). Admin-only write.
+  setShipTo: (shipTo) => post('/api/settings', { shipTo }),
   // Product search + sheet
   searchUpc: (upc) => post('/api/upc-search', { upc }),
   setItemUpc: (vin, upc) => post('/api/items/set-upc', { vin, upc }),

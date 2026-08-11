@@ -270,6 +270,35 @@ Two escape hatches for when a supplier won't use the scan-out portal:
   manifest"** card with the "…'s Staff" note. **Schema-touch: `po_box_id` nullable + `manifest_scope`
   + partial index → run `db:setup`.**
 
+## What the shipment cost the supplier (cost + tip, both per pair per size)
+- **Both are per pair, on the line** — `po_lines.unit_cost` (the column pre-dated any UI)
+  and `po_lines.tip`. A `po_line` is one **SKU + SIZE**, so both are *per size*: the same
+  shoe can cost, and be tipped, differently in a 9 than in an 11. The tip is kept as its
+  own column rather than folded into the cost so the two stay separately reportable.
+  **Schema-touch: `po_lines.tip` → run `db:setup`.**
+- **Entered in two places, both optional.** **Cost** and **Tip** boxes sit on each size row
+  of the `PoScanModal` draft, and again as **"Cost ea" / "Tip ea"** on each `PoLineRow`
+  afterwards. A newly added size row **inherits the money typed on the previous row**,
+  because the common case is still a run of sizes bought at one price — type it once,
+  change only the size that differs. Both ride the existing endpoints (`po/scan`,
+  `po/scan-order`, `po/line`), so the edit window is exactly the manifest's
+  (`manifestEditBlock`) — a closed label is reopened to correct a number, same as any
+  other fix.
+- **Blank is not zero, anywhere.** An emptied cost or tip writes **NULL** ("never
+  declared"), not `0.00` ("this was free") — different claims, and the totals treat them
+  differently: pairs with nothing declared are excluded from the subtotal and **counted out
+  loud** ("3 pairs with nothing entered"), so a partial total is never passed off as the
+  whole number. `api/_lib/po-manifest.js` → **`parseMoney`** is the one parser for both
+  fields and keeps the three outcomes distinct (`undefined` = not sent, `null` = clear,
+  `NaN` = unusable); **`money()`** is the scan-time variant that ignores junk rather than
+  failing a scan, while `po/line` rejects it — there the edit *is* the request. Two write
+  paths protect declared money: `addPoScan`'s upsert `COALESCE`s both fields so a re-scan
+  carrying none can't wipe them, and a **size-change merge keeps both** (the edited line's,
+  else the sibling's).
+- **Where it shows.** Supplier: `Cost $X + tips $Y = $Z` per box, on the card and in the
+  close-box review. PH: read-only on `PoOverview` — per line (`$95.00 ea · tip $10.00 ea`)
+  and the same per-box total, the only place staff can see what a supplier declared.
+
 ## Tracking pushes (17TRACK webhook) — works for the non-compliant paths too
 For the pushes to actually fire when a supplier never uses the portal:
 - **Register at PO creation.** `create.js` calls `registerTracking()` on the labels' numbers right
@@ -328,6 +357,24 @@ order-level line "match" a null/0-id box), and **replacement labels** are exclud
 "Box N of M" count and titled *Replacement shipment* (they're the warehouse's reship, not
 the supplier's packing job). Everything the PDF draws is **plain ASCII** — jsPDF's built-in
 Helvetica silently drops em-dashes, which is why "Tag / Code —" printed as a blank cell.
+
+**SHIP TO block.** Every page carries the address the boxes are sent to, boxed under the
+meta grid — a page separated from the stack still has to be routable. It comes from
+`app_settings` (`ship_to_name` / `_street` / `_city` / `_state` / `_zip` / `_phone` /
+`_email`) via **`getShipTo()`**, whose **defaults are the live address**, so it prints
+correctly with nothing configured; **`po/get` returns `shipTo`** so the PDF and the
+supplier portal both get it from a fetch they already make. A *missing* key falls back to
+the default but an explicitly **blank saved value stays blank** — otherwise clearing a line
+you don't want would undo itself on every read. Admin edits it in **Settings → Shipping
+address** (`POST /api/settings { shipTo }`, admin-only; name/street/city/state/ZIP are
+required — a name over a blank address is worse than no block at all). The supplier portal
+shows the same address as a card, and only while a label is still `pending`/`packed` —
+keyed on the LABELS, not `po.status`, since an order can be part-received while one box is
+still being filled.
+
+**Money never prints on the manifest.** Costs and tips are on-screen only. The sheet is a
+packing slip that travels taped to a box through a courier's hands; what the supplier paid
+is nobody's business along that route.
 
 **A third shape: ONE box.** `buildManifestPdf({ mode: 'perbox', boxId })` renders just that
 label's page — the sheet the SUPPLIER tapes to the box they've packed. The `Box N of M`

@@ -66,7 +66,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           <div className="batch-page-head">
             <div>
               <div className="batch-page-code">{b.batch_code} {isOpen ? <span className="badge open">Open</span> : <span className="badge done">Done</span>}</div>
-              <div className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}</div>
+              {/* A stated "no tracking number" is worth showing — otherwise this batch
+                  looks like one whose tracking simply never got typed in. */}
+              <div className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.tracking_number ? <> · {b.tracking_number}</> : b.no_tracking ? <> · no tracking #</> : ''}</div>
             </div>
             <div className="batch-progress">
               <b>{received}{expected ? `/${expected}` : ''}</b><span className="muted sm"> boxes</span>

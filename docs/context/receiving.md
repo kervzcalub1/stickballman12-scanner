@@ -14,7 +14,18 @@ Full detail: `in-store.md`.
 1. **Shipment details** — buyer defaults to `stickballman12`; supplier + date
    required. **`api/batches/commit` now enforces supplier AND tracking # server-side**
    for a receiving batch (400 if either is blank) — a batch must be traceable to its
-   shipment; rescale is exempt. **A negative cost is rejected** (400, not silently
+   shipment; rescale is exempt.
+   **"No tracking number" checkbox** (`batches.no_tracking`, `header.noTracking`) is the
+   only way past the tracking half: some inbounds genuinely arrive without one
+   (hand-delivered, local pickup, a supplier who never sent one). It's a **stated fact,
+   stored on the batch** — deliberately distinct from `tracking_number IS NULL`, which is
+   just an empty field. Ticking it **clears and disables** the field, and the server
+   **nulls any tracking sent alongside the flag**, so the two can never disagree. Also
+   enforced client-side at step 1 (`goStep2`) so the refusal lands before every shoe has
+   been scanned, not at commit. In **multi-box** it hides the per-box tracking inputs
+   (rows read "No tracking number") and rides along to `createOpenBatch`; **hidden while
+   receiving against a PO**, whose numbers come from the labels. It **resets after each
+   commit** — left sticky, the next shipment would quietly commit as untracked. **A negative cost is rejected** (400, not silently
    nulled). The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
    list + auto-saved custom names); picking "Custom…" and typing a new vendor
    auto-saves it on commit (`addSupplier`, V6 Feature 1). Tracking typed /

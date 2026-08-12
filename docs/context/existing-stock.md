@@ -51,8 +51,9 @@ can't silently land on the wrong shelf.
   = true`. That's the truth, and it doubles as a **backstop**: even if a PH query
   ever missed the exclusion, these read as fully synced and can't inflate a badge.
 - Response carries `shelved: { updated, noBoxBlocked, location }`. The pairs have **no
-  VIN stickers yet**, so the screen goes straight to the **`LabelSheet`** — the one
-  part of this that can't fix itself later.
+  VIN stickers yet**, so the screen goes straight to the **`LabelSheet`** print dialog
+  — the one part of this that can't fix itself later. The "counted in" summary is held
+  back until that dialog closes, so two modals never stack.
 
 ## PH exclusion (the hard invariant)
 `api/_lib/db.js` exports **`PH_EXCLUDED_KINDS = ['instore','existing']`** — one list,

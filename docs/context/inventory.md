@@ -33,10 +33,12 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
   can't be nested inside one.
 - Bulk **Edit status** → `api/items/bulk-status.js` (`bulkSetStatus`), one
   `status_change` event per VIN; sold/shipped cascades clear sync flags.
-- **Print labels** → `LabelSheet` (VIN barcodes, `jsbarcode` CODE128). Builds an
-  exact-size, one-label-per-page **PDF** (`src/lib/labelPdf.js`) instead of
-  `window.print()` — see `docs/context/locations.md` "Labels" for why (iOS
-  AirPrint mis-scaling + url/date footer).
+- **Print labels** → `LabelSheet` (VIN barcodes, `jsbarcode` CODE128) — a small
+  stock-picker dialog, **no on-screen label preview**. Builds an exact-size,
+  one-label-per-page **PDF** (`src/lib/labelPdf.js`) instead of `window.print()`
+  and hands it to the share sheet / print dialog — see `docs/context/locations.md`
+  "Labels" for why (iOS AirPrint mis-scaling + url/date footer) and "One step, not
+  three" for the dispatch order.
 - CSV export.
 
 ## Listing photos (thumbnails + detail view/delete)

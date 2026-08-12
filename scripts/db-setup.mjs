@@ -353,6 +353,11 @@ await sql(`
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS batch_tag      TEXT`);
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS expected_boxes INT`);
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS duplicate_of   BIGINT REFERENCES batches(id)`);
+// Some inbounds genuinely arrive with no tracking number (hand-delivered, local
+// pickup, a supplier who never sent one). `no_tracking` is staff STATING that,
+// which is a different fact from `tracking_number IS NULL` — the latter is just
+// an empty field, and a receiving batch can't otherwise commit without one.
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS no_tracking    BOOLEAN NOT NULL DEFAULT false`);
 await sql(`CREATE INDEX IF NOT EXISTS batches_tracking_idx ON batches (tracking_number)`);
 
 // One row per physical box in a batch; each box carries its own tracking number.

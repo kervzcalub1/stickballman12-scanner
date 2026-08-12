@@ -67,7 +67,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [step, setStep] = useState(1);         // receiving: 1 shipment·2 items·3 review·4 issues | rescale: 1 details·2 items
 
   const [header, setHeader] = useState({
-    buyer: 'stickballman12', supplier: '', tracking: '', dateReceived: today,
+    buyer: 'stickballman12', supplier: '', tracking: '', noTracking: false, dateReceived: today,
     defaultCost: '', notes: '', specialRules: '', origin: isInstore ? '' : 'returned', originOther: '',
     batchTag: '', expectedBoxes: '1', // V6 Feature 7: >1 → open multi-box batch
   });
@@ -76,6 +76,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     ? (String(header.originOther || '').trim() || 'Other')
     : header.origin;
   const setH = (k, v) => setHeader((h) => ({ ...h, [k]: v }));
+  // "No tracking number" clears whatever was typed. The checkbox and the field must
+  // never disagree about what this shipment had — the server drops the field when the
+  // flag is set, so a value left on screen would be a lie about what got recorded.
+  const setNoTracking = (v) => setHeader((h) => ({ ...h, noTracking: v, tracking: v ? '' : h.tracking }));
 
   // V6 PO Phase 2: receive a shipment against a purchase order. When set, Step 1 is
   // pre-filled from the PO (supplier, tag, each label → a box slot) and the commit
@@ -721,6 +725,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (!noShipment && !isBoxMode && !String(header.supplier).trim()) { setError('Select a supplier.'); return; }
     if (!noShipment && !isBoxMode && !String(header.buyer).trim()) { setError('Enter the buyer.'); return; }
     if (!noShipment && !isBoxMode && !String(header.dateReceived).trim()) { setError('Enter the date.'); return; }
+    // The server requires this for a single-box receiving batch. Catch it HERE rather
+    // than at commit, which is after every shoe has been scanned in.
+    if (!noShipment && !isBoxMode && !isMultiBoxNew && !header.noTracking && !String(header.tracking).trim()) {
+      setError('Enter the tracking # — or tick “No tracking number”.'); return;
+    }
     if (isRescale && header.origin === 'other' && !String(header.originOther).trim()) { setError('Enter a custom reason.'); return; }
     setStep(2);
   }
@@ -858,7 +867,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         reconcile: batchRes?.reconcile || null,
       });
       setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); setStep(1);
-      setHeader((h) => ({ ...h, tracking: '', notes: '', specialRules: '' })); // keep buyer/supplier/date/cost
+      // noTracking resets with the tracking # on purpose: left sticky, the NEXT
+      // shipment would quietly commit as untracked too.
+      setHeader((h) => ({ ...h, tracking: '', noTracking: false, notes: '', specialRules: '' })); // keep buyer/supplier/date/cost
     } catch (err) {
       setShowConfirm(false);
       if (err.unauthorized) return onSignOut();
@@ -959,11 +970,29 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {/* Single-box / box-mode: one tracking # here. Multi-box enters
                       a tracking # per box on the box list (next screen). */}
                   {!noShipment && !isMultiBoxNew && (
-                    <label>Tracking #
+                    <label>Tracking #{isBoxMode || header.noTracking ? '' : ' *'}
                       <span className="track-field">
-                        <input value={header.tracking} onChange={(e) => setH('tracking', e.target.value)} placeholder="Type, scan, or upload a photo" />
-                        <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => { setTrackingSlot(null); setScanTracking(true); }}><Icon name="camera" /></button>
-                        <button type="button" className="btn sm ghost" title="Upload / snap a label photo" onClick={() => fileRef.current?.click()} disabled={ocrBusy}>{ocrBusy ? '…' : <Icon name="image" />}</button>
+                        <input value={header.tracking} disabled={header.noTracking}
+                          onChange={(e) => setH('tracking', e.target.value)}
+                          placeholder={header.noTracking ? 'No tracking number' : 'Type, scan, or upload a photo'} />
+                        <button type="button" className="btn sm ghost" title="Scan tracking barcode" disabled={header.noTracking} onClick={() => { setTrackingSlot(null); setScanTracking(true); }}><Icon name="camera" /></button>
+                        <button type="button" className="btn sm ghost" title="Upload / snap a label photo" onClick={() => fileRef.current?.click()} disabled={ocrBusy || header.noTracking}>{ocrBusy ? '…' : <Icon name="image" />}</button>
+                      </span>
+                    </label>
+                  )}
+                  {/* Some inbounds genuinely have no tracking number — hand-delivered,
+                      local pickup, a supplier who never sent one. Ticking this is staff
+                      SAYING so; it's stored on the batch, so it reads differently from an
+                      empty field. Hidden while receiving against a PO, whose tracking
+                      numbers come from the labels themselves. */}
+                  {!noShipment && !isBoxMode && !isPoReceive && (
+                    <label className="batch-form-wide no-track-field">
+                      <span className="no-track-check">
+                        <input type="checkbox" checked={header.noTracking} onChange={(e) => setNoTracking(e.target.checked)} />
+                        <b>No tracking number</b>
+                        <span className="muted sm">{isMultiBoxNew
+                          ? '— none of these boxes has one'
+                          : '— this shipment arrived without one'}</span>
                       </span>
                     </label>
                   )}
@@ -1007,7 +1036,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {!isBoxMode && <label className="batch-form-wide">Notes<input value={header.notes} onChange={(e) => setH('notes', e.target.value)} /></label>}
                 </div>
                 {!noShipment && !isBoxMode && expectedBoxesNum > 1 && (
-                  <p className="muted sm">This is an <b>open multi-box batch</b>. Enter each box's tracking # below and tap <b>Add items</b> — do them in any order. Progress is saved as you submit each box; finish later from the <b>Batches</b> page.</p>
+                  <p className="muted sm">This is an <b>open multi-box batch</b>. {header.noTracking
+                    ? <>Tap <b>Add items</b> on each box</>
+                    : <>Enter each box's tracking # below and tap <b>Add items</b></>} — do them in any order. Progress is saved as you submit each box; finish later from the <b>Batches</b> page.</p>
                 )}
               </div>
 
@@ -1031,11 +1062,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           </>
                         ) : (
                           <>
-                            <span className="track-field box-build-track">
-                              <input value={s.tracking} placeholder="Tracking # (optional)" onChange={(e) => setSlotTracking(i, e.target.value)}
-                                onBlur={() => { if (activeBatch) persistBoxSlots(activeBatch.id); }} />
-                              <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => { setTrackingSlot(i); setScanTracking(true); }}><Icon name="camera" /></button>
-                            </span>
+                            {header.noTracking ? (
+                              <span className="box-track muted sm">No tracking number</span>
+                            ) : (
+                              <span className="track-field box-build-track">
+                                <input value={s.tracking} placeholder="Tracking # (optional)" onChange={(e) => setSlotTracking(i, e.target.value)}
+                                  onBlur={() => { if (activeBatch) persistBoxSlots(activeBatch.id); }} />
+                                <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => { setTrackingSlot(i); setScanTracking(true); }}><Icon name="camera" /></button>
+                              </span>
+                            )}
                             <button className="btn primary sm" onClick={() => openBoxSlot(i)}>Add items</button>
                           </>
                         )}

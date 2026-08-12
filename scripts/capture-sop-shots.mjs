@@ -53,11 +53,12 @@ const SHOTS = [
     id: 'receiving-step1',
     role: 'warehouse',
     path: '/receiving',
-    caption: 'Step 1 of the receiving wizard. Supplier and tracking are both required — the server rejects a batch without them.',
+    caption: 'Step 1 of the receiving wizard. Supplier and tracking are both required — unless the shipment genuinely arrived without a tracking number.',
     ready: '.batch-form',
     hotspots: [
       hot('Supplier — required. Pick from the list, or "Custom…" to add a new one (it is saved for next time).', 'select >> nth=0', 'right'),
       hot('Tracking number — required. Type it, scan the barcode, or photograph the label.', '.track-field', 'right'),
+      hot('No tracking number — tick only when the shipment really arrived without one. It is recorded on the batch.', '.no-track-check', 'left'),
       hot('Boxes expected. Set above 1 and this becomes a per-box list, each with its own tracking number.', 'input[type="number"] >> nth=0', 'right'),
     ],
   },

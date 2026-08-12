@@ -1,7 +1,7 @@
 // Shared presentational components used across screens: chrome (TopBar, clock),
 // status/sync indicators, modals (Modal, HistoryModal, PreferencesModal), the
-// calendar switcher, size chips, the Yes/No flag control, barcodes + labels, and
-// the rescale reported-vs-actual table.
+// calendar switcher, size chips, the Yes/No flag control, the label print dialog,
+// and the rescale reported-vs-actual table.
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
@@ -10,9 +10,9 @@ import { EST_FMT, PH_DATETIME, periodLabel, shiftAnchor } from '../lib/format.js
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
-import { upcDigits, upcFormat, sizeNum, sizeParts } from '../lib/codes.js';
+import { sizeNum } from '../lib/codes.js';
 import { priceBasisChip } from '../lib/ph.js';
-import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint, loadJsBarcode, isChunkLoadError } from '../lib/labelPdf.js';
+import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint, canSharePdf, isChunkLoadError } from '../lib/labelPdf.js';
 
 // Live clock, always rendered in US Eastern with a literal "EST" suffix so the
 // PH team (in PH time) is never confused about which timezone a time is in.
@@ -324,35 +324,6 @@ export function YesNo({ value, editing, onChange }) {
   );
 }
 
-// Barcode via jsbarcode (lazy-loaded). `format` defaults to CODE128 (our VIN);
-// for product UPCs pass a retail format — falls back to CODE128 if the value
-// doesn't satisfy that symbology (wrong length / bad check digit).
-// A barcode that can't be drawn used to leave an EMPTY <svg> behind — on a box
-// label that's a blank barcode column, which looks like a label with no barcode
-// rather than a broken page, so the fix (reload) is invisible. Say it instead.
-export function Barcode({ value, format = 'CODE128', displayValue = false, height = 42 }) {
-  const ref = useRef(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    setFailed(false);
-    loadJsBarcode().then((JsBarcode) => {
-      if (cancelled || !ref.current) return;
-      const opts = { displayValue, height, width: 1.6, margin: 0, fontSize: 13 };
-      // CODE128 encodes anything the retail symbologies reject (wrong length, bad
-      // check digit), so the fallback all but always draws.
-      try { JsBarcode(ref.current, value, { format, ...opts }); }
-      catch {
-        try { JsBarcode(ref.current, value, { format: 'CODE128', ...opts }); }
-        catch { setFailed(true); }
-      }
-    }).catch(() => { if (!cancelled) setFailed(true); });
-    return () => { cancelled = true; };
-  }, [value, format, displayValue, height]);
-  if (failed) return <span className="barcode-fail">Barcode didn’t load — reload the page</span>;
-  return <svg ref={ref} className="barcode-svg" />;
-}
-
 // Small square shoe thumbnail for list rows — the SKU's listing photo (side view
 // preferred, chosen server-side), falling back to the app logo when there are no
 // listing photos (or the image fails to load). When `onOpen` is given AND a photo
@@ -477,25 +448,33 @@ export function CopyText({ text, children, className = '', title }) {
   );
 }
 
-// Printable labels for label-printer rolls (Rollo / Dymo). Two types:
+// Label printing — one step. Picking Print anywhere in the app opens this dialog:
+// choose the stock, hit Print, and the PDF goes straight to the printer (desktop)
+// or the OS share sheet (phones), which is where Print actually lives on iOS.
+//
+// There used to be a full-screen on-screen preview of every label here. It was a
+// preview of a preview: the warehouse hit Print, read a page of HTML labels, hit
+// Print again, landed in Safari's PDF viewer, and had to dig Print out of the
+// share menu — three stages before the print dialog. The PDF is the thing that
+// prints, so it's the only preview worth showing, and the share sheet / viewer
+// shows it. What's left here is the one choice we can't make for them: the stock.
+//
+// Two label types:
 //  • VIN label  — our SBM- barcode (used to track every unit)
 //  • UPC label  — the product's box-style barcode (name / size / colorway / SKU)
 //    for NO-BOX shoes, recreating the manufacturer's box label so it scans like
 //    a normal boxed pair downstream.
-// `mode`: 'vin' (default — our SBM tracking label) or 'upc' (box-style label with
-// the product UPC barcode, used only from the No Box page). Box-style matches the
-// real shoe-box label: vertical UPC barcode on the left, text stacked on the right.
-// Printing generates an exact-size, one-label-per-page PDF (see lib/labelPdf.js) —
-// this is what makes labels come out at the right scale, without the browser's
-// url/date footer, on the warehouse's iPhone → Brother QL label printers.
-// Big size with the men's/women's marker beside it ("9 W"), mirroring the PDF.
-// Why the Print button did nothing, shown ON the preview — the one place the
-// user is looking. A stale chunk is the common cause and the fix is a reload, so
-// offer the reload rather than making them work that out.
+// Both are exact-size, one-label-per-page PDFs (see lib/labelPdf.js) — that's what
+// makes them come out at the right scale, without the browser's url/date footer,
+// on the warehouse's iPhone → Brother QL label printers.
+
+// Why Print failed, shown in the dialog — the one place the user is looking. A
+// stale chunk is the common cause and the fix is a reload, so offer the reload
+// rather than making them work that out.
 function PrintError({ error }) {
   if (!error) return null;
   return (
-    <div className="label-error no-print" role="alert">
+    <div className="label-error" role="alert">
       <span>{error.message || String(error)}</span>
       {isChunkLoadError(error)
         ? <button className="btn sm" onClick={() => window.location.reload()}>Reload</button>
@@ -504,132 +483,100 @@ function PrintError({ error }) {
   );
 }
 
-function BoxLabelSize({ item }) {
-  const { num, suffix } = sizeParts(item.size, item.gender, item.name);
-  return (
-    <div className="blabel-size">
-      {num || '—'}{suffix ? <span className="blabel-size-g">{suffix}</span> : null}
-    </div>
+// Shared body of the print dialog. `kind` is the labelPdf kind ('vin'|'box'|'shelf').
+//
+// The PDF is built as soon as the dialog opens (and again whenever the stock
+// changes) rather than on the Print click, for one hard reason: iOS only allows
+// `navigator.share` inside a live user gesture, and awaiting the build spends it.
+// Pre-building keeps the Print handler synchronous, which is what buys the share
+// sheet. The build is fast enough that "Preparing…" is rarely seen.
+function LabelPrintDialog({ kind, items, count, title, defaultStock, filename, onClose }) {
+  const [stock, setStock] = useState(defaultStock);
+  const [doc, setDoc] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    let dead = false;
+    setDoc(null); setError(null);
+    buildLabelPdf({ kind, items, stock })
+      .then((d) => { if (!dead) setDoc(d); })
+      .catch((e) => { if (!dead) setError(e); });
+    return () => { dead = true; };
+  }, [kind, items, stock]);
+
+  const doPrint = () => {
+    if (!doc) return;
+    try {
+      // Opened here, synchronously, because iOS blocks a `window.open` that comes
+      // later — and only when the share sheet isn't available to do the job.
+      const preWin = isTouchPrint() && !canSharePdf() ? window.open('', '_blank') : null;
+      dispatchPdf(doc, preWin, filename);
+      onClose();
+    } catch (e) { setError(e); }
+  };
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal print-dialog" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">{title}</h3>
+        <p className="modal-msg">{count} label{count === 1 ? '' : 's'} — one per page, sized to the stock.</p>
+        <label className="print-stock">
+          <span className="muted xs">Label stock</span>
+          <select value={stock} onChange={(e) => setStock(e.target.value)}>
+            {Object.entries(LABEL_STOCKS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </label>
+        <PrintError error={error} />
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" onClick={doPrint} disabled={!doc || !!error}>
+            <Icon name="print" /> {doc ? 'Print' : 'Preparing…'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
+// `mode`: 'vin' (default — our SBM tracking label) or 'upc' (box-style label with
+// the product UPC barcode, used from the No Box page and the Box Labels tool).
 export function LabelSheet({ items, onClose, mode = 'vin' }) {
   const list = items || [];
-  const [size, setSize] = useState(mode === 'upc' ? 'box' : 'rollo');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const s = LABEL_STOCKS[size];
-  const doPrint = () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    const preWin = isTouchPrint() ? window.open('', '_blank') : null;
-    buildLabelPdf({ kind: mode === 'upc' ? 'box' : 'vin', items: list, stock: size })
-      .then((doc) => dispatchPdf(doc, preWin, `${mode === 'upc' ? 'box' : 'vin'}-labels.pdf`))
-      .catch((e) => { if (preWin) preWin.close(); setError(e); })
-      .finally(() => setBusy(false));
-  };
-  return createPortal(
-    <div className="label-overlay" style={{ '--lw': `${s.long}mm`, '--lh': `${s.short}mm` }}>
-      <div className="label-toolbar no-print">
-        <span>{list.length} {mode === 'upc' ? 'box' : 'VIN'} label(s)</span>
-        <span className="label-tools">
-          <select value={size} onChange={(e) => setSize(e.target.value)}>
-            {Object.entries(LABEL_STOCKS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
-          <button className="btn ghost sm" onClick={onClose}>Close</button>
-          <button className="btn primary sm" onClick={doPrint} disabled={busy}><Icon name="print" /> {busy ? 'Building…' : 'Print'}</button>
-        </span>
-      </div>
-      <PrintError error={error} />
-      <div className="label-roll">
-        {list.map((it, i) => (mode === 'upc' ? (
-          upcDigits(it.upc) ? (
-            // Box-style label: vertical UPC barcode (left) + text block (right).
-            <div className="rlabel boxlabel" key={it.vin || i}>
-              <div className="blabel-bc"><Barcode value={upcDigits(it.upc)} format={upcFormat(it.upc)} displayValue height={44} /></div>
-              <div className="blabel-text">
-                <div className="blabel-name">{(it.name || '—').toUpperCase()}</div>
-                {it.colorway ? <div className="blabel-cw">{String(it.colorway).toUpperCase()}</div> : null}
-                <BoxLabelSize item={it} />
-                <div className="blabel-sku">{it.sku || '—'}</div>
-              </div>
-            </div>
-          ) : (
-            <div className="rlabel boxlabel missing" key={it.vin || i}>
-              <div className="blabel-text">
-                <div className="blabel-name">{(it.name || '—').toUpperCase()}</div>
-                {it.colorway ? <div className="blabel-cw">{String(it.colorway).toUpperCase()}</div> : null}
-                <BoxLabelSize item={it} />
-                <div className="blabel-sku">{it.sku || '—'}</div>
-                <div className="rlabel-vinlabel">No UPC on file{it.vin ? ` — ${it.vin}` : ''}</div>
-              </div>
-            </div>
-          )
-        ) : (
-          <div className="rlabel" key={it.vin || i}>
-            {it.name ? <div className="rlabel-name">{String(it.name).toUpperCase()}</div> : null}
-            <div className="rlabel-top">
-              <span className="rlabel-sku">{it.sku || '—'}</span>
-              <span className="rlabel-sep">|</span>
-              <span className="rlabel-size">{it.size || '—'}</span>
-            </div>
-            <div className="rlabel-vinlabel">VIN: <b>{it.vin}</b></div>
-            <Barcode value={it.vin} />
-            <div className="rlabel-vin">{it.vin}</div>
-          </div>
-        )))}
-      </div>
-    </div>,
-    document.body,
+  const upc = mode === 'upc';
+  return (
+    <LabelPrintDialog
+      kind={upc ? 'box' : 'vin'}
+      items={list}
+      count={list.length}
+      title={upc ? 'Print box labels' : 'Print VIN labels'}
+      defaultStock={upc ? 'box' : 'rollo'}
+      filename={`${upc ? 'box' : 'vin'}-labels.pdf`}
+      onClose={onClose}
+    />
   );
 }
 
-// Shelf-location labels — a big name + a CODE128 barcode of the location code.
-// Printing generates an exact-size, one-label-per-page PDF (see lib/labelPdf.js),
-// so a single location prints on a single label — not spilled across a sheet by
-// the browser's print dialog.
+// Shelf-location labels — a big name + a CODE128 barcode of the location code, one
+// location per label so a single shelf never spills across a sheet.
 export function ShelfLabelSheet({ locations, onClose }) {
   const list = locations || [];
-  const [size, setSize] = useState('cr80');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const s = LABEL_STOCKS[size];
-  const doPrint = () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    const preWin = isTouchPrint() ? window.open('', '_blank') : null;
-    buildLabelPdf({ kind: 'shelf', items: list, stock: size })
-      .then((doc) => dispatchPdf(doc, preWin, 'shelf-labels.pdf'))
-      .catch((e) => { if (preWin) preWin.close(); setError(e); })
-      .finally(() => setBusy(false));
-  };
-  return createPortal(
-    <div className="label-overlay shelf-overlay" style={{ '--lw': `${s.long}mm`, '--lh': `${s.short}mm` }}>
-      <div className="label-toolbar no-print">
-        <span>{list.length} shelf label{list.length === 1 ? '' : 's'}</span>
-        <span className="label-tools">
-          <select value={size} onChange={(e) => setSize(e.target.value)}>
-            {Object.entries(LABEL_STOCKS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
-          <button className="btn ghost sm" onClick={onClose}>Close</button>
-          <button className="btn primary sm" onClick={doPrint} disabled={busy}><Icon name="print" /> {busy ? 'Building…' : 'Print'}</button>
-        </span>
-      </div>
-      <PrintError error={error} />
-      <div className="shelf-sheet">
-        {list.map((loc) => (
-          <div className="shelf-label" key={loc.code}>
-            <div className="shelf-label-name">{loc.label || loc.code}</div>
-            <div className="shelf-label-sub">{loc.warehouse}{loc.area ? ` · ${loc.area}` : ''}</div>
-            <div className="shelf-label-bc"><Barcode value={loc.code} format="CODE128" height={48} /></div>
-            <div className="shelf-label-code">{loc.code}</div>
-          </div>
-        ))}
-      </div>
-    </div>,
-    document.body,
+  return (
+    <LabelPrintDialog
+      kind="shelf"
+      items={list}
+      count={list.length}
+      title="Print shelf labels"
+      defaultStock="cr80"
+      filename="shelf-labels.pdf"
+      onClose={onClose}
+    />
   );
 }
 

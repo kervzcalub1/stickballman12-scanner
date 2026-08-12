@@ -17,6 +17,7 @@ export const WAREHOUSE_ARTICLES = [
     steps: [
       { do: 'Home → Receiving Shipment Orders → Receive New.' },
       { do: 'Fill the shipment header: supplier, date, and the tracking number off the courier label.', note: 'Supplier and tracking are required — the server rejects a receiving batch without both, because a batch has to be traceable to the shipment it came from.' },
+      { do: 'Did it arrive with no tracking number at all — hand-delivered, picked up locally, or a supplier who never sent one? Tick "No tracking number" under the field and carry on.', note: 'That tick is recorded on the batch, so it reads as "this shipment had none" rather than a field somebody skipped. Only tick it when there really is no number — do not use it to get past a label you have not read yet.' },
       { do: 'Enter the tracking number by typing it, tapping the camera to scan the barcode, or photographing the label so it can be read off the picture.', note: 'UPS 1Z…, FedEx and USPS formats are all recognised and normalised automatically.' },
       { do: 'Leave "Boxes expected" at 1.', note: 'Set it to 2 or more only if this shipment arrived as several separately-tracked boxes — see "Receive a multi-box shipment".' },
       { do: 'Step 2 — tap "+ Add Item" and scan the shoe box UPC (or type the SKU).', note: 'The field auto-focuses so a handheld scanner gun types straight in. The app works out whether you scanned a UPC or typed a SKU.' },
@@ -32,6 +33,7 @@ export const WAREHOUSE_ARTICLES = [
       'Never re-use a VIN. Gaps in the numbering are normal and harmless.',
       'A negative cost is rejected — fix the number rather than blanking it.',
       'If the tracking number has been seen before you get a duplicate warning. It does not block you; commit anyway if the box is genuinely a re-send, and the batch is tagged as a duplicate for later.',
+      '"No tracking number" is the only way past the tracking requirement, and it clears the field when you tick it — the box and the field can never disagree about what the shipment had.',
     ],
     related: ['receive-multibox', 'receive-against-po', 'batches-manage', 'listing-photos-intake', 'print-labels'],
     keywords: ['intake', 'scan in', 'new shipment', 'wizard', 'cart', 'commit', 'arrive', 'delivery'],
@@ -46,7 +48,7 @@ export const WAREHOUSE_ARTICLES = [
     diagram: 'multibox',
     steps: [
       { do: 'On Step 1, set "Boxes expected" to the number of boxes.', note: 'The single tracking field disappears and a list of box rows appears in its place — one row per box.' },
-      { do: 'For the box in front of you, type or scan its tracking number into its row.' },
+      { do: 'For the box in front of you, type or scan its tracking number into its row.', note: 'If none of the boxes has a tracking number, tick "No tracking number" up in the header instead — the per-box fields disappear.' },
       { do: 'Tap "Add items" on that row and run the box through Items → Review → Issues → Submit box.' },
       { do: 'You land back on the box list. Do the next box whenever it turns up.', note: 'Boxes can be done out of order — box 3 before box 1 is fine, each keeps its own number.' },
       { do: 'Tap "Finish batch" when everything has arrived.', note: 'The batch also closes itself once the received count reaches the expected count.' },
@@ -279,7 +281,7 @@ export const WAREHOUSE_ARTICLES = [
     steps: [
       { do: 'Home → Put-away → Box Labels.' },
       { do: 'Scan whatever you have on the pair in your hand. One field takes all three: the VIN sticker, the old box UPC, or a typed SKU.' },
-      { do: 'Scanned a VIN? The pair is already known. Tap "Print box label" — and "Reprint VIN label" too if that sticker is also gone.', note: 'The two print separately because they use different label stock.' },
+      { do: 'Scanned a VIN? The pair is already known. Tap "Print box label" — and "Reprint VIN label" too if that sticker is also gone.', note: 'The two print separately because they use different label stock. Each opens the print dialog: pick the stock, tap Print.' },
       { do: 'Scanned a UPC or typed a SKU? You get the shoe. If it says "From your inventory", the pairs we already hold are listed underneath — tap "Use this VIN" on the one in your hand.' },
       { do: 'Pick the size if it is not already filled in. A UPC usually carries the size; a SKU never does.' },
       { do: 'Then choose: "Print box label only" prints and records nothing, or "Give it a VIN + print both" counts the pair into inventory first.' },
@@ -332,7 +334,7 @@ export const WAREHOUSE_ARTICLES = [
     rules: [
       'A shelf code is SITE-AREA-BAY-SHELF, e.g. MNH-WH-A2-04. Whole-bay spots such as pods drop the shelf part: MNH-PD-1.',
       'Codes are globally unique — that is what makes a shelf barcode unmistakable next to a VIN or a UPC.',
-      'Labels come out as an exact-size PDF, one label per page, not a browser print. On a phone it opens in a new tab — use share → Print to your label printer.',
+      'Labels come out as an exact-size PDF, one label per page, not a browser print. On a phone Print hands it to the share sheet — tap Print there.',
     ],
     related: ['locations-edit-delete', 'locate-shoe', 'shelve-putaway', 'print-labels'],
     keywords: ['shelf label', 'bulk add', 'bay', 'aisle', 'site', 'area', 'deactivate', 'rename', 'code'],
@@ -494,8 +496,9 @@ export const WAREHOUSE_ARTICLES = [
       { do: 'VIN labels — Inventory: select pairs → "Print labels". One label per pair, with its VIN barcode.' },
       { do: 'Box labels — two ways in. The No Box page prints the whole queue at once; the Box Labels page does one pair from a VIN, a UPC or a SKU. Both recreate a shoe-box label with a vertical UPC barcode so the pair scans normally again.' },
       { do: 'Shelf labels — Locate Shoe / Locations: tick shelves → "Print labels" in the breadcrumb bar.' },
-      { do: 'Pick your label stock: CR80 card is the default, plus Small 1.1 × 3.5", Rollo, Dymo, Box, and Brother 62 × 100 mm DK-11202.' },
-      { do: 'On a phone the PDF opens in a new tab — use share → Print. On desktop it prints itself.' },
+      { do: 'Every one of them opens the same small dialog: pick your label stock, tap Print. Nothing else — there is no on-screen preview of the labels to read first.' },
+      { do: 'Stock choices: CR80 card is the default for shelf labels, plus Small 1.1 × 3.5", Rollo, Dymo, Box, and Brother 62 × 100 mm DK-11202.' },
+      { do: 'On a phone Print hands the PDF straight to the share sheet — tap Print there to send it to your label printer. On desktop it goes to the print dialog itself.' },
     ],
     rules: [
       'On label stock smaller than 62 × 100 mm the shoe name is left off on purpose. SKU, size and the barcode are what shelving actually needs, and the name only shrinks the barcode.',

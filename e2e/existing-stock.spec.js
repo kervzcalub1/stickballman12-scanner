@@ -217,30 +217,31 @@ test.describe('Existing Stock · cart loop and post-commit', () => {
     await page.getByRole('button', { name: /Save shelf/i }).click();
     await page.getByRole('button', { name: /Confirm — count onto this shelf/i }).click();
 
-    // The pairs carry no VIN stickers yet, so the sheet leads — and the summary must
-    // NOT be stacked underneath it (two overlays at once).
-    await expect(page.locator('.label-toolbar')).toBeVisible();
-    await expect(page.locator('.modal')).toHaveCount(0);
+    // The pairs carry no VIN stickers yet, so the print dialog leads — and the
+    // summary must NOT be stacked underneath it (two modals at once).
+    await expect(page.locator('.print-dialog')).toBeVisible();
+    await expect(page.locator('.modal:not(.print-dialog)')).toHaveCount(0);
 
-    // The label toolbar has to be usable on the phone this is done from: Print sat
-    // fully off-screen at 390px until .label-tools was allowed to wrap.
+    // The dialog has to be usable on the phone this is done from — nothing off-screen
+    // at 390px, and Print live only once the PDF is actually built.
     const overflow = await page.evaluate(() => {
-      const el = document.querySelector('.label-toolbar');
+      const el = document.querySelector('.print-dialog');
       return el.scrollWidth - el.clientWidth;
     });
-    expect(overflow, 'label toolbar must not overflow a 390px phone').toBeLessThanOrEqual(0);
-    for (const name of [/Close/i, /Print/i]) {
-      const b = await page.locator('.label-tools').getByRole('button', { name }).boundingBox();
+    expect(overflow, 'print dialog must not overflow a 390px phone').toBeLessThanOrEqual(0);
+    await expect(page.locator('.print-dialog').getByRole('button', { name: 'Print', exact: true })).toBeEnabled();
+    for (const name of [/Cancel/i, /Print/i]) {
+      const b = await page.locator('.print-dialog').getByRole('button', { name }).boundingBox();
       expect(b.x + b.width, `${name} must be on-screen`).toBeLessThanOrEqual(390);
     }
 
-    await page.locator('.label-tools').getByRole('button', { name: /Close/i }).click();
+    await page.locator('.print-dialog').getByRole('button', { name: /Cancel/i }).click();
     await expect(page.locator('.modal')).toContainText(/counted in/i);
 
-    // This button read from `labels`, which Close had just set to null — so it was
+    // This button read from `labels`, which closing had just set to null — so it was
     // permanently dead. It now reads the items off `done`.
     await page.getByRole('button', { name: /Print VIN labels again/i }).click();
-    await expect(page.locator('.label-toolbar')).toBeVisible();
+    await expect(page.locator('.print-dialog')).toBeVisible();
   });
 });
 

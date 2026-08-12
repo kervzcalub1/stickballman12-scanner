@@ -41,7 +41,7 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
   now fails the print loudly rather than printing "No UPC on file".
 - Uses `items.upc` (+ colorway). UPC must be on the record (captured at
   scan/lookup). Legacy items without a UPC can't be backfilled by SKU (per-size
-  UPCs aren't in the SKU lookup) → the label sheet **prompts** for one, typed off
+  UPCs aren't in the SKU lookup) → the page **prompts** for one before printing, typed off
   the tongue label inside the shoe, and saves it to the unit
   (`api/items/set-upc.js`). No reverse-lookup endpoint — deliberate.
 - **Sizes carry a men's/women's marker** — "9 W", "11.5 M", drawn as ONE string

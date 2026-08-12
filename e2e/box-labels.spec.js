@@ -12,6 +12,23 @@ import pg from 'pg';
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const q = (text, values) => pool.query(text, values).then((r) => r.rows);
 
+// Printing is one dialog now — stock picker + Print — with no on-screen copy of the
+// label (see components/common.jsx). So what a spec can assert is that the RIGHT
+// dialog opened for the right label count, and that the PDF actually built: the
+// dialog builds it up front and only enables Print once it exists, so a label that
+// can't be drawn (unencodable barcode, missing size) surfaces as `.label-error` and
+// a dead Print button rather than a silently-wrong sticker.
+async function expectPrintDialog(page, title, count = 1) {
+  const dlg = page.locator('.print-dialog');
+  await expect(dlg).toBeVisible({ timeout: 10_000 });
+  await expect(dlg.locator('.modal-title')).toContainText(title);
+  await expect(dlg.locator('.modal-msg')).toContainText(`${count} label`);
+  await expect(dlg.getByRole('button', { name: 'Print', exact: true })).toBeEnabled();
+  await expect(dlg.locator('.label-error')).toHaveCount(0);
+  return dlg;
+}
+const closePrintDialog = (page) => page.locator('.print-dialog').getByRole('button', { name: 'Cancel' }).click();
+
 const SKU = 'E2E-BOXLBL-A';
 const UPC = '195244570123';
 const PRODUCT = {
@@ -119,7 +136,7 @@ test.describe('Box Labels · our own stock comes first', () => {
       await page.locator('.boxlbl-unit').filter({ hasText: vin }).getByRole('button', { name: /Use this VIN/i }).click();
       await expect(page.locator('.vin').first()).toContainText(vin);
       await page.getByRole('button', { name: /Print box label/i }).click();
-      await expect(page.locator('.rlabel.boxlabel')).toHaveCount(1);
+      await expectPrintDialog(page, 'Print box labels');
     });
   }
 
@@ -145,10 +162,8 @@ test.describe('Box Labels · workflow 3 — label only', () => {
     await page.getByRole('button', { name: 'Find', exact: true }).click();
     await page.getByRole('button', { name: /Print box label only/i }).click();
 
-    // The label sheet is a full-screen portal showing the box-style preview.
-    await expect(page.locator('.label-overlay')).toBeVisible();
-    await expect(page.locator('.rlabel.boxlabel')).toHaveCount(1);
-    await expect(page.locator('.blabel-size')).toContainText('9.5');
+    // One box label, built and ready to print — no inventory written on the way.
+    await expectPrintDialog(page, 'Print box labels');
 
     const after = (await q('SELECT count(*)::int AS n FROM items WHERE sku = $1', [SKU]))[0].n;
     expect(after, 'a label-only print must not create inventory').toBe(before);
@@ -168,8 +183,8 @@ test.describe('Box Labels · workflow 1 — no box, no VIN', () => {
     await expect(page.locator('.modal')).toContainText(/isn’t in the system yet/i);
     await page.getByRole('button', { name: /Confirm — create the VIN/i }).click();
 
-    await expect(page.locator('.label-overlay')).toBeVisible();
-    await page.getByRole('button', { name: 'Close' }).click();
+    await expectPrintDialog(page, 'Print box labels');
+    await closePrintDialog(page);
     // First line only — the VIN is click-to-copy, so its innerText also carries
     // the (visually hidden) "Copy" cue on a second line.
     const vinText = (await page.locator('.vin').first().innerText()).split('\n')[0].trim();
@@ -208,13 +223,12 @@ test.describe('Box Labels · workflow 2 — pair already has a VIN', () => {
     await expect(page.locator('.vin').first()).toContainText(vin);
 
     await page.getByRole('button', { name: /Print box label/i }).click();
-    await expect(page.locator('.rlabel.boxlabel')).toHaveCount(1);
-    await page.getByRole('button', { name: 'Close' }).click();
+    await expectPrintDialog(page, 'Print box labels');
+    await closePrintDialog(page);
 
     // …and the VIN sticker can be reprinted too, on its own stock.
     await page.getByRole('button', { name: /Reprint VIN label/i }).click();
-    await expect(page.locator('.rlabel')).toHaveCount(1);
-    await expect(page.locator('.rlabel-vin')).toContainText(vin);
+    await expectPrintDialog(page, 'Print VIN labels');
   });
 
   test('a unit with no UPC is asked for one, and it sticks', async ({ page }) => {
@@ -231,7 +245,7 @@ test.describe('Box Labels · workflow 2 — pair already has a VIN', () => {
     await page.locator('.nobox-upc-input').fill(UPC);
     await page.getByRole('button', { name: /Save & print/i }).click();
 
-    await expect(page.locator('.rlabel.boxlabel')).toHaveCount(1);
+    await expectPrintDialog(page, 'Print box labels');
     const rows = await q('SELECT upc FROM items WHERE vin = $1', [vin]);
     expect(rows[0].upc, 'the typed UPC is saved so the next reprint stops asking').toBe(UPC);
   });
@@ -247,8 +261,8 @@ test.describe('Box Labels · workflow 2 — pair already has a VIN', () => {
     await page.locator('.nobox-noupc-check input').check();
     await page.getByRole('button', { name: /Print without UPC/i }).click();
 
-    await expect(page.locator('.rlabel.boxlabel.missing')).toHaveCount(1);
-    await expect(page.locator('.rlabel-vinlabel')).toContainText('No UPC on file');
+    // Still prints — the PDF falls back to a text-only "No UPC on file" label.
+    await expectPrintDialog(page, 'Print box labels');
     const rows = await q('SELECT upc FROM items WHERE vin = $1', [vin]);
     expect(rows[0].upc, 'skipping the prompt must not write a bogus UPC').toBeNull();
   });

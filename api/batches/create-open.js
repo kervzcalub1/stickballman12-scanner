@@ -1,6 +1,6 @@
 // POST /api/batches/create-open
 //   { batch:{ buyer, supplier, dateReceived, defaultCost, notes, specialRules,
-//             batchTag, expectedBoxes } } -> { ok, batchCode, id }
+//             batchTag, expectedBoxes, noTracking } } -> { ok, batchCode, id }
 // Starts an OPEN multi-box receiving batch (no items yet). Boxes are added and
 // committed one at a time from the Batch Page (V6 Feature 7).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
@@ -47,6 +47,10 @@ export default async function handler(req, res) {
     defaultCost: toCost(h.defaultCost),
     notes: String(h.notes ?? '').trim().slice(0, 2000) || null,
     specialRules: String(h.specialRules ?? '').trim().slice(0, 2000) || null,
+    // Multi-box batches take a tracking # per box rather than one for the batch, so
+    // nothing here enforces tracking — but staff can still state that this whole
+    // shipment arrived without any, which hides the per-box fields and is recorded.
+    noTracking: h.noTracking === true,
     batchTag: String(h.batchTag ?? '').trim().slice(0, 120) || null,
     expectedBoxes: Number.isInteger(expected) && expected > 0 ? Math.min(expected, 999) : null,
     poId,

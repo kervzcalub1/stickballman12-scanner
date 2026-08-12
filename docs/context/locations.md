@@ -228,7 +228,9 @@ and the put-away guard (`items/shelve` 409s on an inactive shelf); delete is for
 shouldn't exist.
 
 ## Labels (`ShelfLabelSheet`)
-Bulk-select shelves on the Locations page → **Print labels** → pick label stock.
+Bulk-select shelves on the Locations page → **Print labels** → pick label stock →
+**Print**. That dialog is the *whole* UI: there is **no on-screen preview of the
+labels** (see "One step, not three" below).
 Each label has a big name (`A2-04`), warehouse·area line, **CODE128 barcode of
 `code`**, code text. Printing builds an **exact-size, one-label-per-page PDF**
 (`src/lib/labelPdf.js`, `LABEL_STOCKS` — CR80 card default, plus Small **1.1 ×
@@ -241,8 +243,28 @@ url/date/"Page X of Y" footer, so page-printing came out mis-scaled with the sit
 URL along the bottom and one label spilled across two sheets. A PDF whose page IS
 the label prints 1:1 (no browser chrome), batches as multi-page, and works on
 iPhone → Brother QL as well as desktop. Same mechanism backs `LabelSheet` (VIN /
-box labels). On touch devices we open the PDF in a new tab (share → Print); on
-desktop we auto-print via a hidden iframe.
+box labels).
+
+### One step, not three (2026-08-13)
+Print used to mean: a full-screen **HTML preview of every label** → Print again →
+Safari's PDF viewer → dig Print out of the **share menu**. Three stages before the
+print dialog; the warehouse (Brent) reported getting lost in them. The preview was
+a preview of a preview — the PDF is what prints — so it's gone. What's left is a
+small dialog (`LabelPrintDialog` in `components/common.jsx`): label stock +
+**Print**, rendered with the standard `.modal` shell.
+
+Dispatch order in `dispatchPdf`, best first:
+1. **Share sheet** (`canSharePdf()` — touch + `navigator.canShare({files})`): hands
+   the PDF file to iOS/Android, whose sheet has **Print** on it. One tap to the
+   print dialog. `navigator.share` is only allowed inside a **live user gesture**,
+   and awaiting the PDF build spends it — which is why the dialog **pre-builds the
+   PDF on open and on every stock change** and the Print handler is synchronous.
+   Print stays disabled ("Preparing…") until the doc exists. An `AbortError`
+   (user dismissed the sheet) is a decision, not a failure — no fallback fires.
+2. **New tab** (touch, no share support): `preWin` opened synchronously in the
+   click, then pointed at the blob.
+3. **Hidden iframe → `.print()`** (desktop): straight to the OS print dialog.
+4. **Download** — the fallback under all of the above.
 
 **The iframe needs `frame-src 'self' blob:` in the CSP** (`server.mjs`).
 `frame-src` falls back to `default-src 'self'` when unset, which does **not**
@@ -263,9 +285,9 @@ really a stale-tab error, reported from the warehouse as "labels won't print".
 routes have no extension and still fall through, so client routing is
 unaffected). That used to surface as a **blank barcode column
 and a dead Print button**, with nothing on screen to suggest a reload. Now the
-loaders throw `ChunkLoadError`, `<Barcode>` renders "Barcode didn't load — reload
-the page" in place of an empty `<svg>`, and the preview shows an error bar with a
-**Reload** button. Relatedly, a barcode that can't be encoded now **fails the
+loaders throw `ChunkLoadError` and the print dialog shows an error bar with a
+**Reload** button (`PrintError`) instead of enabling Print. (Before the preview was
+removed, this also surfaced as a blank on-screen barcode column.) Relatedly, a barcode that can't be encoded now **fails the
 print** instead of quietly emitting a label — a box label saying "No UPC on file"
 when we *have* the UPC is worse than an error.
 

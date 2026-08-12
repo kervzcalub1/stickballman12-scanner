@@ -1,5 +1,5 @@
 // POST /api/batches/commit
-//   { batch:{buyer,supplier,tracking,dateReceived,defaultCost,notes,specialRules},
+//   { batch:{buyer,supplier,tracking,noTracking,dateReceived,defaultCost,notes,specialRules},
 //     items:[{name,sku,size,upc,image,cost,source,notes,withBox}],
 //     issues:[{type,description,expectedCount,receivedCount}] }
 //   -> { ok, batchCode, count, vins }
@@ -74,9 +74,17 @@ export default async function handler(req, res) {
     return send(res, 400, { ok: false, error: `Too many items (max ${MAX_ITEMS}).` });
   // A receiving batch must be traceable to its shipment — require supplier + tracking.
   // (Rescale and in-store carry no shipment, so they're exempt.)
+  //
+  // `noTracking` is the one way past the tracking half: some inbounds genuinely
+  // arrive without a number (hand-delivered, local pickup, a supplier who never
+  // sent one), and the old rule left staff with no honest way to record those.
+  // It has to be STATED — the flag is stored on the batch, so "there was no
+  // tracking number" reads differently from "someone left the field empty".
+  const noTracking = header.noTracking === true;
   if (kind === 'receiving') {
     if (!cleanName(header.supplier)) return send(res, 400, { ok: false, error: 'Supplier is required.' });
-    if (!String(header.tracking ?? '').trim()) return send(res, 400, { ok: false, error: 'Tracking # is required.' });
+    if (!noTracking && !String(header.tracking ?? '').trim())
+      return send(res, 400, { ok: false, error: 'Tracking # is required — or tick “No tracking number”.' });
   }
   // Reject a negative cost outright (a typo like "-5") rather than silently nulling it.
   const isNegCost = (v) => v !== '' && v != null && Number.isFinite(Number(v)) && Number(v) < 0;
@@ -150,7 +158,10 @@ export default async function handler(req, res) {
   const bh = {
     buyer: kind !== 'receiving' ? null : cleanName(header.buyer),
     supplier: kind !== 'receiving' ? null : cleanName(header.supplier),
-    tracking: kind !== 'receiving' ? null : (String(header.tracking ?? '').trim().slice(0, 120) || null),
+    // A stated "no tracking number" wins over anything left in the field, so the
+    // flag and the column can never disagree about what this shipment had.
+    tracking: kind !== 'receiving' || noTracking ? null : (String(header.tracking ?? '').trim().slice(0, 120) || null),
+    noTracking: kind === 'receiving' && noTracking,
     dateReceived: header.dateReceived || null,
     defaultCost,
     notes: String(header.notes ?? '').trim().slice(0, 2000) || null,

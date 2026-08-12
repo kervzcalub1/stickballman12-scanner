@@ -78,7 +78,7 @@ export const FAQ = [
   {
     id: 'faq-renamed-shelf-labels-dead',
     q: 'I renamed an area and now none of its shelf tags scan.',
-    a: 'That is expected, and the app told you so before you saved. The site and the area are part of the shelf barcode itself (MNH-WH-A2-04), so renaming either one re-issues the code on every shelf underneath. The shoes never moved and nothing is lost — the tags on the rack are just the old codes now. Reprint them from the label sheet that opens on save, or tick the level on the Locations page and use "Print labels".',
+    a: 'That is expected, and the app told you so before you saved. The site and the area are part of the shelf barcode itself (MNH-WH-A2-04), so renaming either one re-issues the code on every shelf underneath. The shoes never moved and nothing is lost — the tags on the rack are just the old codes now. Reprint them from the print dialog that opens on save, or tick the level on the Locations page and use "Print labels".',
     area: 'putaway', roles: WH, see: 'locations-edit-delete',
     keywords: ['rename', 'area', 'site', 'labels', 'not scanning', 'dead tag', 'reprint', 'barcode changed'],
   },
@@ -104,6 +104,13 @@ export const FAQ = [
     a: 'Check the No Box queue. Pairs received without a box are not postable and are deliberately hidden from PH\'s New Inventory until the box turns up. In-store buys are also absent from that grid by design — they are listed by hand on the In-Store Listing page.',
     area: 'listing', roles: STAFF, see: 'ph-nobox-view',
     keywords: ['missing', 'not showing', 'grid', 'no box', 'hidden', 'in-store'],
+  },
+  {
+    id: 'faq-label-preview-gone',
+    q: 'Printing labels used to show me the labels first. Where did that go?',
+    a: 'It was removed on purpose — it was a preview of a preview. Print now opens one small dialog: pick your label stock, tap Print. On a phone that hands the PDF straight to the share sheet, where you tap Print to send it to your label printer; on a computer it goes to the print dialog itself. The PDF is what actually prints, so that is the only preview worth reading, and you still see it in the share sheet or the PDF viewer before anything comes out. Nothing about the labels themselves changed.',
+    area: 'putaway', roles: WH, see: 'print-labels',
+    keywords: ['preview', 'print', 'label sheet', 'extra step', 'share', 'gone', 'changed'],
   },
   {
     id: 'faq-box-label-blank',
@@ -161,9 +168,9 @@ export const FAQ = [
   {
     id: 'faq-tracking-required',
     q: 'Why will it not let me commit without a tracking number?',
-    a: 'A receiving batch has to be traceable back to the shipment it came from — that link is what makes a discrepancy investigable weeks later. Supplier and tracking are both required and the server enforces it. Rescale batches are exempt, since there is no shipment.',
+    a: 'A receiving batch has to be traceable back to the shipment it came from — that link is what makes a discrepancy investigable weeks later. Supplier and tracking are both required and the server enforces it. If the shipment genuinely arrived without a tracking number — hand-delivered, local pickup, a supplier who never sent one — tick "No tracking number" under the field: it commits, and the batch records that there was none, which is different from a blank field. Rescale and in-store batches are exempt, since there is no shipment.',
     area: 'intake', roles: WH, see: 'receive-single',
-    keywords: ['tracking', 'required', 'supplier', 'commit', 'blocked', '400'],
+    keywords: ['tracking', 'required', 'supplier', 'commit', 'blocked', '400', 'no tracking number', 'hand delivered', 'pickup'],
   },
   {
     id: 'faq-duplicate-tracking',

@@ -271,16 +271,34 @@ export function isTouchPrint() {
   return /iP(hone|ad|od)|Android/.test(ua) || (/Macintosh/.test(ua) && 'ontouchend' in document);
 }
 
-// Hand a built PDF to the OS. On touch devices pass a `preWin` opened
-// synchronously in the click handler (so it isn't popup-blocked); we set its
-// location to the PDF. On desktop we print via a hidden iframe.
+// True when the browser can hand a PDF file to the OS share sheet — on iOS that
+// sheet has Print on it, so the label goes tap → Print dialog, skipping Safari's
+// PDF viewer and its buried share → Print menu (the stage the warehouse kept
+// getting lost in).
 //
-// Every path here has a way to fail that leaves the user staring at the preview
+// `navigator.share` is only allowed inside a live user gesture, and an `await`
+// between the tap and the call spends it. That's why the print dialog builds the
+// PDF up front and `dispatchPdf` is called synchronously from the click.
+export function canSharePdf() {
+  if (typeof navigator === 'undefined' || !navigator.share || !navigator.canShare) return false;
+  try {
+    const probe = new File([new Blob([''], { type: 'application/pdf' })], 'probe.pdf', { type: 'application/pdf' });
+    return navigator.canShare({ files: [probe] });
+  } catch { return false; }
+}
+
+// Hand a built PDF to the OS. Best case (iOS/Android) it goes straight to the
+// share sheet. Otherwise, on touch devices pass a `preWin` opened synchronously
+// in the click handler (so it isn't popup-blocked); we set its location to the
+// PDF. On desktop we print via a hidden iframe.
+//
+// Every path here has a way to fail that leaves the user staring at the button
 // with nothing happening — a blocked popup, a `frame-src` that won't allow a
 // `blob:` frame, an `onload` that never comes. So each one falls back to simply
 // downloading the PDF: an extra tap to open it, but never a dead button.
 export function dispatchPdf(doc, preWin, filename = 'labels.pdf') {
-  const url = URL.createObjectURL(doc.output('blob'));
+  const blob = doc.output('blob');
+  const url = URL.createObjectURL(blob);
   const release = () => setTimeout(() => URL.revokeObjectURL(url), 60000);
   let settled = false;
   const download = () => {
@@ -294,6 +312,25 @@ export function dispatchPdf(doc, preWin, filename = 'labels.pdf') {
     a.remove();
     release();
   };
+
+  // Share sheet first — one tap from here to the OS print dialog.
+  if (!preWin && isTouchPrint() && canSharePdf()) {
+    const file = new File([blob], filename, { type: 'application/pdf' });
+    if (navigator.canShare({ files: [file] })) {
+      settled = true;
+      navigator.share({ files: [file] })
+        .then(release)
+        // Dismissing the sheet is a decision ("not now"), not a failure — pushing a
+        // download at them there would be the app arguing with the user. Anything
+        // else means the share never happened, so fall back to the file.
+        .catch((e) => {
+          if (e?.name === 'AbortError') { release(); return; }
+          settled = false;
+          download();
+        });
+      return;
+    }
+  }
 
   if (preWin) { settled = true; preWin.location.href = url; release(); return; }
   // Touch with no window means the popup was blocked — iOS won't print a hidden

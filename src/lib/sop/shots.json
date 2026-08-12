@@ -38,7 +38,7 @@
     "file": "/sop-shots/receiving-step1.png",
     "w": 1280,
     "h": 820,
-    "caption": "Step 1 of the receiving wizard. Supplier and tracking are both required — the server rejects a batch without them.",
+    "caption": "Step 1 of the receiving wizard. Supplier and tracking are both required — unless the shipment genuinely arrived without a tracking number.",
     "hotspots": [
       {
         "n": 1,
@@ -61,7 +61,16 @@
       {
         "n": 3,
         "x": 133,
-        "y": 459,
+        "y": 436,
+        "w": 1014,
+        "h": 56,
+        "side": "left",
+        "label": "No tracking number — tick only when the shipment really arrived without one. It is recorded on the batch."
+      },
+      {
+        "n": 4,
+        "x": 641,
+        "y": 513,
         "w": 506,
         "h": 52,
         "side": "right",

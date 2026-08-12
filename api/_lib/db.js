@@ -434,10 +434,10 @@ export async function removeProductPhoto(sku, angle, source = 'warehouse') {
 export async function createBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
-      (buyer_name, supplier_name, tracking_number, date_received,
+      (buyer_name, supplier_name, tracking_number, no_tracking, date_received,
        default_cost, notes, special_rules, kind, origin, duplicate_of, po_id, status, created_by, committed_at)
     VALUES
-      (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null},
+      (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null}, ${h.noTracking === true},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
        ${h.specialRules || null}, ${['receiving', 'rescale', 'instore', 'existing'].includes(h.kind) ? h.kind : 'receiving'},
        ${h.origin || null}, ${h.duplicateOf ?? null}, ${h.poId ?? null}, 'committed', ${createdBy || null}, now())
@@ -738,10 +738,10 @@ export async function getBatch(id) {
 export async function createOpenBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
-      (buyer_name, supplier_name, date_received, default_cost, notes, special_rules,
+      (buyer_name, supplier_name, no_tracking, date_received, default_cost, notes, special_rules,
        kind, batch_tag, expected_boxes, po_id, status, created_by)
     VALUES
-      (${h.buyer || null}, ${h.supplier || null}, ${h.dateReceived || null},
+      (${h.buyer || null}, ${h.supplier || null}, ${h.noTracking === true}, ${h.dateReceived || null},
        ${h.defaultCost ?? null}, ${h.notes || null}, ${h.specialRules || null},
        'receiving', ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null}, 'open', ${createdBy || null})
     RETURNING id, batch_code

@@ -12,7 +12,7 @@
 //  · they were ALREADY listed to II and the stores years ago, so they bypass the PH
 //    team entirely (batches.kind='existing' ∈ PH_EXCLUDED_KINDS) and are recorded
 //    as already-synced.
-// They have no VIN labels yet, so a commit ends by opening the label sheet.
+// They have no VIN labels yet, so a commit ends by opening the label print dialog.
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
@@ -37,7 +37,7 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [done, setDone] = useState(null);          // commit result
-  const [labels, setLabels] = useState(null);      // VIN label sheet after a commit
+  const [labels, setLabels] = useState(null);      // VIN labels to print after a commit
   const [prefs, setPrefs] = useState(loadPrefs);
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const inputRef = useRef(null);
@@ -173,7 +173,7 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
         labelItems,
       });
       // The pairs have no VIN stickers yet — that's the one part of this that can't
-      // fix itself later, so go straight to the label sheet.
+      // fix itself later, so go straight to the print dialog.
       setLabels(labelItems);
       setRows([]);
     } catch (err) {
@@ -295,8 +295,8 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
         </Modal>
       )}
 
-      {/* The label sheet opens first and is a full-screen portal, so hold the summary
-          back until it's closed rather than stacking two overlays. */}
+      {/* The print dialog opens first, so hold the summary back until it's closed
+          rather than stacking two modals. */}
       {done && !labels && (
         <Modal type="success" title={`${done.count} pair${done.count === 1 ? '' : 's'} counted in`}
           message={`Batch ${done.batchCode} · ${done.shelved?.updated ?? 0} shelved at ${done.label}`

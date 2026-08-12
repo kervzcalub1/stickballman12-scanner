@@ -200,8 +200,8 @@ test.describe.serial('Session QA · No Box redesigned row + UPC gate', () => {
 
     await upcInput.fill('012345678905'); // valid 12-digit
     await page.getByRole('button', { name: 'Save & print' }).click();
-    await expect(page.locator('.label-overlay')).toBeVisible({ timeout: 10_000 });
-    await page.locator('.label-overlay').getByRole('button', { name: 'Close' }).click();
+    await expect(page.locator('.print-dialog')).toBeVisible({ timeout: 10_000 });
+    await page.locator('.print-dialog').getByRole('button', { name: 'Cancel' }).click();
   });
 
   test('DB: valid UPC was saved to the unit', async () => {
@@ -220,9 +220,11 @@ test.describe.serial('Session QA · No Box redesigned row + UPC gate', () => {
     await page.locator('.nobox-noupc-check input[type="checkbox"]').check();
     await expect(page.getByRole('button', { name: 'Print without UPC' })).toBeEnabled();
     await page.getByRole('button', { name: 'Print without UPC' }).click();
-    await expect(page.locator('.label-overlay')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('.rlabel.boxlabel.missing')).toBeVisible();
-    await page.locator('.label-overlay').getByRole('button', { name: 'Close' }).click();
+    // Prints as a text-only "No UPC on file" label — the PDF is built up front, so
+    // Print going live is the proof it drew without a barcode rather than failing.
+    await expect(page.locator('.print-dialog')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.print-dialog').getByRole('button', { name: 'Print', exact: true })).toBeEnabled();
+    await page.locator('.print-dialog').getByRole('button', { name: 'Cancel' }).click();
   });
 
   test('a unit that already has a UPC prints directly, no prompt', async ({ page }) => {
@@ -232,8 +234,8 @@ test.describe.serial('Session QA · No Box redesigned row + UPC gate', () => {
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByRole('button', { name: /Box label/ }).click();
     await expect(page.getByText('Box label — UPC needed')).toHaveCount(0);
-    await expect(page.locator('.label-overlay')).toBeVisible({ timeout: 10_000 });
-    await page.locator('.label-overlay').getByRole('button', { name: 'Close' }).click();
+    await expect(page.locator('.print-dialog')).toBeVisible({ timeout: 10_000 });
+    await page.locator('.print-dialog').getByRole('button', { name: 'Cancel' }).click();
   });
 
   test('Other status… applies on select with a confirm, and the unit leaves the queue', async ({ page }) => {

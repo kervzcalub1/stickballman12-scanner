@@ -711,7 +711,7 @@ function EditGroupModal({ node, sites = [], siteAreas = {}, onSaved, onDelete, o
               <>
                 <b>{changed.length} barcode{changed.length === 1 ? '' : 's'} will change</b> across {preview.count} shelf
                 location{preview.count === 1 ? '' : 's'} — the printed labels stop scanning, so reprint them
-                (the label sheet opens on save).
+                (the print dialog opens on save).
                 {preview.liveItems > 0 && <> {preview.liveItems} pair{preview.liveItems === 1 ? '' : 's'} stored here stay exactly where they are; only their codes change.</>}
                 <ul className="loc-edit-diff">
                   {changed.slice(0, 6).map((c) => (

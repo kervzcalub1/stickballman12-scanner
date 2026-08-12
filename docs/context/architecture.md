@@ -10,7 +10,7 @@ React (Vite) SPA + Express server + local/managed PostgreSQL. No Google Sheets.
     RescaleRequests).
   - `src/components/common.jsx` — shared presentational components (TopBar,
     StatusPill, SyncBadges, Modal, HistoryModal, CardBadges, DateRangeBar,
-    SizesQty, YesNo, Barcode, LabelSheet, PreferencesModal, RescaleCompare,
+    SizesQty, YesNo, LabelSheet (label print dialog), PreferencesModal, RescaleCompare,
     EstClock). Camera scanner: `src/components/CameraScanner.jsx` (lazy, zxing).
   - `src/lib/*.js` — pure helpers: `format` (dates), `codes` (VIN/UPC/size),
     `ph` (PH grid grouping/pricing/constants), `history` (event labels),
@@ -91,7 +91,8 @@ skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
   (`SopShot.jsx`). Static data, no API. See `sop.md`.
 - Shared (`src/components/common.jsx`): `TopBar`, `StatusPill`, `SyncBadges`,
   `CardBadges`, `DateRangeBar`, `SizesQty`, `YesNo`, `Modal`, `HistoryModal`,
-  `LabelSheet`, `Barcode`, `PreferencesModal`, `RescaleCompare`, `EstClock`.
+  `LabelSheet`/`ShelfLabelSheet` (the label print dialog — stock picker + Print, no
+  on-screen label preview), `PreferencesModal`, `RescaleCompare`, `EstClock`.
 
 ## Conventions
 - **`<Modal>` children all land in `.modal-actions`, which is a flex ROW.** So a

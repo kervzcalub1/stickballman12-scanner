@@ -154,7 +154,8 @@ export default function App() {
   // Existing (old) stock: same admin/warehouse gate as in-store — ph_team short-
   // circuits to PHTeamApp above and never reaches this router.
   if (view === 'existing-stock') return <ExistingStock navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'batches') return <BatchPage initialBatchId={batchReturnId} onAddBox={(batch) => { setBatchContext(batch); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
+  // `box` is set when continuing an EXISTING pending box; absent = add a new one.
+  if (view === 'batches') return <BatchPage initialBatchId={batchReturnId} onAddBox={(batch, box = null) => { setBatchContext({ ...batch, box }); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'inventory') return <Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'report') return <PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;

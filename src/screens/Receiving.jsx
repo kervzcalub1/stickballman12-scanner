@@ -62,12 +62,19 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // "Box mode": adding a box to an existing OPEN multi-box batch (from Batch Page).
   // Step 1 collects only the box tracking #; finish commits the box (boxCommit).
   const isBoxMode = !noShipment && !!batchContext;
+  // Set when CONTINUING an existing (pending) box from the Batch page, rather than
+  // adding a brand-new one. Its box_number is what makes the commit reuse that row —
+  // `addBatchBox` is find-or-create by number — so scans land in the box the user
+  // tapped instead of silently opening box N+1 beside it.
+  const boxTarget = isBoxMode ? (batchContext.box || null) : null;
   const today = estToday();
   const [tab, setTab] = useState('intake');   // 'intake' | 'recent'
   const [step, setStep] = useState(1);         // receiving: 1 shipment·2 items·3 review·4 issues | rescale: 1 details·2 items
 
   const [header, setHeader] = useState({
-    buyer: 'stickballman12', supplier: '', tracking: '', noTracking: false, dateReceived: today,
+    // Continuing an existing pending box: start from ITS tracking number, so a
+    // re-scan/edit is a deliberate act rather than the field silently blanking it.
+    buyer: 'stickballman12', supplier: '', tracking: batchContext?.box?.tracking_number || '', noTracking: false, dateReceived: today,
     defaultCost: '', notes: '', specialRules: '', origin: isInstore ? '' : 'returned', originOther: '',
     batchTag: '', expectedBoxes: '1', // V6 Feature 7: >1 → open multi-box batch
   });
@@ -788,7 +795,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         const boxTracking = isBoxMode
           ? (header.tracking || null)
           : (boxSlots[activeSlot]?.tracking?.trim() || null);
-        const boxNumber = isBoxMode ? null : activeSlot + 1;
+        const boxNumber = isBoxMode ? (boxTarget?.box_number ?? null) : activeSlot + 1;
         const { box } = await api.batchAddBox(batchId, boxTracking, boxNumber);
         const res = await api.boxCommit({
           batchId, boxId: box.id, items: out, unitIssues: flatUnitIssues,
@@ -909,10 +916,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           {step === 1 && (
             <>
               <div className="card">
-                <h3 className="rows-title">{isRescale ? 'Rescale details' : isInstore ? 'In-store trip' : isBoxMode ? 'Add a box' : 'Shipment details'}</h3>
+                <h3 className="rows-title">{isRescale ? 'Rescale details' : isInstore ? 'In-store trip' : isBoxMode ? (boxTarget ? `Continue box ${boxTarget.box_number}` : 'Add a box') : 'Shipment details'}</h3>
                 {isBoxMode && (
                   <div className="box-context">
-                    Adding a box to <b>{batchContext.batch_code}</b>{batchContext.batch_tag ? <> · <Icon name="tag" /> {batchContext.batch_tag}</> : ''} · {batchContext.supplier_name || '—'}
+                    {boxTarget
+                      ? <>Adding items to <b>Box {boxTarget.box_number}</b> of <b>{batchContext.batch_code}</b></>
+                      : <>Adding a box to <b>{batchContext.batch_code}</b></>}
+                    {batchContext.batch_tag ? <> · <Icon name="tag" /> {batchContext.batch_tag}</> : ''} · {batchContext.supplier_name || '—'}
                   </div>
                 )}
                 <div className="batch-form">

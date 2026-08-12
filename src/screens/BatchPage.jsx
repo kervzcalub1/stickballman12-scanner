@@ -84,6 +84,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
             <h3 className="rows-title">Boxes <span className="muted">({boxes.length})</span></h3>
             {isOpen && <button className="btn primary sm" onClick={() => onAddBox(b)}>+ Add box</button>}
           </div>
+          {isOpen && boxes.some((x) => x.status !== 'received') && (
+            <p className="muted sm">“Pending” means the box is recorded but nothing has been scanned into it yet — tap <b>Add items</b> on its row to continue it. <b>+ Add box</b> is for a box that isn’t listed here at all.</p>
+          )}
           {!boxes.length ? <p className="muted">No boxes yet{isOpen ? ' — tap “Add box” to scan the first one.' : '.'}</p> : (
             <div className="box-list">
               {boxes.map((bx) => {
@@ -92,13 +95,26 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                 const empty = bx.item_count === 0;
                 return (
                   <div className={`box-row-wrap ${isBoxOpen ? 'open' : ''}`} key={bx.id}>
-                    <button className="box-row" onClick={() => setOpenBox(isBoxOpen ? null : bx.id)} title={boxItems.length ? 'Show shoes in this box' : 'No shoes in this box yet'}>
-                      <span className="box-caret">{boxItems.length ? (isBoxOpen ? '▾' : '▸') : '·'}</span>
-                      <span className="box-num">Box {bx.box_number}</span>
-                      <span className="box-track muted sm">{bx.tracking_number || 'no tracking'}</span>
-                      <span className="box-count" style={empty ? { color: '#e08f8f', fontWeight: 600 } : undefined}>{bx.item_count} item{bx.item_count === 1 ? '' : 's'}</span>
-                      <span className={`box-status ${bx.status}`}>{bx.status === 'received' ? '✓ received' : 'pending'}</span>
-                    </button>
+                    <div className="box-row-line">
+                      <button className="box-row" onClick={() => setOpenBox(isBoxOpen ? null : bx.id)} title={boxItems.length ? 'Show shoes in this box' : 'No shoes in this box yet'}>
+                        <span className="box-caret">{boxItems.length ? (isBoxOpen ? '▾' : '▸') : '·'}</span>
+                        <span className="box-num">Box {bx.box_number}</span>
+                        <span className="box-track muted sm">{bx.tracking_number || 'no tracking'}</span>
+                        <span className="box-count" style={empty ? { color: '#e08f8f', fontWeight: 600 } : undefined}>{bx.item_count} item{bx.item_count === 1 ? '' : 's'}</span>
+                        <span className={`box-status ${bx.status}`}>{bx.status === 'received' ? '✓ received' : 'pending'}</span>
+                      </button>
+                      {/* How you CONTINUE a box. A pending row is a box that was recorded
+                          (its tracking scanned, or its slot created up front) but never
+                          scanned into — and without this the row was a dead end: the only
+                          visible action was "+ Add box", which creates box N+1 rather than
+                          filling this one. Scans land in THIS box, keeping its number and
+                          tracking. Received boxes get no button: they're closed, and the
+                          commit would be refused anyway. */}
+                      {isOpen && bx.status !== 'received' && (
+                        <button className="btn primary sm box-row-add" onClick={() => onAddBox(b, bx)}
+                          title={`Scan shoes into box ${bx.box_number}`}>Add items</button>
+                      )}
+                    </div>
                     {isBoxOpen && (
                       <div className="box-items">
                         {!boxItems.length ? <div className="muted sm box-items-empty">No shoes in this box yet.</div> : boxItems.map((it) => (

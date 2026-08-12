@@ -65,6 +65,14 @@ Full detail: `in-store.md`.
    so committing a pre-materialized slot re-uses its row instead of duplicating.
    The Batch page (`getBatchWithBoxes` now also returns `items`) lets each box row
    **expand to its shoes** — VIN → full detail/history via `onOpenItem`.
+   **Continuing a pending box** (`onAddBox(batch, box)` → `batchContext.box` →
+   `boxTarget`): each non-received row has its own **"Add items"**, which opens
+   Receiving in box-mode **aimed at that box** — its tracking prefills the header and
+   the commit passes `boxNumber = box.box_number`, so `addBatchBox`'s find-or-create
+   **reuses that row**. `+ Add box` (no `box`) still means a box that isn't listed at
+   all and takes the next number — using it to continue a pending box is what left
+   staff with an empty box beside the one they meant to fill. Received boxes get no
+   button (the box-commit CAS would refuse them anyway).
 2. **Items** — `+ Add Item` opens the scanning modal. Field auto-focuses so a
    **HID scanner gun types straight in**. Auto-detects UPC vs SKU. Re-scanning a
    shoe's boxes **auto-increments qty by size**. A **With Box** checkbox sets

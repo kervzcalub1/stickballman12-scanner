@@ -66,7 +66,7 @@ const SHOTS = [
     id: 'batches',
     role: 'warehouse',
     path: '/batches',
-    caption: 'Every intake. Open batches are resumable; a box showing a red 0 has a tracking number but no items.',
+    caption: 'Every intake. Open batches are resumable — a pending box is continued with "Add items" on its own row.',
     ready: '.batch-nav-list',
     hotspots: [
       hot('Open batches are resumable — tap one to see its boxes, or to add a box that arrived late.', '.batch-nav-row >> nth=0', 'right'),

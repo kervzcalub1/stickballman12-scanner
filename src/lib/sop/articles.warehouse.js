@@ -49,6 +49,7 @@ export const WAREHOUSE_ARTICLES = [
     steps: [
       { do: 'On Step 1, set "Boxes expected" to the number of boxes.', note: 'The single tracking field disappears and a list of box rows appears in its place — one row per box.' },
       { do: 'For the box in front of you, type or scan its tracking number into its row.', note: 'If none of the boxes has a tracking number, tick "No tracking number" up in the header instead — the per-box fields disappear.' },
+      { do: 'Coming back to it another day? Batches → open the batch → "Add items" on the row of the box you are holding. The boxes still to do are the ones marked "pending".' },
       { do: 'Tap "Add items" on that row and run the box through Items → Review → Issues → Submit box.' },
       { do: 'You land back on the box list. Do the next box whenever it turns up.', note: 'Boxes can be done out of order — box 3 before box 1 is fine, each keeps its own number.' },
       { do: 'Tap "Finish batch" when everything has arrived.', note: 'The batch also closes itself once the received count reaches the expected count.' },
@@ -98,11 +99,13 @@ export const WAREHOUSE_ARTICLES = [
       { do: 'Home → Receiving Shipment Orders → Batches.' },
       { do: 'Open a batch to see its boxes, each with its tracking number and item count.' },
       { do: 'Expand a box row to see the shoes in it. Tap any VIN to open that unit\'s full detail and history.' },
-      { do: 'Tap "Add box" on an open batch to scan another box into it — this drops you into the receiving wizard in box mode.' },
+      { do: 'To CONTINUE a box marked "pending", tap "Add items" on its own row. That drops you into the receiving wizard aimed at that box — its number and tracking come with it, and everything you scan lands in it.', note: 'Pending means the box is recorded but nothing has been scanned into it yet. This is how you pick a batch back up.' },
+      { do: 'Tap "+ Add box" only for a box that is NOT already listed — a late arrival, or one nobody recorded. It creates the next box number.', warn: 'Do not use "+ Add box" to continue a pending box. It opens a new box beside it, and you end up with a batch of empty ones.' },
       { do: 'Tap "Finish"/mark done when the shipment is complete.', note: 'If the batch belongs to a purchase order, finishing it is what triggers the reconciliation check.' },
     ],
     rules: [
       'A red 0 on a box row means a tracking number was recorded but no items were ever scanned into it. Either scan it or investigate — it is not cosmetic.',
+      'A received box has no "Add items" button. Received is final — reopen the batch only if you genuinely need to correct it.',
     ],
     related: ['receive-multibox', 'receive-against-po', 'reconcile-warehouse'],
     keywords: ['open batch', 'past batches', 'resume', 'add box', 'batch page', 'history'],

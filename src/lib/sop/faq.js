@@ -166,6 +166,13 @@ export const FAQ = [
 
   // -------------------------------------------------------------- receiving --
   {
+    id: 'faq-continue-batch',
+    q: 'How do I continue a batch? I open it and the boxes just say "pending".',
+    a: 'Tap "Add items" on the row of the box you are holding. "Pending" means that box is recorded but nothing has been scanned into it yet, and that button drops you into the receiving wizard aimed at that exact box — its number and tracking number come with it, so everything you scan lands in it. Use "+ Add box" only for a box that is not listed at all (a late arrival, or one nobody recorded); it creates the NEXT box number, so using it to continue a pending box leaves you with an empty box beside the one you meant to fill. Received boxes have no button — they are closed.',
+    area: 'intake', roles: WH, see: 'batches-manage',
+    keywords: ['continue', 'resume', 'pending', 'batch', 'add items', 'add box', 'stuck', 'no way to'],
+  },
+  {
     id: 'faq-tracking-required',
     q: 'Why will it not let me commit without a tracking number?',
     a: 'A receiving batch has to be traceable back to the shipment it came from — that link is what makes a discrepancy investigable weeks later. Supplier and tracking are both required and the server enforces it. If the shipment genuinely arrived without a tracking number — hand-delivered, local pickup, a supplier who never sent one — tick "No tracking number" under the field: it commits, and the batch records that there was none, which is different from a blank field. Rescale and in-store batches are exempt, since there is no shipment.',

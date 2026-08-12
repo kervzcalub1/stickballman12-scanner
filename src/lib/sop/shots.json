@@ -82,7 +82,7 @@
     "file": "/sop-shots/batches.png",
     "w": 1280,
     "h": 820,
-    "caption": "Every intake. Open batches are resumable; a box showing a red 0 has a tracking number but no items.",
+    "caption": "Every intake. Open batches are resumable — a pending box is continued with \"Add items\" on its own row.",
     "hotspots": [
       {
         "n": 1,

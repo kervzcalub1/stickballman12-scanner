@@ -2105,7 +2105,9 @@ function PoPickerModal({ onPick, onClose, onSignOut }) {
                     <span>{p.supplier_name}</span>
                     {p.tag_code && <span>{p.tag_code}</span>}
                     <span>{p.box_count} label{p.box_count === 1 ? '' : 's'}</span>
-                    <span>{p.unit_count} unit{p.unit_count === 1 ? '' : 's'}</span>
+                    {/* "declared", not "units": this is the supplier's manifest count, and
+                        the PO list says it the same way. */}
+                    <span>{p.unit_count} declared</span>
                   </div>
                 </button>
               ))}

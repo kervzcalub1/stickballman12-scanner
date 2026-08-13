@@ -190,6 +190,25 @@ test.describe('PO delete', () => {
   });
 });
 
+test('the list separates what the supplier declared from what we counted', async ({ request }) => {
+  const f = await fixture(request);
+  const before = (await (await request.get('/api/po/list', { headers: auth('ph_team') })).json())
+    .pos.find((p) => Number(p.id) === Number(f.po.id));
+  expect(before.unit_count).toBe(2);       // the supplier's manifest
+  expect(before.received_units).toBe(0);   // nothing linked yet
+
+  await request.post('/api/po/link-batch', { headers: auth('ph_team'), data: { poId: f.po.id, batchId: f.batchId } });
+  const after = (await (await request.get('/api/po/list', { headers: auth('ph_team') })).json())
+    .pos.find((p) => Number(p.id) === Number(f.po.id));
+  expect(after.unit_count).toBe(2);
+  expect(after.received_units).toBe(2);    // now counted, from the linked batch
+
+  // Our count is staff-only: a supplier must not read it off a list before the
+  // reconciliation has been settled with them.
+  const mine = await (await request.get('/api/po/list', { headers: auth('supplier') })).json();
+  for (const p of mine.pos || []) expect(p.received_units).toBeUndefined();
+});
+
 test('PH links the shipment, unlinks it, then deletes the order — all from the PO screen', async ({ page, request }) => {
   const f = await fixture(request);
   await loginAs(page, 'ph_team');
@@ -212,6 +231,9 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
   // The order says what it's counting, and offers to undo it.
   const linked = row.locator('.po-ov-batch').filter({ hasText: f.batchCode });
   await expect(linked).toBeVisible({ timeout: 10_000 });
+  // The row now says both numbers — "2 units" hid which of the two it meant.
+  await expect(row.locator('.po-ov-meta')).toContainText('2 declared');
+  await expect(row.locator('.po-ov-meta')).toContainText('2 received');
   // Delete is refused while it's linked — the screen says why instead of hiding it.
   await expect(row.locator('.po-ov-danger')).toContainText(/Can’t be deleted/i);
 

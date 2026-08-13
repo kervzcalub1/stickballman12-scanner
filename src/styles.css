@@ -2758,3 +2758,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   .po-link-row { align-items: stretch; }
   .po-link-row select { max-width: none; }
 }
+/* "0 declared" beside a shelf full of received stock is the one case where the number
+   needs explaining rather than just stating — it's what "received blind" looks like on
+   the list. */
+.po-ov-blind { color: #e0a878; font-weight: 600; cursor: help; }

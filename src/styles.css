@@ -2762,3 +2762,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    needs explaining rather than just stating — it's what "received blind" looks like on
    the list. */
 .po-ov-blind { color: #e0a878; font-weight: 600; cursor: help; }
+/* Entering a manifest for a label that has already gone is legitimate but worth saying
+   out loud — it sets what was expected, never what was counted. */
+.po-ov-fill-late { opacity: 0.75; font-weight: 400; }

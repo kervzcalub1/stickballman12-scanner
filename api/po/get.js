@@ -28,6 +28,9 @@ export default async function handler(req, res) {
     // on-behalf flag so their portal can show the generic "<business>'s Staff" note.
     if (user.role === 'supplier' && !isPrivileged(user.role)) {
       data.lines = (data.lines || []).map(({ entered_by, entered_by_name, entered_by_username, ...rest }) => rest);
+      // Which of our batches the order was received into is internal bookkeeping — the
+      // supplier has no use for a batch code and it's not theirs to see.
+      delete data.batches;
       // Same rule for the reconciliation note: the supplier reads the note itself (it's
       // written for them) but not which staff member typed it — their portal renders it
       // as "From <business>". Keep the timestamp; that's not an identity.

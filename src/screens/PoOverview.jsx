@@ -13,6 +13,7 @@ import { carrierName } from '../lib/carriers.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { PoScanModal } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
+import { PoLinkBatchModal } from '../components/PoLinkBatch.jsx';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',    cls: 'draft' },
@@ -50,12 +51,17 @@ export function PoOverview({ onHome, onSignOut }) {
   const toggleHistory = (id) => setHistoryOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const [scanBox, setScanBox] = useState(null); // po_box being filled on the supplier's behalf
   const [scanOrderPo, setScanOrderPo] = useState(null); // PO being filled as a whole-order manifest
+  const [linkPo, setLinkPo] = useState(null);           // PO being linked to an already-received batch
+  const [unlinkBusy, setUnlinkBusy] = useState(null);   // batch id being unlinked
+  const [delPo, setDelPo] = useState(null);             // PO being deleted (confirm dialog)
+  const [delText, setDelText] = useState('');
+  const [delBusy, setDelBusy] = useState(false);
 
   // Reload the open PO's detail after entering items on behalf of the supplier.
   const refreshOpenDetail = () => {
     if (openId == null) return;
     api.poGet(openId)
-      .then((r) => setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }))
+      .then((r) => setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [] }))
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
     loadList(); // unit counts on the list may have advanced
   };
@@ -75,7 +81,7 @@ export function PoOverview({ onHome, onSignOut }) {
     let cancelled = false;
     setDetail(null); setDetailBusy(true); setError('');
     api.poGet(openId)
-      .then((r) => { if (!cancelled) setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); })
+      .then((r) => { if (!cancelled) setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [] }); })
       .catch((e) => { if (cancelled) return; if (e.unauthorized) return onSignOut(); setError(e.message); })
       .finally(() => { if (!cancelled) setDetailBusy(false); });
     return () => { cancelled = true; };
@@ -90,10 +96,32 @@ export function PoOverview({ onHome, onSignOut }) {
     setError('');
     try {
       const r = await api.poTrackRefresh(poId, boxId != null ? Number(boxId) : undefined);
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines });
+      // track-refresh doesn't return the linked batches — keep the ones already loaded
+      // rather than blanking the "received into" panel on every refresh.
+      setDetail((d) => ({ po: r.po, boxes: r.boxes, lines: r.lines, batches: d?.batches || [] }));
       loadList(); // label counts on the list may have advanced
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { if (boxId != null) setTrackBoxBusy(null); else setTrackBusy(false); }
+  };
+
+  // Undo a link. The batch and its stock are untouched — only the join goes.
+  const unlink = async (poId, batchId) => {
+    setUnlinkBusy(Number(batchId)); setError('');
+    try {
+      await api.poUnlinkBatch(poId, Number(batchId));
+      refreshOpenDetail();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setUnlinkBusy(null); }
+  };
+
+  const doDelete = async () => {
+    setDelBusy(true); setError('');
+    try {
+      await api.poDelete(delPo.id, delText.trim());
+      setDelPo(null); setDelText(''); setOpenId(null);
+      loadList();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setDelBusy(false); }
   };
 
   return (
@@ -133,7 +161,36 @@ export function PoOverview({ onHome, onSignOut }) {
                               <button className="btn ghost sm" disabled={trackBusy || trackBoxBusy != null} onClick={() => refreshTracking(p.id)}>
                                 <Icon name="refresh" /> {trackBusy ? 'Checking…' : 'Refresh all tracking'}
                               </button>
+                              {!['reconciled', 'closed'].includes(detail.po.status) && (
+                                <button className="btn ghost sm" onClick={() => setLinkPo(detail.po)}>
+                                  <Icon name="box" /> Link a received shipment
+                                </button>
+                              )}
                             </div>
+
+                            {/* What this order is actually counting. Receiving normally sets this
+                                itself; it's shown here because it can now be attached (and undone)
+                                by hand for an order opened mid-scan. */}
+                            {(detail.batches || []).length > 0 && (
+                              <div className="po-ov-batches">
+                                <div className="po-ov-batches-head"><b>Received into</b></div>
+                                {detail.batches.map((b) => (
+                                  <div className="po-ov-batch" key={b.id}>
+                                    <span>
+                                      {b.batch_code}
+                                      <span className="muted sm"> · {b.units} unit{b.units === 1 ? '' : 's'} · {b.status}
+                                        {b.date_received ? ` · ${String(b.date_received).slice(0, 10)}` : ''}</span>
+                                    </span>
+                                    {!['reconciled', 'closed'].includes(detail.po.status) && (
+                                      <button className="btn ghost sm" disabled={unlinkBusy === Number(b.id)}
+                                        onClick={() => unlink(p.id, b.id)}>
+                                        {unlinkBusy === Number(b.id) ? 'Unlinking…' : 'Unlink'}
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                             <ManifestPrint poId={p.id} poCode={p.po_code} onSignOut={onSignOut} />
                             {(() => {
                               // Whole-order manifest (Path C): one list for the whole purchase, no per-box
@@ -308,6 +365,26 @@ export function PoOverview({ onHome, onSignOut }) {
                                 })()}
                               </div>
                             ))}
+
+                            {/* An order raised by mistake, or a duplicate. Only offered while
+                                nothing is received against it — otherwise the record of what
+                                arrived would go with the order. */}
+                            {!['reconciled', 'closed'].includes(detail.po.status) && (
+                              (detail.batches || []).length === 0 ? (
+                                <div className="po-ov-danger">
+                                  <button className="btn ghost sm danger-link" onClick={() => { setDelPo(detail.po); setDelText(''); }}>
+                                    Delete this purchase order
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="po-ov-danger">
+                                  <span className="muted xs">
+                                    Can’t be deleted while {detail.batches.length} receiving batch(es) are linked —
+                                    unlink first. Deleting must never take the record of received stock with it.
+                                  </span>
+                                </div>
+                              )
+                            )}
                           </>
                         )}
                       </div>
@@ -318,6 +395,39 @@ export function PoOverview({ onHome, onSignOut }) {
             </div>
           )}
       </div>
+
+      {linkPo && (
+        <PoLinkBatchModal po={linkPo} lines={detail?.lines || []}
+          onClose={() => setLinkPo(null)}
+          onLinked={() => { setLinkPo(null); refreshOpenDetail(); }}
+          onSignOut={onSignOut} />
+      )}
+
+      {/* Deleting is guarded twice over: the order must have no receiving batch attached
+          (the server refuses otherwise, and the database would too), and the PO code has
+          to be typed back. Labels, manifest lines, the resolution and the thread go with
+          it — there is no undo. */}
+      {delPo && (
+        <div className="modal-overlay" onClick={() => !delBusy && setDelPo(null)}>
+          <div className="modal confirm po-del" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Delete {delPo.po_code}?</h3>
+            <p className="modal-msg">
+              This removes the order, its {(detail?.boxes || []).length} label(s), everything the supplier
+              declared, and the comment thread. It cannot be undone.
+            </p>
+            <label className="po-del-field">
+              <span className="muted sm">Type <b>{delPo.po_code}</b> to confirm</span>
+              <input value={delText} autoCapitalize="characters" autoCorrect="off"
+                onChange={(e) => setDelText(e.target.value)} placeholder={delPo.po_code} />
+            </label>
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => { setDelPo(null); setDelText(''); }} disabled={delBusy}>Cancel</button>
+              <button className="btn danger" disabled={delBusy || delText.trim().toUpperCase() !== String(delPo.po_code).toUpperCase()}
+                onClick={doDelete}>{delBusy ? 'Deleting…' : 'Delete permanently'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {scanBox && (
         <PoScanModal box={scanBox} onClose={() => setScanBox(null)}

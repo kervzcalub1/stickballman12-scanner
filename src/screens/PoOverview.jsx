@@ -312,9 +312,18 @@ export function PoOverview({ onHome, onSignOut }) {
                                   // stays open until the order is archived, on any scope — the lines are a
                                   // checklist for the warehouse, and are excluded from reconciliation.
                                   const isReplacement = box.kind === 'replacement';
+                                  // Staff writing the manifest FOR the supplier aren't bound by where
+                                  // the parcel is — that's the whole point of the on-behalf path: the
+                                  // list arrives by message after the box has gone, often after it has
+                                  // landed. Gating it on "draft + pending" meant the one order that
+                                  // needed it most — received with nothing declared — offered nothing.
+                                  // Only a frozen order (reconciled/archived) is off limits.
                                   const canFill = isReplacement
                                     ? detail.po.status !== 'closed'
-                                    : (detail.po.status === 'draft' && box.status === 'pending' && detail.po.manifest_scope !== 'po');
+                                    : (!['reconciled', 'closed'].includes(detail.po.status) && detail.po.manifest_scope !== 'po');
+                                  // Already gone or landed: entering it now only sets what was
+                                  // EXPECTED. It can't rewrite what the warehouse counted.
+                                  const boxIsOut = !['pending', 'pre_transit'].includes(box.status);
                                   return (
                                     <>
                                       {lines.length > 0 && (
@@ -364,11 +373,14 @@ export function PoOverview({ onHome, onSignOut }) {
                                       {canFill && lines.length === 0 && (
                                         <p className="muted xs po-ov-fill-hint">{isReplacement
                                           ? 'No items declared yet — enter what the supplier says they’re reshipping so the warehouse can check the box off against it. It won’t change the shortage on the original order.'
-                                          : 'No items yet — if the supplier sent a manual list of the box contents, enter it here so the warehouse can receive against this PO.'}</p>
+                                          : boxIsOut
+                                            ? 'Nothing was declared for this label. If the supplier has since sent their list, enter it here — it sets what was expected, so the order stops reading as received blind. It can’t change what the warehouse counted.'
+                                            : 'No items yet — if the supplier sent a manual list of the box contents, enter it here so the warehouse can receive against this PO.'}</p>
                                       )}
                                       {canFill && (
                                         <button className="btn sm po-ov-fill-btn" onClick={() => setScanBox(box)}>
                                           <Icon name="camera" /> {lines.length ? 'Add more items on their behalf' : 'Add items on their behalf'}
+                                          {boxIsOut && <span className="po-ov-fill-late"> · label already sent</span>}
                                         </button>
                                       )}
                                     </>

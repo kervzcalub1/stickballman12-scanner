@@ -58,6 +58,33 @@ A supplier-name mismatch **stops the script** (`--force` to override) — a wron
 writes a false receipt against a real order. The in-app path scopes its candidate list to
 the order's own supplier instead, so the mismatch can't arise.
 
+## Who may write a manifest, and when (`manifestEditBlock`)
+One rule, three lifecycles — get this wrong and a supplier is locked out of their own
+order (it happened live 2026-08-14, twice in one day).
+
+- **The supplier**, writing their own label: open while the parcel is **still with them**
+  — `STILL_WITH_SUPPLIER = ['pending', 'pre_transit']`. **`pre_transit` is the trap**:
+  tracking is registered when the PO is *created*, so the carrier acknowledges the label
+  within minutes, 17TRACK reports `InfoReceived` and the box leaves `pending` before
+  anything is packed. Keyed on `pending` alone, that one automatic move took away Add
+  items, Review & close **and** Ship, on a parcel still on their floor. `close-box` and
+  `ship` accept the same pair; `packed` still asks to be reopened.
+- **Staff on the supplier's behalf** (`onBehalf`, i.e. any non-supplier role): **not
+  bound by where the parcel is** — per-box *or* whole-order, before or after the box
+  lands. That path exists for a supplier who doesn't use the portal and sends their list
+  by message, routinely after delivery. Every line is stamped `entered_on_behalf` with
+  the staff member's name, so a late manifest still says who wrote it. PoOverview's
+  `canFill` mirrors this and flags "label already sent" on a box that's out.
+- **A replacement label**: open until the order is archived (it's created already
+  `shipped`, and its lines are excluded from `expected`).
+
+The only order-level bar is that the count is **frozen** — `reconciled` or `closed`.
+Keying it on `draft` was wrong: a multi-label order flips to `receiving` when the first
+box lands, which locked every label still at the supplier, including one added afterwards
+for the rest of the shipment.
+
+Covered by `e2e/po-manifest-window.spec.js`.
+
 ## Status
 - **Phase 0 (done, merged):** schema + `supplier` role.
 - **Phase 1 (built, on branch `feat/po-phase1-scanout` — not deployed):** PH create-batch

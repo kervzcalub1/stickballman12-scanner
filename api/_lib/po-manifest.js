@@ -32,8 +32,15 @@
 // still theirs to write. `pre_transit` = the carrier has the label on file but not the box.
 export const STILL_WITH_SUPPLIER = ['pending', 'pre_transit'];
 
+// `onBehalf` = staff writing the supplier's manifest for them, not the supplier writing
+// their own. That path exists precisely for a supplier who doesn't use the portal and
+// sends their list by message — routinely after the box has gone, sometimes after it has
+// landed — so where the parcel is cannot be the test. Every line is stamped
+// `entered_on_behalf` with the staff member's name and the count freezes at
+// reconciliation, so the record stays honest about who wrote it and when.
+//
 // Returns null when the edit is allowed, else { code, error } to send straight back.
-export function manifestEditBlock({ po, box }) {
+export function manifestEditBlock({ po, box, onBehalf = false }) {
   if (box && box.kind === 'replacement') {
     if (po.status === 'closed') {
       return { code: 409, error: 'This order is archived — bring it back before editing the replacement manifest.' };
@@ -43,6 +50,7 @@ export function manifestEditBlock({ po, box }) {
   if (po.status === 'reconciled' || po.status === 'closed') {
     return { code: 409, error: 'This order is already reconciled — its manifest is settled and can no longer be edited.' };
   }
+  if (onBehalf) return null;
   if (box && box.status === 'packed') {
     return { code: 409, error: 'This label is closed — reopen it to add items.' };
   }

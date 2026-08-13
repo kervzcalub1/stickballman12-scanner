@@ -133,6 +133,57 @@ test('once the order is reconciled the manifest is frozen', async ({ request }) 
   expect((await res.json()).error).toMatch(/reconciled/i);
 });
 
+test.describe('PH entering the manifest on the supplier’s behalf', () => {
+  test('can write a label that has already shipped or landed', async ({ request }) => {
+    const { po, delivered } = await partReceivedOrder(request);
+    // The case this exists for: the supplier doesn't use the portal and sends their list
+    // by message, often after the box has already been received.
+    const res = await request.post('/api/po/scan', {
+      headers: auth('ph_team'),
+      data: { poId: po.id, poBoxId: delivered.id, sku: SKU, size: '9', qty: 4, name: 'E2E Window Runner' },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+    const [line] = await q('SELECT qty_expected, entered_on_behalf FROM po_lines WHERE po_box_id = $1', [delivered.id]);
+    expect(line.qty_expected).toBe(4);
+    // Stamped, so the record says who wrote it — that's what makes a late manifest honest.
+    expect(line.entered_on_behalf).toBe(true);
+  });
+
+  test('can fix a line it just entered on a shipped label', async ({ request }) => {
+    const { po, delivered } = await partReceivedOrder(request);
+    await request.post('/api/po/scan', {
+      headers: auth('ph_team'),
+      data: { poId: po.id, poBoxId: delivered.id, sku: SKU, size: '9', qty: 4, name: 'E2E Window Runner' },
+    });
+    const [line] = await q('SELECT id FROM po_lines WHERE po_box_id = $1', [delivered.id]);
+    const res = await request.post('/api/po/line', {
+      headers: auth('ph_team'), data: { lineId: Number(line.id), qty: 6 },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+    expect((await q('SELECT qty_expected FROM po_lines WHERE id = $1', [line.id]))[0].qty_expected).toBe(6);
+  });
+
+  test('but the SUPPLIER still cannot rewrite a label the carrier has taken', async ({ request }) => {
+    const { po, delivered } = await partReceivedOrder(request);
+    const res = await request.post('/api/po/scan', {
+      headers: auth('supplier', SUPPLIER_UID),
+      data: { poId: po.id, poBoxId: delivered.id, sku: SKU, size: '9', qty: 4 },
+    });
+    expect(res.status()).toBe(409);
+  });
+
+  test('and a reconciled order is frozen even on their behalf', async ({ request }) => {
+    const { po, delivered } = await partReceivedOrder(request);
+    await q("UPDATE purchase_orders SET status = 'reconciled' WHERE id = $1", [po.id]);
+    const res = await request.post('/api/po/scan', {
+      headers: auth('ph_team'),
+      data: { poId: po.id, poBoxId: delivered.id, sku: SKU, size: '9', qty: 1 },
+    });
+    expect(res.status()).toBe(409);
+    expect((await res.json()).error).toMatch(/reconciled/i);
+  });
+});
+
 test('another supplier still cannot touch this order', async ({ request }) => {
   const { po, pending } = await partReceivedOrder(request);
   const res = await request.post('/api/po/scan', {

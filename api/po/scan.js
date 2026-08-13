@@ -48,7 +48,7 @@ export default async function handler(req, res) {
     const onBehalf = user.role !== 'supplier';
     const uidNum = Number(user.uid);
     const enteredBy = onBehalf && Number.isInteger(uidNum) ? uidNum : null;
-    const blocked = manifestEditBlock({ po, box });
+    const blocked = manifestEditBlock({ po, box, onBehalf });
     if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
 
     const line = await addPoScan({

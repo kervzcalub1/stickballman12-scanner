@@ -1,6 +1,7 @@
 // POST /api/po/ship  (supplier / admin)  { poBoxId }
 // Marks one label shipped (must hold ≥1 item). When every label on the PO is
 // shipped, the PO flips to 'shipped'. Returns the refreshed full PO.
+import { STILL_WITH_SUPPLIER } from '../_lib/po-manifest.js';
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, countPoBoxLines, shipPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
@@ -25,7 +26,9 @@ export default async function handler(req, res) {
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
     if (!isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
-    if (box.status === 'pending')
+    // Same set as close-box: a label still with the supplier hasn't been closed yet, so
+    // point at that step rather than claiming it's already shipped.
+    if (STILL_WITH_SUPPLIER.includes(box.status))
       return send(res, 409, { ok: false, error: 'Close the box for shipment before shipping it.' });
     if (box.status !== 'packed')
       return send(res, 409, { ok: false, error: 'This label is already shipped.' });

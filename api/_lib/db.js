@@ -2169,7 +2169,7 @@ export async function closePoBox(poBoxId) {
   const sql = db();
   return (await sql`
     UPDATE po_boxes SET status = 'packed', packed_at = now()
-    WHERE id = ${poBoxId} AND status = 'pending'
+    WHERE id = ${poBoxId} AND status IN ('pending', 'pre_transit')
     RETURNING *
   `)[0] || null;
 }

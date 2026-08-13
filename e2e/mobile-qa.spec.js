@@ -243,7 +243,11 @@ test.describe('390x844 mobile functional', () => {
     test('MQA no-box unit renders as a card with resolve controls reachable', async ({ page }) => {
       await loginAs(page, 'admin');
       await page.goto('/nobox');
-      await expect(page.getByText('No Box')).toBeVisible();
+      // The page's own title, not a loose "No Box": this spec's own fixture is called
+      // "MQA No Box Shoe", so once the seed lands its card matches too and the strict
+      // locator resolves to two elements. Green locally only because the seed had
+      // failed there.
+      await expect(page.getByText('No Box — Not Ready')).toBeVisible();
       await page.waitForTimeout(600);
       await assertNoHOverflow(page, 'nobox');
       test.skip(!noBoxVin, 'seed step did not resolve a VIN (rate-limited?)');

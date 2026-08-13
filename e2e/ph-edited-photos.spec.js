@@ -140,13 +140,10 @@ test('PH grid: PhotosModal groups PH edited vs Warehouse originals with no dup-k
 });
 
 test('Checkbox UX: PH grid .ph-yn-check Yes/No flags still toggle blue/red and save (ph_team edit mode)', async ({ page }) => {
-  // NOTE: the PH grid desktop table has a pre-existing, unrelated bug — an
-  // unconditional useEffect(updateScrollShadow) recreates the scrollShadow
-  // state object every render, causing a continuous "Maximum update depth
-  // exceeded" render loop (confirmed independent of this feature/test; see
-  // QA findings). That churn can make loosely-scoped locators land on the
-  // wrong row, so this test scopes tightly to our fixture's <tr> and
-  // re-resolves it right before each interaction instead of caching a stale handle.
+  // The render loop this test was originally written around (updateScrollShadow
+  // recreating its state object every render) has since been fixed, but the tight
+  // scoping is kept: re-resolve our fixture's <tr> before each interaction rather
+  // than caching a handle, so a re-render can't leave us holding a stale row.
   await loginAs(page, 'ph_team');
   await page.goto('/ph/new-inventory');
   const rowSku = () => page.locator('tr.ph-trow').filter({ hasText: SKU_COEXIST });
@@ -173,8 +170,13 @@ test('Checkbox UX: PH grid .ph-yn-check Yes/No flags still toggle blue/red and s
   const afterClass = await ynCheck.getAttribute('class');
   expect(afterClass).toContain(!before ? 'yes' : 'no');
 
-  // Save (Submit) and confirm the toggle persisted server-side.
+  // Save (Submit), then wait for THE SAVE ITSELF to come back before reading the row.
+  // Waiting on the Submit button disappearing raced the server 50/50: the button
+  // relabels itself to "…" the instant the request is fired, so "Submit is gone"
+  // meant "the request has started", and the DB was read before it had committed.
+  const saved = page.waitForResponse((r) => r.url().includes('/api/ph/update') && r.request().method() === 'POST');
   await rowSku().getByRole('button', { name: 'Submit' }).click();
+  expect((await saved).status()).toBe(200);
   await expect(rowSku().getByRole('button', { name: 'Submit' })).not.toBeVisible({ timeout: 8000 });
 
   const persisted = await db.query(`SELECT added_to_intel_inv FROM items WHERE vin = $1`, [coexistVin]);
@@ -202,14 +204,19 @@ test('Receiving: ListingPhotos shows "PH edited on file" banner for a SKU with p
 
   await page.getByRole('button', { name: /Items →|Next/ }).first().click().catch(() => {});
   // If step didn't advance via that button, try the wizard step tab directly.
-  if (!(await page.getByText('Add Item').isVisible().catch(() => false))) {
+  if (!(await page.locator('.scanbar').isVisible().catch(() => false))) {
     await page.locator('.wstep', { hasText: 'Items' }).click();
   }
-  await page.getByRole('button', { name: '+ Add Item' }).click();
-  const skuField = page.locator('input[placeholder="Scan or type UPC / SKU"]');
+  // Scan straight into the cart, then open THAT shoe's photos — listing photos
+  // hang off the cart row now, not off the scan flow.
+  const skuField = page.locator('.scanbar input[placeholder="Scan or type UPC / SKU"]');
   await expect(skuField).toBeVisible({ timeout: 8000 });
   await skuField.fill(SKU_COEXIST);
   await skuField.press('Enter');
+
+  const cartLine = page.locator('.recv-item').filter({ hasText: 'QAP Test Shoe' });
+  await expect(cartLine).toBeVisible({ timeout: 8000 });
+  await cartLine.locator('.recv-photo-btn').click();
 
   const listingPhotos = page.locator('.listing-photos');
   await expect(listingPhotos).toBeVisible({ timeout: 8000 });

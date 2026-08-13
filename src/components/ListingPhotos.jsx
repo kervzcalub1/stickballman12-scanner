@@ -10,6 +10,39 @@ import { Icon } from './NavIcons.jsx';
 
 const MIN_PHOTOS = 3;
 
+// Session cache of "how many warehouse angles does this SKU have" so a 20-shoe
+// receiving cart doesn't refetch a count on every render.
+const countCache = new Map();
+export function invalidatePhotoCount(sku) { countCache.delete(sku); }
+
+// The per-row photo button on the receiving cart. Photos moved out of the scan
+// flow (which is now uninterrupted) onto each shoe in the list — so the badge has
+// to say, at a glance, which shoes still need shooting.
+export function PhotoCountButton({ sku, onOpen, refreshKey = 0 }) {
+  const [count, setCount] = useState(() => countCache.get(sku) ?? null);
+  useEffect(() => {
+    if (!sku) return undefined;
+    if (countCache.has(sku)) { setCount(countCache.get(sku)); return undefined; }
+    let dead = false;
+    api.photoList(sku)
+      .then(({ photos: rows }) => {
+        const n = (rows || []).filter((r) => r.source !== 'ph_edited').length;
+        countCache.set(sku, n);
+        if (!dead) setCount(n);
+      })
+      .catch(() => { /* leave the count unknown — the button still opens */ });
+    return () => { dead = true; };
+  }, [sku, refreshKey]);
+  const done = count != null && count >= MIN_PHOTOS;
+  return (
+    <button type="button" className={`recv-photo-btn ${done ? 'ok' : ''} ${count === 0 ? 'empty' : ''}`}
+      onClick={onOpen} title={count === 0 ? 'Add listing photos' : 'View / replace listing photos'}>
+      <Icon name="camera" />
+      <span className="recv-photo-count">{count == null ? 'Photos' : `${count}/${SHOE_ANGLES.length}`}</span>
+    </button>
+  );
+}
+
 export function ListingPhotos({ sku, onSignOut, onCameraToggle }) {
   const [photos, setPhotos] = useState({});   // angle -> url (warehouse's own shots)
   const [hasPhEdited, setHasPhEdited] = useState(false); // PH already uploaded edits for this SKU

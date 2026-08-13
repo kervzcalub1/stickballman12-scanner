@@ -33,22 +33,28 @@ test.afterAll(async () => {
   if (pgClient) await pgClient.end();
 });
 
-// This block drives the REAL Add-Item flow, which resolves a SKU through the live
+// This block drives the REAL rapid-scan flow, which resolves a SKU through the live
 // Alias catalog (see the file header). With no ALIAS_API_KEY — CI always, and locally
-// whenever the call is rate-limited or aborted — no draft is ever built, so the flow
-// under test cannot run. It used to sit on `.additem-draft` for 15s and fail, which
-// reads like a GOAT-only regression when it is really a missing upstream dependency.
-// Skip instead, and carry that decision to the DB/cleanup tests: `describe.serial`
-// only halts on FAILURE, so a skipped first test would otherwise leave them asserting
-// against a batch that was never created.
+// whenever the call is rate-limited or aborted — the scan lands as an unresolved line,
+// so the flow under test cannot run. It used to sit on `.additem-draft` for 15s and
+// fail, which reads like a GOAT-only regression when it is really a missing upstream
+// dependency. Skip instead, and carry that decision to the DB/cleanup tests:
+// `describe.serial` only halts on FAILURE, so a skipped first test would otherwise
+// leave them asserting against a batch that was never created.
 let receivingSeeded = false;
 
-// Returns whether the Add-Item draft resolved. Never throws — the caller decides.
-async function draftResolved(page, timeout = 15_000) {
-  return page.locator('.additem-draft')
-    .waitFor({ state: 'visible', timeout })
-    .then(() => true)
-    .catch(() => false);
+// Scan a SKU into the cart and return its line once the lookup resolves — or null
+// when the catalogue didn't answer (the line stays, flagged, so the caller skips).
+async function scanIntoCart(page, sku, size, timeout = 15_000) {
+  await page.locator('.scanbar input').first().fill(sku);
+  await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+  const line = page.locator(`.recv-item[data-sku="${sku}"]`);
+  const ok = await line.waitFor({ state: 'visible', timeout }).then(() => true).catch(() => false);
+  if (!ok) return null;
+  // A SKU search carries no size, so the line lands needing one typed in.
+  const need = line.locator('.sz.need');
+  if (await need.count()) await need.first().fill(size);
+  return line;
 }
 
 test.describe.serial('Session QA · Receiving GOAT-only', () => {
@@ -64,42 +70,24 @@ test.describe.serial('Session QA · Receiving GOAT-only', () => {
     await expect(page.getByText('Items (0 units)')).toBeVisible();
 
     // --- Item 1: GOAT-only ---
-    await page.getByRole('button', { name: '+ Add Item' }).click();
-    const modalInput = page.locator('.modal.additem input').first();
-    await modalInput.fill(SKU_A);
-    await page.locator('.modal.additem').getByRole('button', { name: 'Add' }).click();
-    test.skip(!(await draftResolved(page)), 'Alias catalog lookup unavailable — no Add-Item draft to exercise');
-
-    const goatToggle = page.locator('.goat-toggle input[type="checkbox"]');
-    await expect(goatToggle).toBeVisible();
-    await expect(goatToggle).not.toBeChecked(); // off by default
-    await goatToggle.check();
-    await expect(goatToggle).toBeChecked();
-
-    await page.locator('.size-chips').getByRole('button', { name: '10', exact: true }).click();
-    await page.getByRole('button', { name: 'Complete item ✓' }).click();
-    // completeItem() closes the Add-Item modal itself — wait for it to be gone.
-    await expect(page.locator('.modal.additem')).toHaveCount(0);
-
-    const cartLine = page.locator('.recv-item').filter({ hasText: SKU_A });
-    await expect(cartLine.locator('.goat-badge')).toHaveText('GOAT only');
+    const cartLine = await scanIntoCart(page, SKU_A, '10');
+    test.skip(!cartLine, 'Alias catalog lookup unavailable — no cart line to exercise');
+    // GOAT-only is set on the cart row now (the scan itself is never interrupted).
+    const goatCheck = cartLine.locator('.goat-chip-toggle input[type="checkbox"]');
+    await expect(goatCheck).not.toBeChecked(); // off by default
+    await goatCheck.check();
+    await expect(goatCheck).toBeChecked();
 
     // --- Item 2: normal shoe (no GOAT) — control ---
-    await page.getByRole('button', { name: '+ Add Item' }).click();
-    await modalInput.fill(SKU_B);
-    await page.locator('.modal.additem').getByRole('button', { name: 'Add' }).click();
-    test.skip(!(await draftResolved(page)), 'Alias catalog lookup unavailable — no Add-Item draft to exercise');
-    await expect(page.locator('.goat-toggle input[type="checkbox"]')).not.toBeChecked();
-    await page.locator('.size-chips').getByRole('button', { name: '10', exact: true }).click();
-    await page.getByRole('button', { name: 'Complete item ✓' }).click();
-    await expect(page.locator('.modal.additem')).toHaveCount(0);
-
-    const cartLine2 = page.locator('.recv-item').filter({ hasText: SKU_B });
-    await expect(cartLine2.locator('.goat-badge')).toHaveCount(0); // no GOAT badge on the control line
+    const cartLine2 = await scanIntoCart(page, SKU_B, '10');
+    test.skip(!cartLine2, 'Alias catalog lookup unavailable — no cart line to exercise');
+    await expect(cartLine2.locator('.goat-chip-toggle input[type="checkbox"]')).not.toBeChecked();
 
     // Per-line GOAT toggle in the Review step flips state (round trip, then leave it on).
     await page.getByRole('button', { name: 'Review →' }).click();
-    const reviewLine = page.locator('.recv-item').filter({ hasText: SKU_A });
+    // Review shows name/SKU as editable fields (the mismatch fix), so match the row
+    // by its data-sku hook rather than by rendered text.
+    const reviewLine = page.locator(`.recv-item[data-sku="${SKU_A}"]`);
     const reviewGoatCheck = reviewLine.locator('.goat-chip-toggle input[type="checkbox"]');
     await expect(reviewGoatCheck).toBeChecked();
     await reviewGoatCheck.uncheck();

@@ -302,7 +302,7 @@ test.describe('390x844 mobile functional', () => {
 
   // ---- Receiving wizard (/receiving as admin) ----
   test.describe('Receiving wizard mobile', () => {
-    test('step 1 → Add Item modal (size chip / qty stepper / keyboard) → step 2 list', async ({ page }) => {
+    test('step 1 → rapid scan bar + manual-add modal (size chip / qty stepper / keyboard)', async ({ page }) => {
       await loginAs(page, 'admin');
       await page.goto('/receiving');
       await expect(page.getByText('Shipment details')).toBeVisible();
@@ -315,9 +315,13 @@ test.describe('390x844 mobile functional', () => {
       await trackInput.fill(`MQA-WIZ-${TAG}`);
       await page.getByRole('button', { name: 'Next →' }).click();
 
-      await expect(page.getByRole('button', { name: '+ Add Item' })).toBeVisible();
-      await assertNoHOverflow(page, 'receiving step 2 (empty)');
-      await page.getByRole('button', { name: '+ Add Item' }).click();
+      // The scan bar is the primary path now — it's sticky, so it must not push the
+      // page sideways on a phone.
+      const scanbar = page.locator('.scanbar');
+      await expect(scanbar).toBeVisible();
+      await expect(scanbar.locator('.seg')).toBeVisible(); // sticky With box / No box
+      await assertNoHOverflow(page, 'receiving step 2 (scan bar)');
+      await page.getByRole('button', { name: '+ Add manually' }).click();
       const modal = page.locator('.modal.additem');
       await expect(modal).toBeVisible();
       await assertNoHOverflow(page, 'receiving Add-Item modal open');
@@ -329,10 +333,14 @@ test.describe('390x844 mobile functional', () => {
       // MQA-* SKUs are synthetic and would 404, only exercising the fallback.
       await modalInput.fill('IM2404-645');
       await modal.getByRole('button', { name: 'Add' }).click();
-      await page.waitForTimeout(1500);
 
+      // Wait for the draft itself rather than a fixed beat — a slow catalogue used to
+      // send this down the "no draft" path and then click the × while the draft was
+      // rendering underneath it (the scan flash also auto-clears, shifting layout),
+      // which read as a mobile-layout failure when it was only a race.
       const draft = modal.locator('.additem-draft');
-      const hasDraft = await draft.isVisible().catch(() => false);
+      const hasDraft = await draft.waitFor({ state: 'visible', timeout: 12_000 }).then(() => true).catch(() => false);
+      await page.waitForTimeout(2000); // let the scan flash expire so nothing is mid-shift
       if (hasDraft) {
         // Size chip tap + qty stepper (touch path).
         const chip = draft.locator('.size-chip').first();

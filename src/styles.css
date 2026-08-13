@@ -444,6 +444,46 @@ body {
 .recv-unit { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .vin.pending { color: var(--muted); font-style: italic; font-weight: 600; }
 
+/* --- Rapid scan bar (Items step) -----------------------------------------
+   The scan field lives on the page instead of behind a dialog, so it has to read
+   as the step's primary control — and stay put while the cart grows under it, or
+   the gun loses its aim after a dozen boxes. */
+.scanbar { position: sticky; top: 0; z-index: 5; background: var(--panel);
+  padding: 10px 0 10px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+.scanbar .searchrow input { font-size: 16px; } /* 16px stops iOS zooming the page on focus */
+.scanbar-mode { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.scanbar-mode-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.scanbar .scan-flash { margin: 10px 0 0; }
+/* Undo outlives the flash message on purpose — a mis-scan is often noticed a
+   beat after the confirmation has faded. */
+.scan-undo { margin-top: 8px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border);
+  background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.scan-undo:hover { color: var(--text); border-color: var(--muted); }
+
+/* A line the scan couldn't finish: no product came back, or the catalogue had no
+   size. It's kept in the cart rather than dropped with a flash nobody was
+   watching — and it blocks the commit until it's filled in. */
+.recv-item.needs-fix { border-color: var(--err); background: rgba(255,107,107,0.06); }
+.recv-item-title.pendingline { color: var(--muted); font-weight: 600; }
+.recv-item-failed { display: block; color: #e08f8f; font-size: 12px; }
+.recv-item-head .cart-fields { display: flex; flex-direction: column; gap: 6px; }
+.recv-size-row.needs-size, .review-size-row.needs-size { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.recv-size-warn { color: var(--err); flex: none; }
+.recv-size-row .sz.need, .review-size-row .sz.need { flex: 1; min-width: 0; max-width: 120px; border-color: var(--err); }
+.recv-size-row.needs-size .recv-size-qty { margin-left: auto; }
+
+/* Per-shoe listing photos — moved out of the scan flow onto the cart row, so the
+   count is what tells you which shoes still need shooting. */
+/* Sized as a thumb target, not a chip — it's tapped with a shoe in the other hand. */
+.recv-photo-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 9px 14px; min-height: 40px; border-radius: 999px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 14.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.recv-photo-btn:hover { color: var(--text); border-color: var(--muted); }
+.recv-photo-btn.empty { color: #e0a878; border-color: rgba(224,168,120,0.5); }
+.recv-photo-btn.ok { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.1); }
+.modal.additem .listing-photos { margin-top: 12px; }
+
 /* Add Item modal */
 .modal.additem { max-width: 460px; text-align: left; }
 /* Give the Complete button room so it isn't crowding the size dropdown (mobile). */
@@ -1756,6 +1796,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   .tab { padding: 12px; }
   .searchrow { flex-direction: column; }
   .searchrow .btn { width: 100%; }
+  /* …except the rapid-scan bar: stacked three-high it's a sticky header that
+     pushes the cart off the screen. Field + Add + camera stay on one row. */
+  .scanbar .searchrow { flex-direction: row; gap: 6px; }
+  .scanbar .searchrow .btn { width: auto; flex: none; }
 
   .topbar { gap: 8px; }
   .brand { font-size: 15px; }
@@ -2669,3 +2713,48 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .sop-video-len { font-variant-numeric: tabular-nums; }
 /* Says the quiet part out loud: there is no audio track, so nobody hunts for the volume. */
 .sop-video-note { font-style: italic; opacity: .8; }
+
+/* --- Linking an already-received batch to its PO -------------------------
+   The repair for an order opened while the warehouse was already scanning: the
+   shipment exists, the order exists, and until now nothing could join them. */
+.po-ov-batches { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+.po-ov-batches-head { font-size: 13px; margin-bottom: 6px; }
+.po-ov-batch { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; padding: 4px 0; font-size: 14px; }
+/* Destructive actions sit apart from the working controls, at the end of the panel. */
+.po-ov-danger { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.po-ov-danger .danger-link { color: #e08f8f; border-color: rgba(224,143,143,0.4); }
+.po-ov-danger .danger-link:hover { background: rgba(224,143,143,0.1); }
+
+.modal.po-link { max-width: 620px; text-align: left; }
+.modal.po-link .modal-title { margin: 0; }
+.po-link-step { margin-top: 16px; }
+.po-link-step-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.po-link-batches { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+.po-link-batch { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: transparent;
+  color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.po-link-batch:hover { border-color: var(--muted); }
+.po-link-batch.on { border-color: var(--primary); background: rgba(79,124,255,0.1); }
+.po-link-batch-code { font-weight: 700; }
+.po-link-already { color: #7bc99a; font-weight: 600; }
+.po-link-rows { display: flex; flex-direction: column; gap: 8px; }
+.po-link-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.po-link-box { display: flex; flex-direction: column; }
+.po-link-track { font-variant-numeric: tabular-nums; }
+.po-link-row select { flex: 1; min-width: 200px; max-width: 320px; }
+.po-link-check { display: flex; align-items: flex-start; gap: 10px; font-size: 13.5px; cursor: pointer; }
+.po-link-check input { width: 18px; height: 18px; flex: none; margin-top: 2px; }
+.po-link-check span span { display: block; margin-top: 3px; }
+.po-link-warn { color: #e0a878; font-size: 12.5px; margin-top: 8px; }
+.po-link-warn-inline { color: #e0a878; }
+.po-link-ok-inline { color: #7bc99a; }
+.po-link-summary { margin-top: 16px; padding: 10px 12px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--border); font-size: 14px; }
+.modal.po-del { text-align: left; max-width: 460px; }
+.po-del-field { display: block; margin: 14px 0 4px; }
+.po-del-field input { width: 100%; margin-top: 6px; }
+@media (max-width: 600px) {
+  .po-link-row { align-items: stretch; }
+  .po-link-row select { max-width: none; }
+}

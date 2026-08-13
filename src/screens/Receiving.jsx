@@ -6,12 +6,12 @@ import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal } from '../components/common.jsx';
-import { ListingPhotos } from '../components/ListingPhotos.jsx';
+import { ListingPhotos, PhotoCountButton, invalidatePhotoCount } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { useUnsavedGuard } from '../hooks.js';
-import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes } from '../lib/codes.js';
+import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
 import { estToday } from '../lib/format.js';
 
@@ -365,6 +365,29 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const recentRef = useRef({}); // code -> last scan time (cooldown vs gun/camera re-reads)
   const reselectRef = useRef(false); // after a typed/gun submit, re-select the code once the lookup finishes
 
+  // ---- Rapid scan: the Items step's own scan bar (no dialog in the way) ----
+  // Scan gun / camera fires at box after box and each code lands in the cart
+  // straight away. `scanBoxMode` is sticky so a whole run of no-box pairs is
+  // scanned without touching anything (the SOP already says to scan them apart).
+  const [scanInput, setScanInput] = useState('');
+  const [scanCam, setScanCam] = useState(false);
+  const [scanBoxMode, setScanBoxMode] = useState(true); // true = With box
+  const scanBoxModeRef = useRef(true); scanBoxModeRef.current = scanBoxMode;
+  const scanInputRef = useRef(null);
+  const scanRecentRef = useRef({});   // code -> last scan time (gun/camera re-read cooldown)
+  const lastScanRef = useRef(null);   // { lineKey, vin } — one-tap Undo for the last scan
+  const [canUndo, setCanUndo] = useState(false);
+  // Per-SKU listing-photo modal (replaces the photo block that lived in the draft).
+  const [photoSku, setPhotoSku] = useState(null);
+  const [photoTick, setPhotoTick] = useState(0); // bumped on close so the row's count refetches
+  function closePhotoModal() {
+    if (photoSku) invalidatePhotoCount(photoSku);
+    setPhotoSku(null); setPhotoTick((t) => t + 1);
+  }
+  // Only pull focus where a barcode gun is actually plugged in — on a phone a
+  // programmatic focus() pops (or silently traps) the keyboard over the list.
+  const hasFinePointer = () => { try { return window.matchMedia('(pointer: fine)').matches; } catch { return true; } };
+
   // After a typed/gun submit the field keeps the searched code (so the manual
   // typist still sees it); re-select it once the lookup finishes and the input is
   // re-enabled, so a barcode gun's next scan REPLACES the text instead of
@@ -391,6 +414,18 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       return () => clearTimeout(t);
     }
   }, [showAdd, mCam, photoCam, pendingSwitch, draft]);
+  // Keep the rapid-scan field armed so a HID gun types straight into it — but
+  // never steal focus from another field being typed in (a size being corrected
+  // to 5C / 3Y), and never on a phone (see hasFinePointer).
+  useEffect(() => {
+    if (step !== 2 || scanCam || photoCam || showAdd || photoSku || !hasFinePointer()) return undefined;
+    const t = setTimeout(() => {
+      const ae = document.activeElement;
+      if (ae && ae !== scanInputRef.current && ae.matches?.('input, textarea, select, [contenteditable="true"]')) return;
+      scanInputRef.current?.focus({ preventScroll: true });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [step, scanCam, photoCam, showAdd, photoSku, items.length]);
   // While the listing-photo camera is open, drop focus so the mobile keyboard
   // closes — capturing a photo must never re-summon it via the hidden scan field.
   useEffect(() => { if (photoCam) document.activeElement?.blur?.(); }, [photoCam]);
@@ -416,6 +451,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (showAddSupplier) { setShowAddSupplier(false); return true; }
       if (pendingSwitch) { setPendingSwitch(null); return true; }
       if (showAdd) { closeAddItem(); return true; }
+      if (photoSku) { closePhotoModal(); return true; }
+      if (scanCam) { setScanCam(false); return true; }
       if (scanTracking) { setScanTracking(false); return true; }
       if (showPrefs) { setShowPrefs(false); return true; }
       if (showConfirm) { setShowConfirm(false); return true; }
@@ -428,7 +465,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       return false;
     };
     return () => { if (navBack) navBack.current = null; };
-  }, [navBack, issueEditorVin, unitIssues, showAddSupplier, pendingSwitch, showAdd, scanTracking, showPrefs, showConfirm, result, printLabels, tab, step, isMultiBoxNew, activeBatch, activeSlot]);
+  }, [navBack, issueEditorVin, unitIssues, showAddSupplier, pendingSwitch, showAdd, photoSku, scanCam, scanTracking, showPrefs, showConfirm, result, printLabels, tab, step, isMultiBoxNew, activeBatch, activeSlot]);
 
   // Short audible + haptic confirmation that a box registered.
   function scanFeedback(kind) {
@@ -462,18 +499,27 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     return pool.filter((s) => !(d?.rows || []).some((r) => r.size === s));
   }
 
+  // Clear the scan bar's per-cart state (cooldowns + the one-shot Undo) whenever
+  // the cart it belongs to is swapped out — a different box, or a committed one.
+  function resetScanState() {
+    scanRecentRef.current = {}; lastScanRef.current = null;
+    setCanUndo(false); setScanInput(''); setScanCam(false); setFlash(null);
+  }
+
   function openAddItem() { setDraft(null); setMInput(''); setMError(''); setPendingSwitch(null); setMCam(false); recentRef.current = {}; setShowAdd(true); }
   function closeAddItem() { setShowAdd(false); setDraft(null); setPendingSwitch(null); setMError(''); setMCam(false); }
 
   // Resolve a scanned/typed code (auto-detect UPC vs SKU) and fold it into the
   // current draft: start the shoe, +1 the matching size, or (different SKU)
   // prompt to finish the current shoe and start a new one.
-  async function addCode(code, { showInField = false } = {}) {
+  async function addCode(code, { showInField = false, fromCamera = false } = {}) {
     const c = String(code).trim();
     if (!c) return;
-    const now = Date.now();
-    if (recentRef.current[c] && now - recentRef.current[c] < 1200) return; // gun/camera re-read
-    recentRef.current[c] = now;
+    if (fromCamera) { // live camera re-read of the same barcode — see isCameraReread
+      const now = Date.now();
+      if (isCameraReread(recentRef.current, c, now)) return;
+      recentRef.current[c] = now;
+    }
     // Keep the scanned/typed code visible in the field after a lookup (so the
     // manual typist can still see what they searched). The typed/gun submit path
     // (form onSubmit) re-selects the text afterwards, so a barcode gun's next
@@ -599,6 +645,165 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     } finally { setMBusy(false); }
   }
 
+  // ---- Rapid scan handler --------------------------------------------------
+  // Every scan is added OPTIMISTICALLY: the line appears immediately as pending
+  // and the catalogue lookup resolves behind it, so the next scan never waits.
+  // Two failure modes are deliberately kept *in the list* rather than thrown away
+  // in a flash message nobody was watching while scanning:
+  //   • lookup failed        → a red line carrying the raw code, fixed on Review
+  //   • no size in the catalogue → a red "size?" row, fixed here or on Review
+  // A wrong product (the catalogue answering a Nike scan with an adidas) can't be
+  // caught here at all — Review is where that gets corrected, which is the whole
+  // trade for scanning this fast.
+  async function rapidScan(code, { fromCamera = false } = {}) {
+    const c = String(code).trim();
+    if (!c) return;
+    // The cooldown exists because a live camera re-reads the SAME barcode many
+    // times a second. It must not apply to a gun/typed submit: six identical boxes
+    // scanned back to back are six pairs, and silently dropping the fast ones is
+    // exactly the failure this rapid flow can't afford.
+    if (fromCamera) {
+      const now = Date.now();
+      if (isCameraReread(scanRecentRef.current, c, now)) return;
+      scanRecentRef.current[c] = now;
+    }
+    setScanInput(''); setError('');
+    if (hasFinePointer()) scanInputRef.current?.focus({ preventScroll: true });
+
+    // Rescale: a VIN is an EXISTING unit — it updates its own record, no new VIN.
+    if (isRescale && isVinCode(c)) {
+      const vin = c.toUpperCase();
+      if (rescannedRef.current.some((r) => r.vin === vin)) { setFlash({ type: 'dup', text: `Already added · ${vin}` }); scanFeedback('dup'); return; }
+      try {
+        const { item } = await api.itemLookup(vin);
+        setRescanned((arr) => [...arr, { key: cartKey++, vin: item.vin, name: item.name, sku: item.sku, size: item.size, image: item.image_url, statusSel: '', custom: '' }]);
+        setFlash({ type: 'added', text: `✓ ${item.vin}${item.size ? ` · size ${item.size}` : ''}` }); scanFeedback('added');
+      } catch (err) {
+        if (err.unauthorized) return onSignOut();
+        setError(err.message); scanFeedback('dup');
+      }
+      return;
+    }
+
+    const isUpc = isUpcCode(c);
+    const withBox = scanBoxModeRef.current;
+    const lineKey = cartKey++;
+    lastScanRef.current = { lineKey, vin: null }; setCanUndo(true);
+    setItems((arr) => [{
+      key: lineKey, pending: true, code: c, name: '', sku: '', image: '', source: 'manual',
+      upc: isUpc ? c : '', gender: null, colorway: '', withBox, goatOnly: false, sizes: [],
+    }, ...arr]);
+    setFlash({ type: 'added', text: `Scanning ${c}…` });
+    scanFeedback('added');
+
+    // The VIN is reserved alongside the lookup so the number is on screen for
+    // stickering the moment the line resolves — even when the lookup itself fails.
+    const [look, vin] = await Promise.all([
+      (isUpc ? api.searchUpc(c) : api.searchSku(c)).then((r) => ({ ok: true, product: r.product }), (e) => ({ ok: false, err: e })),
+      api.reserveVins(1, header.dateReceived).then((r) => r.vins?.[0] || null, () => null),
+    ]);
+    if (lastScanRef.current?.lineKey === lineKey) lastScanRef.current.vin = vin;
+
+    if (!look.ok) {
+      if (look.err?.unauthorized) return onSignOut();
+      setItems((arr) => arr.map((it) => (it.key !== lineKey ? it : {
+        ...it, pending: false, failed: true, sizes: [{ key: cartKey++, size: '', qty: 1, needsSize: true, vins: vin ? [vin] : [] }],
+      })));
+      setFlash({ type: 'dup', text: `Not found · ${c} — fill it in below` }); scanFeedback('dup');
+      return;
+    }
+
+    const p = look.product || {};
+    const size = p.scannedSize || '';
+    setItems((arr) => {
+      const resolved = {
+        key: lineKey, name: p.name || '', sku: p.sku || '', image: p.image || '', source: p.source || 'manual',
+        // Keep the UPC whether it was scanned directly or returned by a SKU lookup —
+        // it's needed to print the no-box box-style barcode label.
+        upc: (isUpc ? c : '') || p.upc || '', gender: p.gender || null, colorway: p.colorway || '',
+        sizeOptions: p.sizes || [], withBox, goatOnly: false,
+        sizes: [{ key: cartKey++, size, qty: 1, needsSize: !size, vins: vin ? [vin] : [] }],
+      };
+      // Fold into the same shoe already in the cart (same product AND same box /
+      // GOAT status — boxed and no-box pairs are tracked apart).
+      const i = arr.findIndex((x) => x.key !== lineKey && !x.pending && !x.failed
+        && x.withBox === withBox && !!x.goatOnly === false && sameSku(x.sku, resolved.sku));
+      if (i === -1) return arr.map((it) => (it.key === lineKey ? resolved : it));
+      const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
+      // A blank size always starts its OWN row — two unknown sizes are not one
+      // size scanned twice.
+      const j = size ? sizes.findIndex((z) => z.size === size) : -1;
+      if (j === -1) sizes.push({ key: cartKey++, size, qty: 1, needsSize: !size, vins: vin ? [vin] : [] });
+      else { sizes[j].qty += 1; if (vin) sizes[j].vins.push(vin); }
+      const merged = { ...arr[i], sizes, image: arr[i].image || resolved.image };
+      // Float the just-scanned shoe to the top and drop the pending placeholder.
+      return [merged, ...arr.filter((x, idx) => idx !== i && x.key !== lineKey)];
+    });
+    setFlash(size
+      ? { type: 'added', text: `✓ ${p.name || c} · size ${size}` }
+      : { type: 'warn', text: `${p.name || c} — no size from the catalogue, set it below` });
+  }
+
+  // One-tap reversal of the last scan: drop the whole line if it's still the
+  // scan's own, otherwise pull that unit's VIN back out of the shoe it merged into.
+  function undoLastScan() {
+    const last = lastScanRef.current;
+    if (!last) return;
+    lastScanRef.current = null; setCanUndo(false);
+    setItems((arr) => arr.flatMap((it) => {
+      if (it.key === last.lineKey) return [];
+      if (!last.vin || !it.sizes.some((s) => (s.vins || []).includes(last.vin))) return [it];
+      const sizes = it.sizes.flatMap((s) => {
+        if (!(s.vins || []).includes(last.vin)) return [s];
+        const q = Math.max(0, (Number(s.qty) || 1) - 1);
+        return q === 0 ? [] : [{ ...s, qty: q, vins: (s.vins || []).filter((v) => v !== last.vin) }];
+      });
+      return sizes.length ? [{ ...it, sizes }] : [];
+    }));
+    setFlash({ type: 'warn', text: 'Last scan removed' });
+  }
+
+  // ---- Cart-line edits shared by the Items list and Review -----------------
+  const setItemField = (itemKey, patch) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, ...patch, failed: false } : it)));
+  const setSizeValue = (itemKey, sizeKey, size) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
+    ...it, sizes: it.sizes.map((s) => (s.key === sizeKey ? { ...s, size } : s)),
+  })));
+  // Two scans of one shoe that both came back sizeless land as two separate rows
+  // (two unknown sizes are not one size scanned twice). Once they're typed in and
+  // they match, they ARE the same size — fold them together, carrying the units
+  // across. On BLUR, not on each keystroke: "1" on the way to "10" would otherwise
+  // dissolve into an existing size-1 row mid-type.
+  const mergeSizeRow = (itemKey, sizeKey) => setItems((arr) => arr.map((it) => {
+    if (it.key !== itemKey) return it;
+    const row = it.sizes.find((s) => s.key === sizeKey);
+    const size = String(row?.size || '').trim();
+    if (!row) return it;
+    // Empty on blur → the row still needs a size; keep the field there.
+    if (!size) return { ...it, sizes: it.sizes.map((s) => (s.key === sizeKey ? { ...s, size: '', needsSize: true } : s)) };
+    const twin = it.sizes.find((s) => s.key !== sizeKey && String(s.size || '').trim() === size);
+    if (!twin) return { ...it, sizes: it.sizes.map((s) => (s.key === sizeKey ? { ...s, size, needsSize: false } : s)) };
+    return {
+      ...it,
+      sizes: it.sizes.flatMap((s) => {
+        if (s.key === sizeKey) return [];
+        if (s.key !== twin.key) return [s];
+        return [{
+          ...s,
+          needsSize: false,
+          qty: (Number(s.qty) || 0) + (Number(row.qty) || 0),
+          vins: [...(s.vins || []), ...(row.vins || [])],
+        }];
+      }),
+    };
+  }));
+  // "+ Add size" on Review — reserves its VIN up front like the qty stepper does.
+  async function addSizeRow(itemKey) {
+    const vins = await reserveMoreVins(1);
+    setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
+      ...it, sizes: [...it.sizes, { key: cartKey++, size: '', qty: 1, needsSize: true, vins }],
+    })));
+  }
+
   // Draft size-row helpers (manual add / steppers / remove).
   const setDraftRows = (fn) => setDraft((d) => (d ? { ...d, rows: fn(d.rows) } : d));
   const addDraftSize = (size) => { if (size) setDraftRows((rows) => (rows.some((r) => r.size === size) ? rows : [...rows, { key: cartKey++, size, qty: 1 }])); };
@@ -645,6 +850,25 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // Scan-intake rows are always ≥1, so this is unchanged there.
   const itemUnits = (i) => i.sizes.reduce((a, r) => a + Math.max(0, Number(r.qty) || 0), 0);
   const totalItems = items.reduce((s, i) => s + itemUnits(i), 0);
+  // Rapid scanning lets incomplete lines into the cart on purpose — a lookup that
+  // failed, or a code the catalogue had no size for. They're fixable in the list
+  // and on Review, but they must never reach a commit.
+  const isUnresolved = (it) => it.pending || !String(it.name || '').trim() || it.sizes.some((s) => !String(s.size || '').trim());
+  const unresolvedCount = items.filter(isUnresolved).length;
+  const unresolvedMsg = `Finish the ${unresolvedCount} highlighted line${unresolvedCount === 1 ? '' : 's'} first — every shoe needs a name and a size.`;
+  // The step's error line sits above the sticky footer, which on a long cart is far
+  // below the fold — a blocked "Review →" would look like a dead button. Put the
+  // cursor in the first field that's actually missing instead: it scrolls itself
+  // into view, and on a phone it opens the keyboard where the fix has to be typed.
+  function focusFirstUnresolved() {
+    setTimeout(() => {
+      const row = document.querySelector('.recv-item.needs-fix');
+      if (!row) return;
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const field = [...row.querySelectorAll('input')].find((el) => !el.value.trim() && el.type !== 'checkbox');
+      field?.focus({ preventScroll: true });
+    }, 0);
+  }
   // Pairs this label was supposed to hold — the denominator of the "x of y checked"
   // progress on the PO checklist (overage rows have no expectation, so they're excluded).
   const manifestExpected = items.reduce((s, i) => s + i.sizes.reduce((a, r) => a + (Number(r.expectedQty) || 0), 0), 0);
@@ -656,6 +880,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   function startRescaleFinish() {
     setError('');
     if (!items.length && !rescanned.length) { setError('Scan at least one item or VIN.'); return; }
+    if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; }
     if (rescanned.some((r) => !effRescaleStatus(r))) { setError('Pick a status for every rescanned unit.'); return; }
     setShowConfirm(true);
   }
@@ -702,6 +927,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setActiveSlot(i); setDraft(null);
     setItems(isPoReceive ? buildManifestItems(boxSlots[i]?.poBoxId) : []);
     setIssues([]); setUnitIssues({}); setRescanned([]);
+    resetScanState();
     emptyBoxAck.current = false;
     setStep(2);
   }
@@ -710,6 +936,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   function backToBoxList() {
     setActiveSlot(null); setStep(1);
     setItems([]); setIssues([]); setUnitIssues({}); setDraft(null);
+    resetScanState();
     emptyBoxAck.current = false;
   }
   async function finishBatchNow() {
@@ -743,6 +970,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   async function goStep3() {
     setError('');
     if (!items.length) { setError('Add at least one item first.'); return; }
+    if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; }
     // The PO checklist now starts fully unchecked, so "nothing ticked" is also what an
     // untouched screen looks like. Say so once before letting it through — an empty box
     // IS a legitimate outcome (the whole label came up short), just never a silent one.
@@ -759,7 +987,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (isPoReceive && !(await ensureManifestVins())) return;
     setStep(3);  // Review
   }
-  function goStep4() { setError(''); setStep(4); } // Issues (shipment-level)
+  function goStep4() { // Issues (shipment-level)
+    setError('');
+    if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; }
+    setStep(4);
+  }
 
   async function doCommit() {
     setCommitting(true);
@@ -813,7 +1045,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
           upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
         }));
-        setItems([]); setIssues([]); setRescanned([]); setUnitIssues({});
+        setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); resetScanState();
         if (isMultiBoxNew) {
           // Mark the slot received and drop back to the box list (step 1) to do the next.
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
@@ -873,7 +1105,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         printItems,
         reconcile: batchRes?.reconcile || null,
       });
-      setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); setStep(1);
+      setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1);
       // noTracking resets with the tracking # on purpose: left sticky, the NEXT
       // shipment would quietly commit as untracked too.
       setHeader((h) => ({ ...h, tracking: '', noTracking: false, notes: '', specialRules: '' })); // keep buyer/supplier/date/cost
@@ -1126,29 +1358,105 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               <div className="card">
                 <div className="step-head">
                   <h3 className="rows-title">{isRescale ? 'New / unlabeled stock' : 'Items'} <span className="muted">({totalItems} unit{totalItems === 1 ? '' : 's'})</span></h3>
-                  <button className="btn primary sm" onClick={openAddItem}>+ Add Item</button>
+                  <button className="btn ghost sm" onClick={openAddItem}>+ Add manually</button>
                 </div>
-                {!items.length ? <p className="muted">{isRescale ? 'No new stock — scan a UPC/SKU here for unlabeled stock, or scan VINs below to rescan existing units.' : 'No items yet — tap “Add Item” and scan a box.'}</p> : (
+
+                {/* Rapid scan bar — the gun/camera fires straight into the cart.
+                    No dialog between scans; corrections happen in the list below
+                    and on Review. */}
+                <div className="scanbar">
+                  <form className="searchrow" onSubmit={(e) => { e.preventDefault(); rapidScan(scanInput); }}>
+                    <input ref={scanInputRef} autoCapitalize="characters" autoCorrect="off" autoComplete="off"
+                      placeholder={isRescale ? 'Scan or type VIN / UPC / SKU' : 'Scan or type UPC / SKU'}
+                      value={scanInput} onChange={(e) => setScanInput(e.target.value)} />
+                    <button className="btn primary" type="submit">Add</button>
+                    <button type="button" className={`btn ${scanCam ? 'primary' : 'ghost'}`} onClick={() => setScanCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
+                  </form>
+                  {!isRescale && (
+                    <div className="scanbar-mode">
+                      <span className="scanbar-mode-label">Scanning as</span>
+                      <div className="seg sm" role="group" aria-label="Box status applied to every scan">
+                        <button type="button" className={`seg-btn ${scanBoxMode ? 'on yes' : ''}`} aria-pressed={scanBoxMode} onClick={() => setScanBoxMode(true)}><Icon name="box" /> With box</button>
+                        <button type="button" className={`seg-btn ${!scanBoxMode ? 'on no' : ''}`} aria-pressed={!scanBoxMode} onClick={() => setScanBoxMode(false)}><Icon name="nobox" /> No box</button>
+                      </div>
+                    </div>
+                  )}
+                  {scanCam && (
+                    <Suspense fallback={<p className="muted">Loading camera…</p>}>
+                      <CameraScanner continuous mode={isRescale ? 'rescale' : 'product'} onDetected={(code) => rapidScan(code, { fromCamera: true })} onClose={() => setScanCam(false)}
+                        zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+                    </Suspense>
+                  )}
+                  <div className="scan-flash-live" role="status" aria-live="polite">
+                    {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
+                    {canUndo && <button type="button" className="scan-undo" onClick={undoLastScan}>↶ Undo last scan</button>}
+                  </div>
+                </div>
+
+                {!items.length ? <p className="muted">{isRescale ? 'No new stock — scan a UPC/SKU above for unlabeled stock, or scan VINs to rescan existing units.' : 'No items yet — scan a box above. Keep scanning; each one drops straight into this list.'}</p> : (
                   <div className="recv-items">
                     {items.map((it) => (
-                      <div className={`recv-item ${it.withBox ? '' : 'nobox'}`} key={it.key}>
+                      <div className={`recv-item ${it.withBox ? '' : 'nobox'} ${isUnresolved(it) ? 'needs-fix' : ''}`} key={it.key} data-sku={it.sku || ''}>
                         <div className="recv-item-head">
                           {it.image ? <img className="cart-thumb" src={it.image} alt="" /> : <div className="cart-thumb placeholder">—</div>}
                           <div className="recv-item-info">
-                            <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
+                            {it.pending ? (
+                              <div className="recv-item-title pendingline">Scanning <span className="vin">{it.code}</span>…</div>
+                            ) : !String(it.name || '').trim() ? (
+                              // The lookup came back empty (or failed) — the line stays,
+                              // typed in by hand, rather than the scan vanishing.
+                              <div className="cart-fields">
+                                <input className="cart-name" placeholder="Product name" value={it.name} onChange={(e) => setItemField(it.key, { name: e.target.value })} />
+                                <input placeholder="SKU" value={it.sku} onChange={(e) => setItemField(it.key, { sku: e.target.value })} />
+                                {it.failed && <span className="recv-item-failed">Nothing found for <b>{it.code}</b> — type the shoe in, or remove the line.</span>}
+                              </div>
+                            ) : (
+                              <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
+                            )}
+                            {!it.pending && (
+                              <div className="recv-item-toggles">
+                                <div className="seg sm" role="group" aria-label="Box status">
+                                  <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>
+                                  <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
+                                </div>
+                                <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
+                                  <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
+                                </label>
+                              </div>
+                            )}
                             <div className="recv-item-meta">
-                              <span className={`box-badge ${it.withBox ? 'yes' : 'no'}`}>{it.withBox ? <><Icon name="box" /> With box</> : <><Icon name="nobox" /> No box</>}</span>
-                              {it.goatOnly && <span className="goat-badge">GOAT only</span>}
                               <span className="muted sm">{isRescale ? 'Rescale' : isInstore ? (header.origin?.trim() || 'In-store') : (header.supplier || '—')} · {defaultCostNum != null ? `$${defaultCostNum.toFixed(2)}` : 'no cost'}</span>
                             </div>
                           </div>
+                          {!noShipment && !it.pending && String(it.sku || '').trim() && (
+                            <PhotoCountButton sku={it.sku} refreshKey={photoTick} onOpen={() => setPhotoSku(it.sku)} />
+                          )}
                           <button type="button" className="btn icon ghost remove" title="Remove item" onClick={() => removeItem(it.key)}>×</button>
                         </div>
                         <div className="recv-sizes">
-                          <div className="recv-sizes-head"><span>Size</span><span>Qty · tap to see units</span></div>
+                          {!it.pending && <div className="recv-sizes-head"><span>Size</span><span>Qty · tap to see units</span></div>}
                           {[...it.sizes].sort(compareSizes).map((s) => {
                             const k = `${it.key}:${s.key}`;
                             const open = openSizes.has(k);
+                            // The catalogue had no size for this code — it's added anyway
+                            // so the scan isn't lost, and typed in here or on Review.
+                            // Keyed on the FLAG, not on the value: keyed on the value the
+                            // field would unmount on the first keystroke, and "10" could
+                            // never be typed past the "1".
+                            if (s.needsSize || !String(s.size || '').trim()) {
+                              return (
+                                <div className="recv-size" key={s.key}>
+                                  <div className="recv-size-row needs-size">
+                                    <span className="recv-size-warn" aria-hidden="true">⚠</span>
+                                    <input className="sz need" placeholder="size?" aria-label="Size"
+                                      value={s.size} onChange={(e) => setSizeValue(it.key, s.key, e.target.value)}
+                                      onBlur={() => mergeSizeRow(it.key, s.key)} />
+                                    <span className="recv-size-qty">×{s.qty}</span>
+                                    <button type="button" className="btn icon ghost remove sm" title="Remove size" onClick={() => removeSizeRow(it.key, s.key)}>×</button>
+                                  </div>
+                                </div>
+                              );
+                            }
                             return (
                               <div className="recv-size" key={s.key}>
                                 <button type="button" className="recv-size-row" onClick={() => toggleSize(k)} aria-expanded={open} title="Show units / VINs">
@@ -1228,15 +1536,21 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   <h3 className="rows-title">Review <span className="muted">({totalItems} unit{totalItems === 1 ? '' : 's'} · {items.length} shoe{items.length === 1 ? '' : 's'})</span></h3>
                   {flaggedCount > 0 && <span className="review-flagged">⚠ {flaggedCount} flagged</span>}
                 </div>
-                <p className="muted sm">Check counts, fix box status, and flag any defects before submitting. Sizes are sorted smallest→largest.</p>
+                <p className="muted sm">Scanning is deliberately not interrupted, so this is the check: confirm each shoe really is what the scan said it was — the name and SKU are editable — then check counts, box status, and flag any defects. Sizes are sorted smallest→largest.</p>
                 {!items.length ? <p className="muted">Nothing to review — go back and add items.</p> : (
                   <div className="recv-items review">
                     {items.map((it) => (
-                      <div className={`recv-item ${it.withBox ? '' : 'nobox'}`} key={it.key}>
+                      <div className={`recv-item ${it.withBox ? '' : 'nobox'} ${isUnresolved(it) ? 'needs-fix' : ''}`} key={it.key} data-sku={it.sku || ''}>
                         <div className="recv-item-head">
                           {it.image ? <img className="cart-thumb" src={it.image} alt="" /> : <div className="cart-thumb placeholder">—</div>}
                           <div className="recv-item-info">
-                            <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
+                            {/* Editable on purpose: rapid scanning trusts the catalogue,
+                                and the catalogue sometimes answers a Nike scan with a
+                                different shoe. This is where that gets corrected. */}
+                            <div className="cart-fields">
+                              <input className="cart-name" placeholder="Product name" value={it.name} onChange={(e) => setItemField(it.key, { name: e.target.value })} />
+                              <input placeholder="SKU" value={it.sku} onChange={(e) => setItemField(it.key, { sku: e.target.value })} />
+                            </div>
                             <div className="recv-item-toggles">
                               <div className="seg sm" role="group" aria-label="Box status">
                                 <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>
@@ -1247,6 +1561,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                               </label>
                             </div>
                           </div>
+                          {!noShipment && String(it.sku || '').trim() && (
+                            <PhotoCountButton sku={it.sku} refreshKey={photoTick} onOpen={() => setPhotoSku(it.sku)} />
+                          )}
                           <button type="button" className="btn icon ghost remove" title="Delete shoe" onClick={() => removeItem(it.key)}>×</button>
                         </div>
                         <div className="recv-sizes">
@@ -1255,9 +1572,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             const open = openSizes.has(k);
                             return (
                               <div className="recv-size review" key={s.key}>
-                                <div className="review-size-row">
+                                <div className={`review-size-row ${!String(s.size || '').trim() ? 'needs-size' : ''}`}>
                                   <button type="button" className="recv-caret-btn" onClick={() => toggleSize(k)} aria-expanded={open} title="Show units">{open ? '▾' : '▸'}</button>
-                                  <span className="recv-size-name">{s.size}</span>
+                                  {!s.needsSize && String(s.size || '').trim()
+                                    ? <span className="recv-size-name">{s.size}</span>
+                                    : <input className="sz need" placeholder="size?" aria-label="Size" value={s.size}
+                                        onChange={(e) => setSizeValue(it.key, s.key, e.target.value)} onBlur={() => mergeSizeRow(it.key, s.key)} />}
                                   <div className="qty-stepper sm">
                                     <button type="button" className="btn icon ghost step" onClick={() => bumpSizeQty(it.key, s.key, -1)}>−</button>
                                     <span className="qty-val">{s.qty}</span>
@@ -1289,6 +1609,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                               </div>
                             );
                           })}
+                          <button type="button" className="btn add-size" onClick={() => addSizeRow(it.key)}>+ Add size</button>
                         </div>
                       </div>
                     ))}
@@ -1335,7 +1656,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               <div className="batch-bar">
                 <button className="btn ghost" onClick={() => setStep(3)}>← Back</button>
                 <div className="batch-totals"><b>{totalItems}</b> units · <b>${totalCost.toFixed(2)}</b></div>
-                <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } setShowConfirm(true); }} disabled={committing}>
+                <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; } setShowConfirm(true); }} disabled={committing}>
                   {isBoxMode || isMultiBoxNew ? 'Submit box' : isInstore ? 'Save trip' : 'Finish batch'}
                 </button>
               </div>
@@ -1359,7 +1680,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             mInputRef.current?.focus({ preventScroll: true });
           }}>
             <div className="modal-head">
-              <h3 className="modal-title">Add item</h3>
+              <h3 className="modal-title">{isPoReceive ? 'Add item' : 'Add manually'}</h3>
               <button type="button" className="btn icon ghost" onClick={closeAddItem}>×</button>
             </div>
             <form className="searchrow" onSubmit={(e) => { e.preventDefault(); reselectRef.current = true; addCode(mInput, { showInField: true }); }}>
@@ -1370,7 +1691,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             </form>
             {mCam && (
               <Suspense fallback={<p className="muted">Loading camera…</p>}>
-                <CameraScanner continuous mode={isRescale ? 'rescale' : 'product'} onDetected={(code) => addCode(code, { showInField: true })} onClose={() => setMCam(false)}
+                <CameraScanner continuous mode={isRescale ? 'rescale' : 'product'} onDetected={(code) => addCode(code, { showInField: true, fromCamera: true })} onClose={() => setMCam(false)}
                   zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
               </Suspense>
             )}
@@ -1433,12 +1754,32 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     </div>
                   ))}
                 </div>
-                {!noShipment && draft.sku && <ListingPhotos sku={draft.sku} onSignOut={onSignOut} onCameraToggle={setPhotoCam} />}
+                {/* Listing photos are no longer here — they hang off each shoe in
+                    the cart (PhotoCountButton → the photo modal), so nothing sits
+                    between a scan and the next one. */}
                 <div className="modal-actions">
                   <button type="button" className="btn primary wide" onClick={completeItem}>Complete item ✓</button>
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Listing photos for one shoe in the cart — the 5 angle slots and the
+          full-screen camera, opened from that shoe's row instead of blocking the
+          scan flow. */}
+      {photoSku && (
+        <div className="modal-overlay" onClick={() => { if (!photoCam) closePhotoModal(); }}>
+          <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3 className="modal-title">Photos · <span className="vin">{photoSku}</span></h3>
+              <button type="button" className="btn icon ghost" onClick={closePhotoModal}>×</button>
+            </div>
+            <ListingPhotos sku={photoSku} onSignOut={onSignOut} onCameraToggle={setPhotoCam} />
+            <div className="modal-actions">
+              <button type="button" className="btn primary wide" onClick={closePhotoModal}>Done</button>
+            </div>
           </div>
         </div>
       )}

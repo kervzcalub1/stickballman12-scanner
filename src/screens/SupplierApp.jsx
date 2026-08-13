@@ -269,7 +269,13 @@ export function SupplierApp({ user, onSignOut }) {
               // order — the supplier never packed it. Without saying so it reads as a box
               // they forgot to fill: numbered like their own, and empty.
               const isReplacement = box.kind === 'replacement';
-              const isFilling = !isReplacement && box.status === 'pending';
+              // Still in the supplier's hands, so still theirs to fill. `pre_transit` means
+              // the carrier has the LABEL on file but not the parcel ("Label Created, UPS
+              // has not received the package yet") — and tracking is registered when the
+              // PO is created, so every box lands there within minutes of being made. Read
+              // as shipped, it took away Add items, Review & close, and Ship, on a box
+              // still sitting on their floor.
+              const isFilling = !isReplacement && ['pending', 'pre_transit'].includes(box.status);
               // A reship is created already-shipped on a reopened order, so it never passes
               // the draft/pending test the supplier's own labels use — but saying what's in
               // it is useful right up until the order is archived, and it's what the
@@ -279,7 +285,11 @@ export function SupplierApp({ user, onSignOut }) {
               const isPacked = box.status === 'packed';
               // "En route" states carry live tracking (show the status line + refresh). pre_transit
               // means the label's made but the parcel is still with the supplier — tracking is active.
-              const isShipped = ['shipped', 'in_transit', 'delivered', 'pre_transit'].includes(box.status);
+              // Two different questions that were sharing one answer: does this label have
+              // live tracking to show, and has the parcel actually GONE. `pre_transit` is
+              // yes to the first, no to the second.
+              const hasTracking = ['shipped', 'in_transit', 'delivered', 'pre_transit'].includes(box.status);
+              const isShipped = ['shipped', 'in_transit', 'delivered'].includes(box.status);
               return (
                 <div key={box.id} className={`card po-box ${isShipped ? 'shipped' : ''} ${isPacked ? 'packed' : ''} ${isReplacement ? 'replacement' : ''}`}>
                   <div className="po-card-top">
@@ -306,7 +316,7 @@ export function SupplierApp({ user, onSignOut }) {
                     </p>
                   )}
 
-                  {isShipped && (box.tracking_status || box.last_checkpoint || box.tracking_sub_status) && (
+                  {hasTracking && (box.tracking_status || box.last_checkpoint || box.tracking_sub_status) && (
                     <div className="po-track-status muted sm">
                       {box.carrier ? <span className="po-track-carrier">{box.carrier}</span> : null}
                       {box.tracking_status ? <span> · {box.tracking_status}</span> : null}
@@ -327,7 +337,7 @@ export function SupplierApp({ user, onSignOut }) {
                   )}
 
                   <div className="po-track-actions">
-                    {isShipped && box.tracking_number && (
+                    {hasTracking && box.tracking_number && (
                       <button className="btn ghost sm po-track-refresh-one" disabled={trackBusy || trackBoxBusy != null}
                         onClick={() => refreshTracking(box.id)} title="Check just this label (saves credits)">
                         <Icon name="refresh" /> {trackBoxBusy === Number(box.id) ? 'Checking…' : 'Refresh this label'}

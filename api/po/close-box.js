@@ -2,6 +2,7 @@
 // Closes one label for shipment after review: 'pending' (filling) → 'packed'
 // (ready to ship). Must hold ≥1 item. Editing (scan) is blocked while packed;
 // the supplier can reopen it to keep editing. Returns the refreshed full PO.
+import { STILL_WITH_SUPPLIER } from '../_lib/po-manifest.js';
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, countPoBoxLines, closePoBox, getPoFull, dbConfigured } from '../_lib/db.js';
 
@@ -25,7 +26,9 @@ export default async function handler(req, res) {
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
     if (!isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
-    if (box.status !== 'pending')
+    // `pre_transit` is still with the supplier — the carrier has the label on file, not
+    // the parcel — so the box can still be closed for shipment. See STILL_WITH_SUPPLIER.
+    if (!STILL_WITH_SUPPLIER.includes(box.status))
       return send(res, 409, { ok: false, error: 'This label is already closed.' });
     if ((await countPoBoxLines(poBoxId)) < 1)
       return send(res, 400, { ok: false, error: 'Scan at least one item into this label before closing it.' });

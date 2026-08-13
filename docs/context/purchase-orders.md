@@ -9,6 +9,55 @@ the courier carries it, and the **warehouse** receives it back **against the sam
 reconciling what was promised vs. what actually arrived. A batch spans **multiple shipping
 labels** (one tracking number each); it closes only when every label is shipped.
 
+## Link an already-received batch to its PO (+ delete a PO)
+"Receive against a purchase order" is a **step-1 choice**, so when PH opens the order
+*while the warehouse is already scanning the box* — it arrived before the paperwork —
+the two could not be joined afterwards. The order read as still-outstanding forever and
+its reconciliation showed nothing arriving, while the stock was on the shelf.
+
+**In the app (the normal way):** PH Purchase Orders (`/ph/po-status`) → open the order →
+**"Link a received shipment"** (`PoLinkBatchModal`, `src/components/PoLinkBatch.jsx`).
+Pick the batch from the candidates, confirm which received box is which label
+(pre-matched by tracking #), and link. The open order then shows a **"Received into"**
+panel with an **Unlink** per batch, and — while nothing is linked — **"Delete this
+purchase order"**.
+- Endpoints: `po/link-candidates` (GET, list + per-batch preview), `po/link-batch`,
+  `po/unlink-batch` (all warehouse/ph_team) and `po/delete` (ph_team/admin).
+  db: `listPoLinkCandidates`, `getPoLinkPreview`, `linkBatchToPo`, `unlinkBatchFromPo`,
+  `deletePo`. `getPoFull` now also returns `batches` (stripped for suppliers).
+- **Linking is per BATCH, not per box** — `batches.po_id` is the join and reconciliation
+  counts every unit under it. The box→label matching only fills in tracking numbers and
+  picks which labels `shipLabels` may touch. Unmatched boxes still count, and the modal
+  says so.
+- **Delete is refused while a batch is linked** (server 409; `batches.po_id` has no
+  ON DELETE rule, so the DB would refuse too). The PO code must be typed back, checked
+  **server-side**. Labels/lines/resolution/comments cascade away — no undo.
+- Unlink rolls `received_batch_id` to whatever batch is still linked, and an order left
+  with none drops back to `shipped` (if any label has left the supplier) or `draft`.
+- Both actions leave a **`system` comment** on the order — otherwise a late order with a
+  fully-received batch against it is unexplainable later. Build the author as
+  `Number(user.uid) || null`: the env admin/superadmin uid is **not numeric** and
+  `po_comments.author_id` is a BIGINT, so passing it through kills the note silently.
+
+**From the terminal (bulk / no UI):** `node scripts/link-batch-to-po.mjs --po <PO code>
+--batch <batch code>` (dry run; add `--apply`). Same three writes, reusing the same
+`markPoReceiving` / `getPoReconcileState` / `autoReconcileIfClean`. Run with `--po` alone
+to list candidate batches. Two traps both paths handle explicitly:
+- **Labels the supplier never marked shipped** (`shipLabels` / `--ship-labels`): a
+  per-label manifest counts only lines on labels whose status is `shipped`/`in_transit`/
+  `delivered`. A supplier who never scanned out (the box beat the paperwork) leaves them
+  `pending`, so `expected` is 0 and a fully-delivered order reads **"received blind"**
+  with every pair an overage. Both paths offer to record the **matched** labels as
+  shipped — they physically did — and only those.
+- **Boxes with no tracking # entered** (`boxMap` / `--map <boxNumber>=<tracking>`): with
+  nothing to match on, no box lines up with a label and the per-box evidence trail
+  (`getPoReceivedBoxes`) stays empty. Only tracking numbers already on that PO are
+  accepted, and an already-scanned one is never overwritten — a wrong value invents a
+  shipment.
+A supplier-name mismatch **stops the script** (`--force` to override) — a wrong link
+writes a false receipt against a real order. The in-app path scopes its candidate list to
+the order's own supplier instead, so the mismatch can't arise.
+
 ## Status
 - **Phase 0 (done, merged):** schema + `supplier` role.
 - **Phase 1 (built, on branch `feat/po-phase1-scanout` — not deployed):** PH create-batch

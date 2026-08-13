@@ -125,3 +125,16 @@ export function compareSizes(a, b) {
   if (na !== nb) return na - nb;
   return String(a?.size ?? a).localeCompare(String(b?.size ?? b));
 }
+
+// --- Scan de-duplication ---------------------------------------------------
+// A live camera re-reads the SAME barcode many times a second, so a repeat inside
+// this window is one physical scan, not two pairs. It must NEVER be applied to a
+// scanner gun or a typed submit: those are deliberate acts, and six identical
+// boxes scanned back to back really are six pairs — silently dropping the fast
+// ones is the one failure a rapid, uninterrupted scan flow cannot afford.
+// `seen` is a mutable { code -> last-seen ms } map owned by the caller.
+export const RESCAN_COOLDOWN_MS = 1200;
+export function isCameraReread(seen, code, now, windowMs = RESCAN_COOLDOWN_MS) {
+  const last = seen?.[code];
+  return last != null && now - last < windowMs;
+}

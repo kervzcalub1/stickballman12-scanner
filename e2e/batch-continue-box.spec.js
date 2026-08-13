@@ -84,13 +84,14 @@ test('a pending box offers "Add items", and scans land in THAT box', async ({ pa
     json: { ok: true, product: { name: 'E2E Continue Runner', sku: SKU, upc: null, image: null, brand: 'Nike', colorway: 'Black/White', sizes: ['9', '9.5'], gender: 'Men', source: 'alias' } },
   }));
   await page.getByRole('button', { name: 'Next →' }).click();
-  await page.getByRole('button', { name: '+ Add Item' }).click();
-  await page.locator('.modal.additem input').first().fill(SKU);
-  await page.locator('.modal.additem').getByRole('button', { name: 'Add' }).click();
-  await expect(page.locator('.modal.additem')).toContainText('E2E Continue Runner');
-  await page.locator('.size-chips').getByRole('button', { name: '9.5', exact: true }).click();
-  await page.getByRole('button', { name: 'Complete item ✓' }).click();
-  await expect(page.locator('.modal.additem')).toHaveCount(0);
+  // Rapid scan: the code goes straight into the cart, no dialog in between.
+  await page.locator('.scanbar input').first().fill(SKU);
+  await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+  const line = page.locator(`.recv-item[data-sku="${SKU}"]`);
+  await expect(line).toBeVisible({ timeout: 10_000 });
+  // The stub returns no scanned size, so the line lands needing one — fill it in
+  // rather than losing the scan.
+  await line.locator('.sz.need').fill('9.5');
 
   await page.getByRole('button', { name: 'Review →' }).click();
   await page.getByRole('button', { name: 'Next →' }).click();

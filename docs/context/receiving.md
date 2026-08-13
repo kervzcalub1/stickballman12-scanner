@@ -73,17 +73,55 @@ Full detail: `in-store.md`.
    all and takes the next number — using it to continue a pending box is what left
    staff with an empty box beside the one they meant to fill. Received boxes get no
    button (the box-commit CAS would refuse them anyway).
-2. **Items** — `+ Add Item` opens the scanning modal. Field auto-focuses so a
-   **HID scanner gun types straight in**. Auto-detects UPC vs SKU. Re-scanning a
-   shoe's boxes **auto-increments qty by size**. A **With Box** checkbox sets
-   `with_box` (off → status `no_box`). A **GOAT only** checkbox sets `goat_only`
-   (per shoe → all its units) — PH then lists it to Alias(GOAT)+II only; StockX/
-   Shopify are N/A. Carried through commit → `insertItems`. "Complete item" adds it to the cart.
+2. **Items — rapid scan** (`rapidScan`, replaced the Add Item modal 2026-08-14).
+   The scan field lives **inline on the step** (`.scanbar`, sticky) — no dialog
+   between scans, because the warehouse scans box after box and every stop cost
+   time. Field auto-focuses so a **HID scanner gun types straight in** (only on a
+   `(pointer: fine)` device — a programmatic focus on a phone pops/traps the
+   keyboard, see the iOS note below). Auto-detects UPC vs SKU. Re-scanning a shoe's
+   boxes **auto-increments qty by size**; a different SKU just starts its own line
+   (the old "Different shoe detected" prompt is gone with the modal).
+   - **Each scan is optimistic**: the line is prepended as `pending` and the
+     catalogue lookup + `reserveVins(1)` resolve behind it, so the next scan never
+     waits. On resolve it either replaces the placeholder or **merges** into the
+     same shoe already in the cart (same SKU + same box/GOAT status).
+   - **Nothing a scan produced is ever dropped.** A failed lookup becomes a red
+     line carrying the raw code with typeable name/SKU; a product with no size from
+     the catalogue gets a red **`size?`** row. Both are `isUnresolved` → they block
+     Review/Issues/commit (`unresolvedMsg`) until filled in, and being blocked
+     **puts the cursor in the first missing field** (`focusFirstUnresolved`) — the
+     error line sits above the sticky footer, far below the fold on a long cart.
+     The `size?` field renders on the row's **`needsSize` flag, never on the live
+     value**: keyed on the value it unmounted on the first keystroke, so a size like
+     "10" could not be typed past the "1". Two sizeless scans of one shoe stay as
+     two rows (two unknown sizes aren't one size scanned twice) and **fold together
+     on blur** once both are typed to the same size (`mergeSizeRow`, carrying the
+     units' VINs across) — on blur, not per keystroke, or "1" en route to "10" would
+     dissolve into a real size-1 row mid-type.
+   - **`scanBoxMode`** ("Scanning as: With box / No box") is **sticky** and applied
+     to every scan — the SOP already says to scan no-box pairs separately. Per-shoe
+     box status and **GOAT only** (`goat_only` → PH lists to Alias(GOAT)+II only;
+     StockX/Shopify N/A) are now chips **on the cart row**, not in a draft.
+   - **Undo last scan** removes that unit only (by its VIN, or the whole line if it
+     hadn't merged yet). One-shot, and it outlives the flash message.
+   - The **1200 ms re-read cooldown applies to the camera only** (`fromCamera` →
+     `isCameraReread` in `src/lib/codes.js`, pure + unit-tested because a headless
+     browser has no camera to drive). A live camera re-reads one barcode many times
+     a second; a gun/typed submit is a deliberate act, and six identical boxes
+     scanned back-to-back are six pairs — silently dropping the fast ones is the one
+     failure this flow can't afford. The manual-add modal's `addCode` is scoped the
+     same way.
+   - **`+ Add manually`** opens the old modal (draft + size chips + "Complete
+     item ✓") for a code the catalogue can't resolve at all; it's also what PO
+     receive's "+ Add unexpected" opens.
    **Newest scanned shoe shows on top** of the cart; **sizes sort smallest→largest**
-   in both the cart and the scanning modal (`compareSizes`, V6 Features 3 & 6).
+   (`compareSizes`, V6 Features 3 & 6).
    ⚠️ Scan **no-box pairs separately** so their VINs/labels don't get mixed with
    with-box pairs (see SOP-WAREHOUSE.md).
 3. **Review** (V6 Feature 4) — the dedicated review-before-submit screen, size-sorted.
+   With scanning no longer interrupted, **this is where a wrong catalogue answer
+   gets caught** (a Nike scan that resolved to an adidas): **name and SKU are
+   editable per shoe**, and **`+ Add size`** fills a missing one (reserving its VIN).
    Per shoe: toggle **box status**, **±qty per size** (＋ reserves a VIN, − drops the
    trailing one), remove a size, or delete the whole line. Expand a size to see its
    units; **"＋ Issue" per VIN** opens a defect editor — add one or more defects, each
@@ -115,7 +153,11 @@ Full detail: `in-store.md`.
   PH to fill. See `integrations.md` / `ph-report.md`.
 
 ## Listing photos (V6 Feature 5)
-In the Add Item modal, a per-**SKU** photo block (`src/components/ListingPhotos.jsx`)
+Photos hang off **each shoe in the cart**, not off the scan flow (moved 2026-08-14):
+every row on Items + Review carries a **`PhotoCountButton`** (`n/5`, amber at 0,
+green at ≥3) that opens the photo **modal**. The count is cached per SKU for the
+session and invalidated when the modal closes (`invalidatePhotoCount`). Inside the
+modal, a per-**SKU** photo block (`src/components/ListingPhotos.jsx`)
 shows the 5 angle slots (side · diagonal · outsole · top · rear; icons in
 `ShoeAngleIcons.jsx`) as an at-a-glance review and opens a **full-screen custom
 camera** (`src/components/PhotoCamera.jsx`): live preview + a bottom **angle strip**

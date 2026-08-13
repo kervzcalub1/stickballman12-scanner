@@ -1981,7 +1981,13 @@ export async function getPoFull(id) {
     WHERE l.po_id = ${id}
     ORDER BY l.po_box_id, l.sku, l.size
   `;
-  return { po, boxes, lines };
+  // Receiving batches attached to this order (usually exactly one). The PO screen shows
+  // what the order is actually counting, and can unlink one attached in error.
+  const batches = await sql`
+    SELECT b.id, b.batch_code, b.status, b.created_at, b.supplier_name, b.date_received,
+           (SELECT count(*) FROM items i WHERE i.batch_id = b.id)::int AS units
+    FROM batches b WHERE b.po_id = ${id} ORDER BY b.id`;
+  return { po, boxes, lines, batches };
 }
 
 // List POs with roll-up counts. Supplier sees only their own; everyone else all.
@@ -2780,6 +2786,186 @@ export function resolutionView(r) {
 }
 
 // Archive a reconciled PO → status 'closed' (drops off the active reconcile list).
+/* ---- Linking an already-received batch to its PO ----------------------------
+   "Receive against a purchase order" is a step-1 choice, so when the order is opened
+   AFTER the warehouse has started scanning the box — it arrived before the paperwork —
+   there was no way to join the two afterwards. The order read as outstanding forever
+   while its stock sat on the shelf. These three functions are that repair, in-app. */
+
+// Batches that plausibly ARE this order's shipment: same supplier, or carrying a
+// tracking number that matches one of its labels. Already-linked batches are included
+// (flagged) so the screen can show what's attached rather than hiding it.
+export async function listPoLinkCandidates(poId) {
+  const sql = db();
+  const po = (await sql`SELECT id, supplier_name FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return [];
+  const trackings = (await sql`
+    SELECT upper(replace(coalesce(tracking_number, ''), ' ', '')) AS t
+    FROM po_boxes WHERE po_id = ${poId} AND coalesce(tracking_number, '') <> ''`).map((r) => r.t);
+  return sql`
+    SELECT b.id, b.batch_code, b.supplier_name, b.tracking_number, b.status, b.created_at,
+           b.po_id, b.date_received,
+           (SELECT count(*) FROM items i       WHERE i.batch_id = b.id)::int AS units,
+           (SELECT count(*) FROM batch_boxes x WHERE x.batch_id = b.id)::int AS box_count
+    FROM batches b
+    WHERE (b.kind IS NULL OR b.kind = 'receiving')
+      AND (b.po_id IS NULL OR b.po_id = ${poId})
+      AND b.created_at > now() - interval '120 days'
+      AND (
+        (coalesce(${po.supplier_name}, '') <> '' AND b.supplier_name ILIKE ${`%${po.supplier_name || ''}%`})
+        OR upper(replace(coalesce(b.tracking_number, ''), ' ', '')) = ANY(${trackings})
+        OR EXISTS (SELECT 1 FROM batch_boxes x WHERE x.batch_id = b.id
+                     AND upper(replace(coalesce(x.tracking_number, ''), ' ', '')) = ANY(${trackings}))
+      )
+    ORDER BY b.created_at DESC
+    LIMIT 25`;
+}
+
+// The boxes of a candidate batch, each pre-matched to the PO label with the same
+// tracking number — that match is what the caller confirms or corrects by hand.
+export async function getPoLinkPreview(poId, batchId) {
+  const sql = db();
+  const batch = (await sql`SELECT * FROM batches WHERE id = ${batchId}`)[0];
+  if (!batch) return null;
+  const labels = await sql`SELECT * FROM po_boxes WHERE po_id = ${poId} ORDER BY box_number`;
+  const boxes = await sql`
+    SELECT x.id, x.box_number, x.tracking_number, x.status,
+           (SELECT count(*) FROM items i WHERE i.box_id = x.id)::int AS units
+    FROM batch_boxes x WHERE x.batch_id = ${batchId} ORDER BY x.box_number`;
+  const [{ n: units }] = await sql`SELECT count(*)::int AS n FROM items WHERE batch_id = ${batchId}`;
+  const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  const byTracking = new Map(labels.filter((l) => l.tracking_number).map((l) => [norm(l.tracking_number), l]));
+  // A single-box batch keeps its tracking on the batch itself, not in a box row — it
+  // still has to be matchable, so present it as one box.
+  const rows = (boxes.length ? boxes : [{ id: null, box_number: 1, tracking_number: batch.tracking_number, status: batch.status, units }])
+    .map((b) => {
+      const m = byTracking.get(norm(b.tracking_number));
+      return { ...b, matchedPoBoxId: m ? Number(m.id) : null };
+    });
+  return { batch, units, boxes: rows, labels };
+}
+
+// Attach the batch to the order and move the order into 'receiving' — the same two
+// facts receiving itself would have written, so everything downstream (reconciliation,
+// the received-boxes evidence, auto-close) behaves as if it had been received against
+// the PO in the first place.
+//
+// `boxMap` fills in a tracking number the warehouse never entered, by pointing a
+// received box at one of THIS order's labels. Only that order's own tracking numbers
+// are accepted and an already-scanned one is never overwritten — a wrong value here
+// would invent a shipment.
+//
+// `shipLabels` exists for a trap that would otherwise make this repair look broken: a
+// per-label manifest counts only lines on labels marked shipped, so labels the supplier
+// never scanned out leave `expected` at 0 and a fully delivered order reads "received
+// blind" with every pair an overage.
+export async function linkBatchToPo({ poId, batchId, boxMap = [], shipLabels = false, actor = null }) {
+  const sql = db();
+  const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return { error: 'Purchase order not found.' };
+  if (['reconciled', 'closed'].includes(po.status)) {
+    return { error: `${po.po_code} is already ${po.status} — reopen it before linking a shipment.` };
+  }
+  const batch = (await sql`SELECT * FROM batches WHERE id = ${batchId}`)[0];
+  if (!batch) return { error: 'Batch not found.' };
+  if (batch.po_id != null && Number(batch.po_id) !== Number(poId)) {
+    return { error: `${batch.batch_code} is already linked to another purchase order.` };
+  }
+
+  const labels = await sql`SELECT * FROM po_boxes WHERE po_id = ${poId}`;
+  const labelById = new Map(labels.map((l) => [Number(l.id), l]));
+  const queries = [];
+  if (batch.po_id == null) {
+    queries.push(sql`UPDATE batches SET po_id = ${poId} WHERE id = ${batchId} AND po_id IS NULL`);
+  }
+  for (const m of boxMap) {
+    const label = labelById.get(Number(m.poBoxId));
+    if (!label || !label.tracking_number) continue;   // only this order's own labels
+    if (m.boxId) {
+      queries.push(sql`
+        UPDATE batch_boxes SET tracking_number = ${label.tracking_number}
+        WHERE id = ${Number(m.boxId)} AND batch_id = ${batchId} AND coalesce(tracking_number, '') = ''`);
+    } else {
+      queries.push(sql`
+        UPDATE batches SET tracking_number = ${label.tracking_number}
+        WHERE id = ${batchId} AND coalesce(tracking_number, '') = ''`);
+    }
+  }
+  if (shipLabels) {
+    const ids = boxMap.map((m) => Number(m.poBoxId)).filter((id) => labelById.has(id));
+    if (ids.length) {
+      queries.push(sql`
+        UPDATE po_boxes SET status = 'shipped', shipped_at = COALESCE(shipped_at, now())
+        WHERE id = ANY(${ids}) AND po_id = ${poId} AND status IN ('pending', 'packed')`);
+    }
+  }
+  if (queries.length) await sql.transaction(queries);
+  await markPoReceiving(poId, batchId);
+
+  // Leave the trail: otherwise someone opens this order later and can't work out how an
+  // order raised after the fact has a fully-received batch against it.
+  await addPoComment({
+    poId, kind: 'system', audience: 'internal',
+    body: `Linked receiving batch ${batch.batch_code} to this order — it was already being scanned when the order was opened.`,
+    author: actor || { id: null, name: null, role: 'system' },
+  }).catch(() => { /* the link matters, the note doesn't */ });
+
+  return { ok: true, po: (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0], batch };
+}
+
+// Undo a link (wrong batch, or clearing the way to delete the order). The batch and its
+// stock are untouched — only the join is removed. `received_batch_id` moves to whatever
+// batch is still linked, and an order left with none drops back to where it was before:
+// 'shipped' if any label has left the supplier, else 'draft'.
+export async function unlinkBatchFromPo({ poId, batchId, actor = null }) {
+  const sql = db();
+  const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return { error: 'Purchase order not found.' };
+  if (['reconciled', 'closed'].includes(po.status)) {
+    return { error: `${po.po_code} is ${po.status} — its count is frozen. Reopen it first.` };
+  }
+  const batch = (await sql`SELECT * FROM batches WHERE id = ${batchId} AND po_id = ${poId}`)[0];
+  if (!batch) return { error: 'That batch is not linked to this order.' };
+
+  await sql`UPDATE batches SET po_id = NULL WHERE id = ${batchId}`;
+  const rest = await sql`SELECT id FROM batches WHERE po_id = ${poId} ORDER BY id LIMIT 1`;
+  const shipped = await sql`
+    SELECT 1 FROM po_boxes WHERE po_id = ${poId} AND status NOT IN ('pending', 'packed') LIMIT 1`;
+  await sql`
+    UPDATE purchase_orders
+    SET received_batch_id = ${rest[0] ? Number(rest[0].id) : null},
+        status = CASE WHEN ${rest.length} > 0 THEN status
+                      WHEN ${shipped.length} > 0 THEN 'shipped' ELSE 'draft' END
+    WHERE id = ${poId}`;
+  await addPoComment({
+    poId, kind: 'system', audience: 'internal',
+    body: `Unlinked receiving batch ${batch.batch_code} from this order. The batch and its stock are unchanged.`,
+    author: actor || { id: null, name: null, role: 'system' },
+  }).catch(() => { /* non-blocking */ });
+  return { ok: true, batch };
+}
+
+// Delete a purchase order outright — for one raised by mistake or a duplicate.
+// Refused while a receiving batch is linked: `batches.po_id` has no ON DELETE rule, so
+// the database would reject it anyway, and a clear message beats a constraint error.
+// Labels, manifest lines, the resolution and the comment thread go with it (all
+// ON DELETE CASCADE); the supplier's own scans live in po_lines, so they go too.
+export async function deletePo(poId) {
+  const sql = db();
+  const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return { error: 'Purchase order not found.' };
+  const linked = await sql`SELECT batch_code FROM batches WHERE po_id = ${poId} ORDER BY id`;
+  if (linked.length) {
+    return {
+      error: `${po.po_code} still has ${linked.length} receiving batch(es) linked `
+        + `(${linked.map((b) => b.batch_code).join(', ')}). Unlink them first — deleting the order `
+        + 'must never take the record of received stock with it.',
+    };
+  }
+  await sql`DELETE FROM purchase_orders WHERE id = ${poId}`;
+  return { ok: true, po };
+}
+
 export async function closePo(poId) {
   const sql = db();
   const rows = await sql`

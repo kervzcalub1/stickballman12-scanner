@@ -85,7 +85,7 @@ test.describe('Receiving · no tracking number (wizard)', () => {
     await expect(track).toHaveAttribute('placeholder', 'No tracking number');
 
     await page.getByRole('button', { name: 'Next →' }).click();
-    await expect(page.getByRole('button', { name: /Add Item/i })).toBeVisible();
+    await expect(page.locator('.scanbar')).toBeVisible();
   });
 
   test('typed tracking is cleared when the box is ticked, and restored blank when unticked', async ({ page }) => {

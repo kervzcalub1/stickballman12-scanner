@@ -201,6 +201,14 @@ export const api = {
   poReconcile: (poId) => post('/api/po/reconcile', { poId }),
   poClose: (poId) => post('/api/po/close', { poId }),
   // Archive is reversible: its own list (loaded only when the tab is opened) + undo.
+  // Repair path for an order opened after the warehouse had already started scanning:
+  // attach that batch to the order (see docs/context/purchase-orders.md).
+  poLinkCandidates: (poId, batchId) => get(`/api/po/link-candidates?poId=${encodeURIComponent(poId)}`
+    + (batchId ? `&batchId=${encodeURIComponent(batchId)}` : '')),
+  poLinkBatch: (payload) => post('/api/po/link-batch', payload),
+  poUnlinkBatch: (poId, batchId) => post('/api/po/unlink-batch', { poId, batchId }),
+  poDelete: (poId, confirm) => post('/api/po/delete', { poId, confirm }),
+
   poArchived: () => get('/api/po/archived'),
   poUnarchive: (poId) => post('/api/po/unarchive', { poId }),
   // Discrepancy resolution: one step per call (all reversible via `undo`), plus the

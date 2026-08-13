@@ -2019,7 +2019,15 @@ export async function listPos({ uid, supplierScope }) {
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
       (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l
          LEFT JOIN po_boxes lb ON lb.id = l.po_box_id
-         WHERE l.po_id = p.id AND coalesce(lb.kind, 'original') <> 'replacement')::int AS unit_count
+         WHERE l.po_id = p.id AND coalesce(lb.kind, 'original') <> 'replacement')::int AS unit_count,
+      -- What WE counted, across every batch linked to the order. unit_count above is
+      -- what the SUPPLIER declared, and on an order received with no manifest that is
+      -- legitimately 0 - a row reading "0 units" beside 48 pairs on the shelf reads as
+      -- "nothing here" instead of "nothing declared". Staff-only: a supplier must not
+      -- read our count off a list before the reconciliation is settled with them.
+      -- (No backticks in here: this comment lives inside a JS template literal.)
+      (SELECT count(*) FROM items i JOIN batches b ON b.id = i.batch_id
+         WHERE b.po_id = p.id)::int AS received_units
     FROM purchase_orders p
     ORDER BY p.created_at DESC
   `;

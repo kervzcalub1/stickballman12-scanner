@@ -147,7 +147,18 @@ export function PoOverview({ onHome, onSignOut }) {
                         {p.tag_code && <span><Icon name="tag" /> {p.tag_code}</span>}
                         <span>{p.shipped_count}/{p.box_count} label{p.box_count === 1 ? '' : 's'} shipped</span>
                         {p.delivered_count > 0 && <span>{p.delivered_count} delivered</span>}
-                        <span>{p.unit_count} unit{p.unit_count === 1 ? '' : 's'}</span>
+                        {/* Two different facts, and they were being shown as one number:
+                            `unit_count` is what the SUPPLIER declared, `received_units`
+                            is what we counted. An order received with no manifest is
+                            legitimately "0 declared", which read as "nothing here" beside
+                            a shelf full of stock. */}
+                        <span className={p.unit_count === 0 && p.received_units > 0 ? 'po-ov-blind' : undefined}
+                          title={p.unit_count === 0 && p.received_units > 0
+                            ? 'Nothing was declared for this order, so its reconciliation reads “received blind”. Add the supplier’s manifest to compare against.'
+                            : undefined}>
+                          {p.unit_count} declared
+                        </span>
+                        {p.received_units > 0 && <span>{p.received_units} received</span>}
                       </div>
                       <span className="po-ov-caret">{open ? '▾' : '▸'}</span>
                     </button>

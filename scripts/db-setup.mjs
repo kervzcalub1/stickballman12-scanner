@@ -494,6 +494,17 @@ await sql(`CREATE INDEX IF NOT EXISTS po_boxes_po_idx       ON po_boxes (po_id)`
 await sql(`CREATE INDEX IF NOT EXISTS po_boxes_tracking_idx ON po_boxes (tracking_number)`);
 // Existing DBs: add the 'packed' review state + packed_at (the inline CHECK/columns
 // above only apply to a fresh table). The CHECK gets Postgres's default name.
+// The courier's labels PDF, kept in R2 so the supplier can print the label for the box
+// they're packing instead of hunting for the email it came in. Stored ONCE per order,
+// exactly as uploaded; `label_page` records which page of it belongs to each label, so a
+// per-box download is a page extraction rather than N stored files. Removed from R2 when
+// the order is archived — by then every box has landed and the label is spent.
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_key         TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_name        TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_pages       INT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_uploaded_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_uploaded_by TEXT`);
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS label_page INT`);
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS packed_at TIMESTAMPTZ`);
 // The 17TRACK carrier code (chosen in the New Batch form / auto-detected from the labels
 // PDF) — passed to 17TRACK's register/gettrackinfo so it pulls status from the right

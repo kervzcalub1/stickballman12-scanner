@@ -2974,6 +2974,70 @@ export async function deletePo(poId) {
   return { ok: true, po };
 }
 
+/* ---- The courier's labels PDF (R2) ------------------------------------------
+   Kept so the supplier can print the label for the box they're packing rather than
+   hunting for the email it arrived in. ONE object per order, exactly as uploaded; the
+   page↔label mapping lives on po_boxes.label_page, so a per-box download extracts a page
+   instead of us storing N files that could drift from the original. */
+
+// Record an uploaded PDF against the order and map its pages to labels.
+// The mapping is keyed on the TRACKING NUMBER read off each page, never on page order:
+// the labels a page maps to may have been reordered, edited or typed in by hand before
+// the order was created, and a label pointing at someone else's page is worse than none.
+export async function attachPoLabels({ poId, key, name, pages, pageMap = [], uploadedBy = null }) {
+  const sql = db();
+  const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  const boxes = await sql`SELECT id, tracking_number FROM po_boxes WHERE po_id = ${poId}`;
+  const byTracking = new Map(boxes.filter((b) => b.tracking_number).map((b) => [norm(b.tracking_number), Number(b.id)]));
+
+  const queries = [sql`
+    UPDATE purchase_orders
+    SET labels_key = ${key}, labels_name = ${name || null}, labels_pages = ${pages || null},
+        labels_uploaded_at = now(), labels_uploaded_by = ${uploadedBy}
+    WHERE id = ${poId}`];
+  const matched = [];
+  for (const m of pageMap) {
+    const boxId = byTracking.get(norm(m.tracking));
+    const page = Number(m.page);
+    if (!boxId || !Number.isInteger(page)) continue;
+    matched.push({ boxId, page });
+    queries.push(sql`UPDATE po_boxes SET label_page = ${page} WHERE id = ${boxId} AND po_id = ${poId}`);
+  }
+  await sql.transaction(queries);
+  return { matched: matched.length, pages: pages || 0 };
+}
+
+// The stored file + the page for one label (when poBoxId is given).
+export async function getPoLabelFile(poId, poBoxId = null) {
+  const sql = db();
+  const po = (await sql`
+    SELECT id, po_code, supplier_user_id, labels_key, labels_name, labels_pages
+    FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po || !po.labels_key) return null;
+  let box = null;
+  if (poBoxId != null) {
+    box = (await sql`SELECT id, box_number, label_page, tracking_number FROM po_boxes WHERE id = ${poBoxId} AND po_id = ${poId}`)[0] || null;
+    if (!box) return null;
+  }
+  return { po, box };
+}
+
+// Forget the file: clear the mapping and hand the key back so the caller can delete the
+// object. Returns null when there was nothing stored.
+export async function clearPoLabels(poId) {
+  const sql = db();
+  const po = (await sql`SELECT labels_key FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po?.labels_key) return null;
+  await sql.transaction([
+    sql`UPDATE po_boxes SET label_page = NULL WHERE po_id = ${poId}`,
+    sql`UPDATE purchase_orders
+        SET labels_key = NULL, labels_name = NULL, labels_pages = NULL,
+            labels_uploaded_at = NULL, labels_uploaded_by = NULL
+        WHERE id = ${poId}`,
+  ]);
+  return po.labels_key;
+}
+
 export async function closePo(poId) {
   const sql = db();
   const rows = await sql`

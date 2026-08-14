@@ -2771,3 +2771,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-ov-label-units { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .po-ov-order-head .po-ov-label-units { align-self: center; }
 .po-box-head-side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* The courier's labels PDF on a purchase order — the supplier prints their box's page
+   from here instead of hunting for the email it arrived in. */
+.po-labels-file { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+.po-labels-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.po-labels-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.po-labels-note { color: #e0a878; margin: 8px 0 0; }

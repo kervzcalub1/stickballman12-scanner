@@ -13,6 +13,7 @@ import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoScanModal, PoLineRow } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
+import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',     cls: 'draft' },
@@ -260,6 +261,9 @@ export function SupplierApp({ user, onSignOut }) {
             {detail.boxes.some((b) => b.status === 'pending' || b.status === 'packed') && (
               <ShipToCard shipTo={shipTo} />
             )}
+            {/* The labels our team bought for this order. Read-only here — they print
+                them, they don't upload them. */}
+            <PoLabelsFile po={po} onSignOut={onSignOut} />
 
             {detail.boxes.map((box) => {
               const lines = linesFor(box.id);
@@ -393,6 +397,7 @@ export function SupplierApp({ user, onSignOut }) {
 
                   {isFilling && (
                     <div className="po-box-actions">
+                      <PoLabelDownload poId={Number(po.id)} box={box} onSignOut={onSignOut} />
                       <button className="btn sm" onClick={() => setScanBox(box)}><Icon name="camera" /> Add items</button>
                       <button className="btn sm primary" disabled={units < 1 || busy} onClick={() => setCloseReview(box)}>Review &amp; close box</button>
                     </div>
@@ -409,6 +414,7 @@ export function SupplierApp({ user, onSignOut }) {
                   )}
                   {isPacked && (
                     <div className="po-box-actions">
+                      <PoLabelDownload poId={Number(po.id)} box={box} onSignOut={onSignOut} />
                       <button className="btn sm ghost" disabled={busy} onClick={() => reopenBox(box)}>Reopen to edit</button>
                       {/* Reprint: the sheet gets torn, soaked, or printed before a late edit. */}
                       <ManifestPrint poId={Number(po.id)} poCode={po.po_code} boxId={Number(box.id)}

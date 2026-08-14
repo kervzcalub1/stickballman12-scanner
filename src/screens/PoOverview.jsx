@@ -14,6 +14,7 @@ import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { PoScanModal } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLinkBatchModal } from '../components/PoLinkBatch.jsx';
+import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',    cls: 'draft' },
@@ -216,6 +217,10 @@ export function PoOverview({ onHome, onSignOut }) {
                               </div>
                             )}
                             <ManifestPrint poId={p.id} poCode={p.po_code} onSignOut={onSignOut} />
+                            {/* The courier's own labels, so the supplier can print the one
+                                for the box they're packing instead of digging through email. */}
+                            <PoLabelsFile po={detail.po} canUpload={!['reconciled', 'closed'].includes(detail.po.status)}
+                              onChanged={refreshOpenDetail} onSignOut={onSignOut} />
                             {(() => {
                               // Whole-order manifest (Path C): one list for the whole purchase, no per-box
                               // breakdown. Shown when it's already in use, or available. Receiving still
@@ -394,6 +399,7 @@ export function PoOverview({ onHome, onSignOut }) {
                                             ? 'Nothing was declared for this label. If the supplier has since sent their list, enter it here — it sets what was expected, so the order stops reading as received blind. It can’t change what the warehouse counted.'
                                             : 'No items yet — if the supplier sent a manual list of the box contents, enter it here so the warehouse can receive against this PO.'}</p>
                                       )}
+                                      <PoLabelDownload poId={p.id} box={box} onSignOut={onSignOut} />
                                       {canFill && (
                                         <button className="btn sm po-ov-fill-btn" onClick={() => setScanBox(box)}>
                                           <Icon name="camera" /> {lines.length ? 'Add more items on their behalf' : 'Add items on their behalf'}

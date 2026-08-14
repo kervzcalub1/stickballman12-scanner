@@ -70,6 +70,59 @@ export function presignPutUrl({ key, expiresIn = 300 }) {
   return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
+// The same signature, for any method. Shipping labels are NOT public like listing
+// photos: they carry the ship-to address and a live courier barcode, so the bucket must
+// never serve them by URL. The server signs a short-lived GET (or DELETE) and does the
+// request itself, behind a real permission check.
+export function presignUrl({ key, method = 'GET', expiresIn = 120 }) {
+  const host = endpointHost();
+  const bucket = process.env.R2_BUCKET;
+  const accessKey = process.env.R2_ACCESS_KEY_ID;
+  const secret = process.env.R2_SECRET_ACCESS_KEY;
+
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
+  const canonicalUri = `/${bucket}/${encodeKey(key)}`;
+  const signedHeaders = 'host';
+
+  const params = {
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${accessKey}/${scope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expiresIn),
+    'X-Amz-SignedHeaders': signedHeaders,
+  };
+  const canonicalQuery = Object.keys(params).sort()
+    .map((k) => `${enc(k)}=${enc(params[k])}`).join('&');
+
+  const canonicalRequest = [
+    method, canonicalUri, canonicalQuery,
+    `host:${host}\n`, signedHeaders, 'UNSIGNED-PAYLOAD',
+  ].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(canonicalRequest)].join('\n');
+
+  const kSigning = hmac(hmac(hmac(hmac(`AWS4${secret}`, dateStamp), REGION), SERVICE), 'aws4_request');
+  const signature = crypto.createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
+
+  return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
+// Read an object's bytes server-side. Throws on a non-2xx so a caller never hands a
+// caller an XML error body as if it were a PDF.
+export async function getObject(key) {
+  const res = await fetch(presignUrl({ key, method: 'GET' }));
+  if (!res.ok) throw new Error(`R2 GET ${key} failed (${res.status})`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+// Best-effort delete. A 404 counts as done — the point is that it's gone.
+export async function deleteObject(key) {
+  const res = await fetch(presignUrl({ key, method: 'DELETE' }), { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`R2 DELETE ${key} failed (${res.status})`);
+  return true;
+}
+
 // Public, readable URL for an object key. Prefers R2_PUBLIC_BASE_URL (an R2.dev
 // or custom domain bound to the bucket); falls back to the endpoint path-style
 // URL (only resolves if the bucket is otherwise public).

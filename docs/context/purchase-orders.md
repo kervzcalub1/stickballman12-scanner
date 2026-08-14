@@ -58,6 +58,34 @@ A supplier-name mismatch **stops the script** (`--force` to override) — a wron
 writes a false receipt against a real order. The in-app path scopes its candidate list to
 the order's own supplier instead, so the mismatch can't arise.
 
+## The courier's labels PDF (R2)
+The sheet PH buys from the courier used to be read for its tracking numbers and thrown
+away — the upload box said so — which left the supplier hunting through email for the
+label belonging to the box in front of them. It's now stored and downloadable.
+
+- **One object per order**, exactly as uploaded (`purchase_orders.labels_key/_name/_pages/
+  _uploaded_at/_uploaded_by`). A per-box download **extracts that page on demand**
+  (`pdf-lib`, `po_boxes.label_page`) rather than storing N split files — the page keeps
+  its vectors, so the barcode prints as the courier made it, and a wrong mapping is a data
+  fix rather than a re-upload.
+- **The page↔label map is keyed on the TRACKING NUMBER read off each page**, never page
+  order: rows get reordered, edited, or typed by hand before the order is created, and a
+  label pointing at someone else's page is worse than none. Pages that matched nothing
+  stay in the full sheet only, and the UI says how many matched.
+- **Downloads are proxied and authorised** (`api/po/label-download.js`), never a public
+  bucket URL like listing photos: a label carries the ship-to address and a live courier
+  barcode. `Cache-Control: private, no-store`; a supplier reaches only their own order;
+  `labels_key` is stripped from their `po/get`.
+- **The upload key is minted server-side** from the PO code and validated on attach
+  (`/^po-labels\/[A-Za-z0-9._-]+\.pdf$/`) — a client-chosen key could overwrite another
+  order's labels. Replacing a sheet deletes the previous object.
+- **Archiving the order deletes the file** (`po/close` → `clearPoLabels` + `deleteObject`,
+  best-effort): by then every box has landed and the label is spent, so old addresses
+  don't accumulate.
+- Uploaded at PO creation (`CreatePO`) or later from the order (`PoLabelsFile`); the
+  supplier's portal offers the whole sheet plus their own box's label while filling and
+  once packed. Covered by `e2e/po-labels-file.spec.js`.
+
 ## Who may write a manifest, and when (`manifestEditBlock`)
 One rule, three lifecycles — get this wrong and a supplier is locked out of their own
 order (it happened live 2026-08-14, twice in one day).

@@ -209,6 +209,13 @@ export const api = {
   poUnlinkBatch: (poId, batchId) => post('/api/po/unlink-batch', { poId, batchId }),
   poDelete: (poId, confirm) => post('/api/po/delete', { poId, confirm }),
 
+  // The courier's labels PDF: uploaded straight to R2, then downloaded back through the
+  // server (never a public URL — these carry an address and a live barcode).
+  poLabelsSign: (poId) => post('/api/po/labels-sign', { poId }),
+  poLabelsAttach: (payload) => post('/api/po/labels-attach', payload),
+  poLabelDownload: (poId, poBoxId) => downloadBlob(`/api/po/label-download?poId=${encodeURIComponent(poId)}`
+    + (poBoxId ? `&poBoxId=${encodeURIComponent(poBoxId)}` : '')),
+
   poArchived: () => get('/api/po/archived'),
   poUnarchive: (poId) => post('/api/po/unarchive', { poId }),
   // Discrepancy resolution: one step per call (all reversible via `undo`), plus the

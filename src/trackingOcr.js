@@ -171,3 +171,24 @@ export async function decodeTrackingPdf(file, onProgress) {
   }
   return out;
 }
+
+// Which pages of a labels PDF are actually LABELS.
+//
+// The sheets bought from UPS CampusShip interleave a packing slip after every label, so a
+// 9-label request arrives as 17 pages: label, slip, label, slip… The slips are image-only
+// with no barcode, so they used to import as blank label rows that someone deleted by
+// hand — nine real labels and eight to clean up, every single time.
+//
+// A page that yielded no tracking number is not a label. The exception is a sheet where
+// NOTHING decoded: then we can't tell a slip from a label whose barcode we simply failed
+// to read, so every page comes back for the human to fill in — losing a label silently is
+// far worse than showing a blank row.
+export function labelPagesOnly(results) {
+  const read = (results || []).filter((r) => r.value);
+  if (!read.length) return { labels: results || [], skipped: [], undecidable: true };
+  return {
+    labels: read,
+    skipped: (results || []).filter((r) => !r.value),
+    undecidable: false,
+  };
+}

@@ -140,6 +140,11 @@ export function requireAuth(req, res) {
 // env `superadmin` account (which additionally reaches the PH-team pages, client-side).
 export const isPrivileged = (role) => role === 'admin' || role === 'superadmin';
 
+// getPoFull attaches OUR received count to each label. That's staff-only — a supplier
+// must not read what the warehouse counted off their portal before the reconciliation
+// is settled with them — so every response that can reach a supplier drops it.
+export const hideReceivedUnits = (boxes) => (boxes || []).map(({ received_units, ...b }) => b);
+
 // A user carrying the signed `mustChange` flag (admin issued a temp password) is blocked
 // from every role/admin-gated endpoint until they set a new password via
 // /api/auth/change-password (which requireAuth allows). 428 = "precondition required".

@@ -11,7 +11,7 @@ import { Sop } from './Sop.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { Icon } from '../components/NavIcons.jsx';
-import { PoScanModal, PoLineRow } from '../components/PoScanModal.jsx';
+import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 
@@ -364,6 +364,7 @@ export function SupplierApp({ user, onSignOut }) {
                   {lines.length > 0 && (
                     canDeclare ? (
                       <ul className="po-lines po-lines-edit">
+                        <PoLineHeader />
                         {lines.map((l) => (
                           <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)}
                             onSave={(patch) => patchLine(l, patch)}

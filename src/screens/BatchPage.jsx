@@ -19,6 +19,8 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [reopenId, setReopenId] = useState(null);
+  // The box whose number is being corrected, + the number typed for it.
+  const [renumber, setRenumber] = useState(null); // { box, value }
 
   async function loadLists() {
     setError('');
@@ -36,6 +38,22 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
 
   useEffect(() => { loadLists(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else setDetail(null); }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Put the number on the row back in step with the label on the carton. Boxes that
+  // arrive out of order get whatever "+ Add box" had left (max+1) — box 6 of 9 landing a
+  // day late becomes box 10 — and from then on nothing lines up with the shipment.
+  async function saveRenumber() {
+    const n = Number(renumber?.value);
+    // The message goes in the modal, not the page behind it — the overlay would hide it.
+    if (!Number.isInteger(n) || n < 1) { setRenumber((r) => ({ ...r, err: 'Enter a whole box number of 1 or more.' })); return; }
+    setBusy(true); setRenumber((r) => ({ ...r, err: '' }));
+    try {
+      await api.batchRenumberBox(selId, Number(renumber.box.id), n);
+      setRenumber(null);
+      await loadDetail(selId);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setRenumber((r) => (r ? { ...r, err: err.message } : r)); }
+    finally { setBusy(false); }
+  }
 
   async function setStatus(id, status) {
     setBusy(true);
@@ -87,6 +105,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           {isOpen && boxes.some((x) => x.status !== 'received') && (
             <p className="muted sm">“Pending” means the box is recorded but nothing has been scanned into it yet — tap <b>Add items</b> on its row to continue it. <b>+ Add box</b> is for a box that isn’t listed here at all.</p>
           )}
+          {boxes.length > 1 && (
+            <p className="muted sm">Boxes that arrive out of order are numbered as they land — use the <Icon name="pencil" /> on a row to put its number back in step with the label on the carton.</p>
+          )}
           {!boxes.length ? <p className="muted">No boxes yet{isOpen ? ' — tap “Add box” to scan the first one.' : '.'}</p> : (
             <div className="box-list">
               {boxes.map((bx) => {
@@ -110,6 +131,14 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                           filling this one. Scans land in THIS box, keeping its number and
                           tracking. Received boxes get no button: they're closed, and the
                           commit would be refused anyway. */}
+                      {/* Renumbering stays available on a RECEIVED box: a box arriving
+                          out of order is numbered max+1, and that only becomes obviously
+                          wrong once its contents are in and the count doesn't match the
+                          label on the carton. */}
+                      <button className="btn ghost sm box-row-renum" title={`Change the number on box ${bx.box_number}`}
+                        onClick={() => { setError(''); setRenumber({ box: bx, value: String(bx.box_number ?? '') }); }}>
+                        <Icon name="pencil" />
+                      </button>
                       {isOpen && bx.status !== 'received' && (
                         <button className="btn primary sm box-row-add" onClick={() => onAddBox(b, bx)}
                           title={`Scan shoes into box ${bx.box_number}`}>Add items</button>
@@ -142,6 +171,27 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
             : <button className="btn ghost" disabled={busy} onClick={() => setReopenId(b.id)}>Reopen</button>}
           {isOpen && <button className="btn primary" onClick={() => onAddBox(b)}>+ Add box</button>}
         </div>
+        {renumber && (
+          <Modal type="warn" title={`Box ${renumber.box.box_number} — change its number`}
+            message={`Use the number printed on the carton / on the purchase order's label. ${renumber.box.item_count} item${renumber.box.item_count === 1 ? '' : 's'} and its tracking number move with it — nothing is rescanned.`}
+            onClose={() => setRenumber(null)}>
+            <div className="renum-form">
+              <label>Box number
+                <input type="number" min="1" step="1" inputMode="numeric" value={renumber.value}
+                  onChange={(e) => setRenumber((r) => ({ ...r, value: e.target.value }))} />
+              </label>
+              <p className="muted sm">
+                If that number is an empty <b>pending</b> box, this box takes its place. A box
+                that already has stock in it won’t be overwritten.
+              </p>
+              {renumber.err && <div className="error">{renumber.err}</div>}
+              <div className="renum-acts">
+                <button className="btn primary" disabled={busy} onClick={saveRenumber}>Save number</button>
+                <button className="btn ghost" disabled={busy} onClick={() => setRenumber(null)}>Cancel</button>
+              </div>
+            </div>
+          </Modal>
+        )}
         {reopenId != null && (
           <Modal type="warn" title={`Reopen ${b.batch_code}?`}
             message="This puts a finalized batch back to open so boxes/items can be added. Only reopen if you need to correct it."

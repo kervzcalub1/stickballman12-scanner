@@ -2,7 +2,7 @@
 // Marks one label shipped (must hold ≥1 item). When every label on the PO is
 // shipped, the PO flips to 'shipped'. Returns the refreshed full PO.
 import { STILL_WITH_SUPPLIER } from '../_lib/po-manifest.js';
-import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
 import { getPoBox, getPo, countPoBoxLines, shipPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
 
@@ -39,6 +39,7 @@ export default async function handler(req, res) {
     // Start tracking this label's shipment (best-effort; no-ops without a key).
     if (box.tracking_number) registerTracking([{ number: box.tracking_number, carrier: box.carrier_key }]).catch((e) => console.warn('[po/ship] registerTracking:', e.message));
     const data = await getPoFull(box.po_id);
+    if (!isPrivileged(user.role)) data.boxes = hideReceivedUnits(data.boxes);
     return send(res, 200, { ok: true, ...data });
   } catch (e) {
     console.error('[po/ship]', e.message);

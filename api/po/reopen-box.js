@@ -1,7 +1,7 @@
 // POST /api/po/reopen-box  (supplier / admin)  { poBoxId }
 // Reopens a closed-but-not-shipped label to keep editing: 'packed' → 'pending'.
 // Returns the refreshed full PO.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
 import { getPoBox, getPo, reopenPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
@@ -29,6 +29,7 @@ export default async function handler(req, res) {
 
     await reopenPoBox(poBoxId);
     const data = await getPoFull(box.po_id);
+    if (!isPrivileged(user.role)) data.boxes = hideReceivedUnits(data.boxes);
     return send(res, 200, { ok: true, ...data });
   } catch (e) {
     console.error('[po/reopen-box]', e.message);

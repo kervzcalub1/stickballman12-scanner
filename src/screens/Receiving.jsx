@@ -67,6 +67,26 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // `addBatchBox` is find-or-create by number — so scans land in the box the user
   // tapped instead of silently opening box N+1 beside it.
   const boxTarget = isBoxMode ? (batchContext.box || null) : null;
+  // The batch's boxes as they stand, so "+ Add box" can propose the next free number AND
+  // say what's already recorded. Boxes rarely arrive in order: box 6 of 9 that turns up a
+  // day after the rest was silently filed as box 10 (max+1) and stopped matching the label
+  // stuck to it — the number has to be the warehouse's call, not a counter's.
+  const [batchBoxes, setBatchBoxes] = useState(null);
+  const [newBoxNumber, setNewBoxNumber] = useState('');
+  useEffect(() => {
+    if (!isBoxMode || boxTarget) return;
+    let cancelled = false;
+    api.batchFull(batchContext.id).then((r) => {
+      if (cancelled) return;
+      const list = r.boxes || [];
+      setBatchBoxes(list);
+      const next = list.reduce((n, b) => Math.max(n, Number(b.box_number) || 0), 0) + 1;
+      setNewBoxNumber((v) => v || String(next));
+    }).catch(() => { /* the field still accepts a number typed by hand */ });
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // The box already recorded under the number being typed, if any.
+  const boxAtNumber = (batchBoxes || []).find((b) => Number(b.box_number) === Number(newBoxNumber)) || null;
   const today = estToday();
   const [tab, setTab] = useState('intake');   // 'intake' | 'recent'
   const [step, setStep] = useState(1);         // receiving: 1 shipment·2 items·3 review·4 issues | rescale: 1 details·2 items
@@ -110,9 +130,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       tracking: '',
       expectedBoxes: String(Math.max(1, boxes.length)),
     }));
-    // Every label becomes a box slot — receiving each is a manifest checklist.
+    // Every label becomes a box slot — receiving each is a manifest checklist. The slot
+    // takes the LABEL'S number, not its position in the list: box 4 of the batch has to be
+    // the box the supplier's label 4 is stuck to, or nothing downstream lines up.
     setBoxSlots(boxes.map((b, i) => ({
-      tracking: b.tracking_number || '', status: 'pending', boxNumber: i + 1, itemCount: 0, poBoxId: Number(b.id), boxId: null,
+      tracking: b.tracking_number || '', status: 'pending', boxNumber: Number(b.box_number) || i + 1, itemCount: 0, poBoxId: Number(b.id), boxId: null,
       kind: b.kind || 'original',
     })));
     setShowPoPicker(false);
@@ -125,9 +147,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         setActiveBatch({ id: r.batch.id, batchCode: r.batch.batch_code });
         const byNum = new Map((r.boxes || []).map((b) => [Number(b.box_number), b]));
         setBoxSlots(boxes.map((b, i) => {
-          const bb = byNum.get(i + 1);
+          const num = Number(b.box_number) || i + 1;
+          const bb = byNum.get(num);
           return {
-            tracking: b.tracking_number || '', poBoxId: Number(b.id), boxNumber: i + 1,
+            tracking: b.tracking_number || '', poBoxId: Number(b.id), boxNumber: num,
             kind: b.kind || 'original', boxId: bb ? Number(bb.id) : null,
             status: bb?.status === 'received' ? 'received' : 'pending',
             itemCount: bb?.item_count ?? 0,
@@ -909,7 +932,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   async function persistBoxSlots(batchId, slots = boxSlots) {
     if (!batchId) return;
     const payload = slots
-      .map((s, i) => ({ boxNumber: i + 1, trackingNumber: (s.tracking || '').trim() }))
+      .map((s, i) => ({ boxNumber: Number(s.boxNumber) || i + 1, trackingNumber: (s.tracking || '').trim() }))
       .filter((x) => x.trackingNumber);
     if (!payload.length) return;
     try { await api.batchSyncBoxes(batchId, payload); }
@@ -965,6 +988,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       setError('Enter the tracking # — or tick “No tracking number”.'); return;
     }
     if (isRescale && header.origin === 'other' && !String(header.originOther).trim()) { setError('Enter a custom reason.'); return; }
+    // A new box needs its number BEFORE anything is scanned — after the commit it takes a
+    // renumber on the Batch page to correct, and a wrong number here is what leaves box 6
+    // of the shipment sitting in the system as box 10.
+    if (isBoxMode && !boxTarget) {
+      const n = Number(newBoxNumber);
+      if (!Number.isInteger(n) || n < 1) { setError('Enter the box number printed on the carton (1 or more).'); return; }
+      if (boxAtNumber && boxAtNumber.status === 'received') {
+        setError(`Box ${n} was already received in this batch. Pick the number this carton actually is.`); return;
+      }
+    }
     setStep(2);
   }
   async function goStep3() {
@@ -1027,7 +1060,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         const boxTracking = isBoxMode
           ? (header.tracking || null)
           : (boxSlots[activeSlot]?.tracking?.trim() || null);
-        const boxNumber = isBoxMode ? (boxTarget?.box_number ?? null) : activeSlot + 1;
+        // Continuing a box keeps ITS number; a new one takes the number typed on step 1
+        // (addBatchBox is find-or-create by number, so a pending slot is reused).
+        const boxNumber = isBoxMode
+          ? (boxTarget?.box_number ?? (Number.isInteger(Number(newBoxNumber)) && Number(newBoxNumber) > 0 ? Number(newBoxNumber) : null))
+          : (Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1);
         const { box } = await api.batchAddBox(batchId, boxTracking, boxNumber);
         const res = await api.boxCommit({
           batchId, boxId: box.id, items: out, unitIssues: flatUnitIssues,
@@ -1158,6 +1195,29 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   </div>
                 )}
                 <div className="batch-form">
+                  {/* Which box this is — the number on the carton, not the next one along.
+                      Defaults to the next free number, which is right when boxes arrive in
+                      order and wrong the moment one is late; typing 6 here puts the scans in
+                      box 6, reusing that row if its slot already exists. */}
+                  {isBoxMode && !boxTarget && (
+                    <label>Box number *
+                      <input type="number" min="1" step="1" inputMode="numeric" value={newBoxNumber}
+                        onChange={(e) => setNewBoxNumber(e.target.value)} placeholder="e.g. 6" />
+                    </label>
+                  )}
+                  {isBoxMode && !boxTarget && (
+                    <div className="batch-form-wide box-num-hint muted sm">
+                      {batchBoxes == null ? 'Checking which boxes are already recorded…'
+                        : !batchBoxes.length ? 'No boxes recorded on this batch yet.'
+                          : <>Already recorded: {batchBoxes.map((b) => `${b.box_number}${b.status === 'received' ? '' : ' (pending)'}`).join(', ')}.</>}
+                      {boxAtNumber && boxAtNumber.status === 'received' && (
+                        <div className="dup-warn mt">⚠ Box {boxAtNumber.box_number} was already received ({boxAtNumber.item_count} item{boxAtNumber.item_count === 1 ? '' : 's'}). Pick another number, or correct that box from the Batch page.</div>
+                      )}
+                      {boxAtNumber && boxAtNumber.status !== 'received' && (
+                        <div className="mt">Box {boxAtNumber.box_number} is already recorded as pending — these scans will go into it.</div>
+                      )}
+                    </div>
+                  )}
                   {/* PO Phase 2: receive against a purchase order (receiving mode only). */}
                   {!noShipment && !isBoxMode && (
                     <div className="batch-form-wide po-receive">
@@ -1295,7 +1355,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   <div className="box-build-list">
                     {boxSlots.map((s, i) => (
                       <div className={`box-build-row ${s.status}`} key={i}>
-                        <span className="box-num">Box {i + 1}</span>
+                        <span className="box-num">Box {Number(s.boxNumber) || i + 1}</span>
                         {s.status === 'received' ? (
                           <>
                             <span className="box-track muted sm">{s.tracking || '—'}</span>
@@ -1344,13 +1404,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             <>
               {isMultiBoxNew && activeSlot != null && (
                 <div className="box-context">
-                  Scanning <b>{boxSlots[activeSlot]?.kind === 'replacement' ? 'the replacement shipment' : `Box ${activeSlot + 1}`}</b>
+                  Scanning <b>{boxSlots[activeSlot]?.kind === 'replacement' ? 'the replacement shipment' : `Box ${Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1}`}</b>
                   {boxSlots[activeSlot]?.kind === 'replacement' ? '' : ` of ${boxSlots.length}`} · {activeBatch?.batchCode}
                   {boxSlots[activeSlot]?.tracking ? <> · <Icon name="tag" /> {boxSlots[activeSlot].tracking}</> : ''}
                 </div>
               )}
               {isPoReceive && activeSlot != null ? (
-                <ManifestChecklist boxNumber={activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
+                <ManifestChecklist boxNumber={Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
                   kind={boxSlots[activeSlot]?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
                   items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
                   onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} />
@@ -1821,7 +1881,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     <div><b>{totalItems}</b> units ({items.length} shoe{items.length === 1 ? '' : 's'}) · total <b>${totalCost.toFixed(2)}</b></div>
                     <div className="muted">Supplier: {header.supplier || '—'} · Buyer: {header.buyer || '—'}</div>
                     {isMultiBoxNew && activeSlot != null
-                      ? <div className="muted">Box {activeSlot + 1} of {boxSlots.length} · Tracking: {boxSlots[activeSlot]?.tracking || '—'}</div>
+                      ? <div className="muted">Box {Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} of {boxSlots.length} · Tracking: {boxSlots[activeSlot]?.tracking || '—'}</div>
                       : <div className="muted">Tracking: {header.tracking || '—'} · {header.dateReceived}</div>}
                     {(autoIssues.length + issues.length) > 0 && <div className="muted">{autoIssues.length + issues.length} issue(s) recorded</div>}
                     {flaggedCount > 0 && <div className="muted">{flaggedCount} unit(s) flagged with a defect</div>}

@@ -629,12 +629,22 @@ body {
 .box-row-line { display: flex; align-items: center; gap: 8px; }
 .box-row-line .box-row { flex: 1; min-width: 0; }
 .box-row-add { flex: none; white-space: nowrap; }
+/* Renumber: a quiet icon beside the row — needed often enough to be one tap away,
+   rare enough that it must not compete with "Add items". */
+.box-row-renum { flex: none; padding: 6px 8px; line-height: 1; }
+.renum-form { display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left; }
+.renum-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.renum-form input { width: 120px; }
+.renum-acts { display: flex; gap: 8px; }
 /* On a phone the row can't hold box · tracking · count · status AND a button —
    the tracking number collapsed to "1…", which is the one thing on the row you
    match against the label in your hand. Drop it to its own line instead. */
 @media (max-width: 560px) {
   .box-row { flex-wrap: wrap; row-gap: 2px; }
-  .box-track { flex: 1 1 100%; order: 3; padding-left: 24px; }
+  /* Specific enough to beat the `.box-track { flex: 1 }` below it — without the extra
+     selector the later rule won and a RECEIVED row (whose other chips are wider) kept
+     the tracking inline, ellipsised back to "1Z999A…". */
+  .box-row .box-track { flex: 1 1 100%; order: 3; padding-left: 24px; }
 }
 .box-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; width: 100%; background: none; border: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .box-caret { width: 14px; color: var(--muted, #8a8a8a); }
@@ -2082,15 +2092,61 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* Whole-order manifest block (Path C) inside the PO overview detail. */
 .po-ov-order { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--border); border-radius: 10px; background: var(--surface-2, rgba(155,120,230,0.06)); }
 .po-ov-order-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
-/* Editable line on a filling label — size + qty + remove. */
-.po-lines-edit li.po-line-edit { flex-direction: column; align-items: stretch; gap: 8px; }
+/* Editable manifest line — item · size · qty · cost · tip · remove.
+   PHONE: the item sits on its own line above its controls, each control keeping its own
+   little label, because six controls will never fit across 390px.
+   WIDE (≥720px): the labels give way to ONE header row (`.po-line-headings`) and every
+   row snaps to the same columns — a manifest of a dozen pairs is a table you can read
+   down, not a dozen repeated mini-forms. */
+.po-lines-edit li.po-line-edit,
+.po-lines.editable li.po-line-edit { flex-direction: column; align-items: stretch; gap: 8px; }
 .po-line-edit .po-line-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
 .po-line-edit .po-line-controls { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
-.po-line-size { display: flex; flex-direction: column; gap: 2px; }
+.po-line-size, .po-line-qty { display: flex; flex-direction: column; gap: 2px; }
 .po-line-size .sz { width: 74px; padding: 8px 10px; text-align: center; }
 .po-line-edit .qty-stepper .step { min-width: 44px; min-height: 44px; }
 .po-line-edit .qty-val { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
-.po-line-edit .remove { margin-left: auto; min-width: 40px; min-height: 40px; }
+/* Remove sits on the ITEM's line, top-right — it deletes the whole item, so hanging it
+   off the end of the tip field (where the wrap left it) pointed at the wrong thing. */
+.po-lines li.po-line-edit { position: relative; }
+.po-line-edit .po-line-head { padding-right: 44px; }
+.po-line-edit .remove { position: absolute; top: 4px; right: 0; margin-left: auto;
+  min-width: 38px; min-height: 38px; font-size: 18px; line-height: 1; }
+.po-line-edit .remove:hover { color: var(--danger, #e06060); border-color: var(--danger, #e06060); }
+.po-lines li.po-line-headings { display: none; }
+@media (min-width: 720px) {
+  .po-lines-edit li.po-line-edit,
+  .po-lines.editable li.po-line-edit {
+    /* Same 8px column gap as the header row below, so the two grids line up: the
+       header's five fixed columns sit exactly over the row's nested control grid. */
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+    column-gap: 8px; row-gap: 2px; padding: 8px 0;
+  }
+  .po-line-edit .po-line-head { grid-column: 1; display: block; padding-right: 0; }
+  /* The SKU under the name, not trailing it: in a column this narrow an inline SKU
+     dragged every long product name onto a third line. */
+  .po-line-edit .po-line-meta { display: block; white-space: normal; font-size: 12px; }
+  .po-line-edit .po-line-attribution { grid-column: 1; width: auto; }
+  .po-line-edit .po-line-controls,
+  .po-lines li.po-line-headings {
+    grid-column: 2; grid-row: 1 / span 2; display: grid; align-items: center;
+    grid-template-columns: 66px 118px 78px 78px 38px; gap: 8px;
+  }
+  /* The header carries the item column too, so it spans the whole row. */
+  .po-lines li.po-line-headings {
+    grid-column: 1 / -1; grid-row: auto;
+    grid-template-columns: minmax(0, 1fr) 66px 118px 78px 78px 38px;
+    border-top: 0; padding: 0 0 2px; color: var(--muted); font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .po-line-edit .po-line-size .sz { width: 100%; }
+  .po-line-edit .po-line-cost .po-money-input { width: 100%; }
+  .po-line-edit .po-line-cost .po-money-input input { width: 100%; }
+  .po-line-edit .remove { position: static; }
+  /* One header instead of the same three words on every row. */
+  .po-line-edit .po-line-controls .muted.xs { display: none; }
+  .po-line-edit .remove { margin-left: 0; justify-self: center; }
+}
 .po-box-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .po-box-actions .btn { flex: 1; }
 /* ManifestPrint drops a <div class="mf-print"> wrapper into these button rows — it needs
@@ -2434,9 +2490,25 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 }
 /* Last thing in the reconciliation header card, so it doesn't push the counts down. */
 .rcn-summary + .mf-print, .card > .mf-print:last-child { margin: 12px 0 0; }
-.po-ov-label { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
-.po-ov-label:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+/* A label is a THING — a physical box with a number, a courier and a list — so it gets a
+   card of its own. It used to be separated from the next one by a hairline, which left the
+   whole order reading as one long undifferentiated column of text and controls. */
+.po-ov-label { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-top: 12px;
+  background: var(--panel-2, rgba(255, 255, 255, 0.02)); }
+.po-ov-label:first-of-type { margin-top: 12px; }
 .po-ov-label-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.po-ov-label-id { min-width: 0; }
+/* A tracking number is one long unbroken token — let it wrap inside the card rather than
+   forcing the card wide (or breaking mid-string against the chip beside it). */
+.po-ov-label-id .po-track { overflow-wrap: anywhere; }
+.po-ov-label-counts { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+@media (min-width: 720px) {
+  .po-ov-label-counts { flex-direction: row; align-items: baseline; gap: 10px; }
+}
+.po-track-status { margin: 8px 0 0; }
+.po-track-carrier { font-weight: 600; color: var(--text); }
+.po-track-state { text-transform: none; }
+.po-track-checkpoint { margin-top: 2px; }
 .po-track-status { margin: 8px 0 0; }
 .po-track-carrier { font-weight: 600; color: var(--text); }
 .po-track-checkpoint { margin-top: 2px; }
@@ -2770,6 +2842,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-ov-label-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
 .po-ov-label-units { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .po-ov-order-head .po-ov-label-units { align-self: center; }
+/* What we counted, beside what they declared — the pair reads as two facts, so the
+   received half is the one that carries weight. */
+.po-ov-label-units.received { color: var(--text, #e8e8e8); font-weight: 600; }
+.po-ov-unmatched { margin-top: 10px; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(224, 168, 120, 0.35); background: rgba(224, 168, 120, 0.08); }
 .po-box-head-side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 /* The courier's labels PDF on a purchase order — the supplier prints their box's page

@@ -3,7 +3,7 @@
 // (ready to ship). Must hold ≥1 item. Editing (scan) is blocked while packed;
 // the supplier can reopen it to keep editing. Returns the refreshed full PO.
 import { STILL_WITH_SUPPLIER } from '../_lib/po-manifest.js';
-import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
 import { getPoBox, getPo, countPoBoxLines, closePoBox, getPoFull, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
@@ -35,6 +35,7 @@ export default async function handler(req, res) {
 
     await closePoBox(poBoxId);
     const data = await getPoFull(box.po_id);
+    if (!isPrivileged(user.role)) data.boxes = hideReceivedUnits(data.boxes);
     return send(res, 200, { ok: true, ...data });
   } catch (e) {
     console.error('[po/close-box]', e.message);

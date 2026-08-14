@@ -73,6 +73,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // stuck to it — the number has to be the warehouse's call, not a counter's.
   const [batchBoxes, setBatchBoxes] = useState(null);
   const [newBoxNumber, setNewBoxNumber] = useState('');
+  // The labels of the order this batch is being received against, if any. The tracking
+  // number on the carton says WHICH box it is; the number a person picks while unpacking
+  // is a guess, and that guess is what filed box 6 of 9 as "box 10".
+  const [poLabels, setPoLabels] = useState(null);
   useEffect(() => {
     if (!isBoxMode || boxTarget) return;
     let cancelled = false;
@@ -82,11 +86,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       setBatchBoxes(list);
       const next = list.reduce((n, b) => Math.max(n, Number(b.box_number) || 0), 0) + 1;
       setNewBoxNumber((v) => v || String(next));
+      if (r.batch?.po_id) {
+        api.poGet(Number(r.batch.po_id))
+          .then((po) => { if (!cancelled) setPoLabels(po.boxes || []); })
+          .catch(() => { /* fall back to the typed number */ });
+      }
     }).catch(() => { /* the field still accepts a number typed by hand */ });
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  // The box already recorded under the number being typed, if any.
-  const boxAtNumber = (batchBoxes || []).find((b) => Number(b.box_number) === Number(newBoxNumber)) || null;
   const today = estToday();
   const [tab, setTab] = useState('intake');   // 'intake' | 'recent'
   const [step, setStep] = useState(1);         // receiving: 1 shipment·2 items·3 review·4 issues | rescale: 1 details·2 items
@@ -107,6 +114,25 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // never disagree about what this shipment had — the server drops the field when the
   // flag is set, so a value left on screen would be a lie about what got recorded.
   const setNoTracking = (v) => setHeader((h) => ({ ...h, noTracking: v, tracking: v ? '' : h.tracking }));
+
+  // The label this carton's tracking number belongs to, if it's one of the order's.
+  const normTrack = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  const trackedLabel = React.useMemo(() => {
+    const t = normTrack(header.tracking);
+    if (!t || !poLabels?.length) return null;
+    return poLabels.find((l) => normTrack(l.tracking_number) === t) || null;
+  }, [header.tracking, poLabels]);
+  // Follow the label as soon as it's known. Not locked — the field stays editable, because
+  // a parcel can be re-taped with the wrong label and the person holding it can see that.
+  const lastMatched = useRef(null);
+  useEffect(() => {
+    const n = trackedLabel?.box_number;
+    if (n == null || lastMatched.current === Number(trackedLabel.id)) return;
+    lastMatched.current = Number(trackedLabel.id);
+    setNewBoxNumber(String(n));
+  }, [trackedLabel]);
+  // The box already recorded under the number being typed, if any.
+  const boxAtNumber = (batchBoxes || []).find((b) => Number(b.box_number) === Number(newBoxNumber)) || null;
 
   // V6 PO Phase 2: receive a shipment against a purchase order. When set, Step 1 is
   // pre-filled from the PO (supplier, tag, each label → a box slot) and the commit
@@ -1207,6 +1233,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   )}
                   {isBoxMode && !boxTarget && (
                     <div className="batch-form-wide box-num-hint muted sm">
+                      {/* The tracking number identifies the parcel; the number is then not a
+                          guess at all. Shown, not hidden, so it can be overridden. */}
+                      {trackedLabel && (
+                        <div className="box-num-matched">
+                          Tracking matches <b>{trackedLabel.kind === 'replacement' ? 'the replacement shipment' : `Label ${trackedLabel.box_number}`}</b> on
+                          this purchase order — recording it as box {trackedLabel.box_number}.
+                        </div>
+                      )}
                       {batchBoxes == null ? 'Checking which boxes are already recorded…'
                         : !batchBoxes.length ? 'No boxes recorded on this batch yet.'
                           : <>Already recorded: {batchBoxes.map((b) => `${b.box_number}${b.status === 'received' ? '' : ' (pending)'}`).join(', ')}.</>}

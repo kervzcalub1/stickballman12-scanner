@@ -447,6 +447,14 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                     <div className="rcn-rbox-head">
                       <b>{b.box_number ? `Box ${b.box_number}` : 'Not recorded against a box'}</b>
                       {b.tracking_number && <span className="muted sm"> · {b.tracking_number}</span>}
+                      {/* The number came off the LABEL (its tracking number), not off what
+                          was typed while unpacking. Say so where the two disagree, so this
+                          sheet can't be read as us quietly renumbering the supplier's box. */}
+                      {b.recorded_box_number != null && (
+                        <span className="muted xs rcn-rbox-renamed">
+                          {' '}· matched to this label by tracking; recorded while unpacking as box {b.recorded_box_number}
+                        </span>
+                      )}
                       <span className="rcn-rbox-units">{b.units} unit{b.units === 1 ? '' : 's'}</span>
                     </div>
                     {b.items.length === 0 ? (

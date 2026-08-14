@@ -23,8 +23,25 @@ const PO_STATUS = {
   closed:     { label: 'Closed',      cls: 'muted' },
 };
 
-function PoStatusChip({ status }) {
-  const s = PO_STATUS[status] || { label: status, cls: 'muted' };
+// Same correction as the staff overview: `purchase_orders.status` describes the ORDER, and
+// it lags what the supplier can see with their own eyes. An order whose labels have all
+// gone read "Filling", as if they were still packing. Counts come from the list row
+// (`shipped_count`/`box_count`) or, on the detail, from the labels themselves.
+function poChipOf(po, boxes) {
+  if (po.status === 'reconciled' || po.status === 'closed') return PO_STATUS[po.status];
+  const own = (boxes || []).filter((b) => b.kind !== 'replacement');
+  const total = own.length || Number(po.box_count) || 0;
+  const gone = own.length
+    ? own.filter((b) => !['pending', 'pre_transit', 'packed'].includes(b.status)).length
+    : Number(po.shipped_count) || 0;
+  if (total > 0 && gone === total && po.status !== 'draft') return { label: 'On its way to us', cls: 'shipped' };
+  if (total > 0 && gone === total) return PO_STATUS.shipped;
+  if (gone > 0) return { label: `${gone} of ${total} shipped`, cls: 'shipped' };
+  return PO_STATUS[po.status] || { label: po.status, cls: 'muted' };
+}
+
+function PoStatusChip({ po, boxes }) {
+  const s = poChipOf(po, boxes);
   return <span className={`po-chip ${s.cls}`}>{s.label}</span>;
 }
 
@@ -181,7 +198,7 @@ export function SupplierApp({ user, onSignOut }) {
                   <button key={p.id} className="po-card" onClick={() => openPo(p.id)}>
                     <div className="po-card-top">
                       <span className="po-code">{p.po_code}</span>
-                      <PoStatusChip status={p.status} />
+                      <PoStatusChip po={p} />
                     </div>
                     <div className="po-card-meta">
                       {p.tag_code && <span><Icon name="tag" /> {p.tag_code}</span>}
@@ -227,7 +244,7 @@ export function SupplierApp({ user, onSignOut }) {
             <div className="card">
               <div className="po-card-top">
                 <h3 className="rows-title">{po.po_code}{po.tag_code ? ` · ${po.tag_code}` : ''}</h3>
-                <PoStatusChip status={po.status} />
+                <PoStatusChip po={po} boxes={detail.boxes} />
               </div>
               <p className="muted sm">
                 From {po.supplier_name}{po.date_of_purchase ? ` · purchased ${String(po.date_of_purchase).slice(0, 10)}` : ''}

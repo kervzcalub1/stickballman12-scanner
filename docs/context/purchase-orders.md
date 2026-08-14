@@ -404,6 +404,23 @@ Two escape hatches for when a supplier won't use the scan-out portal:
   manifest"** card with the "…'s Staff" note. **Schema-touch: `po_box_id` nullable + `manifest_scope`
   + partial index → run `db:setup`.**
 
+## The order's chip says where the ORDER is, not what `status` says
+`purchase_orders.status` only ever advances as far as `receiving` on its own, and an order
+received with nothing declared **never auto-reconciles** (`maybeAutoReconcile` bails on
+`no_manifest` / `expected_units === 0` — that call belongs to a person). So PO-100003 sat
+reading **"Receiving"** with all nine labels delivered and 54 pairs counted, contradicting
+the line right underneath it. The same bug one stage earlier: a `draft` order whose labels
+had all shipped read **"Filling"**, as if the supplier were still packing.
+
+`poChipOf` (PoOverview) derives the chip from the label counts the list already returns:
+every label delivered → **"Delivered · to reconcile"** (or "All delivered" with nothing
+received yet); else `receiving` → Receiving; else any label shipped → Shipped; else the raw
+status. `SupplierApp` has the mirror of it (**"On its way to us"**, "2 of 3 shipped"),
+derived from the labels on the detail and from `shipped_count`/`box_count` on the list —
+a supplier must never be told their order is "Filling" when the boxes are with the courier.
+The chip is a **statement about reality, not a workflow state**; the reconciliation queue
+(`poChip` in `Reconciliation.jsx`) still owns what happens next.
+
 ## The PO screen's layout (PoOverview + SupplierApp)
 Reworked 2026-08-15 — the detail had grown into one long column of text and controls.
 - **A label is a card**, not a hairline separator: `.po-ov-label` has a border, radius and its
@@ -434,6 +451,21 @@ isn't broken out per label, so there's no per-label checklist to tick.
   unexpected"), a banner says the order was manifested as one whole-order list, and a SKU
   on that list is chipped **"On the order list"**. A SKU that genuinely isn't still reads
   "Overage · not on PO" — that distinction is the whole point.
+- **A received box is identified by its TRACKING NUMBER, not by the number someone typed**
+  (2026-08-15). PO-100003 shipped nine labels; eight boxes were received one day and label
+  6's box the next, where `+ Add box`'s `max+1` filed it as **"box 10"** — so the evidence
+  sheet read 1,2,3,4,5,7,8,9,10 against an order that only ever had nine labels. The number
+  a person picks while unpacking is a guess; the tracking number on the carton is not.
+  `getPoReceivedBoxes` now matches each `batch_boxes` row to a `po_boxes` label on
+  normalised tracking and reports **that** label's number, sorting by it, so the list (and
+  the "What we received" PDF, which reads the same field) lines up with the labels the
+  supplier printed. `recorded_box_number` carries what was typed **only when it differs** —
+  the Reconciliation row then says "matched to this label by tracking; recorded while
+  unpacking as box 10", so this can never read as us quietly renumbering their box. No
+  tracking, or one that matches nothing, keeps the warehouse's own number
+  (`matched_label: false`). This is a READ-side correction: it fixes every order already in
+  the database, including ones received before the fix. The stored `batch_boxes.box_number`
+  is corrected separately, by hand, with the ✎ on the Batch page (`docs/context/receiving.md`).
 - **`getPoReceivedBoxes(poId)` = what WE counted, box by box.** Built from `items.box_id`
   (receiving already sets it per box) across **every** batch linked to the PO. Units with a
   NULL `box_id` — a single-box or pre-multi-box receive never set one — come back as a

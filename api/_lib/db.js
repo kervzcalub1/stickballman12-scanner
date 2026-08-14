@@ -2322,6 +2322,15 @@ export async function lookupPoByCodeOrTracking(q) {
 // Units with no box_id are real and must not vanish from the count: a single-box or
 // pre-multi-box receive never set one. They're returned as a box-less group so the
 // totals still add up, the same discipline the whole-order manifest page uses.
+//
+// A BOX IS IDENTIFIED BY ITS TRACKING NUMBER, NOT BY THE NUMBER SOMEONE TYPED. The number
+// the warehouse records is a guess made at the moment the carton is opened — boxes arrive
+// out of order, so box 6 of 9 turning up a day late was recorded as "box 10" and this list
+// then read 1,2,3,4,5,7,8,9,10 against an order that only ever had nine labels. The
+// tracking number on the carton is not a guess: it says which label that parcel is. When it
+// matches one of the order's labels we report THAT number and sort by it, so the evidence
+// you send a supplier lines up with the labels they printed. `recorded_box_number` keeps
+// what the warehouse actually typed, for the one place worth admitting the difference.
 export async function getPoReceivedBoxes(poId) {
   const sql = db();
   const boxes = await sql`
@@ -2346,15 +2355,38 @@ export async function getPoReceivedBoxes(poId) {
     if (!byBox.has(k)) byBox.set(k, []);
     byBox.get(k).push({ sku: r.sku, size: r.size, name: r.name, qty: r.qty });
   }
+  // Which label each received box actually is, read off its tracking number.
+  const labels = await sql`
+    SELECT id, box_number, tracking_number, kind FROM po_boxes
+    WHERE po_id = ${poId} AND coalesce(tracking_number, '') <> ''`;
+  const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  const byTracking = new Map(labels.map((l) => [norm(l.tracking_number), l]));
   const out = boxes.map((b) => {
     const items = byBox.get(String(b.id)) || [];
-    return { ...b, items, units: items.reduce((n, i) => n + i.qty, 0) };
+    const label = b.tracking_number ? byTracking.get(norm(b.tracking_number)) : null;
+    const recorded = b.box_number == null ? null : Number(b.box_number);
+    const labelNumber = label ? Number(label.box_number) : null;
+    return {
+      ...b,
+      // The parcel's real identity wins; the typed number is kept beside it, and only
+      // reported as different when it actually is.
+      box_number: labelNumber ?? recorded,
+      recorded_box_number: labelNumber != null && labelNumber !== recorded ? recorded : null,
+      label_kind: label ? (label.kind || 'original') : null,
+      matched_label: !!label,
+      items,
+      units: items.reduce((n, i) => n + i.qty, 0),
+    };
   });
+  // Sorted by the number the reader will see, so a late box sits where its label does
+  // instead of trailing the list at the number it was typed under.
+  out.sort((a, b) => (a.box_number ?? 1e9) - (b.box_number ?? 1e9) || Number(a.id) - Number(b.id));
   const loose = byBox.get('none') || [];
   if (loose.length) {
     out.push({
       id: null, box_number: null, tracking_number: null, status: 'received',
       received_at: null, received_by: null, batch_code: out[0]?.batch_code || null, batch_id: null,
+      recorded_box_number: null, label_kind: null, matched_label: false,
       items: loose, units: loose.reduce((n, i) => n + i.qty, 0),
     });
   }

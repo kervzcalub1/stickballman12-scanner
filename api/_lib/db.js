@@ -833,6 +833,44 @@ export async function syncBatchBoxes(batchId, slots, createdBy) {
   return listBatchBoxes(batchId);
 }
 
+// Correct a box's number. "+ Add box" can only ever append max+1, which is right
+// while boxes arrive in order and wrong the moment they don't: box 6 of 9 turning up
+// a day after the rest gets recorded as "box 10", and from then on the number on the
+// row doesn't match the number on the label stuck to the carton. Renumbering is that
+// repair, and it stays available after the box is received — that's when the mistake
+// is usually noticed.
+//
+// A collision is refused rather than silently allowed (there's no unique index on
+// (batch_id, box_number), so nothing else would stop two box 6s). The exception is an
+// EMPTY pending row: that's a slot materialized up front and never filled — exactly
+// the placeholder the late box belongs in — so it's absorbed instead of blocking.
+export async function renumberBatchBox(batchId, boxId, boxNumber) {
+  const sql = db();
+  const box = (await sql`
+    SELECT id, box_number, status, tracking_number FROM batch_boxes WHERE id = ${boxId} AND batch_id = ${batchId}`)[0];
+  if (!box) return { error: 'Box not found in this batch.' };
+  if (Number(box.box_number) === boxNumber) return { ok: true, absorbed: false, boxes: await listBatchBoxes(batchId) };
+  const clash = (await sql`
+    SELECT bx.id, bx.status, bx.tracking_number, (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count
+    FROM batch_boxes bx
+    WHERE bx.batch_id = ${batchId} AND bx.box_number = ${boxNumber} AND bx.id <> ${boxId}
+    LIMIT 1`)[0];
+  if (clash && (clash.status === 'received' || clash.item_count > 0)) {
+    return { error: `Box ${boxNumber} already exists in this batch and has ${clash.item_count} item${clash.item_count === 1 ? '' : 's'} in it.` };
+  }
+  const queries = [];
+  if (clash) queries.push(sql`DELETE FROM batch_boxes WHERE id = ${clash.id}`);
+  // The absorbed slot may be the only place this box's tracking number was ever written
+  // (typed up front off the PO's label, never re-entered by the person scanning). Inherit
+  // it rather than deleting it — an empty tracking field is what breaks the label match.
+  const tracking = String(box.tracking_number || '').trim() || (clash ? clash.tracking_number : null) || null;
+  queries.push(sql`
+    UPDATE batch_boxes SET box_number = ${boxNumber}, tracking_number = ${tracking}
+    WHERE id = ${boxId} AND batch_id = ${batchId}`);
+  await sql.transaction(queries);
+  return { ok: true, absorbed: !!clash, from: Number(box.box_number), boxes: await listBatchBoxes(batchId) };
+}
+
 // Every unit in a batch with its owning box, so the Batch page can list a box's
 // shoes (VIN → history) under each box row.
 export async function listItemsByBatch(batchId) {
@@ -1971,7 +2009,32 @@ export async function getPoFull(id) {
   const sql = db();
   const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${id}`)[0];
   if (!po) return null;
-  const boxes = await sql`SELECT * FROM po_boxes WHERE po_id = ${id} ORDER BY box_number`;
+  // `received_units` = what the WAREHOUSE actually counted into this label's box, beside
+  // what the supplier declared for it. A label on an order raised after the boxes landed
+  // has no manifest at all, so its declared total is legitimately 0 — and a card reading
+  // "0 units" next to a box with twelve pairs already scanned out of it reads as "this
+  // box is empty", which is the opposite of the truth. Same fix as the PO list's
+  // "0 declared · 48 received" (staff-only there and here: a supplier must not read our
+  // count off the screen before the reconciliation is settled with them).
+  //
+  // The join is the TRACKING NUMBER — batch_boxes has no po_box_id, so that string is the
+  // only thing tying a received box to a label (the link-batch preview matches the same
+  // way). The second half covers a receive that never made a box row: a single-box batch
+  // keeps its tracking on the batch itself and leaves items.box_id NULL.
+  const boxes = await sql`
+    SELECT b.*,
+      (SELECT count(*) FROM items i
+         JOIN batch_boxes x ON x.id = i.box_id
+         JOIN batches bt   ON bt.id = x.batch_id
+        WHERE bt.po_id = ${id} AND coalesce(b.tracking_number, '') <> ''
+          AND upper(replace(coalesce(x.tracking_number, ''), ' ', '')) = upper(replace(b.tracking_number, ' ', '')))::int
+      +
+      (SELECT count(*) FROM items i
+         JOIN batches bt ON bt.id = i.batch_id
+        WHERE bt.po_id = ${id} AND i.box_id IS NULL AND coalesce(b.tracking_number, '') <> ''
+          AND upper(replace(coalesce(bt.tracking_number, ''), ' ', '')) = upper(replace(b.tracking_number, ' ', '')))::int
+      AS received_units
+    FROM po_boxes b WHERE b.po_id = ${id} ORDER BY b.box_number`;
   // entered_by_name = the staff member who entered/last-edited an on-behalf line, for
   // the INTERNAL views (warehouse/PH). get.js strips it before responding to a supplier.
   const lines = await sql`

@@ -216,8 +216,10 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
 
   const row = page.locator('.po-ov').filter({ hasText: f.po.po_code });
   await expect(row).toBeVisible({ timeout: 15_000 });
-  // Each label totals its own declared units, so nobody adds up ×1 + ×2 + ×1 by eye.
-  await expect(row.locator('.po-ov-label-units').first()).toHaveText('2 units');
+  // Each label totals its own units, so nobody adds up ×1 + ×2 + ×1 by eye — and says
+  // WHICH count it is: "0 units" over a box with pairs already scanned out of it read as
+  // "this box is empty", the opposite of the truth.
+  await expect(row.locator('.po-ov-label-units').first()).toHaveText('2 declared');
   await row.getByRole('button', { name: /Link a received shipment/ }).click();
 
   const modal = page.locator('.modal.po-link');
@@ -236,6 +238,9 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
   // The row now says both numbers — "2 units" hid which of the two it meant.
   await expect(row.locator('.po-ov-meta')).toContainText('2 declared');
   await expect(row.locator('.po-ov-meta')).toContainText('2 received');
+  // …and so does the LABEL the box was matched to, by its tracking number. A card
+  // reading only "declared" is what made a full box look empty.
+  await expect(row.locator('.po-ov-label-units.received').first()).toHaveText('2 received');
   // Delete is refused while it's linked — the screen says why instead of hiding it.
   await expect(row.locator('.po-ov-danger')).toContainText(/Can’t be deleted/i);
 

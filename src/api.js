@@ -104,6 +104,7 @@ export const api = {
   createOpenBatch: (batch) => post('/api/batches/create-open', { batch }),
   batchAddBox: (batchId, trackingNumber, boxNumber = null) => post('/api/batches/add-box', { batchId, trackingNumber, boxNumber }),
   batchSyncBoxes: (batchId, boxes) => post('/api/batches/sync-boxes', { batchId, boxes }),
+  batchRenumberBox: (batchId, boxId, boxNumber) => post('/api/batches/renumber-box', { batchId, boxId, boxNumber }),
   boxCommit: (payload) => post('/api/batches/box-commit', payload),
   openBatches: () => get('/api/batches/open-list'),
   batchFull: (id) => get(`/api/batches/full?id=${encodeURIComponent(id)}`),

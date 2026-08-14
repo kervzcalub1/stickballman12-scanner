@@ -359,9 +359,21 @@ Two escape hatches for when a supplier won't use the scan-out portal:
   Env admin/superadmin have a non-numeric `uid`, so their writes set the flag but leave
   `entered_by` NULL (no real `users` row to reference).
   **UI:** the shared **`src/components/PoScanModal.jsx`** (extracted from `SupplierApp` — exports
-  `PoScanModal` + `PoLineRow`, used by both sides) is opened from **`PoOverview`** per draft/pending
-  label ("Add items on their behalf"), which also renders each line's internal attribution.
-  `SupplierApp` shows "Entered for you by {business}'s Staff" on flagged lines.
+  `PoScanModal` + `PoLineRow` + `PoLineHeader`, used by both sides) is opened from **`PoOverview`**
+  per draft/pending label ("Add items on their behalf"), which also renders each line's internal
+  attribution. `SupplierApp` shows "Entered for you by {business}'s Staff" on flagged lines.
+  **Staff can EDIT and REMOVE lines too, not only add them** (2026-08-15). `PoOverview` renders the
+  same editable `PoLineRow` the supplier portal uses — size, qty, cost, tip, and a remove ✕ — on
+  per-label *and* whole-order lines. A manifest typed off a WhatsApp message gets a size or a qty
+  wrong, or carries a pair the supplier later says isn't in the box; being able to add a line but
+  never fix or drop one left deleting the whole order as the only correction. The client gate
+  (`canEditLines`) mirrors the server's `manifestEditBlock(onBehalf)` exactly: open until the
+  order's count is FROZEN (`reconciled`/`closed`; a replacement label until `closed`) — where the
+  parcel is doesn't bind staff. **A removal goes through a confirm dialog on the staff side only**:
+  here the row is somebody else's declaration, often for a box that has already shipped, and
+  dropping it changes what the order is owed. The supplier's own portal keeps the immediate ✕ —
+  they're fixing their own scan with the box open in front of them. No new endpoint: `po/line`
+  with `qty: 0` has always been the removal.
 
 - **Option 2 — no list at all → warehouse receives blind.** Already works (receive against a
   `draft`/`shipped` PO, scan the actual items). `getPoReconciliation` now sets
@@ -392,6 +404,23 @@ Two escape hatches for when a supplier won't use the scan-out portal:
   manifest"** card with the "…'s Staff" note. **Schema-touch: `po_box_id` nullable + `manifest_scope`
   + partial index → run `db:setup`.**
 
+## The PO screen's layout (PoOverview + SupplierApp)
+Reworked 2026-08-15 — the detail had grown into one long column of text and controls.
+- **A label is a card**, not a hairline separator: `.po-ov-label` has a border, radius and its
+  own background, so an order with four labels reads as four things.
+- **A manifest is a table, once you have room for one.** `PoLineRow` renders every control as a
+  labelled cell; at **≥720px** the per-row labels give way to a single `PoLineHeader`
+  (ITEM · SIZE · QTY · COST EA · TIP EA) and the rows snap to shared columns, with the SKU under
+  the product name. Below 720px each cell keeps its own label and the rows stack — six controls
+  never fit across a phone. **Both sides use it**, so a supplier on a laptop gets the same table;
+  if you add `PoLineRow` anywhere new, render `PoLineHeader` above it or the columns lose their
+  headings on desktop.
+- **Remove (✕) sits on the item's line**, top-right, not trailing the tip field — it deletes the
+  whole item, and the flex wrap used to park it under "Tip ea" where it pointed at the wrong thing.
+- **The label header no longer repeats itself**: the carrier shows once (again only if tracking
+  reports a *different* one than the label claims), and 17TRACK's checkpoint text is suppressed
+  when it merely restates the status — that's what produced "UPS · Delivered / Delivered, DELIVERED".
+
 ## Receiving a whole-order (Path C) PO, and our own per-box count
 Receiving is per box on a Path C order exactly as it is on any other — the manifest just
 isn't broken out per label, so there's no per-label checklist to tick.
@@ -420,6 +449,20 @@ isn't broken out per label, so there's no per-label checklist to tick.
   at the order level, where their list actually lives. Offered on `Reconciliation` next to
   the supplier's manifest, and it's the one printable that **is** offered on a blind
   receipt — there's no manifest to print, but our count is the only record of the shipment.
+- **Each label card on `PoOverview` shows both numbers** (2026-08-14): `N declared`
+  (`po_lines` for that label — 0 on a whole-order or blind order, legitimately) and, beside
+  it, `N received` — what the warehouse counted into that label's box. A card reading a bare
+  "0 units" over a box with twelve pairs already scanned out of it reads as *this box is
+  empty*, which is the opposite of the truth; it's the same fix the PO list got ("0 declared
+  · 48 received"). `getPoFull` computes `boxes[].received_units` by joining on the
+  **tracking number** — `batch_boxes` has no `po_box_id`, so that string is the only thing
+  tying a received box to a label (`getPoLinkPreview` matches the same way), plus a second
+  arm for items with a NULL `box_id` in a batch whose own tracking matches. Units the
+  warehouse recorded under no matching tracking are named under the labels ("N received
+  units … aren't counted against any label above"), never silently dropped from the
+  arithmetic. **Staff-only**: `hideReceivedUnits` strips the field on every response a
+  supplier can reach (`po/get`, `ship`, `close-box`, `reopen-box`, `track-refresh`) — they
+  must not read our count before the reconciliation is settled with them.
 - **Known friction:** `listOpenPos` (the Receiving "Open shipments" picker) lists only
   `shipped`/`receiving` POs. A supplier who never touches the portal leaves the PO `draft`,
   so it is NOT in that list — the warehouse pulls it up by **scanning a label** or typing

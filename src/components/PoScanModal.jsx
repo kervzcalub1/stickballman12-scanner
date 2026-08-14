@@ -52,12 +52,18 @@ export function PoLineRow({ line, disabled, onSave, attribution }) {
             onChange={(e) => setSize(e.target.value)} onBlur={commitSize}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} />
         </label>
-        <div className="qty-stepper">
-          <button type="button" className="btn icon ghost step" disabled={disabled || line.qty_expected <= 1}
-            onClick={() => onSave({ qty: line.qty_expected - 1 })}>−</button>
-          <span className="qty-val">×{line.qty_expected}</span>
-          <button type="button" className="btn icon ghost step" disabled={disabled}
-            onClick={() => onSave({ qty: line.qty_expected + 1 })}>+</button>
+        {/* Every control is a labelled cell of the same shape, so the rows line up as
+            columns on a wide screen (where the labels give way to one header row) and
+            stack legibly on a phone. */}
+        <div className="po-line-qty">
+          <span className="muted xs">Qty</span>
+          <div className="qty-stepper">
+            <button type="button" className="btn icon ghost step" disabled={disabled || line.qty_expected <= 1}
+              onClick={() => onSave({ qty: line.qty_expected - 1 })}>−</button>
+            <span className="qty-val">×{line.qty_expected}</span>
+            <button type="button" className="btn icon ghost step" disabled={disabled}
+              onClick={() => onSave({ qty: line.qty_expected + 1 })}>+</button>
+          </div>
         </div>
         <label className="po-line-cost">
           <span className="muted xs">Cost ea</span>
@@ -79,9 +85,21 @@ export function PoLineRow({ line, disabled, onSave, attribution }) {
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} />
           </span>
         </label>
-        <button type="button" className="btn icon ghost remove" title="Remove item" disabled={disabled}
+        <button type="button" className="btn icon ghost remove" title="Remove this item from the manifest"
+          aria-label="Remove this item from the manifest" disabled={disabled}
           onClick={() => onSave({ qty: 0 })}>×</button>
       </div>
+    </li>
+  );
+}
+
+// Column headings for a list of `PoLineRow`s. Only shown on a wide screen — that's where
+// the per-cell labels are hidden and the rows read as a table; on a phone each cell keeps
+// its own label and this collapses away.
+export function PoLineHeader() {
+  return (
+    <li className="po-line-headings" aria-hidden="true">
+      <span>Item</span><span>Size</span><span>Qty</span><span>Cost ea</span><span>Tip ea</span><span />
     </li>
   );
 }

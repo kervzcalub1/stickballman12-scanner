@@ -1,6 +1,6 @@
 // GET /api/po/get?id=  — full PO (header + labels + expected lines).
 // A supplier is restricted to their own POs; staff/admin see any.
-import { send, applySecurity, requireRole, isPrivileged } from '../_lib/util.js';
+import { send, applySecurity, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
 import { getPoFull, getBusinessName, getShipTo, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
@@ -28,6 +28,7 @@ export default async function handler(req, res) {
     // on-behalf flag so their portal can show the generic "<business>'s Staff" note.
     if (user.role === 'supplier' && !isPrivileged(user.role)) {
       data.lines = (data.lines || []).map(({ entered_by, entered_by_name, entered_by_username, ...rest }) => rest);
+      data.boxes = hideReceivedUnits(data.boxes);
       // Which of our batches the order was received into is internal bookkeeping — the
       // supplier has no use for a batch code and it's not theirs to see.
       delete data.batches;

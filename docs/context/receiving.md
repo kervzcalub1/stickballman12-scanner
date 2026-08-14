@@ -70,9 +70,26 @@ Full detail: `in-store.md`.
    Receiving in box-mode **aimed at that box** — its tracking prefills the header and
    the commit passes `boxNumber = box.box_number`, so `addBatchBox`'s find-or-create
    **reuses that row**. `+ Add box` (no `box`) still means a box that isn't listed at
-   all and takes the next number — using it to continue a pending box is what left
-   staff with an empty box beside the one they meant to fill. Received boxes get no
-   button (the box-commit CAS would refuse them anyway).
+   all — using it to continue a pending box is what left staff with an empty box
+   beside the one they meant to fill. Received boxes get no button (the box-commit
+   CAS would refuse them anyway).
+   **Which number a new box gets is staff's call, not a counter's** (2026-08-14).
+   `+ Add box` used to hard-code max+1, which is only right while boxes arrive in
+   order: box 6 of 9 turning up a day after the rest was filed as **box 10** and
+   stopped matching the label on the carton. Box-mode step 1 now shows a **Box
+   number** field — pre-filled with the next free number, listing what's already
+   recorded, warning when the number is a box already **received** (blocked on Next)
+   and saying so when it's an existing **pending** slot (which it then fills, via
+   find-or-create). Receiving against a PO takes each slot's number from the
+   **label's own `box_number`**, not its position in the list.
+   **Renumbering a box already recorded**: pencil on any Batch-page box row →
+   `POST /api/batches/renumber-box` → `renumberBatchBox`. Available on **received**
+   boxes too (that's when the mismatch is noticed). A collision with a box that holds
+   stock is refused (nothing else would stop two box 6s — there's no unique index on
+   `(batch_id, box_number)`); an **empty pending** row at the target number is
+   absorbed instead, and the moving box **inherits its tracking number** if it has
+   none of its own — that slot is often the only place the label's tracking was
+   ever written, and an empty tracking field is what breaks the PO label match.
 2. **Items — rapid scan** (`rapidScan`, replaced the Add Item modal 2026-08-14).
    The scan field lives **inline on the step** (`.scanbar`, sticky) — no dialog
    between scans, because the warehouse scans box after box and every stop cost

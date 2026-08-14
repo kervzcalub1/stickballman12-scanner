@@ -87,6 +87,19 @@ export function PoOverview({ onHome, onSignOut }) {
     return () => { cancelled = true; };
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Units declared per label (and for a whole-order list), summed once. A ten-row label
+  // otherwise leaves the reader adding ×1 + ×2 + ×1 … in their head to answer "how many
+  // pairs is this box supposed to hold?" — the question the whole screen is about.
+  const unitsByBox = React.useMemo(() => {
+    const m = new Map();
+    for (const l of detail?.lines || []) {
+      const k = String(l.po_box_id ?? 'order');
+      m.set(k, (m.get(k) || 0) + (Number(l.qty_expected) || 0));
+    }
+    return m;
+  }, [detail]);
+  const boxUnits = (box) => unitsByBox.get(String(box.id)) || 0;
+
   // p.id is a BIGINT that arrives as a STRING; openId is numeric — compare coerced.
   const toggle = (id) => setOpenId(Number(openId) === Number(id) ? null : id);
 
@@ -219,6 +232,7 @@ export function PoOverview({ onHome, onSignOut }) {
                                 <div className="po-ov-order">
                                   <div className="po-ov-order-head">
                                     <b>Whole-order manifest</b>
+                                    <span className="po-ov-label-units">{unitsByBox.get('order') || 0} unit{(unitsByBox.get('order') || 0) === 1 ? '' : 's'}</span>
                                     <span className="muted xs">One list for the whole purchase — no per-box breakdown. Warehouse still receives box by box.</span>
                                   </div>
                                   {orderLines.length > 0 && (
@@ -265,7 +279,10 @@ export function PoOverview({ onHome, onSignOut }) {
                                       {box.tracking_number || (carrierName(box.carrier || box.carrier_key) ? '' : '— no tracking #')}
                                     </div>
                                   </div>
-                                  <span className={`po-chip ${boxChipCls(box.status)}`}>{boxStatusLabel(box.status)}</span>
+                                  <div className="po-ov-label-side">
+                                    <span className={`po-chip ${boxChipCls(box.status)}`}>{boxStatusLabel(box.status)}</span>
+                                    <span className="po-ov-label-units">{boxUnits(box)} unit{boxUnits(box) === 1 ? '' : 's'}</span>
+                                  </div>
                                 </div>
                                 {(box.tracking_status || box.last_checkpoint || box.tracking_sub_status) && (
                                   <div className="po-track-status muted sm">

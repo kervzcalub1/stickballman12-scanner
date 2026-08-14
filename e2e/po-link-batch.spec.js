@@ -216,6 +216,8 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
 
   const row = page.locator('.po-ov').filter({ hasText: f.po.po_code });
   await expect(row).toBeVisible({ timeout: 15_000 });
+  // Each label totals its own declared units, so nobody adds up ×1 + ×2 + ×1 by eye.
+  await expect(row.locator('.po-ov-label-units').first()).toHaveText('2 units');
   await row.getByRole('button', { name: /Link a received shipment/ }).click();
 
   const modal = page.locator('.modal.po-link');

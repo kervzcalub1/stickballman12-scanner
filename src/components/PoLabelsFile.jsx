@@ -65,6 +65,8 @@ export function PoLabelsFile({ po, canUpload = false, onChanged, onSignOut }) {
     try {
       const { decodeTrackingPdf } = await import('../trackingOcr.js');
       const pages = await decodeTrackingPdf(file, (p, n) => setBusy(`Reading page ${p} of ${n}…`));
+      // Only pages that ARE labels get mapped; the packing slips between them ride along
+      // in the stored file and come out with the label they follow (see attachPoLabels).
       const pageMap = pages.filter((r) => r.value).map((r) => ({ tracking: r.value, page: r.page }));
 
       setBusy('Uploading…');

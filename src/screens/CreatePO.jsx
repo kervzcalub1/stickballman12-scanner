@@ -43,16 +43,22 @@ export function CreatePO({ onHome, onSignOut }) {
     if (!file) return;
     setError(''); setPdfStatus('Reading PDF…');
     try {
-      const { decodeTrackingPdf } = await import('../trackingOcr.js');
-      const results = await decodeTrackingPdf(file, (p, n) => setPdfStatus(`Reading label ${p} of ${n}…`));
+      const { decodeTrackingPdf, labelPagesOnly } = await import('../trackingOcr.js');
+      const results = await decodeTrackingPdf(file, (p, n) => setPdfStatus(`Reading page ${p} of ${n}…`));
       if (!results.length) { setPdfStatus(''); setError('That PDF had no pages to read.'); return; }
-      const found = results.map((r) => ({ trackingNumber: r.value || '', carrierKey: r.carrierKey || null }));
+      // Packing slips are interleaved after every label — they carry no barcode, and used
+      // to import as blank rows to delete by hand.
+      const { labels: pages, skipped, undecidable } = labelPagesOnly(results);
+      const found = pages.map((r) => ({ trackingNumber: r.value || '', carrierKey: r.carrierKey || null }));
       setPdfFile(file); setPdfPages(results);
       // Keep any tracking numbers already typed; append the imported rows after them.
       setLabels((ls) => { const kept = ls.filter((l) => l.trackingNumber.trim()); return [...kept, ...found]; });
-      const readCount = results.filter((r) => r.value).length;
-      const carrierCount = results.filter((r) => r.carrierKey).length;
-      setPdfStatus(`Added ${results.length} label${results.length === 1 ? '' : 's'} — read ${readCount} tracking number${readCount === 1 ? '' : 's'}${carrierCount ? `, detected ${carrierCount} courier${carrierCount === 1 ? '' : 's'}` : ''}${readCount < results.length ? '. Fill any blanks below.' : '.'}`);
+      const carrierCount = pages.filter((r) => r.carrierKey).length;
+      setPdfStatus(undecidable
+        ? `Added ${pages.length} label${pages.length === 1 ? '' : 's'} — no tracking number could be read from any page. Fill them in below.`
+        : `Added ${pages.length} label${pages.length === 1 ? '' : 's'} from ${results.length} pages`
+          + `${carrierCount ? `, detected ${carrierCount} courier${carrierCount === 1 ? '' : 's'}` : ''}.`
+          + `${skipped.length ? ` Skipped ${skipped.length} page${skipped.length === 1 ? '' : 's'} with no tracking number (packing slips).` : ''}`);
     } catch (e) {
       setPdfStatus(''); setError(`Could not read that PDF. ${e.message || ''}`.trim());
     }

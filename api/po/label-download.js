@@ -52,13 +52,18 @@ export default async function handler(req, res) {
       // barcode prints exactly as the courier made it.
       const { PDFDocument } = await import('pdf-lib');
       const src = await PDFDocument.load(pdf);
-      const idx = box.label_page - 1;
-      if (idx < 0 || idx >= src.getPageCount()) {
+      const count = src.getPageCount();
+      const from = box.label_page - 1;
+      // The label plus anything between it and the next label — the packing slip that
+      // belongs in this box. Clamped to the file: a stale mapping must not 500.
+      const to = Math.min(Math.max(Number(box.label_page_end) || box.label_page, box.label_page) - 1, count - 1);
+      if (from < 0 || from >= count) {
         return send(res, 409, { ok: false, error: 'That label points at a page the file does not have — re-upload the labels PDF.' });
       }
       const out = await PDFDocument.create();
-      const [page] = await out.copyPages(src, [idx]);
-      out.addPage(page);
+      const idxs = [];
+      for (let i = from; i <= to; i++) idxs.push(i);
+      for (const page of await out.copyPages(src, idxs)) out.addPage(page);
       bytes = Buffer.from(await out.save());
       filename = `${po.po_code}-label-${box.box_number}.pdf`;
     }

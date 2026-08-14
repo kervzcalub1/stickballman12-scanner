@@ -2995,13 +2995,26 @@ export async function attachPoLabels({ poId, key, name, pages, pageMap = [], upl
     SET labels_key = ${key}, labels_name = ${name || null}, labels_pages = ${pages || null},
         labels_uploaded_at = now(), labels_uploaded_by = ${uploadedBy}
     WHERE id = ${poId}`];
+
+  // A label owns every page up to the NEXT label. The sheets bought from UPS CampusShip
+  // interleave a packing slip after each label, and that slip goes in that box — so the
+  // per-box download is a range, and the last label runs to the end of the file.
+  const wanted = pageMap
+    .map((m) => ({ boxId: byTracking.get(norm(m.tracking)), page: Number(m.page) }))
+    .filter((m) => m.boxId && Number.isInteger(m.page) && m.page > 0)
+    .sort((a, b) => a.page - b.page);
+  const total = Number(pages) || (wanted.length ? wanted[wanted.length - 1].page : 0);
   const matched = [];
-  for (const m of pageMap) {
-    const boxId = byTracking.get(norm(m.tracking));
-    const page = Number(m.page);
-    if (!boxId || !Number.isInteger(page)) continue;
-    matched.push({ boxId, page });
-    queries.push(sql`UPDATE po_boxes SET label_page = ${page} WHERE id = ${boxId} AND po_id = ${poId}`);
+  for (let i = 0; i < wanted.length; i++) {
+    const { boxId, page } = wanted[i];
+    const next = wanted[i + 1]?.page;
+    // Guard the arithmetic rather than trusting the caller's page count: an end before
+    // the start would hand someone an empty or backwards PDF.
+    const end = Math.max(page, (next ? next - 1 : total) || page);
+    matched.push({ boxId, page, end });
+    queries.push(sql`
+      UPDATE po_boxes SET label_page = ${page}, label_page_end = ${end}
+      WHERE id = ${boxId} AND po_id = ${poId}`);
   }
   await sql.transaction(queries);
   return { matched: matched.length, pages: pages || 0 };
@@ -3016,7 +3029,8 @@ export async function getPoLabelFile(poId, poBoxId = null) {
   if (!po || !po.labels_key) return null;
   let box = null;
   if (poBoxId != null) {
-    box = (await sql`SELECT id, box_number, label_page, tracking_number FROM po_boxes WHERE id = ${poBoxId} AND po_id = ${poId}`)[0] || null;
+    box = (await sql`SELECT id, box_number, label_page, label_page_end, tracking_number
+                     FROM po_boxes WHERE id = ${poBoxId} AND po_id = ${poId}`)[0] || null;
     if (!box) return null;
   }
   return { po, box };
@@ -3029,7 +3043,7 @@ export async function clearPoLabels(poId) {
   const po = (await sql`SELECT labels_key FROM purchase_orders WHERE id = ${poId}`)[0];
   if (!po?.labels_key) return null;
   await sql.transaction([
-    sql`UPDATE po_boxes SET label_page = NULL WHERE po_id = ${poId}`,
+    sql`UPDATE po_boxes SET label_page = NULL, label_page_end = NULL WHERE po_id = ${poId}`,
     sql`UPDATE purchase_orders
         SET labels_key = NULL, labels_name = NULL, labels_pages = NULL,
             labels_uploaded_at = NULL, labels_uploaded_by = NULL

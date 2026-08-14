@@ -505,6 +505,10 @@ await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_pages    
 await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_uploaded_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_uploaded_by TEXT`);
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS label_page INT`);
+// A label's pages RUN UNTIL THE NEXT LABEL. The sheets bought from UPS CampusShip put a
+// packing slip after every label, and that slip belongs in that box — so a per-box
+// download is a range (label + its slip), not a single page.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS label_page_end INT`);
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS packed_at TIMESTAMPTZ`);
 // The 17TRACK carrier code (chosen in the New Batch form / auto-detected from the labels
 // PDF) — passed to 17TRACK's register/gettrackinfo so it pulls status from the right

@@ -72,6 +72,18 @@ label belonging to the box in front of them. It's now stored and downloadable.
   order: rows get reordered, edited, or typed by hand before the order is created, and a
   label pointing at someone else's page is worse than none. Pages that matched nothing
   stay in the full sheet only, and the UI says how many matched.
+- **Sheets interleave a packing slip after every label.** A 9-label request bought from
+  UPS CampusShip arrives as **17 pages** — label, slip, label, slip… The slips are
+  image-only with no barcode, so they used to import as blank label rows somebody deleted
+  by hand every time. `labelPagesOnly` (`src/trackingOcr.js`) drops them: **a page that
+  yielded no tracking number is not a label**. The one exception is a sheet where NOTHING
+  decoded — then a slip can't be told from a label whose barcode simply failed to read, so
+  every page comes back for a human (`undecidable`); losing a label silently is far worse
+  than showing a blank row.
+- **A label owns the pages up to the NEXT label** (`label_page` → `label_page_end`,
+  computed in `attachPoLabels`), so a per-box download is the label *and its packing
+  slip* — which is the point of interleaving them. The last label runs to the end of the
+  file. The download clamps the range to the real page count, so a stale mapping can't 500.
 - **Downloads are proxied and authorised** (`api/po/label-download.js`), never a public
   bucket URL like listing photos: a label carries the ship-to address and a live courier
   barcode. `Cache-Control: private, no-store`; a supplier reaches only their own order;

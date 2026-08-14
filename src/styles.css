@@ -2854,3 +2854,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-labels-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .po-labels-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .po-labels-note { color: #e0a878; margin: 8px 0 0; }
+/* Receiving box mode: the tracking number identified the carton, so the box number
+   stopped being a guess. Stated in the affirmative, above the "already recorded" list. */
+.box-num-matched { color: var(--ok, #7ec98f); margin-bottom: 4px; }
+/* Reconciliation evidence: this box was matched to its label by tracking, and the number
+   typed while unpacking disagreed. Quiet — it's a footnote, not a warning. */
+.rcn-rbox-renamed { display: block; margin-top: 2px; }

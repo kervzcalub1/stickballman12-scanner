@@ -41,8 +41,37 @@ function checkpointAdds(checkpoint, status) {
   return c.split(' ').filter(Boolean).some((w) => !said.has(w));
 }
 
-function PoStatusChip({ status }) {
-  const s = PO_STATUS[status] || { label: status, cls: 'muted' };
+// The chip says where the ORDER actually is, which is not the same as the raw status
+// column. `purchase_orders.status` only ever advances as far as `receiving`, and an order
+// received with nothing declared never auto-reconciles (that decision is a person's), so
+// PO-100003 sat reading "Receiving" with all nine labels delivered and 54 pairs counted —
+// contradicting the very line underneath it. The same wrong-by-a-stage bug shows one step
+// earlier too: a `draft` order whose labels have all shipped read "Filling", as if the
+// supplier were still packing.
+//
+// So: once every label has landed, say so; the reconciliation queue owns what happens next.
+// Falls back to the raw status whenever the counts can't say better (a supplier's own
+// response carries no `received_units`, and older callers pass no counts at all).
+function poChipOf(p) {
+  if (p.status === 'reconciled' || p.status === 'closed') return PO_STATUS[p.status];
+  const boxes = Number(p.box_count) || 0;
+  const delivered = Number(p.delivered_count) || 0;
+  const shipped = Number(p.shipped_count) || 0;
+  const received = Number(p.received_units) || 0;
+  if (boxes > 0 && delivered === boxes) {
+    return received > 0
+      ? { label: 'Delivered · to reconcile', cls: 'ok' }
+      : { label: 'All delivered', cls: 'ok' };
+  }
+  if (p.status === 'receiving') return PO_STATUS.receiving;
+  // A label out with the carrier means the supplier has stopped filling, whatever the
+  // order row still says.
+  if (shipped > 0) return PO_STATUS.shipped;
+  return PO_STATUS[p.status] || { label: p.status, cls: 'muted' };
+}
+
+function PoStatusChip({ po }) {
+  const s = poChipOf(po);
   return <span className={`po-chip ${s.cls}`}>{s.label}</span>;
 }
 
@@ -223,7 +252,7 @@ export function PoOverview({ onHome, onSignOut }) {
                     <button className="po-ov-head" onClick={() => toggle(p.id)}>
                       <div className="po-ov-top">
                         <span className="po-code">{p.po_code}</span>
-                        <PoStatusChip status={p.status} />
+                        <PoStatusChip po={p} />
                       </div>
                       <div className="po-ov-meta muted sm">
                         {p.tag_code && <span><Icon name="tag" /> {p.tag_code}</span>}

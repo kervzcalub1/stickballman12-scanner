@@ -82,6 +82,13 @@ Full detail: `in-store.md`.
    and saying so when it's an existing **pending** slot (which it then fills, via
    find-or-create). Receiving against a PO takes each slot's number from the
    **label's own `box_number`**, not its position in the list.
+   **When the batch is being received against a PO, the tracking number picks the number
+   for you** (2026-08-15): box mode loads that order's labels and, the moment the tracking
+   entered matches one, sets the field to that label's number and says so in the affirmative
+   ("Tracking matches Label 6 — recording it as box 6"). Not locked — a parcel can be
+   re-taped with the wrong label, and the person holding it can see that. This is the fix at
+   source; the reconciliation view corrects the *reading* of boxes recorded before it
+   (`docs/context/purchase-orders.md`).
    **Renumbering a box already recorded**: pencil on any Batch-page box row →
    `POST /api/batches/renumber-box` → `renumberBatchBox`. Available on **received**
    boxes too (that's when the mismatch is noticed). A collision with a box that holds

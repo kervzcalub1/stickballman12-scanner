@@ -301,9 +301,13 @@ export function SupplierApp({ user, onSignOut }) {
                         {box.tracking_number || (carrierName(box.carrier || box.carrier_key) ? '' : '— no tracking #')}
                       </div>
                     </div>
-                    {isFilling
-                      ? <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>
-                      : <span className={`po-chip ${box.status === 'delivered' ? 'ok' : box.status === 'in_transit' ? 'receiving' : box.status === 'pre_transit' ? 'pretransit' : box.status === 'packed' ? 'packed' : 'shipped'}`}>{boxStatusLabel(box)}</span>}
+                    {/* The count belongs on every label, not only the one being filled: once
+                        it's closed or gone, "how many pairs did I put in this box?" is
+                        exactly what gets asked when the warehouse comes back short. */}
+                    <span className="po-box-head-side">
+                      {!isFilling && <span className={`po-chip ${box.status === 'delivered' ? 'ok' : box.status === 'in_transit' ? 'receiving' : box.status === 'pre_transit' ? 'pretransit' : box.status === 'packed' ? 'packed' : 'shipped'}`}>{boxStatusLabel(box)}</span>}
+                      <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>
+                    </span>
                   </div>
 
                   {isReplacement && (

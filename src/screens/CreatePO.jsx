@@ -21,6 +21,10 @@ export function CreatePO({ onHome, onSignOut }) {
   const [error, setError] = useState('');
   const [created, setCreated] = useState(null); // { po, boxes } after success
   const [pdfStatus, setPdfStatus] = useState(''); // progress/result note for the PDF import
+  // The imported file itself, kept so it can be stored once the order exists — the
+  // supplier prints their box's label from it instead of hunting through email.
+  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfPages, setPdfPages] = useState([]);   // [{ page, value }] from the import
   const [dragOver, setDragOver] = useState(false); // dropzone highlight while dragging a file
 
   useEffect(() => {
@@ -43,6 +47,7 @@ export function CreatePO({ onHome, onSignOut }) {
       const results = await decodeTrackingPdf(file, (p, n) => setPdfStatus(`Reading label ${p} of ${n}…`));
       if (!results.length) { setPdfStatus(''); setError('That PDF had no pages to read.'); return; }
       const found = results.map((r) => ({ trackingNumber: r.value || '', carrierKey: r.carrierKey || null }));
+      setPdfFile(file); setPdfPages(results);
       // Keep any tracking numbers already typed; append the imported rows after them.
       setLabels((ls) => { const kept = ls.filter((l) => l.trackingNumber.trim()); return [...kept, ...found]; });
       const readCount = results.filter((r) => r.value).length;
@@ -79,6 +84,25 @@ export function CreatePO({ onHome, onSignOut }) {
         tagCode, dateOfPurchase, notes,
         labels: cleaned,
       });
+      // Store the sheet against the order it just became. Best-effort: the order is
+      // created either way, and the labels can be attached later from its own page.
+      if (pdfFile) {
+        try {
+          setPdfStatus('Saving the labels PDF…');
+          const { key, url } = await api.poLabelsSign(r.po.id);
+          const put = await fetch(url, { method: 'PUT', body: pdfFile, headers: { 'Content-Type': 'application/pdf' } });
+          if (!put.ok) throw new Error(`Upload failed (${put.status})`);
+          const att = await api.poLabelsAttach({
+            poId: r.po.id, key, name: pdfFile.name, pages: pdfPages.length,
+            pageMap: pdfPages.filter((x) => x.value).map((x) => ({ tracking: x.value, page: x.page })),
+          });
+          setPdfStatus(att.matched
+            ? `Labels PDF saved — ${att.matched} of ${pdfPages.length} pages matched a label.`
+            : 'Labels PDF saved, but no page matched a tracking number — single-label downloads won’t work.');
+        } catch (e) {
+          setPdfStatus(`The order was created, but the labels PDF could not be saved (${e.message}). Attach it from the order page.`);
+        }
+      }
       setCreated({ po: r.po, boxes: r.boxes });
     } catch (e) {
       if (e.unauthorized) return onSignOut();
@@ -164,7 +188,7 @@ export function CreatePO({ onHome, onSignOut }) {
             <span className="po-dropzone-text"><b>Drag &amp; drop a labels PDF</b> here, or <span className="po-dropzone-link">browse</span></span>
             <span className="muted sm">One label per page — each tracking number is read in automatically.</span>
           </label>
-          <p className="po-dropzone-note sm">The PDF is only used here to auto-read the tracking numbers — the shipping labels themselves are never stored or shown to the supplier.</p>
+          <p className="po-dropzone-note sm">The tracking numbers are read off each page, and the PDF is saved with the order so the supplier can print the label for the box they’re packing. It’s only ever served to them through the app — never a public link.</p>
           {pdfStatus && <p className="po-pdf-status sm">{pdfStatus}</p>}
           <div className="po-label-rows">
             {labels.map((l, i) => (

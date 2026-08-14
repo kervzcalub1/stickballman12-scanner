@@ -2,7 +2,8 @@
 // Archives a reconciled PO → status 'closed' (it drops off the active
 // reconciliation list). Only allowed from 'reconciled'.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { closePo, dbConfigured } from '../_lib/db.js';
+import { closePo, clearPoLabels, dbConfigured } from '../_lib/db.js';
+import { deleteObject, r2Configured } from '../_lib/r2.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -19,6 +20,14 @@ export default async function handler(req, res) {
   try {
     const po = await closePo(poId);
     if (!po) return send(res, 409, { ok: false, error: 'Only a reconciled purchase order can be archived.' });
+    // Archived = every box has landed and the labels are spent. Take the PDF out of the
+    // bucket with the order rather than leaving ship-to addresses and live-looking
+    // barcodes lying around. Best-effort: the archive is the point, not the cleanup.
+    if (r2Configured()) {
+      clearPoLabels(poId)
+        .then((key) => (key ? deleteObject(key) : null))
+        .catch((e) => console.warn('[po/close] labels cleanup:', e.message));
+    }
     return send(res, 200, { ok: true, po });
   } catch (e) {
     console.error('[po/close]', e.message);

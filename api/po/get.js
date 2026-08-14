@@ -34,7 +34,9 @@ export default async function handler(req, res) {
       // Same rule for the reconciliation note: the supplier reads the note itself (it's
       // written for them) but not which staff member typed it — their portal renders it
       // as "From <business>". Keep the timestamp; that's not an identity.
-      const { reconcile_note_by, ...po } = data.po;
+      // Same for the labels file's storage key: they download it through the endpoint,
+      // which checks it's their order — the key itself is ours.
+      const { reconcile_note_by, labels_key, ...po } = data.po;
       data.po = po;
     }
     return send(res, 200, { ok: true, businessName, shipTo, ...data });

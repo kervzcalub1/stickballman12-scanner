@@ -25,10 +25,21 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
 
 ## UPC box labels
 - **Print box labels** (`LabelSheet mode` box-style): recreates a real shoe-box
-  label — vertical UPC barcode on the left, then **NAME → colorway → size → SKU**
-  down the right, the order and weighting a Nike box label uses (colorway sits
-  directly under the name in a lighter/narrower face, 2-line clamp). So no-box
-  pairs scan and read like a normal boxed pair. Accessible **only on this page**
+  label — vertical UPC barcode on the left **with the UPC digits printed alongside
+  it**, then **NAME → colorway → size → SKU** down the right, the order and
+  weighting a Nike box label uses (colorway sits directly under the name in a
+  lighter/narrower face, 2-line clamp). So no-box pairs scan and read like a
+  normal boxed pair.
+  - **The digits are drawn INTO the barcode canvas** (`displayValue`), not printed
+    as a separate row like the VIN/shelf labels do — the barcode is rotated, and
+    only text baked into the canvas turns with it and stays glued to the bars.
+    They ship with **`flat: true`**, which is load-bearing: JsBarcode's default
+    UPC-A layout hangs the first and last digit OUTSIDE the guard bars and widens
+    the canvas ~17%, and since the barcode scales to a fixed length on the label, a
+    wider canvas means **narrower modules** (0.241 mm → 0.206 mm on the smallest
+    stock, on a code already under GS1 nominal). Flat centres the digits under the
+    bars instead, so the number costs ~9% of bar *height* and nothing of
+    scannability. **Never set `displayValue` without `flat`.** Accessible **only on this page**
   and from the Box Labels tool. Emitted as an exact-size PDF
   (`src/lib/labelPdf.js`, `drawBoxLabel`); no-UPC records fall back to a
   centered text-only label with the same row order. The whole text column

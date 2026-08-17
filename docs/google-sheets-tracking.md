@@ -20,8 +20,12 @@ slow/broken Sheet never blocks the database write.
   "updates": [
     {
       "trackingNumber": "1Z999AA10123456784",
-      "status": "InTransit",          // raw 17TRACK status text
-      "stage": "in_transit",           // our mapped stage: pre_transit | in_transit | delivered
+      "status": "InTransit",              // raw 17TRACK status text
+      "subStatus": "InTransit_PickedUp",  // raw 17TRACK sub-status — filter/pivot on this
+      "subStatusLabel": "Picked up",      // readable version, no lookup table needed
+      "subStatusDetail": "Shipment picked up",  // 17TRACK's own extra description
+      "needsAction": false,               // true when stuck / returning / lost
+      "stage": "in_transit",              // our mapped stage: pre_transit | in_transit | delivered
       "carrier": "UPS",
       "lastCheckpoint": "Departed facility - Louisville, KY"
     }
@@ -30,6 +34,9 @@ slow/broken Sheet never blocks the database write.
 ```
 `stage` values: **pre_transit** = label made, parcel still with the supplier · **in_transit**
 = courier has it · **delivered** = arrived.
+
+`needsAction` is the one to build an alert or filter view on — it's `true` only for the
+sub-statuses that mean a human has to do something (stuck, being returned, lost).
 
 ## Setup (one time)
 1. Open your tracking Google Sheet → **Extensions → Apps Script**.
@@ -48,6 +55,22 @@ tracking number isn't in the sheet yet.
 const SHEET_NAME = 'Labels';            // <-- your tab name
 const TRACK_COL_HEADER = 'Tracking #';  // <-- header of your tracking-number column
 
+// Column header -> how to read it off one update. ONE list, used both for appending a
+// new row and for updating an existing one — when these were two separate lists, four
+// fields got added to the payload and only ever landed in half the code. Add a column
+// by adding a line here; delete a line to stop writing it.
+const FIELDS = [
+  ['Status',            function (u) { return u.status; }],
+  ['Sub-status',        function (u) { return u.subStatusLabel; }],   // readable
+  ['Sub-status code',   function (u) { return u.subStatus; }],        // raw — filter/pivot on this
+  ['Sub-status detail', function (u) { return u.subStatusDetail; }],
+  ['Needs action',      function (u) { return u.needsAction ? 'YES' : ''; } ],
+  ['Stage',             function (u) { return u.stage; }],
+  ['Carrier',           function (u) { return u.carrier; }],
+  ['Last checkpoint',   function (u) { return u.lastCheckpoint; }],
+  ['Updated',           function ()  { return new Date(); }],
+];
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000); // serialize concurrent pushes so rows don't collide
@@ -59,7 +82,7 @@ function doPost(e) {
     if (trackCol < 0) throw new Error('No "' + TRACK_COL_HEADER + '" column');
 
     const data = sheet.getDataRange().getValues();       // includes header row
-    const norm = (s) => String(s || '').trim().toUpperCase();
+    const norm = function (s) { return String(s || '').trim().toUpperCase(); };
 
     (body.updates || []).forEach(function (u) {
       const key = norm(u.trackingNumber);
@@ -68,23 +91,14 @@ function doPost(e) {
       for (let r = 1; r < data.length; r++) {
         if (norm(data[r][trackCol]) === key) { rowIdx = r; break; }
       }
-      const now = new Date();
       if (rowIdx === -1) {
         const row = new Array(headers.length).fill('');
         row[trackCol] = u.trackingNumber;
-        setCol_(row, headers, 'Status', u.status);
-        setCol_(row, headers, 'Stage', u.stage);
-        setCol_(row, headers, 'Carrier', u.carrier);
-        setCol_(row, headers, 'Last checkpoint', u.lastCheckpoint);
-        setCol_(row, headers, 'Updated', now);
+        FIELDS.forEach(function (f) { setCol_(row, headers, f[0], f[1](u)); });
         sheet.appendRow(row);
         data.push(row); // keep local copy in sync for this batch
       } else {
-        writeCell_(sheet, headers, rowIdx, 'Status', u.status);
-        writeCell_(sheet, headers, rowIdx, 'Stage', u.stage);
-        writeCell_(sheet, headers, rowIdx, 'Carrier', u.carrier);
-        writeCell_(sheet, headers, rowIdx, 'Last checkpoint', u.lastCheckpoint);
-        writeCell_(sheet, headers, rowIdx, 'Updated', now);
+        FIELDS.forEach(function (f) { writeCell_(sheet, headers, rowIdx, f[0], f[1](u)); });
       }
     });
     return ContentService.createTextOutput(JSON.stringify({ ok: true }))
@@ -97,13 +111,14 @@ function doPost(e) {
   }
 }
 
-// Ensure our output columns exist; return the header array.
+// Ensure our output columns exist; return the header array. Missing ones are appended
+// to the right, so this is safe to re-run on a sheet that already has data.
 function ensureHeaders_(sheet) {
   let headers = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0];
-  ['Status', 'Stage', 'Carrier', 'Last checkpoint', 'Updated'].forEach(function (h) {
-    if (headers.indexOf(h) === -1) {
-      sheet.getRange(1, headers.length + 1).setValue(h);
-      headers.push(h);
+  FIELDS.forEach(function (f) {
+    if (headers.indexOf(f[0]) === -1) {
+      sheet.getRange(1, headers.length + 1).setValue(f[0]);
+      headers.push(f[0]);
     }
   });
   return headers;
@@ -123,3 +138,14 @@ function writeCell_(sheet, headers, rowIdx, header, val) {
   for a given deployment.
 - The Apps Script is the layout adapter — change which columns it writes without touching the
   app. The app only ever sends the JSON above.
+- **One destination at a time.** `GOOGLE_SHEETS_TRACKING_URL` holds a single URL, so pointing
+  it at a new script stops the old sheet updating. Feeding two sheets at once needs a change to
+  `forwardTrackingToSheet` (`api/_lib/tracking.js`) to fan out over a list.
+- **Swapping to a new script/sheet:** deploy the new Web App, change the env var, then send a
+  test — `POST` the payload above straight at the `/exec` URL with `curl`, or use 17TRACK's
+  Test Webhook and watch the Railway logs. Nothing about the app changes; no redeploy needed
+  beyond the env var taking effect.
+- **If rows stop updating**, check the Apps Script execution log first (Apps Script →
+  Executions). Forwarding is best-effort by design: a broken Sheet never blocks the database
+  write or the 200 we owe 17TRACK, so a silent Sheet looks identical to a healthy one from
+  the app's side.

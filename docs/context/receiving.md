@@ -26,7 +26,11 @@ Full detail: `in-store.md`.
    (rows read "No tracking number") and rides along to `createOpenBatch`; **hidden while
    receiving against a PO**, whose numbers come from the labels. It **resets after each
    commit** — left sticky, the next shipment would quietly commit as untracked. **A negative cost is rejected** (400, not silently
-   nulled). The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
+   nulled). **A BLANK cost saves as NULL ("not known"), never as $0** — `toCost` in
+   `api/_lib/intake.js`, the single copy all four intake paths now import. It used to be
+   `Number(v)` guarded only by `isFinite && >= 0`, and `Number('')` is 0, so every
+   skipped cost box was quietly recorded as a free shoe. A deliberate zero still works
+   (type `0`). Blanks are backfilled later on the Costs page (`costs.md`). The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
    list + auto-saved custom names); picking "Custom…" and typing a new vendor
    auto-saves it on commit (`addSupplier`, V6 Feature 1). Tracking typed /
    camera-scanned / OCR'd from a label photo (`src/trackingOcr.js`: zxing →

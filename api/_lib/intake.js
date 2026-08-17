@@ -15,7 +15,18 @@ import { priceBasisLabel } from './pricing.js';
 const VIN_RE = /^SBM-\d{6}-\d{6}$/;
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-const toCost = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
+// Blank means "nobody told us", NOT $0 — and the two must never collapse into each
+// other, because $0 is a real claim that reads as a free pair and nothing downstream
+// can tell it back apart from a gap (the Costs backlog looks for NULL). The obvious
+// one-liner got this wrong: `Number('')` and `Number(null)` are both 0, so every
+// skipped cost box was silently stored as a free shoe. A deliberate zero still works
+// — type 0. Exported because commit / box-commit / create-open all need the same
+// answer; they each had their own copy of the broken version.
+export const toCost = (v) => {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
 // Final price rounds to the nearest whole dollar (GI × margin → e.g. 94.30 → 94).
 const roundFinal = (v) => Math.round(v);
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };

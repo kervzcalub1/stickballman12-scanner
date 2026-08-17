@@ -1145,6 +1145,12 @@ export async function pendingCounts() {
       count(*) FILTER (WHERE listable AND ph_managed AND NOT synced_alias)::int       AS not_alias,
       count(*) FILTER (WHERE listable AND ph_managed AND NOT goat_only AND NOT synced_stockx)::int  AS not_stockx,
       count(*) FILTER (WHERE listable AND ph_managed AND NOT goat_only AND NOT synced_shopify)::int AS not_shopify,
+      count(*) FILTER (WHERE cost IS NULL AND costable
+        AND status NOT IN ('missing','issue'))::int                    AS missing_cost,
+      -- Recorded as free. Kept OUT of missing_cost (and so out of the home badge):
+      -- a $0 is a claim on file, not a known gap — it's a review list, not a chore.
+      count(*) FILTER (WHERE cost = 0 AND costable
+        AND status NOT IN ('missing','issue'))::int                    AS zero_cost,
       count(*) FILTER (WHERE status = 'needs_shelf')::int              AS needs_shelf,
       count(*) FILTER (WHERE status = 'no_box')::int                   AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
@@ -1183,7 +1189,12 @@ export async function pendingCounts() {
       SELECT it.*,
              (it.with_box AND it.status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable,
              (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})) AS ph_managed,
-             (b.kind = 'instore') AS is_instore
+             (b.kind = 'instore') AS is_instore,
+             -- Costable = the Costs page's backlog, and it must match
+             -- listItemsMissingCost exactly or the badge counts rows the page
+             -- won't show. Existing (old) stock has no cost to capture by design
+             -- and runs to thousands of pairs; missing/issue are dead paperwork.
+             (b.kind IS NULL OR b.kind <> 'existing') AS costable
       FROM items it
       LEFT JOIN batches b ON b.id = it.batch_id
     ) i
@@ -1553,6 +1564,102 @@ export async function updateRescaleRequestListing(id, listing, by, baseListedAt 
 export async function setItemUpc(itemId, upc) {
   const sql = db();
   await sql`UPDATE items SET upc = ${upc}, updated_at = now() WHERE id = ${itemId}`;
+}
+
+/* ---------------------------- Cost backfill ---------------------------- */
+// `items.cost` is written ONCE, at intake (insertItems ← intake.js: the item's own
+// cost or the batch default). Suppliers routinely leave cost off a PO manifest, so
+// pairs land with a NULL cost and nothing in the app could ever fill it in. These
+// three power the Costs page.
+
+// Both queries select the same column list by hand — the shim can't nest `sql`
+// fragments, so a shared constant isn't an option here. Keep them in step.
+
+// The backlog: units with no cost on file, newest first.
+//
+// `zero: true` switches it to the OTHER backlog — pairs recorded as costing exactly
+// $0. Until toCost was fixed (intake.js), a blank cost box was stored as 0 rather
+// than NULL, so an unknown cost was silently filed as "this shoe was free" and no
+// "no cost on file" query could ever find it. Those rows are ambiguous — almost all
+// are skipped blanks, a few may be genuine — so they get their own reviewable list
+// instead of being folded into the backlog as if we knew which.
+//
+// `kind='existing'` is excluded deliberately. Counted-in old stock has no shipment,
+// supplier, tracking or cost to capture by design, and there can be THOUSANDS of it
+// (existing-stock.md) — leaving it in would bury the pairs that genuinely need a
+// number under a backlog nobody will ever work. The `b.kind IS NULL` half matters:
+// this is a LEFT JOIN, and a unit with no batch would otherwise fail the test.
+// missing/issue units are dead paperwork, not something to cost.
+export async function listItemsMissingCost(from = null, to = null, zero = false) {
+  // One query, not an if/else pair: the shim can't nest `sql` fragments, and the two
+  // branches are identical but for this one predicate — duplicating 15 lines of SELECT
+  // to vary it is how the two drift out of step later.
+  return await db()`
+    SELECT i.vin, i.name, i.sku, i.size, i.gender, i.colorway, i.status,
+           i.cost, i.created_at, i.created_by, i.batch_id,
+           b.batch_code, b.supplier_name, b.kind, b.date_received
+    FROM items i LEFT JOIN batches b ON b.id = i.batch_id
+    WHERE (CASE WHEN ${zero}::boolean THEN i.cost = 0 ELSE i.cost IS NULL END)
+      AND i.status NOT IN ('missing', 'issue')
+      AND (b.kind IS NULL OR b.kind <> 'existing')
+      AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+    ORDER BY i.created_at DESC, i.sku, i.id
+    LIMIT 5000
+  `;
+}
+
+// The search half: every unit of the SKU behind a VIN / UPC / SKU, costed or not,
+// so a cost that's already there but WRONG can be corrected. Scanning one pair's VIN
+// returns the whole SKU on purpose — you're pricing a shipment, not a single box.
+export async function listItemCostsByCode(code) {
+  const raw = String(code || '').trim();
+  if (!raw) return [];
+  // Same rule as findStockByCode: a UPC only if the code is digits end to end, and
+  // SKUs compared with spaces/dashes stripped so "DQ8426-109" and "DQ8426 109" match.
+  const bare = raw.replace(/\s/g, '');
+  const upc = /^\d{8,14}$/.test(bare) ? bare : null;
+  const sku = raw.toUpperCase().replace(/[\s-]/g, '');
+  const vin = raw.toUpperCase();
+  return await db()`
+    WITH hits AS (
+      SELECT DISTINCT sku FROM items
+       WHERE sku IS NOT NULL
+         AND (upper(replace(replace(coalesce(sku, ''), ' ', ''), '-', '')) = ${sku}
+              OR vin = ${vin}
+              OR (${upc}::text IS NOT NULL AND regexp_replace(coalesce(upc, ''), '\\D', '', 'g') = ${upc}))
+       LIMIT 5
+    )
+    SELECT i.vin, i.name, i.sku, i.size, i.gender, i.colorway, i.status,
+           i.cost, i.created_at, i.created_by, i.batch_id,
+           b.batch_code, b.supplier_name, b.kind, b.date_received
+    FROM items i LEFT JOIN batches b ON b.id = i.batch_id
+    WHERE i.sku IN (SELECT sku FROM hits)
+      AND i.status NOT IN ('missing', 'issue')
+    ORDER BY i.created_at DESC, i.size, i.id
+    LIMIT 2000
+  `;
+}
+
+// Set (or clear) the cost on a set of units. Blank writes NULL, never 0 — "I don't
+// know what this cost" is not the same claim as "this was free", the same rule the
+// PO lines follow (purchase-orders.md). Terminal units are editable on purpose: a
+// pair that already sold still needs its cost for the margin to mean anything.
+export async function setItemsCost(vins, cost, by) {
+  const list = (vins || []).filter(Boolean);
+  if (!list.length) return [];
+  const sql = db();
+  const rows = await sql`
+    UPDATE items SET cost = ${cost}, updated_at = now()
+    WHERE vin = ANY(${list})
+    RETURNING id, vin, cost
+  `;
+  const text = cost == null ? 'Cost cleared' : `Cost set to $${Number(cost).toFixed(2)}`;
+  for (const r of rows) {
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${r.id}, 'note', ${JSON.stringify({ text })}::jsonb, ${by || null})`;
+  }
+  return rows;
 }
 
 // Toggle "GOAT only" (list to Alias/GOAT + II only) across a set of units — used

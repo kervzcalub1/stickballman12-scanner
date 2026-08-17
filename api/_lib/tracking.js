@@ -121,9 +121,26 @@ export function parseTrackEntry(entry) {
 // Point GOOGLE_SHEETS_TRACKING_URL at a Google Apps Script Web App (deployed "Anyone")
 // that appends/updates rows keyed by tracking number. Best-effort + env-gated: no-ops
 // without the URL, and a slow/broken Sheet never blocks the DB write or the 17TRACK 200.
-export const sheetsTrackingUrl = () => process.env.GOOGLE_SHEETS_TRACKING_URL || '';
+// One or more Apps Script Web App URLs, comma- or newline-separated (a URL can hold
+// neither, so splitting on both is safe). Multiple targets matter because this env var
+// is the ONLY thing pointing at a sheet: with a single slot, adding a second sheet
+// meant overwriting the first, which silently stopped it updating.
+export const sheetsTrackingUrls = () => String(process.env.GOOGLE_SHEETS_TRACKING_URL || '')
+  .split(/[\s,]+/)
+  .map((u) => u.trim())
+  .filter((u) => /^https?:\/\//i.test(u));
+// "Is a sheet configured at all" — kept for callers that only need the yes/no.
+export const sheetsTrackingUrl = () => sheetsTrackingUrls()[0] || '';
+
+// An /exec URL is a capability — anyone holding it can write to that sheet — so logs
+// get a recognisable tail, never the whole thing.
+const shortSheetUrl = (u) => {
+  const seg = String(u).split('/').filter(Boolean).sort((a, b) => b.length - a.length)[0] || '';
+  return `…${seg.slice(-6)}`;
+};
+
 export async function forwardTrackingToSheet(updates) {
-  const url = sheetsTrackingUrl();
+  const urls = sheetsTrackingUrls();
   // Both the raw sub-status and a readable version: the raw code is what you'd filter or
   // pivot on in the sheet, the label is what a person reads without a lookup table.
   const rows = (updates || []).map((u) => ({
@@ -137,20 +154,33 @@ export async function forwardTrackingToSheet(updates) {
     carrier: u.carrier || null,
     lastCheckpoint: u.lastCheckpoint || null,
   }));
-  if (!url || !rows.length) return { skipped: true };
-  try {
+  if (!urls.length || !rows.length) return { skipped: true };
+  const body = JSON.stringify({ source: 'stickballman12', updates: rows });
+  // Every sheet gets its own request, its own timeout and its own failure. One slow or
+  // broken sheet must not stop the others receiving the update — and none of them may
+  // block the DB write or the 200 we owe 17TRACK, which is why both callers
+  // fire-and-forget this.
+  const results = await Promise.all(urls.map(async (url) => {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 6000);
     try {
-      await fetch(url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: 'stickballman12', updates: rows }), signal: ac.signal,
+      const res = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: ac.signal,
       });
+      return { url, ok: res.ok, status: res.status };
+    } catch (e) {
+      return { url, ok: false, error: e.message };
     } finally { clearTimeout(t); }
-    return { ok: true, sent: rows.length };
-  } catch (e) {
-    return { ok: false, error: e.message };
+  }));
+  // Name the sheet that broke. Silence was the old failure mode: the callers
+  // fire-and-forget and this swallowed its own errors, so a sheet that quietly stopped
+  // updating left no trace anywhere. With more than one target that gets worse — the
+  // other sheet keeps filling in, which makes everything look fine.
+  const failed = results.filter((r) => !r.ok);
+  for (const f of failed) {
+    console.warn('[tracking sheet]', shortSheetUrl(f.url), 'failed:', f.error || `HTTP ${f.status}`);
   }
+  return { ok: !failed.length, sent: rows.length, targets: urls.length, failed: failed.length };
 }
 
 // Extract the track record(s) from a 17TRACK webhook push body.

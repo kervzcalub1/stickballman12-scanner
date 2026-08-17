@@ -548,6 +548,11 @@ For the pushes to actually fire when a supplier never uses the portal:
 - **Google Sheets mirror** (optional): `forwardTrackingToSheet` (env `GOOGLE_SHEETS_TRACKING_URL`)
   posts every update to a Google Apps Script Web App from BOTH the webhook and `track-refresh`
   (best-effort, env-gated). Setup + Apps Script in `docs/google-sheets-tracking.md`.
+  **The env var takes a comma-separated LIST** (`sheetsTrackingUrls`) — each sheet is posted
+  independently with its own timeout, so one slow/broken sheet can't starve the others, and a
+  failure is logged with a short tail of the deployment ID (`[tracking sheet] …abcXYZ failed:`).
+  It was a single slot until 2026-08-17, so adding a sheet meant silently killing the old one.
+  Both callers fire-and-forget, which is why the function logs rather than throws.
 - **Sub-status** — 17TRACK's `latest_status` carries `{ status, sub_status, sub_status_descr }`.
   `status` is the coarse stage we map onto `po_boxes.status` and it's too blunt to act on:
   "Exception" doesn't say whether customs is holding the parcel or the courier already sent it

@@ -8,10 +8,9 @@ import {
   getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues,
   reconcileOutcomeForIntake, dbConfigured,
 } from '../_lib/db.js';
-import { normalizeItems, parseUnitIssues, enrichGlobalIndicators } from '../_lib/intake.js';
+import { normalizeItems, parseUnitIssues, enrichGlobalIndicators, toCost } from '../_lib/intake.js';
 
 const MAX_ITEMS = 2000;
-const toCost = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
 
 export default async function handler(req, res) {
   applySecurity(req, res);

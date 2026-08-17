@@ -17,16 +17,12 @@ import {
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
   getLocationByCode, shelveItems, PH_EXCLUDED_KINDS,
 } from '../_lib/db.js';
-import { enrichGlobalIndicators } from '../_lib/intake.js';
+import { enrichGlobalIndicators, toCost } from '../_lib/intake.js';
 import { normalizeLocationCode } from '../_lib/locations.js';
 
 const MAX_ITEMS = 2000;
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-const toCost = (v) => {
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-};
 const normSku = (s) => {
   const c = cleanSku(s);
   return c ? c.replace(/\s+/g, '-') : null;

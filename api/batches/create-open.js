@@ -5,9 +5,9 @@
 // committed one at a time from the Batch Page (V6 Feature 7).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { createOpenBatch, addSupplier, getPo, getOpenBatchForPo, markPoReceiving, dbConfigured } from '../_lib/db.js';
+import { toCost } from '../_lib/intake.js';
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-const toCost = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
 
 export default async function handler(req, res) {
   applySecurity(req, res);

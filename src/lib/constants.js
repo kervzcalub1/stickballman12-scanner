@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -82,6 +82,7 @@ export function homeCardBadges(key, c) {
   if (key === 'report') return SYNC_BADGES(c);
   if (key === 'inventory') return [['Needs shelf', c.needs_shelf]];
   if (key === 'nobox') return [['No box', c.no_box]];
+  if (key === 'costs') return [['No cost', c.missing_cost]];
   if (key === 'rescale') return [['Restock', c.restock_pending]];
   if (key === 'instore-listing') return [['Not listed', c.instore_unlisted]];
   if (key === 'rescalereq') return [['Pending', c.rescale_requests], ['Done', c.rescale_requests_audited, 'ok']];
@@ -102,6 +103,7 @@ export const HOME_SECTIONS = [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
+    { key: 'costs', icon: '💵', title: 'Costs', sub: 'Fill in what a pair cost when the supplier left it off the manifest' },
   ] },
   { title: 'In-Store Mode', accent: 'inventory', cards: [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },
@@ -149,6 +151,7 @@ export const HOME_SECTIONS = [
 // >0, linking to the screen that clears that queue. (from usePendingCounts)
 export const HOME_ATTENTION = [
   { key: 'nobox', label: 'No box', count: 'no_box' },
+  { key: 'costs', label: 'No cost on file', count: 'missing_cost' },
   { key: 'shelve', label: 'Needs shelf', count: 'needs_shelf' },
   { key: 'rescalereq', label: 'Rescale requests', count: 'rescale_requests' },
   { key: 'rescale', label: 'Restock', count: 'restock_pending' },

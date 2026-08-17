@@ -38,6 +38,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
 | Inventory browse, SKU-merge, bulk status, labels | `docs/context/inventory.md` |
+| Costs page: backfilling a cost the supplier skipped, blank-vs-$0 | `docs/context/costs.md` |
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
 | No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |

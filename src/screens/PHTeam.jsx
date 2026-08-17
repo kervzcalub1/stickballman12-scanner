@@ -19,6 +19,7 @@ import {
 } from '../lib/ph.js';
 import { clearQuery, useQueryParam } from '../lib/urlstate.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
+import { ItemCosts } from './ItemCosts.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { ImageFinder } from './ImageFinder.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
@@ -50,6 +51,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
   if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'costs') return <ItemCosts onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
@@ -120,6 +122,12 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-title">No Box / Not Ready</span>
             <span className="home-card-sub">Units bought without a box — not yet postable (view-only; warehouse resolves)</span>
             <CardBadges badges={counts ? [['No box', counts.no_box]] : []} />
+          </button>
+          <button className="home-card" onClick={() => goPage('costs')}>
+            <span className="home-card-icon"><NavIcon name="sold" /></span>
+            <span className="home-card-title">Costs</span>
+            <span className="home-card-sub">Fill in what a pair cost when the supplier left it off the manifest</span>
+            <CardBadges badges={counts ? [['No cost', counts.missing_cost]] : []} />
           </button>
           <button className="home-card" onClick={() => goPage('request')}>
             <span className="home-card-icon"><NavIcon name="rescalereq" /></span>

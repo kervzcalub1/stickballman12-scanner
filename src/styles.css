@@ -860,6 +860,48 @@ body {
   color: var(--muted); background: var(--panel-2);
 }
 .sync-badge.on { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
+/* ---- Costs page: fill in a cost the supplier left off the manifest ---- */
+.cost-search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0 10px; }
+.cost-search-input {
+  flex: 1 1 320px; min-width: 0; padding: 9px 11px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 14px;
+}
+.cost-tabs { margin: 4px 0 8px; }
+.cost-zero-note {
+  margin: 0 0 8px; padding: 9px 11px; border-radius: 9px; color: var(--muted);
+  border: 1px solid rgba(224,168,120,0.35); background: rgba(224,168,120,0.08);
+}
+.cost-groups { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.cost-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--panel-2); }
+/* Amber rail on a card that still owes a number — the same "needs you" language the
+   rest of the app uses, so a half-worked backlog is scannable at a glance. */
+.cost-card.needs { border-left: 3px solid rgba(224,168,120,0.7); }
+.cost-card-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.cost-card-title { min-width: 0; }
+.cost-card-meta { text-align: right; white-space: nowrap; }
+.cost-batch { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.cost-kind {
+  margin-left: 6px; padding: 1px 6px; border-radius: 5px; font-size: 10px; font-weight: 700;
+  color: #c9a24f; border: 1px solid rgba(201,162,79,0.5); background: rgba(201,162,79,0.12);
+}
+.cost-sizes { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 12px 0 4px; }
+.cost-size { display: flex; align-items: center; gap: 8px; }
+.cost-size-label { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.cost-size .ph-price-wrap { width: 110px; }
+.cost-mixed { font-size: 10px; font-weight: 700; color: #e0a878; white-space: nowrap; }
+.cost-card-foot {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+}
+/* Phones: the meta block stops hugging the right edge (it would wrap mid-word next
+   to a long shoe name) and each size row goes full width for a fat tap target. */
+@media (max-width: 768px) {
+  .cost-card-meta { text-align: left; white-space: normal; }
+  .cost-sizes { flex-direction: column; gap: 10px; }
+  .cost-size { width: 100%; justify-content: space-between; }
+  .cost-size .ph-price-wrap { width: 130px; }
+}
+
 /* "+2d" beside a date: this row's pairs came in over more than one scan day. Only
    pending rows merge days, so this never appears on a row PH has started. */
 .ph-daycount {

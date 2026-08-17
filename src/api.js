@@ -160,6 +160,11 @@ export const api = {
   // In-Store Listing worklist + per-store (Alias/StockX/Shopify) flag updates.
   instoreList: (from, to) => get(`/api/items/instore-list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}`),
   instoreListed: (vins, flags) => post('/api/items/instore-listed', { vins, ...flags }),
+  // Costs page: the "no cost on file" backlog, a SKU lookup for fixing one that's
+  // already there, and the save. Blank cost clears to unknown, never to $0.
+  costsList: (from, to, mode) => get(`/api/items/costs?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(mode ? { mode } : {}) }).toString()}`),
+  costsSearch: (q) => get(`/api/items/costs?q=${encodeURIComponent(q)}`),
+  setItemsCost: (vins, cost) => post('/api/items/set-cost', { vins, cost }),
   pendingCounts: () => get('/api/items/pending-counts'),
   boxFound: (vin) => post('/api/items/box-found', { vin }),
   restockDone: (vins) => post('/api/items/restock-done', { vins }),

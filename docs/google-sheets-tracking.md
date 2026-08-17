@@ -9,7 +9,8 @@ control, so the warehouse's existing "tracking labels" sheet stays current autom
                                               └──▶  Google Apps Script Web App ──▶ your Sheet
 ```
 17TRACK only pushes to ONE URL (ours). Our webhook updates the database and then forwards
-the same update to your Apps Script. Manual "Refresh tracking" pulls do the same. It's
+the same update to your Apps Script — or to **several**, if you list more than one URL
+(see Notes). Manual "Refresh tracking" pulls do the same. It's
 best-effort and env-gated: nothing happens until `GOOGLE_SHEETS_TRACKING_URL` is set, and a
 slow/broken Sheet never blocks the database write.
 
@@ -45,6 +46,8 @@ sub-statuses that mean a human has to do something (stuck, being returned, lost)
 3. **Deploy → New deployment → Web app** — *Execute as:* **Me**, *Who has access:* **Anyone**.
    Copy the `/exec` URL.
 4. Set it on the server: `GOOGLE_SHEETS_TRACKING_URL=<that /exec URL>` (Railway env var).
+   **Adding a sheet rather than replacing one? Keep the existing URL and append the new one
+   after a comma** — the variable takes a list.
 
 The script **updates the matching row** by tracking number (writing Status / Stage / Carrier /
 Last checkpoint / Updated columns, creating them if missing), and **appends a new row** if the
@@ -138,9 +141,19 @@ function writeCell_(sheet, headers, rowIdx, header, val) {
   for a given deployment.
 - The Apps Script is the layout adapter — change which columns it writes without touching the
   app. The app only ever sends the JSON above.
-- **One destination at a time.** `GOOGLE_SHEETS_TRACKING_URL` holds a single URL, so pointing
-  it at a new script stops the old sheet updating. Feeding two sheets at once needs a change to
-  `forwardTrackingToSheet` (`api/_lib/tracking.js`) to fan out over a list.
+- **Several sheets: separate the `/exec` URLs with commas** (newlines work too).
+  ```
+  GOOGLE_SHEETS_TRACKING_URL=https://script.google.com/macros/s/AAA/exec,https://script.google.com/macros/s/BBB/exec
+  ```
+  Each is posted **independently**, with its own 6-second timeout, so a slow or broken sheet
+  can't stop the others receiving the update — and none of them can block the database write
+  or the 200 we owe 17TRACK. Every sheet gets the identical payload; each Apps Script decides
+  its own column layout, so two sheets can look nothing alike. One URL still works exactly as
+  before. Entries that aren't `http(s)` URLs are ignored.
+- **A failed sheet is named in the logs** — `[tracking sheet] …abcXYZ failed: HTTP 500`, with a
+  short tail of the deployment ID rather than the whole `/exec` URL (that URL is a capability:
+  anyone holding it can write to the sheet). This matters most with more than one target,
+  because the healthy sheet keeps filling in and makes everything look fine.
 - **Swapping to a new script/sheet:** deploy the new Web App, change the env var, then send a
   test — `POST` the payload above straight at the `/exec` URL with `curl`, or use 17TRACK's
   Test Webhook and watch the Railway logs. Nothing about the app changes; no redeploy needed

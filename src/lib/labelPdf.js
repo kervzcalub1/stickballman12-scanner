@@ -70,9 +70,23 @@ export async function loadJsBarcode() {
 // Render a barcode onto a canvas at generous pixel density so it stays sharp and
 // scannable when scaled into the PDF. Returns the canvas, or null if the value
 // can't be encoded even as CODE128.
-function barcodeCanvas(JsBarcode, value, { format = 'CODE128', height = 90, width = 2 } = {}) {
+//
+// `displayValue` draws the digits into the canvas instead of leaving the caller to
+// print them as a separate row. That's what a ROTATED barcode needs: the text turns
+// with the bars and stays glued to them. Labels with a horizontal barcode (VIN,
+// shelf) keep printing their own text row — they control the font and position and
+// have no rotation to fight.
+//
+// `flat` rides along with it, and is the whole reason this is safe: JsBarcode's
+// default UPC-A layout hangs the first and last digit OUTSIDE the guard bars, which
+// widens the canvas ~17% — and since the barcode is scaled to a fixed length on the
+// label, a wider canvas means NARROWER modules (0.241mm → 0.206mm on the smallest
+// stock, on a code already under GS1 nominal). Flat centres the digits under the
+// bars, canvas width unchanged, so adding the number costs ~9% of bar HEIGHT and
+// nothing of scannability. Never turn `displayValue` on without it.
+function barcodeCanvas(JsBarcode, value, { format = 'CODE128', height = 90, width = 2, displayValue = false } = {}) {
   const canvas = document.createElement('canvas');
-  const opts = { displayValue: false, height, width, margin: 0 };
+  const opts = { displayValue, flat: displayValue, height, width, margin: 0, fontSize: 20, textMargin: 2 };
   try {
     JsBarcode(canvas, String(value), { format, ...opts });
   } catch {
@@ -157,7 +171,12 @@ function drawVinLabel(doc, JsBarcode, pw, ph, it, showName) {
 function drawBoxLabel(doc, JsBarcode, pw, ph, it) {
   const sz = sizeParts(it.size, it.gender, it.name);
   const upc = it.upc ? String(it.upc).replace(/\D/g, '') : '';
-  const bc = upc ? barcodeCanvas(JsBarcode, upc, { format: upc.length === 12 ? 'UPC' : upc.length === 13 ? 'EAN13' : 'CODE128' }) : null;
+  // Digits ON. A barcode with no number under it can't be read back by a human or
+  // typed in when a scanner won't take it — which is exactly what a No-Box label is
+  // for. Every other place we show a UPC prints the digits; this one didn't.
+  const bc = upc
+    ? barcodeCanvas(JsBarcode, upc, { format: upc.length === 12 ? 'UPC' : upc.length === 13 ? 'EAN13' : 'CODE128', displayValue: true })
+    : null;
   // "No UPC on file" is a truthful label for a pair we never got a UPC for. It is
   // a LIE when we have one and merely failed to encode it — that prints a label
   // the warehouse believes is the best we could do, when a reload would have
@@ -176,7 +195,10 @@ function drawBoxLabel(doc, JsBarcode, pw, ph, it) {
     drawStack(doc, pw, ph, blocks);
     return;
   }
-  // Left column: rotated (vertical) barcode.
+  // Left column: rotated (vertical) barcode with its digits alongside — the rotation
+  // puts them between the bars and the text column, which is where they land when you
+  // turn a real shoe box on its side. Column width is unchanged: the digits share the
+  // strip with the bars rather than pushing anything out (see barcodeCanvas).
   const rot = rotate90(bc);
   const colW = pw * 0.16;
   const bcH = ph * 0.82;

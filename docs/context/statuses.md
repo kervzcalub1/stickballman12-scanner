@@ -17,8 +17,10 @@ Defined centrally: `src/statuses.js` (labels/colors, client) + `api/_lib/statuse
 
 ## Sync flags (cross-store listing, set by PH)
 `added_to_intel_inv` (II = Intelligent Inventory, the master) → cascades to
-`synced_alias` (AL), `synced_stockx` (SX), `synced_shopify` (SH).
-Shown as `SyncBadges`.
+`synced_alias` (AL), `synced_stockx` (SX), `synced_shopify` (SH) — applied in the
+PH grid's editor (`setSizeFlag`, on-tick only, `ph-report.md`), not in the DB, so
+PH can still untick a store whose push failed. Shown as `SyncBadges`, which reads
+**on / partial (n/total) / not yet** — see the two-wave trap in `ph-report.md`.
 
 ## Cascades (in db.js: `bulkSetStatus` / `addItemEvent`)
 - Marking a unit **sold** or **shipped** **clears all sync flags** (auto-delist

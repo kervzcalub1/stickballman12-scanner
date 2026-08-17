@@ -31,17 +31,37 @@ export function StatusPill({ status }) {
 // PH-Team sync indicators surfaced in the admin/warehouse views: Intelligent
 // Inventory + Alias / StockX / Shopify. `compact` shows only the lit ones (for a
 // list row); otherwise all four show, dim when not yet done.
+//
+// Three states, not two. A grouped row's flag is an all-units AND, so a SKU
+// received in two waves — sizes 7-9 listed, 10-12 scanned in later — went dark
+// again the moment the new pairs joined the group, reading exactly like a SKU
+// nobody had touched. When the caller passes a group carrying `flagCounts` (the
+// per-flag unit tally from groupPhRows/groupPhSized), a flag that covers some but
+// not all of the units renders "partial" with the fraction, so the row says 3/6
+// instead of silently understating what's already live.
 export function SyncBadges({ item, compact, goatOnly }) {
-  let fields = compact ? SYNC_FIELDS.filter(([k]) => item[k]) : SYNC_FIELDS;
+  const counts = item.flagCounts || null;
+  const total = Number(item.qty) || 0;
+  const covered = (k) => (counts && total ? counts[k] : (item[k] ? total : 0));
+  const isPartial = (k) => !!counts && total > 1 && counts[k] > 0 && counts[k] < total;
+  // Compact = the lit ones only, and a partly-listed flag counts as lit (hiding it
+  // is what loses the information this whole state exists to surface).
+  let fields = compact ? SYNC_FIELDS.filter(([k]) => item[k] || isPartial(k)) : SYNC_FIELDS;
   // "GOAT only" shoes list to II + Alias only — StockX/Shopify don't apply.
   if (goatOnly) fields = fields.filter(([k]) => k !== 'synced_stockx' && k !== 'synced_shopify');
   if (!fields.length) return null;
   return (
     <span className="sync-badges">
-      {fields.map(([k, ab, label]) => (
-        <span key={k} className={`sync-badge ${item[k] ? 'on' : ''}`}
-          title={`${label}: ${item[k] ? 'added / synced' : 'not yet'}`}>{ab}</span>
-      ))}
+      {fields.map(([k, ab, label]) => {
+        const part = isPartial(k);
+        return (
+          <span key={k} className={`sync-badge ${item[k] ? 'on' : part ? 'part' : ''}`}
+            title={part ? `${label}: ${covered(k)} of ${total} units — the rest still to do`
+              : `${label}: ${item[k] ? 'added / synced' : 'not yet'}`}>
+            {ab}{part && <span className="sync-badge-frac">{covered(k)}/{total}</span>}
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -309,8 +329,17 @@ export function BasisChip({ basis }) {
   return <span className={`ph-basis-chip ph-basis-${chip.tone}`} title={chip.title}>{chip.short}</span>;
 }
 
-export function YesNo({ value, editing, onChange }) {
-  if (!editing) return <span className={`ph-yn ${value ? 'yes' : 'no'}`}>{value ? 'Yes' : 'No'}</span>;
+export function YesNo({ value, editing, onChange, count, total }) {
+  // Same three-state story as SyncBadges, one level down: a size holding two pairs
+  // with only one of them listed rolls up to "No", which reads as untouched. Show
+  // the fraction instead. (Edit mode stays a plain checkbox — like the "~" mixed
+  // cost/price beside it, submitting applies one value to every unit of the size.)
+  if (!editing) {
+    if (total > 1 && count > 0 && count < total) {
+      return <span className="ph-yn part" title={`${count} of ${total} units — the rest still to do`}>{count}/{total}</span>;
+    }
+    return <span className={`ph-yn ${value ? 'yes' : 'no'}`}>{value ? 'Yes' : 'No'}</span>;
+  }
   // Edit mode: a colored checkbox (blue = checked/yes, red = unchecked/no) — a
   // ✓/✕ glyph marks the state too (color alone isn't enough contrast/signal).
   // Wrapped in a <label> so the tap target is bigger than the visible control

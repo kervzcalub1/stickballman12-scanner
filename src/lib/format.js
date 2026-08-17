@@ -27,6 +27,11 @@ export function estCivil(date = new Date()) {
 
 export const ymd = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 
+// Any timestamp → the EST calendar day it falls on, as YYYY-MM-DD. The stable key
+// for "same day" comparisons (e.g. which scan day a pair belongs to) — EST, so it
+// agrees with the server's date filters and with what the grid prints.
+export const estDate = (v) => ymd(estCivil(new Date(v)));
+
 // Format a dollar amount, dropping a trailing ".00" (Final prices round to whole
 // dollars) but keeping real cents on a manual override. 94 → "94", 94.5 → "94.50".
 export const fmtPrice = (v) => {

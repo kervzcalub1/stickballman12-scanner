@@ -14,7 +14,7 @@ import { markupSuffix } from '../lib/config.js';
 import { rangeOf, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
 import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized, PRICE_BASES,
-  phListingStatus, PH_LISTING_STATUSES,
+  phListingStatus, PH_LISTING_STATUSES, requiredFlags,
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
 } from '../lib/ph.js';
 import { clearQuery, useQueryParam } from '../lib/urlstate.js';
@@ -387,7 +387,18 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // Alias basis, so clear gi_basis (removes the "WY" chip on save).
   const setSizeGI = (key, size, v) => setSizeField(key, size, { global_indicator: v, price: calcFinalPrice(v), gi_basis: null });
   const setSizePrice = (key, size, v) => setSizeField(key, size, { price: v });
-  const setSizeFlag = (key, size, flagKey, v) => setSizeField(key, size, { [flagKey]: v });
+  // Intelligent Inventory is the master: a size pushed to II goes out to the stores
+  // it feeds in the same pass, so ticking II ticks the stores that apply to this
+  // shoe (GOAT-only shoes = Alias only; StockX/Shopify are N/A and stay untouched).
+  // The store checkboxes remain individually editable — untick one before Submit if
+  // that particular push didn't take. Unticking II deliberately cascades NOTHING:
+  // dropping a listing is the case where the stores genuinely diverge, and clearing
+  // three flags the user didn't ask to clear would destroy what they recorded.
+  const setSizeFlag = (g, size, flagKey, v) => {
+    const patch = { [flagKey]: v };
+    if (flagKey === 'added_to_intel_inv' && v) for (const f of requiredFlags(g)) patch[f] = true;
+    setSizeField(g.key, size, patch);
+  };
   const setSizeNote = (key, size, v) => setSizeField(key, size, { ph_note: v });
   // Save a group: every field is per-size now (GI, final price, II/AL/SX/SH, Note).
   // ONE atomic request covers every size — the server applies all sizes' updates
@@ -503,6 +514,33 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       </button>
     );
   };
+  // A pending row deliberately merges every scan day of that SKU, so PH reads one
+  // honest "this many still to list" instead of the same SKU pending twice. That
+  // makes a single date on the row a half-truth, so it gets a "+Nd" marker naming
+  // the other days. Touched rows never span days, so this only ever shows on pending.
+  const dateCell = (g) => {
+    const first = PH_DATE.format(new Date(g.created_at));
+    if (!g.days || g.days.length < 2) return first;
+    const all = g.days.map((d) => PH_DATE.format(new Date(`${d}T12:00:00Z`))).join(', ');
+    return (
+      <>{first}<span className="ph-daycount" title={`Scanned over ${g.days.length} days (${all}) — pairs of this SKU that nobody has started share one row, so the count is the real number still to list`}>+{g.days.length - 1}d</span></>
+    );
+  };
+  // Rows are split by listing state, so the same SKU can legitimately appear more
+  // than once — already-listed pairs never merge with pairs that still need work.
+  // Only the split rows get the chip: on a SKU that appears once it would be noise,
+  // and unexplained twins are exactly what would read as a duplicate-scan bug.
+  const SPLIT_CHIP = {
+    done: ['✓ Listed', 'These pairs are already live — kept separate so a later scan can’t make them read as unlisted'],
+    in_progress: ['◐ Part-listed', 'These pairs are on some stores but not all — separate from the finished and the untouched ones'],
+    pending: ['• Not listed', 'These pairs still need listing — separate from the ones already done'],
+  };
+  const splitChip = (g) => {
+    if (!g.splitSku) return null;
+    const c = SPLIT_CHIP[phListingStatus(g)];
+    if (!c) return null;
+    return <span className={`ph-split-chip ${phListingStatus(g)}`} title={c[1]}>{c[0]}</span>;
+  };
   // A store flag is N/A on a GOAT-only group when it's StockX/Shopify.
   const flagNA = (g, k) => g.goat_only && (k === 'synced_stockx' || k === 'synced_shopify');
 
@@ -566,7 +604,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                 <div className={`ph-card ${ed ? 'editing' : ''}`} key={g.key}>
                   <div className="ph-card-top">
                     <span className="ph-qty-badge">×{g.qty}</span>
-                    <span className="muted sm">{PH_DATE.format(new Date(g.created_at))} · {g._mixedBy ? 'multiple' : (g.created_by || '—')}</span>
+                    <span className="muted sm">{dateCell(g)} · {g._mixedBy ? 'multiple' : (g.created_by || '—')}</span>
                   </div>
                   <div className="ph-card-title">
                     <ShoeThumb url={g.photo_url} size={40} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} />
@@ -574,6 +612,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   </div>
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
+                    {splitChip(g)}
                     {g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}
                   </div>
                   <button type="button" className="ph-card-sizes ph-card-sizes-btn" onClick={() => toggleExpand(g.key)} aria-expanded={open}>
@@ -599,7 +638,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                   <span className="muted sm">{label}</span>
                                   {flagNA(g, k)
                                     ? <span className="ph-flag-na" title="GOAT only — not listed to this store">N/A</span>
-                                    : <YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} />}
+                                    : <YesNo value={ed ? sd[k] : s[k]} count={s.flagCounts?.[k]} total={s.qty} editing={ed} onChange={(v) => setSizeFlag(g, s.size, k, v)} />}
                                 </span>
                               ))}
                             </span>
@@ -678,8 +717,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   return (
                     <React.Fragment key={g.key}>
                       <tr className={`ph-trow ${ed ? 'ph-editing' : ''} ${open ? 'open' : ''}`} onClick={() => toggleExpand(g.key)}>
-                        <td style={frozenStyle(0)} className="ph-frozen">{PH_DATE.format(new Date(g.created_at))}</td>
-                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} />{copyable(g.name, g.name || '—', 'ph-title-name')}{g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}</span></td>
+                        <td style={frozenStyle(0)} className="ph-frozen">{dateCell(g)}</td>
+                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} />{copyable(g.name, g.name || '—', 'ph-title-name')}{splitChip(g)}{g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}</span></td>
                         <td style={frozenStyle(2)} className="ph-frozen">{copyable(g.sku, g.sku || '—')}</td>
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
@@ -747,7 +786,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                         {PH_FLAGS.map(([k]) => (
                                           <td key={k}>{flagNA(g, k)
                                             ? <span className="ph-flag-na" title="GOAT only — not listed to this store">N/A</span>
-                                            : <YesNo value={ed ? sd[k] : s[k]} editing={ed} onChange={(v) => setSizeFlag(g.key, s.size, k, v)} />}</td>
+                                            : <YesNo value={ed ? sd[k] : s[k]} count={s.flagCounts?.[k]} total={s.qty} editing={ed} onChange={(v) => setSizeFlag(g, s.size, k, v)} />}</td>
                                         ))}
                                         <td className="ph-note-cell">
                                           {ed

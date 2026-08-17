@@ -18,7 +18,9 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   the In-Store Listing page. See `in-store.md` for every guard.
 
 ## SKU-merge — expandable per-size rows (`groupPhSized`)
-- One **collapsed row per SKU + status**: Date · Shoe · SKU · size×qty chips ·
+- One **collapsed row per SKU + status + store-flag signature + scan day** (the scan
+  day only once a pair has been touched — see the split rules below): Date · Shoe ·
+  SKU · size×qty chips ·
   total Qty · Status · sync badges (`SyncBadges`) · Edit. Click the row (or the
   caret) to **expand** a detail drawer; editing auto-expands it.
 - The drawer holds a **per-size table** — `Size | Qty | Cost | Global indicator |
@@ -26,6 +28,44 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   SIZE** (cost/GI/final price/flags/note can all differ; `~` marks units that differ
   within a size). The collapsed-row `SyncBadges` is the group summary (a flag reads
   "on" only if **all** units have it).
+- **Rows split by listing state, and by scan day once a pair has been touched.** The
+  group key is `sku | item status | store-flag signature | scan day (untouched pairs:
+  omitted)`. Two rules:
+  1. **The flag signature always splits.** II+AL+SX+SH, plus `goat_only` (it decides
+     whether SX/SH are required at all, so the same four ticks mean "done" for a
+     GOAT-only pair and "half done" for a normal one). The moment ONE tick lands the
+     pair leaves the row it shared, same scan day or not: list size 7 out of Monday's
+     7/8/9 and it splits off while 8 and 9 stay put. Six pairs listed Monday + one
+     scanned Tuesday used to collapse into one row whose all-units-AND badges then
+     spoke for all seven — the SKU read as unlisted and PH couldn't tell what was live.
+  2. **The scan day splits too — but only for pairs with at least one tick.**
+     `pending` pairs (nothing set anywhere) merge across days on purpose, so PH gets
+     ONE row saying how many of that SKU are waiting instead of the same SKU pending
+     twice. A touched pair keys on the day it was **scanned**, never the day it was
+     listed, so 8 and 9 listed on Tuesday rejoin size 7 in the Monday batch they
+     arrived with — while a later delivery still can't fold into an older row,
+     because it carries its own scan day. Day = `estDate` (`format.js`), EST, so it
+     agrees with the server's date filters and with what the Date column prints.
+
+  Every row has exactly ONE listing status (`unitListingStatus` per unit →
+  `g.listingState`, which `phListingStatus` short-circuits on), so rows line up 1:1
+  with the Done / In-Progress / Pending tabs.
+  - `g.days` is the sorted set of scan days in the row — length ≥2 only on a merged
+    pending row, where the Date cell adds a **`+Nd` marker** (`dateCell` in
+    `PHTeam.jsx`) naming the other days, since one date on a multi-day row is a
+    half-truth.
+  - `g.splitSku` marks a SKU whose rows sit at **different listing states**; those
+    get a **`✓ Listed` / `◐ Part-listed` / `• Not listed` chip** (`splitChip`) so a
+    legitimate twin doesn't read as a duplicate-scan bug — which platforms differ is
+    in the badges beside it. Rows split only by **day** get no chip: the Date column
+    is the first thing on the row and already says why.
+- **Partial sync state (`flagCounts`).** `groupPhRows` / `groupPhSized` also emit
+  per-flag unit tallies (group AND per-size), and `SyncBadges` has a third **amber
+  `part` state showing the fraction** (`II 3/6`); the per-size `YesNo` shows `1/2`
+  instead of "No". After the split above, PH-grid rows are homogeneous so this
+  rarely fires there — it carries the **merged `groupPhRows`** views (Inventory
+  browse), which stay keyed on SKU + status and can still hold mixed units. The
+  home-screen badges were always right: they count units (`pendingCounts`), never rows.
 - The PH-team Inventory browse page still uses the merged `groupPhRows`.
 - **Click-to-copy (PH work pages only):** on **New Inventory** (`kind='receiving'`)
   and **Rescale** (`kind='rescale'`), the shoe **name** and **SKU** are wrapped in
@@ -69,6 +109,13 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
 - Plus **II / AL / SX / SH** Yes/No toggles per size (soft blue =
   yes, soft red = no — rendered as a colored **checkbox** in edit mode) plus a
   per-size **Note**. Persist to `items` (`global_indicator`, `gi_basis`, `price`, sync flags, `ph_note`).
+- **II is the master — ticking it ticks the stores** (`setSizeFlag` in `PHTeam.jsx`):
+  Intelligent Inventory pushes to the stores it feeds, so turning **II on** for a size
+  turns on that shoe's applicable store flags in the same draft (`requiredFlags(g)` —
+  GOAT-only ⇒ Alias only; SX/SH are N/A and untouched). Each store box stays
+  individually editable: untick one before Submit if that push didn't take.
+  **Turning II off cascades nothing** — a delist is exactly where the stores diverge,
+  and silently clearing three flags would destroy what PH recorded.
 - **GOAT only** (`items.goat_only`, warehouse-set at intake or toggled on the grid
   via `ph/set-goat`; group rollup = all units): shoe lists to **Alias(GOAT)+II only**
   — SX/SH show **N/A** (not editable), a purple **GOAT only** chip marks the group,

@@ -860,6 +860,29 @@ body {
   color: var(--muted); background: var(--panel-2);
 }
 .sync-badge.on { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
+/* "+2d" beside a date: this row's pairs came in over more than one scan day. Only
+   pending rows merge days, so this never appears on a row PH has started. */
+.ph-daycount {
+  display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 4px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.3px;
+  color: var(--muted); border: 1px solid var(--border); background: var(--panel-2);
+}
+
+/* Why this SKU is on the board twice: its pairs aren't at the same point in the
+   listing process, so they don't share a row. Only shown on the split rows. */
+.ph-split-chip {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;
+  padding: 1px 6px; border-radius: 5px; margin-left: 6px;
+  border: 1px solid var(--border); color: var(--muted); background: var(--panel-2);
+}
+.ph-split-chip.done { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
+.ph-split-chip.in_progress { color: #e0a878; border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.12); }
+
+/* Partly done — some of the group's units carry the flag, not all. Amber sits
+   between the dim "not yet" and the green "all done" it must not be mistaken for,
+   and the fraction spells out how many, since color alone can't. */
+.sync-badge.part { color: #e0a878; border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.12); }
+.sync-badge-frac { margin-left: 3px; font-weight: 800; opacity: 0.9; }
 /* In-store chip — shown in place of the store-sync badges (in-store buys bypass
    the PH team and are listed to Alias by hand). */
 .inv-instore-chip {
@@ -1492,6 +1515,8 @@ body {
 .ph-yn { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 12px; }
 .ph-yn.yes, .ph-yn-sel.yes { color: #86b3e6; background: rgba(134,179,230,0.16); }
 .ph-yn.no, .ph-yn-sel.no { color: #e08f8f; background: rgba(224,143,143,0.16); }
+/* Part of this size is done — amber, same language as .sync-badge.part. */
+.ph-yn.part { color: #e0a878; background: rgba(224,168,120,0.16); font-weight: 700; }
 .ph-yn-sel { padding: 6px 8px; border-radius: 8px; font-weight: 600; }
 /* Edit-mode flag checkbox — blue = checked (yes), red = unchecked (no). A
    <label> wrapper (.ph-yn-hit) gives a >=40px tap target around the smaller

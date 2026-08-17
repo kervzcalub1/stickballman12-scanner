@@ -2,6 +2,7 @@
 // frozen-column geometry, /ph/* routing, and edit-lock timings.
 import { sizeNum } from './codes.js';
 import { getMarkupMult } from './config.js';
+import { estDate } from './format.js';
 
 // Frozen columns and their fixed widths (px): Date, Title, SKU, Qty.
 // Rows are merged per SKU+status; the size breakdown is a scrolling column.
@@ -59,11 +60,19 @@ export function calcFinalPrice(globalIndicator) {
   return String(Math.round(n * getMarkupMult()));
 }
 
+// A group's sync badges roll up as all-units-true, which on its own can't tell
+// "nothing listed" from "most of it listed" — and those look identical on a SKU
+// that was received in two waves (sizes 7-9 listed, then 10-12 scanned in an hour
+// later). So every rollup also carries how MANY units have each flag; the badge
+// renders the fraction. Zeroed counters, one per flag.
+const zeroCounts = () => ({ added_to_intel_inv: 0, synced_alias: 0, synced_stockx: 0, synced_shopify: 0 });
+
 // Merge into ONE row per SKU + status (regardless of size), because the PH team
 // encodes a SKU to Intelligent Inventory once for all its sizes. The row lists
 // each size with its quantity; Price + II/AL/SX/SH + Note are set once for the
 // whole SKU and applied to every member VIN. A sync flag reads "Yes" only when
-// ALL units have it (so a partially-synced SKU shows as not-done).
+// ALL units have it (so a partially-synced SKU shows as not-done), with
+// `flagCounts` carrying the partial truth alongside it.
 export function groupPhRows(list) {
   const map = new Map();
   for (const r of list) {
@@ -73,6 +82,7 @@ export function groupPhRows(list) {
       g = {
         ...r, key, vins: [], qty: 0, _mixedBy: false, _sizeMap: {}, _prices: new Set(), _globals: new Set(), _costs: new Set(),
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
+        _counts: zeroCounts(),
       };
       map.set(key, g);
     }
@@ -83,7 +93,7 @@ export function groupPhRows(list) {
     g._prices.add(r.price == null ? '' : String(r.price));
     g._globals.add(r.global_indicator == null ? '' : String(r.global_indicator));
     g._costs.add(r.cost == null ? '' : String(r.cost));
-    for (const f of ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify']) g._flags[f] = g._flags[f] && !!r[f];
+    for (const f of FLAG_KEYS) { g._flags[f] = g._flags[f] && !!r[f]; if (r[f]) g._counts[f] += 1; }
     if (r.created_by !== g.created_by) g._mixedBy = true;
     if (r.created_at < g.created_at) g.created_at = r.created_at; // earliest scan
     if (r.last_edit_at && (!g.last_edit_at || r.last_edit_at > g.last_edit_at)) {
@@ -93,6 +103,7 @@ export function groupPhRows(list) {
   return [...map.values()].map((g) => ({
     ...g,
     ...g._flags, // representative flags = all-units-true
+    flagCounts: g._counts, // …with how many of the g.qty units each flag actually covers
     priceMixed: g._prices.size > 1,
     globalMixed: g._globals.size > 1,
     costMixed: g._costs.size > 1,
@@ -100,19 +111,52 @@ export function groupPhRows(list) {
   }));
 }
 
-// Like groupPhRows, but keeps a per-SIZE breakdown inside each SKU+status group
-// (the PH grid's expandable detail). Cost / global indicator / final price are
-// tracked PER SIZE (each can differ); II/AL/SX/SH + Note stay per-SKU (set once,
-// applied to all sizes). `sizes[]` carries each size's vins, qty and its own
+// Listing state of a SINGLE unit — the same three keys as PH_LISTING_STATUSES,
+// judged per pair instead of per group. `goat_only` is a per-unit column, so the
+// applicable flags are read off the row (GOAT-only pairs need II + Alias only).
+// This is what splits a SKU into separate rows, so it has to be per unit.
+export function unitListingStatus(r) {
+  const req = requiredFlags(r);
+  if (req.every((f) => r[f])) return 'done';
+  return req.some((f) => r[f]) ? 'in_progress' : 'pending';
+}
+
+// Like groupPhRows, but keeps a per-SIZE breakdown inside each group (the PH grid's
+// expandable detail) — and groups on SKU + item status + **the exact store-flag
+// signature**, so a row only ever holds pairs that are at the same point in the
+// listing process. Cost / global indicator / final price are tracked PER SIZE (each
+// can differ). `sizes[]` carries each size's vins, qty and its own
 // cost/global_indicator/price (+ *Mixed flags when units within a size differ).
 export function groupPhSized(list) {
   const map = new Map();
   for (const r of list) {
-    const key = `${r.sku || ''}|#|${r.status || ''}`;
+    // What shares a row, in two rules:
+    //
+    // 1. The store-flag signature always splits — II, AL, SX, SH, plus goat_only
+    //    (which decides whether SX/SH are required at all, so the same four ticks
+    //    mean "done" for one pair and "half done" for another). The moment ONE tick
+    //    lands on a pair it leaves the row it was sharing, same day or not: list
+    //    size 7 out of Monday's 7/8/9 and it splits off, 8 and 9 stay put.
+    //    Six pairs listed Monday + one scanned Tuesday used to collapse into a
+    //    single row whose all-units-AND badges then spoke for all seven — the SKU
+    //    read as unlisted and PH had no way to see which pairs were live.
+    //
+    // 2. The scan day splits too, but ONLY once a pair has been touched. Untouched
+    //    pairs of a SKU merge across days on purpose: PH needs one row saying how
+    //    many of this SKU are waiting, not the same SKU pending twice. A pair that's
+    //    been listed keys on the day it was SCANNED (never the day it was listed),
+    //    so when 8 and 9 are listed on Tuesday they rejoin size 7 in the Monday
+    //    batch they arrived with — and a later delivery still can't fold into an
+    //    older row, because it carries its own scan day.
+    const lstate = unitListingStatus(r);
+    const sig = FLAG_KEYS.map((f) => (r[f] ? '1' : '0')).join('') + (r.goat_only ? 'G' : '-');
+    const day = estDate(r.created_at);
+    const key = `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : day}`;
     let g = map.get(key);
     if (!g) {
       g = {
-        key, sku: r.sku, name: r.name, status: r.status, gender: r.gender,
+        key, sku: r.sku, name: r.name, status: r.status, gender: r.gender, listingState: lstate, day,
+        _days: new Set(), // a merged pending row can span scan days — the grid says so
         photo_count: r.photo_count || 0, // per-SKU listing-photo count (all rows share it)
         photo_url: r.photo_url || null,  // preferred (side) listing photo for the thumbnail
         created_at: r.created_at, created_by: r.created_by, _mixedBy: false,
@@ -121,11 +165,13 @@ export function groupPhSized(list) {
         last_edit_at: r.last_edit_at, last_edit_by: r.last_edit_by,
         goat_only: true, // "GOAT only" (Alias+II only) — all-units rollup, set just below
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
+        _counts: zeroCounts(),
         _sizes: new Map(),
       };
       map.set(key, g);
     }
     g.vins.push(r.vin); g.qty += 1;
+    g._days.add(day);
     if (r.created_by !== g.created_by) g._mixedBy = true;
     if (r.created_at < g.created_at) g.created_at = r.created_at;
     if (r.last_edit_at && (!g.last_edit_at || r.last_edit_at > g.last_edit_at)) { g.last_edit_at = r.last_edit_at; g.last_edit_by = r.last_edit_by; }
@@ -134,13 +180,14 @@ export function groupPhSized(list) {
     // A unit edited more than once has last_edit_at strictly after its own
     // first_edit_at (per-VIN, same-submit edits share now()) → subsequent edits exist.
     if (r.first_edit_at && r.last_edit_at && new Date(r.last_edit_at) > new Date(r.first_edit_at)) g._hasSubsequent = true;
-    for (const f of FLAG_KEYS) g._flags[f] = g._flags[f] && !!r[f]; // group badge = all units true
+    // Group badge = all units true; the count beside it = how many of them actually are.
+    for (const f of FLAG_KEYS) { g._flags[f] = g._flags[f] && !!r[f]; if (r[f]) g._counts[f] += 1; }
     g.goat_only = g.goat_only && !!r.goat_only; // GOAT-only only if every unit is
     const sz = r.size || '—';
     let s = g._sizes.get(sz);
     if (!s) {
       s = { size: sz, vins: [], qty: 0, cost: null, global_indicator: null, gi_basis: null, price: null, listed_price: null, note: null, _drift: false, _costs: new Set(), _globals: new Set(), _prices: new Set(),
-        _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true } };
+        _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true }, _counts: zeroCounts() };
       g._sizes.set(sz, s);
     }
     s.vins.push(r.vin); s.qty += 1;
@@ -157,10 +204,13 @@ export function groupPhSized(list) {
     // price it was listed at (a GI "Refresh prices" moved it) → ⚠ "Price changed".
     if (r.added_to_intel_inv && r.price != null && r.listed_price != null
         && Math.abs(Number(r.price) - Number(r.listed_price)) >= 0.005) { s._drift = true; g._drift = true; }
-    for (const f of FLAG_KEYS) s._flags[f] = s._flags[f] && !!r[f]; // per-size flag = all units of that size true
+    // Per-size flag = all units of that size true (two pairs of a US 9, one listed
+    // and one not, reads "No" — `flagCounts` is what says 1 of 2 rather than 0).
+    for (const f of FLAG_KEYS) { s._flags[f] = s._flags[f] && !!r[f]; if (r[f]) s._counts[f] += 1; }
   }
-  return [...map.values()].map((g) => ({
-    ...g, ...g._flags, priceChanged: g._drift,
+  const out = [...map.values()].map((g) => ({
+    ...g, ...g._flags, flagCounts: g._counts, priceChanged: g._drift,
+    days: [...g._days].sort(), // ≥2 only on a merged pending row; drives the Date cell
     sizes: [...g._sizes.values()]
       .sort((a, b) => (sizeNum(a.size) - sizeNum(b.size)) || String(a.size).localeCompare(b.size))
       .map((s) => ({
@@ -170,9 +220,23 @@ export function groupPhSized(list) {
         price: s.price, priceMixed: s._prices.size > 1,
         listed_price: s.listed_price, priceChanged: s._drift,
         note: s.note,
-        ...s._flags,
+        ...s._flags, flagCounts: s._counts,
       })),
   }));
+  // A SKU can now be on the board twice for two different reasons, and only one of
+  // them needs explaining. Rows at DIFFERENT listing states get a chip, because
+  // nothing else on the row says why its twin exists. Rows split only by scan day
+  // get none — the Date column is the first thing on the row and already says it,
+  // so a chip there would just repeat itself.
+  const states = new Map();
+  const skuKey = (g) => `${g.sku || ''}|#|${g.status || ''}`;
+  for (const g of out) {
+    const k = skuKey(g);
+    if (!states.has(k)) states.set(k, new Set());
+    states.get(k).add(g.listingState);
+  }
+  for (const g of out) g.splitSku = (states.get(skuKey(g))?.size || 0) > 1;
+  return out;
 }
 
 // Derived listing status of a PH group, from the store-sync flags (II/AL/SX/SH):
@@ -191,9 +255,16 @@ export const PH_LISTING_STATUSES = [
 export const GOAT_FLAG_KEYS = ['added_to_intel_inv', 'synced_alias'];
 export const requiredFlags = (g) => (g && g.goat_only ? GOAT_FLAG_KEYS : FLAG_KEYS);
 export function phListingStatus(g) {
+  // groupPhSized rows are homogeneous by construction (listing state is part of the
+  // group key), so the row already knows — and the filter tabs then line up 1:1 with
+  // what's on screen. The derivation below still serves the merged groupPhRows shape.
+  if (g && g.listingState) return g.listingState;
   const req = requiredFlags(g);
   if (req.every((f) => g[f])) return 'done';
-  const anyOn = req.some((f) => g[f]) || (g.sizes || []).some((s) => req.some((f) => s[f]));
+  // "Some" has to look at the unit counts too: a size holding two pairs with only
+  // one of them listed rolls up false at BOTH levels, so flags alone read pending.
+  const c = g.flagCounts || null;
+  const anyOn = req.some((f) => g[f] || (c && c[f] > 0)) || (g.sizes || []).some((s) => req.some((f) => s[f]));
   return anyOn ? 'in_progress' : 'pending';
 }
 

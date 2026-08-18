@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -131,6 +131,7 @@ export const HOME_SECTIONS = [
     { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
     { key: 'locations', icon: '🗺️', title: 'Locate Shoe', sub: 'Find which shelf a shoe is on' },
     { key: 'report', icon: '📊', title: 'Listings & Sync', sub: 'Store listings & sync status' },
+    { key: 'deleted', icon: '🗑️', title: 'Deleted', sub: 'Pairs removed from inventory — search by SKU, history kept' },
   ] },
   { title: 'PH Team', superOnly: true, accent: 'requests', cards: [
     { key: 'ph', icon: '🧾', title: 'PH Team Workspace', sub: 'Open the PH pricing / listing pages (New Inventory, Rescale, Photos…)' },

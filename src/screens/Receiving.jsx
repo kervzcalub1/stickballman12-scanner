@@ -1824,7 +1824,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 </div>
                 <label className="goat-toggle">
                   <input type="checkbox" checked={draft.goatOnly === true} onChange={(e) => setDraft((d) => ({ ...d, goatOnly: e.target.checked }))} />
-                  <span><b>GOAT only</b> — PH lists to Alias (GOAT) + Intelligent Inventory only (no StockX/Shopify)</span>
+                  <span><b>GOAT only</b> — PH lists to Alias (GOAT) only (no Intelligent Inventory, StockX or Shopify)</span>
                 </label>
                 <div className="size-rows">
                   <div className="muted sm">Tap a size to add it (tap again for +1), or “+ Custom”.</div>

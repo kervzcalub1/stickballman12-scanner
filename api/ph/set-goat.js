@@ -21,7 +21,8 @@ export default async function handler(req, res) {
   if (!vins.length) return send(res, 400, { ok: false, error: 'No units specified.' });
 
   try {
-    const rows = await setItemsGoatOnly(vins, goatOnly);
+    const by = user.name || user.username || '';
+    const rows = await setItemsGoatOnly(vins, goatOnly, by);
     return send(res, 200, { ok: true, updated: rows.length, goatOnly });
   } catch (e) {
     console.error('[ph/set-goat]', e.message);

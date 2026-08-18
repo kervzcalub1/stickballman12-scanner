@@ -330,7 +330,7 @@ function ListingSync() {
       <Box x={280} y={20} w={120} h={44} title="Alias" sub="AL" tone="ok" />
       <Box x={280} y={78} w={120} h={44} title="StockX" sub="SX" />
       <Box x={280} y={136} w={120} h={44} title="Shopify" sub="SH" />
-      <Box x={470} y={78} w={160} title="GOAT only" sub="Alias + II only" note="SX / SH show N/A" tone="warn" />
+      <Box x={470} y={78} w={160} title="GOAT only" sub="Alias only" note="II / SX / SH show N/A" tone="warn" />
       <Box x={640} y={160} w={150} h={46} title="Sold / Shipped" sub="clears all four" tone="bad" />
 
       <Elbow x1={180} y1={105} x2={276} y2={42} midX={230} tone="muted" />

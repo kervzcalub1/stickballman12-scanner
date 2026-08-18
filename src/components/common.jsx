@@ -10,7 +10,7 @@ import { EST_FMT, PH_DATETIME, periodLabel, shiftAnchor } from '../lib/format.js
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
-import { sizeNum } from '../lib/codes.js';
+import { sizeNum, compareSizes } from '../lib/codes.js';
 import { priceBasisChip } from '../lib/ph.js';
 import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint, canSharePdf, isChunkLoadError } from '../lib/labelPdf.js';
 
@@ -47,8 +47,8 @@ export function SyncBadges({ item, compact, goatOnly }) {
   // Compact = the lit ones only, and a partly-listed flag counts as lit (hiding it
   // is what loses the information this whole state exists to surface).
   let fields = compact ? SYNC_FIELDS.filter(([k]) => item[k] || isPartial(k)) : SYNC_FIELDS;
-  // "GOAT only" shoes list to II + Alias only — StockX/Shopify don't apply.
-  if (goatOnly) fields = fields.filter(([k]) => k !== 'synced_stockx' && k !== 'synced_shopify');
+  // "GOAT only" shoes list to Alias and nowhere else — II/StockX/Shopify don't apply.
+  if (goatOnly) fields = fields.filter(([k]) => k === 'synced_alias');
   if (!fields.length) return null;
   return (
     <span className="sync-badges">
@@ -606,6 +606,128 @@ export function ShelfLabelSheet({ locations, onClose }) {
       filename="shelf-labels.pdf"
       onClose={onClose}
     />
+  );
+}
+
+// Remove pairs from inventory — the miscount fix, shared by the warehouse Inventory
+// page and the PH New Inventory grid so both behave identically.
+//
+// It's a QUANTITY editor, not a delete button: each size shows what's on file and
+// takes a new count, because "there are 3, not 5" is how the warehouse actually finds
+// this — nobody knows which two VINs were the phantom ones. Which pairs leave is
+// therefore ours to choose, and we pick the NEWEST first: the most recently scanned
+// pairs are the least likely to be shelved, priced or already listed. We then name
+// them outright before anything happens, because this cannot be undone from the UI.
+export function RemoveUnitsModal({ title, sku, units, onClose, onDone }) {
+  const sizes = React.useMemo(() => {
+    const m = new Map();
+    for (const u of units || []) {
+      const k = u.size == null || u.size === '' ? '—' : String(u.size);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(u);
+    }
+    // Newest first within each size — that's the removal order.
+    for (const list of m.values()) {
+      list.sort((a, b) => (new Date(b.created_at || 0) - new Date(a.created_at || 0))
+        || String(b.vin).localeCompare(String(a.vin)));
+    }
+    return [...m.entries()].sort((a, b) => compareSizes(a[0], b[0]))
+      .map(([size, list]) => ({ size, units: list, qty: list.length }));
+  }, [units]);
+
+  // keep = how many of that size REMAIN. Starts at the full count (remove nothing).
+  const [keep, setKeep] = useState(() => Object.fromEntries(sizes.map((s) => [s.size, s.qty])));
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !busy) onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, busy]);
+
+  const doomed = sizes.flatMap((s) => {
+    const k = Math.max(0, Math.min(s.qty, Number(keep[s.size] ?? s.qty)));
+    return s.units.slice(0, s.qty - k);
+  });
+  const blockedNow = doomed.filter((u) => u.status === 'sold' || u.status === 'shipped');
+
+  async function submit() {
+    if (!doomed.length || busy) return;
+    setBusy(true); setError('');
+    try {
+      const res = await api.deleteItems(doomed.map((u) => u.vin), reason.trim());
+      onDone(res);
+    } catch (e) {
+      setError(e.message || 'Could not remove those pairs.');
+      setBusy(false);
+    }
+  }
+
+  return createPortal(
+    <div className="modal-overlay" onClick={() => { if (!busy) onClose(); }}>
+      <div className="modal remove-units" role="dialog" aria-modal="true" aria-label="Remove pairs" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">Remove pairs</h3>
+        <p className="modal-msg">{title}{sku ? <> · <span className="mono">{sku}</span></> : null}</p>
+
+        <div className="rm-sizes">
+          {sizes.map((s) => {
+            const k = Math.max(0, Math.min(s.qty, Number(keep[s.size] ?? s.qty)));
+            const going = s.qty - k;
+            return (
+              <div className={`rm-size ${going ? 'cut' : ''}`} key={s.size}>
+                <span className="rm-size-label">US {s.size}</span>
+                <span className="muted sm">on file {s.qty}</span>
+                <label className="rm-qty">
+                  <span className="muted xs">Keep</span>
+                  <input
+                    type="number" min={0} max={s.qty} inputMode="numeric" value={k}
+                    onChange={(e) => setKeep((o) => ({ ...o, [s.size]: e.target.value === '' ? '' : Number(e.target.value) }))}
+                  />
+                </label>
+                <span className="rm-going">{going ? `− ${going}` : ''}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        {doomed.length > 0 && (
+          <div className="rm-doomed">
+            <div className="muted sm">These {doomed.length} pair{doomed.length === 1 ? '' : 's'} will be deleted — newest scanned first:</div>
+            <ul>
+              {doomed.slice(0, 12).map((u) => (
+                <li key={u.vin}>
+                  <span className="mono">{u.vin}</span>
+                  <span className="muted sm"> · US {u.size || '—'}{u.location_code ? ` · ${u.location_code}` : ''}{u.status ? ` · ${statusLabel(u.status)}` : ''}</span>
+                </li>
+              ))}
+              {doomed.length > 12 && <li className="muted sm">…and {doomed.length - 12} more</li>}
+            </ul>
+          </div>
+        )}
+
+        {blockedNow.length > 0 && (
+          <p className="rm-warn">{blockedNow.length} of these are already sold or shipped — the server will refuse those and remove the rest.</p>
+        )}
+
+        <label className="rm-reason">
+          <span className="muted xs">Reason (optional — kept with the deleted record)</span>
+          <input type="text" value={reason} maxLength={200} placeholder="Miscount, damaged, returned to supplier…"
+            onChange={(e) => setReason(e.target.value)} />
+        </label>
+
+        {error && <p className="rm-error">{error}</p>}
+
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn danger" onClick={submit} disabled={!doomed.length || busy}>
+            {busy ? 'Removing…' : `Remove ${doomed.length || ''} pair${doomed.length === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

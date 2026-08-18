@@ -1865,7 +1865,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    it carries a per-size quantity editor and names every VIN that's about to go. */
 .modal.remove-units { max-width: 520px; text-align: left; }
 .modal.remove-units .modal-title, .modal.remove-units .modal-msg { text-align: center; }
-.rm-sizes { display: flex; flex-direction: column; gap: 6px; margin: 16px 0 6px; }
+.rm-quick { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+/* 13 sizes would otherwise push Remove off the bottom on a phone — scroll the list,
+   not the whole modal, so the primary action stays put. */
+.rm-sizes { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 6px; max-height: 40vh; overflow-y: auto; }
+.rm-whole { color: #e08f8f; font-size: 13.5px; margin: 12px 0 0; }
 .rm-size {
   display: grid;
   grid-template-columns: 5.5em 1fr auto 3.2em;

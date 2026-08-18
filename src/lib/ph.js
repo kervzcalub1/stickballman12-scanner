@@ -129,8 +129,17 @@ export function unitListingStatus(r) {
 // Cost / global indicator / final price are tracked PER SIZE (each can differ).
 // `sizes[]` carries each size's vins, qty and its own cost/global_indicator/price
 // (+ *Mixed flags when units within a size differ).
-export function groupPhSized(list, lockTagFor) {
+export function groupPhSized(list, isLocked) {
   const map = new Map();
+  // Rule 3 needs to know, BEFORE grouping, which natural keys are being edited —
+  // see the note at the key below for why the lock can't just go into the key.
+  const naturalKey = (r) => {
+    const lstate = unitListingStatus(r);
+    const sig = FLAG_KEYS.map((f) => (r[f] ? '1' : '0')).join('') + (r.goat_only ? 'G' : '-');
+    return `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : estDate(r.created_at)}`;
+  };
+  const lockedKeys = new Set();
+  if (isLocked) for (const r of list) if (isLocked(r.vin)) lockedKeys.add(naturalKey(r));
   for (const r of list) {
     // What shares a row, in three rules:
     //
@@ -151,17 +160,20 @@ export function groupPhSized(list, lockTagFor) {
     //    batch they arrived with — and a later delivery still can't fold into an
     //    older row, because it carries its own scan day.
     const lstate = unitListingStatus(r);
-    const sig = FLAG_KEYS.map((f) => (r[f] ? '1' : '0')).join('') + (r.goat_only ? 'G' : '-');
     const day = estDate(r.created_at);
-    // 3. A row BEING EDITED stops accepting new pairs. The lock is claimed over
-    //    exactly the pairs the row held when edit mode opened, so tagging each unit
-    //    with its lock holder keeps those pairs together and leaves a delivery that
-    //    lands mid-edit to form its own row. Without this, a second shipment of the
-    //    same SKU minutes after the first folded into the row PH was working on
-    //    (rule 2 — both were untouched), and the group action they clicked next
-    //    applied to pairs they never saw. Untouched, unlocked rows still merge.
-    const lockTag = lockTagFor ? (lockTagFor(r.vin) || '') : '';
-    const key = `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : day}|#|${lockTag}`;
+    const base = naturalKey(r);
+    // 3. A row BEING EDITED stops accepting new pairs. A second shipment of the same
+    //    SKU minutes after the first folded into the row PH was working on (rule 2 —
+    //    both untouched), and the group action they clicked next applied to pairs they
+    //    never saw arrive.
+    //
+    //    The LATE ARRIVAL moves, never the locked row — the edited row must keep the
+    //    exact key it had when Edit was clicked. `editing`, `drafts` and `expanded` in
+    //    PHTeam.jsx are all keyed on g.key, and claiming the lock is itself what makes
+    //    a row locked: putting the lock in every member's key re-keyed the row the
+    //    instant editing began, so `editing.has(g.key)` went false and the per-size
+    //    editor vanished as it opened. (Caught by the PH grid e2e suite.)
+    const key = (isLocked && !isLocked(r.vin) && lockedKeys.has(base)) ? `${base}|#|new` : base;
     let g = map.get(key);
     if (!g) {
       g = {

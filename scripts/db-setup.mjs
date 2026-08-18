@@ -313,6 +313,38 @@ await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listing   JSONB
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_by TEXT`);
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_at TIMESTAMPTZ`);
 
+// Deleted stock — the archive behind "remove pairs" on Inventory / New Inventory.
+// The items row is genuinely DELETED (both pages, every count and the batch totals
+// have to read true after a miscount is corrected), and item_events cascades away
+// with it — so the whole row AND its history are frozen into JSONB here first.
+// `item_json` keeps every column, so a future column on items is never lost by an
+// archive written before it existed; the promoted columns are just what the
+// Deleted page searches and sorts on.
+await sql(`
+  CREATE TABLE IF NOT EXISTS deleted_items (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    vin         TEXT NOT NULL,
+    item_id     BIGINT,           -- the original items.id (NOT a FK — the row is gone)
+    sku         TEXT,
+    name        TEXT,
+    size        TEXT,
+    status      TEXT,             -- status at the moment it was deleted
+    batch_id    BIGINT,
+    batch_code  TEXT,
+    cost        NUMERIC(12,2),
+    scanned_at  TIMESTAMPTZ,      -- the original items.created_at
+    scanned_by  TEXT,
+    reason      TEXT,
+    item_json   JSONB NOT NULL,   -- the whole items row as it stood
+    events      JSONB,            -- its full item_events history, frozen
+    deleted_by  TEXT,
+    deleted_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS deleted_items_sku_idx ON deleted_items (sku)`);
+await sql(`CREATE INDEX IF NOT EXISTS deleted_items_vin_idx ON deleted_items (vin)`);
+await sql(`CREATE INDEX IF NOT EXISTS deleted_items_when_idx ON deleted_items (deleted_at DESC)`);
+
 // Future — profit tracking. Schema now, UI later.
 await sql(`
   CREATE TABLE IF NOT EXISTS sales (

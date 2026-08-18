@@ -113,7 +113,7 @@ export function groupPhRows(list) {
 
 // Listing state of a SINGLE unit — the same three keys as PH_LISTING_STATUSES,
 // judged per pair instead of per group. `goat_only` is a per-unit column, so the
-// applicable flags are read off the row (GOAT-only pairs need II + Alias only).
+// applicable flags are read off the row (a GOAT-only pair needs Alias alone).
 // This is what splits a SKU into separate rows, so it has to be per unit.
 export function unitListingStatus(r) {
   const req = requiredFlags(r);
@@ -124,13 +124,15 @@ export function unitListingStatus(r) {
 // Like groupPhRows, but keeps a per-SIZE breakdown inside each group (the PH grid's
 // expandable detail) — and groups on SKU + item status + **the exact store-flag
 // signature**, so a row only ever holds pairs that are at the same point in the
-// listing process. Cost / global indicator / final price are tracked PER SIZE (each
-// can differ). `sizes[]` carries each size's vins, qty and its own
-// cost/global_indicator/price (+ *Mixed flags when units within a size differ).
-export function groupPhSized(list) {
+// listing process. `lockTagFor(vin)` is optional: it returns a stable tag for a unit
+// currently held by an edit lock (see rule 3 below), and nothing when it isn't.
+// Cost / global indicator / final price are tracked PER SIZE (each can differ).
+// `sizes[]` carries each size's vins, qty and its own cost/global_indicator/price
+// (+ *Mixed flags when units within a size differ).
+export function groupPhSized(list, lockTagFor) {
   const map = new Map();
   for (const r of list) {
-    // What shares a row, in two rules:
+    // What shares a row, in three rules:
     //
     // 1. The store-flag signature always splits — II, AL, SX, SH, plus goat_only
     //    (which decides whether SX/SH are required at all, so the same four ticks
@@ -151,7 +153,15 @@ export function groupPhSized(list) {
     const lstate = unitListingStatus(r);
     const sig = FLAG_KEYS.map((f) => (r[f] ? '1' : '0')).join('') + (r.goat_only ? 'G' : '-');
     const day = estDate(r.created_at);
-    const key = `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : day}`;
+    // 3. A row BEING EDITED stops accepting new pairs. The lock is claimed over
+    //    exactly the pairs the row held when edit mode opened, so tagging each unit
+    //    with its lock holder keeps those pairs together and leaves a delivery that
+    //    lands mid-edit to form its own row. Without this, a second shipment of the
+    //    same SKU minutes after the first folded into the row PH was working on
+    //    (rule 2 — both were untouched), and the group action they clicked next
+    //    applied to pairs they never saw. Untouched, unlocked rows still merge.
+    const lockTag = lockTagFor ? (lockTagFor(r.vin) || '') : '';
+    const key = `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : day}|#|${lockTag}`;
     let g = map.get(key);
     if (!g) {
       g = {
@@ -250,9 +260,13 @@ export const PH_LISTING_STATUSES = [
   { key: 'done', label: 'Done' },
 ];
 // The store flags that actually apply to a group. "GOAT only" shoes list to
-// Intelligent Inventory + Alias(GOAT) only — StockX/Shopify are N/A, so they don't
+// Alias(GOAT) alone — II/StockX/Shopify are N/A, so they don't
 // count toward completion or the badges.
-export const GOAT_FLAG_KEYS = ['added_to_intel_inv', 'synced_alias'];
+// "GOAT only" = **Alias only**. Not II, not StockX, not Shopify — the pair is
+// listed to Alias (GOAT) and nowhere else, so Alias's tick alone completes it.
+// (Until 2026-08-19 this also required Intelligent Inventory, which left every
+// finished GOAT-only row sitting in In-Progress waiting for a tick PH never makes.)
+export const GOAT_FLAG_KEYS = ['synced_alias'];
 export const requiredFlags = (g) => (g && g.goat_only ? GOAT_FLAG_KEYS : FLAG_KEYS);
 export function phListingStatus(g) {
   // groupPhSized rows are homogeneous by construction (listing state is part of the
@@ -270,7 +284,7 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';

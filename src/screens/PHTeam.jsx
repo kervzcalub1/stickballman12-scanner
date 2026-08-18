@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
-import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText } from '../components/common.jsx';
+import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText, Modal, RemoveUnitsModal } from '../components/common.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges } from '../lib/constants.js';
@@ -27,6 +27,7 @@ import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
 import { Sop } from './Sop.jsx';
+import { DeletedItems } from './DeletedItems.jsx';
 
 // PH Team home: pick which report to work — New Inventory (newly received stock)
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
@@ -61,6 +62,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   // shortage, so making them wait on warehouse just parked POs in the queue.
   if (page === 'reconcile') return <Reconciliation canReconcile onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'sop') return <Sop user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'deleted') return <DeletedItems onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -144,6 +146,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="sop" /></span>
             <span className="home-card-title">SOP &amp; Help</span>
             <span className="home-card-sub">Step-by-step procedures for every screen, searchable, plus FAQ</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('deleted')}>
+            <span className="home-card-icon"><NavIcon name="inventory" /></span>
+            <span className="home-card-title">Deleted</span>
+            <span className="home-card-sub">Pairs removed from inventory — search by SKU, with the history kept</span>
           </button>
         </div>
       </section>
@@ -304,6 +311,27 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   }
   const myId = holderIdRef.current;
   const lockHolder = (g) => { for (const v of g.vins) { const l = locks[v]; if (l && l.holder_id !== myId) return l.holder; } return null; };
+  // Rule 3 of groupPhSized: a locked (being-edited) row stops absorbing new pairs.
+  // Tagging by the lock HOLDER, not just "locked", keeps two editors' rows apart.
+  const lockTagFor = useCallback((vin) => {
+    const l = locks[vin];
+    return l ? `L${l.holder_id}` : '';
+  }, [locks]);
+
+  // Pairs that arrived while this page has been open. The live poll folds a fresh
+  // delivery straight into a matching untouched row, so a group action clicked
+  // afterwards would otherwise silently reach pairs the user never saw arrive.
+  // Seeded on the first load of a view (everything there is "already known") and
+  // reset whenever the date range or page changes.
+  const knownVinsRef = useRef(null);
+  const newVinsRef = useRef(new Set());
+  const noteArrivals = useCallback((list) => {
+    const vins = (list || []).map((r) => r.vin);
+    if (!knownVinsRef.current) { knownVinsRef.current = new Set(vins); return; }
+    for (const v of vins) {
+      if (!knownVinsRef.current.has(v)) { knownVinsRef.current.add(v); newVinsRef.current.add(v); }
+    }
+  }, []);
 
   async function load() {
     releaseAll();
@@ -311,6 +339,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     try {
       const [from, to] = rangeOf(dr.mode, dr.anchor);
       const { rows: r } = await api.phList(from, to, kind);
+      knownVinsRef.current = null; newVinsRef.current = new Set(); noteArrivals(r);
       setRows(r); setEditing(new Set()); setDrafts({}); setExpanded(new Set());
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setLoading(false); }
@@ -338,7 +367,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       const [from, to] = rangeOf(dr.mode, dr.anchor);
       const { rows: r } = await api.phList(from, to, kind);
       // Re-check: the user may have started editing during the fetch.
-      if (editingCountRef.current === 0 && !savingRef.current) setRows(r);
+      if (editingCountRef.current === 0 && !savingRef.current) { noteArrivals(r); setRows(r); }
     } catch { /* transient — try again next tick */ }
     finally { pollBusyRef.current = false; }
   }
@@ -397,7 +426,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const setSizePrice = (key, size, v) => setSizeField(key, size, { price: v });
   // Intelligent Inventory is the master: a size pushed to II goes out to the stores
   // it feeds in the same pass, so ticking II ticks the stores that apply to this
-  // shoe (GOAT-only shoes = Alias only; StockX/Shopify are N/A and stay untouched).
+  // shoe. A GOAT-only shoe never reaches this cascade — II is N/A there, and Alias
+  // (its only required store) is ticked directly.
   // The store checkboxes remain individually editable — untick one before Submit if
   // that particular push didn't take. Unticking II deliberately cascades NOTHING:
   // dropping a listing is the case where the stores genuinely diverge, and clearing
@@ -504,7 +534,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     finally { setGiFillKey(null); }
   }
 
-  // "GOAT only": list to Alias(GOAT)+II only. Toggle it for the whole SKU group.
+  // "GOAT only": list to Alias(GOAT) and nowhere else. Toggle it for the whole SKU group.
   async function setGoat(g, goatOnly) {
     setError('');
     try {
@@ -512,16 +542,57 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       setRows((rs) => rs.map((x) => (g.vins.includes(x.vin) ? { ...x, goat_only: goatOnly } : x)));
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
+  // The chip writes to every pair in the row, and an untouched row can have grown
+  // since it was drawn (a second delivery of the same SKU merges into it). When it
+  // has, say so and count them before applying — GOAT only takes a pair off II, StockX
+  // and Shopify for good, and nothing downstream ever flags a wrongly-flagged pair.
+  const [goatConfirm, setGoatConfirm] = useState(null); // { g, goatOnly, fresh: [vin] }
+  const [removing, setRemoving] = useState(null);       // { title, sku, units } — remove-pairs modal
+  // A removal deletes rows, so there's nothing local to patch — reload and report,
+  // including whatever the server refused (sold/shipped can't be removed).
+  function onRemoved(res) {
+    setRemoving(null);
+    const gone = res?.deleted?.length || 0;
+    const kept = res?.blocked?.length || 0;
+    setNotice(`${gone} pair${gone === 1 ? '' : 's'} removed${kept ? ` — ${kept} refused (already sold/shipped)` : ''}.`);
+    load();
+  }
+  // The raw units behind a group, which carry the scan time the removal order needs.
+  const unitsOf = (g) => {
+    const want = new Set(g.vins);
+    return (rows || []).filter((r) => want.has(r.vin));
+  };
+  function askGoat(g, goatOnly) {
+    const fresh = g.vins.filter((v) => newVinsRef.current.has(v));
+    if (fresh.length && fresh.length < g.vins.length) setGoatConfirm({ g, goatOnly, fresh });
+    else setGoat(g, goatOnly);
+  }
   const goatChip = (g) => {
     if (!canEdit) return g.goat_only ? <span className="goat-badge">GOAT only</span> : null;
     return (
       <button type="button" className={`goat-chip ${g.goat_only ? 'on' : ''}`} disabled={editing.has(g.key)}
-        title="GOAT only — PH lists to Alias (GOAT) + Intelligent Inventory; StockX/Shopify are N/A"
-        onClick={(e) => { e.stopPropagation(); setGoat(g, !g.goat_only); }}>
+        title="GOAT only — PH lists to Alias (GOAT) only; II/StockX/Shopify are N/A"
+        onClick={(e) => { e.stopPropagation(); askGoat(g, !g.goat_only); }}>
         {g.goat_only ? '✓ GOAT only' : 'GOAT only'}
       </button>
     );
   };
+  const goatConfirmModal = goatConfirm ? (
+    <Modal
+      type="warn"
+      title={goatConfirm.goatOnly ? 'Turn GOAT only on for the whole row?' : 'Turn GOAT only off for the whole row?'}
+      message={`This row now holds ${goatConfirm.g.qty} pair${goatConfirm.g.qty === 1 ? '' : 's'} of ${goatConfirm.g.sku || 'this SKU'} — ${goatConfirm.fresh.length} of them arrived from the warehouse while you had this page open. ${goatConfirm.goatOnly ? 'GOAT only means Alias and nowhere else — it takes every one of them off Intelligent Inventory, StockX and Shopify.' : 'This puts every one of them back on Intelligent Inventory, StockX and Shopify.'}`}
+      onClose={() => setGoatConfirm(null)}
+    >
+      <button className="btn ghost" onClick={() => setGoatConfirm(null)}>Cancel</button>
+      <button
+        className="btn primary"
+        onClick={() => { const c = goatConfirm; setGoatConfirm(null); setGoat(c.g, c.goatOnly); }}
+      >
+        Apply to all {goatConfirm.g.qty}
+      </button>
+    </Modal>
+  ) : null;
   // A pending row deliberately merges every scan day of that SKU, so PH reads one
   // honest "this many still to list" instead of the same SKU pending twice. That
   // makes a single date on the row a half-truth, so it gets a "+Nd" marker naming
@@ -549,8 +620,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     if (!c) return null;
     return <span className={`ph-split-chip ${phListingStatus(g)}`} title={c[1]}>{c[0]}</span>;
   };
-  // A store flag is N/A on a GOAT-only group when it's StockX/Shopify.
-  const flagNA = (g, k) => g.goat_only && (k === 'synced_stockx' || k === 'synced_shopify');
+  // On a GOAT-only group every store but Alias is N/A — it lists to Alias only.
+  const flagNA = (g, k) => g.goat_only && k !== 'synced_alias';
 
   const isRescale = kind === 'rescale';
   // Click-to-copy the shoe name / SKU on the PH work pages (New Inventory +
@@ -561,7 +632,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     : (cls ? <span className={cls}>{node}</span> : node));
 
   // Consolidate per SKU+status (with per-size detail), then sort by scan date.
-  const allGroups = groupPhSized(rows || []);
+  const allGroups = groupPhSized(rows || [], lockTagFor);
   allGroups.sort((a, b) => (sortDir === 'desc' ? (a.created_at < b.created_at ? 1 : -1) : (a.created_at < b.created_at ? -1 : 1)));
   // New Inventory only: narrow to the selected listing-status buckets.
   const groups = useStatusFilter ? allGroups.filter((g) => statusFilter.has(phListingStatus(g))) : allGroups;
@@ -691,6 +762,11 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                       return (
                         <span className="ph-edit-actions">
                           <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>
+                          <button className="btn sm ghost danger" disabled={editing.size > 0}
+                            title="Correct the count — deletes pairs and files them under Deleted"
+                            onClick={() => setRemoving({ title: g.name || g.sku || 'Unknown shoe', sku: g.sku, units: unitsOf(g) })}>
+                            Remove…
+                          </button>
                           {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
                         </span>
                       );
@@ -824,6 +900,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
         )}
       </div>
       {historyFor && <HistoryModal vins={historyFor.vins} title={historyFor.title} onClose={() => setHistoryFor(null)} />}
+      {goatConfirmModal}
+      {removing && <RemoveUnitsModal {...removing} onClose={() => setRemoving(null)} onDone={onRemoved} />}
       {photosSku && <PhotosModal sku={photosSku} onClose={() => setPhotosSku(null)} onSignOut={onSignOut} />}
     </div>
   );

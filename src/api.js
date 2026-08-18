@@ -178,6 +178,12 @@ export const api = {
   // Read-only price inquiry (no save) — GI + Final + lowest/highest/last-sold, PH Price Inquiry page.
   phPriceInquiry: (sku, sizes, consigned = true) => post('/api/ph/price-inquiry', { sku, sizes, consigned }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
+  // Remove pairs outright (miscount fix). Archived to deleted_items first; the
+  // server refuses sold/shipped and returns them as `blocked`.
+  deleteItems: (vins, reason) => post('/api/items/delete', { vins, reason }),
+  deletedItems: (q, from, to) => get(`/api/items/deleted?${new URLSearchParams(
+    Object.entries({ q, from, to }).filter(([, v]) => v),
+  )}`),
   // v5 — PH Team monthly grid
   phList: (from, to, kind) => get(`/api/ph/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(kind ? { kind } : {}) }).toString()}`),
   phUpdateMany: (vins, fields, baseEditedAt) => post('/api/ph/update', { vins, fields, baseEditedAt }),

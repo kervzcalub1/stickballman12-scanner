@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
-import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip, CopyText } from '../components/common.jsx';
+import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip, CopyText, RemoveUnitsModal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
@@ -53,10 +53,12 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   const [data, setData] = useState(null); // { rows, totals }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState(''); // transient confirmation (e.g. pairs removed)
   const [sel, setSel] = useState(() => new Set());
   const [labels, setLabels] = useState(null);
   const [lightbox, setLightbox] = useState(null);  // defect-issue photos viewer
   const [expanded, setExpanded] = useState(() => new Set()); // vins with the accordion open
+  const [removing, setRemoving] = useState(null); // { title, sku, units } — remove-pairs modal
   const [hist, setHist] = useState({}); // vin -> { loading, events, error } (lazily loaded)
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkStatusSel, setBulkStatusSel] = useState('needs_shelf');
@@ -224,6 +226,17 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setSavingStatusVin(null); }
   }
+  // A removal deletes rows, so nothing local can be patched — reload from the server
+  // and say what happened, including anything the server refused (sold/shipped).
+  function onRemoved(res) {
+    setRemoving(null);
+    const gone = res?.deleted?.length || 0;
+    const kept = res?.blocked?.length || 0;
+    setNotice(`${gone} pair${gone === 1 ? '' : 's'} removed${kept ? ` — ${kept} refused (already sold/shipped)` : ''}.`);
+    setSel(new Set());
+    load();
+  }
+
   // Report: bulk status change over the selected VINs.
   async function applyBulkStatus() {
     setBulkBusy(true); setError('');
@@ -398,6 +411,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
         <TopBar title="Inventory" onHome={onHome} onSignOut={onSignOut}
           right={<button className="btn ghost sm" onClick={backToList}>← Back to list</button>} />
         {error && <div className="error mt">{error}</div>}
+        {notice && <div className="notice mt">{notice}</div>}
         {!detail ? <p className="muted">Loading…</p> : (
           <>
             <div className="card result">
@@ -493,6 +507,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           </>
         )}
         {labels && <LabelSheet items={labels} onClose={() => setLabels(null)} />}
+        {removing && <RemoveUnitsModal {...removing} onClose={() => setRemoving(null)} onDone={onRemoved} />}
         {shelveModal}
         <PhotoLightbox photos={lightbox} onClose={() => setLightbox(null)} />
         {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
@@ -571,6 +586,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           </button>
         )}
         <button className="btn sm ghost" onClick={() => setLabels(gItems)}><Icon name="print" /> Print labels ({g.qty})</button>
+        <button className="btn sm ghost danger" title="Correct the count — deletes pairs and files them under Deleted"
+          onClick={() => setRemoving({ title: g.name || g.sku || 'Unknown shoe', sku: g.sku, units: gItems })}>
+          Remove pairs…
+        </button>
       </div>
       <div className="inv-units">
         <div className="inv-history-title">Units</div>
@@ -656,6 +675,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
       </div>
 
       {error && <div className="error mt">{error}</div>}
+      {notice && <div className="notice mt">{notice}</div>}
 
       {data && (
         <>
@@ -772,6 +792,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
       )}
 
       {labels && <LabelSheet items={labels} onClose={() => setLabels(null)} />}
+      {removing && <RemoveUnitsModal {...removing} onClose={() => setRemoving(null)} onDone={onRemoved} />}
       {shelveModal}
       {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
     </div>

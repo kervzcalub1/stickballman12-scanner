@@ -30,7 +30,7 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   "on" only if **all** units have it).
 - **Rows split by listing state, and by scan day once a pair has been touched.** The
   group key is `sku | item status | store-flag signature | scan day (untouched pairs:
-  omitted)`. Two rules:
+  omitted) | edit-lock tag`. Three rules:
   1. **The flag signature always splits.** II+AL+SX+SH, plus `goat_only` (it decides
      whether SX/SH are required at all, so the same four ticks mean "done" for a
      GOAT-only pair and "half done" for a normal one). The moment ONE tick lands the
@@ -46,6 +46,17 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
      arrived with — while a later delivery still can't fold into an older row,
      because it carries its own scan day. Day = `estDate` (`format.js`), EST, so it
      agrees with the server's date filters and with what the Date column prints.
+  3. **A row being EDITED stops accepting new pairs** (2026-08-19). `groupPhSized`
+     takes an optional `lockTagFor(vin)`; `PHTeam.jsx` passes the active edit lock's
+     **holder** id, so two editors' rows also stay apart. The lock is claimed over
+     exactly the pairs the row held when edit mode opened, so those pairs stay
+     together and a delivery landing mid-edit forms its own row.
+     Why: rule 2 merges untouched pairs, so a second shipment of the same SKU minutes
+     after the first folded into the row PH was working on — and the group action they
+     clicked next (GOAT only) reached pairs they never saw arrive. A row that's merely
+     *pending and unlocked* still merges, deliberately: two same-state deliveries of one
+     SKU are one worklist line. What must never happen is a **done** row regressing —
+     it can't, because its flag signature (rule 1) differs from an untouched pair's.
 
   Every row has exactly ONE listing status (`unitListingStatus` per unit →
   `g.listingState`, which `phListingStatus` short-circuits on), so rows line up 1:1
@@ -112,15 +123,37 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
 - **II is the master — ticking it ticks the stores** (`setSizeFlag` in `PHTeam.jsx`):
   Intelligent Inventory pushes to the stores it feeds, so turning **II on** for a size
   turns on that shoe's applicable store flags in the same draft (`requiredFlags(g)` —
-  GOAT-only ⇒ Alias only; SX/SH are N/A and untouched). Each store box stays
+  GOAT-only ⇒ Alias only, and a GOAT-only row never reaches this cascade at all
+  because II is N/A there — Alias is ticked directly). Each store box stays
   individually editable: untick one before Submit if that push didn't take.
   **Turning II off cascades nothing** — a delist is exactly where the stores diverge,
   and silently clearing three flags would destroy what PH recorded.
+- **Remove…** on a row opens the shared `RemoveUnitsModal` — a per-size quantity
+  editor that **deletes** the pairs (archived to `deleted_items` first) rather than
+  re-statusing them, so the grid's counts read true after a miscount. Disabled while
+  any row is being edited. Full rules + the Deleted archive: `inventory.md`.
 - **GOAT only** (`items.goat_only`, warehouse-set at intake or toggled on the grid
-  via `ph/set-goat`; group rollup = all units): shoe lists to **Alias(GOAT)+II only**
-  — SX/SH show **N/A** (not editable), a purple **GOAT only** chip marks the group,
-  and completion (`phListingStatus`) + the SX/SH badges/`pendingCounts` ignore SX/SH.
-  Required flags: `requiredFlags(g)` in `lib/ph.js`.
+  via `ph/set-goat`; group rollup = all units): shoe lists to **Alias(GOAT) ALONE**
+  — II/SX/SH all show **N/A** (not editable), a purple **GOAT only** chip marks the
+  group, and completion (`phListingStatus`) + the badges + `pendingCounts` (`not_ii`
+  as well as `not_stockx`/`not_shopify`) ignore all three.
+  Required flags: `requiredFlags(g)` → `GOAT_FLAG_KEYS = ['synced_alias']`.
+  **Alias's tick alone completes a GOAT-only row** (2026-08-19). It used to also
+  require Intelligent Inventory, which parked every finished GOAT-only row in
+  In-Progress waiting for a tick PH never makes. Note the follow-on: a legacy row
+  with II ticked but **not** Alias now reads `pending`, not `in_progress` — correct
+  under the new rule, since II was never the work.
+  - **Every change is logged to each unit's history** (`setItemsGoatOnly` writes a
+    `ph_update` event naming who did it, 2026-08-19). It used to write nothing at all
+    — the one flag that decides whether a pair is ever listed to SX/SH was the only
+    field on the row with no answer to "who set this, and when", and a GOAT-only unit
+    is excluded from the SX/SH `pendingCounts`, so a wrong flag surfaces as a backlog
+    **nowhere**.
+  - **The chip confirms its scope when the row grew** (`askGoat` in `PHTeam.jsx`):
+    the live poll can fold a fresh delivery into an untouched row, so if any pair in
+    it arrived while the page has been open (`newVinsRef`, seeded on the first load of
+    a view) the click asks first and counts them. The chip writes to **every** VIN in
+    the row — that's the point of the warning.
 - Nothing is group-level anymore; each size's fields apply to that size's VINs.
 - **GI fetched at receiving** (Alias pricing insights, per unit) seeds these; PH
   reviews/overrides. GI fetched best-effort, so it may be null. See `integrations.md`.

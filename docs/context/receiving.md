@@ -128,7 +128,7 @@ Full detail: `in-store.md`.
      dissolve into a real size-1 row mid-type.
    - **`scanBoxMode`** ("Scanning as: With box / No box") is **sticky** and applied
      to every scan — the SOP already says to scan no-box pairs separately. Per-shoe
-     box status and **GOAT only** (`goat_only` → PH lists to Alias(GOAT)+II only;
+     box status and **GOAT only** (`goat_only` → PH lists to Alias(GOAT) ALONE;
      StockX/Shopify N/A) are now chips **on the cart row**, not in a draft.
    - **Undo last scan** removes that unit only (by its VIN, or the whole line if it
      hadn't merged yet). One-shot, and it outlives the flash message.

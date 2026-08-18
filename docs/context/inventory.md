@@ -67,3 +67,36 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 - The modal scans/types a shelf barcode (camera or gun), resolves it via
   `locationLookup` to confirm the shelf name, lists the units, then **Shelve N
   here**. On success the list refreshes so moved units show their shelf chip.
+
+## Removing pairs (miscount fix) + the Deleted archive
+- **"Remove pairs…"** on an Inventory group (and **"Remove…"** on a PH New Inventory
+  row — `ph-report.md`) opens the shared `RemoveUnitsModal` (`components/common.jsx`).
+  Both pages use the same component so the two teams never see different behaviour.
+- It's a **quantity editor, not a delete button**: each size shows what's on file and
+  takes a new "Keep" count, because "there are 3, not 5" is how the warehouse actually
+  finds this — nobody knows *which* two VINs were the phantom pairs. Choosing is
+  therefore ours: **newest scanned first** (least likely to be shelved, priced or
+  listed), and the exact VINs are **named in the modal before anything happens**,
+  since this can't be undone from the UI. An optional reason is stored with the record.
+- **The rows are genuinely DELETED** (`POST /api/items/delete` → `deleteItems`), not
+  re-statused. That was the deliberate call: both pages, every pending count and the
+  batch's own received total have to read true after a miscount is corrected, and a
+  status change can't deliver that. Note the consequence — a PO's received count and
+  therefore its reconciliation move too, which is *right* for a genuine miscount.
+- **`sold`/`shipped` pairs are refused** server-side and come back as `blocked`: that
+  money already happened, and `sales` cascades off `items`. The UI reports them.
+- **Archive first, delete second.** `item_events` is `ON DELETE CASCADE`, so deleting
+  the item silently takes its whole history with it. `deleteItems` writes a
+  `deleted_items` row per unit inside the same transaction as the delete, holding
+  `to_jsonb(i)` (the WHOLE row — not a hand-listed subset, which would quietly drop
+  any column added later) plus the unit's full `item_events` as JSONB.
+  **Both jsonb params are `JSON.stringify(...)::jsonb`** — node-pg serializes a JS
+  array as a Postgres *array literal*, so passing `events` straight through writes
+  something that isn't JSON and the insert dies on `invalid input syntax for type json`.
+- **Deleted page** (`/deleted`, and `/ph/deleted` for the PH team — `DeletedItems.jsx`,
+  `GET /api/items/deleted`): every removed pair, newest first, searchable by **SKU** /
+  VIN / name with a removed-on date range, and each row expands to the unit's frozen
+  history. Home card in *Browse & Reports*; PH home card under *Help*.
+- Roles: warehouse + PH team (admin/superadmin auto-allowed via `requireRole`).
+  Rate limit is tighter than bulk-status (20/min vs 30) — this one can't be undone
+  from the UI, so a stuck button costs real rows.

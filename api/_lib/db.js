@@ -8,6 +8,7 @@
 // local database now and on any real host later (not tied to Vercel/Neon).
 
 import pg from 'pg';
+import { TERMINAL_STATUSES } from './statuses.js';
 
 const { Pool } = pg;
 
@@ -1141,7 +1142,8 @@ export async function setInstoreListed(vins, flags, by) {
 export async function pendingCounts() {
   const rows = await db()`
     SELECT
-      count(*) FILTER (WHERE listable AND ph_managed AND NOT added_to_intel_inv)::int AS not_ii,
+      -- GOAT-only pairs list to Alias ONLY, so they are not II backlog either.
+      count(*) FILTER (WHERE listable AND ph_managed AND NOT goat_only AND NOT added_to_intel_inv)::int AS not_ii,
       count(*) FILTER (WHERE listable AND ph_managed AND NOT synced_alias)::int       AS not_alias,
       count(*) FILTER (WHERE listable AND ph_managed AND NOT goat_only AND NOT synced_stockx)::int  AS not_stockx,
       count(*) FILTER (WHERE listable AND ph_managed AND NOT goat_only AND NOT synced_shopify)::int AS not_shopify,
@@ -1664,10 +1666,93 @@ export async function setItemsCost(vins, cost, by) {
 
 // Toggle "GOAT only" (list to Alias/GOAT + II only) across a set of units — used
 // from Receiving (whole shoe) and the PH grid (a SKU group).
-export async function setItemsGoatOnly(vins, goatOnly) {
+//
+// Every change is LOGGED to each unit's history. This used to write nothing at all,
+// which made the one flag that decides whether a pair is ever listed to StockX /
+// Shopify the only field on the row with no answer to "who set this, and when" —
+// and a GOAT-only unit is excluded from the StockX/Shopify pending counts
+// (`pendingCounts`), so a wrong flag never surfaces as a backlog anywhere. When a
+// group merged an unrelated delivery and the chip was clicked, there was no trace.
+export async function setItemsGoatOnly(vins, goatOnly, by) {
   const list = (vins || []).filter(Boolean);
   if (!list.length) return [];
-  return await db()`UPDATE items SET goat_only = ${!!goatOnly}, updated_at = now() WHERE vin = ANY(${list}) RETURNING vin, goat_only`;
+  const sql = db();
+  const rows = await sql`
+    UPDATE items SET goat_only = ${!!goatOnly}, updated_at = now()
+    WHERE vin = ANY(${list})
+    RETURNING id, vin, goat_only
+  `;
+  const text = goatOnly
+    ? 'GOAT only turned ON — lists to Alias (GOAT) + Intelligent Inventory only'
+    : 'GOAT only turned OFF — lists to all stores';
+  for (const r of rows) {
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${r.id}, 'ph_update', ${JSON.stringify({ text })}::jsonb, ${by || null})`;
+  }
+  return rows;
+}
+
+// Delete pairs outright, archiving each one first. Used by "remove" on Inventory
+// and New Inventory, where a miscount has to be corrected: every count, both pages
+// and the batch's own received total have to read true afterwards, which a status
+// change can't deliver.
+//
+// The archive is written BEFORE the delete for a reason that isn't obvious:
+// item_events is `ON DELETE CASCADE`, so deleting the item silently takes its whole
+// history with it. `to_jsonb(i)` freezes the entire row (not a hand-listed subset,
+// which would quietly drop any column added later) and the events go with it.
+//
+// Sold/shipped pairs are refused — that money already happened, `sales` cascades off
+// items too, and "we miscounted" is never the reason a sold pair leaves.
+export async function deleteItems(vins, reason, by) {
+  const list = [...new Set((vins || []).filter(Boolean))];
+  if (!list.length) return { deleted: [], blocked: [] };
+  const sql = db();
+  const rows = await sql`
+    SELECT i.id, i.vin, i.sku, i.name, i.size, i.status, i.batch_id, i.cost,
+           i.created_at, i.created_by, b.batch_code, to_jsonb(i) AS item_json,
+           coalesce((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.created_at)
+                       FROM item_events e WHERE e.item_id = i.id), '[]'::jsonb) AS events
+      FROM items i LEFT JOIN batches b ON b.id = i.batch_id
+     WHERE i.vin = ANY(${list})
+  `;
+  const blocked = rows.filter((r) => TERMINAL_STATUSES.includes(r.status)).map((r) => r.vin);
+  const doomed = rows.filter((r) => !TERMINAL_STATUSES.includes(r.status));
+  if (!doomed.length) return { deleted: [], blocked };
+
+  // Archive every row, then delete in ONE statement so a half-archived batch can't
+  // survive a mid-loop failure as live stock with a tombstone already filed.
+  // JSON.stringify + ::jsonb, not the bare value: node-pg serializes a JS ARRAY as a
+  // Postgres array literal (`{...}`), so passing `events` straight through writes
+  // something that isn't JSON and the insert dies on "invalid input syntax for type json".
+  const queries = doomed.map((r) => sql`
+    INSERT INTO deleted_items
+      (vin, item_id, sku, name, size, status, batch_id, batch_code, cost,
+       scanned_at, scanned_by, reason, item_json, events, deleted_by)
+    VALUES
+      (${r.vin}, ${r.id}, ${r.sku}, ${r.name}, ${r.size}, ${r.status}, ${r.batch_id},
+       ${r.batch_code}, ${r.cost}, ${r.created_at}, ${r.created_by}, ${reason || null},
+       ${JSON.stringify(r.item_json)}::jsonb, ${JSON.stringify(r.events)}::jsonb, ${by || null})
+  `);
+  const ids = doomed.map((r) => r.id);
+  queries.push(sql`DELETE FROM items WHERE id = ANY(${ids})`);
+  await sql.transaction(queries);
+  return { deleted: doomed.map((r) => r.vin), blocked };
+}
+
+// The Deleted page: what was removed, newest first. `q` matches SKU / VIN / name.
+export async function listDeletedItems({ q = null, from = null, to = null, limit = 500 } = {}) {
+  const like = q ? `%${String(q).trim()}%` : null;
+  return await db()`
+    SELECT id, vin, sku, name, size, status, batch_code, cost, reason,
+           scanned_at, scanned_by, deleted_by, deleted_at, events
+      FROM deleted_items
+     WHERE (${like}::text IS NULL OR sku ILIKE ${like} OR vin ILIKE ${like} OR name ILIKE ${like})
+       AND (${from}::date IS NULL OR (deleted_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       AND (${to}::date   IS NULL OR (deleted_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+     ORDER BY deleted_at DESC, id DESC
+     LIMIT ${Math.min(2000, Math.max(1, Number(limit) || 500))}
+  `;
 }
 
 export async function markBoxFound(itemId, createdBy) {

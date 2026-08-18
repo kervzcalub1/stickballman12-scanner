@@ -311,12 +311,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   }
   const myId = holderIdRef.current;
   const lockHolder = (g) => { for (const v of g.vins) { const l = locks[v]; if (l && l.holder_id !== myId) return l.holder; } return null; };
-  // Rule 3 of groupPhSized: a locked (being-edited) row stops absorbing new pairs.
-  // Tagging by the lock HOLDER, not just "locked", keeps two editors' rows apart.
-  const lockTagFor = useCallback((vin) => {
-    const l = locks[vin];
-    return l ? `L${l.holder_id}` : '';
-  }, [locks]);
+  // Rule 3 of groupPhSized: a row being edited stops absorbing new pairs. It only
+  // asks whether a unit is locked — the LATE ARRIVAL is what moves, so the edited
+  // row keeps the key `editing`/`drafts`/`expanded` are all stored under.
+  const isLockedVin = useCallback((vin) => !!locks[vin], [locks]);
 
   // Pairs that arrived while this page has been open. The live poll folds a fresh
   // delivery straight into a matching untouched row, so a group action clicked
@@ -632,7 +630,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     : (cls ? <span className={cls}>{node}</span> : node));
 
   // Consolidate per SKU+status (with per-size detail), then sort by scan date.
-  const allGroups = groupPhSized(rows || [], lockTagFor);
+  const allGroups = groupPhSized(rows || [], isLockedVin);
   allGroups.sort((a, b) => (sortDir === 'desc' ? (a.created_at < b.created_at ? 1 : -1) : (a.created_at < b.created_at ? -1 : 1)));
   // New Inventory only: narrow to the selected listing-status buckets.
   const groups = useStatusFilter ? allGroups.filter((g) => statusFilter.has(phListingStatus(g))) : allGroups;

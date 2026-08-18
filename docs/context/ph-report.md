@@ -30,7 +30,7 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   "on" only if **all** units have it).
 - **Rows split by listing state, and by scan day once a pair has been touched.** The
   group key is `sku | item status | store-flag signature | scan day (untouched pairs:
-  omitted) | edit-lock tag`. Three rules:
+  omitted)`, plus a `|#|new` suffix on arrivals blocked by rule 3. Three rules:
   1. **The flag signature always splits.** II+AL+SX+SH, plus `goat_only` (it decides
      whether SX/SH are required at all, so the same four ticks mean "done" for a
      GOAT-only pair and "half done" for a normal one). The moment ONE tick lands the
@@ -47,10 +47,14 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
      because it carries its own scan day. Day = `estDate` (`format.js`), EST, so it
      agrees with the server's date filters and with what the Date column prints.
   3. **A row being EDITED stops accepting new pairs** (2026-08-19). `groupPhSized`
-     takes an optional `lockTagFor(vin)`; `PHTeam.jsx` passes the active edit lock's
-     **holder** id, so two editors' rows also stay apart. The lock is claimed over
-     exactly the pairs the row held when edit mode opened, so those pairs stay
-     together and a delivery landing mid-edit forms its own row.
+     takes an optional `isLocked(vin)`; `PHTeam.jsx` passes "is this unit under an
+     active edit lock". **The late arrival is what moves** — an unlocked unit whose
+     natural key is being edited is pushed to `<key>|#|new`, and the locked row keeps
+     its key exactly. That direction is not cosmetic: `editing`, `drafts` and
+     `expanded` are all keyed on `g.key`, and claiming the lock is itself what makes a
+     row locked, so putting the lock in every member's key re-keyed the row the instant
+     editing began and the per-size editor vanished as it opened (caught by the PH grid
+     e2e suite, not by review).
      Why: rule 2 merges untouched pairs, so a second shipment of the same SKU minutes
      after the first folded into the row PH was working on — and the group action they
      clicked next (GOAT only) reached pairs they never saw arrive. A row that's merely

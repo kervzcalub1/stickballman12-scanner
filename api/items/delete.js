@@ -9,6 +9,9 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { deleteItems, dbConfigured } from '../_lib/db.js';
 
+// Matches bulk-status' ceiling. A single SKU+status row realistically never reaches it.
+const MAX_PER_CALL = 1000;
+
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
@@ -23,10 +26,17 @@ export default async function handler(req, res) {
 
   const body = await getJsonBody(req);
   const vins = Array.isArray(body.vins)
-    ? [...new Set(body.vins.map((v) => String(v).trim().toUpperCase()).filter(Boolean))].slice(0, 200)
+    ? [...new Set(body.vins.map((v) => String(v).trim().toUpperCase()).filter(Boolean))]
     : [];
   const reason = String(body.reason || '').trim().slice(0, 200) || null;
   if (!vins.length) return send(res, 400, { ok: false, error: 'Select at least one pair to remove.' });
+  // REFUSE over the cap rather than slicing to it. "Delete entire row" can send every
+  // pair of a big SKU in one call, and silently dropping the tail would report a clean
+  // success while leaving stock behind — the exact miscount this feature exists to fix.
+  if (vins.length > MAX_PER_CALL) return send(res, 400, {
+    ok: false,
+    error: `That's ${vins.length} pairs in one go — the limit is ${MAX_PER_CALL}. Remove them in smaller batches.`,
+  });
 
   try {
     const by = user.name || user.username || '';

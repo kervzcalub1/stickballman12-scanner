@@ -78,6 +78,14 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
   therefore ours: **newest scanned first** (least likely to be shelved, priced or
   listed), and the exact VINs are **named in the modal before anything happens**,
   since this can't be undone from the UI. An optional reason is stored with the record.
+- **"Delete entire row"** clears every size in one click (and the primary button then
+  says so, plus a line naming the count and size spread). Zeroing thirteen size inputs by
+  hand to clear one shoe was the wrong amount of work — but it's the SAME confirm, with
+  the VINs still listed, not a separate one-click nuke on the page.
+- **The server REFUSES a call over 1,000 VINs instead of slicing to it.** It used to
+  `.slice(0, 200)`, which whole-row delete turns into a trap: a big SKU would report a
+  clean success while silently leaving stock behind — the exact miscount this feature
+  exists to fix.
 - **The rows are genuinely DELETED** (`POST /api/items/delete` → `deleteItems`), not
   re-statused. That was the deliberate call: both pages, every pending count and the
   batch's own received total have to read true after a miscount is corrected, and a

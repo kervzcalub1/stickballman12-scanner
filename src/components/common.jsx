@@ -652,6 +652,13 @@ export function RemoveUnitsModal({ title, sku, units, onClose, onDone }) {
     return s.units.slice(0, s.qty - k);
   });
   const blockedNow = doomed.filter((u) => u.status === 'sold' || u.status === 'shipped');
+  const totalQty = sizes.reduce((n, s) => n + s.qty, 0);
+  // Zeroing 13 sizes by hand to clear one shoe is the wrong amount of work, so the
+  // whole row goes in one action. It's still the SAME confirm — the VINs are listed
+  // and the button says outright that the row is what's leaving.
+  const wholeRow = totalQty > 0 && doomed.length === totalQty;
+  const removeAll = () => setKeep(Object.fromEntries(sizes.map((s) => [s.size, 0])));
+  const resetAll = () => setKeep(Object.fromEntries(sizes.map((s) => [s.size, s.qty])));
 
   async function submit() {
     if (!doomed.length || busy) return;
@@ -670,6 +677,15 @@ export function RemoveUnitsModal({ title, sku, units, onClose, onDone }) {
       <div className="modal remove-units" role="dialog" aria-modal="true" aria-label="Remove pairs" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">Remove pairs</h3>
         <p className="modal-msg">{title}{sku ? <> · <span className="mono">{sku}</span></> : null}</p>
+
+        <div className="rm-quick">
+          <button type="button" className="btn sm ghost danger" onClick={removeAll} disabled={wholeRow}>
+            Delete entire row ({totalQty})
+          </button>
+          <button type="button" className="btn sm ghost" onClick={resetAll} disabled={!doomed.length}>
+            Reset
+          </button>
+        </div>
 
         <div className="rm-sizes">
           {sizes.map((s) => {
@@ -691,6 +707,14 @@ export function RemoveUnitsModal({ title, sku, units, onClose, onDone }) {
             );
           })}
         </div>
+
+        {wholeRow && (
+          <p className="rm-whole">
+            This removes <b>every</b> pair on this row — {totalQty} of {sku || 'this SKU'} across{' '}
+            {sizes.length} size{sizes.length === 1 ? '' : 's'}. The row disappears from Inventory
+            and New Inventory.
+          </p>
+        )}
 
         {doomed.length > 0 && (
           <div className="rm-doomed">
@@ -722,7 +746,9 @@ export function RemoveUnitsModal({ title, sku, units, onClose, onDone }) {
         <div className="modal-actions">
           <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button className="btn danger" onClick={submit} disabled={!doomed.length || busy}>
-            {busy ? 'Removing…' : `Remove ${doomed.length || ''} pair${doomed.length === 1 ? '' : 's'}`}
+            {busy ? 'Removing…'
+              : wholeRow ? `Delete entire row (${totalQty})`
+              : `Remove ${doomed.length || ''} pair${doomed.length === 1 ? '' : 's'}`}
           </button>
         </div>
       </div>

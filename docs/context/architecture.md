@@ -38,6 +38,7 @@ npm run db:go-live # beta→prod reset: inventory + PO side (see deploy.md)
 npm run e2e        # Playwright E2E (auto-starts dev on :5189); npm run e2e:ui for the UI
 npm run mobile        # serve the built app to a phone on this Wi-Fi (see below)
 npm run mobile:https  # …over HTTPS on the LAN IP — camera works, nothing published
+npm run mobile:ca     # serve just the CA cert for the phone to install (port 8081)
 npm run mobile:tunnel # …over public HTTPS from anywhere — camera works, IS published
 ```
 
@@ -69,12 +70,28 @@ was already in the server). Everything lands in **`certs/` — git-ignored**; on
 `certs/rootCA.pem` ever goes to a device.
 - The CA is **never added to this Mac's keychain** — no sudo, nothing to uninstall
   later. Only the devices you explicitly trust it on are affected.
-- **Phone setup, once:** open `http://<lan-ip>:8081` (the script serves the CA over
-  plain HTTP — it's the one file that has to travel *before* the phone trusts
-  anything, so it can't come over the https URL it's the prerequisite for) → Settings
-  → Profile Downloaded → Install → **General → About → Certificate Trust Settings →
-  full trust**. That last toggle is the step everyone misses; without it Safari
-  still refuses the cert.
+- **Phone setup, once:** open `http://<lan-ip>:8081` — a page with a Download
+  button (the CA is served over plain HTTP because it's the one file that has to
+  travel *before* the phone trusts anything, so it can't come over the https URL it's
+  the prerequisite for) → tap Allow → Settings → Profile Downloaded → Install →
+  **General → About → Certificate Trust Settings → full trust**. That last toggle is
+  the step everyone misses; without it Safari still refuses the cert.
+- **Three things iOS needs, each of which fails silently on its own** (learned the
+  hard way — the first version of this served the CA and the download did nothing):
+  **(1)** serve the cert **inline** — `Content-Disposition: attachment` routes it to
+  the Files download manager instead of the profile installer, and a `.pem` sitting in
+  Files is a dead end; **(2)** the URL needs a certificate extension — `.cer` carrying
+  **DER** is what iOS takes without argument (`.crt`/PEM is served too); **(3)** `/` is
+  a real HTML page, because landing on a bare IP that answers with a raw download is
+  indistinguishable from "the server isn't running".
+- **`npm run mobile:ca`** serves *only* the CA (`local-cert.mjs --serve`) — for when
+  the phone needs the certificate and the app server isn't running. Note the CA page
+  lives only as long as the command does; a phone visiting `:8081` after Ctrl-C gets
+  nothing, which reads exactly like a broken download.
+- **A busy port steps aside instead of crashing:** `serveCa` catches `EADDRINUSE`,
+  says so, and binds the next port (the printed instructions follow the real one). It
+  used to throw an unhandled `error` event *after* the banner had already printed the
+  old port — the run died while the screen still said "open :8081".
 - **Apple's rules, all of which the leaf satisfies** (get one wrong and iOS rejects
   it with no useful error): RSA ≥2048, SHA-256, `extendedKeyUsage=serverAuth`, a SAN
   covering the address (CN is not consulted), and validity ≤825 days. The leaf gets

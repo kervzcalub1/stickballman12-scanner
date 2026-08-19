@@ -11,6 +11,7 @@
     "serve": "vite build && node server.mjs",
     "mobile": "node scripts/mobile-preview.mjs",
     "mobile:https": "node scripts/mobile-preview.mjs --https",
+    "mobile:ca": "node scripts/local-cert.mjs --serve",
     "mobile:tunnel": "node scripts/mobile-preview.mjs --tunnel",
     "db:setup": "node scripts/db-setup.mjs",
     "db:reset": "node scripts/db-reset.mjs",

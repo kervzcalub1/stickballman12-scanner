@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   const p = new URL(req.url, 'http://x').searchParams;
   const sp = p.get('status');
-  const status = sp === 'all' ? null : (sp === 'audited' ? 'audited' : 'open');
+  const status = sp === 'all' ? null : (['audited', 'cancelled'].includes(sp) ? sp : 'open');
   const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
   const from = isDate(p.get('from')) ? p.get('from') : null;
   const to = isDate(p.get('to')) ? p.get('to') : null;

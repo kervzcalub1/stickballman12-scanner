@@ -295,7 +295,7 @@ await sql(`
     price        NUMERIC(12,2),
     reason       TEXT,
     note         TEXT,
-    status       TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'done'
+    status       TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'audited' | 'cancelled'
     requested_by TEXT,
     resolved_by  TEXT,
     resolved_at  TIMESTAMPTZ,
@@ -312,6 +312,10 @@ await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS audit_note   TE
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listing   JSONB`);
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_by TEXT`);
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_at TIMESTAMPTZ`);
+// PH cancelling a request they raised in error. Only the reason needs a column —
+// WHO cancelled and WHEN reuse resolved_by/resolved_at ("who ended this, and when"),
+// with `status` saying how it ended. The warehouse's audit_note stays theirs alone.
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS cancel_note TEXT`);
 
 // Pre-printed VIN/1ID roll stock ("VIN Project"). Blank stickers are minted and
 // printed in bulk BEFORE anyone knows which shoe each will land on, so intake never

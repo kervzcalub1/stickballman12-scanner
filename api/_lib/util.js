@@ -235,6 +235,22 @@ export function cleanUpc(raw) {
   return digits;
 }
 
+// Some pairs carry TWO style codes in one field — "315121-115/CW2290-111" (a shoe
+// re-issued under a new code, or double-labelled). No provider knows that combined
+// string: Alias returns nothing for it, so every price lookup on those items came
+// back empty while each half resolves fine on its own. Pricing therefore keys off
+// the FIRST code — the one whoever received the pair wrote first.
+//
+// Splits on `/`, `,` and `|` only. NOT on whitespace: a style code is sometimes
+// typed with a space instead of a dash ("DD1391 100"), and splitting there would
+// truncate a perfectly good single SKU to "DD1391".
+export function primarySku(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  const first = s.split(/[/,|]/)[0].trim();
+  return first || null;
+}
+
 export function cleanSku(raw) {
   // Allow letters, digits, spaces and dashes; trim and cap length.
   const s = String(raw || '').trim().slice(0, 64);

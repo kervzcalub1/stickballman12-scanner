@@ -92,6 +92,19 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
     (`ALIAS_API_KEY` bearer), returns `catalog_items[0].catalog_id`. This is how
     **SKU-scanned units (no UPC) still get a GI** (KicksDB returns no UPC). SKU match
     is fuzzy (dash or space). SKU-only catalog rows are stored with `upc = NULL`.
+  - **DUAL-CODE SKUs price off the FIRST code.** Some pairs carry two style codes in
+    one field — `315121-115/CW2290-111` (re-issued or double-labelled). The catalog
+    knows each code and **never the pair**, so the combined string returned nothing and
+    those items silently had no price at all. `aliasCatalogBySku` now searches
+    `primarySku()` (`util.js`) — split on `/`, `,`, `|`, **never on whitespace**, since
+    a lone SKU is sometimes typed with a space (`DD1391 100`) and splitting there would
+    truncate it. Done at this one chokepoint on purpose: every SKU-driven price path
+    goes through it (receiving `enrichGlobalIndicators`, `giForSkuSizes`, Price
+    Inquiry, `refreshGiForItems`, `/api/get-price`, `sku-search`), plus the image and
+    eBay-listing lookups. The `products` cache still keys on the item's FULL sku.
+    Note the two codes can resolve to *different* catalog rows (`315121-115` → AF1 High
+    '07 'White', `CW2290-111` → 'Triple White'), which is why there is no silent
+    fallback to the second code — the first is the one the receiver wrote first.
   - Conditions default to NEW / GOOD_CONDITION. Pricing `size` is numeric — `9W`/`5.5Y`
     are stripped to `9`/`5.5` in `aliasGlobalIndicator`.
 - **All callers treat failure as "no GI" (best-effort).** Used at **receiving**

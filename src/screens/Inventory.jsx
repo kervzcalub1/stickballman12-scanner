@@ -27,7 +27,12 @@ function intakeChip(g) {
   return <SyncBadges item={g} />;
 }
 
-export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }) {
+// `canEditStock` is the warehouse/PH split. PH team gets the same page — search,
+// filters, detail, history, photos, labels, CSV, and Remove pairs (they already have
+// that on their own grid) — but NOT the physical-stock writes: status changes and
+// Move to shelf. Those endpoints stay warehouse-only server-side, so this flag hides
+// buttons that would 403 rather than granting anything (docs/context/inventory.md).
+export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, canEditStock = true }) {
   const today = estToday();
   const [mode, setMode] = useState('list'); // 'list' | 'detail'
 
@@ -56,6 +61,17 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   const [notice, setNotice] = useState(''); // transient confirmation (e.g. pairs removed)
   const [sel, setSel] = useState(() => new Set());
   const [labels, setLabels] = useState(null);
+  // Supplier filter options: the live list (seeded + names staff typed while
+  // receiving + anything already on a batch), not a hard-coded array — a supplier
+  // added during intake was invisible here until the constant was edited by hand.
+  // Falls back to the static SUPPLIERS constant if the fetch fails.
+  const [supplierOptions, setSupplierOptions] = useState(SUPPLIERS);
+  // Keep the active filter in the list even if it isn't in the fetched names (a
+  // shared/refreshed URL, or a name that has since changed) — otherwise the select
+  // would read "All" while the results are still filtered to that supplier.
+  const supplierNames = useMemo(() => (
+    supplier && !supplierOptions.includes(supplier) ? [...supplierOptions, supplier] : supplierOptions
+  ), [supplierOptions, supplier]);
   const [lightbox, setLightbox] = useState(null);  // defect-issue photos viewer
   const [expanded, setExpanded] = useState(() => new Set()); // vins with the accordion open
   const [removing, setRemoving] = useState(null); // { title, sku, units } — remove-pairs modal
@@ -115,6 +131,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    let cancelled = false;
+    api.suppliers()
+      .then(({ suppliers }) => { if (!cancelled && suppliers?.length) setSupplierOptions(suppliers); })
+      .catch(() => { /* keep the static fallback */ });
+    return () => { cancelled = true; };
+  }, []);
   // Keep the search box focused in list mode so a scanner gun types into it.
   useEffect(() => { if (mode === 'list' && !showCam) searchRef.current?.focus(); }, [mode, showCam, data]);
 
@@ -207,6 +230,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   // Report: status edits are staged in statusDrafts and only persisted on Save.
   const setStatusDraft = (vin, status) => setStatusDrafts((d) => ({ ...d, [vin]: status }));
   async function saveRowStatus(vin, current) {
+    if (!canEditStock) return;
     const status = statusDrafts[vin];
     if (!status || status === current) return;
     setSavingStatusVin(vin); setError('');
@@ -240,6 +264,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
 
   // Report: bulk status change over the selected VINs.
   async function applyBulkStatus() {
+    if (!canEditStock) return;
     setBulkBusy(true); setError('');
     // Picking "In Stock" for unshelved units isn't a status change — it's a
     // put-away. Route to the shelf scanner instead of a doomed bulk-status call.
@@ -254,6 +279,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
 
   /* ----- Move to shelf (put-away) ----- */
   function openShelve(items, title) {
+    if (!canEditStock) return;
     const units = items.map((r) => ({ vin: r.vin, size: r.size, noBox: r.status === 'no_box' || r.with_box === false }));
     if (!units.length) return;
     setShelveFor({ title, units });
@@ -335,6 +361,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   const clearStatusDraft = () => { setDetailStatusDraft(null); setCustomTag(''); };
   // Persist the staged status/tag — only runs when the user hits Save.
   async function saveItemStatus() {
+    if (!canEditStock) return;
     if (!detail) return;
     const s = draftStatus;
     if (!s || s === detail.item.status) return;
@@ -348,6 +375,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
     finally { setBusy(false); }
   }
   async function submitNote() {
+    if (!canEditStock) return;
     const text = note.trim();
     if (!text || !detail) return;
     setBusy(true); setError('');
@@ -442,6 +470,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                 </div>
               </div>
 
+              {canEditStock && (<>
               <h3 className="rows-title">Set status / tag</h3>
               {/* Pick a preset or type a custom tag. Nothing is saved until "Save". */}
               <div className="status-actions">
@@ -469,6 +498,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
                 <input placeholder="Note about this item…" value={note} onChange={(e) => setNote(e.target.value)} />
                 <button className="btn primary" disabled={busy || !note.trim()}>Add</button>
               </form>
+              </>)}
 
               <div className="send"><button className="btn ghost wide" onClick={() => setLabels([{ vin: it.vin, sku: it.sku, size: it.size, name: it.name, upc: it.upc, colorway: it.colorway, gender: it.gender, withBox: it.with_box }])}><Icon name="print" /> Print this label</button></div>
             </div>
@@ -534,6 +564,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
 
   // Status change over a whole SKU group (all its VINs) via bulk-status.
   async function saveGroupStatus(g) {
+    if (!canEditStock) return;
     const status = statusDrafts[g.key];
     if (!status || status === g.status) return;
     // In Stock requires a shelf — route unshelved units to put-away instead.
@@ -573,18 +604,22 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
         <div className="inv-metrics-wide"><dt>Listed / synced</dt><dd><SyncBadges item={g} /></dd></div>
       </dl>
       <div className="inv-actions">
-        <label className="inv-status-edit">Status (all {g.qty})
-          <select value={statusDrafts[g.key] ?? g.status} onChange={(e) => setStatusDraft(g.key, e.target.value)}>
-            {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-          </select>
-        </label>
-        <button className="btn sm primary" disabled={(statusDrafts[g.key] ?? g.status) === g.status || savingStatusVin === g.key} onClick={() => saveGroupStatus(g)}>
-          {savingStatusVin === g.key ? 'Saving…' : 'Save'}
-        </button>
-        {unshelved.length > 0 && (
-          <button className="btn sm ghost" onClick={() => openShelve(unshelved, g.name)}>
-            <Icon name="pin" /> Move to shelf ({unshelved.length})
-          </button>
+        {canEditStock && (
+          <>
+            <label className="inv-status-edit">Status (all {g.qty})
+              <select value={statusDrafts[g.key] ?? g.status} onChange={(e) => setStatusDraft(g.key, e.target.value)}>
+                {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+              </select>
+            </label>
+            <button className="btn sm primary" disabled={(statusDrafts[g.key] ?? g.status) === g.status || savingStatusVin === g.key} onClick={() => saveGroupStatus(g)}>
+              {savingStatusVin === g.key ? 'Saving…' : 'Save'}
+            </button>
+            {unshelved.length > 0 && (
+              <button className="btn sm ghost" onClick={() => openShelve(unshelved, g.name)}>
+                <Icon name="pin" /> Move to shelf ({unshelved.length})
+              </button>
+            )}
+          </>
         )}
         <button className="btn sm ghost" onClick={() => setLabels(gItems)}><Icon name="print" /> Print labels ({g.qty})</button>
         <button className="btn sm ghost danger" title="Correct the count — deletes pairs and files them under Deleted"
@@ -601,7 +636,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
             {/* UPC lives on the UNIT, not the SKU group — it's per size. */}
             {r.upc ? <CopyText text={r.upc} className="muted sm" title={`Copy UPC ${r.upc}`}>UPC {r.upc}</CopyText> : null}
             {r.location_code ? <span className="loc-chip sm" title={r.location_code}><Icon name="pin" /> {r.location_code}</span> : <span className="muted sm">unshelved</span>}
-            {shelvable(r) && <button className="btn sm ghost" onClick={() => openShelve([r], r.name || g.name)} title="Place this unit on a shelf"><Icon name="pin" /> Shelve</button>}
+            {canEditStock && shelvable(r) && <button className="btn sm ghost" onClick={() => openShelve([r], r.name || g.name)} title="Place this unit on a shelf"><Icon name="pin" /> Shelve</button>}
             <button className="btn sm ghost" onClick={() => openDetail(r.vin)}>Details →</button>
           </div>
         ))}
@@ -618,7 +653,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
       <div className="card">
         {/* One box: scan a VIN (gun or camera) to open it, or type to search. */}
         <form className="searchrow" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <input ref={searchRef} placeholder="Scan a VIN or shelf — or search VIN / SKU / name / shelf…" value={q}
+          <input ref={searchRef} placeholder="Scan a VIN or shelf — or search by keywords: name, SKU, UPC, shelf…" value={q}
             onChange={(e) => setQ(e.target.value)} autoCapitalize="characters" />
           <button className="btn primary" disabled={loading}>Go</button>
           <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera"><Icon name="camera" /> {showCam ? 'Close camera' : 'Scan with camera'}</button>
@@ -653,7 +688,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
           <label>Supplier
             <select value={supplier} onChange={(e) => setSupplier(e.target.value)}>
               <option value="">All</option>
-              {SUPPLIERS.map((s) => <option key={s} value={s}>{s}</option>)}
+              {supplierNames.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
           <label>Status
@@ -686,8 +721,8 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
               {Object.entries(data.totals.byStatus).map(([s, n]) => <span key={s} className="muted"> · {statusLabel(s)}: {n}</span>)}
             </div>
             <span className="report-actions">
-              <button className="btn sm ghost" disabled={!sel.size} onClick={() => setBulkOpen(true)}>Edit status{sel.size ? ` (${sel.size})` : ''}</button>
-              {(() => { const u = selectedItems.filter(shelvable); return (
+              {canEditStock && <button className="btn sm ghost" disabled={!sel.size} onClick={() => setBulkOpen(true)}>Edit status{sel.size ? ` (${sel.size})` : ''}</button>}
+              {canEditStock && (() => { const u = selectedItems.filter(shelvable); return (
                 <button className="btn sm ghost" disabled={!u.length} title="Place selected units on a shelf (marks them In Stock)"
                   onClick={() => openShelve(u, `${u.length} selected unit${u.length === 1 ? '' : 's'}`)}>
                   <Icon name="pin" /> Move to shelf{u.length ? ` (${u.length})` : ''}

@@ -44,7 +44,10 @@
   Reports, Rescale Requests (audits them), **In-Store Buying + In-Store Listing**.
 - **ph_team** — Report (New Inventory), Rescale Stock, No Box (view), Request
   Rescale (creates + views audit), **Edited Photos** (upload edited listing images
-  per SKU — `source='ph_edited'` only; see `ph-report.md`). Logs into a card home
+  per SKU — `source='ph_edited'` only; see `ph-report.md`), **Inventory browse**
+  (`/ph/inventory` — the warehouse page, read-only over stock: no status edits, no
+  shelving, no notes; `items/query` + `items/lookup` accept `ph_team`, the write
+  endpoints don't — `inventory.md`). Logs into a card home
   (`PHTeamApp`); its pages are URL-routed under `/ph/*` (refresh/Back/deep-link work).
   **Cannot touch in-store** — the intake commit, `instore-list`/`instore-listed`, and
   every PH surface exclude `kind='instore'` (`in-store.md`).

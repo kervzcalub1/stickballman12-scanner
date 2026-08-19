@@ -370,10 +370,20 @@ export async function releaseLock(key) {
 
 /* ------------------------ v6: suppliers ------------------------------- */
 
-// Vendor names for the receiving dropdown — seeded list + any custom names
-// staff have typed (auto-saved on commit). Returned alphabetically.
+// Vendor names for the receiving dropdown AND the Inventory supplier filter —
+// the seeded list, any custom names staff have typed (auto-saved on commit), and
+// every supplier that actually appears on a batch. That last half matters: a
+// filter has to offer the names the data really carries, including batches
+// received before a name was ever saved to `suppliers`.
 export async function listSuppliers() {
-  const rows = await db()`SELECT name FROM suppliers ORDER BY name`;
+  const rows = await db()`
+    SELECT name FROM (
+      SELECT name FROM suppliers
+      UNION
+      SELECT DISTINCT btrim(supplier_name) AS name FROM batches
+       WHERE coalesce(btrim(supplier_name), '') <> ''
+    ) s
+    ORDER BY name`;
   return rows.map((r) => r.name);
 }
 
@@ -990,13 +1000,32 @@ export async function findStockByCode(code, limit = 25) {
      LIMIT ${lim}`;
 }
 
+// Free-text search, split into keywords. Typing "Kobe Air Force" has to find
+// "Kobe Bryant x Nike Air Force 1 Low 'Triple Black'" — one `%kobe air force%`
+// LIKE never would, because those words aren't adjacent in the name. So every
+// whitespace-separated token must match SOMEWHERE (any searched column), which
+// means each extra word narrows the result instead of killing it.
+//
+// `%`, `_` and `\` are escaped: they're legal characters in a shoe name, and an
+// unescaped `_` silently matches any single character. Returns null for a blank
+// query so the caller's `IS NULL` short-circuit skips the whole clause.
+function searchTokens(q) {
+  const toks = String(q || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => `%${t.replace(/[\\%_]/g, '\\$&')}%`);
+  return toks.length ? toks : null;
+}
+
 // Unified inventory query — powers the merged Inventory page (browse + report).
-// Any combination of: text search (q over vin/sku/name), received-date range
+// Any combination of: keyword search (q over vin/sku/name/upc/colorway/shelf,
+// every keyword required — see searchTokens), received-date range
 // (from/to), supplier, status. Nulls are ignored. Received date = the batch's
 // date_received (falling back to the item's created date).
 export async function queryItems({ q = null, from = null, to = null, supplier = null, status = null, kind = null, limit = 2000 }) {
   const lim = Math.min(5000, Math.max(1, Number(limit) || 2000));
-  const like = q ? `%${q}%` : null;
+  const toks = searchTokens(q);
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.cost, i.status, i.created_by, i.created_at,
            i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv,
@@ -1012,7 +1041,14 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
       AND (${supplier}::text IS NULL OR b.supplier_name = ${supplier})
       AND (${status}::text   IS NULL OR i.status = ${status})
       AND (${kind}::text     IS NULL OR b.kind = ${kind})
-      AND (${like}::text IS NULL OR i.vin ILIKE ${like} OR i.sku ILIKE ${like} OR i.name ILIKE ${like} OR i.upc ILIKE ${like} OR i.location_code ILIKE ${like})
+      AND (${toks}::text[] IS NULL OR NOT EXISTS (
+            SELECT 1 FROM unnest(${toks}::text[]) AS s(tok)
+             WHERE coalesce(i.vin, '')           NOT ILIKE tok
+               AND coalesce(i.sku, '')           NOT ILIKE tok
+               AND coalesce(i.name, '')          NOT ILIKE tok
+               AND coalesce(i.upc, '')           NOT ILIKE tok
+               AND coalesce(i.colorway, '')      NOT ILIKE tok
+               AND coalesce(i.location_code, '') NOT ILIKE tok))
     ORDER BY i.vin
     LIMIT ${lim}
   `;

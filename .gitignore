@@ -27,6 +27,8 @@ env.env
 # Service-account / key material
 *.pem
 *.key
+# Local HTTPS certs for phone testing (scripts/local-cert.mjs) — private keys
+certs/
 *-service-account*.json
 gcp-*.json
 credentials*.json

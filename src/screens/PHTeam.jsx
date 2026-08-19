@@ -28,6 +28,7 @@ import { PoOverview } from './PoOverview.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
 import { Sop } from './Sop.jsx';
 import { DeletedItems } from './DeletedItems.jsx';
+import { Inventory } from './Inventory.jsx';
 
 // PH Team home: pick which report to work — New Inventory (newly received stock)
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
@@ -63,6 +64,10 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'reconcile') return <Reconciliation canReconcile onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'sop') return <Sop user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'deleted') return <DeletedItems onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  // The warehouse Inventory page, same component. `canEditStock={false}`: PH looks
+  // stock up (and can still correct a miscount), but status changes and shelving are
+  // warehouse work — and warehouse-only server-side, so the buttons would 403.
+  if (page === 'inventory') return <Inventory canEditStock={false} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -92,6 +97,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="inventory" /></span>
             <span className="home-card-title">Price Inquiry</span>
             <span className="home-card-sub">Look up live Alias prices for any SKU — lowest ask, highest offer, last sold &amp; Global Indicator</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('inventory')}>
+            <span className="home-card-icon"><NavIcon name="inventory" /></span>
+            <span className="home-card-title">Inventory</span>
+            <span className="home-card-sub">Search every pair we hold — by name keywords, SKU, VIN or shelf — with its detail, history &amp; photos</span>
           </button>
         </div>
       </section>

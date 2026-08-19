@@ -9,6 +9,7 @@ import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import { PoManifestImport } from '../components/PoManifestImport.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
@@ -372,6 +373,15 @@ export function PoOverview({ onHome, onSignOut }) {
                                 </div>
                               );
                             })()}
+                            {/* Bulk on-behalf entry: the supplier's whole manifest PDF at once.
+                                Same window as filling a single label by hand — a settled order's
+                                manifest is closed, and a whole-order manifest isn't per-label. */}
+                            {!['reconciled', 'closed'].includes(detail.po.status)
+                              && detail.po.manifest_scope !== 'po'
+                              && detail.boxes.length > 0 && (
+                              <PoManifestImport po={detail.po} boxes={detail.boxes} lines={detail.lines}
+                                onImported={refreshOpenDetail} onSignOut={onSignOut} />
+                            )}
                             {detail.boxes.map((box) => (
                               <div key={box.id} className={`po-ov-label${box.kind === 'replacement' ? ' replacement' : ''}`}>
                                 <div className="po-ov-label-top">

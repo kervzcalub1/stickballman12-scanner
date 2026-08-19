@@ -2510,6 +2510,18 @@ export async function addPoScan({ poId, poBoxId, sku, size, qty, name, upc, colo
   return rows[0];
 }
 
+// How many expected lines each label of a PO already carries. Drives the manifest
+// import's "only fill a label that has NOTHING declared" rule in one query rather
+// than a round trip per box.
+export async function poBoxLineCounts(poId) {
+  const rows = await db()`
+    SELECT po_box_id, count(*)::int AS n
+    FROM po_lines WHERE po_id = ${poId} AND po_box_id IS NOT NULL
+    GROUP BY po_box_id
+  `;
+  return new Map(rows.map((r) => [Number(r.po_box_id), r.n]));
+}
+
 // Whole-order manifest (Path C): add/increment a line against the PO itself (no label).
 // Conflict target is the partial unique index on (po_id, sku, size) WHERE po_box_id IS NULL.
 export async function addPoOrderScan({ poId, sku, size, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false }) {

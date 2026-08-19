@@ -68,6 +68,40 @@ test('flag checkbox toggles', async ({ page }) => {
   expect(await cb.isChecked()).toBe(!before);
 });
 
+// The column "All" tick: a 13-size shoe is 13 identical clicks otherwise, and PH
+// lists a whole row to a store in one pass. Guards the header control staying wired
+// to every size's draft — the bug it replaces is silent (one size left unticked).
+test('column "All" ticks that store for every size', async ({ page }) => {
+  const rows = await openGrid(page);
+  test.skip(rows === 0, 'no rows in range (empty DB)');
+  // Edit the first MULTI-size row — a one-size row can't show that "All" spans sizes.
+  const trows = page.locator('.ph-trow');
+  let target = -1;
+  for (let i = 0; i < Math.min(rows, 20); i++) {
+    if (await trows.nth(i).locator('.szq-chip').count() > 1) { target = i; break; }
+  }
+  test.skip(target < 0, 'no multi-size row in range');
+  await trows.nth(target).getByRole('button', { name: 'Edit' }).click();
+  const table = page.locator('.ph-sizetable').first();
+  await expect(table).toBeVisible();
+  const sizeCount = await table.locator('tbody tr').count();
+
+  // Column index of Alias (it shifts with the pricing columns, which warehouse can't see).
+  // innerText is the RENDERED text and the header is text-transform: uppercase — match
+  // case-insensitively or this silently finds nothing and the test skips itself.
+  const headers = await table.locator('thead th').allInnerTexts();
+  const col = headers.findIndex((h) => h.trim().toLowerCase().startsWith('alias'));
+  test.skip(col < 0, 'GOAT-only row — Alias column not present in this shape');
+
+  const cellBox = (i) => table.locator('tbody tr').nth(i).locator('td').nth(col).locator('input.ph-yn-check');
+  await table.locator('thead th').nth(col).locator('.ph-flag-all input').check();
+  for (let i = 0; i < sizeCount; i++) await expect(cellBox(i)).toBeChecked();
+
+  // …and unticking it clears the whole column again (it is not a one-way switch).
+  await table.locator('thead th').nth(col).locator('.ph-flag-all input').uncheck();
+  for (let i = 0; i < sizeCount; i++) await expect(cellBox(i)).not.toBeChecked();
+});
+
 test('History modal opens with a timeline', async ({ page }) => {
   const rows = await openGrid(page);
   test.skip(rows === 0, 'no rows in range (empty DB)');

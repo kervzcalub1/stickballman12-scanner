@@ -445,6 +445,25 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     if (flagKey === 'added_to_intel_inv' && v) for (const f of requiredFlags(g)) patch[f] = true;
     setSizeField(g.key, size, patch);
   };
+  // Column "select all": apply one store flag to EVERY size of the row at once —
+  // a 13-size shoe is 13 identical clicks otherwise, and PH lists a whole row to a
+  // store in one pass. Deliberately routed through the SAME rules as a single cell
+  // (ticking II still cascades to the flags this shoe actually requires), so the
+  // header control and the cells can never diverge.
+  const setAllSizesFlag = (g, flagKey, v) => {
+    setDrafts((d) => {
+      const cur = d[g.key];
+      if (!cur) return d;                      // not in edit mode — nothing to patch
+      const sizes = { ...cur.sizes };
+      for (const s of g.sizes) {
+        const patch = { [flagKey]: v };
+        if (flagKey === 'added_to_intel_inv' && v) for (const f of requiredFlags(g)) patch[f] = true;
+        sizes[s.size] = { ...sizes[s.size], ...patch };
+      }
+      return { ...d, [g.key]: { ...cur, sizes } };
+    });
+    resetIdle();
+  };
   const setSizeNote = (key, size, v) => setSizeField(key, size, { ph_note: v });
   // Save a group: every field is per-size now (GI, final price, II/AL/SX/SH, Note).
   // ONE atomic request covers every size — the server applies all sizes' updates
@@ -630,6 +649,19 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   };
   // On a GOAT-only group every store but Alias is N/A — it lists to Alias only.
   const flagNA = (g, k) => g.goat_only && k !== 'synced_alias';
+  // The per-column "All" tick, shown in the size table's header while the row is in
+  // edit mode. Checked only when EVERY size already carries the flag, so it doubles
+  // as a read-out of the column; unticking it clears the column the same way.
+  const flagAll = (g, d, k, label) => {
+    const sizes = g.sizes || [];
+    const on = sizes.length > 0 && sizes.every((sz) => d?.sizes?.[sz.size]?.[k]);
+    return (
+      <label className="ph-flag-all" title={`${on ? 'Untick' : 'Tick'} ${label} for all ${sizes.length} size${sizes.length === 1 ? '' : 's'}`}>
+        <input type="checkbox" checked={on} onChange={(e) => setAllSizesFlag(g, k, e.target.checked)} />
+        <span>All</span>
+      </label>
+    );
+  };
 
   const isRescale = kind === 'rescale';
   // Click-to-copy the shoe name / SKU on the PH work pages (New Inventory +
@@ -707,6 +739,25 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   </button>
                   {open && (
                     <div className="ph-sizedetail" ref={drawerAnimRef}>
+                      {/* Phone: one "all sizes" row above the sizes. Skipped on a single-size
+                          row — there it's just a duplicate of the row below it, and vertical
+                          space is the scarce thing here (the desktop header control costs
+                          none, so it stays put). */}
+                      {ed && g.sizes.length > 1 && (
+                        <div className="ph-sizedetail-allrow">
+                          <span className="muted sm">All {g.sizes.length} sizes</span>
+                          <span className="ph-sizedetail-flags">
+                            {PH_FLAGS.map(([k, label]) => (
+                              <span className="ph-sizedetail-flag" key={k}>
+                                <span className="muted sm">{label}</span>
+                                {flagNA(g, k)
+                                  ? <span className="ph-flag-na" title="GOAT only — not listed to this store">N/A</span>
+                                  : flagAll(g, d, k, label)}
+                              </span>
+                            ))}
+                          </span>
+                        </div>
+                      )}
                       {g.sizes.map((s) => {
                         const sd = ed ? (d.sizes?.[s.size] || {}) : null;
                         return (
@@ -852,7 +903,14 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                 <thead><tr>
                                   <th>Size</th><th>Qty</th><th>Cost</th>
                                   {showPricing && <><th><span className="ph-gi-th">Global indicator{ed && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for this shoe’s sizes" disabled={giFillKey === g.key} onClick={(e) => { e.stopPropagation(); fillGroupGi(g); }}><Icon name="refresh" size="1em" className={giFillKey === g.key ? 'spin' : ''} /></button>}</span></th><th>Final Price (GI+{markupSuffix()})</th></>}
-                                  {PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
+                                  {PH_FLAGS.map(([k, label]) => (
+                                    <th key={k}>
+                                      <span className="ph-flag-th">
+                                        <span>{label}</span>
+                                        {ed && !flagNA(g, k) && flagAll(g, d, k, label)}
+                                      </span>
+                                    </th>
+                                  ))}
                                   <th>Note</th><th>History</th>
                                 </tr></thead>
                                 <tbody>

@@ -132,6 +132,17 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   individually editable: untick one before Submit if that push didn't take.
   **Turning II off cascades nothing** — a delist is exactly where the stores diverge,
   and silently clearing three flags would destroy what PH recorded.
+- **Column "All" — tick one store for every size** (`setAllSizesFlag` + `flagAll` in
+  `PHTeam.jsx`). Sits in the size table's **header**, under each store's name, and only
+  while the row is being edited. A 13-size shoe was 13 identical clicks otherwise, and
+  PH lists a whole row to a store in one pass. It routes through the **same rules as a
+  single cell** — ticking II's "All" still cascades to `requiredFlags(g)` — so the
+  header and the cells can't diverge, and it's a **checkbox, not a one-way button**:
+  unticking clears the column. It's checked only when *every* size already carries the
+  flag, so it doubles as a read-out. N/A columns (GOAT-only ⇒ II/SX/SH) get no control.
+  On a phone the same four toggles sit in one row above the sizes, **skipped on a
+  single-size row** — there it would just duplicate the row below it, and vertical
+  space is scarce (the desktop header control costs none, so it always shows).
 - **Remove…** on a row opens the shared `RemoveUnitsModal` — a per-size quantity
   editor that **deletes** the pairs (archived to `deleted_items` first) rather than
   re-statusing them, so the grid's counts read true after a miscount. Disabled while

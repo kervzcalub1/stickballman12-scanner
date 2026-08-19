@@ -1521,6 +1521,18 @@ body {
 .ph-sizedetail-size { font-weight: 700; }
 .ph-sizedetail-flags { display: flex; flex-wrap: wrap; gap: 12px 16px; width: 100%; }
 .ph-sizedetail-flag { display: inline-flex; align-items: center; gap: 5px; }
+/* Column "select all" (PH size table header + the phone card's top row): tick one
+   store for every size of the row at once. Deliberately NOT the .ph-yn-check
+   red/blue cell checkbox — it's a control OVER the column, not a value IN it, and
+   it sits in the header where a value box would read as another size. */
+.ph-flag-th { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.ph-flag-all { display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--muted); text-transform: none; }
+.ph-flag-all:hover { color: var(--text); }
+.ph-flag-all input[type="checkbox"] { width: 16px; height: 16px; border-radius: 5px; }
+.ph-flag-all input[type="checkbox"]::after { font-size: 11px; }
+.ph-sizedetail-allrow { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+  font-size: 13px; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
 .ph-sizedetail-note { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .ph-sizedetail-hist { width: 100%; }
 .ph-card-credit { display: block; line-height: 1.5; }

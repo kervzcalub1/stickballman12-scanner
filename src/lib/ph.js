@@ -280,6 +280,28 @@ export const PH_LISTING_STATUSES = [
 // finished GOAT-only row sitting in In-Progress waiting for a tick PH never makes.)
 export const GOAT_FLAG_KEYS = ['synced_alias'];
 export const requiredFlags = (g) => (g && g.goat_only ? GOAT_FLAG_KEYS : FLAG_KEYS);
+
+// Free-text search for the PH grid — the same keyword rule the Inventory page uses
+// server-side (`searchTokens` in api/_lib/db.js): split on whitespace and require
+// EVERY token to match somewhere, so "kobe air force" finds a name whose words
+// aren't adjacent, word order doesn't matter, and each extra word narrows rather
+// than kills the result.
+//
+// This twin runs in the BROWSER, over the rows already loaded for the date range.
+// The grid IS a date window by definition — `phListItems(from,to,kind)`, the
+// row-split rules and the listing-status tabs all key off it — so widening the
+// period stays the date control's job, not the search box's. Filtering client-side
+// also means typing can't refetch, and a refetch can't yank a row out from under an
+// open edit lock.
+export const phSearchTokens = (q) => String(q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+// Name / SKU / VIN — the three things PH actually has in hand when they go looking
+// (the shoe in front of them, the code on the box, the sticker on the pair).
+export function phRowMatches(g, tokens) {
+  if (!tokens.length) return true;
+  const hay = [g.name, g.sku, ...(g.vins || [])].filter(Boolean).join(' ').toLowerCase();
+  return tokens.every((t) => hay.includes(t));
+}
 export function phListingStatus(g) {
   // groupPhSized rows are homogeneous by construction (listing state is part of the
   // group key), so the row already knows — and the filter tabs then line up 1:1 with

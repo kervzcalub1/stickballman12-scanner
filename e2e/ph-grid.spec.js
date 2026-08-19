@@ -102,6 +102,53 @@ test('column "All" ticks that store for every size', async ({ page }) => {
   for (let i = 0; i < sizeCount; i++) await expect(cellBox(i)).not.toBeChecked();
 });
 
+// Search on the PH grid: same keyword rule as the Inventory page, but client-side
+// over the rows already loaded for the date range (lib/ph phRowMatches).
+test('search narrows the lines by non-adjacent keywords', async ({ page }) => {
+  const rows = await openGrid(page);
+  test.skip(rows === 0, 'no rows in range (empty DB)');
+  const trows = page.locator('.ph-trow');
+  // The title cell renders through CopyText, so its innerText carries a trailing
+  // "Copy" affordance that is NOT part of the shoe's name — searching for it would
+  // (correctly) match nothing, since the filter reads the data, not the DOM.
+  const name = (await trows.first().locator('td').nth(1).innerText()).replace(/\bCopy\b/g, '').trim();
+  const words = name.split(/\s+/).filter((w) => w.length > 2);
+  test.skip(words.length < 3, 'first row has too short a name to test non-adjacency');
+
+  // First + LAST word — deliberately not adjacent, which a plain substring can't match.
+  const query = `${words[0]} ${words[words.length - 1]}`;
+  const want = [words[0], words[words.length - 1]].map((w) => w.toLowerCase());
+  await page.locator('.ph-search-input').fill(query);
+  // Poll the INVARIANT, not the count: "≤ rows" is true before the filter has even
+  // rendered, so asserting on it first reads the unfiltered table and passes for the
+  // wrong reason (it did exactly that here).
+  await expect.poll(async () => {
+    const n = await trows.count();
+    if (!n) return 'no rows';
+    for (let i = 0; i < n; i++) {
+      const text = (await trows.nth(i).innerText()).toLowerCase();
+      if (!want.every((w) => text.includes(w))) return 'unfiltered row still shown';
+    }
+    return 'all shown rows match';
+  }).toBe('all shown rows match');
+
+  await page.locator('.ph-search').getByRole('button', { name: 'Clear' }).click();
+  await expect.poll(() => trows.count()).toBe(rows);
+});
+
+// The row you're editing must never be filtered away: it holds an unsaved draft AND a
+// server-side edit lock, and hiding it strands both behind a search box.
+test('a row being edited survives a search that excludes it', async ({ page }) => {
+  const rows = await openGrid(page);
+  test.skip(rows === 0, 'no rows in range (empty DB)');
+  await page.getByRole('button', { name: 'Edit' }).first().click();
+  await expect(page.locator('.ph-sizetable').first()).toBeVisible();
+  await page.locator('.ph-search-input').fill('zzz definitely no match');
+  await page.waitForTimeout(300);
+  await expect(page.locator('.ph-sizetable').first()).toBeVisible();
+  expect(await page.locator('.ph-trow').count()).toBe(1);
+});
+
 test('History modal opens with a timeline', async ({ page }) => {
   const rows = await openGrid(page);
   test.skip(rows === 0, 'no rows in range (empty DB)');

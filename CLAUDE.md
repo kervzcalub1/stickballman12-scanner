@@ -27,6 +27,7 @@ npm run db:go-live  # beta→prod reset: inventory + PO side, KEEP accounts/phot
 npm run sop:shots # re-capture the SOP screenshots (needs dev on :5189 + local data)
 npm run mobile    # test on a real phone: plain LAN URL, no camera — architecture.md
 npm run mobile:https   # HTTPS on the LAN IP (camera works; trust the CA on the phone once)
+npm run mobile:ca      # serve just the CA cert on :8081 for the phone to install
 npm run mobile:tunnel  # public HTTPS URL (camera works; publishes the app while it runs)
 ```
 Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).

@@ -166,8 +166,10 @@ if (HTTPS) {
     console.error('[mobile] fall back to: npm run mobile:tunnel');
     shutdown(1);
   }
-  serveCa(CA_PORT);
 }
+// The CA has to stay reachable for as long as the phone might need it — and on its
+// own plain-HTTP port, since it's the prerequisite for the HTTPS one.
+const caPort = HTTPS ? await new Promise((r) => { serveCa(CA_PORT, r); }) : CA_PORT;
 
 serve(tls);
 // Give the listener a moment so the first tap doesn't hit a closed port.
@@ -177,7 +179,7 @@ if (HTTPS) {
   const target = tls.host || tls.ip;
   banner([
     ...(tls.newCa ? [] : ['Already trusted this phone? Just open:', `  https://${target}:${HTTPS_PORT}`, '']),
-    ...instructions({ ip: tls.ip, host: tls.host, httpsPort: HTTPS_PORT, caPort: CA_PORT }),
+    ...instructions({ ip: tls.ip, host: tls.host, httpsPort: HTTPS_PORT, caPort }),
     '',
     `Plain http://${tls.ip}:${PORT} redirects here. Nothing is published to the internet.`,
   ]);

@@ -7,7 +7,7 @@
 //   if (!r.ok) throw new Error(...); use r.data
 //
 // Credentials come from env (ALIAS_EMAIL / ALIAS_PASSWORD) — never hardcode them.
-import { fetchWithTimeout } from './util.js';
+import { fetchWithTimeout, primarySku } from './util.js';
 import { hasPrice, resolveFromInsights } from './pricing.js';
 
 export const ALIAS_BASE = 'https://bypass-alias-host-railway-alias.up.railway.app';
@@ -147,8 +147,14 @@ export async function aliasCatalogId(upc) {
 // space both work). null if not found / no key.
 export async function aliasCatalogBySku(query) {
   const apiKey = process.env.ALIAS_API_KEY;
-  if (!apiKey || !query) return null;
-  const r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query: String(query), limit: '1' } });
+  // A dual-code SKU ("315121-115/CW2290-111") matches nothing here — the catalog
+  // knows each code, never the pair — so search on the first one. This is the single
+  // chokepoint every SKU-driven price path goes through (intake enrichment,
+  // giForSkuSizes, price inquiry, /api/get-price), which is why the split lives here
+  // rather than in each caller.
+  const q = primarySku(query);
+  if (!apiKey || !q) return null;
+  const r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query: q, limit: '1' } });
   if (!r.ok) return null;
   const c = r.data?.catalog_items?.[0];
   if (!c?.catalog_id) return null;

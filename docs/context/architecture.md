@@ -36,7 +36,63 @@ npm run db:setup   # idempotent schema migrate (CREATE/ALTER IF NOT EXISTS)
 npm run db:reset   # wipe inventory data, KEEP accounts (destructive)
 npm run db:go-live # beta→prod reset: inventory + PO side (see deploy.md)
 npm run e2e        # Playwright E2E (auto-starts dev on :5189); npm run e2e:ui for the UI
+npm run mobile        # serve the built app to a phone on this Wi-Fi (see below)
+npm run mobile:https  # …over HTTPS on the LAN IP — camera works, nothing published
+npm run mobile:tunnel # …over public HTTPS from anywhere — camera works, IS published
 ```
+
+## Testing on a real phone (`scripts/mobile-preview.mjs`)
+Warehouse staff live on phones, so device testing is a first-class step. Two modes:
+
+| | URL | Camera (scanner + photos) | Reach | Setup |
+|---|---|---|---|---|
+| `npm run mobile` | `http://<lan-ip>:3000` | **No** | same Wi-Fi | none |
+| `npm run mobile:https` | `https://<mac>.local:8443` | **Yes** | same Wi-Fi | trust a CA on the phone, once |
+| `npm run mobile:tunnel` | `https://<random>.trycloudflare.com` | **Yes** | anywhere, public while it runs | none |
+
+- **Never `vite --host`.** The Vite DEV server binds to localhost *on purpose* —
+  it can serve project source via path traversal (the note in `vite.config.js`).
+  Both modes here build to `dist/` and serve through **`server.mjs`**, which has
+  the traversal guard and the production security headers. Verified: `/api/../
+  server.mjs` and `/api/../../.env` over the LAN IP return the SPA shell, not source.
+- **Why the tunnel exists:** `getUserMedia` needs a secure context. iOS Safari
+  counts `https://` and `localhost` — a plain `http://192.168.x.x` LAN URL is not,
+  so the barcode scanner and photo camera are simply dead there while everything
+  else works. Layout/flows → LAN. An actual on-device scan → tunnel.
+- `--watch` runs `vite build --watch`, so a save rebuilds `dist/` and a
+  pull-to-refresh on the phone picks it up. `--port=N`, `--no-build`, `--verbose`.
+
+### `mobile:https` — a real certificate for the LAN address (`scripts/local-cert.mjs`)
+The private, no-tunnel way to get a secure context. Creates a small CA, issues a
+leaf for this Mac, and starts `server.mjs` with `TLS_CERT`/`TLS_KEY` (support that
+was already in the server). Everything lands in **`certs/` — git-ignored**; only
+`certs/rootCA.pem` ever goes to a device.
+- The CA is **never added to this Mac's keychain** — no sudo, nothing to uninstall
+  later. Only the devices you explicitly trust it on are affected.
+- **Phone setup, once:** open `http://<lan-ip>:8081` (the script serves the CA over
+  plain HTTP — it's the one file that has to travel *before* the phone trusts
+  anything, so it can't come over the https URL it's the prerequisite for) → Settings
+  → Profile Downloaded → Install → **General → About → Certificate Trust Settings →
+  full trust**. That last toggle is the step everyone misses; without it Safari
+  still refuses the cert.
+- **Apple's rules, all of which the leaf satisfies** (get one wrong and iOS rejects
+  it with no useful error): RSA ≥2048, SHA-256, `extendedKeyUsage=serverAuth`, a SAN
+  covering the address (CN is not consulted), and validity ≤825 days. The leaf gets
+  **397 days** — the stricter 2020 cap exempts user-installed roots, but there's no
+  upside to betting on the exemption.
+- **DHCP-proof:** the cert covers the Bonjour name (`<mac>.local`) *and* the current
+  IP, and prefers the name in the printed URL. When the IP changes, re-running
+  re-issues the leaf **from the same CA** — the phone is never re-trusted. Same for
+  expiry (auto-reissues within 14 days of it).
+- Ports move above 1024 (`8443` TLS, `8080` → 301 redirect, `8081` CA) because
+  `server.mjs` defaults to 443/80, which need root.
+- The tunnel **publishes this machine's app, pointed at your LOCAL database**, for
+  as long as the command runs (random hostname, dead on Ctrl-C). Login-gated pages
+  stay login-gated; the by-design public endpoints (`/api/track`, `/api/get-price`)
+  are public there too.
+- **Supplier accounts can't sign in** over any of these URLs: the portal gate in
+  `api/auth/login.js` only relaxes for `localhost`, so a supplier hits "please sign
+  in at supplier.stickballman12.com". Staff/admin are unaffected (`auth-roles.md`).
 
 ## Testing (Playwright E2E)
 - Specs in `e2e/*.spec.js`; config `playwright.config.js` (chromium, auto-starts

@@ -9,7 +9,9 @@ const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  if (!requireRole(req, res, ['warehouse'])) return;
+  // PH team browses the same page (read-only — the write endpoints this page uses
+  // stay warehouse-only; see docs/context/inventory.md).
+  if (!requireRole(req, res, ['warehouse', 'ph_team'])) return;
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
   const p = new URL(req.url, 'http://x').searchParams;

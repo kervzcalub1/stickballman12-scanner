@@ -1,5 +1,19 @@
 # Inventory (warehouse browse)
 
+## Who can open it
+- **Warehouse / admin / superadmin:** `/inventory`, full page.
+- **PH team:** `/ph/inventory` (card in *Pricing & Listing*) — the **same
+  `Inventory` component** rendered by `PHTeamApp` with **`canEditStock={false}`**.
+  They get search, filters, groups/units, detail + history, listing photos, labels,
+  CSV and **Remove pairs** (they already have that on their own grid). Hidden: the
+  **status editor** (group, bulk and detail), **Move to shelf**, and **Add note**.
+- That split is enforced **server-side, not by the prop**: `items/query` and
+  `items/lookup` accept `ph_team`; `items/bulk-status`, `items/shelve` and
+  `items/event` stay `['warehouse']` and answer a PH token with 403. `canEditStock`
+  only hides buttons that would fail — it grants nothing. Moving stock between
+  statuses/shelves is warehouse work, and `sold`/`shipped` cascades off it
+  (`statuses.md`); flip the flag *and* the endpoint roles together if that changes.
+
 Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 `queryItems` (per-VIN rows; returns upc/colorway/gender; ORDER BY vin).
 
@@ -12,12 +26,28 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
   per VIN). Status change on a group applies to all its VINs via bulk-status.
 
 ## Features
-- Search box: scan a VIN (gun/camera) to open it, or type VIN / SKU / name.
-  **A shelf code** (`MNH-WH-A2-04`, typed or scanned) returns that **shelf's
-  contents** (`queryItems` matches `location_code`); rows/detail show a **📍
-  location chip**. See `locations.md`.
+- Search box: scan a VIN (gun/camera) to open it, or type VIN / SKU / name /
+  UPC / colorway. **A shelf code** (`MNH-WH-A2-04`, typed or scanned) returns that
+  **shelf's contents** (`queryItems` matches `location_code`); rows/detail show a
+  **📍 location chip**. See `locations.md`.
+- **Keyword search, not phrase search.** The query is split on whitespace
+  (`searchTokens` in `db.js`) and **every** token must match somewhere — any of
+  vin / sku / name / upc / colorway / location_code — so "Kobe Air Force" (or
+  "kobe air") finds `Kobe Bryant x Nike Air Force 1 Low 'Triple Black'`, which a
+  single `%kobe air force%` LIKE never could: those words aren't adjacent in the
+  name. Word order doesn't matter and each extra word narrows rather than kills
+  the result. Tokens are escaped for `%` / `_` / `\` (legal in a shoe name; an
+  unescaped `_` matches any character). Tokens may match *different* columns, so
+  a short numeric one ("1") tends to match every VIN and effectively drops out.
 - **Day/Week/Month + Custom** date filter (`DateRangeBar` for day/week/month;
-  Inventory also keeps a Custom from/to). Supplier / status / **intake** filters
+  Inventory also keeps a Custom from/to). The **Supplier** dropdown is the LIVE
+  list (`GET /api/suppliers` → `listSuppliers`), not the static `SUPPLIERS`
+  constant — that constant is only the fallback if the fetch fails. A vendor
+  added during receiving has to be filterable here the same day, so `listSuppliers`
+  returns the `suppliers` table **UNION every distinct `batches.supplier_name`**
+  (batches received before the name was ever saved still need an option). The
+  active filter value is appended if it isn't in the list, so a shared/refreshed
+  URL doesn't show "All" over filtered results. Status / **intake** filters
   (intake = receiving | rescale | **in-store**, passed as `kind` to `queryItems`).
 - **In-store** units (`b.kind='instore'`) show an **"In-store" chip** in place of
   the PH sync badges (they bypass PH); detail shows "Intake: In-store (store)".

@@ -25,6 +25,9 @@ npm start     # node server.mjs (prod)           npm run db:setup  # migrate (id
 npm run db:reset  # wipe inventory, KEEP accounts (destructive)
 npm run db:go-live  # beta→prod reset: inventory + PO side, KEEP accounts/photos/locations
 npm run sop:shots # re-capture the SOP screenshots (needs dev on :5189 + local data)
+npm run mobile    # test on a real phone: plain LAN URL, no camera — architecture.md
+npm run mobile:https   # HTTPS on the LAN IP (camera works; trust the CA on the phone once)
+npm run mobile:tunnel  # public HTTPS URL (camera works; publishes the app while it runs)
 ```
 Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 

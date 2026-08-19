@@ -36,7 +36,8 @@ sticker. Nothing is minted, and a pair without one can't be committed (it rides 
    `Number(v)` guarded only by `isFinite && >= 0`, and `Number('')` is 0, so every
    skipped cost box was quietly recorded as a free shoe. A deliberate zero still works
    (type `0`). Blanks are backfilled later on the Costs page (`costs.md`). The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
-   list + auto-saved custom names); picking "Custom…" and typing a new vendor
+   list + auto-saved custom names + every name already on a batch — the same
+   list the Inventory supplier filter uses, see `inventory.md`); picking "Custom…" and typing a new vendor
    auto-saves it on commit (`addSupplier`, V6 Feature 1). Tracking typed /
    camera-scanned / OCR'd from a label photo (`src/trackingOcr.js`: zxing →
    Tesseract.js, lazy-loaded). The decoded string is normalized by

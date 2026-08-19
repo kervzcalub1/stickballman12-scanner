@@ -1850,6 +1850,31 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   backdrop-filter: blur(2px);
 }
 
+/* 1ID sticker stock page. */
+.vs-counts { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-end; margin-top: 14px; }
+.vs-count { display: flex; flex-direction: column; gap: 2px; }
+.vs-count .vs-n { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.vs-count.big .vs-n { font-size: 40px; line-height: 1; }
+.vs-counts.low .vs-count.big .vs-n { color: #e9c46a; }
+.vs-low { color: #e9c46a; font-size: 13px; margin: 10px 0 0; }
+.vs-mint { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 8px; }
+.vs-mint input { width: 6em; text-align: center; }
+.vs-void { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.vs-void input { flex: 1 1 260px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* Raw 1ID mode — the two-beat scan prompt and the "no sticker yet" unit marker. */
+.rawvin-beat {
+  margin-top: 8px; padding: 8px 10px; border-radius: 10px;
+  font-size: 13px; line-height: 1.45;
+  border: 1px solid var(--line, #2a2a2a); color: var(--muted, #9aa4ae);
+}
+.rawvin-beat b { color: var(--text, #e8eaed); }
+.rawvin-beat.awaiting {
+  border-color: rgba(233,196,106,0.45); background: rgba(233,196,106,0.10); color: #e9c46a;
+}
+.rawvin-beat.awaiting b { color: #e9c46a; }
+.vin.need { color: #e08f8f; border-color: rgba(224,143,143,0.5); font-weight: 700; }
+
 /* Deleted archive page — the record of removed pairs (their items rows are gone). */
 .del-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-top: 14px; }
 .del-filters label { display: flex; flex-direction: column; gap: 4px; }

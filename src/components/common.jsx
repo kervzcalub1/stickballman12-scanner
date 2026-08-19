@@ -592,6 +592,24 @@ export function LabelSheet({ items, onClose, mode = 'vin' }) {
   );
 }
 
+// Blank pre-printed 1ID stickers, straight off the roll. Same one-step print dialog
+// as every other label (build the PDF on open so Print stays inside the tap gesture —
+// that's what makes the iOS share sheet work), just a different renderer.
+export function RawVinLabelSheet({ vins, onClose }) {
+  const items = (vins || []).map((v) => ({ vin: typeof v === 'string' ? v : v.vin }));
+  return (
+    <LabelPrintDialog
+      kind="rawvin"
+      items={items}
+      count={items.length}
+      title="Print 1ID stickers"
+      defaultStock="rollo"
+      filename="1id-stickers.pdf"
+      onClose={onClose}
+    />
+  );
+}
+
 // Shelf-location labels — a big name + a CODE128 barcode of the location code, one
 // location per label so a single shelf never spills across a sheet.
 export function ShelfLabelSheet({ locations, onClose }) {
@@ -758,7 +776,7 @@ export function RemoveUnitsModal({ title, sku, units, onClose, onDone }) {
 }
 
 // Preferences — saved automatically (localStorage) as the user toggles.
-export function PreferencesModal({ prefs, onCameraZoom, onClose }) {
+export function PreferencesModal({ prefs, onCameraZoom, onRawVins, onClose }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -794,6 +812,31 @@ export function PreferencesModal({ prefs, onCameraZoom, onClose }) {
             ))}
           </div>
         </div>
+
+        {onRawVins && (
+          <div className="pref-row">
+            <div className="pref-text">
+              <div className="pref-label">Raw 1ID stickers</div>
+              <div className="pref-help">
+                Don’t print a label per shoe. Scan the shoe, then scan a pre-printed 1ID
+                sticker onto it — works with no printer and no Wi-Fi.
+              </div>
+            </div>
+            <div className="zoom-toggle" role="group" aria-label="Raw 1ID stickers">
+              {[['Off', false], ['On', true]].map(([label, v]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`btn sm ${!!prefs.rawVins === v ? 'primary' : 'ghost'}`}
+                  aria-pressed={!!prefs.rawVins === v}
+                  onClick={() => onRawVins(v)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="modal-actions">
           <button className="btn primary" onClick={onClose}>Done</button>

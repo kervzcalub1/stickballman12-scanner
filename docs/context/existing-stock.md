@@ -123,3 +123,10 @@ shelved + already-synced, a bad shelf leaves no orphan batch, the SKU never appe
 on PH New Inventory, and a rescale rescan 409s. A second describe puts the **same
 SKU on one shelf in both kinds** so the Locate views have to actually tell them
 apart (header + unit row + shelf contents), and asserts the VIN stays legible.
+
+## Raw 1ID mode
+With `prefs.rawVins` on, the count is a two-beat scan — shelf, then **shoe → sticker**
+per pair — and **the post-commit label dialog is skipped**: the sticker is already on the
+shoe, and printing those labels would put a second number on the same pair. Counting old
+stock happens deep in the racks, the furthest anyone gets from a working printer, so this
+is the flow that benefits most. See `docs/context/vin-stock.md`.

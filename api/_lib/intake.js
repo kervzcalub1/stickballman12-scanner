@@ -3,6 +3,7 @@
 // item normalization, per-unit defect-issue parsing, and best-effort Alias
 // Global-Indicator price enrichment.
 import { cleanSku } from './util.js';
+import { VIN_RE } from './vins.js';
 import {
   getProductByUpc, getCatalogIdBySku, upsertProduct, setItemGlobalIndicators,
   refreshItemGi, getPriceMarkupMult,
@@ -12,7 +13,6 @@ import { priceBasisLabel } from './pricing.js';
 
 // Final price = global indicator × markup. The markup is the configurable price
 // margin (default 1.2 = +20%), fetched per call via getPriceMarkupMult().
-const VIN_RE = /^SBM-\d{6}-\d{6}$/;
 
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
 // Blank means "nobody told us", NOT $0 — and the two must never collapse into each

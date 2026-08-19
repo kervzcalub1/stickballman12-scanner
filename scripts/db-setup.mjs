@@ -313,6 +313,32 @@ await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listing   JSONB
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_by TEXT`);
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_at TIMESTAMPTZ`);
 
+// Pre-printed VIN/1ID roll stock ("VIN Project"). Blank stickers are minted and
+// printed in bulk BEFORE anyone knows which shoe each will land on, so intake never
+// depends on a working label printer: scan the shoe, scan the sticker, done.
+//
+// Its own sequence, not vin_seq: the roll series renders as SBM-R-000123, which is
+// short enough to print at 0.34 mm bar width on a 1" label. Phone cameras (what the
+// warehouse actually scans with) start missing below ~0.30 mm, and the dated
+// 17-character VIN squeezes to 0.26 mm on the same stock.
+await sql(`CREATE SEQUENCE IF NOT EXISTS vin_roll_seq START 1`); // roll VINs: SBM-R-000001
+await sql(`
+  CREATE TABLE IF NOT EXISTS vin_stock (
+    vin              TEXT PRIMARY KEY,
+    status           TEXT NOT NULL DEFAULT 'available',  -- available | assigned | void
+    run_id           BIGINT,          -- which print run it came from (reprint a jammed run)
+    printed_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    printed_by       TEXT,
+    assigned_item_id BIGINT,          -- items.id once it's on a shoe (NOT a FK: an item
+                                      -- can be deleted, and the sticker still existed)
+    assigned_at      TIMESTAMPTZ,
+    voided_by        TEXT,            -- a torn/lost sticker is voided, never reused
+    voided_at        TIMESTAMPTZ
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS vin_stock_status_idx ON vin_stock (status)`);
+await sql(`CREATE INDEX IF NOT EXISTS vin_stock_run_idx ON vin_stock (run_id, vin)`);
+
 // Deleted stock — the archive behind "remove pairs" on Inventory / New Inventory.
 // The items row is genuinely DELETED (both pages, every count and the batch totals
 // have to read true after a miscount is corrected), and item_events cascades away

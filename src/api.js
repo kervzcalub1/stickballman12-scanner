@@ -132,6 +132,12 @@ export const api = {
   imageFinderBrand: (sku, title, picks, includeSpec, includeWelcome, size, mode = 'preview') =>
     post('/api/images/brand', { sku, title, picks, includeSpec, includeWelcome, size, mode }),
   reserveVins: (count, dateReceived) => post('/api/vins/reserve', { count, dateReceived }),
+  // Pre-printed 1ID roll stock ("VIN Project").
+  mintVins: (count) => post('/api/vins/mint', { count }),
+  vinStock: () => get('/api/vins/stock'),
+  vinRun: (run) => get(`/api/vins/stock?run=${encodeURIComponent(run)}`),
+  checkVin: (vin) => get(`/api/vins/check?vin=${encodeURIComponent(vin)}`),
+  voidVins: (vins) => post('/api/vins/void', { vins }),
   batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),

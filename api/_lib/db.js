@@ -9,6 +9,7 @@
 
 import pg from 'pg';
 import { TERMINAL_STATUSES } from './statuses.js';
+import { ROLL_VIN_RE } from './vins.js';
 
 const { Pool } = pg;
 
@@ -480,7 +481,19 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
     RETURNING id, vin
   `);
   const results = await sql.transaction(queries);
-  return results.map((r) => r[0]);
+  const created = results.map((r) => r[0]);
+  // Pre-printed 1ID stickers: record which shoe each one landed on. Best-effort and
+  // deliberately AFTER the insert — `items.vin` is UNIQUE NOT NULL, so that insert is
+  // what actually makes a double-assign impossible; vin_stock is the bookkeeping that
+  // lets the stock page say how many are left and stops a used sticker being handed
+  // out again. Failing the whole commit because the bookkeeping hiccuped would cost
+  // the warehouse a scanned box for no integrity gain.
+  const rollClaims = created.filter((r) => ROLL_VIN_RE.test(r.vin)).map((r) => ({ vin: r.vin, itemId: r.id }));
+  if (rollClaims.length) {
+    try { await claimVinStock(rollClaims); }
+    catch (e) { console.warn('[insertItems] vin_stock claim:', e.message); }
+  }
+  return created;
 }
 
 // Store the Alias-resolved indicator on freshly received items, and seed the
@@ -1690,6 +1703,119 @@ export async function setItemsGoatOnly(vins, goatOnly, by) {
       VALUES (${r.id}, 'ph_update', ${JSON.stringify({ text })}::jsonb, ${by || null})`;
   }
   return rows;
+}
+
+/* ------------------------------------------------------------------ */
+/* Pre-printed VIN/1ID roll stock — the "VIN Project".                  */
+/* ------------------------------------------------------------------ */
+
+// Mint `count` blank stickers into vin_stock and return them in print order.
+// One run_id per batch so a jammed print can be reprinted from where it stopped.
+// nextval is atomic, so two people minting at once can never get the same number.
+export async function mintVinStock(count, by) {
+  const n = Math.min(2000, Math.max(1, Number(count) || 0));
+  const sql = db();
+  const [{ run_id: runId }] = await sql`SELECT coalesce(max(run_id), 0) + 1 AS run_id FROM vin_stock`;
+  const rows = await sql`
+    INSERT INTO vin_stock (vin, run_id, printed_by)
+    SELECT 'SBM-R-' || lpad(nextval('vin_roll_seq')::text, 6, '0'), ${runId}, ${by || null}
+      FROM generate_series(1, ${n})
+    RETURNING vin
+  `;
+  return { runId, vins: rows.map((r) => r.vin) };
+}
+
+// What a scanned sticker is, for the guard at scan time.
+// 'unknown' = not ours / mis-scan; 'assigned' = already on a shoe (with which one).
+export async function checkVinStock(vin) {
+  const v = String(vin || '').trim().toUpperCase();
+  if (!v) return { state: 'unknown' };
+  const rows = await db()`
+    SELECT s.vin, s.status, i.vin AS item_vin, i.sku, i.size, i.name
+      FROM vin_stock s
+      LEFT JOIN items i ON i.id = s.assigned_item_id
+     WHERE s.vin = ${v}
+  `;
+  if (!rows.length) return { state: 'unknown' };
+  const r = rows[0];
+  return { state: r.status, item: r.item_vin ? { vin: r.item_vin, sku: r.sku, size: r.size, name: r.name } : null };
+}
+
+// Claim stickers for the units they were just scanned onto. **Compare-and-swap** —
+// `WHERE status = 'available'` means two people who scanned the same sticker can't
+// both win; the loser gets it back in `failed` and the caller 409s naming the VIN.
+// Same TOCTOU pattern as commitBoxItems.
+//
+// A sticker NOT in vin_stock is not an error here: intake accepts a scan the server
+// couldn't vet (flaky warehouse Wi-Fi must never stop intake), and `items.vin` is
+// UNIQUE NOT NULL, so the real double-assign guard is the insert itself. This records
+// what it can.
+export async function claimVinStock(pairs) {
+  const list = (pairs || []).filter((p) => p && p.vin && p.itemId != null);
+  if (!list.length) return { claimed: [], failed: [] };
+  const sql = db();
+  const claimed = [];
+  const failed = [];
+  for (const p of list) {
+    const vin = String(p.vin).trim().toUpperCase();
+    const rows = await sql`
+      UPDATE vin_stock
+         SET status = 'assigned', assigned_item_id = ${p.itemId}, assigned_at = now()
+       WHERE vin = ${vin} AND status = 'available'
+      RETURNING vin
+    `;
+    if (rows.length) claimed.push(vin);
+    else {
+      // Either it was never ours, or someone else took it first. Tell them apart so
+      // the caller can say which — "not one of ours" and "already used" are very
+      // different mistakes on the warehouse floor.
+      const known = await sql`SELECT status FROM vin_stock WHERE vin = ${vin}`;
+      if (known.length) failed.push({ vin, reason: known[0].status === 'void' ? 'void' : 'taken' });
+    }
+  }
+  return { claimed, failed };
+}
+
+// Void a torn/lost/misprinted sticker so it can never be assigned. Never reused —
+// same rule as the dated VINs: numbering gaps are fine, a reused number is not.
+export async function voidVinStock(vins, by) {
+  const list = [...new Set((vins || []).map((v) => String(v).trim().toUpperCase()).filter(Boolean))];
+  if (!list.length) return [];
+  return await db()`
+    UPDATE vin_stock SET status = 'void', voided_by = ${by || null}, voided_at = now()
+     WHERE vin = ANY(${list}) AND status <> 'assigned'
+    RETURNING vin
+  `;
+}
+
+// The stock page: how many stickers are left, and the recent print runs.
+export async function getVinStockSummary() {
+  const sql = db();
+  const [counts] = await sql`
+    SELECT count(*) FILTER (WHERE status = 'available')::int AS available,
+           count(*) FILTER (WHERE status = 'assigned')::int  AS assigned,
+           count(*) FILTER (WHERE status = 'void')::int      AS void
+      FROM vin_stock
+  `;
+  const runs = await sql`
+    SELECT run_id, count(*)::int AS total,
+           count(*) FILTER (WHERE status = 'available')::int AS available,
+           min(vin) AS first_vin, max(vin) AS last_vin,
+           min(printed_at) AS printed_at, min(printed_by) AS printed_by
+      FROM vin_stock
+     WHERE run_id IS NOT NULL
+     GROUP BY run_id
+     ORDER BY run_id DESC
+     LIMIT 20
+  `;
+  return { counts, runs };
+}
+
+// Every sticker in one run, in print order — for reprinting a run that jammed.
+export async function getVinRun(runId) {
+  return await db()`
+    SELECT vin, status FROM vin_stock WHERE run_id = ${Number(runId)} ORDER BY vin
+  `;
 }
 
 // Delete pairs outright, archiving each one first. Used by "remove" on Inventory

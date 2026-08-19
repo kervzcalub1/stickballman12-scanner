@@ -30,6 +30,7 @@ import { SupplierApp } from './screens/SupplierApp.jsx';
 import { Reconciliation } from './screens/Reconciliation.jsx';
 import { Sop } from './screens/Sop.jsx';
 import { DeletedItems } from './screens/DeletedItems.jsx';
+import { VinStock } from './screens/VinStock.jsx';
 
 // The supplier scan-out portal is served on the `supplier.` subdomain. This is a
 // UX/branding branch only — the real boundary is server-side (every /api/po/*
@@ -161,6 +162,7 @@ export default function App() {
   if (view === 'inventory') return <Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'report') return <PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'deleted') return <DeletedItems onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'vin-stock') return <VinStock onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'settings') return <Settings onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'nobox') return <NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />;

@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -101,6 +101,7 @@ export function homeCardBadges(key, c) {
 export const HOME_SECTIONS = [
   { title: 'Receiving Shipment Orders', accent: 'shipping', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
+    { key: 'vin-stock', icon: '🏷️', title: '1ID Stickers', sub: 'Print blank 1ID stickers in bulk so intake never waits on a printer' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
     { key: 'costs', icon: '💵', title: 'Costs', sub: 'Fill in what a pair cost when the supplier left it off the manifest' },

@@ -71,6 +71,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showPrefs, setShowPrefs] = useState(false);
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
+  const setRawVins = (on) => setPrefs((p) => { const n = { ...p, rawVins: !!on }; savePrefs(n); return n; });
 
   // "Move to shelf" (put-away) — place selected units on a scanned shelf, which
   // is the only way a unit becomes In Stock (invariant: in_stock ⟺ shelved).
@@ -510,7 +511,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
         {removing && <RemoveUnitsModal {...removing} onClose={() => setRemoving(null)} onDone={onRemoved} />}
         {shelveModal}
         <PhotoLightbox photos={lightbox} onClose={() => setLightbox(null)} />
-        {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
+        {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onRawVins={setRawVins} onClose={() => setShowPrefs(false)} />}
       </div>
     );
   }
@@ -794,7 +795,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut }
       {labels && <LabelSheet items={labels} onClose={() => setLabels(null)} />}
       {removing && <RemoveUnitsModal {...removing} onClose={() => setRemoving(null)} onDone={onRemoved} />}
       {shelveModal}
-      {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
+      {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onRawVins={setRawVins} onClose={() => setShowPrefs(false)} />}
     </div>
   );
 }

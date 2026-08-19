@@ -17,8 +17,9 @@ import {
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
   getLocationByCode, shelveItems, PH_EXCLUDED_KINDS,
 } from '../_lib/db.js';
-import { enrichGlobalIndicators, toCost } from '../_lib/intake.js';
+import { enrichGlobalIndicators, normalizeItems, toCost } from '../_lib/intake.js';
 import { normalizeLocationCode } from '../_lib/locations.js';
+import { VIN_RE, duplicateVin } from '../_lib/vins.js';
 
 const MAX_ITEMS = 2000;
 
@@ -53,7 +54,6 @@ export default async function handler(req, res) {
   const issues = (kind === 'rescale' || kind === 'existing') ? [] : (Array.isArray(body.issues) ? body.issues : []);
   // Per-unit defect issues flagged on the Review screen (V6 Feature 4):
   // [{ vin, type, note, photos:[https…] }]. Mapped to item ids after insert.
-  const VIN_RE = /^SBM-\d{6}-\d{6}$/;
   const unitIssues = (Array.isArray(body.unitIssues) ? body.unitIssues : [])
     .map((u) => ({
       vin: String(u?.vin || '').trim().toUpperCase(),
@@ -127,27 +127,13 @@ export default async function handler(req, res) {
   const noBoxVins = new Set(unitIssues.filter((u) => u.type === 'no_box').map((u) => u.vin));
 
   // Normalize items. "With Box" unchecked (toggle) OR a 'no_box' defect → no_box.
-  const items = rawItems.map((it) => {
-    const vin = /^SBM-\d{6}-\d{6}$/.test(String(it.vin || '')) ? it.vin : null;
-    const withBox = (it.withBox !== false) && !(vin && noBoxVins.has(vin.toUpperCase()));
-    return {
-      name: cleanName(it.name) || 'Unknown',
-      sku: normSku(it.sku),
-      size: String(it.size ?? '').trim().slice(0, 24),
-      upc: String(it.upc ?? '').replace(/\D/g, '').slice(0, 14) || null,
-      image: it.image || null,
-      cost: toCost(it.cost) ?? defaultCost,
-      source: ['stockx', 'alias', 'kicksdb', 'manual'].includes(it.source) ? it.source : 'manual',
-      gender: ['Men', 'Women', 'Youth', 'Toddler', 'Unisex'].includes(it.gender) ? it.gender : null,
-      colorway: String(it.colorway ?? '').trim().slice(0, 120) || null,
-      notes: String(it.notes ?? '').trim().slice(0, 500) || null,
-      withBox,
-      goatOnly: it.goatOnly === true, // list to Alias(GOAT)+II only; StockX/Shopify N/A
-      status: withBox ? 'needs_shelf' : 'no_box',
-      // Reserved VIN (assigned during receiving). Validated; else server generates.
-      vin,
-    };
-  });
+  //
+  // This used to be a line-for-line COPY of normalizeItems, carrying its own inline
+  // VIN pattern — which is how the pre-printed 1ID series got silently dropped here
+  // while working everywhere else: an unrecognised VIN is nulled, and insertItems then
+  // mints a dated one, so the shoe left the bench wearing a number that wasn't on it.
+  // One implementation, shared with box-commit (intake.js).
+  const items = normalizeItems(rawItems, { defaultCost, noBoxVins });
 
   // Only a real shipment (receiving) carries buyer/supplier/tracking. Rescale and
   // in-store drop those; in-store keeps `origin` (the store name) like rescale.
@@ -242,6 +228,12 @@ export default async function handler(req, res) {
     }
     return;
   } catch (e) {
+    // A 1ID sticker already on another shoe. Retrying can't help, so say which one.
+    const dupe = duplicateVin(e);
+    if (dupe) return send(res, 409, {
+      ok: false, vin: dupe,
+      error: `1ID ${dupe} is already on another shoe. Pull that sticker, put a fresh one on, and submit again.`,
+    });
     console.error('[batches/commit]', e.message);
     return send(res, 500, { ok: false, error: 'Could not save the batch. Please try again.' });
   }

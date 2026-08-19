@@ -202,6 +202,8 @@ export const api = {
   // Purchase Orders — supplier scan-out (Phase 1). PH creates the PO shell + labels;
   // supplier lists/opens their own, scans items under each label, ships per label.
   poSuppliers: () => get('/api/po/suppliers'),
+  // Bulk on-behalf manifest import (a parsed supplier PDF) — staff only.
+  poManifestImport: (poId, boxes) => post('/api/po/manifest-import', { poId, boxes }),
   poCreate: (payload) => post('/api/po/create', payload),
   poList: () => get('/api/po/list'),
   poGet: (id) => get(`/api/po/get?id=${encodeURIComponent(id)}`),

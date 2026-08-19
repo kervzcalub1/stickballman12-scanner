@@ -3020,3 +3020,27 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* Reconciliation evidence: this box was matched to its label by tracking, and the number
    typed while unpacking disagreed. Quiet — it's a footnote, not a warning. */
 .rcn-rbox-renamed { display: block; margin-top: 2px; }
+
+/* Manifest PDF import (PO detail) — bulk "add items on their behalf". Sits above the
+   labels list because it acts on all of them at once. */
+.po-mf-import { border: 1px dashed var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.po-mf-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.po-mf-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; }
+.po-mf-hint { margin: 6px 0 0; }
+.po-mf-result { margin-top: 8px; }
+.po-mf-preview { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.po-mf-summary { font-size: 13px; margin-bottom: 8px; }
+.po-mf-rows { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; }
+.po-mf-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: 12px; padding: 4px 6px; border-radius: 6px; background: var(--panel-2); }
+/* Only the rows that will actually be written read as active; the rest are muted so a
+   long list scans as "these 16, not those 2". */
+.po-mf-row.has_manifest, .po-mf-row.unmatched, .po-mf-row.empty { opacity: 0.62; }
+.po-mf-row.unmatched .po-mf-status, .po-mf-row.empty .po-mf-status { color: #e0a06a; }
+.po-mf-page { font-weight: 700; min-width: 30px; }
+.po-mf-box { font-weight: 600; }
+.po-mf-trk { flex: 1 1 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.po-mf-units { font-weight: 700; }
+.po-mf-warn { color: #e0a06a; font-weight: 700; }
+.po-mf-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+@media (max-width: 768px) { .po-mf-trk { flex-basis: 100%; } }

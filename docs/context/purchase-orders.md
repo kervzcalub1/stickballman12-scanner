@@ -342,6 +342,43 @@ Covered by `e2e/po-manifest-window.spec.js`.
   admin is already covered by **Check Access** (approve / set role / reset password / delete),
   so no new admin UI. Feature complete through Phase 5.
 
+## Importing a supplier's manifest PDF (bulk on-behalf entry)
+- **`PoManifestImport`** on the PO detail (above the labels) → parses the PDF in the
+  browser (`src/lib/manifestImport.js` — the **inverse of `manifestPdf.js`**, which
+  prints one) → preview → **`POST /api/po/manifest-import`** (`ph_team`/admin).
+  Typing 18 boxes into the per-box modal by hand is the thing this replaces.
+- **One page = one box.** Reads `Box Number: n/N`, `Tracking Number: …` and the
+  `Product Name | SKU | Size | Qty` table between the header and `Total`. It also
+  accepts **our own** sheet's wording (`ITEM | SKU | SIZE | PAIRS`, `TOTAL PAIRS`), so
+  a manifest this app printed can be re-imported.
+- **The colon is not reliable.** The same document prints `Box Number: 1/18` on some
+  pages and `Box Number 4/18` on others (and `Tracking Number:1Z…` with no space).
+  Requiring it lost the box number on 10 of 18 pages of the first real file — invisible
+  until tracking fails to match and the fallback is all that's left.
+- **SKUs are normalised `IM6673 100` → `IM6673-100`.** The sheet prints style codes with
+  a space; our items carry the dashed form and `rcSku` (reconciliation) upper-cases but
+  does **NOT** strip separators — importing verbatim would leave every line unmatched
+  and report a perfect shipment as `wrong_sku`. This is what makes an imported manifest
+  reconcilable at all.
+- **Matched to a label by TRACKING NUMBER**, box number as the fallback — the same rule
+  as the labels PDF and the received-batch link (a box *is* its tracking number).
+- **Only labels with NOTHING declared are filled.** A label the supplier already scanned
+  (or PH typed) is reported as skipped, never merged into or doubled. Enforced
+  server-side as well as in the preview, so re-importing the same file is a no-op.
+- **One request, not a loop.** `po/scan` is rate-limited to 120/min and a real manifest
+  is ~200 lines: looping it from the client would 429 halfway and leave the order
+  half-declared. Every line still goes through `addPoScan` stamped `entered_by` +
+  `entered_on_behalf`, so a supplier reading their own order sees "entered by their
+  staff" exactly as with hand entry.
+- Rows whose parsed count disagrees with the sheet's own printed `Total` are flagged in
+  the preview (⚠) rather than imported silently — a mismatch means the page didn't
+  fully parse, and the box would land under-declared.
+- Refused: a **whole-order-manifest** PO (409 — mixing scopes double-counts at
+  reconciliation) and any settled order (`manifestEditBlock`).
+- Verified against a real 18-page supplier file: 233 pairs, every page matching its
+  printed total; 17 labels filled with 1 skipped as already-declared, and a second
+  import of the same file writing nothing.
+
 ## Supplier non-compliance — on-behalf manifest entry + no-manifest receiving
 Two escape hatches for when a supplier won't use the scan-out portal:
 

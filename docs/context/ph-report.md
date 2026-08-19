@@ -132,6 +132,20 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   individually editable: untick one before Submit if that push didn't take.
   **Turning II off cascades nothing** — a delist is exactly where the stores diverge,
   and silently clearing three flags would destroy what PH recorded.
+- **Search box** (`phSearchTokens` + `phRowMatches` in `lib/ph.js`, `?q=` in the URL).
+  Same keyword rule as the Inventory page — split on whitespace, **every** token must
+  match — so "kobe air force" finds a name whose words aren't adjacent and word order
+  doesn't matter. Matches **name / SKU / VIN**: what PH has in hand when they go
+  looking. Two deliberate differences from Inventory's:
+  - It runs **in the browser over the rows already loaded for the date range**, not as
+    a server query. The grid *is* a date window (`phListItems(from,to,kind)`, the
+    row-split rules and the status tabs all key off it), so widening the net stays the
+    date control's job. Typing never refetches — and so can never yank a row out from
+    under an open edit lock. The empty state says this out loud rather than reading as
+    "not found".
+  - **A row being EDITED is never filtered out**, whatever is typed. It holds an
+    unsaved draft *and* a server-side edit lock; hiding it strands both behind a
+    search box. (Covered by e2e.)
 - **Column "All" — tick one store for every size** (`setAllSizesFlag` + `flagAll` in
   `PHTeam.jsx`). Sits in the size table's **header**, under each store's name, and only
   while the row is being edited. A 13-size shoe was 13 identical clicks otherwise, and

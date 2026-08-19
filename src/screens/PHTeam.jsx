@@ -16,6 +16,7 @@ import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized, PRICE_BASES,
   phListingStatus, PH_LISTING_STATUSES, requiredFlags,
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
+  phSearchTokens, phRowMatches,
 } from '../lib/ph.js';
 import { clearQuery, useQueryParam } from '../lib/urlstate.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
@@ -201,6 +202,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [refreshing, setRefreshing] = useState(false); // re-fetching GI from Alias (all shown)
   const [giFillKey, setGiFillKey] = useState(null);    // group whose GI is being pulled into its draft
   const [sortDir, setSortDir] = useState('asc'); // by scan date: asc = oldest first
+  // Search text rides in the URL alongside the date range and status tabs, so a
+  // refresh (or a link handed to the person on the next shift) reopens the same view.
+  const [q, setQ] = useQueryParam('q', '');
+  const searchTokens = useMemo(() => phSearchTokens(q), [q]);
   // New Inventory: filter lines by derived listing status (Pending/In-Progress/Done);
   // multi-select, defaults to Pending (the unfinished worklist).
   const useStatusFilter = kind === 'receiving';
@@ -675,7 +680,12 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const allGroups = groupPhSized(rows || [], isLockedVin);
   allGroups.sort((a, b) => (sortDir === 'desc' ? (a.created_at < b.created_at ? 1 : -1) : (a.created_at < b.created_at ? -1 : 1)));
   // New Inventory only: narrow to the selected listing-status buckets.
-  const groups = useStatusFilter ? allGroups.filter((g) => statusFilter.has(phListingStatus(g))) : allGroups;
+  const statusGroups = useStatusFilter ? allGroups.filter((g) => statusFilter.has(phListingStatus(g))) : allGroups;
+  // A row being EDITED always stays on screen, whatever is typed — hiding it would
+  // strand an unsaved draft behind a filter and leave its server-side edit lock held
+  // by a row nobody can see.
+  const groups = statusGroups.filter((g) => editing.has(g.key) || phRowMatches(g, searchTokens));
+  const hiddenBySearch = statusGroups.length - groups.length;
   const totalUnits = groups.reduce((n, g) => n + g.qty, 0);
   return (
     <div className="app app-wide">
@@ -689,6 +699,14 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
               {showPricing && <button className="btn sm ph-gi-refresh-btn" type="button" style={{ marginLeft: 8 }} disabled={refreshing || loading} onClick={refreshPrices} title={`Re-fetch Global Indicator from Alias and update Final price (GI + ${markupSuffix()})`}><Icon name="refresh" className={refreshing ? 'spin' : ''} /> {refreshing ? 'Refreshing…' : 'Refresh prices'}</button>}
             </span>
           )} />
+        <div className="ph-search">
+          {/* No autoFocus: on iOS a programmatic focus takes the caret without raising
+              the keyboard, which reads as "the keyboard is broken" (see hooks/Receiving). */}
+          <input type="search" className="ph-search-input" value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Search this range — shoe name, SKU or VIN…" aria-label="Search the lines shown" />
+          {q ? <button type="button" className="btn ghost sm" onClick={() => setQ('')}>Clear</button> : null}
+          {q ? <span className="muted sm">{groups.length} of {statusGroups.length} line{statusGroups.length === 1 ? '' : 's'}{hiddenBySearch > 0 ? '' : ' · nothing filtered'}</span> : null}
+        </div>
         {useStatusFilter && (
           <div className="ph-status-filter">
             <span className="muted sm">Status</span>
@@ -709,9 +727,11 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       <div className="card">
         {!rows ? <p className="muted">Loading…</p> : !groups.length ? (
           <p className="muted">
-            {useStatusFilter && allGroups.length > 0
-              ? (statusFilter.size === 0 ? 'Select a status above to show lines.' : 'No lines match the selected status in this range.')
-              : `No ${emptyKind} items in this range.`}
+            {q && allGroups.length > 0
+              ? `Nothing matches “${q}” in this date range — the search only looks at the lines shown, so try a wider range above.`
+              : useStatusFilter && allGroups.length > 0
+                ? (statusFilter.size === 0 ? 'Select a status above to show lines.' : 'No lines match the selected status in this range.')
+                : `No ${emptyKind} items in this range.`}
           </p>
         ) : isMobile ? (
           <div className="ph-cards" ref={cardsAnimRef}>

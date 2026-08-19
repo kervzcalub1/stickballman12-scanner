@@ -5,7 +5,7 @@
 import { send, applySecurity, requireRole } from '../_lib/util.js';
 import {
   getPoReconcileState, getPoResolution, listPoComments, resolutionView,
-  stepsFor, getPoReceivedBoxes, dbConfigured,
+  stepsFor, getPoReceivedBoxes, getPoBoxDiffs, dbConfigured,
 } from '../_lib/db.js';
 
 export default async function handler(req, res) {
@@ -27,10 +27,14 @@ export default async function handler(req, res) {
     // two more round trips. Both are cheap and only ever load when an order is opened.
     // `receivedBoxes` = our own per-box count, for the "this is what we opened" evidence
     // (and the PDF built from it). Same fetch, since it's only ever read on this screen.
-    const [resolution, comments, receivedBoxes] = await Promise.all([
+    // `box_diffs` = the same comparison per LABEL, so a shortage says which box to open
+    // rather than only which shoe. Empty on a whole-order manifest, which has no per-box
+    // expectation to compare against.
+    const [resolution, comments, receivedBoxes, boxDiffs] = await Promise.all([
       getPoResolution(poId),
       listPoComments(poId, { limit: 50 }),
       getPoReceivedBoxes(poId),
+      getPoBoxDiffs(poId),
     ]);
     return send(res, 200, {
       ok: true, ...data,
@@ -39,6 +43,7 @@ export default async function handler(req, res) {
       steps: stepsFor(resolution?.outcome),
       comments,
       received_boxes: receivedBoxes,
+      box_diffs: boxDiffs,
     });
   } catch (e) {
     console.error('[po/reconciliation]', e.message);

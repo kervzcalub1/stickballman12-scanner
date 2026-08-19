@@ -7,6 +7,11 @@ const KEY = 'sb_prefs';
 export const DEFAULTS = {
   cameraZoom: 1, // 1 = normal, 2 = zoomed in (scan from farther away)
   scanSound: true, // audible ok/error tones on the bulk scan-out screens
+  // Raw 1ID mode: don't mint a VIN at intake — scan a PRE-PRINTED sticker onto each
+  // pair instead. Per person, per device on purpose: someone standing at a working
+  // printer and someone across the warehouse with a roll of stickers are doing the
+  // same job two different ways, and neither should flip the other's screen.
+  rawVins: false,
 };
 
 export function loadPrefs() {

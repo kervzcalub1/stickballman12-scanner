@@ -6,9 +6,9 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getLocationByCode, shelveItems, dbConfigured } from '../_lib/db.js';
 import { normalizeLocationCode } from '../_lib/locations.js';
+import { VIN_RE } from '../_lib/vins.js';
 
 const MAX_UNITS = 1000;
-const VIN_RE = /^SBM-\d{6}-\d+$/i;
 
 export default async function handler(req, res) {
   applySecurity(req, res);

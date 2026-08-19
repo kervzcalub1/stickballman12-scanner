@@ -6,8 +6,8 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { dbConfigured } from '../_lib/db.js';
 import { r2Configured, presignPutUrl, publicUrl } from '../_lib/r2.js';
+import { VIN_RE } from '../_lib/vins.js';
 
-const VIN_RE = /^SBM-\d{6}-\d{6}$/;
 const EXT = { 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png' };
 
 export default async function handler(req, res) {

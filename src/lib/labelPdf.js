@@ -161,6 +161,20 @@ function drawVinLabel(doc, JsBarcode, pw, ph, it, showName) {
   drawStack(doc, pw, ph, blocks);
 }
 
+// A BLANK pre-printed 1ID sticker — barcode and number, nothing else. There is no
+// shoe yet: these are printed in bulk before anyone knows what they'll land on, which
+// is the entire point (intake stops depending on a working printer). So the code gets
+// the whole label, printed as large as the stock allows — it's read by phone cameras
+// in warehouse light, and a fat barcode is the difference between one scan and four.
+function drawRawVinLabel(doc, JsBarcode, pw, ph, it) {
+  const bc = barcodeCanvas(JsBarcode, it.vin, { format: 'CODE128', height: 110, width: 3 });
+  if (!bc) throw new Error(`Couldn’t build the barcode for ${it.vin}.`);
+  drawStack(doc, pw, ph, [
+    { kind: 'img', dataUrl: bc.toDataURL('image/png'), h0: 13, fill: true },
+    { kind: 'text', text: it.vin, pt0: 11, bold: true, mono: true },
+  ]);
+}
+
 // One box-style label (No-Box UPC): vertical UPC barcode on the left, text block
 // on the right — mirrors a real shoe box, so the rows run in the same order Nike
 // prints them: NAME, colorway (lighter/narrower, directly under the name), then
@@ -279,6 +293,7 @@ export async function buildLabelPdf({ kind, items, stock }) {
     const ph = doc.internal.pageSize.getHeight();
     if (kind === 'box') drawBoxLabel(doc, JsBarcode, pw, ph, it);
     else if (kind === 'shelf') drawShelfLabel(doc, JsBarcode, pw, ph, it);
+    else if (kind === 'rawvin') drawRawVinLabel(doc, JsBarcode, pw, ph, it);
     else drawVinLabel(doc, JsBarcode, pw, ph, it, showName);
   }
   if (!doc) doc = new jsPDF({ unit: 'mm', format: [W, H], orientation: 'landscape' }); // empty guard

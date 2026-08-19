@@ -10,6 +10,11 @@ isInstore` gates the header; the Review + Issues steps are gated on `isRescale` 
 in-store keeps all 4. In-store is fresh stock scanned like receiving (NOT VIN-rescan).
 Full detail: `in-store.md`.
 
+**Raw 1ID mode** (`prefs.rawVins`, per person): instead of minting a VIN to print, the
+warehouse scans a **pre-printed sticker** onto each pair — scan the shoe, scan the
+sticker. Nothing is minted, and a pair without one can't be committed (it rides the same
+`isUnresolved` machinery as a missing size). Full rules: `docs/context/vin-stock.md`.
+
 ## 4-step wizard (receiving / in-store) / 2-step (rescale)
 1. **Shipment details** — buyer defaults to `stickballman12`; supplier + date
    required. **`api/batches/commit` now enforces supplier AND tracking # server-side**

@@ -19,7 +19,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 import { TopBar, Modal, LabelSheet } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
-import { isUpcCode, isLocationCode, compareSizes } from '../lib/codes.js';
+import { isUpcCode, isLocationCode, isRollVin, compareSizes } from '../lib/codes.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { ShelfPicker } from '../components/ShelfPicker.jsx';
 
@@ -40,6 +40,10 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
   const [labels, setLabels] = useState(null);      // VIN labels to print after a commit
   const [prefs, setPrefs] = useState(loadPrefs);
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
+  // Raw 1ID mode (per person, set on the Receiving screen's Preferences). Counting old
+  // stock happens deep in the racks — the furthest anyone gets from a working printer —
+  // so this is the flow that benefits most from a stack of pre-printed stickers.
+  const rawVins = !!prefs.rawVins;
   const inputRef = useRef(null);
   const recentRef = useRef({});
   const [flash, setFlash] = useState(null);
@@ -135,6 +139,10 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
     recentRef.current[c] = now;
     setInput('');
     if (isLocationCode(c)) return setShelf(c);
+    // Raw 1ID mode, second beat: this scan is a STICKER for the pair just counted.
+    // Checked before isLocationCode would ever see it — a VIN isn't a shelf code, but
+    // routing it explicitly keeps the intent obvious.
+    if (rawVins && isRollVin(c)) return bindSticker(c);
     return addProduct(c);
   }
 
@@ -143,6 +151,37 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
   const clearShelf = () => { setRows([]); setLocation(null); setError(''); };
 
   const missingSize = rows.filter((r) => !String(r.size || '').trim()).length;
+  // In raw mode every counted pair needs a sticker scanned onto it before it can be
+  // saved — same rule as a missing size, and blocked the same way.
+  const missingStickers = rawVins
+    ? rows.reduce((n, r) => n + Math.max(0, (Number(r.qty) || 0) - (r.vins || []).length), 0)
+    : 0;
+  const awaitingSticker = rawVins
+    ? rows.find((r) => (Number(r.qty) || 0) > (r.vins || []).length) || null
+    : null;
+
+  // Bind a scanned pre-printed sticker to the pair waiting for one. The server check is
+  // advisory — see the same call in Receiving: flaky Wi-Fi must never stop a count, and
+  // `items.vin` being UNIQUE means a secretly-used sticker is still caught at commit.
+  async function bindSticker(code) {
+    const vin = String(code).trim().toUpperCase();
+    if (rows.some((r) => (r.vins || []).includes(vin))) {
+      setError(`1ID ${vin} is already on a pair in this count.`);
+      return;
+    }
+    const target = rows.find((r) => (Number(r.qty) || 0) > (r.vins || []).length);
+    if (!target) { setError(`Scan the shoe first, then its 1ID — ${vin} has nothing to go on.`); return; }
+    try {
+      const r = await api.checkVin(vin);
+      if (r.state === 'assigned') { setError(`1ID ${vin} is already used — grab another sticker.`); return; }
+      if (r.state === 'void') { setError(`1ID ${vin} was voided — grab another sticker.`); return; }
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      /* couldn't check — bind anyway, commit is the authority */
+    }
+    setError('');
+    patchRow(target.key, { vins: [...(target.vins || []), vin] });
+  }
 
   async function save() {
     if (!location || !rows.length) return;
@@ -151,9 +190,11 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
     try {
       // One item per unit — the server assigns a VIN to each, exactly as receiving
       // does, so labels/locate/sold-shipped all behave normally afterwards.
-      const items = rows.flatMap((r) => Array.from({ length: r.qty }, () => ({
+      const items = rows.flatMap((r) => Array.from({ length: r.qty }, (_, i) => ({
         name: r.name, sku: r.sku, size: r.size, upc: r.upc, image: r.image,
         withBox: r.withBox, source: 'manual',
+        // Raw mode: the pair's number comes off the sticker already on the shoe.
+        vin: rawVins ? (r.vins || [])[i] || null : null,
       })));
       const res = await api.batchCommit({
         kind: 'existing',
@@ -173,8 +214,11 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
         labelItems,
       });
       // The pairs have no VIN stickers yet — that's the one part of this that can't
-      // fix itself later, so go straight to the print dialog.
-      setLabels(labelItems);
+      // fix itself later, so go straight to the print dialog. UNLESS raw 1ID mode is
+      // on: then the sticker is already on the shoe and was scanned to get here, so
+      // opening a print dialog would just be a dialog to dismiss (and printing those
+      // labels would put a SECOND number on the same pair).
+      if (!rawVins) setLabels(labelItems);
       setRows([]);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
@@ -203,9 +247,18 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
           <p className="muted">Scan the <b>shelf barcode</b> you're standing at, then scan the box of every pair already on it.</p>
         )}
 
+        {rawVins && location && (
+          <div className={`rawvin-beat ${awaitingSticker ? 'awaiting' : ''}`} role="status" aria-live="polite">
+            {awaitingSticker
+              ? <><b>2 · Scan the 1ID</b> sticker onto {awaitingSticker.name || awaitingSticker.sku || 'that pair'}, then stick it on</>
+              : <><b>1 · Scan the shoe</b> — then scan its pre-printed 1ID sticker</>}
+          </div>
+        )}
         <form className="searchrow" onSubmit={(e) => { e.preventDefault(); routeScan(input); }}>
           <input ref={inputRef} autoCapitalize="characters" autoCorrect="off"
-            placeholder={location ? 'Scan a box UPC — or type a SKU' : 'Scan a shelf barcode (e.g. MNH-WH-A2-04)'}
+            placeholder={!location ? 'Scan a shelf barcode (e.g. MNH-WH-A2-04)'
+              : rawVins ? (awaitingSticker ? 'Now scan the 1ID sticker' : 'Scan a box UPC — or type a SKU')
+              : 'Scan a box UPC — or type a SKU'}
             value={input} onChange={(e) => setInput(e.target.value)} disabled={busy} />
           <button className="btn primary" disabled={busy}>Add</button>
           <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">
@@ -232,8 +285,9 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
         <div className="batch-totals">
           <b>{total}</b> pair{total === 1 ? '' : 's'} on this shelf
           {missingSize ? ` · ${missingSize} need a size` : ''}
+          {missingStickers ? ` · ${missingStickers} need a 1ID sticker` : ''}
         </div>
-        <button className="btn primary" disabled={busy || !location || !rows.length || missingSize > 0}
+        <button className="btn primary" disabled={busy || !location || !rows.length || missingSize > 0 || missingStickers > 0}
           onClick={() => setShowConfirm(true)}>{busy ? 'Saving…' : 'Save shelf'}</button>
       </div>
 
@@ -244,6 +298,11 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
               <div className="dcard" key={r.key}>
                 <div className="dcard-top">
                   <span className="dcard-name">{r.name}</span>
+                  {rawVins && (
+                    (Number(r.qty) || 0) > (r.vins || []).length
+                      ? <span className="vin need">1ID?</span>
+                      : <span className="vin">{(r.vins || []).join(' ')}</span>
+                  )}
                   <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeRow(r.key)}>×</button>
                 </div>
                 <div className="muted sm">{r.sku || '—'}{r.upc ? ` · ${r.upc}` : ''}</div>

@@ -2,10 +2,18 @@
 // extraction, UPC symbology, US size charts, numeric size parsing.
 
 // Code-type detection so a scan/typed code is routed correctly BEFORE any API
-// call: our minted VIN is `SBM-YYMMDD-<sequence>` (alphanumeric); a UPC/EAN is
-// 8–14 digits; anything else is treated as a SKU.
-export const VIN_RE = /^SBM-\d{6}-\d+$/i;
+// call: a UPC/EAN is 8–14 digits; anything else is treated as a SKU.
+//
+// TWO VIN series, both ours (mirror of api/_lib/vins.js — keep them in step):
+//   SBM-YYMMDD-<seq>  minted at intake, dated with the day it was received
+//   SBM-R-<seq>       pre-printed ROLL stock ("1ID"), minted before anyone knows
+//                     which shoe it lands on, so it cannot carry a date
+export const VIN_RE = /^SBM-(?:\d{6}-\d+|R-\d+)$/i;
 export const isVinCode = (s) => VIN_RE.test(String(s || '').trim());
+// The roll series alone — the intake flow needs to tell a pre-printed sticker from
+// a VIN we minted, e.g. to look it up in vin_stock before binding it to a shoe.
+export const ROLL_VIN_RE = /^SBM-R-\d+$/i;
+export const isRollVin = (s) => ROLL_VIN_RE.test(String(s || '').trim());
 export const isUpcCode = (s) => /^\d{8,14}$/.test(String(s || '').trim());
 // A shelf-location barcode: LETTERS-… with a dash (e.g. MNH-WH-A2-04), distinct
 // from a VIN (SBM-…) and a UPC (all digits). Mirrors api/_lib/locations.js.

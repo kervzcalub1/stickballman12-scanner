@@ -11,7 +11,7 @@ import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { useUnsavedGuard } from '../hooks.js';
-import { isVinCode, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
+import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
 import { estToday } from '../lib/format.js';
 
@@ -333,6 +333,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showPrefs, setShowPrefs] = useState(false);
   const setCameraZoom = (zoom) => setPrefs((p) => { const n = { ...p, cameraZoom: zoom }; savePrefs(n); return n; });
+  const setRawVins = (on) => setPrefs((p) => { const n = { ...p, rawVins: !!on }; savePrefs(n); return n; });
+  // Raw 1ID mode: scan a PRE-PRINTED sticker onto each pair instead of minting a VIN
+  // to print. Never on for RESCALE — there a VIN scan means "this existing pair",
+  // which is the opposite operation.
+  const rawVins = !!prefs.rawVins && !isRescale;
 
   const [items, setItems] = useState([]);     // completed shoes (each: name,sku,…,withBox,sizes[])
   // Rescale only: EXISTING units re-scanned by VIN — each updates its own record
@@ -424,6 +429,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const scanBoxModeRef = useRef(true); scanBoxModeRef.current = scanBoxMode;
   const scanInputRef = useRef(null);
   const scanRecentRef = useRef({});   // code -> last scan time (gun/camera re-read cooldown)
+  const itemsRef = useRef([]);        // mirror of the cart so a scan callback reads fresh state
+  const rawVinsRef = useRef(false);   // ditto for the mode, read inside async scan handlers
+  itemsRef.current = items;
+  rawVinsRef.current = rawVins;
   const lastScanRef = useRef(null);   // { lineKey, vin } — one-tap Undo for the last scan
   const [canUndo, setCanUndo] = useState(false);
   // Per-SKU listing-photo modal (replaces the photo block that lived in the draft).
@@ -704,6 +713,68 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // A wrong product (the catalogue answering a Nike scan with an adidas) can't be
   // caught here at all — Review is where that gets corrected, which is the whole
   // trade for scanning this fast.
+  // Bind a scanned pre-printed sticker to the pair that's waiting for one.
+  //
+  // Which pair: the newest line still short a sticker (the cart prepends, so that's
+  // the one just scanned) — matching what the hand is doing, shoe then sticker.
+  //
+  // The server check is ADVISORY. If it can't be reached we bind anyway and say so,
+  // because a warehouse with flaky Wi-Fi is the entire reason this mode exists — the
+  // one thing it must never do is stop intake. Nothing is lost by that: `items.vin` is
+  // UNIQUE NOT NULL, so a sticker that's secretly already on another shoe is refused
+  // at commit, naming itself, rather than being silently accepted.
+  async function bindSticker(code) {
+    const vin = String(code).trim().toUpperCase();
+    const target = itemsRef.current.find((it) => !it.pending && it.sizes.some(
+      (sz) => (Number(sz.qty) || 0) > (sz.vins || []).length,
+    ));
+    if (!target) {
+      setFlash({ type: 'dup', text: `Scan the shoe first, then its 1ID — ${vin} has nothing to go on` });
+      scanFeedback('dup');
+      return;
+    }
+    if (itemsRef.current.some((it) => it.sizes.some((sz) => (sz.vins || []).includes(vin)))) {
+      setFlash({ type: 'dup', text: `1ID ${vin} is already on a pair in this batch` });
+      scanFeedback('dup');
+      return;
+    }
+
+    let warn = '';
+    try {
+      const r = await api.checkVin(vin);
+      if (r.state === 'assigned') {
+        const on = r.item ? ` (on ${r.item.sku || r.item.name || r.item.vin})` : '';
+        setFlash({ type: 'dup', text: `1ID ${vin} is already used${on} — grab another sticker` });
+        scanFeedback('dup');
+        return;
+      }
+      if (r.state === 'void') {
+        setFlash({ type: 'dup', text: `1ID ${vin} was voided — grab another sticker` });
+        scanFeedback('dup');
+        return;
+      }
+      if (r.state === 'unknown') warn = ' · not in the printed stock';
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      warn = ' · couldn’t check it, saved anyway';
+    }
+
+    setItems((arr) => arr.map((it) => {
+      if (it.key !== target.key) return it;
+      let done = false;
+      return {
+        ...it,
+        sizes: it.sizes.map((sz) => {
+          if (done || (Number(sz.qty) || 0) <= (sz.vins || []).length) return sz;
+          done = true;
+          return { ...sz, vins: [...(sz.vins || []), vin] };
+        }),
+      };
+    }));
+    setFlash({ type: 'added', text: `✓ ${vin} → ${target.name || target.sku || 'pair'}${warn}` });
+    scanFeedback('added');
+  }
+
   async function rapidScan(code, { fromCamera = false } = {}) {
     const c = String(code).trim();
     if (!c) return;
@@ -734,6 +805,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       return;
     }
 
+    // Raw 1ID mode, second beat: this scan is a STICKER, not a shoe.
+    if (rawVinsRef.current && isRollVin(c)) return bindSticker(c);
+
     const isUpc = isUpcCode(c);
     const withBox = scanBoxModeRef.current;
     const lineKey = cartKey++;
@@ -747,9 +821,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
     // The VIN is reserved alongside the lookup so the number is on screen for
     // stickering the moment the line resolves — even when the lookup itself fails.
+    // In raw-1ID mode we mint NOTHING: the pair's number comes off the sticker that's
+    // about to be scanned onto it, and minting one here would burn a sequence number
+    // per scan and put a second, wrong VIN on the line.
     const [look, vin] = await Promise.all([
       (isUpc ? api.searchUpc(c) : api.searchSku(c)).then((r) => ({ ok: true, product: r.product }), (e) => ({ ok: false, err: e })),
-      api.reserveVins(1, header.dateReceived).then((r) => r.vins?.[0] || null, () => null),
+      rawVinsRef.current
+        ? Promise.resolve(null)
+        : api.reserveVins(1, header.dateReceived).then((r) => r.vins?.[0] || null, () => null),
     ]);
     if (lastScanRef.current?.lineKey === lineKey) lastScanRef.current.vin = vin;
 
@@ -902,9 +981,24 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // Rapid scanning lets incomplete lines into the cart on purpose — a lookup that
   // failed, or a code the catalogue had no size for. They're fixable in the list
   // and on Review, but they must never reach a commit.
-  const isUnresolved = (it) => it.pending || !String(it.name || '').trim() || it.sizes.some((s) => !String(s.size || '').trim());
+  // In raw-1ID mode a line also needs its STICKER. A pair whose 1ID was never scanned
+  // is exactly as unfinished as one with no size: it would commit with a system-minted
+  // VIN that matches nothing physically on the shoe — the silent failure this whole
+  // mode exists to avoid. So it rides the same machinery: blocks Review, blocks commit,
+  // and focusFirstUnresolved puts the cursor on it.
+  const needsSticker = (it) => rawVins && !it.pending && it.sizes.some(
+    (sz) => (Number(sz.qty) || 0) > (sz.vins || []).length,
+  );
+  const isUnresolved = (it) => it.pending || !String(it.name || '').trim()
+    || it.sizes.some((s) => !String(s.size || '').trim()) || needsSticker(it);
   const unresolvedCount = items.filter(isUnresolved).length;
-  const unresolvedMsg = `Finish the ${unresolvedCount} highlighted line${unresolvedCount === 1 ? '' : 's'} first — every shoe needs a name and a size.`;
+  const missingStickers = rawVins ? items.filter(needsSticker).length : 0;
+  // The pair the next sticker scan will land on — same pick as bindSticker, so the
+  // prompt can name it and the row can be marked.
+  const awaitingSticker = rawVins ? items.find(needsSticker) || null : null;
+  const unresolvedMsg = missingStickers
+    ? `Scan a 1ID sticker onto the ${missingStickers} highlighted line${missingStickers === 1 ? '' : 's'} — every pair needs one before it can be saved.`
+    : `Finish the ${unresolvedCount} highlighted line${unresolvedCount === 1 ? '' : 's'} first — every shoe needs a name and a size.`;
   // The step's error line sits above the sticky footer, which on a long cart is far
   // below the fold — a blocked "Review →" would look like a dead button. Put the
   // cursor in the first field that's actually missing instead: it scrolls itself
@@ -1461,11 +1555,20 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 <div className="scanbar">
                   <form className="searchrow" onSubmit={(e) => { e.preventDefault(); rapidScan(scanInput); }}>
                     <input ref={scanInputRef} autoCapitalize="characters" autoCorrect="off" autoComplete="off"
-                      placeholder={isRescale ? 'Scan or type VIN / UPC / SKU' : 'Scan or type UPC / SKU'}
+                      placeholder={isRescale ? 'Scan or type VIN / UPC / SKU'
+                        : rawVins ? (awaitingSticker ? 'Now scan the 1ID sticker' : 'Scan the shoe (UPC / SKU)')
+                        : 'Scan or type UPC / SKU'}
                       value={scanInput} onChange={(e) => setScanInput(e.target.value)} />
                     <button className="btn primary" type="submit">Add</button>
                     <button type="button" className={`btn ${scanCam ? 'primary' : 'ghost'}`} onClick={() => setScanCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
                   </form>
+                  {rawVins && (
+                    <div className={`rawvin-beat ${awaitingSticker ? 'awaiting' : ''}`} role="status" aria-live="polite">
+                      {awaitingSticker
+                        ? <><b>2 · Scan the 1ID</b> sticker onto {awaitingSticker.name || awaitingSticker.sku || 'that pair'}, then stick it on</>
+                        : <><b>1 · Scan the shoe</b> — then scan its pre-printed 1ID sticker</>}
+                    </div>
+                  )}
                   {!isRescale && (
                     <div className="scanbar-mode">
                       <span className="scanbar-mode-label">Scanning as</span>
@@ -1565,7 +1668,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                         <span className="recv-unit-n">{i + 1}.</span>
                                         {s.vins?.[i]
                                           ? <span className="vin">{s.vins[i]}</span>
-                                          : <span className="vin pending">VIN on submit</span>}
+                                          : rawVins
+                                            ? <span className="vin need">1ID?</span>
+                                            : <span className="vin pending">VIN on submit</span>}
                                         {!it.withBox && <span className="recv-unit-nobox">no box — sticker carefully</span>}
                                       </div>
                                     ))}
@@ -2059,7 +2164,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         </div>
       )}
 
-      {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onClose={() => setShowPrefs(false)} />}
+      {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onRawVins={setRawVins} onClose={() => setShowPrefs(false)} />}
     </div>
   );
 }

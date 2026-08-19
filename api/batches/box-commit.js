@@ -9,6 +9,7 @@ import {
   reconcileOutcomeForIntake, dbConfigured,
 } from '../_lib/db.js';
 import { normalizeItems, parseUnitIssues, enrichGlobalIndicators, toCost } from '../_lib/intake.js';
+import { duplicateVin } from '../_lib/vins.js';
 
 const MAX_ITEMS = 2000;
 
@@ -73,6 +74,11 @@ export default async function handler(req, res) {
     return;
   } catch (e) {
     if (e.conflict) return send(res, 409, { ok: false, error: e.message });
+    const dupe = duplicateVin(e);
+    if (dupe) return send(res, 409, {
+      ok: false, vin: dupe,
+      error: `1ID ${dupe} is already on another shoe. Pull that sticker, put a fresh one on, and submit again.`,
+    });
     console.error('[batches/box-commit]', e.message);
     return send(res, 500, { ok: false, error: 'Could not submit the box. Please try again.' });
   }

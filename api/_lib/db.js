@@ -1267,7 +1267,7 @@ export async function createRescaleRequest({ sku, name, sizes, price, reason, no
 
 export async function listRescaleRequests(status = 'open', from = null, to = null) {
   return await db()`
-    SELECT id, sku, name, sizes, actual_sizes, audit_note, price, reason, note, status,
+    SELECT id, sku, name, sizes, actual_sizes, audit_note, cancel_note, price, reason, note, status,
            listing, listed_by, listed_at,
            requested_by, resolved_by, resolved_at, created_at
     FROM rescale_requests
@@ -1288,6 +1288,28 @@ export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
     WHERE id = ${id} AND status = 'open' RETURNING id
   `;
   return rows.length > 0;
+}
+
+// PH cancels a request it raised in error or no longer needs — it drops off the
+// warehouse's Pending-audit queue and out of the home badge (which counts 'open').
+//
+// ONLY while the request is still `open`. Once the warehouse has audited it, that
+// row carries a count somebody made standing at a shelf, and cancelling would throw
+// it away; the `status = 'open'` in the WHERE is the whole guard, so losing a race
+// against an audit fails cleanly instead of overwriting it. Returns false when the
+// request is missing or has already moved on. It reports WHICH of those happened —
+// `{ ok:false, status }` — so the caller can say "already audited" or "already
+// cancelled" instead of one message that is wrong half the time.
+export async function cancelRescaleRequest(id, note, by) {
+  const rows = await db()`
+    UPDATE rescale_requests
+    SET status = 'cancelled', cancel_note = ${note || null},
+        resolved_by = ${by || null}, resolved_at = now()
+    WHERE id = ${id} AND status = 'open' RETURNING id
+  `;
+  if (rows.length) return { ok: true };
+  const cur = await db()`SELECT status FROM rescale_requests WHERE id = ${id}`;
+  return { ok: false, status: cur[0]?.status || null };
 }
 
 /* --------------------------- Shelf locations --------------------------- */

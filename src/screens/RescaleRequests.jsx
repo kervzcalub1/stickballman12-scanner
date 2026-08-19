@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { TopBar, DateRangeBar, RescaleCompare, YesNo, PriceInput, BasisChip } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
-import { rangeOf, fmtPrice } from '../lib/format.js';
+import { rangeOf, fmtPrice, PH_DATETIME } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
 import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
@@ -170,6 +170,24 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   const setAuditRow = (k, patch) => setAuditRows((a) => a.map((x) => (x.key === k ? { ...x, ...patch } : x)));
   const addAuditRow = () => setAuditRows((a) => [...a, { key: cartKey++, size: '', qty: 0 }]);
   const rmAuditRow = (k) => setAuditRows((a) => a.filter((x) => x.key !== k));
+  // Cancelling: PH only, and only while the request is still open. Two steps on
+  // purpose — the confirm row names the shoe and takes an optional reason, because
+  // the warehouse sees this disappear from their queue and deserves to know why.
+  const [cancelId, setCancelId] = useState(null);
+  const [cancelNote, setCancelNote] = useState('');
+  function startCancel(r) { setCancelId(r.id); setCancelNote(''); setAuditId(null); }
+  async function submitCancel(r) {
+    setBusyId(r.id); setError('');
+    try { await api.rescaleRequestCancel(r.id, cancelNote.trim()); setCancelId(null); load(); }
+    catch (err) {
+      if (err.unauthorized) return onSignOut();
+      // 409 = the warehouse audited it while this was open on screen; reload so the
+      // count they just made is what PH sees, rather than a stale "open" row.
+      setError(err.message);
+      if (err.conflict) { setCancelId(null); load(); }
+    }
+    finally { setBusyId(null); }
+  }
 
   async function submitAudit(r) {
     const actual = auditRows.filter((x) => String(x.size).trim()).map((x) => ({ size: String(x.size).trim(), qty: Math.max(0, Number(x.qty) || 0) }));
@@ -252,7 +270,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
           right={(
             <span className="ph-edit-actions">
               <span className="seg">
-                {[['open', 'Open'], ['audited', 'Audited'], ['all', 'All']].map(([v, l]) =>
+                {[['open', 'Open'], ['audited', 'Audited'], ...(canCreate ? [['cancelled', 'Cancelled']] : []), ['all', 'All']].map(([v, l]) =>
                   <button key={v} type="button" className={`seg-btn ${statusF === v ? 'on' : ''}`} onClick={() => setStatusF(v)}>{l}</button>)}
               </span>
               {canCreate && <button className="btn sm primary" onClick={() => setMode('new')}>+ New request</button>}
@@ -268,14 +286,23 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                     <div className="rc-title">{r.name || r.sku}</div>
                     <div className="muted sm">{r.sku} · {r.reason}{r.price != null ? ` · $${fmtPrice(r.price)}` : ''}</div>
                   </div>
-                  <span className={`rc-pill ${r.status}`}>{r.status === 'audited' ? 'Audited' : 'Open'}</span>
+                  <span className={`rc-pill ${r.status}`}>
+                    {r.status === 'audited' ? 'Audited' : r.status === 'cancelled' ? 'Cancelled' : 'Open'}
+                  </span>
                 </div>
                 <RescaleCompare reported={r.sizes} actual={r.actual_sizes} />
                 {r.note ? <div className="muted sm">Request note: “{r.note}”</div> : null}
                 {r.audit_note ? <div className="muted sm">Audit note: “{r.audit_note}”</div> : null}
+                {r.cancel_note ? <div className="muted sm">Cancelled because: “{r.cancel_note}”</div> : null}
                 <div className="rc-foot muted sm">
-                  Requested by {r.requested_by || '—'} · {new Date(r.created_at).toLocaleString()}
+                  {/* EST, not the viewer's clock. The Day/Week/Month filter above buckets
+                      these by the EST calendar (the server dates everything `AT TIME ZONE
+                      'America/New_York'`), so a local-time stamp put a request filed under
+                      "Aug 18" next to the text "8/19 12:18 AM" for anyone outside EST —
+                      which is most of the PH team. Same formatter the PH grid uses. */}
+                  Requested by {r.requested_by || '—'} · {PH_DATETIME.format(new Date(r.created_at))} EST
                   {r.status === 'audited' && r.resolved_by ? ` · audited by ${r.resolved_by}` : ''}
+                  {r.status === 'cancelled' && r.resolved_by ? ` · cancelled by ${r.resolved_by}` : ''}
                 </div>
                 {canAudit && r.status === 'open' && (auditId === r.id ? (
                   <div className="rc-audit">
@@ -300,6 +327,27 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                   </div>
                 ) : (
                   <div className="rc-foot"><button className="btn sm primary" onClick={() => startAudit(r)}>🔍 Audit shelf</button></div>
+                ))}
+
+                {/* Cancel — PH only (the server refuses everyone else, admin included) and
+                    only while the request is still open: once the warehouse has audited it,
+                    that row holds a count someone made at a shelf. */}
+                {canCreate && r.status === 'open' && (cancelId === r.id ? (
+                  <div className="rc-cancel">
+                    <div className="sm">Cancel this request for <b>{r.name || r.sku}</b>? The warehouse stops seeing it in Pending audit.</div>
+                    <input className="rc-auditnote" placeholder="Reason (optional) — the warehouse sees this"
+                      value={cancelNote} maxLength={500} onChange={(e) => setCancelNote(e.target.value)} />
+                    <div className="ph-edit-actions">
+                      <button className="btn sm danger" disabled={busyId === r.id} onClick={() => submitCancel(r)}>
+                        {busyId === r.id ? '…' : 'Yes, cancel it'}
+                      </button>
+                      <button className="btn sm ghost" disabled={busyId === r.id} onClick={() => setCancelId(null)}>Keep request</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rc-foot">
+                    <button className="btn sm ghost danger" onClick={() => startCancel(r)}>Cancel request…</button>
+                  </div>
                 ))}
 
                 {/* PH listing — shown INLINE once the warehouse has audited it

@@ -36,8 +36,32 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
   on the request (`listing` JSONB + `listed_by/at`). **Requests aren't tied to VINs,
   so this is a self-contained listing record** (it does NOT flip inventory sync
   flags — that's the Rescale Stock worklist's job).
+- **PH cancels a request** it raised in error / no longer needs →
+  `api/rescale-requests/cancel.js` (`cancelRescaleRequest`). Status → `cancelled`,
+  with an optional reason (`cancel_note`, shown to both teams) and
+  `resolved_by`/`resolved_at` reused for who ended it and when — `status` says *how*
+  it ended, so only the reason needed a new column.
+  - **PH team only, and deliberately NOT via `requireRole`** — that auto-allows admin,
+    and withdrawing a request is the requesting team's own call. Same explicit
+    `ph_team || superadmin` check the other PH-owned writes use (`ph/update.js`,
+    `ph/set-goat.js`). Warehouse and admin get 403 and see no button.
+  - **Only while `open`.** The `status = 'open'` in the UPDATE's WHERE is the whole
+    guard: once the warehouse has audited it, that row carries a count somebody made
+    standing at a shelf, and cancelling would throw it away. An audit landing while
+    the confirm is open therefore wins, and PH gets a 409 that says so (the client
+    reloads to show the count). Already-cancelled and missing rows report their own
+    reasons — one message for all three states is wrong two-thirds of the time.
+  - A **Cancelled** filter tab (PH only) and a struck-through neutral-grey pill: PH
+    withdrawing its own request is a normal outcome, not an error state.
 - Home badges: 🟡 Pending audit (open) + 🟢 Audited (done) — `pendingCounts`
-  returns `rescale_requests` (open) and `rescale_requests_audited`.
+  returns `rescale_requests` (open) and `rescale_requests_audited`. A cancelled
+  request leaves both counts for free, since they key on `status`.
+- **Timestamps render in EST** (`PH_DATETIME` + " EST"), like the rest of the app.
+  They were `toLocaleString()` — the viewer's clock — while the Day/Week/Month filter
+  above them buckets by the **EST calendar** (the server dates everything `AT TIME
+  ZONE 'America/New_York'`). For the PH team (UTC+8) that filed a request under
+  "Aug 18" and then stamped it "8/19, 12:18 AM". Fixed here and in the Inventory
+  item-history timeline, which had the same `toLocaleString()`.
 
 ## Notes
 - **`api/items/rescale.js` rejects an in-store VIN (409)** — rescaling sets

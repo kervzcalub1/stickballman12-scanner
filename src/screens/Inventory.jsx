@@ -12,7 +12,7 @@ import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
 import { isLocationCode } from '../lib/codes.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
-import { ymd, periodRange, periodLabel, shiftAnchor, estToday } from '../lib/format.js';
+import { ymd, periodRange, periodLabel, shiftAnchor, estToday, PH_DATETIME } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
@@ -529,7 +529,9 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
                     <div className="tl-dot" />
                     <div className="tl-body">
                       <HistoryLine event={e} onViewPhotos={setLightbox} />
-                      <div className="muted sm">{new Date(e.created_at).toLocaleString()}</div>
+                      {/* EST like everything else the server stamps — the page's own date
+                          filter is EST, and PH (UTC+8) reads this page too. */}
+                      <div className="muted sm">{PH_DATETIME.format(new Date(e.created_at))} EST</div>
                     </div>
                   </div>
                 ))}

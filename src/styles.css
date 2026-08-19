@@ -3044,3 +3044,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-mf-warn { color: #e0a06a; font-weight: 700; }
 .po-mf-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 @media (max-width: 768px) { .po-mf-trk { flex-basis: 100%; } }
+
+/* Reconciliation → "By box": where the differences are, so a shortage names a box
+   instead of only a shoe. Only the boxes that differ are listed; the rest are a
+   single line, because 11 clean boxes are noise once they're known to be clean. */
+.rcn-boxdiff .rcn-bd-box { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.rcn-bd-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.rcn-bd-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 3px 0; font-size: 13px; }
+.rcn-bd-name { font-weight: 600; }
+.rcn-bd-clean { margin-top: 10px; }

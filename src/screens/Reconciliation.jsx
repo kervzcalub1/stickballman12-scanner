@@ -156,6 +156,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
           intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
           resolution: r.resolution, steps: r.steps, comments: r.comments || [],
           receivedBoxes: r.received_boxes || [],
+          boxDiffs: r.box_diffs || [],
         });
         setNote(r.po.reconcile_note || ''); setNoteSaved(r.po.reconcile_note || '');
       })
@@ -188,6 +189,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
         intakeDone: r.intake_done, awaitingBoxes: r.awaiting_boxes,
         resolution: r.resolution, steps: r.steps, comments: r.comments || [],
         receivedBoxes: r.received_boxes || d.receivedBoxes,
+        boxDiffs: r.box_diffs || d.boxDiffs,
       }));
       loadList();
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
@@ -233,7 +235,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
     setBusy(true);
     try {
       const r = await api.poReconcile(openId);
-      setDetail((d) => ({ ...d, po: r.po, rows: r.rows, summary: r.summary, receivedBoxes: r.received_boxes || d.receivedBoxes }));
+      setDetail((d) => ({ ...d, po: r.po, rows: r.rows, summary: r.summary, receivedBoxes: r.received_boxes || d.receivedBoxes, boxDiffs: r.box_diffs || d.boxDiffs }));
       loadList();
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
@@ -427,6 +429,55 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                   received={detail.receivedBoxes} compare={{ rows: detail.rows }} onSignOut={onSignOut} />
               )}
             </div>
+
+            {/* WHERE the differences are, box by box. The table above says "one Dunk is
+                missing"; this says "box 11" — the difference between a message to the
+                supplier and someone walking to a shelf. Only on a per-box manifest: a
+                whole-order list has no per-box expectation to compare against.
+
+                A label that hasn't been received yet is NOT listed as a pile of missing
+                pairs — it's simply still outstanding, and reading it as a shortage is how
+                a half-delivered order gets chased as a loss. */}
+            {!blind && detail.boxDiffs?.length > 0 && (() => {
+              const received = detail.boxDiffs.filter((b) => b.received);
+              const pending = detail.boxDiffs.filter((b) => !b.received);
+              const dirty = received.filter((b) => b.diffs.length);
+              const clean = received.filter((b) => !b.diffs.length);
+              if (!received.length) return null;
+              return (
+                <div className="card rcn-boxdiff">
+                  <h3 className="rows-title">
+                    By box{' '}
+                    <span className="muted">({clean.length} of {received.length} match exactly)</span>
+                  </h3>
+                  {!dirty.length ? (
+                    <p className="muted sm">Every box we opened holds exactly what its label declared.</p>
+                  ) : dirty.map((b) => (
+                    <div className="rcn-bd-box" key={b.box_number}>
+                      <div className="rcn-bd-head">
+                        <b>Box {b.box_number}</b>
+                        <span className="muted sm">declared {b.expected_units} · counted {b.received_units}</span>
+                      </div>
+                      {b.diffs.map((d, i) => (
+                        <div className={`rcn-bd-line ${d.kind}`} key={`${d.sku}-${d.size}-${i}`}>
+                          <span className={`po-flag ${d.kind === 'missing' ? 'bad' : 'warn'}`}>
+                            {d.kind === 'missing' ? `−${d.qty}` : `+${d.qty}`}
+                          </span>
+                          <span className="rcn-bd-name">{d.name || d.sku}</span>
+                          <span className="muted xs">{d.sku} · size {d.size}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {clean.length > 0 && dirty.length > 0 && (
+                    <p className="muted xs rcn-bd-clean">Matching exactly: box {clean.map((b) => b.box_number).join(', ')}.</p>
+                  )}
+                  {pending.length > 0 && (
+                    <p className="muted xs">Still to arrive: box {pending.map((b) => b.box_number).join(', ')} — not counted as short.</p>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* OUR count, box by box — the evidence in a shortage conversation. The
                 supplier's manifest says what they claim they sent; this says what came

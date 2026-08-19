@@ -2793,6 +2793,76 @@ export async function getPoReceivedBoxes(poId) {
   return out;
 }
 
+// Per-LABEL discrepancies: what each box declared vs what came out of that box.
+//
+// The order-level table says "one Dunk is missing"; this says "box 11". That is the
+// difference between a message to the supplier and someone walking to a shelf. It uses
+// the same canonical matching as `getPoReconciliation`, so a notation difference never
+// reads as a missing pair here either.
+//
+// ONLY on a per-box manifest. On a whole-order list there is no per-box expectation and
+// inventing one would be us making up a claim the supplier never made — the same reason
+// the received PDF states only what we counted per box (see purchase-orders.md).
+export async function getPoBoxDiffs(poId) {
+  const sql = db();
+  const po = (await sql`SELECT id, manifest_scope FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po || po.manifest_scope === 'po') return [];
+
+  const expected = await sql`
+    SELECT l.po_box_id, l.sku, l.size, max(l.name) AS name, sum(l.qty_expected)::int AS qty
+    FROM po_lines l WHERE l.po_id = ${poId} AND l.po_box_id IS NOT NULL
+    GROUP BY l.po_box_id, l.sku, l.size`;
+  const labels = await sql`SELECT id, box_number, kind FROM po_boxes WHERE po_id = ${poId} ORDER BY box_number`;
+  const receivedBoxes = await getPoReceivedBoxes(poId);
+
+  // One code-group map for the whole order, so the same shoe groups identically in
+  // every box (a dual code declared on one label and single on another still matches).
+  const canon = rcCodeGroups([
+    ...expected.map((e) => rcCodes(e.sku)),
+    ...receivedBoxes.flatMap((b) => (b.items || []).map((i) => rcCodes(i.sku))),
+  ]);
+  const key = (x) => `${canon(rcCodes(x.sku))}|${rcSizeNum(x.size)}`;
+  const roll = (list, qtyOf) => {
+    const m = new Map();
+    for (const x of list) {
+      const k = key(x);
+      const cur = m.get(k);
+      if (cur) cur.qty += qtyOf(x);
+      else m.set(k, { sku: x.sku, size: x.size, name: x.name, qty: qtyOf(x) });
+    }
+    return m;
+  };
+
+  // Received boxes carry the LABEL's number once their tracking matched one, which is
+  // what ties the two halves together (`getPoReceivedBoxes` resolves that).
+  const recByNumber = new Map();
+  for (const b of receivedBoxes) {
+    if (b.box_number == null) continue;
+    const cur = recByNumber.get(Number(b.box_number)) || [];
+    recByNumber.set(Number(b.box_number), cur.concat(b.items || []));
+  }
+
+  return labels.map((l) => {
+    const exp = roll(expected.filter((e) => Number(e.po_box_id) === Number(l.id)), (e) => e.qty);
+    const rec = roll(recByNumber.get(Number(l.box_number)) || [], (i) => i.qty);
+    const diffs = [];
+    for (const [k, e] of exp) {
+      const got = rec.get(k)?.qty || 0;
+      if (got < e.qty) diffs.push({ kind: 'missing', sku: e.sku, size: e.size, name: e.name, qty: e.qty - got });
+      else if (got > e.qty) diffs.push({ kind: 'extra', sku: rec.get(k).sku, size: rec.get(k).size, name: rec.get(k).name || e.name, qty: got - e.qty });
+    }
+    for (const [k, r] of rec) if (!exp.has(k)) diffs.push({ kind: 'extra', sku: r.sku, size: r.size, name: r.name, qty: r.qty });
+    return {
+      box_number: l.box_number,
+      kind: l.kind || 'original',
+      expected_units: [...exp.values()].reduce((n, x) => n + x.qty, 0),
+      received_units: [...rec.values()].reduce((n, x) => n + x.qty, 0),
+      received: recByNumber.has(Number(l.box_number)),
+      diffs,
+    };
+  });
+}
+
 export async function markPoReceiving(poId, batchId) {
   const sql = db();
   await sql`

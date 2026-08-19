@@ -403,6 +403,28 @@ by that key before comparing, so two spellings on the same side fold together to
 - Consequence worth knowing: orders that were falsely dirty can now auto-close
   (`autoReconcileIfClean`), which is the intended behaviour.
 
+## Per-box discrepancies — which BOX, not just which shoe
+`getPoBoxDiffs(poId)` → `box_diffs` on `GET /api/po/reconciliation`, rendered as the
+**By box** card on the Reconciliation screen (above the "what we received" evidence).
+The order-level table says "one Dunk is missing"; this says **box 11**, which is the
+difference between a message to the supplier and someone walking to a shelf.
+- Expected = `po_lines` per label. Received = `getPoReceivedBoxes` (already loaded by
+  that screen), whose boxes carry the **label's** number once their tracking matched —
+  that resolved number is what ties the two halves together.
+- **Same canonical matching as the order-level table** (`rcCodes` + `rcSizeNum`, one
+  code-group map for the whole order), so a dual style code or a `7.5W` never reads as
+  a missing pair here either.
+- **A label that hasn't been received is NOT listed as a pile of missing pairs** — it's
+  shown as "still to arrive, not counted as short". Reading an undelivered box as a
+  shortage is how a half-delivered order gets chased as a loss.
+- Only the boxes that DIFFER are listed; the clean ones collapse to one line ("Matching
+  exactly: box 1, 2, 4…"). On PO-100005 that's 7 boxes to look at instead of 18.
+- **Per-box manifests only.** A whole-order list has no per-box expectation, and
+  inventing one would be us making up a claim the supplier never made (same rule as the
+  received PDF, which states only what we counted per box). Returns `[]` for scope `po`.
+- e2e: `po-box-diffs.spec.js` — dual code + W-suffix must match, an undeclared pair
+  shows against its box, an unshipped label is outstanding rather than short.
+
 ## Manifest PDFs — continuation pages carry a one-line header
 A table spilling to a new page used to reprint the **whole** page header: supplier
 block, ship-to box and every tracking number on the order. On an 18-box order that

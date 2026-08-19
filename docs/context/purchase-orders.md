@@ -379,6 +379,39 @@ Covered by `e2e/po-manifest-window.spec.js`.
   printed total; 17 labels filled with 1 skipped as already-declared, and a second
   import of the same file writing nothing.
 
+## Reconciliation matching — the two notations that faked 154 short pairs
+`getPoReconciliation` used to compare `sku`/`size` as literal text (upper-cased,
+nothing else). On PO-100005 that reported a **fully-correct 233-pair shipment as 88
+lines / 154 pairs wrong**. Two notations cause it, and each shows up TWICE — a phantom
+`shortage` against their spelling and a phantom `wrong_sku` against ours:
+- **Women's sizes** — the supplier writes `7.5`, we store `7.5W` (27 lines on that order).
+- **Dual style codes** — the supplier writes one code, our UPC lookup gives both
+  (10 lines): their `CW2290-111` vs our `315121-115/CW2290-111`, and
+  `HV9918-301-/-HV9919-301` — the hyphens around the slash are `normSku` turning the
+  spaces into dashes on the way in.
+
+So matching is now on **any style code in common + the numeric part of the size**
+(`rcCodes` / `rcSizeNum`). Codes are grouped **transitively** (union-find): a line
+listing `A/B` makes A and B one shoe, and a later `B/C` pulls C in, with the
+alphabetically-first code as the group's stable key. Both sides are then *aggregated*
+by that key before comparing, so two spellings on the same side fold together too.
+- The row still reports **what each side actually wrote**; `sku_ours`/`size_ours` carry
+  our spelling when it differs, so a report can show `7.5 → 7.5W` rather than quietly
+  normalising the difference away.
+- Verified by rebuilding PO-100005 from both PDFs: **88 flagged lines / 154 pairs → 12
+  lines / 12 pairs**, matching an independent comparison of the two documents exactly.
+- Consequence worth knowing: orders that were falsely dirty can now auto-close
+  (`autoReconcileIfClean`), which is the intended behaviour.
+
+## Manifest PDFs — continuation pages carry a one-line header
+A table spilling to a new page used to reprint the **whole** page header: supplier
+block, ship-to box and every tracking number on the order. On an 18-box order that
+made the reconciliation 20 pages, mostly the same 18 tracking numbers over and over.
+`drawContinuedHeader` replaces it with one line — business · PO · title · "continued" —
+and the **table head repeats** instead. PO-100005's received sheet went **38 pages →
+24** (its reconciliation section, 20 → 6). Applies to every paginating table: per-box,
+whole-order, received and reconciliation.
+
 ## Supplier non-compliance — on-behalf manifest entry + no-manifest receiving
 Two escape hatches for when a supplier won't use the scan-out portal:
 

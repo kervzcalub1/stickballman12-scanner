@@ -129,6 +129,30 @@ function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle, s
   return y;
 }
 
+// A CONTINUATION page's header — one line, not the whole block.
+//
+// A long table used to reprint the entire page header on every page: the supplier
+// block, the ship-to box and every tracking number on the order. On a real 18-box
+// order that turned the reconciliation into 20 pages, most of it the same 18
+// tracking numbers over and over. The order's identity only has to be established
+// once; a continuation page needs to say which document it belongs to and get out of
+// the way, then repeat the TABLE head (which `drawItemTable`/`drawCompareTable`
+// already do) so the columns stay readable.
+function drawContinuedHeader(doc, { businessName, title, po }) {
+  doc.setFillColor(...ACCENT);
+  doc.rect(0, 0, PAGE_W, 4, 'F');
+  let y = MARGIN + 2;
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...INK);
+  doc.text(businessName || 'Inbound Shipment', MARGIN, y);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...MUTED);
+  const right = [po?.po_code, title, 'continued'].filter(Boolean).join('  ·  ');
+  doc.text(right, PAGE_W - MARGIN, y, { align: 'right' });
+  y += 2.5;
+  doc.setDrawColor(...HAIR); doc.setLineWidth(0.3);
+  doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+  return y + 5;
+}
+
 // Draw the item-table header row at y; returns the next y.
 function drawTableHead(doc, y, cols) {
   doc.setFillColor(...INK);
@@ -312,7 +336,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
       });
       const startY = header();
       const items = sortLines(linesForBox(lines, box.id));
-      if (items.length) drawItemTable(doc, startY, items, header);
+      if (items.length) drawItemTable(doc, startY, items, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po }));
       else if (orderLines.length) drawNote(doc, startY, 'This order was manifested as one whole-order list, not box by box - the full item list is on the last page.');
       else drawNote(doc, startY, 'No items recorded for this box.');
     });
@@ -325,7 +349,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
         trackingNumbers: trackingList(boxes),
         subtitle: { label: 'Scope', value: 'Whole order - not broken out by box' },
       });
-      drawItemTable(doc, header(), orderLines, header);
+      drawItemTable(doc, header(), orderLines, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest - Whole Order', po }));
     }
 
     // No labels and nothing manifested — still produce a readable sheet.
@@ -357,7 +381,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
       });
       const startY = header();
       const items = sortLines((box.items || []).map((i) => ({ ...i, qty_expected: i.qty })));
-      if (items.length) drawItemTable(doc, startY, items, header);
+      if (items.length) drawItemTable(doc, startY, items, () => drawContinuedHeader(doc, { businessName, title: 'Received - Our Count', po }));
       else drawNote(doc, startY, 'This box was opened and nothing was in it.');
     });
 
@@ -368,7 +392,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
         businessName, title: 'Received - Reconciliation', po, trackingNumbers: trackingList(boxes), shipTo,
         subtitle: { label: 'Scope', value: 'Their list vs our count, whole order' },
       });
-      drawCompareTable(doc, header(), compare.rows, header);
+      drawCompareTable(doc, header(), compare.rows, () => drawContinuedHeader(doc, { businessName, title: 'Received - Reconciliation', po }));
     }
 
     if (!drawn) {
@@ -384,7 +408,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
     });
     const startY = header();
     const allItems = sortLines(lines);
-    if (allItems.length) drawItemTable(doc, startY, allItems, header);
+    if (allItems.length) drawItemTable(doc, startY, allItems, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest - Whole Order', po }));
     else drawNote(doc, startY, 'No items recorded on this order yet.');
   }
 

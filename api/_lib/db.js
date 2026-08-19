@@ -2819,6 +2819,50 @@ export async function getOpenBatchForPo(poId) {
 const rcSku = (s) => String(s || '').trim().toUpperCase();
 const rcSize = (s) => String(s || '').trim();
 
+// --- Matching two sides that write the same shoe differently -----------------
+// Comparing the raw text (upper-cased, nothing more) reported a fully-correct
+// 233-pair shipment as 154 pairs wrong. Two notations do it, and each one shows up
+// TWICE — a phantom "short" against their spelling and a phantom "not on their
+// list" against ours:
+//
+//   • Women's sizes. The supplier writes `7.5`; we store `7.5W`.
+//   • Dual style codes. The supplier writes `CW2290-111`; we store
+//     `315121-115/CW2290-111` — and sometimes `HV9918-301-/-HV9919-301`, because
+//     normSku turns the spaces around the slash into hyphens on the way in.
+//
+// So match on: any style code in common, and the NUMERIC part of the size. The row
+// still reports what each side actually wrote — this only decides what lines up.
+const rcCodes = (sku) => String(sku || '').toUpperCase().split('/')
+  .map((c) => c.trim().replace(/\s+/g, '-').replace(/^[-\s]+|[-\s]+$/g, ''))
+  .filter(Boolean);
+const rcSizeNum = (s) => String(s || '').trim().toUpperCase().replace(/[A-Z]+$/, '');
+
+// One shoe can be written under several codes, so the codes have to be grouped
+// transitively: a line listing `A/B` makes A and B the same shoe, and a later line
+// listing `B/C` pulls C in too. Union-find, with the alphabetically-first code of
+// each group as its stable representative.
+function rcCodeGroups(rowsets) {
+  const parent = new Map();
+  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  const add = (x) => { if (!parent.has(x)) parent.set(x, x); };
+  const union = (a, b) => { add(a); add(b); const ra = find(a); const rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+  for (const codes of rowsets) {
+    codes.forEach(add);
+    for (let i = 1; i < codes.length; i++) union(codes[0], codes[i]);
+  }
+  // Collapse each set to its smallest member so the key is deterministic.
+  const rep = new Map();
+  for (const c of parent.keys()) {
+    const r = find(c);
+    const cur = rep.get(r);
+    if (!cur || c < cur) rep.set(r, c);
+  }
+  return (codes) => {
+    for (const c of codes) if (parent.has(c)) return rep.get(find(c));
+    return codes[0] || '';
+  };
+}
+
 // Compute the reconciliation table + summary on demand (does not persist).
 export async function getPoReconciliation(poId) {
   const sql = db();
@@ -2862,11 +2906,24 @@ export async function getPoReconciliation(poId) {
     WHERE b.po_id = ${poId}
     GROUP BY i.sku, i.size`;
 
-  const key = (s, z) => `${rcSku(s)}|${rcSize(z)}`;
-  const expMap = new Map(); const expSkus = new Set();
-  for (const e of expected) { expMap.set(key(e.sku, e.size), e); expSkus.add(rcSku(e.sku)); }
-  const recMap = new Map();
-  for (const r of received) recMap.set(key(r.sku, r.size), r);
+  // Group both sides on (shoe, numeric size) rather than on the literal text, so a
+  // difference in notation can't read as a missing pair. Aggregating BY that key also
+  // folds together two spellings of the same shoe arriving on either side.
+  const canon = rcCodeGroups([...expected, ...received].map((x) => rcCodes(x.sku)));
+  const key = (x) => `${canon(rcCodes(x.sku))}|${rcSizeNum(x.size)}`;
+  const bucket = (list) => {
+    const m = new Map();
+    for (const x of list) {
+      const k = key(x);
+      const cur = m.get(k);
+      if (cur) { cur.qty += x.qty; if (!cur.name && x.name) cur.name = x.name; }
+      else m.set(k, { sku: x.sku, size: x.size, name: x.name, qty: x.qty });
+    }
+    return m;
+  };
+  const expMap = bucket(expected);
+  const recMap = bucket(received);
+  const expShoes = new Set([...expMap.keys()].map((k) => k.split('|')[0]));
 
   const rows = [];
   for (const k of new Set([...expMap.keys(), ...recMap.keys()])) {
@@ -2877,9 +2934,13 @@ export async function getPoReconciliation(poId) {
     if (exp > 0 && rec === exp) flag = 'match';
     else if (exp > 0 && rec < exp) flag = 'shortage';
     else if (exp > 0 && rec > exp) flag = 'overage';
-    else if (exp === 0 && expSkus.has(rcSku(sku))) flag = 'wrong_size'; // SKU expected, this size wasn't
-    else flag = 'wrong_sku';                                            // SKU not on the PO at all
-    rows.push({ sku, size, name, expected: exp, received: rec, delta: rec - exp, flag });
+    else if (exp === 0 && expShoes.has(k.split('|')[0])) flag = 'wrong_size'; // shoe expected, this size wasn't
+    else flag = 'wrong_sku';                                                  // shoe not on the PO at all
+    // What each side actually wrote, when they wrote it differently — so the report
+    // can show "7.5 → 7.5W" instead of silently normalising the difference away.
+    const skuOurs = r && e && rcSku(r.sku) !== rcSku(e.sku) ? r.sku : null;
+    const sizeOurs = r && e && rcSize(r.size) !== rcSize(e.size) ? r.size : null;
+    rows.push({ sku, size, name, expected: exp, received: rec, delta: rec - exp, flag, sku_ours: skuOurs, size_ours: sizeOurs });
   }
   rows.sort((a, b) => (a.sku || '').localeCompare(b.sku || '') || rcSize(a.size).localeCompare(rcSize(b.size)));
 

@@ -420,7 +420,8 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                   ever entered one". */}
               {!blind && (
                 <ManifestPrint poId={openId} poCode={po.po_code}
-                  received={detail.receivedBoxes} compare={{ rows: detail.rows }} onSignOut={onSignOut} />
+                  received={detail.receivedBoxes} compare={{ rows: detail.rows }}
+                  boxDiffs={detail.boxDiffs} onSignOut={onSignOut} />
               )}
               {/* On a blind receipt there's no manifest to print, but "what we received"
                   is exactly what's worth sending — it's the only record of the shipment. */}

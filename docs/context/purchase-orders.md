@@ -424,6 +424,15 @@ difference between a message to the supplier and someone walking to a shelf.
   received PDF, which states only what we counted per box). Returns `[]` for scope `po`.
 - e2e: `po-box-diffs.spec.js` — dual code + W-suffix must match, an undeclared pair
   shows against its box, an unshipped label is outstanding rather than short.
+- **Downloadable as a PDF**: `buildManifestPdf({ mode: 'discrepancies', boxDiffs })` →
+  the **"Discrepancies by box"** button on `ManifestPrint` (Reconciliation screen). It
+  prints ONLY the boxes that differ — the sheet is meant to be carried into the
+  warehouse, so what is already settled compresses to one line ("Checked and correct:
+  box 1, 2, 4…"). That line is not decoration: a discrepancy sheet listing only problems
+  can't be told apart from one nobody produced. Unreceived labels get their own line
+  ("still to arrive, not counted as short"). Short rows print red, extras amber.
+  The button only appears when a received box actually differs. PO-100005's sheet is
+  **2 pages** (7 boxes) against 38 for the full received PDF.
 
 ## Manifest PDFs — continuation pages carry a one-line header
 A table spilling to a new page used to reprint the **whole** page header: supplier

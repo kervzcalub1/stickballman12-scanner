@@ -1986,7 +1986,7 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
   // land on one (they're skipped below since they won't be in curByVin).
   const curRows = await sql`
     SELECT i.id, i.vin, i.price, i.global_indicator, i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
-           i.ph_note, i.last_edit_at, i.last_edit_by
+           i.goat_only, i.ph_note, i.last_edit_at, i.last_edit_by
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE i.vin = ANY(${allVins}) AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
@@ -2046,7 +2046,17 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       // synced if the item is on II. Turning II off clears the store flags — this
       // prevents the impossible "II off / Alias on" state. (II on + store off is
       // still valid: the store just hasn't synced yet.)
-      if (!next.intel) { next.alias = false; next.stockx = false; next.shopify = false; }
+      //
+      // EXCEPT on a GOAT-only pair, where II is not the master — it isn't in the
+      // picture at all. "GOAT only" means Alias and nowhere else, so the grid shows
+      // II as N/A, PH can't tick it, and every save sends `added_to_intel_inv:false`.
+      // Cascading off that flag therefore wiped the Alias tick straight back off on
+      // save: PH ticked AL, submitted, and the row came back unlisted, forever
+      // (reported on prod for CU9225-100). This is the same trap the GOAT-only
+      // completion rule hit on 2026-08-19 — a rule keyed on II, applied to the one
+      // kind of row that is deliberately never on II. Anything else keyed on
+      // `added_to_intel_inv` needs the same question asked of it.
+      if (!next.intel && !cur.goat_only) { next.alias = false; next.stockx = false; next.shopify = false; }
       if (next.global == null) next.giBasis = null; // no GI → no basis
       // Final price is auto = GI × markup (the configurable price margin). It only
       // counts as a human change (gets a name) when the user OVERRIDES that
@@ -2068,7 +2078,9 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       // on II, it's now "listed at" this price (clears any prior drift); when II is
       // off it isn't listed, so no baseline. A GI refresh (refreshItemGi) deliberately
       // does NOT touch listed_price — that's what surfaces the ⚠ "Price changed" chip.
-      const listedPrice = next.intel ? next.price : null;
+      // A GOAT-only pair is "listed" when Alias is ticked — II is never involved, so
+      // basing its snapshot on II would leave it permanently null.
+      const listedPrice = (next.intel || (cur.goat_only && next.alias)) ? next.price : null;
       queries.push(sql`
         UPDATE items SET price = ${next.price}, global_indicator = ${next.global}, gi_basis = ${next.giBasis}, added_to_intel_inv = ${next.intel},
           synced_alias = ${next.alias}, synced_stockx = ${next.stockx}, synced_shopify = ${next.shopify},

@@ -31,6 +31,8 @@ const MUTED = [107, 114, 128]; // grey sub-text
 const ACCENT = [37, 99, 235];  // blue header bar
 const HAIR = [209, 213, 219];  // hairline rules
 const ZEBRA = [244, 246, 250]; // alternating row fill
+const SHORT_RED = [180, 45, 45];   // declared and not found
+const EXTRA_AMBER = [166, 106, 20]; // turned up undeclared
 
 async function loadJsPDF() {
   const mod = await import('jspdf');
@@ -295,6 +297,51 @@ function drawCompareTable(doc, startY, rows, headerFn) {
 }
 
 // An italic "nothing here" note under a header.
+// Discrepancy report, box by box — ONLY the boxes that differ.
+//
+// The point of the sheet is "go and look in these boxes", so a clean box has no place
+// on it beyond one line at the end saying it was checked. A box heading is kept with
+// its first row: a heading stranded at the foot of a page reads as a box with nothing
+// wrong.
+function drawBoxDiffs(doc, startY, boxes, headerFn) {
+  const left = MARGIN + 3;
+  const right = PAGE_W - MARGIN - 3;
+  const cols = [
+    { label: '', x: left, w: 12 },
+    { label: 'ITEM', x: left + 16, w: 82 },
+    { label: 'SKU', x: left + 102, w: 34 },
+    { label: 'SIZE', x: right, w: 0, align: 'right' },
+  ];
+  const rowH = 7;
+  let y = startY;
+  for (const b of boxes) {
+    if (y + rowH * 3 > PAGE_H - 20) { doc.addPage(); y = headerFn(); }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...INK);
+    const heading = b.kind === 'replacement' ? 'Replacement shipment' : `Box ${b.box_number}`;
+    doc.text(heading, left, y + 4);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...MUTED);
+    doc.text(`declared ${b.expected_units}  ·  counted ${b.received_units}`, left + 32, y + 4);
+    y = drawTableHead(doc, y + 6.5, cols);
+    b.diffs.forEach((d, i) => {
+      if (y + rowH > PAGE_H - 20) { doc.addPage(); y = drawTableHead(doc, headerFn(), cols); }
+      if (i % 2 === 1) { doc.setFillColor(...ZEBRA); doc.rect(MARGIN, y, PAGE_W - MARGIN * 2, rowH, 'F'); }
+      const missing = d.kind === 'missing';
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+      doc.setTextColor(...(missing ? SHORT_RED : EXTRA_AMBER));
+      doc.text(`${missing ? '-' : '+'}${d.qty}`, cols[0].x, y + 4.8);
+      doc.setFont('helvetica', 'normal'); doc.setTextColor(...INK);
+      doc.text(doc.splitTextToSize(String(d.name || d.sku || '-'), cols[1].w)[0] || '-', cols[1].x, y + 4.8);
+      doc.setFont('courier', 'normal'); doc.setFontSize(8.5);
+      doc.text(doc.splitTextToSize(String(d.sku || '-'), cols[2].w)[0] || '-', cols[2].x, y + 4.8);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+      doc.text(String(d.size || '-'), cols[3].x, y + 4.8, { align: 'right' });
+      y += rowH;
+    });
+    y += 6;
+  }
+  return y;
+}
+
 function drawNote(doc, y, text) {
   doc.setFont('helvetica', 'italic'); doc.setFontSize(10); doc.setTextColor(...MUTED);
   doc.splitTextToSize(text, PAGE_W - MARGIN * 2).forEach((ln, i) => doc.text(ln, MARGIN, y + 6 + i * 5));
@@ -304,7 +351,7 @@ function drawNote(doc, y, text) {
 // `boxId` narrows 'perbox' to ONE label — the sheet a supplier prints for the box they
 // just closed, to tape to that box before sealing it. The "Box N of M" denominator still
 // counts every label on the order, so a single sheet says which box of the shipment it is.
-export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null, receivedBoxes = null, compare = null }) {
+export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null, receivedBoxes = null, compare = null, boxDiffs = null }) {
   const jsPDF = await loadJsPDF();
   const doc = new jsPDF({ unit: 'mm', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
   const stamp = generatedAt || '';
@@ -356,6 +403,42 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
     if (!drawn) {
       const startY = drawHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: [], shipTo });
       drawNote(doc, startY, 'No labels or items recorded on this order yet.');
+    }
+  } else if (mode === 'discrepancies') {
+    // The short sheet: only the boxes whose contents disagree with what that label
+    // declared. This is the one somebody carries into the warehouse, so everything that
+    // is already settled is compressed to a single line at the end rather than printed.
+    const received = (boxDiffs || []).filter((b) => b.received);
+    const pending = (boxDiffs || []).filter((b) => !b.received);
+    const dirty = received.filter((b) => b.diffs?.length);
+    const clean = received.filter((b) => !b.diffs?.length);
+    const header = () => drawHeader(doc, {
+      businessName, title: 'Discrepancy Report - By Box', po, trackingNumbers: [], shipTo,
+      subtitle: { label: 'Scope', value: dirty.length
+        ? `${dirty.length} of ${received.length} boxes differ`
+        : `All ${received.length} boxes match their manifest` },
+    });
+    let y = header();
+    if (dirty.length) {
+      y = drawBoxDiffs(doc, y, dirty, () => drawContinuedHeader(doc, { businessName, title: 'Discrepancy Report - By Box', po }));
+    } else {
+      y = drawNote(doc, y, 'Every box we opened holds exactly what its label declared.');
+    }
+    // What was checked and found correct still belongs on the page — a discrepancy sheet
+    // that lists only problems can't be told apart from one where nobody looked.
+    if (y + 24 > PAGE_H - 20) { doc.addPage(); y = drawContinuedHeader(doc, { businessName, title: 'Discrepancy Report - By Box', po }); }
+    doc.setDrawColor(...HAIR); doc.setLineWidth(0.3);
+    doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+    y += 6;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...MUTED);
+    if (clean.length) {
+      doc.text(doc.splitTextToSize(`Checked and correct: box ${clean.map((b) => b.box_number).join(', ')}.`, PAGE_W - MARGIN * 2 - 6), MARGIN + 3, y);
+      y += 6;
+    }
+    if (pending.length) {
+      // Not a shortage: an undelivered box has nothing to be short of yet.
+      doc.text(doc.splitTextToSize(`Still to arrive, not counted as short: box ${pending.map((b) => b.box_number).join(', ')}.`, PAGE_W - MARGIN * 2 - 6), MARGIN + 3, y);
+      y += 6;
     }
   } else if (mode === 'received') {
     // WHAT WE RECEIVED, box by box — our own count, not the supplier's claim. This is the

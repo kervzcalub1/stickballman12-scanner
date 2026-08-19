@@ -24,8 +24,11 @@ import { buildManifestPdf } from '../lib/manifestPdf.js';
 // box, plus a their-list-vs-our-count page. That's the sheet you send a supplier when a
 // shipment is short, so it's driven by the reconciliation data the caller already has
 // (`receivedBoxes` / `compare`) rather than the supplier's manifest.
-export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Manifest PDF:', buttonLabel = 'Print box manifest', primary = false, received = null, compare = null, onSignOut }) {
-  const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole' | 'received'
+// `boxDiffs` adds the DISCREPANCY sheet: only the boxes whose contents disagree with
+// what that label declared. It's the sheet somebody carries into the warehouse, so it's
+// offered only when there is actually something to look at.
+export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Manifest PDF:', buttonLabel = 'Print box manifest', primary = false, received = null, compare = null, boxDiffs = null, onSignOut }) {
+  const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole' | 'received' | 'discrepancies'
   const [error, setError] = useState('');
 
   if (!poId) return null;
@@ -41,7 +44,7 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       const doc = await buildManifestPdf({
         po: d.po, boxes: d.boxes, lines: d.lines, businessName: d.businessName, mode, generatedAt,
         boxId: mode === 'perbox' ? boxId : null, shipTo: d.shipTo,
-        receivedBoxes: received, compare,
+        receivedBoxes: received, compare, boxDiffs,
       });
       // Download rather than auto-print: the thermal-label iframe trick fires .print()
       // before a multi-page PDF viewer has rendered, and navigating a popup to a blob
@@ -53,8 +56,10 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       const which = boxId != null && mode === 'perbox'
         ? `box-${boxNumber ?? boxId}`
         : mode === 'received' ? 'received'
-          : (mode === 'perbox' ? 'per-box' : 'whole-order');
-      a.download = `${mode === 'received' ? 'received' : 'manifest'}-${d.po?.po_code || poCode || poId}-${which}.pdf`;
+          : mode === 'discrepancies' ? 'by-box'
+            : (mode === 'perbox' ? 'per-box' : 'whole-order');
+      const kind = mode === 'received' ? 'received' : mode === 'discrepancies' ? 'discrepancies' : 'manifest';
+      a.download = `${kind}-${d.po?.po_code || poCode || poId}-${which}.pdf`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
@@ -88,6 +93,13 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       {received?.length > 0 && (
         <button className="btn ghost sm" disabled={!!busy} onClick={() => run('received')}>
           <Icon name="download" /> {busy === 'received' ? 'Building…' : 'What we received'}
+        </button>
+      )}
+      {/* Only when a box actually differs: a "discrepancies" sheet listing none of them
+          is indistinguishable from one nobody produced. */}
+      {boxDiffs?.some((b) => b.received && b.diffs?.length > 0) && (
+        <button className="btn ghost sm" disabled={!!busy} onClick={() => run('discrepancies')}>
+          <Icon name="download" /> {busy === 'discrepancies' ? 'Building…' : 'Discrepancies by box'}
         </button>
       )}
       {error && <span className="mf-print-err sm">{error}</span>}

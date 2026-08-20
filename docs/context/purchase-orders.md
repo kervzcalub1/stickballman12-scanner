@@ -164,6 +164,10 @@ Covered by `e2e/po-manifest-window.spec.js`.
     before letting it through (`emptyBoxAck`) — an all-short label is legitimate, just never
     silent. Nothing changed downstream: qty 0 already expanded to 0 units in `doCommit`, and
     the shortage is still inferred server-side by `getPoReconciliation`.
+  - **Raw 1ID stickers work here too** (2026-08-20): with `prefs.rawVins` on, a sticky
+    sticker-scan bar sits above the checklist and every ticked pair needs a `SBM-R-…`
+    scanned onto it before Review. See `docs/context/vin-stock.md` — the checklist is the
+    "scan the shoe" beat, so this screen only ever scans stickers.
   Reconciliation (received-vs-expected per SKU+size: shortage/overage/wrong-SKU) falls out of
   this at receipt; the full PO-level snapshot + PO→`reconciled` is Phase 3.
 - **Phase 3 (built, on branch `feat/po-phase3-reconcile` — not deployed):** reconciliation.

@@ -402,6 +402,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [error, setError] = useState('');
   const [committing, setCommitting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  // PO manifest sticker bar: scanning (the default — no software keyboard, the field
+  // just holds focus for the gun) vs typing a 1ID by hand when a sticker won't read.
+  const [stickerTyping, setStickerTyping] = useState(false);
   const [result, setResult] = useState(null);
   const [printLabels, setPrintLabels] = useState(null);
 
@@ -483,15 +486,32 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // Keep the rapid-scan field armed so a HID gun types straight into it — but
   // never steal focus from another field being typed in (a size being corrected
   // to 5C / 3Y), and never on a phone (see hasFinePointer).
+  //
+  // The PO manifest's sticker bar is the exception, and it has to be: there the
+  // normal setup IS a phone with a Bluetooth gun, and **every tick of a checkbox
+  // takes focus off the field**, so the next trigger pull went nowhere and the pair
+  // had to be tapped back into the field one at a time (Brent's recording,
+  // 2026-08-20). Re-arming can't pop the keyboard over the list there because the
+  // field is `inputMode="none"` while scanning — that's what buys the exception.
+  // Pairs — not lines — still short a sticker. On the PO manifest one line is four
+  // sizes at four pairs each, so "1 line" would badly understate the work left.
+  const stickersShort = !rawVins ? 0 : items.reduce((n, it) => (it.pending ? n : n + it.sizes.reduce(
+    (a, s) => a + Math.max(0, (Number(s.qty) || 0) - (s.vins || []).length), 0)), 0);
+  const armStickerBar = rawVins && isPoReceive && activeSlot != null && !stickerTyping;
   useEffect(() => {
-    if (step !== 2 || scanCam || photoCam || showAdd || photoSku || !hasFinePointer()) return undefined;
+    if (step !== 2 || scanCam || photoCam || showAdd || photoSku) return undefined;
+    if (!hasFinePointer() && !armStickerBar) return undefined;
     const t = setTimeout(() => {
       const ae = document.activeElement;
-      if (ae && ae !== scanInputRef.current && ae.matches?.('input, textarea, select, [contenteditable="true"]')) return;
+      // A checkbox is not something you type into — ticking a size off must hand the
+      // field straight back, or the gun is dead until someone taps it.
+      if (ae && ae !== scanInputRef.current && ae.matches?.('input:not([type="checkbox"]), textarea, select, [contenteditable="true"]')) return;
       scanInputRef.current?.focus({ preventScroll: true });
     }, 60);
     return () => clearTimeout(t);
-  }, [step, scanCam, photoCam, showAdd, photoSku, items.length]);
+    // `stickersShort` moves on every bind, tick and stepper press — the three things
+    // that take focus away — so it is what re-arms the field.
+  }, [step, scanCam, photoCam, showAdd, photoSku, items.length, armStickerBar, stickersShort]);
   // While the listing-photo camera is open, drop focus so the mobile keyboard
   // closes — capturing a photo must never re-summon it via the hidden scan field.
   useEffect(() => { if (photoCam) document.activeElement?.blur?.(); }, [photoCam]);
@@ -799,7 +819,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       scanRecentRef.current[c] = now;
     }
     setScanInput(''); setError('');
-    if (hasFinePointer()) scanInputRef.current?.focus({ preventScroll: true });
+    // Always, not just with a fine pointer: this bar exists for a gun on a phone.
+    scanInputRef.current?.focus({ preventScroll: true });
+    // One hand-typed sticker doesn't mean the next one is typed too — go back to
+    // scan mode so the keyboard gets out of the way and the gun re-arms itself.
+    setStickerTyping(false);
     if (isRollVin(c)) return bindSticker(c);
     setFlash({ type: 'dup', text: `${c} isn’t a 1ID sticker — use “+ Add unexpected” for a pair that isn’t on the PO` });
     scanFeedback('dup');
@@ -1023,10 +1047,6 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     || it.sizes.some((s) => !String(s.size || '').trim()) || needsSticker(it);
   const unresolvedCount = items.filter(isUnresolved).length;
   const missingStickers = rawVins ? items.filter(needsSticker).length : 0;
-  // Pairs — not lines — still short a sticker. On the PO manifest one line is four
-  // sizes at four pairs each, so "1 line" would badly understate the work left.
-  const stickersShort = !rawVins ? 0 : items.reduce((n, it) => (it.pending ? n : n + it.sizes.reduce(
-    (a, s) => a + Math.max(0, (Number(s.qty) || 0) - (s.vins || []).length), 0)), 0);
   // The exact pair the next sticker scan will land on: { item, size }, or null.
   // bindSticker binds THIS slot and the UI marks THIS row, so the screen can never
   // point at a different pair than the scan hits.
@@ -1120,7 +1140,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (!String(header.buyer).trim()) { setError('Enter the buyer first.'); return; }
       if (!String(header.dateReceived).trim()) { setError('Enter the date first.'); return; }
     }
-    setActiveSlot(i); setDraft(null);
+    setActiveSlot(i); setDraft(null); setStickerTyping(false);
     setItems(isPoReceive ? buildManifestItems(boxSlots[i]?.poBoxId) : []);
     setIssues([]); setUnitIssues({}); setRescanned([]);
     resetScanState();
@@ -1606,10 +1626,26 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {rawVins && (
                     <div className="scanbar po-sticker-bar">
                       <form className="searchrow" onSubmit={(e) => { e.preventDefault(); stickerScan(scanInput); }}>
+                        {/* inputMode="none" while scanning: the field keeps focus so a
+                            Bluetooth gun types into it, WITHOUT iOS throwing the software
+                            keyboard over half the manifest. "Type" is the way back in when
+                            a sticker's barcode won't read. */}
                         <input ref={scanInputRef} autoCapitalize="characters" autoCorrect="off" autoComplete="off"
-                          placeholder={awaitingSticker ? `Scan the 1ID for size ${awaitingSticker.size.size}` : 'Scan a 1ID sticker'}
+                          inputMode={stickerTyping ? 'text' : 'none'}
+                          placeholder={stickerTyping ? 'Type the 1ID'
+                            : awaitingSticker ? `1ID for size ${awaitingSticker.size.size}` : 'Scan a 1ID sticker'}
                           value={scanInput} onChange={(e) => setScanInput(e.target.value)} />
                         <button className="btn primary" type="submit">Add</button>
+                        <button type="button" className={`btn ${stickerTyping ? 'primary' : 'ghost'} sticker-type`}
+                          aria-pressed={stickerTyping} title={stickerTyping ? 'Back to scanning' : 'Type a 1ID by hand'}
+                          onClick={() => {
+                            const on = !stickerTyping;
+                            setStickerTyping(on);
+                            // Focus from inside the tap so iOS actually raises the keyboard
+                            // — a focus() outside a gesture sets focus and suppresses it.
+                            if (on) setTimeout(() => scanInputRef.current?.focus(), 0);
+                            else scanInputRef.current?.blur();
+                          }}>Type</button>
                         <button type="button" className={`btn ${scanCam ? 'primary' : 'ghost'}`} onClick={() => setScanCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
                       </form>
                       <div className={`rawvin-beat ${awaitingSticker ? 'awaiting' : ''}`} role="status" aria-live="polite">

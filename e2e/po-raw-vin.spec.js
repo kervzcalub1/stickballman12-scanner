@@ -21,7 +21,11 @@ const q = (text, values) => pool.query(text, values).then((r) => r.rows);
 const stamp = `${Date.now()}`;
 // One order per test: the first one COMMITS its box, and a received label has no
 // "Add items" button left for the second test to click.
-const PO_CODE = { commit: `PO-RAWVIN-${stamp.slice(-6)}A`, untick: `PO-RAWVIN-${stamp.slice(-6)}B` };
+const PO_CODE = {
+  commit: `PO-RAWVIN-${stamp.slice(-6)}A`,
+  untick: `PO-RAWVIN-${stamp.slice(-6)}B`,
+  focus: `PO-RAWVIN-${stamp.slice(-6)}C`,
+};
 const SKU = `E2E-PORAW-${stamp.slice(-6)}`;
 const RUN = 9998;
 // Roll numbers derived from the run's own stamp: a run that fails to clean up
@@ -51,10 +55,11 @@ async function seedPo(code, suffix) {
 test.beforeAll(async () => {
   await seedPo(PO_CODE.commit, 'A');
   await seedPo(PO_CODE.untick, 'B');
+  await seedPo(PO_CODE.focus, 'C');
   const rows = await q(
     `INSERT INTO vin_stock (vin, run_id, printed_by)
      SELECT 'SBM-R-' || lpad(($2::bigint + g)::text, 6, '0'), $1, 'e2e'
-     FROM generate_series(1, 3) g RETURNING vin`, [RUN, VIN_BASE]);
+     FROM generate_series(1, 4) g RETURNING vin`, [RUN, VIN_BASE]);
   stickers = rows.map((r) => r.vin).sort();
 });
 
@@ -156,6 +161,41 @@ test('the manifest asks for a sticker per ticked pair, and marks the row it will
   // The stickers are spent, so neither can be handed out again.
   const stock = await q('SELECT status FROM vin_stock WHERE vin = ANY($1)', [committed]);
   expect(stock.map((r) => r.status)).toEqual(['assigned', 'assigned']);
+});
+
+// A Bluetooth gun types into whatever holds focus. Ticking a checkbox takes it, so
+// without this the next trigger pull goes nowhere and the field has to be tapped for
+// every single pair — what Brent's 2026-08-20 recording showed.
+//
+// Emulated as a PHONE on purpose: the app only re-arms a scan field on a fine pointer
+// (a programmatic focus on a phone traps the keyboard), and the sticker bar is the one
+// exception to that. On a desktop viewport this test would pass without the fix.
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test('the field takes focus back after a tick and after a scan, without a keyboard', async ({ page }) => {
+    await rawMode(page);
+    await loginAs(page, 'warehouse');
+    await toManifest(page, PO_CODE.focus);
+
+    const field = page.locator('.po-sticker-bar input');
+    // No software keyboard while scanning — it would cover half the manifest.
+    await expect(field).toHaveAttribute('inputmode', 'none');
+    await expect(field).toBeFocused();                       // armed as soon as the box opens
+
+    const row = page.locator('.po-manifest-size').first();
+    await row.locator('input[type="checkbox"]').check();
+    await expect(field).toBeFocused();                       // the tick handed it back
+
+    await field.fill(stickers[3]);
+    await page.locator('.po-sticker-bar').getByRole('button', { name: 'Add' }).click();
+    await expect(row.locator('.po-flag.id')).toHaveText('1ID 1/2');
+    await expect(field).toBeFocused();                       // …and so did the scan
+
+    // A sticker whose barcode won't read still has a way in.
+    await page.locator('.sticker-type').click();
+    await expect(field).toHaveAttribute('inputmode', 'text');
+  });
 });
 
 test('unticking a size hands its sticker back', async ({ page }) => {

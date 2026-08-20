@@ -2441,6 +2441,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* The sticker bar sits above the manifest card, so it needs the card's own gap under
    it; .scanbar's 6px is tuned for sitting inside one. */
 .po-sticker-bar { margin-bottom: 12px; }
+/* Four controls on a 390px phone: the field still has to be the wide one. */
+.po-sticker-bar .searchrow input { min-width: 0; }
+.po-sticker-bar .sticker-type { font-size: 13px; padding-left: 10px; padding-right: 10px; }
 
 /* ---- PO Phase 3: reconciliation report ----
    Prefixed `rcn-`, NOT `rc-`: the Rescale-request report above already owns `rc-*`

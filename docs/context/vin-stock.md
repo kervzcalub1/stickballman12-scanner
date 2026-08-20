@@ -79,6 +79,16 @@ on the flow the stickers are most useful for (PO-100005). Now:
   scanning its sticker can't file that number under the size 8.5 row above it.
 - Per row: a `1ID n/m` chip, red while short, and the ONE row the next scan lands on gets
   the blue ring the bar names.
+- **The field keeps focus by itself.** A Bluetooth gun types into whatever is focused and
+  **ticking a checkbox takes focus away**, so the bar re-arms after every tick, stepper
+  press and bind — otherwise the next trigger pull goes nowhere and the field has to be
+  tapped once per pair (Brent's recording, 2026-08-20). This is the ONE exception to the
+  `hasFinePointer()` rule that says never pull focus on a phone, and it's only safe
+  because the field is **`inputMode="none"`** while scanning: DOM focus without iOS
+  throwing the software keyboard over half the manifest. **`Type`** flips it to
+  `inputMode="text"` and focuses from inside the tap (a focus outside a gesture would set
+  focus and suppress the keyboard — see [[ios-keyboard-focus-trap]]); submitting drops
+  back to scan mode, because one hand-typed sticker doesn't mean the next one is.
 - **Stepping a count down hands the sticker back** (`setSizeQty` trims `vins` to qty) —
   a pair that isn't in the box shouldn't hold a number, and the sticker is still on the roll.
 - **`ensureManifestVins` mints nothing** here: it only reserves the shortfall, which is

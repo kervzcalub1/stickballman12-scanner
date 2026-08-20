@@ -12,6 +12,10 @@ export const DEFAULTS = {
   // printer and someone across the warehouse with a roll of stickers are doing the
   // same job two different ways, and neither should flip the other's screen.
   rawVins: false,
+  // PDF or CSV for the PO reports (ManifestPrint). Per device: the person who files
+  // signed paper and the person who works in a spreadsheet are doing the same job two
+  // different ways, and neither should flip the other's default.
+  reportFormat: 'pdf',
 };
 
 export function loadPrefs() {

@@ -424,6 +424,17 @@ difference between a message to the supplier and someone walking to a shelf.
   received PDF, which states only what we counted per box). Returns `[]` for scope `po`.
 - e2e: `po-box-diffs.spec.js` — dual code + W-suffix must match, an undeclared pair
   shows against its box, an unshipped label is outstanding rather than short.
+- **Every PO report downloads as PDF *or* CSV** — a `PDF | CSV` picker on
+  `ManifestPrint` governs all four (per box, whole order, what we received,
+  discrepancies). `src/lib/manifestCsv.js` is the spreadsheet half of `manifestPdf.js`
+  and is fed the **same input object**, so a CSV can never disagree with the PDF of the
+  same report. One row per line with the box repeated on every row — a CSV with heading
+  rows can't be sorted or filtered, which is the only reason to want one. The
+  discrepancy CSV keeps a row per clean box (`no difference`) and per unreceived label
+  (`not received yet`) for the same reason the PDF names them. The choice is remembered
+  per device (`prefs.reportFormat`): the person who files signed paper and the person
+  who lives in a spreadsheet shouldn't flip each other's default. An empty report says
+  so instead of downloading a header row. e2e: `po-report-format.spec.js`.
 - **Downloadable as a PDF**: `buildManifestPdf({ mode: 'discrepancies', boxDiffs })` →
   the **"Discrepancies by box"** button on `ManifestPrint` (Reconciliation screen). It
   prints ONLY the boxes that differ — the sheet is meant to be carried into the

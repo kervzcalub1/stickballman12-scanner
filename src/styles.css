@@ -3053,3 +3053,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .rcn-bd-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 3px 0; font-size: 13px; }
 .rcn-bd-name { font-weight: 600; }
 .rcn-bd-clean { margin-top: 10px; }
+
+/* PO report format picker (PDF | CSV) — sits with the download buttons it governs. */
+.mf-fmt { flex: none; }
+.mf-fmt .seg-btn { padding: 3px 10px; font-size: 12px; }

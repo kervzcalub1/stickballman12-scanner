@@ -16,6 +16,8 @@ import React, { useState } from 'react';
 import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { buildManifestPdf } from '../lib/manifestPdf.js';
+import { buildManifestCsv } from '../lib/manifestCsv.js';
+import { loadPrefs, savePrefs } from '../prefs.js';
 
 // `boxId` switches this to the SUPPLIER's one-box sheet: a single button that builds the
 // page for the label they just closed, so it can be taped to that box before it's sealed.
@@ -27,9 +29,15 @@ import { buildManifestPdf } from '../lib/manifestPdf.js';
 // `boxDiffs` adds the DISCREPANCY sheet: only the boxes whose contents disagree with
 // what that label declared. It's the sheet somebody carries into the warehouse, so it's
 // offered only when there is actually something to look at.
-export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Manifest PDF:', buttonLabel = 'Print box manifest', primary = false, received = null, compare = null, boxDiffs = null, onSignOut }) {
+export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Download:', buttonLabel = 'Print box manifest', primary = false, received = null, compare = null, boxDiffs = null, onSignOut }) {
   const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole' | 'received' | 'discrepancies'
   const [error, setError] = useState('');
+  // PDF or CSV, remembered per device: whoever prints these does the same thing every
+  // time — one person signs and files paper, another lives in a spreadsheet — and
+  // re-picking the format on every download is the kind of small tax that makes people
+  // stop using the export.
+  const [fmt, setFmt] = useState(() => (loadPrefs().reportFormat === 'csv' ? 'csv' : 'pdf'));
+  const pickFmt = (v) => { setFmt(v); savePrefs({ ...loadPrefs(), reportFormat: v }); };
 
   if (!poId) return null;
 
@@ -41,16 +49,26 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       // be minutes stale after an on-behalf manifest edit.
       const d = await api.poGet(poId);
       const generatedAt = `Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EST`;
-      const doc = await buildManifestPdf({
+      // Both formats are built from the SAME inputs, so a CSV can never disagree with
+      // the PDF of the same report.
+      const input = {
         po: d.po, boxes: d.boxes, lines: d.lines, businessName: d.businessName, mode, generatedAt,
         boxId: mode === 'perbox' ? boxId : null, shipTo: d.shipTo,
         receivedBoxes: received, compare, boxDiffs,
-      });
+      };
+      let blob;
+      if (fmt === 'csv') {
+        const text = buildManifestCsv(mode, input);
+        if (!text) { setError('That report has no rows to export yet.'); return; }
+        blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+      } else {
+        blob = (await buildManifestPdf(input)).output('blob');
+      }
       // Download rather than auto-print: the thermal-label iframe trick fires .print()
       // before a multi-page PDF viewer has rendered, and navigating a popup to a blob
       // PDF is flaky across browsers. A download works everywhere — the user opens the
       // file and prints it with the OS dialog.
-      const url = URL.createObjectURL(doc.output('blob'));
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       const which = boxId != null && mode === 'perbox'
@@ -59,7 +77,7 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
           : mode === 'discrepancies' ? 'by-box'
             : (mode === 'perbox' ? 'per-box' : 'whole-order');
       const kind = mode === 'received' ? 'received' : mode === 'discrepancies' ? 'discrepancies' : 'manifest';
-      a.download = `${kind}-${d.po?.po_code || poCode || poId}-${which}.pdf`;
+      a.download = `${kind}-${d.po?.po_code || poCode || poId}-${which}.${fmt}`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
@@ -82,6 +100,12 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
   return (
     <div className="mf-print">
       <span className="muted xs">{label}</span>
+      <span className="seg sm mf-fmt" role="group" aria-label="Download format">
+        {[['pdf', 'PDF'], ['csv', 'CSV']].map(([v, l]) => (
+          <button key={v} type="button" className={`seg-btn ${fmt === v ? 'on' : ''}`}
+            aria-pressed={fmt === v} disabled={!!busy} onClick={() => pickFmt(v)}>{l}</button>
+        ))}
+      </span>
       <button className="btn ghost sm" disabled={!!busy} onClick={() => run('perbox')}>
         <Icon name="download" /> {busy === 'perbox' ? 'Building…' : 'Per box'}
       </button>

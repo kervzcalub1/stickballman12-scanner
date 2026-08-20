@@ -61,8 +61,28 @@ doing the same job two ways, and neither should flip the other's screen. Applies
 there a VIN scan means "this existing pair", the opposite operation.
 
 Two beats: **scan the shoe → scan the sticker**. The scan bar says which beat it's on and
-names the pair waiting. `bindSticker` attaches it to the newest line still short one,
-matching what the hand is doing.
+names the pair waiting. `pickStickerSlot` decides which pair the next sticker lands on —
+the newest line still short one, matching what the hand is doing — and both `bindSticker`
+and the highlighted row read it, so **the screen can never point at a different pair than
+the scan hits**.
+
+**Receiving against a PO is one beat, not two** (added 2026-08-20). The manifest checklist
+replaces the rapid-scan bar entirely, so raw mode used to block Review with "scan a 1ID
+onto the 1 highlighted line" on a screen that had no scanner and no highlight — a dead end
+on the flow the stickers are most useful for (PO-100005). Now:
+
+- The shoe is already on the supplier's list, so **ticking a size IS the first beat**; the
+  sticky `.po-sticker-bar` above the checklist is the second. A scan there is only ever a
+  sticker — a UPC gets told to use **+ Add unexpected**, because a pair that isn't on the
+  PO changes the count.
+- Sizes are walked in **displayed** (sorted) order, not cart order, so ticking size 9 and
+  scanning its sticker can't file that number under the size 8.5 row above it.
+- Per row: a `1ID n/m` chip, red while short, and the ONE row the next scan lands on gets
+  the blue ring the bar names.
+- **Stepping a count down hands the sticker back** (`setSizeQty` trims `vins` to qty) —
+  a pair that isn't in the box shouldn't hold a number, and the sticker is still on the roll.
+- **`ensureManifestVins` mints nothing** here: it only reserves the shortfall, which is
+  zero once every ticked pair wears a sticker.
 
 - **Nothing is minted** in raw mode — the pair's number comes off the sticker. Minting
   one anyway would burn a sequence number per scan and put a second, wrong VIN on the line.
@@ -70,8 +90,11 @@ matching what the hand is doing.
   `isUnresolved` machinery, so it blocks Review and commit and focuses the row exactly
   like a missing size. Committing without one would write a system-minted VIN matching
   nothing physically on the shoe — the silent failure this mode exists to prevent.
-- **Existing Stock skips its post-commit print dialog** in raw mode: the sticker is
-  already on the shoe, and printing those labels would put a *second* number on the pair.
+- **Nothing is printed after a raw-mode commit.** Existing Stock skips its post-commit
+  print dialog and Receiving/In-Store hide the **Print labels** button (`printItems` is
+  built empty in raw mode, decided at commit rather than read live from the toggle):
+  the sticker is already on the shoe, and printing those labels would put a *second*
+  number on the pair.
 
 ## The guards
 1. **In this cart already** → refused client-side.
@@ -91,4 +114,5 @@ matching what the hand is doing.
    count honest. Failing a whole commit because the bookkeeping hiccuped would cost the
    warehouse a scanned box for no integrity gain.
 
-Low-stock warning under 200 unused. Tests: `e2e/raw-vin.spec.js`.
+Low-stock warning under 200 unused. Tests: `e2e/raw-vin.spec.js`,
+`e2e/po-raw-vin.spec.js` (the PO manifest).

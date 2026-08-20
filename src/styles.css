@@ -2417,6 +2417,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* Rows start unchecked, so unchecked is the full-strength "still to pull" state and a
    ticked row gets the done wash — the reverse of when rows pre-filled as received. */
 .po-manifest-size.on { background: rgba(46,204,113,0.08); border-radius: 8px; padding-left: 6px; padding-right: 6px; }
+/* Raw 1ID mode. A ticked pair with no sticker on it can't be saved, so the row says
+   so — it has to beat the green "done" wash above, hence the later rule. `awaiting`
+   is the single row the NEXT scan lands on: the scan bar names it and this marks it,
+   so a sticker in the hand can't be filed against the row above. */
+.po-manifest-size.needs-fix { background: rgba(255,107,107,0.10); border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255,107,107,0.45); padding-left: 6px; padding-right: 6px; }
+.po-manifest-size.awaiting { background: rgba(79,124,255,0.12); box-shadow: inset 0 0 0 2px var(--primary); }
 .po-manifest-progress { font-family: ui-monospace, monospace; font-size: 12px; font-weight: 700; color: var(--muted);
   background: var(--panel-2, rgba(255,255,255,0.05)); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; margin-left: 6px; white-space: nowrap; }
 .po-manifest-progress.done { color: var(--ok); background: rgba(46,204,113,0.12); border-color: rgba(46,204,113,0.35); }
@@ -2428,6 +2435,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-flag.short { color: var(--err); background: rgba(213,69,63,0.14); border: 1px solid rgba(213,69,63,0.35); }
 .po-flag.pending { color: var(--muted); background: rgba(255,255,255,0.04); border: 1px solid var(--border); font-weight: 600; }
 .po-flag.over { color: #c6871a; background: rgba(198,135,26,0.14); border: 1px solid rgba(198,135,26,0.35); }
+/* "1ID 2/4" — stickers scanned vs pairs ticked on this row. */
+.po-flag.id.need { color: var(--err); background: rgba(255,107,107,0.14); border: 1px solid rgba(255,107,107,0.35); }
+.po-flag.id.ok { color: var(--ok); background: rgba(46,204,113,0.12); border: 1px solid rgba(46,204,113,0.35); }
+/* The sticker bar sits above the manifest card, so it needs the card's own gap under
+   it; .scanbar's 6px is tuned for sitting inside one. */
+.po-sticker-bar { margin-bottom: 12px; }
 
 /* ---- PO Phase 3: reconciliation report ----
    Prefixed `rcn-`, NOT `rc-`: the Rescale-request report above already owns `rc-*`

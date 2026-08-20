@@ -13,7 +13,9 @@ Full detail: `in-store.md`.
 **Raw 1ID mode** (`prefs.rawVins`, per person): instead of minting a VIN to print, the
 warehouse scans a **pre-printed sticker** onto each pair — scan the shoe, scan the
 sticker. Nothing is minted, and a pair without one can't be committed (it rides the same
-`isUnresolved` machinery as a missing size). Full rules: `docs/context/vin-stock.md`.
+`isUnresolved` machinery as a missing size). **Receiving against a PO** works the same way
+with one beat instead of two — ticking the manifest row is the "scan the shoe" half, and a
+sticker bar sits above the checklist. Full rules: `docs/context/vin-stock.md`.
 
 ## 4-step wizard (receiving / in-store) / 2-step (rescale)
 1. **Shipment details** — buyer defaults to `stickballman12`; supplier + date

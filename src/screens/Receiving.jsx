@@ -220,7 +220,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     return [...bySku.values()];
   }
   const setSizeQty = (itemKey, sizeKey, qty) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
-    ...it, sizes: it.sizes.map((s) => (s.key === sizeKey ? { ...s, qty: Math.max(0, parseInt(qty, 10) || 0) } : s)),
+    ...it,
+    sizes: it.sizes.map((s) => {
+      if (s.key !== sizeKey) return s;
+      const q = Math.max(0, parseInt(qty, 10) || 0);
+      // Never hold more 1ID stickers than pairs: unticking a size (or stepping it
+      // down) hands the sticker back so it can be scanned onto the pair it is
+      // actually on. Trimming from the end drops the last one scanned.
+      return { ...s, qty: q, vins: (s.vins || []).slice(0, q) };
+    }),
   })));
   // Reserve real VINs for the current manifest counts so every received unit shows
   // its VIN on Review and can be flagged with a per-shoe defect (parity with the
@@ -725,14 +733,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // at commit, naming itself, rather than being silently accepted.
   async function bindSticker(code) {
     const vin = String(code).trim().toUpperCase();
-    const target = itemsRef.current.find((it) => !it.pending && it.sizes.some(
-      (sz) => (Number(sz.qty) || 0) > (sz.vins || []).length,
-    ));
-    if (!target) {
-      setFlash({ type: 'dup', text: `Scan the shoe first, then its 1ID — ${vin} has nothing to go on` });
+    const slot = pickStickerSlot(itemsRef.current);
+    if (!slot) {
+      setFlash({ type: 'dup', text: isPoReceive
+        ? `Tick the size off first, then scan its 1ID — ${vin} has nothing to go on`
+        : `Scan the shoe first, then its 1ID — ${vin} has nothing to go on` });
       scanFeedback('dup');
       return;
     }
+    const target = slot.item;
     if (itemsRef.current.some((it) => it.sizes.some((sz) => (sz.vins || []).includes(vin)))) {
       setFlash({ type: 'dup', text: `1ID ${vin} is already on a pair in this batch` });
       scanFeedback('dup');
@@ -759,20 +768,41 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       warn = ' · couldn’t check it, saved anyway';
     }
 
+    // The exact row pickStickerSlot named — the one the screen highlighted. Binding
+    // "the first short row" again here could land it elsewhere if a count changed
+    // between the scan and the server check.
     setItems((arr) => arr.map((it) => {
       if (it.key !== target.key) return it;
-      let done = false;
       return {
         ...it,
-        sizes: it.sizes.map((sz) => {
-          if (done || (Number(sz.qty) || 0) <= (sz.vins || []).length) return sz;
-          done = true;
-          return { ...sz, vins: [...(sz.vins || []), vin] };
-        }),
+        sizes: it.sizes.map((sz) => (sz.key === slot.size.key
+          ? { ...sz, vins: [...(sz.vins || []), vin] } : sz)),
       };
     }));
-    setFlash({ type: 'added', text: `✓ ${vin} → ${target.name || target.sku || 'pair'}${warn}` });
+    setFlash({ type: 'added', text: `✓ ${vin} → ${target.name || target.sku || 'pair'}${slot.size.size ? ` · size ${slot.size.size}` : ''}${warn}` });
     scanFeedback('added');
+  }
+
+  // Raw 1ID mode on the PO manifest. There is no shoe-scan beat here — the pair is
+  // already on the supplier's list, ticked off as it comes out of the box — so a
+  // scan at this bar is only ever a sticker. Anything else is NAMED rather than
+  // silently swallowed: a UPC scanned here means a pair that isn't on the PO, and
+  // that has its own button ("+ Add unexpected") because it changes the count.
+  async function stickerScan(code, { fromCamera = false } = {}) {
+    const c = String(code).trim();
+    if (!c) return;
+    // Same camera re-read guard as rapid scan: a live camera fires the same sticker
+    // many times a second. Never applied to a gun or a typed submit.
+    if (fromCamera) {
+      const now = Date.now();
+      if (isCameraReread(scanRecentRef.current, c, now)) return;
+      scanRecentRef.current[c] = now;
+    }
+    setScanInput(''); setError('');
+    if (hasFinePointer()) scanInputRef.current?.focus({ preventScroll: true });
+    if (isRollVin(c)) return bindSticker(c);
+    setFlash({ type: 'dup', text: `${c} isn’t a 1ID sticker — use “+ Add unexpected” for a pair that isn’t on the PO` });
+    scanFeedback('dup');
   }
 
   async function rapidScan(code, { fromCamera = false } = {}) {
@@ -993,11 +1023,34 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     || it.sizes.some((s) => !String(s.size || '').trim()) || needsSticker(it);
   const unresolvedCount = items.filter(isUnresolved).length;
   const missingStickers = rawVins ? items.filter(needsSticker).length : 0;
-  // The pair the next sticker scan will land on — same pick as bindSticker, so the
-  // prompt can name it and the row can be marked.
-  const awaitingSticker = rawVins ? items.find(needsSticker) || null : null;
+  // Pairs — not lines — still short a sticker. On the PO manifest one line is four
+  // sizes at four pairs each, so "1 line" would badly understate the work left.
+  const stickersShort = !rawVins ? 0 : items.reduce((n, it) => (it.pending ? n : n + it.sizes.reduce(
+    (a, s) => a + Math.max(0, (Number(s.qty) || 0) - (s.vins || []).length), 0)), 0);
+  // The exact pair the next sticker scan will land on: { item, size }, or null.
+  // bindSticker binds THIS slot and the UI marks THIS row, so the screen can never
+  // point at a different pair than the scan hits.
+  //
+  // Scan intake prepends each new line, so the first line short a sticker is the
+  // pair just scanned — shoe then sticker, matching the hand. The PO manifest is a
+  // fixed list read top to bottom, so its sizes are walked in the order they're
+  // DISPLAYED: ticking size 9 and scanning its sticker must not quietly file that
+  // number under the size 8.5 row sitting above it in cart order.
+  function pickStickerSlot(list) {
+    for (const it of list) {
+      if (it.pending) continue;
+      const sizes = isPoReceive ? [...it.sizes].sort(compareSizes) : it.sizes;
+      for (const size of sizes) {
+        if ((Number(size.qty) || 0) > (size.vins || []).length) return { item: it, size };
+      }
+    }
+    return null;
+  }
+  const awaitingSticker = rawVins ? pickStickerSlot(items) : null;
   const unresolvedMsg = missingStickers
-    ? `Scan a 1ID sticker onto the ${missingStickers} highlighted line${missingStickers === 1 ? '' : 's'} — every pair needs one before it can be saved.`
+    ? (isPoReceive
+      ? `${stickersShort} ticked pair${stickersShort === 1 ? '' : 's'} still need${stickersShort === 1 ? 's' : ''} a 1ID sticker — scan one onto each highlighted row.`
+      : `Scan a 1ID sticker onto the ${missingStickers} highlighted line${missingStickers === 1 ? '' : 's'} — every pair needs one before it can be saved.`)
     : `Finish the ${unresolvedCount} highlighted line${unresolvedCount === 1 ? '' : 's'} first — every shoe needs a name and a size.`;
   // The step's error line sits above the sticky footer, which on a long cart is far
   // below the fold — a blocked "Review →" would look like a dead button. Put the
@@ -1005,7 +1058,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // into view, and on a phone it opens the keyboard where the fix has to be typed.
   function focusFirstUnresolved() {
     setTimeout(() => {
-      const row = document.querySelector('.recv-item.needs-fix');
+      const row = document.querySelector('.recv-item.needs-fix, .po-manifest-size.needs-fix');
       if (!row) return;
       row.scrollIntoView({ block: 'center', behavior: 'smooth' });
       const field = [...row.querySelectorAll('input')].find((el) => !el.value.trim() && el.type !== 'checkbox');
@@ -1198,7 +1251,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           ],
         });
         setShowConfirm(false);
-        const printItems = (res.vins || []).map((vin, i) => ({
+        // Raw 1ID mode: the pair already wears its number, so there is nothing to
+        // print — a label per shoe here would put a SECOND number on it. Same rule
+        // as Existing Stock, which skips its post-commit print dialog. Decided at
+        // commit, not read live in the modal: what got stuck on the shoes is what
+        // matters, not the toggle's state while the modal happens to be open.
+        const printItems = rawVins ? [] : (res.vins || []).map((vin, i) => ({
           vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
           upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
         }));
@@ -1250,7 +1308,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       }
 
       setShowConfirm(false);
-      const printItems = (batchRes?.vins || []).map((vin, i) => ({
+      // Raw 1ID mode prints nothing — see the box-commit path above.
+      const printItems = rawVins ? [] : (batchRes?.vins || []).map((vin, i) => ({
         vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
         upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
       }));
@@ -1538,10 +1597,49 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 </div>
               )}
               {isPoReceive && activeSlot != null ? (
-                <ManifestChecklist boxNumber={Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
-                  kind={boxSlots[activeSlot]?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
-                  items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
-                  onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} />
+                <>
+                  {/* Raw 1ID mode: one beat, not two. The shoe is already on the
+                      manifest, so ticking a size IS the first beat and this bar is
+                      the second. Sticky like the rapid-scan bar — the list runs
+                      well past a phone screen and the gun can't lose its aim
+                      halfway down the box. */}
+                  {rawVins && (
+                    <div className="scanbar po-sticker-bar">
+                      <form className="searchrow" onSubmit={(e) => { e.preventDefault(); stickerScan(scanInput); }}>
+                        <input ref={scanInputRef} autoCapitalize="characters" autoCorrect="off" autoComplete="off"
+                          placeholder={awaitingSticker ? `Scan the 1ID for size ${awaitingSticker.size.size}` : 'Scan a 1ID sticker'}
+                          value={scanInput} onChange={(e) => setScanInput(e.target.value)} />
+                        <button className="btn primary" type="submit">Add</button>
+                        <button type="button" className={`btn ${scanCam ? 'primary' : 'ghost'}`} onClick={() => setScanCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
+                      </form>
+                      <div className={`rawvin-beat ${awaitingSticker ? 'awaiting' : ''}`} role="status" aria-live="polite">
+                        {awaitingSticker
+                          ? <><b>Scan a 1ID</b> onto <b>size {awaitingSticker.size.size}</b> of {awaitingSticker.item.name || awaitingSticker.item.sku || 'that pair'} — sticker {(awaitingSticker.size.vins || []).length + 1} of {Number(awaitingSticker.size.qty) || 0}{
+                            // Only once the box holds more than this row's own pairs —
+                            // otherwise it repeats the "of N" that's already been said.
+                            stickersShort > (Number(awaitingSticker.size.qty) || 0) - (awaitingSticker.size.vins || []).length
+                              ? ` · ${stickersShort} left in this box` : ''}</>
+                          : totalItems > 0
+                            ? <>Every ticked pair has its 1ID ✓ — Review when the box is empty</>
+                            : <><b>Tick a size</b> as you pull it from the box, then scan its 1ID sticker onto it</>}
+                      </div>
+                      {scanCam && (
+                        <Suspense fallback={<p className="muted">Loading camera…</p>}>
+                          <CameraScanner continuous mode="vin" onDetected={(code) => stickerScan(code, { fromCamera: true })} onClose={() => setScanCam(false)}
+                            zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+                        </Suspense>
+                      )}
+                      <div className="scan-flash-live" role="status" aria-live="polite">
+                        {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
+                      </div>
+                    </div>
+                  )}
+                  <ManifestChecklist boxNumber={Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
+                    kind={boxSlots[activeSlot]?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
+                    items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
+                    onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem}
+                    rawVins={rawVins} awaiting={awaitingSticker} />
+                </>
               ) : (
               <div className="card">
                 <div className="step-head">
@@ -1565,7 +1663,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {rawVins && (
                     <div className={`rawvin-beat ${awaitingSticker ? 'awaiting' : ''}`} role="status" aria-live="polite">
                       {awaitingSticker
-                        ? <><b>2 · Scan the 1ID</b> sticker onto {awaitingSticker.name || awaitingSticker.sku || 'that pair'}, then stick it on</>
+                        ? <><b>2 · Scan the 1ID</b> sticker onto {awaitingSticker.item.name || awaitingSticker.item.sku || 'that pair'}, then stick it on</>
                         : <><b>1 · Scan the shoe</b> — then scan its pre-printed 1ID sticker</>}
                     </div>
                   )}
@@ -2174,7 +2272,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
    list is the picking guide and whatever stays unticked is the shortage. Adjust the
    "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
    issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem, wholeOrder = false, orderSkus }) {
+function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem, wholeOrder = false, orderSkus, rawVins = false, awaiting = null }) {
   const done = expectedUnits > 0 && totalItems >= expectedUnits;
   // On a whole-order PO there is no per-label expectation to count against, so "0 of 0
   // checked" is noise; what matters is the running count of what came out of this box.
@@ -2226,8 +2324,15 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                 const pending = exp != null && exp > 0 && got === 0;
                 const short = exp != null && got > 0 && got < exp;
                 const over = exp != null && got > exp;
+                // Raw 1ID mode: a ticked pair with no sticker scanned onto it can't be
+                // saved (needsSticker → isUnresolved), so the row that's holding the box
+                // up says so itself — and the ONE row the next scan will land on is
+                // marked, because the person is holding that sticker over a shoe.
+                const ids = rawVins ? (s.vins || []).length : 0;
+                const needsId = rawVins && got > ids;
+                const isNext = rawVins && awaiting?.size?.key === s.key;
                 return (
-                  <div className={`po-manifest-size ${got > 0 ? 'on' : 'off'}`} key={s.key}>
+                  <div className={`po-manifest-size ${got > 0 ? 'on' : 'off'} ${needsId ? 'needs-fix' : ''} ${isNext ? 'awaiting' : ''}`} key={s.key}>
                     <label className="po-check">
                       <input type="checkbox" checked={got > 0}
                         onChange={(e) => onSetQty(it.key, s.key, e.target.checked ? (exp ?? 1) : 0)} />
@@ -2238,6 +2343,9 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                       <input className="qty" type="number" inputMode="numeric" min="0" value={got} onChange={(e) => onSetQty(it.key, s.key, e.target.value)} />
                       <button type="button" className="btn icon ghost step" onClick={() => onSetQty(it.key, s.key, got + 1)}>+</button>
                     </div>
+                    {rawVins && got > 0 && (
+                      <span className={`po-flag id ${needsId ? 'need' : 'ok'}`}>1ID {ids}/{got}</span>
+                    )}
                     {pending && <span className="po-flag pending">to pull {exp}</span>}
                     {short && <span className="po-flag short">short {exp - got}</span>}
                     {over && <span className="po-flag over">+{got - exp}</span>}
@@ -2250,7 +2358,8 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
           ))}
         </div>
       )}
-      <p className="muted sm">Check each size off as you pull it from the box. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for pairs that aren’t on the PO. Flag defects per shoe on the next screen.</p>
+      <p className="muted sm">Check each size off as you pull it from the box. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for pairs that aren’t on the PO. Flag defects per shoe on the next screen.
+        {rawVins ? ' Every ticked pair also needs a 1ID sticker scanned onto it — that sticker is the pair’s number, so no label gets printed for it.' : ''}</p>
     </div>
   );
 }

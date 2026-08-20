@@ -83,6 +83,30 @@ test.describe('Raw 1ID · receiving', () => {
     await expect(page.locator('.rawvin-beat')).toContainText('Scan the shoe');
   });
 
+  // Guards `pickStickerSlot`: the bar names a pair, and the sticker must land on THAT
+  // pair's size row — the same pick the PO manifest highlights.
+  test('the sticker binds to the pair the bar names', async ({ page }) => {
+    await rawMode(page);
+    await loginAs(page, 'warehouse');
+    await page.route('**/api/sku-search', (route) => route.fulfill({
+      json: { ok: true, product: { name: 'Raw VIN Runner', sku: SKU, image: '', source: 'manual', scannedSize: '9', sizes: ['9', '9.5'] } },
+    }));
+    await toItemsStep(page);
+
+    await page.locator('.scanbar input').first().fill(SKU);
+    await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+    const line = page.locator(`.recv-item[data-sku="${SKU}"]`);
+    await expect(line).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.rawvin-beat')).toContainText('Scan the 1ID');
+    await expect(line).toHaveClass(/needs-fix/);   // no sticker yet → can't be saved
+
+    await page.locator('.scanbar input').first().fill(minted[0]);
+    await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+    await expect(line).not.toHaveClass(/needs-fix/);
+    await line.locator('.recv-size-row').first().click();
+    await expect(line.locator('.recv-unit .vin')).toHaveText(minted[0]);
+  });
+
   test('off by default — the normal flow is untouched', async ({ page }) => {
     await rawMode(page, false);
     await loginAs(page, 'warehouse');

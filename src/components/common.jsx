@@ -237,11 +237,16 @@ export function ProgressBar({ value, label, indeterminate = false }) {
 // Shipment tracking as a milestone timeline — the full checkpoint history (newest first)
 // from 17TRACK. A connecting line runs down the nodes; the latest checkpoint is emphasized
 // (green check on delivery, otherwise an accent node with a soft pulse), earlier ones dim.
+// EST, not the viewer's timezone: every other time on this page is EST, and a
+// checkpoint quietly rendered in Manila time reads as the parcel moving 12 hours off.
+const EVENT_TIME = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+});
 const fmtEventTime = (iso) => {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return `${EVENT_TIME.format(d)} EST`;
 };
 export function TrackingTimeline({ events, status }) {
   const list = Array.isArray(events) ? events.filter((e) => e && (e.description || e.time)) : [];

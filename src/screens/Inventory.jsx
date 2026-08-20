@@ -12,7 +12,7 @@ import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
 import { isLocationCode } from '../lib/codes.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
-import { ymd, periodRange, periodLabel, shiftAnchor, estToday, PH_DATETIME } from '../lib/format.js';
+import { ymd, periodRange, periodLabel, shiftAnchor, estToday, estCivil, estCivilFromYmd, PH_DATETIME } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
@@ -49,12 +49,11 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
   // The period anchor is a Date; it round-trips through the URL as a plain ymd string.
   // Falls back to today if absent or unparseable, so a hand-edited URL can't produce an
   // Invalid Date that would poison every period calculation downstream.
-  const [anchorYmd, setAnchorYmd] = useQueryParam('anchor', ymd(new Date()));
-  const anchor = useMemo(() => {
-    const d = new Date(`${anchorYmd}T00:00:00`);
-    return Number.isNaN(d.getTime()) ? new Date() : d;
-  }, [anchorYmd]);
-  const setAnchor = (d) => setAnchorYmd(ymd(d instanceof Date ? d : new Date(d)));
+  // EST at both ends: the server dates everything by EST, so an anchor read off a PH
+  // viewer's own clock would ask for a different day than the one on screen.
+  const [anchorYmd, setAnchorYmd] = useQueryParam('anchor', estToday());
+  const anchor = useMemo(() => estCivilFromYmd(anchorYmd), [anchorYmd]);
+  const setAnchor = (d) => setAnchorYmd(ymd(estCivil(d instanceof Date ? d : new Date(d))));
   const [data, setData] = useState(null); // { rows, totals }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

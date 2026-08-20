@@ -11,6 +11,7 @@
 // scan overwrites. Submitting is still one deliberate action on a list you can
 // see, which is what makes an accidental scan recoverable.
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { estTime } from '../lib/format.js';
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { TopBar, StatusPill, Modal } from '../components/common.jsx';
@@ -220,7 +221,7 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
             <div className="scanout-fail" key={f.key}>
               <span className="vin">{f.code}</span>
               <span className="muted sm">{f.reason}</span>
-              <span className="muted sm scanout-fail-t">{f.at.toLocaleTimeString()}</span>
+              <span className="muted sm scanout-fail-t">{estTime(f.at)}</span>
             </div>
           ))}
           {fails.length > 25 && <div className="muted sm">+ {fails.length - 25} older</div>}

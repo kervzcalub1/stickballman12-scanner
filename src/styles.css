@@ -2638,13 +2638,81 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-track-refresh-one { margin-top: 10px; min-height: 44px; }
 
 /* PH Purchase Orders overview (read-only list + expandable tracking) */
-.po-ov { padding: 0; overflow: hidden; }
-.po-ov-head { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; width: 100%; text-align: left; background: none; border: 0; cursor: pointer; padding: 14px 16px; color: var(--text); }
+.po-ov { padding: 0; overflow: hidden; display: flex; align-items: center; }
+.po-ov:hover { border-color: #3a4150; }
+.po-ov-head { display: grid; grid-template-columns: 1fr; align-items: center; gap: 4px 10px; flex: 1; min-width: 0; text-align: left; background: none; border: 0; cursor: pointer; padding: 14px 16px; color: var(--text); }
+.po-ov .po-ov-caret { flex: none; padding-right: 14px; font-size: 20px; }
+
+/* ---- One order, on its own page (screens/PoDetail.jsx) ----------------------
+   The detail used to unfold inside the list row; nine labels deep, you couldn't tell
+   where one box ended and the next began, and the order's own details were pushed off
+   screen by the first label. Now: a page, and ONE CARD PER LABEL — a box is a physical
+   thing and reads like one. */
+/* .wrap-narrow is a flex COLUMN, so a bare button stretches to the full content width
+   and reads as a banner. Back is a small step, not the page's main action. */
+.po-back { align-self: flex-start; margin-bottom: 2px; }
+.po-detail-head { display: flex; flex-direction: column; gap: 6px; }
+.po-detail-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.po-detail-id .po-code { font-size: 17px; }
+.po-detail-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.po-detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 14px 0 4px; }
+/* The labels are the body of the page, so they get a heading of their own rather than
+   just appearing under the order card. */
+.po-labels-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; margin: 22px 0 4px; }
+.po-labels-head .rows-title { margin: 0; }
+.po-labels-head .po-add-label-btn { margin: 0; }
+.po-lbl { margin-bottom: 14px; }
+/* A reship isn't one of the supplier's numbered labels — it reads as its own thing. */
+.po-lbl.replacement { border-color: rgba(139, 124, 246, 0.45); }
+.po-lbl-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--border); }
+.po-lbl-id { min-width: 0; }
+.po-lbl-id b { font-size: 15px; }
+/* A tracking number is one long unbroken token — let it wrap inside the card rather than
+   forcing the card wide (or breaking mid-string against the chip beside it). */
+.po-lbl-id .po-track { overflow-wrap: anywhere; }
+.po-lbl-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+.po-lbl-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px;
+  padding-top: 12px; border-top: 1px dashed var(--border); }
+.po-lbl-foot .po-ov-fill-btn { margin-top: 0; }
+.po-lbl .po-track-actions { flex-wrap: wrap; }
 .po-ov-top { display: flex; align-items: center; gap: 10px; }
 .po-ov-meta { grid-column: 1 / 2; display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .po-ov-caret { grid-column: 2; grid-row: 1 / 3; align-self: center; color: var(--muted); font-size: 14px; }
 .po-ov-detail { border-top: 1px solid var(--border); padding: 12px 16px; background: var(--panel-2); }
 .po-ov-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+/* Editing an order after it exists (PoEdit.jsx). Both forms sit INSIDE the open order,
+   so they're inset rather than another card — a card inside a card reads as a separate
+   thing, and this is the same order you're already looking at. */
+/* Both controls sit directly under a card, so they need air ABOVE as well as below —
+   with only a bottom margin "+ Add label" tucked itself under the block above it and
+   read as part of that card rather than as the start of the label list. */
+.po-edit-btn, .po-add-label-btn { margin: 16px 0 10px; }
+.po-edit-form { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px; margin: 16px 0 14px; }
+.po-edit-form .batch-form { margin-bottom: 0; }
+.po-edit-form .po-label-rows { margin-top: 2px; }
+.po-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+/* The add-label form takes the courier's PDF too, so it carries the same dropzone the
+   create-order form does — plus the one decision that only exists here: an order holds
+   ONE labels file, so saving this one replaces what's on it. */
+.po-edit-form .po-dropzone { margin-bottom: 10px; }
+.po-store-sheet { display: flex; align-items: flex-start; gap: 10px; margin: 10px 0 12px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+  font-size: 13px; line-height: 1.45; cursor: pointer; }
+.po-store-sheet input { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+/* The label dialogs carry a form, not just a message, so they get the wider modal body
+   and a left-aligned title (the shared <Modal> centres its icon + message). */
+.po-label-modal { max-width: 460px; text-align: left; }
+.po-label-modal .modal-title { margin-bottom: 8px; }
+.po-label-modal .modal-msg { margin: 0; }
+.po-label-modal .po-err { margin-bottom: 12px; }
+.po-label-modal .batch-form { margin: 16px 0 0; }
+.po-label-modal .po-confirm { margin-top: 16px; }
+/* The shared .modal-actions carries no top margin of its own (the message modals set
+   their own), so without this the Cancel/Move row sat flush against the field above it. */
+.po-label-modal .modal-actions { margin-top: 20px; }
 /* Manifest PDF buttons (components/ManifestPrint.jsx) — shared by the PH Purchase
    Orders overview, warehouse PO Reconciliation, and the Receiving PO banner. */
 .mf-print { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }

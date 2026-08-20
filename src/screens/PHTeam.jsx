@@ -11,7 +11,7 @@ import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
-import { rangeOf, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
+import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
 import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized, PRICE_BASES,
   phListingStatus, PH_LISTING_STATUSES, requiredFlags,
@@ -184,14 +184,16 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const [drMode, setDrMode] = useQueryParam('dm', kind === 'rescale' ? 'day' : 'month');
   const [drAnchor, setDrAnchor] = useQueryParam('da', '');
   const dr = useMemo(() => {
-    const d = drAnchor ? new Date(`${drAnchor}T00:00:00`) : new Date();
-    return { mode: drMode, anchor: Number.isNaN(d.getTime()) ? new Date() : d };
+    // EST civil dates at both ends — see estCivilFromYmd. A local-midnight parse put a
+    // Manila viewer's "today" on the previous EST day, and writing it back moved it again.
+    const d = drAnchor ? estCivilFromYmd(drAnchor) : estCivil();
+    return { mode: drMode, anchor: d };
   }, [drMode, drAnchor]);
   const setDr = (next) => {
     const v = typeof next === 'function' ? next(dr) : next;
     setDrMode(v.mode);
     const a = v.anchor instanceof Date ? v.anchor : new Date(v.anchor);
-    setDrAnchor(Number.isNaN(a.getTime()) ? '' : a.toISOString().slice(0, 10));
+    setDrAnchor(Number.isNaN(a.getTime()) ? '' : ymd(estCivil(a)));
   };
   const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(false);

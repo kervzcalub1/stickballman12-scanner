@@ -6,6 +6,15 @@
 //   npm run build && npm start      # or: npm run serve
 //
 // Env comes from the process (a real host) or a local .env file.
+// This system runs on US Eastern, everywhere. The DB filters by it
+// (`AT TIME ZONE 'America/New_York'`), the UI prints it with a literal "EST", and the
+// warehouse day is an EST day — so the process is pinned to it rather than inheriting
+// the host's zone (Railway is UTC; the PH team's own machines are Asia/Manila, which is
+// where a server-side `new Date()` silently drifts a day). Node re-reads this on
+// assignment, so it applies to every Date built from here on; the same line is in
+// vite.config.js because in dev the API handlers run inside Vite's process.
+process.env.TZ = process.env.TZ || 'America/New_York';
+
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';

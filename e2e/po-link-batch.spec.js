@@ -214,13 +214,15 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
   await loginAs(page, 'ph_team');
   await page.goto(`/ph/po-status?po=${f.po.id}`);
 
-  const row = page.locator('.po-ov').filter({ hasText: f.po.po_code });
-  await expect(row).toBeVisible({ timeout: 15_000 });
+  // ?po= opens the order on its own page now, so everything below is scoped to that page
+  // rather than to a row in the list.
+  const view = page.locator('.po-detail');
+  await expect(view).toContainText(f.po.po_code, { timeout: 15_000 });
   // Each label totals its own units, so nobody adds up ×1 + ×2 + ×1 by eye — and says
   // WHICH count it is: "0 units" over a box with pairs already scanned out of it read as
   // "this box is empty", the opposite of the truth.
-  await expect(row.locator('.po-ov-label-units').first()).toHaveText('2 declared');
-  await row.getByRole('button', { name: /Link a received shipment/ }).click();
+  await expect(page.locator('.po-lbl .po-ov-label-units').first()).toHaveText('2 declared');
+  await view.getByRole('button', { name: /Link a received shipment/ }).click();
 
   const modal = page.locator('.modal.po-link');
   await expect(modal).toBeVisible();
@@ -233,21 +235,21 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
   await expect(modal).toBeHidden({ timeout: 10_000 });
 
   // The order says what it's counting, and offers to undo it.
-  const linked = row.locator('.po-ov-batch').filter({ hasText: f.batchCode });
+  const linked = view.locator('.po-ov-batch').filter({ hasText: f.batchCode });
   await expect(linked).toBeVisible({ timeout: 10_000 });
   // The row now says both numbers — "2 units" hid which of the two it meant.
-  await expect(row.locator('.po-ov-meta')).toContainText('2 declared');
-  await expect(row.locator('.po-ov-meta')).toContainText('2 received');
+  await expect(view.locator('.po-detail-meta')).toContainText('2 declared');
+  await expect(view.locator('.po-detail-meta')).toContainText('2 received');
   // …and so does the LABEL the box was matched to, by its tracking number. A card
   // reading only "declared" is what made a full box look empty.
-  await expect(row.locator('.po-ov-label-units.received').first()).toHaveText('2 received');
+  await expect(page.locator('.po-lbl .po-ov-label-units.received').first()).toHaveText('2 received');
   // Delete is refused while it's linked — the screen says why instead of hiding it.
-  await expect(row.locator('.po-ov-danger')).toContainText(/Can’t be deleted/i);
+  await expect(page.locator('.po-ov-danger')).toContainText(/Can’t be deleted/i);
 
   await linked.getByRole('button', { name: 'Unlink' }).click();
-  await expect(row.locator('.po-ov-batch')).toHaveCount(0, { timeout: 10_000 });
+  await expect(view.locator('.po-ov-batch')).toHaveCount(0, { timeout: 10_000 });
 
-  await row.getByRole('button', { name: 'Delete this purchase order' }).click();
+  await page.getByRole('button', { name: 'Delete this purchase order' }).click();
   const del = page.locator('.modal.po-del');
   const confirm = del.getByRole('button', { name: 'Delete permanently' });
   await expect(confirm).toBeDisabled();                 // nothing typed yet
@@ -256,6 +258,10 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
   await del.locator('input').fill(f.po.po_code);
   await confirm.click();
 
-  await expect(page.locator('.po-ov').filter({ hasText: f.po.po_code })).toHaveCount(0, { timeout: 10_000 });
+  // Deleting drops back to the list. Waiting on the PAGE to go is what proves the delete
+  // finished — "no row with this code" is true the instant you're off the list, so on its
+  // own it races the request it's meant to be waiting for.
+  await expect(page.locator('.po-detail')).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('.po-ov').filter({ hasText: f.po.po_code })).toHaveCount(0);
   expect((await q('SELECT 1 FROM purchase_orders WHERE id = $1', [f.po.id])).length).toBe(0);
 });

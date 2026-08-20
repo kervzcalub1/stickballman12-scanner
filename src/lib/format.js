@@ -45,6 +45,22 @@ export const fmtPrice = (v) => {
 // batch/VIN and showing the wrong "Today" in Inventory. Server filters are EST too.
 export const estToday = () => ymd(estCivil());
 
+// The partner of `ymd`: a YYYY-MM-DD string back to a civil Date. Parsed at NOON UTC,
+// never `new Date('2026-08-21T00:00:00')` — that's local midnight, which in Manila (the
+// PH team's own clocks) is the previous EST day, so an anchor written to the URL came
+// back a day earlier every round trip. Invalid input → today, so a hand-edited URL
+// can't poison every period calculation downstream.
+export function estCivilFromYmd(s) {
+  const d = new Date(`${String(s || '').slice(0, 10)}T12:00:00Z`);
+  return Number.isNaN(d.getTime()) ? estCivil() : d;
+}
+
+// A timestamp's time of day in EST ("2:07 PM"). Everything on screen is EST, so a
+// checkpoint or a scan log rendered in the viewer's own timezone silently disagrees
+// with the rest of the page.
+export const PH_TIME = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+export const estTime = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? '' : PH_TIME.format(d); };
+
 export function periodRange(mode, a) {
   const c = estCivil(a);
   if (mode === 'week') { const s = new Date(c); s.setUTCDate(c.getUTCDate() - c.getUTCDay()); const e = new Date(s); e.setUTCDate(s.getUTCDate() + 6); return [s, e]; }

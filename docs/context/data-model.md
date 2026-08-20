@@ -108,5 +108,13 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   Coerce first: `Number(row.id) === id`. (This caused box-commit's "Box not found
   in this batch" — the freshly-added box id never matched.)
 - Date filters compare `(col AT TIME ZONE 'America/New_York')::date` to from/to.
+- **`DATE` columns come back as `'YYYY-MM-DD'` strings**, not JS `Date`s
+  (`pg.types.setTypeParser(1082, …)` in db.js). A DATE is a calendar day, not an
+  instant: the driver's default parses it at LOCAL midnight, which JSON then
+  serialises as UTC, so on a server east of UTC — this team runs `Asia/Manila` —
+  every date reached the client **a day early** (a purchase made on the 5th read as
+  the 4th), and an edit form that round-tripped the value walked it back again on
+  every save. Every consumer already did `String(d).slice(0, 10)`, which is now
+  exactly right.
 - Adding a column? Put an `ADD COLUMN IF NOT EXISTS` in db-setup.mjs AND run
   `db:setup` on every environment (see `deploy.md` — prod drift is the #1 trap).

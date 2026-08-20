@@ -67,7 +67,15 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
 - Secrets are server-side only; `.env` is git-ignored — **never commit it**.
 - Alias has **auto-relogin on 401; StockX does NOT**.
 - VINs (`SBM-YYMMDD-######`) are never reused; numbering gaps are fine.
-- Times/filters are EST (`AT TIME ZONE 'America/New_York'`).
+- **Everything is EST (`America/New_York`) — never the viewer's or the host's clock.**
+  SQL filters with `AT TIME ZONE 'America/New_York'`; the UI formats through
+  `src/lib/format.js` (`estToday`, `estDate`, `estCivilFromYmd`, `PH_DATE(TIME)`,
+  `estTime`) and prints a literal "EST"; the process is pinned in `server.mjs` **and**
+  `vite.config.js`. `new Date().toISOString().slice(0,10)`, a bare `toLocale*()`, and
+  `new Date('YYYY-MM-DDT00:00:00')` are all bugs here — the PH team works a night shift
+  from Manila, so their clock is a day ahead of the EST day the server is filtering by.
+  DATE columns come back as `'YYYY-MM-DD'` strings (`docs/context/data-model.md`).
+  Guarded by `e2e/est-timezone.spec.js`, which runs the browser in `Asia/Manila`.
 - **`PH_EXCLUDED_KINDS` (`instore` + `existing`) must NEVER touch the PH team** —
   guard every PH path (phListItems both branches, pendingCounts badges, rescaleItem,
   phUpdateGroup, getItemsForGiRefresh, recomputeUnlistedPrices), not just the New

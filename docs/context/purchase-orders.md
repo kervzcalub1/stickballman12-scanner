@@ -9,6 +9,71 @@ the courier carries it, and the **warehouse** receives it back **against the sam
 reconciling what was promised vs. what actually arrived. A batch spans **multiple shipping
 labels** (one tracking number each); it closes only when every label is shipped.
 
+## Editing an order after it exists (2026-08-21)
+
+An order isn't settled the moment it's raised: the supplier buys more and gets another
+label, a tracking number goes in with a typo, and a label sometimes belongs to a
+different order entirely. All of it is staff-side (`ph_team`/admin) on
+`/ph/po-status` → open the order. UI: `src/components/PoEdit.jsx`.
+
+| What | Where | Endpoint |
+|---|---|---|
+| Supplier account, tag/code, purchase date, notes, **boxes expected** | "Edit details" | `po/update` |
+| Add labels (tracking # + courier, typed **or read off the courier's PDF**) | "+ Add label" above the label list | `po/label-add` |
+| Fix a label's tracking # / courier | per label: "Tracking #" | `po/label-update` |
+| Delete a label | per label: "Remove" | `po/label-remove` |
+| Move a label to another order (existing or new) | per label: "Move…" | `po/label-move` |
+
+Three rules hold across all of it (`PO_FROZEN`, `movePoBox` in `api/_lib/db.js`):
+
+1. **A reconciled or closed order is frozen.** Its count has been settled with the
+   supplier, and the record has to keep saying what was settled.
+2. **A label with stock counted into it is never deleted — only moved.** `po/label-remove`
+   answers **409 with `mustMove: true`** and the dialog turns into "Move it instead".
+   The record of what physically arrived outlives any tidying up of the paperwork.
+3. **Received stock follows its label.** A label is tied to what arrived only by its
+   tracking number, and only within batches linked to the *same* order (see the
+   `received_units` sub-select in `getPoFull`) — so moving the label alone would leave
+   the old order carrying units nothing claims and the new one reading fully short. The
+   move therefore takes the `batch_boxes` row and its `items` into a batch on the target
+   order, **creating one** (copying the source batch's header) when the target has none.
+   The single-box shape — tracking on the batch itself, `items.box_id` NULL — moves the
+   whole batch instead, and is **refused** when that batch also holds box rows, because
+   then the count would be ambiguous.
+
+**Adding labels from the courier's PDF** (2026-08-21) — the same dropzone the create-order
+form uses: one label per page, tracking number decoded from the barcode (packing slips
+carry none, which is how the two are told apart), rows land fully editable. Two things are
+particular to adding rather than creating:
+- **A page whose tracking number is already on the order is dropped**, not offered for the
+  server to refuse. Re-importing the whole sheet to pick up two new labels is the normal
+  way this gets used.
+- **The FILE is a decision, not a side effect.** An order stores ONE labels PDF and a
+  per-label download is a page range into it, so saving this one replaces what's there.
+  The checkbox defaults ON when the order has no sheet (nothing to lose) and OFF when it
+  has (the labels not in this PDF stop being printable). Attached only after the labels
+  exist, because `attachPoLabels` maps pages by tracking number.
+- **`attachPoLabels` now clears every `label_page`/`label_page_end` on the order first.**
+  It didn't, and that was a live bug in the older "Replace labels PDF" button too: the old
+  pointers became indexes into a file that no longer existed, so Label 1 downloaded page 1
+  of the NEW sheet — somebody else's label, which is worse than no label at all.
+
+Smaller things that matter:
+- **A tracking number can only ever be on one label**, checked across every order:
+  two labels carrying it would both claim the same received box and the labels PDF
+  couldn't tell their pages apart. 409 naming the order it's already on.
+- **Labels are numbered on from the highest already there** and keep that number for
+  life — it's what the warehouse writes on the carton (see [[batch-box-renumbering]]).
+  A move renumbers onto the end of the target order.
+- **`expected_boxes` can be set higher than the labels entered** (an order often knows
+  six boxes are coming before the last tracking numbers exist) but never lower than the
+  labels it holds; adding labels raises it automatically (`syncExpectedBoxes`).
+- **Every edit posts a `kind='system'` comment** to the order's thread — both threads for
+  a move. That thread is the order's audit trail; there's no separate history table.
+- Removing a label takes its declared lines (`po_lines.po_box_id` is ON DELETE CASCADE)
+  and needs the **label number typed back**; an order must keep at least one label.
+- Tests: `e2e/po-edit.spec.js`.
+
 ## Link an already-received batch to its PO (+ delete a PO)
 "Receive against a purchase order" is a **step-1 choice**, so when PH opens the order
 *while the warehouse is already scanning the box* — it arrived before the paperwork —
@@ -537,10 +602,24 @@ a supplier must never be told their order is "Filling" when the boxes are with t
 The chip is a **statement about reality, not a workflow state**; the reconciliation queue
 (`poChip` in `Reconciliation.jsx`) still owns what happens next.
 
-## The PO screen's layout (PoOverview + SupplierApp)
-Reworked 2026-08-15 — the detail had grown into one long column of text and controls.
-- **A label is a card**, not a hairline separator: `.po-ov-label` has a border, radius and its
-  own background, so an order with four labels reads as four things.
+## The PO screen's layout (PoOverview → PoDetail, + SupplierApp)
+**An order opens on its own page (2026-08-21).** `PoOverview` is now just the list: tapping an
+order sets `?po=<id>` and renders `PoDetail.jsx` full-screen, with **← All purchase orders**
+back to the list. It used to unfold inside the list row, and on a nine-label order (PO-100005)
+that buried the order's own details under the first label and ran every box together. The
+deep link is unchanged, so a shared `/ph/po-status?po=123` still lands on the order.
+- The page reads: **order card** (who it's from, where it is, declared vs received, the
+  order-level actions + Edit details + labels PDF + "Received into") → whole-order manifest →
+  manifest-PDF import → **Labels (N)** with + Add label → **one card per label** → the
+  unmatched-units note → the danger zone.
+- `PoDetail` rebuilds the list's chip counts (`box_count`/`shipped_count`/`delivered_count`/
+  `received_units`) from the labels it already has, because `po/get` returns the raw order row
+  — without that the page would say "Filling" under a set of delivered labels, the exact
+  contradiction `poChipOf` exists to end. That function now lives in `src/lib/postatus.js`
+  with the box-status labels, shared by both screens so they can't drift.
+- Reworked 2026-08-15 — the detail had grown into one long column of text and controls.
+- **A label is a card**, not a hairline separator: `.po-lbl` is a real card (was `.po-ov-label`),
+  so an order with four labels reads as four things.
 - **A manifest is a table, once you have room for one.** `PoLineRow` renders every control as a
   labelled cell; at **≥720px** the per-row labels give way to a single `PoLineHeader`
   (ITEM · SIZE · QTY · COST EA · TIP EA) and the rows snap to shared columns, with the SKU under

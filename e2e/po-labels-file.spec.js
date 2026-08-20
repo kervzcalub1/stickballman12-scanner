@@ -78,6 +78,30 @@ async function upload(request, poId, pdf) {
   return signed.key;
 }
 
+// Attaching doesn't touch R2 — it records where each label lives in the stored file — so
+// this one runs everywhere.
+test('a replacement sheet clears the page pointers the old one left behind', async ({ request }) => {
+  const { po } = await order(request);
+  const attach = (pageMap, pages) => request.post('/api/po/labels-attach', {
+    headers: auth('ph_team'),
+    data: { poId: po.id, key: `po-labels/${po.id}-test.pdf`, name: 'labels.pdf', pages, pageMap },
+  });
+  await attach([{ tracking: TRACK_A, page: 1 }, { tracking: TRACK_B, page: 3 }], 4);
+  let rows = await q('SELECT tracking_number, label_page FROM po_boxes WHERE po_id = $1', [po.id]);
+  expect(rows.find((r) => r.tracking_number === TRACK_A).label_page).toBe(1);
+
+  // A second sheet — the courier re-issued label B only. There is ONE file per order, so
+  // A's old page number is now an index into a file that no longer exists: page 1 of the
+  // new sheet is B's label. Handing someone else's label to A is worse than handing them
+  // nothing, so the pointer is cleared and A's download button hides itself.
+  const res = await attach([{ tracking: TRACK_B, page: 1 }], 2);
+  expect(res.status(), await res.text()).toBe(200);
+  rows = await q('SELECT tracking_number, label_page, label_page_end FROM po_boxes WHERE po_id = $1', [po.id]);
+  expect(rows.find((r) => r.tracking_number === TRACK_A).label_page).toBeNull();
+  expect(rows.find((r) => r.tracking_number === TRACK_A).label_page_end).toBeNull();
+  expect(rows.find((r) => r.tracking_number === TRACK_B).label_page).toBe(1);
+});
+
 test.describe('labels file', () => {
   test.skip(!R2, 'R2 is not configured in this environment');
 

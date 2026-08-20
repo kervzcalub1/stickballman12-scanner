@@ -3,6 +3,11 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+// In dev the api/**/*.js handlers run inside THIS process, so it gets the same US
+// Eastern pinning as server.mjs — otherwise a date defaulted server-side in dev lands on
+// the developer's own zone (Asia/Manila here) and disagrees with prod by a day.
+process.env.TZ = process.env.TZ || 'America/New_York';
+
 const apiDir = path.dirname(fileURLToPath(import.meta.url));
 
 // Dev-only plugin: serve the /api/*.js serverless functions through Vite's

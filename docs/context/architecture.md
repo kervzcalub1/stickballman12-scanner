@@ -156,6 +156,10 @@ skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
   `PHGrid` is also App's admin/warehouse Report view.
 - `NoBoxReport`, `StatusScanPage` (sold/shipped), `RescaleRequests`
   (`RescaleRequestForm` + `RescaleRequestsReport`).
+- `PoOverview` (`/ph/po-status`) — the purchase-order LIST; tapping one sets `?po=<id>`
+  and hands off to `PoDetail`, the order's own full-screen page (one card per label,
+  add/edit/remove/move labels, edit the order). Shared status vocabulary in
+  `src/lib/postatus.js`; see `purchase-orders.md`.
 - `PhEditedPhotos` (`/ph/edited-photos`, PH+admin) — PH uploads edited listing
   images per SKU (`source='ph_edited'`, precedence over warehouse; `ph-report.md`).
 - `Sop` (`/sop`, `/ph/sop`, + a supplier top-bar toggle) — the in-app SOP & Help
@@ -183,6 +187,26 @@ skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
   → `rateLimit` → `getJsonBody` (256 KB cap). Helpers in `api/_lib/util.js`.
 - A 401 from any API → client clears session, returns to login (`err.unauthorized`).
 - 409 → `err.conflict` (optimistic-concurrency / lock conflicts).
+- **Timezone: EST (`America/New_York`) everywhere, never the viewer's or the host's
+  clock.** The warehouse day is an EST day and the PH team works a night shift from
+  Manila — 10am–6pm EST is 10pm–7am the *next* PH date — so a screen that follows the
+  viewer's clock asks the server for a different day than the one it's printing. The
+  three layers:
+  1. **Process** — `process.env.TZ` is pinned in `server.mjs` and `vite.config.js`
+     (dev runs the API handlers inside Vite), so a server-side `new Date()` can't
+     inherit Railway's UTC or a developer's own zone.
+  2. **Transport** — `DATE` columns are handed back as `'YYYY-MM-DD'` strings
+     (`pg.types.setTypeParser(1082, …)` in db.js); see `data-model.md` for why the
+     driver's default lost a day.
+  3. **Render** — everything goes through `src/lib/format.js`: `estToday`, `estDate`,
+     `estCivil`/`estCivilFromYmd` (the URL-anchor round trip), `PH_DATE`,
+     `PH_DATETIME`, `estTime`, `EST_FMT`. Times print a literal "EST".
+
+  Banned as a result: `new Date().toISOString().slice(0,10)` (UTC), a bare
+  `toLocale*()` (viewer's zone), and `new Date('YYYY-MM-DDT00:00:00')` (local
+  midnight — a Manila viewer's anchor came back a day earlier on every round trip).
+  `e2e/est-timezone.spec.js` guards it with the browser pinned to `Asia/Manila`; on an
+  EST machine the same assertions pass no matter what the code does.
 - Times shown in EST; dates filtered by EST calendar day (`AT TIME ZONE 'America/New_York'`).
   The **client Day/Week/Month picker also computes in EST** (`src/lib/format.js`
   `estCivil` normalizes any instant to the EST calendar day, then period math runs

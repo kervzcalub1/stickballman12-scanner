@@ -13,6 +13,14 @@ import { ROLL_VIN_RE } from './vins.js';
 
 const { Pool } = pg;
 
+// A Postgres DATE is a calendar day, not an instant, and node-postgres parses one into a
+// JS Date at LOCAL midnight — which JSON then serialises as UTC. On a server east of UTC
+// (this team runs Asia/Manila) that hands the client the day BEFORE: a purchase made on
+// the 5th reads as the 4th, and an edit form that round-trips the value walks it back
+// another day on every save. Hand back the string Postgres actually sent; every consumer
+// already does String(d).slice(0, 10) with it. (OID 1082 = date.)
+pg.types.setTypeParser(1082, (v) => v);
+
 let _pool = null;
 function pool() {
   if (_pool) return _pool;
@@ -3600,6 +3608,263 @@ export async function deletePo(poId) {
   return { ok: true, po };
 }
 
+/* ---- Editing an order that already exists -----------------------------------
+   An order isn't settled the moment it's raised: the supplier buys more and gets
+   another label, a tracking number goes in with a typo, and a label sometimes turns
+   out to belong to a different order altogether. Three rules hold across everything
+   below.
+
+   1. A **reconciled or closed** order is frozen. Its count has been settled with the
+      supplier; moving the goalposts afterwards is how a settled order starts
+      disagreeing with the message that settled it.
+   2. A label with **stock counted into it is never deleted** — only moved. The record
+      of what physically arrived outlives any tidying up of the paperwork.
+   3. **Received stock follows its label.** A label is tied to what arrived only by its
+      tracking number, and only within batches linked to the SAME order (see
+      `getPoFull`), so moving the label alone would leave the old order carrying units
+      nothing claims and the new one reading fully short — worse than not moving it. */
+
+export const PO_FROZEN = ['reconciled', 'closed'];
+const trackKey = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+
+// Header fields. Only the keys actually present in `patch` are written, so a caller
+// editing the notes can't blank the tag code by omission — `null` is a real value here
+// (clearing a date), which is why this can't lean on coalesce().
+export async function updatePo(poId, patch = {}) {
+  const sql = db();
+  const has = (k) => Object.prototype.hasOwnProperty.call(patch, k);
+  const rows = await sql`
+    UPDATE purchase_orders SET
+      supplier_name    = CASE WHEN ${has('supplierName')} THEN ${patch.supplierName ?? null}::text ELSE supplier_name END,
+      supplier_user_id = CASE WHEN ${has('supplierUserId')} THEN ${patch.supplierUserId ?? null}::bigint ELSE supplier_user_id END,
+      tag_code         = CASE WHEN ${has('tagCode')} THEN ${patch.tagCode ?? null}::text ELSE tag_code END,
+      date_of_purchase = CASE WHEN ${has('dateOfPurchase')} THEN ${patch.dateOfPurchase ?? null}::date ELSE date_of_purchase END,
+      notes            = CASE WHEN ${has('notes')} THEN ${patch.notes ?? null}::text ELSE notes END,
+      expected_boxes   = CASE WHEN ${has('expectedBoxes')} THEN ${patch.expectedBoxes ?? null}::int ELSE expected_boxes END
+    WHERE id = ${poId}
+    RETURNING *`;
+  return rows[0] || null;
+}
+
+// A tracking number identifies a parcel, so it can only ever be on ONE label: two
+// labels carrying it would both claim the same received box (`getPoFull` matches on
+// that string) and the labels PDF couldn't tell which page belongs to which. Checked
+// across every order, not just this one — the clash is global.
+export async function poBoxByTracking(tracking, { exceptBoxId = null } = {}) {
+  const key = trackKey(tracking);
+  if (!key) return null;
+  const rows = await sql_poBoxTracking(key, exceptBoxId);
+  return rows[0] || null;
+}
+async function sql_poBoxTracking(key, exceptBoxId) {
+  const sql = db();
+  if (exceptBoxId) {
+    return await sql`
+      SELECT b.*, p.po_code FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
+      WHERE upper(replace(coalesce(b.tracking_number, ''), ' ', '')) = ${key} AND b.id <> ${exceptBoxId} LIMIT 1`;
+  }
+  return await sql`
+    SELECT b.*, p.po_code FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
+    WHERE upper(replace(coalesce(b.tracking_number, ''), ' ', '')) = ${key} LIMIT 1`;
+}
+
+// What the warehouse has counted into ONE label's box — the same tracking-number join
+// `getPoFull` uses, but resolved to the ROWS behind the number so a move can take them
+// with it. Two shapes, because receiving records a box two ways:
+//   • `boxRows` — a box row inside a multi-box batch (items carry its box_id)
+//   • `loose`   — a single-box batch that kept the tracking on the batch itself and
+//                 left items.box_id NULL
+export async function poBoxReceived(box) {
+  const sql = db();
+  const key = trackKey(box?.tracking_number);
+  if (!key) return { units: 0, boxRows: [], loose: [] };
+  const boxRows = await sql`
+    SELECT x.id, x.batch_id, x.box_number, bt.batch_code,
+           (SELECT count(*)::int FROM items i WHERE i.box_id = x.id) AS units
+    FROM batch_boxes x JOIN batches bt ON bt.id = x.batch_id
+    WHERE bt.po_id = ${box.po_id}
+      AND upper(replace(coalesce(x.tracking_number, ''), ' ', '')) = ${key}`;
+  const loose = await sql`
+    SELECT bt.id AS batch_id, bt.batch_code,
+           (SELECT count(*)::int FROM items i WHERE i.batch_id = bt.id AND i.box_id IS NULL) AS units,
+           (SELECT count(*)::int FROM batch_boxes x2 WHERE x2.batch_id = bt.id) AS box_count
+    FROM batches bt
+    WHERE bt.po_id = ${box.po_id}
+      AND upper(replace(coalesce(bt.tracking_number, ''), ' ', '')) = ${key}`;
+  const units = boxRows.reduce((n, r) => n + (r.units || 0), 0)
+    + loose.reduce((n, r) => n + (r.units || 0), 0);
+  return { units, boxRows, loose: loose.filter((r) => r.units > 0) };
+}
+
+// Add labels to an existing order. Numbered on from the highest already there — a label
+// keeps its number for life, because that number is what the warehouse writes on the
+// carton and what every downstream screen calls it.
+export async function addPoLabels(poId, labels, createdBy) {
+  const sql = db();
+  const next = (await sql`
+    SELECT coalesce(max(box_number), 0) + 1 AS n FROM po_boxes WHERE po_id = ${poId}`)[0].n;
+  const nums = labels.map((_, i) => Number(next) + i);
+  const tracks = labels.map((l) => (String(l.trackingNumber || '').trim() || null));
+  const carriers = labels.map((l) => (Number.isInteger(Number(l.carrierKey)) && Number(l.carrierKey) > 0 ? Number(l.carrierKey) : null));
+  const rows = await sql`
+    INSERT INTO po_boxes (po_id, box_number, tracking_number, carrier_key, status, kind, created_by)
+    SELECT ${poId}, t.box_number, t.tracking_number, t.carrier_key, 'pending', 'original', ${createdBy || null}
+    FROM unnest(${nums}::int[], ${tracks}::text[], ${carriers}::int[]) AS t(box_number, tracking_number, carrier_key)
+    RETURNING *`;
+  await syncExpectedBoxes(poId);
+  return rows;
+}
+
+// The order's declared box count never reads FEWER than the labels it holds. It can read
+// more on purpose — an order can be raised knowing six boxes are coming before all six
+// tracking numbers exist — so this only ever raises it.
+export async function syncExpectedBoxes(poId) {
+  const sql = db();
+  await sql`
+    UPDATE purchase_orders p
+    SET expected_boxes = GREATEST(
+      coalesce(p.expected_boxes, 0),
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'))
+    WHERE p.id = ${poId}`;
+}
+
+// Correct a label's tracking number / carrier (a typo, or a number that arrived later).
+export async function updatePoBox(boxId, { trackingNumber, carrierKey }) {
+  const sql = db();
+  const has = (v) => v !== undefined;
+  const rows = await sql`
+    UPDATE po_boxes SET
+      tracking_number = CASE WHEN ${has(trackingNumber)} THEN ${trackingNumber ?? null}::text ELSE tracking_number END,
+      carrier_key     = CASE WHEN ${has(carrierKey)} THEN ${carrierKey ?? null}::int ELSE carrier_key END
+    WHERE id = ${boxId}
+    RETURNING *`;
+  return rows[0] || null;
+}
+
+// Delete a label. Its manifest lines go with it (po_lines.po_box_id is ON DELETE
+// CASCADE) — that list described a box that no longer exists. Refused for anything the
+// caller should have to face instead of quietly losing: see the rules at the top.
+export async function removePoBox(boxId) {
+  const sql = db();
+  const box = (await sql`SELECT * FROM po_boxes WHERE id = ${boxId}`)[0];
+  if (!box) return { error: 'That label no longer exists.' };
+  const po = await getPo(box.po_id);
+  if (PO_FROZEN.includes(po?.status)) {
+    return { error: `${po.po_code} is ${po.status} — its count is settled, so its labels can't be changed.` };
+  }
+  const received = await poBoxReceived(box);
+  if (received.units > 0) {
+    return {
+      error: `${received.units} pair(s) have already been counted into this label's box. `
+        + 'Move the label to another order instead — deleting it would take the record of received stock with it.',
+      received: received.units,
+      mustMove: true,
+    };
+  }
+  const siblings = (await sql`
+    SELECT count(*)::int AS n FROM po_boxes WHERE po_id = ${box.po_id} AND kind <> 'replacement'`)[0].n;
+  if (box.kind !== 'replacement' && siblings <= 1) {
+    return { error: 'An order has to keep at least one label. Delete the whole order instead if it was raised by mistake.' };
+  }
+  const lines = (await sql`SELECT count(*)::int AS n FROM po_lines WHERE po_box_id = ${boxId}`)[0].n;
+  await sql`DELETE FROM po_boxes WHERE id = ${boxId}`;
+  return { ok: true, box, linesRemoved: lines };
+}
+
+// Move a label to another order, taking everything that describes it: its manifest lines
+// and — the part that makes this honest rather than cosmetic — the box the warehouse
+// actually received against it. Returns { error } rather than throwing so the endpoint
+// can hand the reason back verbatim.
+export async function movePoBox(boxId, targetPoId, { createdBy = null } = {}) {
+  const sql = db();
+  const box = (await sql`SELECT * FROM po_boxes WHERE id = ${boxId}`)[0];
+  if (!box) return { error: 'That label no longer exists.' };
+  const from = await getPo(box.po_id);
+  const to = await getPo(targetPoId);
+  if (!to) return { error: 'The order to move it to no longer exists.' };
+  if (Number(to.id) === Number(box.po_id)) return { error: `That label is already on ${to.po_code}.` };
+  if (PO_FROZEN.includes(from?.status)) {
+    return { error: `${from.po_code} is ${from.status} — its count is settled, so its labels can't be moved off it.` };
+  }
+  if (PO_FROZEN.includes(to.status)) {
+    return { error: `${to.po_code} is ${to.status} — its count is already settled, so a label can't be added to it.` };
+  }
+
+  const received = await poBoxReceived(box);
+  // A single-box batch IS the box: its tracking sits on the batch and its items have no
+  // box_id, so the only way to move it is to move the whole batch — which is only true
+  // to the paperwork if that batch holds nothing else.
+  for (const l of received.loose) {
+    if (Number(l.box_count) > 0) {
+      return {
+        error: `${l.batch_code} counted these pairs against the batch itself, alongside ${l.box_count} box row(s). `
+          + 'Sort that batch out first (or unlink it) — moving the label would leave the count ambiguous.',
+      };
+    }
+  }
+
+  const nextNum = (await sql`
+    SELECT coalesce(max(box_number), 0) + 1 AS n FROM po_boxes WHERE po_id = ${targetPoId}`)[0].n;
+
+  // Where the received box lands: the order's own receiving batch. One is created when
+  // the target has none, copying the source batch's header — the pairs were received on
+  // that day, by that person, from that supplier, and that stays true after the move.
+  let targetBatchId = null;
+  let createdBatch = null;
+  if (received.boxRows.length) {
+    const open = await sql`
+      SELECT id, batch_code FROM batches WHERE po_id = ${targetPoId} ORDER BY id DESC`;
+    if (open.length > 1) {
+      return {
+        error: `${to.po_code} has ${open.length} receiving batches linked (${open.map((b) => b.batch_code).join(', ')}). `
+          + 'Unlink the ones that don\'t belong first, so there is one place for this box to land.',
+      };
+    }
+    if (open.length === 1) targetBatchId = Number(open[0].id);
+    else {
+      const src = (await sql`SELECT * FROM batches WHERE id = ${received.boxRows[0].batch_id}`)[0];
+      const made = await sql`
+        INSERT INTO batches (buyer_name, supplier_name, no_tracking, date_received, default_cost,
+                             notes, kind, batch_tag, po_id, status, created_by)
+        VALUES (${src?.buyer_name || null}, ${src?.supplier_name || to.supplier_name || null},
+                ${src?.no_tracking === true}, ${src?.date_received || null}, ${src?.default_cost ?? null},
+                ${`Opened by moving a label from ${from?.po_code || 'another order'}.`},
+                'receiving', ${to.tag_code || null}, ${targetPoId}, 'open', ${createdBy || null})
+        RETURNING id, batch_code`;
+      targetBatchId = Number(made[0].id);
+      createdBatch = made[0].batch_code;
+    }
+  }
+
+  const queries = [
+    sql`UPDATE po_boxes SET po_id = ${targetPoId}, box_number = ${nextNum} WHERE id = ${boxId}`,
+    sql`UPDATE po_lines SET po_id = ${targetPoId} WHERE po_box_id = ${boxId}`,
+  ];
+  for (const r of received.boxRows) {
+    queries.push(sql`
+      UPDATE batch_boxes SET batch_id = ${targetBatchId},
+        box_number = (SELECT coalesce(max(x.box_number), 0) + 1 FROM batch_boxes x WHERE x.batch_id = ${targetBatchId})
+      WHERE id = ${r.id}`);
+    queries.push(sql`UPDATE items SET batch_id = ${targetBatchId} WHERE box_id = ${r.id}`);
+  }
+  for (const l of received.loose) {
+    queries.push(sql`UPDATE batches SET po_id = ${targetPoId} WHERE id = ${l.batch_id}`);
+  }
+  await sql.transaction(queries);
+  await syncExpectedBoxes(box.po_id);
+  await syncExpectedBoxes(targetPoId);
+  return {
+    ok: true,
+    box,
+    from,
+    to,
+    boxNumber: Number(nextNum),
+    units: received.units,
+    movedBatches: received.loose.map((l) => l.batch_code),
+    createdBatch,
+  };
+}
+
 /* ---- The courier's labels PDF (R2) ------------------------------------------
    Kept so the supplier can print the label for the box they're packing rather than
    hunting for the email it arrived in. ONE object per order, exactly as uploaded; the
@@ -3620,7 +3885,13 @@ export async function attachPoLabels({ poId, key, name, pages, pageMap = [], upl
     UPDATE purchase_orders
     SET labels_key = ${key}, labels_name = ${name || null}, labels_pages = ${pages || null},
         labels_uploaded_at = now(), labels_uploaded_by = ${uploadedBy}
-    WHERE id = ${poId}`];
+    WHERE id = ${poId}`,
+  // Every page pointer on the order is cleared before the new sheet is mapped. There is
+  // ONE stored file per order, so a replacement makes every old `label_page` an index
+  // into a file that no longer exists — and page 3 of the new sheet is somebody else's
+  // label, which is far worse than no label at all. A label the new sheet doesn't carry
+  // now has no page, and its download button hides itself.
+  sql`UPDATE po_boxes SET label_page = NULL, label_page_end = NULL WHERE po_id = ${poId}`];
 
   // A label owns every page up to the NEXT label. The sheets bought from UPS CampusShip
   // interleave a packing slip after each label, and that slip goes in that box — so the

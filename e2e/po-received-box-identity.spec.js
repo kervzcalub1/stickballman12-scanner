@@ -141,9 +141,9 @@ test('once every label has landed, the order stops calling itself Receiving', as
   await q(`UPDATE po_boxes SET status = 'delivered' WHERE po_id = $1`, [Number(f.po.id)]);
   await loginAs(page, 'ph_team');
   await page.goto(`/ph/po-status?po=${f.po.id}`);
-  const row = page.locator('.po-ov').filter({ hasText: f.po.po_code });
-  await expect(row).toBeVisible({ timeout: 15_000 });
-  await expect(row.locator('.po-chip').first()).toHaveText('Delivered · to reconcile');
+  // The order opens on its own page; its chip lives in that page's header.
+  await expect(page.locator('.po-detail')).toContainText(f.po.po_code, { timeout: 15_000 });
+  await expect(page.locator('.po-detail-id .po-chip')).toHaveText('Delivered · to reconcile');
 });
 
 test('a draft order whose labels have all gone is not still "Filling"', async ({ page, request }) => {
@@ -153,6 +153,5 @@ test('a draft order whose labels have all gone is not still "Filling"', async ({
   await q(`UPDATE purchase_orders SET status = 'draft' WHERE id = $1`, [Number(f.po.id)]);
   await loginAs(page, 'ph_team');
   await page.goto(`/ph/po-status?po=${f.po.id}`);
-  const row = page.locator('.po-ov').filter({ hasText: f.po.po_code });
-  await expect(row.locator('.po-chip').first()).toHaveText('Shipped');
+  await expect(page.locator('.po-detail-id .po-chip')).toHaveText('Shipped', { timeout: 15_000 });
 });

@@ -7,8 +7,11 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
 import { CARRIERS, carrierName } from '../lib/carriers.js';
+import { estToday } from '../lib/format.js';
 
-const today = () => new Date().toISOString().slice(0, 10);
+// EST, not UTC: an order raised at 9pm EST would otherwise be dated tomorrow, and one
+// raised from a PH desk dated by Manila's calendar. The whole system dates by EST.
+const today = () => estToday();
 
 export function CreatePO({ onHome, onSignOut }) {
   const [suppliers, setSuppliers] = useState(null);

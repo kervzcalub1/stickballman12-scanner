@@ -211,6 +211,15 @@ export const api = {
   // Whole-order manifest (Path C): add a line against the PO itself (no label).
   poScanOrder: (payload) => post('/api/po/scan-order', payload),
   poLine: (lineId, patch) => post('/api/po/line', { lineId, ...patch }),
+  // Editing an order after it exists: its own details, and its labels. Only what's
+  // passed is written — see api/po/update.js.
+  poUpdate: (poId, patch) => post('/api/po/update', { poId, ...patch }),
+  poLabelAdd: (poId, labels) => post('/api/po/label-add', { poId, labels }),
+  poLabelUpdate: (boxId, patch) => post('/api/po/label-update', { boxId, ...patch }),
+  poLabelRemove: (boxId, confirm) => post('/api/po/label-remove', { boxId, confirm }),
+  // A label the warehouse already counted stock into can only be MOVED, never deleted:
+  // pass an existing targetPoId, or newPo to raise one for it.
+  poLabelMove: (boxId, target) => post('/api/po/label-move', { boxId, ...target }),
   poCloseBox: (poBoxId) => post('/api/po/close-box', { poBoxId }),
   poReopenBox: (poBoxId) => post('/api/po/reopen-box', { poBoxId }),
   poShip: (poBoxId) => post('/api/po/ship', { poBoxId }),

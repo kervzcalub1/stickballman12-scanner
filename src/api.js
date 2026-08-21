@@ -185,6 +185,9 @@ export const api = {
   phGiLookup: (sku, sizes) => post('/api/ph/gi-lookup', { sku, sizes }),
   // Read-only price inquiry (no save) — GI + Final + lowest/highest/last-sold, PH Price Inquiry page.
   phPriceInquiry: (sku, sizes, consigned = true) => post('/api/ph/price-inquiry', { sku, sizes, consigned }),
+  // Same engine as phPriceInquiry, but reachable by the WAREHOUSE too — the Payout
+  // Calculator is used standing in a store deciding whether to buy (api/payout/quote.js).
+  payoutQuote: (sku, sizes, consigned = true) => post('/api/payout/quote', { sku, sizes, consigned }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // Remove pairs outright (miscount fix). Archived to deleted_items first; the
   // server refuses sold/shipped and returns them as `blocked`.

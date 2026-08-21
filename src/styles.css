@@ -3141,3 +3141,108 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* PO report format picker (PDF | CSV) — sits with the download buttons it governs. */
 .mf-fmt { flex: none; }
 .mf-fmt .seg-btn { padding: 3px 10px; font-size: 12px; }
+
+/* ------------------------------------------------------------------ */
+/* Payout Calculator (/payout, /ph/payout — screens/PayoutCalculator)  */
+/* Phone-first: warehouse runs this one-handed in a store aisle, so    */
+/* every field pair collapses to a single column under 560px and the   */
+/* verdict stays big enough to read at arm's length.                   */
+/* ------------------------------------------------------------------ */
+.pc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pc-head p { margin: 0; }
+.pc-h {
+  margin: 22px 0 10px; font-size: 13px; font-weight: 700; letter-spacing: 0.4px;
+  text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.pc-h .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.pc-note { margin: 8px 0 0; }
+
+.pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.pc-grid.three { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 560px) {
+  .pc-grid, .pc-grid.three { grid-template-columns: 1fr 1fr; }
+}
+.pc-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.pc-field-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.pc-field-hint { font-size: 11px; }
+/* The $ / % sits INSIDE the box: a dollar figure and a percentage look identical at
+   a glance, and on this screen mixing them up is the difference between a buy and a
+   loss. Padding is reserved for the affix so a long number can't slide under it. */
+.pc-input-wrap { position: relative; display: block; }
+.pc-input-wrap input { width: 100%; }
+.pc-input-wrap.has-prefix input { padding-left: 22px; }
+.pc-input-wrap.has-suffix input { padding-right: 26px; }
+.pc-affix {
+  position: absolute; top: 50%; transform: translateY(-50%); left: 10px;
+  color: var(--muted); font-size: 13px; pointer-events: none;
+}
+.pc-affix.suffix { left: auto; right: 10px; }
+
+/* Live Alias market strip — each cell is a button that fills the sale price. */
+.pc-market { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 10px 12px; }
+.pc-market-head { margin-bottom: 8px; }
+.pc-market-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 560px) { .pc-market-grid { grid-template-columns: 1fr 1fr; } }
+.pc-market-cell {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); color: var(--text); cursor: pointer; text-align: left;
+}
+.pc-market-cell:hover:not(:disabled) { border-color: var(--primary); }
+.pc-market-cell:disabled { opacity: 0.45; cursor: default; }
+.pc-market-label { font-size: 11px; color: var(--muted); }
+.pc-market-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.pc-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.pc-stat { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 10px 12px; }
+.pc-stat-label { display: block; font-size: 12px; color: var(--muted); }
+.pc-stat-val { display: block; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pc-stat-val.up { color: var(--ok); }
+
+.pc-details { margin-top: 10px; }
+.pc-details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.pc-break { width: 100%; margin-top: 8px; font-size: 13px; border-collapse: collapse; }
+.pc-break td { padding: 3px 0; color: var(--muted); }
+.pc-break-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+.pc-break-val.down { color: var(--err); }
+.pc-break-val.up { color: var(--muted); }
+.pc-break-total td { border-top: 1px solid var(--border); padding-top: 6px; font-weight: 700; color: var(--text); }
+.pc-profit td { font-weight: 700; }
+.pc-profit.up td, .pc-profit.up .pc-break-val { color: var(--ok); }
+.pc-profit.down td, .pc-profit.down .pc-break-val { color: var(--err); }
+
+.pc-payouts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .pc-payouts { grid-template-columns: 1fr; } }
+.pc-payout { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 12px; }
+.pc-payout-head { font-weight: 700; letter-spacing: 0.3px; }
+.pc-payout-empty { margin: 10px 0 0; }
+
+.pc-liq { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+
+/* The call. Colour carries it — this is read from arm's length, mid-aisle. */
+.pc-verdict { border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--panel-2); }
+.pc-verdict.buy { border-color: rgba(46, 204, 113, 0.45); background: rgba(46, 204, 113, 0.08); }
+.pc-verdict.watch { border-color: rgba(224, 164, 88, 0.45); background: rgba(224, 164, 88, 0.08); }
+.pc-verdict.pass { border-color: rgba(255, 107, 107, 0.45); background: rgba(255, 107, 107, 0.08); }
+.pc-verdict-top { display: flex; align-items: baseline; gap: 10px; }
+.pc-verdict-call { font-size: 26px; font-weight: 800; letter-spacing: 0.5px; }
+.pc-verdict.buy .pc-verdict-call { color: var(--ok); }
+.pc-verdict.watch .pc-verdict-call { color: #e0a458; }
+.pc-verdict.pass .pc-verdict-call { color: var(--err); }
+.pc-verdict-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px 16px; margin-top: 12px; }
+.pc-verdict-rows > div { display: flex; flex-direction: column; gap: 2px; }
+.pc-verdict-rows span:last-child { font-weight: 700; font-variant-numeric: tabular-nums; }
+.pc-verdict-rows .up { color: var(--ok); }
+.pc-verdict-rows .down { color: var(--err); }
+.pc-risk.low { color: var(--ok); }
+.pc-risk.medium { color: #e0a458; }
+.pc-risk.high { color: #e08f5a; }
+.pc-risk.loss { color: var(--err); }
+.pc-verdict-note { margin: 12px 0 0; font-size: 13px; color: var(--text); }
+/* A catalogue near-miss on StockX — the right shoe in the wrong colourway prices
+   very differently, so the warning sits ON the strip, not in a tooltip. */
+.pc-market-note {
+  margin: 0 0 8px; padding: 6px 9px; border-radius: 8px; font-size: 12px;
+  color: #e0a458; background: rgba(224, 164, 88, 0.12); border: 1px solid rgba(224, 164, 88, 0.3);
+}

@@ -41,6 +41,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Receiving wizard, VINs, batches, intake | `docs/context/receiving.md` |
 | Pre-printed 1ID stickers (`SBM-R-…` roll stock, printer-free intake) | `docs/context/vin-stock.md` |
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
+| Payout Calculator: store cost stack → Alias/StockX payout, profit, ROI, buy call | `docs/context/payout-calculator.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
 | Inventory browse, SKU-merge, bulk status, labels, **removing pairs + Deleted archive** | `docs/context/inventory.md` |
 | Costs page: backfilling a cost the supplier skipped, blank-vs-$0 | `docs/context/costs.md` |

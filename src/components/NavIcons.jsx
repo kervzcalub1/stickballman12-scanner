@@ -87,6 +87,14 @@ const PATHS = {
     <circle cx="7.5" cy="7.5" r="1.2" />
     <path d="M10.5 13.5l2 2 4-4" />
   </>),
+  // Payout Calculator — a calculator: keypad, display, and a bottom row that reads
+  // as the total, since what the screen is for is the number at the end.
+  payout: (<>
+    <rect x="5" y="2.5" width="14" height="19" rx="2" />
+    <path d="M8 6.5h8" />
+    <path d="M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5h.01" />
+    <path d="M8.5 18h7" />
+  </>),
   // In-Store Buying — a shopping bag
   instore: (<>
     <path d="M6 8h12l1 12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />

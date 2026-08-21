@@ -25,6 +25,7 @@ import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
 import { ShelvePage } from './screens/ShelvePage.jsx';
 import { Locations } from './screens/Locations.jsx';
 import { InstoreListing } from './screens/InstoreListing.jsx';
+import { PayoutCalculator } from './screens/PayoutCalculator.jsx';
 import { ExistingStock } from './screens/ExistingStock.jsx';
 import { SupplierApp } from './screens/SupplierApp.jsx';
 import { Reconciliation } from './screens/Reconciliation.jsx';
@@ -154,6 +155,7 @@ export default function App() {
   // circuit to PHTeamApp above), so the normal Home/router already gates it.
   if (view === 'instore') return <Receiving mode="instore" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
   if (view === 'instore-listing') return <InstoreListing onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'payout') return <PayoutCalculator onHome={() => go('home')} onSignOut={signOut} />;
   // Existing (old) stock: same admin/warehouse gate as in-store — ph_team short-
   // circuits to PHTeamApp above and never reaches this router.
   if (view === 'existing-stock') return <ExistingStock navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;

@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'payout', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -109,6 +109,7 @@ export const HOME_SECTIONS = [
   { title: 'In-Store Mode', accent: 'inventory', cards: [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },
     { key: 'instore-listing', icon: '🏷️', title: 'In-Store Listing', sub: 'Mark in-store buys listed to Alias/StockX/Shopify' },
+    { key: 'payout', icon: '🧮', title: 'Payout Calculator', sub: 'Cost after discounts vs. what Alias/StockX pay out — is this pair a buy?' },
   ] },
   // A one-off migration mode, not part of the daily loop — its own section so it
   // reads as "the project of getting old stock into the system", not as receiving.

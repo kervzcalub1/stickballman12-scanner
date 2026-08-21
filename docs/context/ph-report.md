@@ -65,6 +65,22 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   Every row has exactly ONE listing status (`unitListingStatus` per unit →
   `g.listingState`, which `phListingStatus` short-circuits on), so rows line up 1:1
   with the Done / In-Progress / Pending tabs.
+  - **Sold is as good as done.** A unit whose status is `sold` or `shipped`
+    (`PH_CLOSED_STATUSES` in `src/lib/ph.js`) reports `done` whatever its store flags
+    say, and the row carries `closed: true`. The pair has left the building: there is
+    nothing left to list, and an edit would only rewrite the record of stock that's
+    gone. So a pair sold before PH ever got to it **drops out of the Pending /
+    In-Progress tabs** (it stays visible under **Done**, with its Sold status pill) and
+    the row goes **read-only** — no Edit, no Remove…, and the GOAT-only chip renders as
+    a plain badge; the Action cell says *"Sold — nothing to list"*. `startEdit` refuses
+    it too, for a tab that hasn't refreshed yet.
+    Enforced server-side as well, so a stale tab can't write: `phUpdateGroup` and
+    `setItemsGoatOnly` (`api/_lib/db.js`) both exclude `sold`/`shipped` the same way
+    they exclude in-store units — a save that reaches only sold pairs 404s with *"no
+    longer editable"*. The pricing paths always agreed (`getItemsForGiRefresh`,
+    `recomputeUnlistedPrices` skip both statuses), and so did the home badges
+    (`pendingCounts.listable`) — before this, only the grid disagreed and showed the
+    pair as outstanding work.
   - `g.days` is the sorted set of scan days in the row — length ≥2 only on a merged
     pending row, where the Date cell adds a **`+Nd` marker** (`dateCell` in
     `PHTeam.jsx`) naming the other days, since one date on a multi-day row is a

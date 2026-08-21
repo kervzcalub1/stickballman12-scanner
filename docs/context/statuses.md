@@ -35,6 +35,10 @@ PH can still untick a store whose push failed. Shown as `SyncBadges`, which read
   `shipped→sold` stay allowed (both terminal).
 - "Listable" / sellable = `with_box = true AND status NOT IN (sold, shipped,
   missing, issue, no_box)` — this drives the pending-count badges.
+- **Sold/shipped closes the PH side too.** The unit reads as `done` in the PH grid
+  whatever its store flags say, leaves the Pending/In-Progress tabs, and can no longer
+  be edited or re-flagged by PH (`PH_CLOSED_STATUSES`; full rule in `ph-report.md`).
+  A pair sold before it was ever listed is not listing work — it's gone.
 
 ## Shelving (`needs_shelf` → located)
 - **Shelve / Put-away** (`/shelve`) sets a boxed unit's `location` and flips

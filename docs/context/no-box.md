@@ -25,14 +25,21 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
 
 ## UPC box labels
 - **Print box labels** (`LabelSheet mode` box-style): recreates a real shoe-box
-  label — vertical UPC barcode on the left **with the UPC digits printed alongside
-  it**, then **NAME → colorway → size → SKU** down the right, the order and
+  label — vertical UPC barcode on the left **with the UPC digits down the outside
+  left edge and the bars inboard of them**, then **NAME → colorway → size → SKU**
+  down the right, the order and
   weighting a Nike box label uses (colorway sits directly under the name in a
   lighter/narrower face, 2-line clamp). So no-box pairs scan and read like a
   normal boxed pair.
   - **The digits are drawn INTO the barcode canvas** (`displayValue`), not printed
     as a separate row like the VIN/shelf labels do — the barcode is rotated, and
     only text baked into the canvas turns with it and stays glued to the bars.
+  - **The rotation direction is load-bearing** (`rotate90`, 90° **CW**). Clockwise
+    puts the digits on the OUTSIDE left edge, reading top-to-bottom, with the bars
+    between them and the text — what Nike prints on a real box, and the strip still
+    visible when boxes are stacked on a shelf. Counter-clockwise (what we shipped
+    until 2026-08-22) buries the number on the inside edge, between the bars and the
+    text column. Brent asked for the flip off the floor.
     They ship with **`flat: true`**, which is load-bearing: JsBarcode's default
     UPC-A layout hangs the first and last digit OUTSIDE the guard bars and widens
     the canvas ~17%, and since the barcode scales to a fixed length on the label, a

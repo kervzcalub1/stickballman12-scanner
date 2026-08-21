@@ -96,15 +96,23 @@ function barcodeCanvas(JsBarcode, value, { format = 'CODE128', height = 90, widt
   return canvas;
 }
 
-// Rotate a canvas 90° CCW so a horizontal barcode becomes a vertical one (box
+// Rotate a canvas 90° CW so a horizontal barcode becomes a vertical one (box
 // labels put the UPC on the left edge, like a real shoe box).
+//
+// The DIRECTION is the whole point and it is not arbitrary — turn it the other way
+// and the digits land on the inside edge, between the bars and the text. Clockwise
+// reproduces what Nike prints on a real box: the number runs down the OUTSIDE left
+// edge with the bars beside it, and it reads top-to-bottom (the barcode's first
+// digit ends up at the top, because the original's left edge rotates to the top).
+// Brent asked for this off the floor — that outside strip is the part still visible
+// when the boxes are stacked and shelved.
 function rotate90(canvas) {
   const r = document.createElement('canvas');
   r.width = canvas.height;
   r.height = canvas.width;
   const ctx = r.getContext('2d');
   ctx.translate(r.width / 2, r.height / 2);
-  ctx.rotate(-Math.PI / 2);
+  ctx.rotate(Math.PI / 2);
   ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
   return r;
 }
@@ -209,10 +217,11 @@ function drawBoxLabel(doc, JsBarcode, pw, ph, it) {
     drawStack(doc, pw, ph, blocks);
     return;
   }
-  // Left column: rotated (vertical) barcode with its digits alongside — the rotation
-  // puts them between the bars and the text column, which is where they land when you
-  // turn a real shoe box on its side. Column width is unchanged: the digits share the
-  // strip with the bars rather than pushing anything out (see barcodeCanvas).
+  // Left column: rotated (vertical) barcode with its digits down the OUTSIDE left
+  // edge and the bars inboard of them, the way Nike prints a real box label — that
+  // outside strip is what stays readable when the boxes are stacked on a shelf.
+  // Column width is unchanged: the digits share the strip with the bars rather than
+  // pushing anything out (see barcodeCanvas + rotate90 for the direction).
   const rot = rotate90(bc);
   const colW = pw * 0.16;
   const bcH = ph * 0.82;

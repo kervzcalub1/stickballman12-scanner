@@ -396,6 +396,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // Claim the lock first; only enter edit mode if no one else holds it.
   async function startEdit(g) {
     setError(''); setNotice('');
+    // Sold/shipped can't be edited (the server refuses too) — the row shows no Edit
+    // button, so this only catches a click from a tab that hasn't refreshed yet.
+    if (g.closed) { setNotice('This pair is already sold — there is nothing left to list.'); return; }
     // One row at a time per session — finish or cancel the current edit first.
     if (editing.size > 0 && !editing.has(g.key)) {
       setNotice('You can only edit one row at a time on this device — submit or cancel the current edit first.');
@@ -602,7 +605,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     else setGoat(g, goatOnly);
   }
   const goatChip = (g) => {
-    if (!canEdit) return g.goat_only ? <span className="goat-badge">GOAT only</span> : null;
+    if (!canEdit || g.closed) return g.goat_only ? <span className="goat-badge">GOAT only</span> : null;
     return (
       <button type="button" className={`goat-chip ${g.goat_only ? 'on' : ''}`} disabled={editing.has(g.key)}
         title="GOAT only — PH lists to Alias (GOAT) only; II/StockX/Shopify are N/A"
@@ -656,6 +659,14 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   };
   // On a GOAT-only group every store but Alias is N/A — it lists to Alias only.
   const flagNA = (g, k) => g.goat_only && k !== 'synced_alias';
+  // Sold (or shipped) = read-only for PH. The pair has left the building, so there is
+  // nothing to list and nothing to correct — "sold is as good as done" (PH_CLOSED_STATUSES
+  // in lib/ph.js also files the row under Done, out of the Pending/In-Progress tabs).
+  const closedNote = (g) => (
+    <span className="muted sm" title="This pair is already sold — there is nothing left for the PH team to list.">
+      {g.status === 'shipped' ? 'Shipped — nothing to list' : 'Sold — nothing to list'}
+    </span>
+  );
   // The per-column "All" tick, shown in the size table's header while the row is in
   // edit mode. Checked only when EVERY size already carries the flag, so it doubles
   // as a read-out of the column; unticking it clears the column the same way.
@@ -832,13 +843,14 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                       ) : '—'}
                     </span>
                     {canEdit && (() => {
-                      const locked = !ed && lockHolder(g);
+                      const locked = !ed && lockHolder(g) && !g.closed;
                       if (ed) return (
                         <span className="ph-edit-actions">
                           <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : 'Submit'}</button>
                           <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
                         </span>
                       );
+                      if (g.closed) return closedNote(g); // sold/shipped — no Edit, no Remove
                       if (locked) return <span className="presence-badge" title={`${locked} is editing this right now`}>{locked} editing…</span>;
                       return (
                         <span className="ph-edit-actions">
@@ -898,7 +910,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                   <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => submitGroup(g)}>{savingKey === g.key ? '…' : 'Submit'}</button>
                                   <button className="btn sm ghost" disabled={savingKey === g.key} onClick={() => closeEdit(g.key)}>Cancel</button>
                                 </span>)
-                              : (lockHolder(g)
+                              : g.closed
+                                ? closedNote(g)
+                                : (lockHolder(g)
                                   ? <span className="presence-badge" title={`${lockHolder(g)} is editing this right now`}>{lockHolder(g)} editing…</span>
                                   : (<span className="ph-edit-actions">
                                       <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>

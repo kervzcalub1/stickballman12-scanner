@@ -81,7 +81,7 @@ export default async function handler(req, res) {
 
     try {
       const rows = await phUpdateGroup(sizeUpdates, by, baseEditedAt);
-      if (!rows.length) return send(res, 404, { ok: false, error: 'No matching items found.' });
+      if (!rows.length) return send(res, 404, { ok: false, error: 'Those pairs are no longer editable — they may have been sold or removed. Reload the grid.' });
       return send(res, 200, { ok: true, row: rows[0], rows });
     } catch (e) {
       if (e.conflict) return send(res, 409, { ok: false, error: e.message, conflict: true });
@@ -100,7 +100,7 @@ export default async function handler(req, res) {
 
   try {
     const rows = await phUpdateItems(vins, fields, by, baseEditedAt);
-    if (!rows.length) return send(res, 404, { ok: false, error: 'No matching items found.' });
+    if (!rows.length) return send(res, 404, { ok: false, error: 'Those pairs are no longer editable — they may have been sold or removed. Reload the grid.' });
     return send(res, 200, { ok: true, row: rows[0], rows });
   } catch (e) {
     if (e.conflict) return send(res, 409, { ok: false, error: e.message, conflict: true });

@@ -25,6 +25,17 @@ export const PH_FLAGS = [
 ];
 export const FLAG_KEYS = ['added_to_intel_inv', 'synced_alias', 'synced_stockx', 'synced_shopify'];
 
+// A pair that has been SOLD (or shipped — sold's only onward transition) is out of
+// PH's hands: it left the building, so there is nothing left to list and an edit
+// would only rewrite the record of a pair that's gone. **Sold is as good as done** —
+// such a unit reads as `done` below, which drops it out of the Pending / In-Progress
+// worklist tabs, and the grid offers no Edit / GOAT-only on it. The server enforces
+// the same rule (phUpdateGroup + setItemsGoatOnly in api/_lib/db.js), so a stale tab
+// can't write to one either. The pricing paths already agreed: getItemsForGiRefresh
+// and recomputeUnlistedPrices have always skipped these two statuses.
+export const PH_CLOSED_STATUSES = ['sold', 'shipped'];
+export const isPhClosed = (r) => !!r && PH_CLOSED_STATUSES.includes(r.status);
+
 // Display mirror of the server's PRICE_HIERARCHY (api/_lib/pricing.js) — keep the
 // keys and order in step with it. A size takes the first level Alias has a real
 // price for, and `items.gi_basis` records which one, so the grid can say what
@@ -116,6 +127,7 @@ export function groupPhRows(list) {
 // applicable flags are read off the row (a GOAT-only pair needs Alias alone).
 // This is what splits a SKU into separate rows, so it has to be per unit.
 export function unitListingStatus(r) {
+  if (isPhClosed(r)) return 'done'; // sold/shipped — gone, so nothing is pending on it
   const req = requiredFlags(r);
   if (req.every((f) => r[f])) return 'done';
   return req.some((f) => r[f]) ? 'in_progress' : 'pending';
@@ -178,6 +190,7 @@ export function groupPhSized(list, isLocked) {
     if (!g) {
       g = {
         key, sku: r.sku, name: r.name, status: r.status, gender: r.gender, listingState: lstate, day,
+        closed: isPhClosed(r), // sold/shipped: row is read-only (status is in the key, so this holds for every unit)
         _days: new Set(), // a merged pending row can span scan days — the grid says so
         photo_count: r.photo_count || 0, // per-SKU listing-photo count (all rows share it)
         photo_url: r.photo_url || null,  // preferred (side) listing photo for the thumbnail
@@ -265,6 +278,8 @@ export function groupPhSized(list, isLocked) {
 //  · 'done'        — every store synced across all units (group rollup all true)
 //  · 'pending'     — nothing synced anywhere yet
 //  · 'in_progress' — some but not all stores synced (incl. a size partly done)
+// A SOLD or shipped pair short-circuits to 'done' whatever its flags say (see
+// PH_CLOSED_STATUSES) — it can't be listed any more, so it isn't outstanding work.
 // Used by the New Inventory status filter. Keys/labels in PH_LISTING_STATUSES.
 export const PH_LISTING_STATUSES = [
   { key: 'pending', label: 'Pending' },
@@ -303,6 +318,9 @@ export function phRowMatches(g, tokens) {
   return tokens.every((t) => hay.includes(t));
 }
 export function phListingStatus(g) {
+  // Sold/shipped first: a gone pair is done whatever its flags say, and both group
+  // shapes key on item status, so a row is never half sold.
+  if (isPhClosed(g)) return 'done';
   // groupPhSized rows are homogeneous by construction (listing state is part of the
   // group key), so the row already knows — and the filter tabs then line up 1:1 with
   // what's on screen. The derivation below still serves the merged groupPhRows shape.

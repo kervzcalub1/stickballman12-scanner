@@ -1756,9 +1756,11 @@ export async function setItemsGoatOnly(vins, goatOnly, by) {
   const list = (vins || []).filter(Boolean);
   if (!list.length) return [];
   const sql = db();
+  // Sold/shipped are left alone: GOAT-only decides where a pair gets LISTED, and a
+  // pair that's gone is past that (matches phUpdateGroup and the read-only grid row).
   const rows = await sql`
     UPDATE items SET goat_only = ${!!goatOnly}, updated_at = now()
-    WHERE vin = ANY(${list})
+    WHERE vin = ANY(${list}) AND status NOT IN ('sold', 'shipped')
     RETURNING id, vin, goat_only
   `;
   const text = goatOnly
@@ -2014,12 +2016,17 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
   const allVins = [...new Set(groups.flatMap((g) => g.vins))];
   // Exclude in-store units: they bypass the PH team, so a PH write must never
   // land on one (they're skipped below since they won't be in curByVin).
+  // Sold/shipped are excluded the same way: the pair is gone, so it is done as far as
+  // listing goes and PH must not re-price or re-flag it. The grid already hides Edit on
+  // those rows (`closed` from lib/ph.js) — this is the guard for a tab that loaded
+  // before the warehouse scanned it out. Same status pair as getItemsForGiRefresh.
   const curRows = await sql`
     SELECT i.id, i.vin, i.price, i.global_indicator, i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.listed_price,
            i.goat_only, i.ph_note, i.last_edit_at, i.last_edit_by
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
-    WHERE i.vin = ANY(${allVins}) AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
+    WHERE i.vin = ANY(${allVins}) AND i.status NOT IN ('sold', 'shipped')
+      AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
   `;
   if (!curRows.length) return [];
   const curByVin = new Map(curRows.map((r) => [r.vin, r]));

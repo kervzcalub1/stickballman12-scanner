@@ -78,10 +78,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Safe areas. `viewport-fit=cover` (index.html) lets the page use the full screen on a
+   notched phone, which means WE now owe the insets — otherwise the status bar sits on
+   the header and the home indicator sits on whatever is at the bottom. Every value is
+   `max(design padding, inset)` so nothing shrinks on a device without notches. */
 .app {
   max-width: 760px;
   margin: 0 auto;
-  padding: 16px 20px;
+  padding: max(16px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+           max(16px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
   width: 100%;
 }
 /* Use more of the screen on larger displays (desktop/large desktop). */
@@ -604,9 +609,17 @@ body {
 /* History defect-photo viewer */
 .tl-photos { margin-left: 8px; vertical-align: middle; }
 .btn.xs { padding: 1px 8px; font-size: 11px; min-height: 0; line-height: 1.6; }
-.lightbox-overlay { position: fixed; inset: 0; z-index: 250; background: rgba(0, 0, 0, 0.88); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.lightbox-overlay {
+  position: fixed; inset: 0; z-index: 250; background: rgba(0, 0, 0, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+           max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+}
 .lightbox { position: relative; max-width: 100%; max-height: 100%; overflow: auto; }
-.lightbox-close { position: fixed; top: 12px; right: 14px; z-index: 251; color: #fff; font-size: 26px; }
+.lightbox-close {
+  position: fixed; z-index: 251; color: #fff; font-size: 26px;
+  top: max(12px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right));
+}
 .lightbox-imgs { display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .lightbox-imgs img { max-width: 90vw; max-height: 85vh; object-fit: contain; border-radius: 8px; }
 
@@ -1771,7 +1784,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+           max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   z-index: 100;
   animation: overlay-in 0.15s ease-out;
 }
@@ -2190,7 +2204,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 @media (prefers-reduced-motion: reduce) { .copytext-cue { transition: opacity 0.12s; } }
 
 /* ---- Purchase Orders: supplier scan-out + PH create (Phase 1) ---- */
-.wrap-narrow { max-width: 720px; margin: 0 auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.wrap-narrow {
+  max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+           max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
 .empty-state { color: var(--muted); text-align: center; padding: 28px 18px; line-height: 1.5; }
 .po-err { background: rgba(213,69,63,0.12); border: 1px solid rgba(213,69,63,0.4); color: var(--err); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
 .po-flash { background: rgba(26,157,99,0.12); border: 1px solid rgba(26,157,99,0.4); color: var(--ok); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
@@ -3263,13 +3281,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* ------------------------------------------------------------------ */
 .advisor-fab {
   position: fixed; right: 18px; bottom: 18px; z-index: 60;
-  width: 52px; height: 52px; border-radius: 50%;
+  width: 54px; height: 54px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  border: 1px solid var(--primary); background: var(--primary); color: #fff;
+  border: 1px solid var(--border); background: var(--panel-2); color: #fff;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); cursor: pointer;
 }
-.advisor-fab svg { width: 22px; height: 22px; }
-.advisor-fab:hover { background: var(--primary-d); }
+.advisor-fab svg { width: 36px; height: 36px; }
+.advisor-fab:hover { border-color: var(--primary); background: var(--panel); }
 .advisor-fab.on { background: var(--panel-2); color: var(--text); border-color: var(--border); font-size: 18px; }
 /* Clear of the iPhone home indicator, which sits exactly where a bottom-right FAB wants to be. */
 @supports (padding: max(0px)) {

@@ -10,9 +10,35 @@
 // shelve a pair with no box" needs our written procedures. Both go to the same place.
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Icon } from './NavIcons.jsx';
 import { getAdvisorContext, ADVISOR_NAME, ADVISOR_INITIALS } from '../lib/advisorContext.js';
 import { estClock } from '../lib/format.js';
+
+// Alex Head's face. Drawn inline rather than shipped as a PNG so it stays crisp at any
+// size and needs no asset pipeline — same call as every other icon in this app. Flat
+// colour, no gradients: at 30px a gradient reads as mud.
+function RobotIcon() {
+  return (
+    <svg viewBox="0 0 64 64" width="36" height="36" aria-hidden="true">
+      {/* antenna */}
+      <rect x="30.5" y="8" width="3" height="9" rx="1.5" fill="#0f2350" />
+      <circle cx="32" cy="7" r="4.5" fill="#3ab5fb" />
+      {/* ears */}
+      <rect x="4" y="24" width="9" height="15" rx="4.5" fill="#3ab5fb" />
+      <rect x="51" y="24" width="9" height="15" rx="4.5" fill="#2f7fe0" />
+      {/* head, with the right side a shade darker like the source art */}
+      <rect x="10" y="16" width="44" height="32" rx="12" fill="#e6e9ec" />
+      <path d="M32 16h10a12 12 0 0 1 12 12v8a12 12 0 0 1-12 12H32z" fill="#cdd3d9" />
+      {/* speech-bubble tail */}
+      <path d="M28 46h11l-11 9z" fill="#cdd3d9" />
+      {/* screen */}
+      <rect x="16" y="21" width="32" height="22" rx="8" fill="#10275c" />
+      {/* eyes + mouth */}
+      <rect x="23" y="26" width="5" height="9" rx="2.5" fill="#3ab5fb" />
+      <rect x="36" y="26" width="5" height="9" rx="2.5" fill="#3ab5fb" />
+      <rect x="28" y="37" width="8" height="3" rx="1.5" fill="#3ab5fb" />
+    </svg>
+  );
+}
 
 // The advisor writes markdown — mostly **bold** around the numbers or the step that
 // carries the answer, occasionally `code` for a SKU or VIN. Render that as React
@@ -114,7 +140,7 @@ export function Advisor({ user }) {
       <button type="button" className={`advisor-fab${open ? ' on' : ''}`}
         aria-label={open ? `Close ${ADVISOR_NAME}` : `Ask ${ADVISOR_NAME}`} aria-expanded={open}
         onClick={() => { setOpen((o) => !o); setTimeout(() => inputRef.current?.focus(), 60); }}>
-        {open ? <span aria-hidden="true">✕</span> : <Icon name="chat" />}
+        {open ? <span aria-hidden="true">✕</span> : <RobotIcon />}
       </button>
 
       {open && (

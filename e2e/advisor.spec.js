@@ -275,3 +275,16 @@ test('the panel fits a phone without pushing the page sideways', async ({ page }
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test('the safe-area contract holds: viewport-fit is set, so env() is not inert', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await page.goto('/');
+  // Without viewport-fit=cover, every env(safe-area-inset-*) in this stylesheet
+  // silently resolves to 0 on iOS — which is exactly why the status bar was sitting on
+  // the header while the CSS "handled" it. The two only work together.
+  const meta = await page.locator('meta[name=viewport]').getAttribute('content');
+  expect(meta).toContain('viewport-fit=cover');
+  // And the page owning the full screen means WE owe the insets back.
+  const pad = await page.evaluate(() => getComputedStyle(document.querySelector('.app')).paddingTop);
+  expect(pad).not.toBe('0px');
+});

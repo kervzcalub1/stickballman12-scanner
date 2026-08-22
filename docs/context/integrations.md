@@ -193,7 +193,10 @@ Entirely separate from the keyless UPC proxy below, and from KicksDB.
   `products[].styleId`, so `DZ5485` can't silently return `DZ5485-400` — an inexact hit
   is returned flagged, and the screen warns) → `/catalog/products/{id}/variants` (a bare
   ARRAY of `ProductVariant`; size = `variantValue`, falling back to a US row of
-  `sizeChart.availableConversions[]`) → `/catalog/products/{id}/variants/{variantId}/market-data?currencyCode=USD&country=US`.
+  `sizeChart.availableConversions[]`) → `/catalog/products/{id}/variants/{variantId}/market-data?currencyCode=USD`.
+  ⚠️ **Never send `country`.** The published spec still lists it as optional; the live
+  API returns **400 — "not supported anymore. Market data will be based on your
+  market."** Found by `probe-stockx.mjs` on the first real call, and pinned by a test.
 - **Shortcut when a UPC is in hand**: `/catalog/products/variants/gtins/{gtin}`
   (`stockxVariantByGtin`) returns productId AND variantId in ONE call — no text search,
   no size matching, so it cannot land on the wrong colourway or size. `payout/quote`

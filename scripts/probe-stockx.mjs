@@ -117,7 +117,7 @@ if (RAW) {
   await dump('search', `${STOCKX_BASE}/catalog/search?query=${encodeURIComponent(SKU)}&pageSize=3`);
   if (product.id) {
     await dump('variants', `${STOCKX_BASE}/catalog/products/${product.id}/variants`);
-    await dump('market-data', `${STOCKX_BASE}/catalog/products/${product.id}/variants/${variant.id}/market-data?currencyCode=USD&country=US`);
+    await dump('market-data', `${STOCKX_BASE}/catalog/products/${product.id}/variants/${variant.id}/market-data?currencyCode=USD`);
   }
 }
 console.log('');

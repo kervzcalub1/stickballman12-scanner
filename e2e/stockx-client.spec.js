@@ -228,13 +228,15 @@ test('zero and null read as "no market", not as a $0 price', async () => {
   expect(m.highest_bid).toBe(null);
 });
 
-test('the market request names the currency and the country', async () => {
+test('the market request names the currency — and never sends country', async () => {
   mockFetch([TOKEN_OK, ['/market-data', async () => [200, { lowestAskAmount: '100' }]]]);
   await stockxVariantMarket('p-query', 'v-query');
   const url = calls.find((c) => c.url.includes('/market-data')).url;
   expect(url).toContain('currencyCode=USD');
-  // Left implicit, StockX picks the market for us — and we are a US business.
-  expect(url).toContain('country=US');
+  // The published spec still lists `country` as an optional parameter, but the live
+  // API 400s on it ("not supported anymore. Market data will be based on your
+  // market"). This pins it so nobody re-adds it from the docs.
+  expect(url).not.toContain('country');
 });
 
 /* ---------------------------------- GTIN ---------------------------------- */

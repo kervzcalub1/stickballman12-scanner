@@ -34,9 +34,13 @@ export const STOCKX_BASE = process.env.STOCKX_API_BASE || 'https://api.stockx.co
 const TOKEN_URL = process.env.STOCKX_TOKEN_URL || 'https://accounts.stockx.com/oauth/token';
 // StockX issues tokens per audience; the API sits behind the gateway audience.
 const TOKEN_AUDIENCE = process.env.STOCKX_AUDIENCE || 'gateway.stockx.com';
-// market-data takes an optional `country`; ours is a US business, and leaving it
-// implicit would let StockX pick the market for us.
-const COUNTRY = process.env.STOCKX_COUNTRY || 'US';
+// NO `country` parameter. The published OpenAPI spec still lists one as optional on
+// market-data, but the live API rejects it outright:
+//   400 · "The \"country\" query parameter is not supported anymore. Market data will
+//          be based on your market. Please try again without the country parameter"
+// Caught by scripts/probe-stockx.mjs on the first real call — a spec is a promise, not
+// a response. Don't re-add it from the docs.
+
 
 const PRODUCT_TTL = 12 * 60 * 60 * 1000; // catalogue: a shoe's id and size run don't move
 const MARKET_TTL = 10 * 60 * 1000;       // money: fresh enough to trade on, cheap enough to cache
@@ -191,7 +195,7 @@ export async function stockxVariantMarket(productId, variantId, currencyCode = '
   if (hit !== null) return hit;
   const { ok, data } = await sxGet(
     `/catalog/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}/market-data`,
-    { currencyCode, country: COUNTRY },
+    { currencyCode },
   );
   if (!ok) return null;
   const m = data || {};

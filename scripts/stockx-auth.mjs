@@ -20,6 +20,8 @@
 // Read-only against our own files: it prints, it never writes .env for you.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
 
 const envPath = path.join(process.cwd(), '.env');
 if (fs.existsSync(envPath)) {
@@ -42,9 +44,28 @@ const ok = (s) => `\x1b[32m${s}\x1b[0m`;
 const bad = (s) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s) => `\x1b[2m${s}\x1b[0m`;
 
+// PKCE. StockX's auth service is Auth0, which REQUIRES a code_challenge when the
+// application is registered as a public client and rejects the authorize call with a
+// bare `invalid_request` when it's missing — no hint as to which parameter. For a
+// confidential client (one with a secret, like ours) PKCE is merely allowed, so
+// sending it is safe in both cases and removes one whole class of failure.
+// The verifier has to survive between the two runs of this script, so it's parked in
+// a temp file rather than asked for twice.
+const PKCE_FILE = path.join(os.tmpdir(), 'stockx-pkce.json');
+const b64url = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
 const clientId = process.env.STOCKX_CLIENT_ID;
 const clientSecret = process.env.STOCKX_CLIENT_SECRET;
-const code = process.argv[2];
+const code = process.argv[2] === '--print' ? null : process.argv[2];
+
+// Deliberate, asked-for disclosure — the only way the token reaches Railway.
+if (process.argv.includes('--print')) {
+  const t = process.env.STOCKX_REFRESH_TOKEN;
+  if (!t) { console.log(bad('\nNo STOCKX_REFRESH_TOKEN in .env yet — run the two grant steps first.\n')); process.exit(1); }
+  console.log(`\nSTOCKX_REFRESH_TOKEN=${t}\n`);
+  console.log(dim('Paste into Railway → Variables. Clear your terminal afterwards.\n'));
+  process.exit(0);
+}
 
 if (!clientId || !clientSecret) {
   console.log(bad('\nSTOCKX_CLIENT_ID and STOCKX_CLIENT_SECRET must be set in .env first.'));
@@ -53,10 +74,15 @@ if (!clientId || !clientSecret) {
 }
 
 if (!code) {
+  const verifier = b64url(crypto.randomBytes(32));
+  const challenge = b64url(crypto.createHash('sha256').update(verifier).digest());
+  try { fs.writeFileSync(PKCE_FILE, JSON.stringify({ verifier, redirect: REDIRECT_URI }), { mode: 0o600 }); } catch { /* step 2 falls back to no PKCE */ }
   const url = `${AUTHORIZE_URL}?${new URLSearchParams({
     response_type: 'code',
     client_id: clientId,
     redirect_uri: REDIRECT_URI,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
     // offline_access is what makes StockX return a refresh token at all; openid is
     // required by OIDC. Drop either one and step 2 gives you an access token that
     // dies in 12 hours with no way to renew it.
@@ -86,12 +112,23 @@ if (!code) {
   process.exit(0);
 }
 
+// The verifier proves this exchange belongs to the same authorize call. Omitted if
+// step 1 couldn't write the temp file, which is still a valid request for a
+// confidential client.
+let pkce = null;
+try { pkce = JSON.parse(fs.readFileSync(PKCE_FILE, 'utf8')); } catch { /* none */ }
+if (pkce && pkce.redirect && pkce.redirect !== REDIRECT_URI) {
+  console.log(bad(`\nSTOCKX_REDIRECT_URI changed since step 1 (${pkce.redirect} → ${REDIRECT_URI}).`));
+  console.log(bad('Re-run step 1 — the code is bound to the redirect it was issued for.\n'));
+  process.exit(1);
+}
 const form = new URLSearchParams({
   grant_type: 'authorization_code',
   client_id: clientId,
   client_secret: clientSecret,
   code,
   redirect_uri: REDIRECT_URI,
+  ...(pkce?.verifier ? { code_verifier: pkce.verifier } : {}),
 });
 
 const r = await fetch(TOKEN_URL, {
@@ -115,9 +152,32 @@ if (!r.ok || !data?.refresh_token) {
   process.exit(1);
 }
 
-console.log(`\n${ok('Success.')} Put this line in your .env (and in Railway's variables):\n`);
-console.log(`  STOCKX_REFRESH_TOKEN=${data.refresh_token}\n`);
-console.log(dim(`access token also issued, expires in ${data.expires_in || '?'}s — not needed, the server mints its own.`));
-console.log(bad('\nTreat that refresh token like a password: it is long-lived and grants API access'));
-console.log(bad('as your StockX account. Never commit it, never paste it into a chat.\n'));
-console.log(`Then verify end to end:  ${bold('node scripts/probe-stockx.mjs DD1391-100 10')}\n`);
+try { fs.unlinkSync(PKCE_FILE); } catch { /* already gone */ }
+
+// Write it STRAIGHT into .env rather than printing it. A refresh token is a
+// long-lived credential: the moment it lands in a terminal it is in scrollback, and
+// from there in screenshots and chat logs. Printing it also cost us a whole grant
+// once — the value was masked out of the output before anything could store it, and
+// authorization codes are single-use, so it could not be recovered. `--print` exists
+// for the one legitimate case (copying it into Railway) and must be asked for.
+const envFile = path.join(process.cwd(), '.env');
+let wrote = false;
+try {
+  const cur = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+  const line = `STOCKX_REFRESH_TOKEN=${data.refresh_token}`;
+  const next = /^STOCKX_REFRESH_TOKEN=.*$/m.test(cur)
+    ? cur.replace(/^STOCKX_REFRESH_TOKEN=.*$/m, line)
+    : `${cur}${cur.endsWith('\n') || !cur ? '' : '\n'}${line}\n`;
+  fs.writeFileSync(envFile, next, { mode: 0o600 });
+  wrote = true;
+} catch (e) {
+  console.log(bad(`\nCould not write .env (${e.message}).`));
+}
+
+console.log(`\n${ok('Success.')} ${wrote ? 'STOCKX_REFRESH_TOKEN written to .env.' : 'Token obtained but NOT saved:'}`);
+if (!wrote) console.log(`  STOCKX_REFRESH_TOKEN=${data.refresh_token}`);
+console.log(dim(`An access token was issued too (expires in ${data.expires_in || '?'}s) — discarded, the server mints its own.`));
+console.log(`\nStill to do by hand: set the same value in ${bold("Railway's variables")} — run`);
+console.log(`  ${bold('node scripts/stockx-auth.mjs --print')}   to display it when you need to copy it there.`);
+console.log(bad('\nTreat it like a password: long-lived, grants API access as your StockX account.'));
+console.log(`\nVerify end to end:  ${bold('node scripts/probe-stockx.mjs DD1391-100 10')}\n`);

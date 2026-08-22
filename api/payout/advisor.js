@@ -105,7 +105,10 @@ HOW TO ANSWER:
 - Our own history above outranks any general intuition about the shoe. If we paid less
   before, or the last batch sat for months, lead with that.
 - If a number you need isn't on screen, say which one and stop. Never invent a price.
-- Talk like an experienced buyer to a colleague. No preamble, no disclaimers.`;
+- Talk like an experienced buyer to a colleague. No preamble, no disclaimers.
+- Plain prose. **Bold** is fine around the numbers that decide the answer, and \`code\`
+  for a SKU — the screen renders both. No headings, bullet lists or tables: those render
+  literally, as raw #s and dashes, in the small panel this appears in.`;
 }
 
 export default async function handler(req, res) {

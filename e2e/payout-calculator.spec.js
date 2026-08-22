@@ -320,3 +320,29 @@ test('the conversation is carried forward, and clears with the pair', async ({ p
   await page.getByRole('button', { name: 'Clear' }).click();
   await expect(page.locator('.pc-msg')).toHaveCount(0);
 });
+
+test('the advisor’s markdown renders — as elements, never as HTML', async ({ page }) => {
+  await openCalc(page);
+  await stubAdvisor(page, (route) => route.fulfill({ json: { ok: true, reply:
+    'Buy **1 pair**. At **$75.99** cost, `FZ9033-102` nets **$94.61** — <img src=x onerror=alert(1)> stays text.' } }));
+  await page.locator('.pc-chat-suggest button').first().click();
+  const body = page.locator('.pc-msg.assistant .pc-msg-body');
+  await expect(body.locator('strong')).toHaveCount(3);
+  await expect(body.locator('strong').first()).toHaveText('1 pair');
+  await expect(body.locator('code')).toHaveText('FZ9033-102');
+  // The asterisks are gone from the visible text…
+  await expect(body).not.toContainText('**');
+  // …and any HTML in model output is inert text, not a node. This is the one that
+  // matters: the advisor repeats strings from Alias, StockX and our own database.
+  await expect(body.locator('img')).toHaveCount(0);
+  await expect(body).toContainText('<img src=x onerror=alert(1)>');
+});
+
+test('what the USER typed is never re-interpreted as formatting', async ({ page }) => {
+  await openCalc(page);
+  await stubAdvisor(page, (route) => route.fulfill({ json: { ok: true, reply: 'ok' } }));
+  await page.locator('.pc-chat-ask input').fill('why **not** 2 pairs?');
+  await page.locator('.pc-chat-ask button').click();
+  // Their asterisks are asterisks — we only parse the advisor's own words.
+  await expect(page.locator('.pc-msg.user')).toContainText('why **not** 2 pairs?');
+});

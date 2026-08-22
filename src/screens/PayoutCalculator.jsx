@@ -97,6 +97,24 @@ function NumField({ label, value, onChange, prefix, suffix, placeholder = '0', h
   );
 }
 
+// The advisor writes markdown — mostly **bold** around the numbers that decide the
+// answer, occasionally `code`. Render that small slice as React ELEMENTS.
+//
+// Never as HTML. This is model output: `dangerouslySetInnerHTML` here would be an XSS
+// hole wearing a formatting hat, and the model is repeating strings that came from
+// Alias, StockX and our own database — none of which we control. Splitting on the
+// markers and returning <strong>/<code> gives the formatting with none of the risk.
+// Anything else (headings, bullets, tables) renders literally, which is why the system
+// prompt tells it to stick to prose.
+function RichText({ text }) {
+  const parts = String(text ?? '').split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g);
+  return parts.map((part, i) => {
+    if (/^\*\*[^*\n]+\*\*$/.test(part)) return <strong key={i}>{part.slice(2, -2)}</strong>;
+    if (/^`[^`\n]+`$/.test(part)) return <code key={i}>{part.slice(1, -1)}</code>;
+    return <React.Fragment key={i}>{part}</React.Fragment>;
+  });
+}
+
 function BreakRow({ label, value, sign, bold }) {
   return (
     <tr className={bold ? 'pc-break-total' : ''}>
@@ -531,7 +549,9 @@ export function PayoutCalculator({ onHome, onSignOut }) {
                 {chat.map((m, i) => (
                   <div className={`pc-msg ${m.role}`} key={i}>
                     <span className="pc-msg-who">{m.role === 'user' ? 'You' : m.role === 'error' ? 'Couldn’t answer' : 'Advisor'}</span>
-                    <span className="pc-msg-body">{m.content}</span>
+                    <span className="pc-msg-body">
+                      {m.role === 'assistant' ? <RichText text={m.content} /> : m.content}
+                    </span>
                   </div>
                 ))}
                 {asking && (

@@ -43,6 +43,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
 | Payout Calculator: store cost stack → Alias/StockX payout, profit, ROI, buy call | `docs/context/payout-calculator.md` |
 | The app-wide advisor: floating button, screen context, its five read-only tools | `docs/context/advisor.md` |
+| Sales history import (`sales_history`), velocity per style, dual-SKU matching | `docs/context/sales-history.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
 | Inventory browse, SKU-merge, bulk status, labels, **removing pairs + Deleted archive** | `docs/context/inventory.md` |
 | Costs page: backfilling a cost the supplier skipped, blank-vs-$0 | `docs/context/costs.md` |

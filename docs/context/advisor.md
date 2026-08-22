@@ -44,7 +44,7 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 ## The five tools — all reads
 | Tool | Answers | Source |
 |---|---|---|
-| `sku_history` | "have we sold this before, and what did we pay?" | `advisorSkuHistory` (db.js) |
+| `sku_history` | "have we sold this before, what did we pay, **how fast does it move?**" | `advisorSkuHistory` + `salesVelocity` (db.js) |
 | `find_stock` | "do we have it, and which shelf?" | `findStockByCode` |
 | `pending_work` | "what are we behind on?" | `pendingCounts` |
 | `search_sop` | "how do I…?" / "what's the rule about…?" | `searchSop` (lib/sop) |
@@ -59,6 +59,16 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 - **`MAX_TOOL_HOPS = 4`**, and the last hop drops the tools entirely — that forces an
   answer rather than a fifth lookup the user is still waiting on.
 - Tool results are trimmed before they enter the prompt (25 pairs, 3 SOP hits, 14 steps).
+
+### Sales velocity — measured, not estimated
+`sku_history` returns two halves: `inventory` (what we hold and paid) and `sales` (how
+fast the style actually sells, from `sales_history` — see `sales-history.md`). The second
+is the one the prompt tells him to trust over a hand-picked liquidity: *"you've marked it
+weekly, but it's sold 16 in the last 30 days"*.
+
+**Two kinds of "no", kept apart.** No export loaded on this server → `salesVelocity`
+returns `null` → the tool says the velocity is **unknown**. Export loaded but this style
+never sold → a real zero. Conflating them talks someone out of a good buy.
 
 ## The prompt
 Identity, the live screen, the rules, then how to answer. The rules are **injected**:

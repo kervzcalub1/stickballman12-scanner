@@ -28,7 +28,7 @@
 //    where" is the question, and that data is already on the Inventory screen every one
 //    of these roles can open.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { advisorSkuHistory, findStockByCode, pendingCounts, dbConfigured } from '../_lib/db.js';
+import { advisorSkuHistory, findStockByCode, pendingCounts, salesVelocity, dbConfigured } from '../_lib/db.js';
 import { priceInquiryForSkuSizes } from '../_lib/intake.js';
 import { stockxConfigured, stockxPriceForSkuSize } from '../_lib/stockx.js';
 import { DEFAULT_FEE_PCT, BUY_MIN_PROFIT, BUY_MIN_ROI } from '../../src/lib/payout.js';
@@ -55,7 +55,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'sku_history',
-      description: 'What WE know about a shoe: pairs on hand, units sold all-time and in the last 90 days, the median days from receiving to sold, and what we last and typically paid. Use this before any opinion about whether a shoe is worth buying or how fast it moves.',
+      description: 'What WE know about a shoe. Two things at once: our INVENTORY (pairs on hand, what we last and typically paid, median days from receiving to sold) and our real SALES VELOCITY from the platform sales export (units sold in the last 30 and 90 days, sales per week, and the liquidity band that implies). Use this before any opinion about whether a shoe is worth buying or how fast it moves — the velocity figure is measured, not estimated.',
       parameters: {
         type: 'object',
         properties: {
@@ -136,8 +136,16 @@ async function runTool(name, args, user) {
   switch (name) {
     case 'sku_history': {
       if (!dbConfigured() || !sku) return { error: 'no sku given' };
-      const h = await advisorSkuHistory(sku, size);
-      return h || { note: 'we have never held this SKU' };
+      const [held, sales] = await Promise.all([advisorSkuHistory(sku, size), salesVelocity(sku)]);
+      return {
+        inventory: held || { note: 'we have never held this SKU' },
+        // Two different kinds of "no": the export isn't loaded at all, versus it IS
+        // loaded and this style has never sold. The first is missing data, the second
+        // is a finding — conflating them talks someone out of a good buy.
+        sales: sales
+          ? { ...sales, note: sales.sold_total === 0 ? 'never sold in the covered window' : undefined }
+          : { note: 'no sales export loaded on this server — say the velocity is unknown, do not guess it' },
+      };
     }
     case 'find_stock': {
       const code = String(args?.code || '').trim();
@@ -259,6 +267,9 @@ HOW TO ANSWER:
 - Two to four sentences for a simple question. Longer only when the analysis earns it.
 - Our own history outranks any general intuition about a shoe. If we paid less before,
   or the last batch sat for months, lead with that.
+- Judge how fast it sells on the MEASURED velocity from sku_history, not on the liquidity
+  someone picked by hand on the screen. Where they disagree, say so — "you've marked it
+  weekly, but it's sold 16 in the last 30 days" is exactly what this is for.
 - Talk like an experienced colleague. No preamble, no disclaimers, no offers to help further.
 - Don't sign off, don't greet, and don't introduce yourself unless asked — this is a
   running thread, not a series of letters.

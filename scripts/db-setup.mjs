@@ -724,8 +724,34 @@ await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFA
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id)`);
 await sql(`CREATE INDEX IF NOT EXISTS batches_po_idx ON batches (po_id)`);
 
+/* ------------------------------------------------------------------ */
+/* Sales history — the platform sales export, one row per sale.        */
+/*                                                                     */
+/* Answers "how fast does this actually move", which nothing else here */
+/* can: items.status only tells us about pairs that went through our   */
+/* own flow. Loaded by scripts/import-sales.mjs from the Sales Report  */
+/* CSV (Style ID, Sale Date).                                          */
+/*                                                                     */
+/* `codes` is the style ID SPLIT on "/" — the export writes dual SKUs   */
+/* as "315115-112/DD8959-100" (561 of 18,721 rows in the first file),  */
+/* and a lookup for either half has to find the sale. One row per sale */
+/* still, so nothing is double-counted; the array is just the index.   */
+await sql(`
+  CREATE TABLE IF NOT EXISTS sales_history (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    style_id    TEXT NOT NULL,        -- exactly as exported, dual SKUs included
+    codes       TEXT[] NOT NULL,      -- style_id split on "/", upper-cased
+    sale_date   DATE NOT NULL,
+    source_file TEXT,                 -- which export this row came from
+    imported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS sales_history_codes_idx ON sales_history USING GIN (codes)`);
+await sql(`CREATE INDEX IF NOT EXISTS sales_history_date_idx  ON sales_history (sale_date)`);
+
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);
 const { rows: [{ po }] } = await sql(`SELECT count(*)::int AS po FROM purchase_orders`);
-console.log(`✓ Tables ready. users: ${count}, batches: ${b}, purchase_orders: ${po}`);
+const { rows: [{ sh }] } = await sql(`SELECT count(*)::int AS sh FROM sales_history`);
+console.log(`✓ Tables ready. users: ${count}, batches: ${b}, purchase_orders: ${po}, sales rows: ${sh}`);
 await pool.end();

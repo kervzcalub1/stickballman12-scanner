@@ -395,6 +395,46 @@ export async function advisorSkuHistory(sku, size = null) {
   return rows[0] || null;
 }
 
+// How fast a style ACTUALLY sells, from the platform sales export (`sales_history`,
+// loaded by scripts/import-sales.mjs). This is the honest answer to "is it a fast
+// mover" — `advisorSkuHistory` can only see pairs that went through our own status
+// flow, while this counts every sale.
+//
+// Matching is on `codes`, the style ID split on "/", so a lookup for DD8959-100 finds
+// a sale exported as "315115-112/DD8959-100" — and finds it once, because the row is
+// still one row.
+//
+// Windows are EST, like every date filter in this app: `current_date` would follow the
+// host's clock, and the PH team's day is a day ahead of the one we file sales under.
+export async function salesVelocity(sku) {
+  const code = String(sku || '').trim().toUpperCase();
+  if (!code) return null;
+  const rows = await db()`
+    WITH today AS (SELECT (now() AT TIME ZONE 'America/New_York')::date AS d),
+    mine AS (SELECT sale_date FROM sales_history WHERE ${code} = ANY(codes))
+    SELECT
+      (SELECT count(*)::int FROM mine)                                        AS sold_total,
+      (SELECT count(*)::int FROM mine, today WHERE sale_date > d - 30)        AS sold_30d,
+      (SELECT count(*)::int FROM mine, today WHERE sale_date > d - 90)        AS sold_90d,
+      (SELECT min(sale_date) FROM mine)                                       AS first_sale,
+      (SELECT max(sale_date) FROM mine)                                       AS last_sale,
+      (SELECT min(sale_date) FROM sales_history)                              AS data_from,
+      (SELECT max(sale_date) FROM sales_history)                              AS data_to
+  `;
+  const r = rows[0];
+  // No sales_history at all is a DIFFERENT answer from "this style never sold", and the
+  // advisor must be able to tell them apart — one is missing data, the other is a fact.
+  if (!r || !r.data_from) return null;
+  const perWeek30 = r.sold_30d / (30 / 7);
+  return {
+    ...r,
+    per_week: Math.round(perWeek30 * 10) / 10,
+    // The same three bands the calculator's liquidity picker offers, so a suggestion
+    // here can fill that field without translation.
+    liquidity: perWeek30 >= 7 ? 'daily' : perWeek30 >= 1 ? 'weekly' : 'monthly',
+  };
+}
+
 /* ---------------------- Distributed lock (mutex) ---------------------- */
 // Atomic acquire: insert the key, or steal it if the prior holder's lease
 // expired. Returns true if acquired. One round trip, safe over the HTTP driver.

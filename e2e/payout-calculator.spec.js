@@ -236,3 +236,87 @@ test('the basis survives a refresh, like the shoe does', async ({ page }) => {
   await page.locator('.pi-sku-input').press('Enter'); // re-resolve the shoe after reload
   await expect(page.locator('.seg-btn', { hasText: 'Consigned' })).toHaveAttribute('aria-pressed', 'true');
 });
+
+/* ------------------------------------------------------------------ */
+/* The advisor. Stubbed: what matters here is WHAT WE SEND it and how   */
+/* the screen behaves around it — the model's own answers aren't ours   */
+/* to assert.                                                           */
+/* ------------------------------------------------------------------ */
+
+async function stubAdvisor(page, handler) {
+  await page.route('**/api/payout/advisor', handler);
+}
+
+test('the advisor is told the numbers actually on screen', async ({ page }) => {
+  await openCalc(page);
+  let sent = null;
+  await stubLookup(page, { ok: true, configured: true, results: [ALIAS_ROW], stockx: { configured: false, results: [] } });
+  await stubAdvisor(page, (route) => {
+    sent = route.request().postDataJSON();
+    return route.fulfill({ json: { ok: true, reply: 'Pass — thin margin.' } });
+  });
+  await pickSize(page);
+  await page.locator('.pc-market-cell', { hasText: 'Lowest ask' }).click();
+  await field(page, 'Shelf price').fill('100');
+  await page.locator('.seg-btn', { hasText: 'Weekly' }).click();
+  await page.locator('.pc-chat-suggest button', { hasText: 'Is this a good buy?' }).click();
+  await expect(page.locator('.pc-msg.assistant')).toContainText('Pass — thin margin.');
+
+  // The shoe, the size, the basis and the liquidity the user picked.
+  expect(sent.context.sku).toBe('DD1391-100');
+  expect(sent.context.size).toBe('10');
+  expect(sent.context.basis).toBe('with_you');
+  expect(sent.context.liquidity).toBe('weekly');
+  // The cost it must reason from, and the payout it must not re-derive wrongly.
+  expect(sent.context.cost.finalCost).toBeCloseTo(100, 2);
+  const alias = sent.context.payouts.find((p) => p.label === 'Alias');
+  expect(alias.salePrice).toBe(130);
+  expect(alias.payout).toBeCloseTo(130 * 0.901, 2);
+  // And the call the screen is currently showing, so the two can't contradict.
+  // $130 − 9.9% = $117.13 payout − $100 cost = $17.13 at 17.1% ROI: both thresholds
+  // cleared, so this is a Buy.
+  expect(sent.context.verdict).toContain('Buy');
+  expect(sent.messages).toEqual([{ role: 'user', content: 'Is this a good buy?' }]);
+});
+
+test('an unconfigured server retires the panel instead of erroring at you', async ({ page }) => {
+  await openCalc(page);
+  await stubAdvisor(page, (route) => route.fulfill({
+    status: 503, json: { ok: false, error: 'The advisor isn’t configured on this server (no model key).' },
+  }));
+  await page.locator('.pc-chat-suggest button').first().click();
+  await expect(page.getByText(/isn’t configured on this server/)).toBeVisible();
+  // A setup fact, not a failed question — so no error bubble is left in the transcript.
+  await expect(page.locator('.pc-msg')).toHaveCount(0);
+  await expect(page.locator('.pc-chat-ask')).toHaveCount(0);
+});
+
+test('a failed answer shows as a failure, never as advice', async ({ page }) => {
+  await openCalc(page);
+  await stubAdvisor(page, (route) => route.fulfill({
+    status: 502, json: { ok: false, error: 'The advisor couldn’t answer just now.' },
+  }));
+  await page.locator('.pc-chat-suggest button').first().click();
+  await expect(page.locator('.pc-msg.error')).toContainText('couldn’t answer');
+  // The question stays on screen so it can be retried.
+  await expect(page.locator('.pc-msg.user')).toHaveCount(1);
+});
+
+test('the conversation is carried forward, and clears with the pair', async ({ page }) => {
+  await openCalc(page);
+  let lastSent = null;
+  await stubAdvisor(page, (route) => {
+    lastSent = route.request().postDataJSON();
+    return route.fulfill({ json: { ok: true, reply: `answer ${lastSent.messages.length}` } });
+  });
+  await page.locator('.pc-chat-suggest button', { hasText: 'Is this a good buy?' }).click();
+  await expect(page.locator('.pc-msg.assistant')).toHaveCount(1);
+  await page.locator('.pc-chat-ask input').fill('And at $20 less?');
+  await page.locator('.pc-chat-ask button').click();
+  // Turn two carries the whole thread — otherwise "and at $20 less?" means nothing.
+  await expect.poll(() => lastSent.messages.length).toBe(3);
+  await expect(page.locator('.pc-msg.user')).toHaveCount(2);
+  // Clear wipes it: a conversation about one pair's margin must not follow the next shoe.
+  await page.getByRole('button', { name: 'Clear' }).click();
+  await expect(page.locator('.pc-msg')).toHaveCount(0);
+});

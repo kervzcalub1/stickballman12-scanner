@@ -347,6 +347,54 @@ export async function recomputeUnlistedPrices(oldMult, newMult) {
   return rows.length;
 }
 
+// What WE know about a SKU, for the Payout Calculator's advisor. This is the half of
+// the picture the tool we ported from cannot have: they run on external APIs alone,
+// we have five months of our own buying and selling behind the same shoe.
+//
+// Deliberately aggregate — counts, averages, medians. No VINs, no batch codes, no
+// people: this goes into a prompt sent to a third-party model, so it carries what
+// informs a buy decision and nothing that identifies a person or a shipment.
+//
+// All batch kinds count, in-store and existing stock included: we paid for those pairs
+// too, and "what did we last pay for this" is the question being answered.
+export async function advisorSkuHistory(sku, size = null) {
+  const s = String(sku || '').trim();
+  if (!s) return null;
+  const sz = String(size || '').trim() || null;
+  const rows = await db()`
+    WITH ours AS (
+      SELECT i.id, i.size, i.cost, i.status, i.created_at
+      FROM items i WHERE upper(i.sku) = upper(${s})
+    ),
+    gone AS (
+      SELECT o.id, o.created_at,
+             (SELECT max(e.created_at) FROM item_events e
+               WHERE e.item_id = o.id AND e.type = 'status_change'
+                 AND e.details->>'status' IN ('sold', 'shipped')) AS gone_at
+      FROM ours o WHERE o.status IN ('sold', 'shipped')
+    )
+    SELECT
+      (SELECT count(*)::int FROM ours
+        WHERE status NOT IN ('sold','shipped','missing','issue')) AS on_hand,
+      (SELECT count(*)::int FROM ours
+        WHERE status NOT IN ('sold','shipped','missing','issue')
+          AND (${sz}::text IS NULL OR size = ${sz})) AS on_hand_size,
+      (SELECT count(*)::int FROM ours WHERE status IN ('sold','shipped')) AS sold_total,
+      (SELECT count(*)::int FROM gone WHERE gone_at > now() - interval '90 days') AS sold_90d,
+      (SELECT round(avg(cost), 2) FROM ours WHERE cost IS NOT NULL AND cost > 0) AS avg_cost,
+      (SELECT cost FROM ours WHERE cost IS NOT NULL AND cost > 0
+        ORDER BY created_at DESC LIMIT 1) AS last_cost,
+      -- EST, like every other date this app prints.
+      (SELECT (created_at AT TIME ZONE 'America/New_York')::date FROM ours
+        WHERE cost IS NOT NULL AND cost > 0 ORDER BY created_at DESC LIMIT 1) AS last_cost_on,
+      -- Median, not mean: one pair that sat for a year would otherwise libel the SKU.
+      (SELECT round(percentile_cont(0.5) WITHIN GROUP (
+                ORDER BY EXTRACT(EPOCH FROM (gone_at - created_at)) / 86400)::numeric, 0)
+         FROM gone WHERE gone_at IS NOT NULL) AS median_days_to_sell
+  `;
+  return rows[0] || null;
+}
+
 /* ---------------------- Distributed lock (mutex) ---------------------- */
 // Atomic acquire: insert the key, or steal it if the prior holder's lease
 // expired. Returns true if acquired. One round trip, safe over the HTTP driver.

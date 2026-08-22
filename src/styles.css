@@ -3248,3 +3248,21 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 }
 /* Alias basis toggle — sits with the size chips because it governs what a tap fetches. */
 .pc-basis { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+
+/* Payout advisor — a chat that reads the calculation above it. */
+.pc-chat { display: flex; flex-direction: column; gap: 10px; }
+.pc-chat-log {
+  display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 10px;
+}
+.pc-msg { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 10px; }
+.pc-msg.user { background: rgba(79, 124, 255, 0.10); border: 1px solid rgba(79, 124, 255, 0.22); }
+.pc-msg.assistant { background: var(--panel); border: 1px solid var(--border); }
+.pc-msg.error { background: rgba(255, 107, 107, 0.10); border: 1px solid rgba(255, 107, 107, 0.3); }
+.pc-msg-who { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
+/* Keep the model's line breaks — it lays out arithmetic across lines. */
+.pc-msg-body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.pc-chat-suggest { display: flex; flex-wrap: wrap; gap: 8px; }
+.pc-chat-ask { display: flex; gap: 8px; }
+.pc-chat-ask input { flex: 1; min-width: 0; }
+.pc-chat-ask .btn { flex: none; }

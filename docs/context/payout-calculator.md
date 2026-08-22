@@ -101,6 +101,41 @@ want them.
   lie when the StockX box is simply empty.
 - **Best platform = most profit**, counting only platforms with a sale price entered.
 
+## The advisor (`api/payout/advisor.js`)
+A chat panel at the foot of the screen that can see the calculation **and what our own
+inventory knows about the SKU**, and will argue about whether to buy. Ported in spirit
+from the source engine's "AI Advisor"; three things are done differently.
+
+1. **The rules are injected, never written as prose.** The fee defaults and the
+   Buy/Watch/Pass thresholds come from `src/lib/payout.js` — the same module the screen
+   computes with. The source typed *"StockX fees: 10%… a strong deal is 30%+ ROI"* into
+   the prompt, which holds until someone changes a constant and the advisor keeps
+   quoting last month's numbers. Here they cannot drift.
+2. **It sees our history**, which the source cannot: `advisorSkuHistory` (db.js) returns
+   pairs on hand (total and in this size), units sold all-time and in 90 days, median
+   days from receiving to sold, and what we last/typically paid. That turns *"is 13.8%
+   ROI good?"* into *"you paid $88 for this in June and it sat 40 days."*
+   **Aggregate only** — counts, averages, a median. No VINs, no batch codes, no people:
+   this payload goes to a third-party model.
+3. **It is optional and says so.** No `OPENAI_API_KEY` → 503 → the panel retires itself
+   with the server's message instead of leaving an error bubble. Nothing else on the
+   calculator depends on it.
+
+- Model: `PAYOUT_AI_MODEL`, default `gpt-5.4-mini`. Verified working against the account
+  key. Provider is OpenAI because the key already exists here (SOP narration uses it);
+  swapping to Claude means an `ANTHROPIC_API_KEY` and a different call shape.
+- Gated to the same roles as the calculator, rate-limited to **12/min** (each turn costs
+  money), 20 turns of history, 4,000 chars a message.
+- Failure modes are distinguished on screen: *not configured* retires the panel,
+  *couldn't answer* renders as an error bubble with the question kept so it can be
+  retried. Neither is ever dressed up as advice.
+- The conversation lives in memory only — not the URL, not prefs — and **clears with
+  Clear**: a thread about one pair's margin must not follow the next shoe.
+- Verified live end to end on FZ9033-102 size 11: screen said *Pass, $11.45 profit,
+  13.8% ROI*; the advisor answered *"Pass. At Alias, $105 − 9.9% = $94.60 payout, and
+  after the $83.16 landed cost that's only about $11.44 profit, or 13.8% ROI — below our
+  $15 / 15% buy threshold."* Same numbers, our thresholds.
+
 ## Roles — and the one deliberate exception
 Admin + **warehouse** + PH. Every *other* pricing surface is PH + admin, because the
 warehouse doesn't set prices; `api/ph/price-inquiry.js` stays PH + admin. The

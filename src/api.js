@@ -188,6 +188,9 @@ export const api = {
   // Same engine as phPriceInquiry, but reachable by the WAREHOUSE too — the Payout
   // Calculator is used standing in a store deciding whether to buy (api/payout/quote.js).
   payoutQuote: (sku, sizes, consigned = true) => post('/api/payout/quote', { sku, sizes, consigned }),
+  // The calculator's buying advisor. 503 when no model key is set on the server —
+  // the screen shows that inline rather than pretending the panel isn't there.
+  payoutAdvisor: (messages, context) => post('/api/payout/advisor', { messages, context }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
   // Remove pairs outright (miscount fix). Archived to deleted_items first; the
   // server refuses sold/shipped and returns them as `blocked`.

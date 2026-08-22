@@ -27,6 +27,14 @@ const quoted = (v) => (v == null || Number(v) <= 0 ? null : Number(v));
 const pct = (v) => `${Number(v || 0).toFixed(1)}%`;
 
 const CALL_LABEL = { buy: 'Buy', watch: 'Watch', pass: 'Pass' };
+// Openers, so an empty panel isn't a blank box asking to be impressed. They're the
+// three questions the screen can't answer on its own: a judgement, a counterfactual,
+// and a comparison.
+const ASK_SUGGESTIONS = [
+  'Is this a good buy?',
+  'What if I get it $20 cheaper?',
+  'Which platform should I sell on?',
+];
 const RISK_LABEL = { low: 'Low', medium: 'Medium', high: 'High', loss: 'Loss' };
 
 // The market numbers a size can be priced at, in the order they answer "what would
@@ -145,6 +153,13 @@ export function PayoutCalculator({ onHome, onSignOut }) {
   const [feeOverride, setFeeOverride] = useState({ alias: '', stockx: '' });
   const [liquidity, setLiquidity] = useState('');
 
+  // The advisor. Kept out of the URL and out of prefs: a conversation about one pair's
+  // margin is not state anyone wants restored on the next shoe.
+  const [chat, setChat] = useState([]);          // [{ role, content }]
+  const [asking, setAsking] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [advisorOff, setAdvisorOff] = useState('');  // set when the server has no model key
+
   const breakdown = useMemo(() => calcCostBreakdown({
     shelfPrice,
     storePct: rates.storePct, promoPct: rates.promoPct, giftPct: rates.giftPct,
@@ -218,10 +233,58 @@ export function PayoutCalculator({ onHome, onSignOut }) {
     if (size && product?.sku) tapSize(size, next);
   }
 
+  // Everything the advisor is allowed to see. Built fresh per question so it always
+  // describes the screen as it is now, not as it was when the panel was opened.
+  function advisorContext() {
+    const priced = payouts.filter((p) => p.salePrice > 0);
+    return {
+      sku: product?.sku || null,
+      name: product?.name || null,
+      size: size || null,
+      basis,
+      cost: {
+        shelf: shelfPrice, storePct: rates.storePct, promoPct: rates.promoPct,
+        giftPct: rates.giftPct, couponAmt, cashbackPct: rates.cashbackPct,
+        taxPct: rates.taxPct, tipAmt, shippingAmt, finalCost: breakdown.finalCost,
+      },
+      payouts: payouts.map((p) => ({
+        label: p.label, salePrice: p.salePrice, feePct: p.feePct,
+        payout: p.payout, profit: p.profit, roi: p.roi,
+      })),
+      market: {
+        alias: hasMarket ? MARKET_COLS.map(([k, l]) => `${l} ${quoted(market[k]) ? money(quoted(market[k])) : '—'}`).join(', ') : null,
+        stockx: sxRow ? SX_MARKET_COLS.map(([k, l]) => `${l} ${quoted(sxRow[k]) ? money(quoted(sxRow[k])) : '—'}`).join(', ') : null,
+      },
+      liquidity,
+      verdict: verdict
+        ? `${CALL_LABEL[verdict.call]} — best on ${verdict.best.label}, profit ${money(verdict.best.profit)}, ROI ${pct(verdict.best.roi)}, risk ${RISK_LABEL[verdict.risk]}`
+        : (priced.length ? null : 'not enough entered for a call yet'),
+    };
+  }
+
+  async function ask(text) {
+    const q = String(text ?? question).trim();
+    if (!q || asking) return;
+    // The question goes on screen immediately; the reply lands beside it.
+    const next = [...chat, { role: 'user', content: q }];
+    setChat(next); setQuestion(''); setAsking(true); setAdvisorOff('');
+    try {
+      const res = await api.payoutAdvisor(next, advisorContext());
+      setChat([...next, { role: 'assistant', content: res.reply }]);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      // 503 means "no model key on this server" — a setup fact, not a failed question,
+      // so it retires the panel instead of sitting in the transcript as an error bubble.
+      if (err.status === 503) { setAdvisorOff(err.message); setChat(chat); return; }
+      setChat([...next, { role: 'error', content: err.message }]);
+    } finally { setAsking(false); }
+  }
+
   function resetPair() {
     setShelfPrice(''); setCouponAmt(''); setTipAmt(''); setShippingAmt('');
     setSale({ alias: '', stockx: '' }); setFeeOverride({ alias: '', stockx: '' });
     setLiquidity(''); setMarket(null); setSx(null); setSize(''); setProduct(null); setSkuInput('');
+    setChat([]); setQuestion('');
     setError(''); setNotConfigured(false);
   }
 
@@ -456,6 +519,50 @@ export function PayoutCalculator({ onHome, onSignOut }) {
         <p className="pc-note muted sm">
           “Buy” needs both: at least {money(BUY_MIN_PROFIT)} profit a pair and {pct(BUY_MIN_ROI)} ROI. One of the two is a “Watch”.
         </p>
+
+        {/* 5 — the advisor */}
+        <h3 className="pc-h">Advisor <span className="muted sm">sees this screen, and what we’ve paid for this SKU before</span></h3>
+        {advisorOff ? (
+          <p className="muted sm">{advisorOff}</p>
+        ) : (
+          <div className="pc-chat">
+            {chat.length > 0 && (
+              <div className="pc-chat-log">
+                {chat.map((m, i) => (
+                  <div className={`pc-msg ${m.role}`} key={i}>
+                    <span className="pc-msg-who">{m.role === 'user' ? 'You' : m.role === 'error' ? 'Couldn’t answer' : 'Advisor'}</span>
+                    <span className="pc-msg-body">{m.content}</span>
+                  </div>
+                ))}
+                {asking && (
+                  <div className="pc-msg assistant">
+                    <span className="pc-msg-who">Advisor</span>
+                    <span className="pc-msg-body muted">Thinking…</span>
+                  </div>
+                )}
+              </div>
+            )}
+            {chat.length === 0 && (
+              <div className="pc-chat-suggest">
+                {ASK_SUGGESTIONS.map((q) => (
+                  <button type="button" key={q} className="btn ghost sm" disabled={asking} onClick={() => ask(q)}>{q}</button>
+                ))}
+              </div>
+            )}
+            <form className="pc-chat-ask" onSubmit={(e) => { e.preventDefault(); ask(); }}>
+              <input type="text" value={question} disabled={asking}
+                onChange={(e) => setQuestion(e.target.value)}
+                placeholder={product ? 'Ask about this pair…' : 'Ask anything — load a shoe for sharper answers'}
+                aria-label="Ask the advisor" />
+              <button type="submit" className="btn" disabled={asking || !question.trim()}>
+                {asking ? '…' : 'Ask'}
+              </button>
+            </form>
+            <p className="pc-note muted sm">
+              Answers use the numbers on this screen. It can be wrong — the arithmetic above is the source of truth.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

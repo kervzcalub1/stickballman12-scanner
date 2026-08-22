@@ -107,6 +107,22 @@ deliberately: a stale thread costs tokens on every turn and is rarely what anyon
 back. **Clear** empties it on demand.
 
 ## Rendering
+**Markdown-lite**: `**bold**`, `` `code` ``, and short bullet lists (`- `). Lists matter
+more than they look — *"sizes 8: 4, 8.5: 6, 9: 5, 9.5: 2, 10: 1…"* is a wall to read,
+and one per line is a glance. No headings or tables; they'd render literally.
+
+**The stock caveat is attached by the UI, not asked of the model.** When a reply's
+`used` includes `stock_status`, the panel appends the fixed line under it. A caveat that
+has to appear *every* time a stock figure does cannot depend on the model remembering it
+under pressure — and this way the wording never drifts. It is deliberately NOT attached
+to other answers: a caveat on everything is a caveat nobody reads.
+
+**Closing it.** The FAB used to double as the close control, which works on desktop
+where it sits beside the panel and **traps you on a phone**, where the bottom sheet
+covers it. There is now a ✕ in the header at every size, plus a tappable backdrop on
+small screens, and the FAB hides while the sheet is open rather than lurking underneath
+as an invisible tap target. Three tests cover it.
+
 Assistant replies are markdown-lite — `**bold**` and `` `code` `` — rendered as **React
 elements, never HTML**. `dangerouslySetInnerHTML` here would be an XSS hole wearing a
 formatting hat: the advisor quotes strings from Alias, StockX, our database and our SOPs.

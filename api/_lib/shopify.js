@@ -234,7 +234,10 @@ export async function shopifyInventoryForSku(sku) {
     const out = r.denied
       ? { permission: 'Shopify inventory needs the read_products / read_inventory scopes, which this token does not have. Say the quantity is unavailable — do not report zero.' }
       : { error: 'Shopify inventory lookup failed' };
-    cacheSet(cacheKey, out, 5 * 60 * 1000);
+    // 60s, not the 5 minutes this used to be. A permissions failure gets fixed within
+    // seconds of someone noticing it, and caching the refusal makes the fix look like
+    // it didn't work — which is exactly how an afternoon gets lost.
+    cacheSet(cacheKey, out, 60 * 1000);
     return out;
   }
   const rows = (r.data?.productVariants?.edges || []).map((e) => e.node);

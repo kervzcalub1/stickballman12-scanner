@@ -145,6 +145,45 @@ test('the thread carries forward, and Clear wipes it', async ({ page }) => {
   await expect(panel(page).locator('.ah-msg')).toHaveCount(0);
 });
 
+test('bullet lists render as a list, not as literal dashes', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stub(page, reply('36 pairs in Shopify:\n- **8**: 4\n- **8.5**: 6\n- **13**: 7\n\nMostly small sizes.'));
+  await page.goto('/');
+  await fab(page).click();
+  await panel(page).locator('.advisor-ask input').fill('stock?');
+  await panel(page).locator('.advisor-ask button').click();
+  const body = panel(page).locator('.ah-msg.assistant .ah-body');
+  await expect(body.locator('.ah-list li')).toHaveCount(3);
+  await expect(body.locator('.ah-list li').first()).toHaveText('8: 4');
+  // The dashes are gone from the text, and the trailing paragraph is its own block.
+  await expect(body).not.toContainText('- **8**');
+  await expect(body.locator('.ah-p')).toHaveCount(2);
+});
+
+test('the stock caveat is attached by the UI, not left to the model', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  // The model says NOTHING about physical counts — the panel must add it anyway.
+  await stub(page, (route) => route.fulfill({ json: { ok: true, reply: '36 pairs.', used: ['stock_status'] } }));
+  await page.goto('/');
+  await fab(page).click();
+  await panel(page).locator('.advisor-ask input').fill('how many do we have?');
+  await panel(page).locator('.advisor-ask button').click();
+  await expect(panel(page).locator('.ah-caveat')).toContainText('Not a physical count');
+  await expect(panel(page).locator('.ah-caveat')).toContainText('Ask the warehouse');
+});
+
+test('and it is NOT attached to answers that carry no stock figure', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stub(page, (route) => route.fulfill({ json: { ok: true, reply: 'Scan the shelf first.', used: ['search_sop'] } }));
+  await page.goto('/');
+  await fab(page).click();
+  await panel(page).locator('.advisor-ask input').fill('how do I shelve?');
+  await panel(page).locator('.advisor-ask button').click();
+  await expect(panel(page).locator('.ah-msg.assistant')).toBeVisible();
+  // A caveat on every answer is a caveat nobody reads.
+  await expect(panel(page).locator('.ah-caveat')).toHaveCount(0);
+});
+
 test('markdown renders as elements — model output is never HTML', async ({ page }) => {
   await loginAs(page, 'warehouse');
   await stub(page, reply('Buy **1 pair** of `DD1391-100` — <img src=x onerror=alert(1)> stays text.'));
@@ -192,4 +231,47 @@ test('his messages carry his name and an EST time', async ({ page }) => {
   // estClock formats America/New_York to the minute — the browser clock is irrelevant
   // here by design, and seconds are noise in a thread.
   await expect(panel(page).locator('.ah-msg.assistant .ah-time')).toHaveText(/^\d{1,2}:\d{2}\s?(AM|PM)$/);
+});
+
+/* ------------------------------------------------------------------ */
+/* Getting out of it. On a phone the sheet covers the FAB, so the FAB   */
+/* cannot be the only way to close — that was a genuine trap.           */
+/* ------------------------------------------------------------------ */
+
+test('the header ✕ closes it, on any screen size', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await page.goto('/');
+  for (const size of [{ width: 1200, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(size);
+    await fab(page).click();
+    await expect(panel(page)).toBeVisible();
+    await panel(page).getByRole('button', { name: 'Close' }).click();
+    await expect(panel(page), `stuck open at ${size.width}px`).toHaveCount(0);
+  }
+});
+
+test('on a phone the backdrop closes it, and the FAB is not left underneath', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await fab(page).click();
+  await expect(panel(page)).toBeVisible();
+  // The sheet covers the FAB, so leaving it rendered is an invisible tap target.
+  await expect(fab(page)).toBeHidden();
+  await page.locator('.advisor-backdrop').click({ position: { x: 195, y: 80 } });
+  await expect(panel(page)).toHaveCount(0);
+  await expect(fab(page)).toBeVisible();
+});
+
+test('the panel fits a phone without pushing the page sideways', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await fab(page).click();
+  const box = await panel(page).boundingBox();
+  expect(box.width).toBeLessThanOrEqual(390);
+  expect(box.height).toBeLessThanOrEqual(844 * 0.85);
+  // Warehouse staff live on phones; a horizontal scrollbar on the body is a bug here.
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
 });

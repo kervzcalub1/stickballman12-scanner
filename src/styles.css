@@ -3353,3 +3353,46 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* Why the liquidity band says what it says. */
 .pc-liq-why { flex-basis: 100%; }
 .pc-liq-why strong { color: var(--text); }
+/* Alex Head's answers: paragraphs, short lists, and the stock caveat. */
+.ah-body .ah-p { margin: 0 0 6px; }
+.ah-body .ah-p:last-child { margin-bottom: 0; }
+.ah-list { margin: 2px 0 6px; padding-left: 16px; list-style: disc; }
+.ah-list li { margin: 1px 0; }
+/* Attached by the UI under every stock answer, so it can't be forgotten or reworded. */
+.ah-caveat {
+  display: block; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border);
+  font-size: 11px; line-height: 1.45; color: var(--muted);
+}
+
+/* Closing the panel. The FAB used to double as the close control — fine on desktop
+   where it sits beside the panel, a trap on a phone where the bottom sheet covers it
+   completely. So: an explicit ✕ in the header, plus a tappable backdrop. */
+.advisor-close {
+  flex: none; width: 28px; height: 28px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  font-size: 13px; line-height: 1; cursor: pointer;
+}
+.advisor-close:hover { color: var(--text); border-color: var(--primary); }
+.advisor-head .btn.ghost.sm { margin-left: auto; }
+.advisor-head .btn.ghost.sm + .advisor-close { margin-left: 6px; }
+.advisor-head .advisor-close:first-of-type { margin-left: auto; }
+
+/* Desktop: no backdrop — the panel is a corner popover and the page behind it stays
+   usable. Phone: a dim layer that closes on tap, which is what a sheet implies. */
+.advisor-backdrop { display: none; }
+@media (max-width: 560px) {
+  .advisor-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 59;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  /* The sheet covers it, so a floating button there is just an invisible tap target. */
+  .advisor-fab.on { display: none; }
+}
+/* On a phone the header has a name, a subtitle, Clear and ✕ in ~340px. The subtitle is
+   the one that can go — it explains the panel, and by the time you've opened it you
+   know. Keeping it wrapped "Alex Head" onto two lines instead. */
+@media (max-width: 560px) {
+  .advisor-head .ah-sub { display: none; }
+  .advisor-title { white-space: nowrap; }
+}

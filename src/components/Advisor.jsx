@@ -22,13 +22,36 @@ import { estClock } from '../lib/format.js';
 // and our SOPs; `dangerouslySetInnerHTML` here would be an XSS hole wearing a
 // formatting hat. Splitting on the markers gives the formatting with none of the risk,
 // and anything else renders literally — which is why the prompt asks for plain prose.
-export function RichText({ text }) {
+function inline(text) {
   const parts = String(text ?? '').split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g);
   return parts.map((part, i) => {
     if (/^\*\*[^*\n]+\*\*$/.test(part)) return <strong key={i}>{part.slice(2, -2)}</strong>;
     if (/^`[^`\n]+`$/.test(part)) return <code key={i}>{part.slice(1, -1)}</code>;
     return <React.Fragment key={i}>{part}</React.Fragment>;
   });
+}
+
+// Bold, inline code, and short bullet lists — the slice of markdown an answer in a
+// narrow panel actually needs. Lists matter more than they look: "sizes 8: 4, 8.5: 6,
+// 9: 5, 9.5: 2, 10: 1…" is a wall to read, and the same data one-per-line is a glance.
+export function RichText({ text }) {
+  const lines = String(text ?? '').split('\n');
+  const out = [];
+  let list = null;
+  const flush = () => { if (list) { out.push(<ul className="ah-list" key={`l${out.length}`}>{list}</ul>); list = null; } };
+  lines.forEach((line, i) => {
+    const bullet = line.match(/^\s*[-•*]\s+(.*)$/);
+    if (bullet) {
+      (list ||= []).push(<li key={i}>{inline(bullet[1])}</li>);
+      return;
+    }
+    flush();
+    // Blank lines are paragraph breaks; `white-space: pre-wrap` would otherwise turn a
+    // list into a ragged block.
+    if (line.trim()) out.push(<p className="ah-p" key={i}>{inline(line)}</p>);
+  });
+  flush();
+  return out;
 }
 
 // Openers, chosen from what the screen is showing. An empty box asking to be impressed
@@ -74,7 +97,7 @@ export function Advisor({ user }) {
       // Read the context at ASK time, not at open time: someone types a cost, then
       // asks. The answer must reflect the screen as it is now.
       const res = await api.advisorAsk(next, getAdvisorContext());
-      setChat([...next, { role: 'assistant', content: res.reply, at: Date.now() }]);
+      setChat([...next, { role: 'assistant', content: res.reply, at: Date.now(), used: res.used || [] }]);
     } catch (err) {
       // 503 is a setup fact, not a failed question — retire the panel rather than
       // leaving an error bubble that invites a retry which cannot work.
@@ -95,6 +118,10 @@ export function Advisor({ user }) {
       </button>
 
       {open && (
+        <div className="advisor-backdrop" onClick={() => setOpen(false)} aria-hidden="true" />
+      )}
+
+      {open && (
         <div className="advisor-panel" role="dialog" aria-label={ADVISOR_NAME}>
           <div className="advisor-head">
             <span className="ah-avatar" aria-hidden="true">{ADVISOR_INITIALS}</span>
@@ -105,6 +132,7 @@ export function Advisor({ user }) {
             {chat.length > 0 && (
               <button type="button" className="btn ghost sm" onClick={() => setChat([])}>Clear</button>
             )}
+            <button type="button" className="advisor-close" aria-label="Close" onClick={() => setOpen(false)}>✕</button>
           </div>
 
           {off ? (
@@ -131,6 +159,15 @@ export function Advisor({ user }) {
                       <span className="ah-body">
                         {m.role === 'assistant' ? <RichText text={m.content} /> : m.content}
                       </span>
+                      {/* The stock caveat is attached by the UI, not asked of the model.
+                          It has to appear every single time a stock figure does, and a
+                          rule the model can forget under pressure is not that. Same
+                          wording every time, and visibly separate from the answer. */}
+                      {m.used?.includes('stock_status') && (
+                        <span className="ah-caveat">
+                          Not a physical count — Shopify’s figures and our sync flags. Ask the warehouse for a number to act on.
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}

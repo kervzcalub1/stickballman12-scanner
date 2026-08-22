@@ -35,6 +35,19 @@ want them.
      "should I buy this".
    - A StockX catalogue **near-miss** (right shoe, wrong colourway) renders an amber
      warning on the strip rather than quietly pricing the wrong pair.
+   - **Alias basis toggle — and this screen defaults differently from the rest of the
+     app.** Alias quotes *consigned* (Alias holds your stock) and *"With You"* (you hold
+     the pair and ship on sale), and they are not close: FZ9033-102 size 11 asks **$120
+     consigned vs $105 With You**, a **$13.51** swing in payout — the gap between a buy
+     and a pass. Every other pricing surface here (PH grid, Price Inquiry, the 8-level
+     hierarchy) leads with **consigned**. This screen defaults to **`with_you`**,
+     because the person using it is standing in a shop deciding whether to buy a pair
+     they will then hold and ship themselves, and that is the basis describing what
+     actually happens to the shoe. It also matches the numbers the floor already quotes
+     each other from the tool this was ported from. The toggle sits with the size chips
+     (it governs what a tap fetches), rides in `?basis=`, and **re-prices the size on
+     switch** — relabelling a stale number would be worse than showing none. The Alias
+     strip names the basis so a screenshot of it can't be misread later.
 2. **Store cost** — shelf price, the discount stack, tax, tip, shipping → **Final
    cost** + **Saved off sticker**, with a collapsible line-by-line breakdown.
 3. **Expected payouts → The call** — per-platform fees → payout / profit / ROI, then a

@@ -106,6 +106,17 @@ export function PayoutCalculator({ onHome, onSignOut }) {
   // someone else's cost basis around is a leak, not a convenience.
   const [skuInput, setSkuInput] = useQueryParam('sku');
   const [size, setSize] = useQueryParam('size');
+  // Alias quotes two bases and they differ a lot — $120 vs $105 on FZ9033-102 size 11,
+  // which is $13.51 of payout, i.e. the gap between a buy and a pass.
+  //   · consigned  — Alias holds your stock. The daily-ops basis, and what every OTHER
+  //                  pricing surface here defaults to (PH grid, Price Inquiry).
+  //   · with_you   — you hold the pair and ship when it sells.
+  // This screen defaults to **with_you** on purpose, unlike the rest of the app: the
+  // person using it is standing in a shop deciding whether to buy a pair they will then
+  // hold and ship themselves, so that is the basis that describes what actually happens
+  // to the shoe. It also matches the numbers the floor already quotes each other. The
+  // toggle is there because a consignment buy is still a real case.
+  const [basis, setBasis] = useQueryParam('basis', 'with_you');
   const [product, setProduct] = useState(null);
   const [market, setMarket] = useState(null);     // Alias row for `size`, or { _empty: true }
   const [sx, setSx] = useState(null);            // { configured, row, error } for `size`
@@ -174,13 +185,16 @@ export function PayoutCalculator({ onHome, onSignOut }) {
 
   // Tap a size → live Alias prices for that size. Tapping the priced size again drops
   // it, so a mis-tap costs nothing but the call already made.
-  async function tapSize(sz) {
-    if (String(sz) === String(size)) { setSize(''); setMarket(null); setSx(null); return; }
+  // `basisOverride` lets the basis toggle re-price the size already on screen without
+  // waiting for the state update to land.
+  async function tapSize(sz, basisOverride) {
+    const nextBasis = basisOverride || basis;
+    if (!basisOverride && String(sz) === String(size)) { setSize(''); setMarket(null); setSx(null); return; }
     setSize(String(sz)); setMarket(null); setSx(null); setError(''); setNotConfigured(false);
     if (!product?.sku) return;
     setPricing(true);
     try {
-      const res = await api.payoutQuote(product.sku, [String(sz)]);
+      const res = await api.payoutQuote(product.sku, [String(sz)], nextBasis === 'consigned');
       // StockX is read first and independently: Alias being unconfigured must not
       // hide a StockX quote we did get, and vice versa.
       setSx({
@@ -194,6 +208,14 @@ export function PayoutCalculator({ onHome, onSignOut }) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
     } finally { setPricing(false); }
+  }
+
+  // Switching basis re-prices whatever size is on screen — leaving the old number under
+  // a new label would be worse than showing nothing.
+  function changeBasis(next) {
+    if (next === basis) return;
+    setBasis(next);
+    if (size && product?.sku) tapSize(size, next);
   }
 
   function resetPair() {
@@ -250,6 +272,18 @@ export function PayoutCalculator({ onHome, onSignOut }) {
 
         {product && sizes.length > 0 && (
           <div className="pi-sizes mt">
+            <div className="pc-basis">
+              <span className="pc-field-label">Alias pricing basis</span>
+              <div className="seg sm">
+                <button type="button" className={`seg-btn ${basis === 'with_you' ? 'on' : ''}`}
+                  aria-pressed={basis === 'with_you'} onClick={() => changeBasis('with_you')}>With You</button>
+                <button type="button" className={`seg-btn ${basis === 'consigned' ? 'on' : ''}`}
+                  aria-pressed={basis === 'consigned'} onClick={() => changeBasis('consigned')}>Consigned</button>
+              </div>
+              <span className="muted sm">
+                {basis === 'with_you' ? 'You hold the pair and ship it when it sells' : 'Alias holds your stock (the basis the PH pages use)'}
+              </span>
+            </div>
             <div className="pi-sizes-head">
               <span className="pi-sizes-label">Tap the size you’re holding</span>
             </div>
@@ -273,7 +307,7 @@ export function PayoutCalculator({ onHome, onSignOut }) {
 
         {hasMarket && (
           <MarketStrip
-            title={`Size ${market.size} · live Alias market — tap one to use it as the sale price`}
+            title={`Size ${market.size} · live Alias market · ${basis === 'with_you' ? 'With You' : 'Consigned'} — tap one to use it as the sale price`}
             cols={MARKET_COLS} row={market}
             onUse={(v) => setSale((s) => ({ ...s, alias: v }))} />
         )}

@@ -178,3 +178,61 @@ test('StockX with no market for the size says exactly that', async ({ page }) =>
   await pickSize(page);
   await expect(page.getByText('StockX has no market for size 10.')).toBeVisible();
 });
+
+/* ------------------------------------------------------------------ */
+/* Alias basis. This screen defaults to "With You" while every other    */
+/* pricing surface defaults to consigned — the divergence is deliberate */
+/* and worth pinning, because the two bases differ by real money        */
+/* ($120 vs $105 ask on FZ9033-102 size 11).                            */
+/* ------------------------------------------------------------------ */
+
+test('the calculator asks Alias for "With You" pricing by default', async ({ page }) => {
+  await openCalc(page);
+  const sent = [];
+  await page.route('**/api/sku-search', (r) => r.fulfill({ json: { ok: true, product: PRODUCT } }));
+  await page.route('**/api/payout/quote', (route) => {
+    sent.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ok: true, configured: true, results: [ALIAS_ROW], stockx: { configured: false, results: [] } } });
+  });
+  await pickSize(page);
+  // consigned:false IS the "With You" basis — the flag the server reads.
+  expect(sent[0].consigned).toBe(false);
+});
+
+test('switching basis re-prices the size instead of relabelling a stale number', async ({ page }) => {
+  await openCalc(page);
+  const sent = [];
+  await page.route('**/api/sku-search', (r) => r.fulfill({ json: { ok: true, product: PRODUCT } }));
+  await page.route('**/api/payout/quote', (route) => {
+    const body = route.request().postDataJSON();
+    sent.push(body);
+    // Consigned quotes higher than With You, exactly as Alias does in real life.
+    const ask = body.consigned ? 120 : 105;
+    return route.fulfill({ json: {
+      ok: true, configured: true,
+      results: [{ ...ALIAS_ROW, lowest_listing: ask }],
+      stockx: { configured: false, results: [] },
+    } });
+  });
+  await pickSize(page);
+  await expect(page.locator('.pc-market-cell', { hasText: 'Lowest ask' })).toContainText('$105.00');
+  await page.locator('.seg-btn', { hasText: 'Consigned' }).click();
+  await expect(page.locator('.pc-market-cell', { hasText: 'Lowest ask' })).toContainText('$120.00');
+  expect(sent.map((b) => b.consigned)).toEqual([false, true]);
+  // The strip names the basis, so a screenshot of it can't be misread later.
+  await expect(page.locator('.pc-market-head').first()).toContainText('Consigned');
+});
+
+test('the basis survives a refresh, like the shoe does', async ({ page }) => {
+  await openCalc(page);
+  // The toggle lives with the size chips — it governs what a tap fetches — so it only
+  // exists once a shoe is loaded. Look one up first.
+  await stubLookup(page, { ok: true, configured: true, results: [ALIAS_ROW], stockx: { configured: false, results: [] } });
+  await page.locator('.pi-sku-input').fill('DD1391-100');
+  await page.getByRole('button', { name: /Look up/ }).click();
+  await page.locator('.seg-btn', { hasText: 'Consigned' }).click();
+  await expect(page).toHaveURL(/basis=consigned/);
+  await page.reload();
+  await page.locator('.pi-sku-input').press('Enter'); // re-resolve the shoe after reload
+  await expect(page.locator('.seg-btn', { hasText: 'Consigned' })).toHaveAttribute('aria-pressed', 'true');
+});

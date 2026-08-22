@@ -144,7 +144,12 @@ export function PayoutCalculator({ onHome, onSignOut }) {
   const [shippingAmt, setShippingAmt] = useState('');
   const [sale, setSale] = useState({ alias: '', stockx: '' });
   const [feeOverride, setFeeOverride] = useState({ alias: '', stockx: '' });
+  // Liquidity: measured if we have sales data, chosen if the buyer picked. `touched`
+  // is what stops a measured value from stomping a deliberate choice — someone who
+  // knows this shoe is about to drop can say "daily" and keep it.
   const [liquidity, setLiquidity] = useState('');
+  const [liquidityTouched, setLiquidityTouched] = useState(false);
+  const [velocity, setVelocity] = useState(null);   // { sold_30d, per_week, liquidity, … }
 
 
   const breakdown = useMemo(() => calcCostBreakdown({
@@ -176,6 +181,11 @@ export function PayoutCalculator({ onHome, onSignOut }) {
     const sku = String(skuInput || '').trim();
     if (!sku) return;
     setLooking(true); setError(''); setNotConfigured(false); setProduct(null); setMarket(null);
+    setVelocity(null); setLiquidityTouched(false);
+    // Drop the selected size too. It belonged to the previous shoe: leaving it set left a
+    // chip highlighted with no market behind it, and tapping that chip DESELECTED it
+    // instead of pricing it — the one action a highlighted size invites.
+    setSize(''); setSx(null);
     try {
       const { product: p } = await api.searchSku(sku);
       setProduct(p);
@@ -199,6 +209,11 @@ export function PayoutCalculator({ onHome, onSignOut }) {
       const res = await api.payoutQuote(product.sku, [String(sz)], nextBasis === 'consigned');
       // StockX is read first and independently: Alias being unconfigured must not
       // hide a StockX quote we did get, and vice versa.
+      // Per style, not per size — it rides beside the results.
+      setVelocity(res.velocity || null);
+      if (res.velocity?.liquidity && res.velocity.sold_total > 0 && !liquidityTouched) {
+        setLiquidity(res.velocity.liquidity);
+      }
       setSx({
         configured: !!res.stockx?.configured,
         row: res.stockx?.results?.[0] || null,
@@ -223,13 +238,18 @@ export function PayoutCalculator({ onHome, onSignOut }) {
   function resetPair() {
     setShelfPrice(''); setCouponAmt(''); setTipAmt(''); setShippingAmt('');
     setSale({ alias: '', stockx: '' }); setFeeOverride({ alias: '', stockx: '' });
-    setLiquidity(''); setMarket(null); setSx(null); setSize(''); setProduct(null); setSkuInput('');
+    setLiquidity(''); setLiquidityTouched(false); setVelocity(null);
+    setMarket(null); setSx(null); setSize(''); setProduct(null); setSkuInput('');
     setError(''); setNotConfigured(false);
   }
 
   const sizes = product?.sizes || [];
   const hasMarket = market && !market._empty;
   const sxRow = sx?.row || null;
+  // "Measured" only while it still matches the data — the moment someone overrides it,
+  // the number on screen is theirs. The evidence line still shows (what the shoe did is
+  // true either way); this flag is what tells the advisor whose call the band is.
+  const measured = !!velocity && velocity.sold_total > 0 && !liquidityTouched && liquidity === velocity.liquidity;
 
   // Publish what this screen is showing, so the app-wide advisor (the floating button)
   // can answer about the pair in front of you. Rebuilt whenever the numbers change, so a
@@ -254,11 +274,17 @@ export function PayoutCalculator({ onHome, onSignOut }) {
       stockx: sxRow ? SX_MARKET_COLS.map(([k, l]) => `${l} ${quoted(sxRow[k]) ? money(quoted(sxRow[k])) : '—'}`).join(', ') : null,
     },
     liquidity,
+    // Without this he'd cheerfully argue with a figure that came from the same table he
+    // reads — "you've marked it weekly, but…" is only useful against a human guess.
+    liquiditySource: measured ? 'measured from our sales data' : (liquidity ? 'chosen by the buyer' : 'not set'),
+    salesVelocity: velocity && velocity.sold_total > 0
+      ? `${velocity.sold_30d} sold in 30 days, ${velocity.sold_90d} in 90, ${velocity.per_week}/week`
+      : null,
     verdict: verdict
       ? `${CALL_LABEL[verdict.call]} — best on ${verdict.best.label}, profit ${money(verdict.best.profit)}, ROI ${pct(verdict.best.roi)}, risk ${RISK_LABEL[verdict.risk]}`
       : 'not enough entered for a call yet',
   }), [product, size, basis, shelfPrice, couponAmt, tipAmt, shippingAmt, liquidity,
-    breakdown.finalCost, payouts, market, sxRow, rates]);
+    breakdown.finalCost, payouts, market, sxRow, rates, velocity, measured]);
 
   return (
     <div className="app">
@@ -459,9 +485,21 @@ export function PayoutCalculator({ onHome, onSignOut }) {
             {LIQUIDITY.map((l) => (
               <button type="button" key={l.key} className={`seg-btn ${liquidity === l.key ? 'on' : ''}`}
                 aria-pressed={liquidity === l.key}
-                onClick={() => setLiquidity(liquidity === l.key ? '' : l.key)}>{l.label}</button>
+                onClick={() => { setLiquidityTouched(true); setLiquidity(liquidity === l.key ? '' : l.key); }}>{l.label}</button>
             ))}
           </div>
+          {/* Say WHERE the answer came from. A picker that fills itself and doesn't
+              explain why is a number nobody trusts — and this one drives the risk band. */}
+          {velocity && velocity.sold_total > 0 ? (
+            <span className="pc-liq-why muted sm">
+              from our sales: <strong>{velocity.sold_30d}</strong> sold in 30 days
+              {velocity.sold_90d > velocity.sold_30d ? `, ${velocity.sold_90d} in 90` : ''}
+              {' · '}{velocity.per_week}/week
+              {liquidityTouched ? ' — you overrode this' : ''}
+            </span>
+          ) : velocity ? (
+            <span className="pc-liq-why muted sm">no sales on record for this style — pick one</span>
+          ) : null}
         </div>
 
         {verdict ? (

@@ -400,18 +400,27 @@ export async function advisorSkuHistory(sku, size = null) {
 // mover" — `advisorSkuHistory` can only see pairs that went through our own status
 // flow, while this counts every sale.
 //
-// Matching is on `codes`, the style ID split on "/", so a lookup for DD8959-100 finds
-// a sale exported as "315115-112/DD8959-100" — and finds it once, because the row is
-// still one row.
+// Matching splits BOTH SIDES on "/" and asks whether they overlap, because the dual-SKU
+// notation turns up on either end:
+//   · the export writes "315115-112/DD8959-100" for one sale, and
+//   · the SKU used during an inquiry can itself be a dual — that's how our catalogue and
+//     the PH grid carry a shoe listed under two codes.
+// So a lookup for DD8959-100, for 315115-112, or for the whole "315115-112/DD8959-100"
+// all find that sale — and find it ONCE, because it is still one row. Matching only one
+// direction (the query as a whole string) silently returned zero sales for exactly the
+// shoes most likely to be dual-listed.
 //
 // Windows are EST, like every date filter in this app: `current_date` would follow the
 // host's clock, and the PH team's day is a day ahead of the one we file sales under.
 export async function salesVelocity(sku) {
-  const code = String(sku || '').trim().toUpperCase();
-  if (!code) return null;
+  const codes = String(sku || '').split('/').map((c) => c.trim().toUpperCase()).filter(Boolean);
+  if (!codes.length) return null;
+  // `&&` is array overlap, and it uses the GIN index on codes. NB: no `--` comments
+  // inside these templates — the shim collapses the query to one line, which would turn
+  // everything after the marker into a comment and truncate the statement.
   const rows = await db()`
     WITH today AS (SELECT (now() AT TIME ZONE 'America/New_York')::date AS d),
-    mine AS (SELECT sale_date FROM sales_history WHERE ${code} = ANY(codes))
+    mine AS (SELECT sale_date FROM sales_history WHERE codes && ${codes}::text[])
     SELECT
       (SELECT count(*)::int FROM mine)                                        AS sold_total,
       (SELECT count(*)::int FROM mine, today WHERE sale_date > d - 30)        AS sold_30d,

@@ -19,7 +19,7 @@ than no screen. Their inventory intake, barcode scanner, product search, bulk/ba
 analyser and AI advisor were **not** ported: we already have all of those, or don't
 want them.
 
-## The three steps down the page
+## The steps down the page
 1. **Shoe** (optional) — SKU → Alias catalogue (`api/sku-search.js`, shared with PH's
    Price Inquiry) → tap the size you're holding → **one call** (`api/payout/quote.js`)
    returns that size's live market on **both** platforms, as two tappable strips:
@@ -50,7 +50,23 @@ want them.
      strip names the basis so a screenshot of it can't be misread later.
 2. **Store cost** — shelf price, the discount stack, tax, tip, shipping → **Final
    cost** + **Saved off sticker**, with a collapsible line-by-line breakdown.
-3. **Expected payouts → The call** — per-platform fees → payout / profit / ROI, then a
+3. **Liquidity — filled from our own sales, not guessed.** `api/payout/quote.js` returns
+   `velocity` for the style alongside the prices (`salesVelocity`, see
+   `sales-history.md`), and the picker selects the matching band with the evidence
+   beside it: *"from our sales: 16 sold in 30 days, 20 in 90 · 3.7/week"*. A picker that
+   fills itself and doesn't say why is a number nobody trusts — and this one drives the
+   risk band on the verdict.
+   - **A deliberate choice wins.** `liquidityTouched` stops a measurement overwriting a
+     buyer who knows something the data doesn't (a shoe about to drop). The note then
+     reads *"— you overrode this"*; the sales figures still show, because what the shoe
+     did is true either way.
+   - **A new lookup starts fresh** — the previous shoe's override is not evidence about
+     this one. (Looking up also clears the selected size now: leaving it set left a chip
+     highlighted with no market behind it, and tapping it deselected instead of pricing.)
+   - **Never sold ≠ sells monthly.** Zero sales leaves the picker empty and says "no
+     sales on record"; no export loaded leaves it silent. Filling in "Monthly" for either
+     would put a measurement on screen that nothing measured.
+4. **Expected payouts → The call** — per-platform fees → payout / profit / ROI, then a
    **Buy / Watch / Pass** verdict with risk and platform spread.
 
 ## The cost maths (`calcCostBreakdown`) — order is the point

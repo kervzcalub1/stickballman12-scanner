@@ -3350,3 +3350,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .ah-typing i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes ah-bounce { 0%, 60%, 100% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 @media (prefers-reduced-motion: reduce) { .ah-typing i { animation: none; } }
+/* Why the liquidity band says what it says. */
+.pc-liq-why { flex-basis: 100%; }
+.pc-liq-why strong { color: var(--text); }

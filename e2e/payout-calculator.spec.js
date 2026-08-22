@@ -236,3 +236,72 @@ test('the basis survives a refresh, like the shoe does', async ({ page }) => {
   await page.locator('.pi-sku-input').press('Enter'); // re-resolve the shoe after reload
   await expect(page.locator('.seg-btn', { hasText: 'Consigned' })).toHaveAttribute('aria-pressed', 'true');
 });
+
+/* ------------------------------------------------------------------ */
+/* Liquidity auto-fill from measured sales velocity.                    */
+/* ------------------------------------------------------------------ */
+
+const withVelocity = (velocity) => ({
+  ok: true, configured: true, results: [ALIAS_ROW],
+  stockx: { configured: false, results: [] }, velocity,
+});
+
+test('the liquidity band fills itself from our sales, and says why', async ({ page }) => {
+  await openCalc(page);
+  await stubLookup(page, withVelocity({ sold_total: 20, sold_30d: 16, sold_90d: 20, per_week: 3.7, liquidity: 'weekly' }));
+  await pickSize(page);
+  await expect(page.locator('.seg-btn', { hasText: 'Weekly' })).toHaveAttribute('aria-pressed', 'true');
+  // A picker that fills itself and doesn't explain why is a number nobody trusts —
+  // and this one drives the risk band on the verdict.
+  await expect(page.locator('.pc-liq-why')).toContainText('16 sold in 30 days');
+  await expect(page.locator('.pc-liq-why')).toContainText('3.7/week');
+});
+
+test('a deliberate choice survives the next lookup on the same shoe', async ({ page }) => {
+  await openCalc(page);
+  await stubLookup(page, withVelocity({ sold_total: 20, sold_30d: 16, sold_90d: 20, per_week: 3.7, liquidity: 'weekly' }));
+  await pickSize(page);
+  await expect(page.locator('.seg-btn', { hasText: 'Weekly' })).toHaveAttribute('aria-pressed', 'true');
+
+  // Someone who knows this shoe is about to drop overrides the measurement…
+  await page.locator('.seg-btn', { hasText: 'Daily' }).click();
+  // …and keeps working: another size re-quotes, and must not undo their call.
+  await page.locator('.pi-chip', { hasText: /^9$/ }).click();
+  await expect(page.locator('.pc-market')).toBeVisible();
+
+  await expect(page.locator('.seg-btn', { hasText: 'Daily' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.seg-btn', { hasText: 'Weekly' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.pc-liq-why')).toContainText('you overrode this');
+});
+
+test('but a NEW shoe starts fresh — the last shoe’s override is not evidence', async ({ page }) => {
+  await openCalc(page);
+  await stubLookup(page, withVelocity({ sold_total: 20, sold_30d: 16, sold_90d: 20, per_week: 3.7, liquidity: 'weekly' }));
+  await pickSize(page);
+  await page.locator('.seg-btn', { hasText: 'Daily' }).click();
+  // Search again: a different pair, and their call about the last one means nothing here.
+  await page.locator('.pi-sku-input').fill('DD1391-100');
+  await page.getByRole('button', { name: /Look up/ }).click();
+  await page.locator('.pi-chip', { hasText: /^10$/ }).click();
+  await expect(page.locator('.seg-btn', { hasText: 'Weekly' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('no sales on record says so, rather than implying "slow"', async ({ page }) => {
+  await openCalc(page);
+  await stubLookup(page, withVelocity({ sold_total: 0, sold_30d: 0, sold_90d: 0, per_week: 0, liquidity: 'monthly' }));
+  await pickSize(page);
+  // Never sold is not the same as sells monthly — filling in "Monthly" here would put a
+  // measurement on the screen that nothing measured.
+  await expect(page.locator('.seg-btn', { hasText: 'Monthly' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.pc-liq-why')).toContainText('no sales on record');
+});
+
+test('with no export loaded the picker stays a question', async ({ page }) => {
+  await openCalc(page);
+  await stubLookup(page, withVelocity(null));
+  await pickSize(page);
+  for (const band of ['Daily', 'Weekly', 'Monthly']) {
+    await expect(page.locator('.seg-btn', { hasText: band })).toHaveAttribute('aria-pressed', 'false');
+  }
+  await expect(page.locator('.pc-liq-why')).toHaveCount(0);
+});

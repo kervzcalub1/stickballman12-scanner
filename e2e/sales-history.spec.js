@@ -71,6 +71,18 @@ test('either half of a dual SKU finds the sale — and finds it ONCE', async () 
   expect(a.sold_30d).toBe(1);
 });
 
+test('a dual SKU used AS THE QUERY matches too — and still counts once', async () => {
+  // The other direction, and the one that bites: the SKU used during an inquiry can
+  // itself be a dual, because that's how our catalogue carries a shoe listed under two
+  // codes. Matching only the query-as-one-string returned zero sales for exactly the
+  // shoes most likely to be dual-listed.
+  const whole = await salesVelocity(PAIR);                 // "ZZTEST-100/ZZTEST-200"
+  expect(whole.sold_total).toBe(1);
+  // Order and spacing are however someone typed it.
+  const reversed = await salesVelocity(' zztest-200 / zztest-100 ');
+  expect(reversed.sold_total).toBe(1);
+});
+
 test('lookups are case-insensitive — SKUs get typed however they get typed', async () => {
   const v = await salesVelocity('zztest-001');
   expect(v.sold_total).toBe(5);

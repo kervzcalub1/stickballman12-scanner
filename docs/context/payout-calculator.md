@@ -10,9 +10,10 @@ this pair?** Nothing is saved — it never touches inventory, never writes an it
 has no batch. It is a scratchpad with the right arithmetic in it.
 
 ## Where it came from
-Ported from the public **GemsClean/payout-calculator** ("Payout Engine"). That repo
-carries **no licence file**, so nothing was copied: it's Next.js + TypeScript +
-Tailwind and this is a re-implementation in our idiom. The **arithmetic is faithful**,
+Ported from **GemsClean/payout-calculator** ("Payout Engine") — a colleague's repo, and
+the work is ours (confirmed 2026-08-23, so there's no licence question to re-raise). It's
+Next.js + TypeScript + Tailwind, so this is a re-implementation in our idiom rather than
+a copy. The **arithmetic is faithful**,
 deliberately — including the two quirks below — because the floor already quotes each
 other numbers out of that tool, and a screen that silently disagrees with it is worse
 than no screen. Their inventory intake, barcode scanner, product search, bulk/batch

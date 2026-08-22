@@ -28,9 +28,12 @@
 //    where" is the question, and that data is already on the Inventory screen every one
 //    of these roles can open.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { advisorSkuHistory, findStockByCode, pendingCounts, salesVelocity, dbConfigured } from '../_lib/db.js';
+import { advisorSkuHistory, findStockByCode, pendingCounts,
+  ourListingFlags, dbConfigured } from '../_lib/db.js';
 import { priceInquiryForSkuSizes } from '../_lib/intake.js';
 import { stockxConfigured, stockxPriceForSkuSize } from '../_lib/stockx.js';
+import { shopifyConfigured, shopifyTopSellers, shopifyVelocity,
+  shopifyInventoryForSku } from '../_lib/shopify.js';
 import { DEFAULT_FEE_PCT, BUY_MIN_PROFIT, BUY_MIN_ROI } from '../../src/lib/payout.js';
 import { searchSop, articleById, sopRoleForAccount } from '../../src/lib/sop/index.js';
 import { ADVISOR_NAME } from '../../src/lib/advisorContext.js';
@@ -55,7 +58,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'sku_history',
-      description: 'What WE know about a shoe. Two things at once: our INVENTORY (pairs on hand, what we last and typically paid, median days from receiving to sold) and our real SALES VELOCITY from the platform sales export (units sold in the last 30 and 90 days, sales per week, and the liquidity band that implies). Use this before any opinion about whether a shoe is worth buying or how fast it moves — the velocity figure is measured, not estimated.',
+      description: 'What WE know about a shoe. Two things at once: our INVENTORY (pairs on hand, what we last and typically paid, median days from receiving to sold) and its real SALES VELOCITY over the last 30 days across every channel — units sold, the per-channel split, sizes, average price and the liquidity band. Use this before any opinion about whether a shoe is worth buying or how fast it moves; the velocity is measured, not estimated.',
       parameters: {
         type: 'object',
         properties: {
@@ -101,6 +104,32 @@ const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'top_sellers',
+      description: "What is actually SELLING, ranked, over a window — across EVERY channel (GOAT, StockX, eBay, TikTok, the online store) with the per-channel split, average price and sizes. Use for \"what's our best seller this week\", \"what's moving\", \"what should we restock\". Defaults to 7 days.",
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'integer', description: 'Window in days. 7 = this week, 30 = this month. 60 is the maximum — the sales feed does not reach further back.' },
+          limit: { type: 'integer', description: 'How many styles to return. Default 10, max 50.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'stock_status',
+      description: "How many of a style we appear to have: Shopify's inventory figures by size, plus what OUR OWN records say is on hand and listed to each store. Use for \"do we have it\", \"how many are left\", \"what sizes do we have\". The result carries a disclaimer about accuracy — repeat it.",
+      parameters: {
+        type: 'object',
+        properties: { sku: { type: 'string', description: 'Style ID, e.g. DD1391-100' } },
+        required: ['sku'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'market_price',
       description: 'Live market prices for one shoe in one size: Alias (lowest ask, highest offer, last sold, Global Indicator) and StockX (lowest ask, highest bid) when configured. Costs an upstream call each time — one size per question unless asked otherwise.',
       parameters: {
@@ -136,15 +165,21 @@ async function runTool(name, args, user) {
   switch (name) {
     case 'sku_history': {
       if (!dbConfigured() || !sku) return { error: 'no sku given' };
-      const [held, sales] = await Promise.all([advisorSkuHistory(sku, size), salesVelocity(sku)]);
+      const [held, sales] = await Promise.all([
+        advisorSkuHistory(sku, size),
+        shopifyConfigured() ? shopifyVelocity(sku, { days: 30 }) : Promise.resolve(null),
+      ]);
       return {
         inventory: held || { note: 'we have never held this SKU' },
         // Two different kinds of "no": the export isn't loaded at all, versus it IS
         // loaded and this style has never sold. The first is missing data, the second
         // is a finding — conflating them talks someone out of a good buy.
-        sales: sales
-          ? { ...sales, note: sales.sold_total === 0 ? 'never sold in the covered window' : undefined }
-          : { note: 'no sales export loaded on this server — say the velocity is unknown, do not guess it' },
+        // Every channel at once — GOAT, StockX, eBay, TikTok, the online store — with the
+        // split, because "44 sold" and "44 sold, 24 of them on GOAT" are different
+        // instructions to whoever decides where to list next.
+        sales: sales && !sales.error
+          ? { ...sales, note: sales.sold === 0 ? 'no sales in this window' : undefined }
+          : { note: 'Shopify is not configured here — say the velocity is unknown, do not guess it' },
       };
     }
     case 'find_stock': {
@@ -178,6 +213,34 @@ async function runTool(name, args, user) {
         results: hits.slice(0, 3).map((h) => (h.kind === 'faq'
           ? { kind: 'faq', question: h.title, answer: String(h.answer || h.a || '').slice(0, 800), article: h.see || null }
           : renderArticle(articleById(h.id)))),
+      };
+    }
+    case 'top_sellers': {
+      if (!shopifyConfigured()) return { error: 'Shopify is not configured here, so there is no sales feed to rank' };
+      const r = await shopifyTopSellers({ days: args?.days, limit: args?.limit });
+      if (!r || r.error) return { error: r?.error || 'Shopify is not configured here' };
+      return {
+        ...r,
+        ...(r.unmatched_units
+          ? { unmatched_note: `${r.unmatched_units} units sold had no style code in their product title and are not in this ranking` }
+          : {}),
+        ...(r.truncated ? { warning: 'more orders in this window than were read; the ranking may be incomplete' } : {}),
+      };
+    }
+    case 'stock_status': {
+      if (!sku) return { error: 'no sku given' };
+      const [shop, ours] = await Promise.all([
+        shopifyConfigured() ? shopifyInventoryForSku(sku) : Promise.resolve(null),
+        dbConfigured() ? ourListingFlags(sku) : Promise.resolve(null),
+      ]);
+      return {
+        // Asked "how many do we have", give the numbers and then SAY THIS, every time.
+        // Shopify's count is what Shopify believes; our flags are what PH ticked. A pair
+        // can be listed and already gone, or on a shelf and never listed. Neither is a
+        // physical count, and only one place has that.
+        how_many_disclaimer: 'These are Shopify inventory figures and our own sync flags — NOT a physical count. They can be stale or wrong in both directions. For a number to act on, ask the warehouse.',
+        shopify: shop || { note: 'Shopify is not configured on this server — say so, do not infer' },
+        our_records: ours || { note: 'database unavailable' },
       };
     }
     case 'market_price': {
@@ -235,8 +298,23 @@ WHAT'S ON THEIR SCREEN RIGHT NOW:
 ${screen}
 
 LOOKING THINGS UP:
-- You have five read-only tools: sku_history, find_stock, pending_work, market_price,
-  and search_sop — the written procedures and FAQs for this app.
+- You have seven read-only tools: sku_history, find_stock, pending_work, top_sellers,
+  stock_status, market_price, and search_sop — the written procedures and FAQs.
+- "What's selling / what's our best seller / what's moving" is top_sellers, not a SKU
+  lookup. You do not need them to name a style first.
+- **Sales come from Shopify, which carries EVERY channel** — GOAT, StockX, eBay, TikTok,
+  the online store — so a total is a real total. Give the channel split when it changes
+  what someone would do: "44 sold, 24 of them on GOAT" tells them where to list next.
+- **The sales feed reaches 60 days.** Never state or imply anything about older sales.
+- **Asked how many we HAVE, give the numbers and then pass on the disclaimer the tool
+  returns**, every time: these are Shopify's figures and our sync flags, not a physical
+  count, and the warehouse is the place to get a number worth acting on. Do not drop that
+  caveat to sound more confident.
+- If a tool reports a \`permission\` problem, say the figure is unavailable. Never
+  substitute a zero — "none left" and "we can't see it" are opposite answers.
+- Be precise about WHOSE truth you are quoting. Sales and inventory come from Shopify;
+  our sync flags are what PH ticked here. Where the two disagree, that gap is the
+  interesting part — say it rather than picking one.
 - USE THEM. Do not answer a question about our stock, our costs, our backlog or a live
   price from memory — look it up. You cannot know these; they change hourly.
 - You cannot change anything. Every tool is a read. If asked to mark something sold,

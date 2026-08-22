@@ -41,13 +41,15 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 - Today only the Payout Calculator publishes. Every other screen still gets a working
   advisor, because the server can look things up itself.
 
-## The five tools — all reads
+## The seven tools — all reads
 | Tool | Answers | Source |
 |---|---|---|
-| `sku_history` | "have we sold this before, what did we pay, **how fast does it move?**" | `advisorSkuHistory` + `salesVelocity` (db.js) |
+| `sku_history` | "have we sold this before, what did we pay, **how fast does it move?**" | `advisorSkuHistory` (db.js) + `shopifyVelocity` |
 | `find_stock` | "do we have it, and which shelf?" | `findStockByCode` |
 | `pending_work` | "what are we behind on?" | `pendingCounts` |
 | `search_sop` | "how do I…?" / "what's the rule about…?" | `searchSop` (lib/sop) |
+| `top_sellers` | "what's selling this week?" | `shopifyTopSellers` — every channel |
+| `stock_status` | "how many do we have?" | Shopify inventory + our sync flags |
 | `market_price` | "what's it worth right now?" | Alias + StockX |
 
 - **Read-only is structural, not a promise.** All five are existing queries; nothing here
@@ -61,6 +63,16 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 - Tool results are trimmed before they enter the prompt (25 pairs, 3 SOP hits, 14 steps).
 
 ### Sales velocity — measured, not estimated
+Sales come from **Shopify, which carries every channel** (GOAT, StockX, eBay, TikTok…),
+so a total is a real total and the per-channel split says where to list next. The feed
+reaches **60 days**; the prompt forbids implying anything about older sales. See
+`shopify.md`.
+
+**Stock figures always carry a disclaimer** — Shopify's inventory and our sync flags are
+not a physical count. When the inventory scopes are missing the tool returns a
+`permission` result and the advisor must say the figure is *unavailable*, never zero.
+
+
 `sku_history` returns two halves: `inventory` (what we hold and paid) and `sales` (how
 fast the style actually sells, from `sales_history` — see `sales-history.md`). The second
 is the one the prompt tells him to trust over a hand-picked liquidity: *"you've marked it

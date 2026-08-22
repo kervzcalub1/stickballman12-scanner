@@ -248,18 +248,20 @@ const withVelocity = (velocity) => ({
 
 test('the liquidity band fills itself from our sales, and says why', async ({ page }) => {
   await openCalc(page);
-  await stubLookup(page, withVelocity({ sold_total: 20, sold_30d: 16, sold_90d: 20, per_week: 3.7, liquidity: 'weekly' }));
+  await stubLookup(page, withVelocity({ sold: 16, days: 30, per_week: 3.7, liquidity: 'weekly', channels: { GOAT: 11, StockX: 5 } }));
   await pickSize(page);
   await expect(page.locator('.seg-btn', { hasText: 'Weekly' })).toHaveAttribute('aria-pressed', 'true');
   // A picker that fills itself and doesn't explain why is a number nobody trusts —
   // and this one drives the risk band on the verdict.
   await expect(page.locator('.pc-liq-why')).toContainText('16 sold in 30 days');
   await expect(page.locator('.pc-liq-why')).toContainText('3.7/week');
+  // The channel split is the part that tells someone where to list next.
+  await expect(page.locator('.pc-liq-why')).toContainText('GOAT 11');
 });
 
 test('a deliberate choice survives the next lookup on the same shoe', async ({ page }) => {
   await openCalc(page);
-  await stubLookup(page, withVelocity({ sold_total: 20, sold_30d: 16, sold_90d: 20, per_week: 3.7, liquidity: 'weekly' }));
+  await stubLookup(page, withVelocity({ sold: 16, days: 30, per_week: 3.7, liquidity: 'weekly', channels: { GOAT: 11, StockX: 5 } }));
   await pickSize(page);
   await expect(page.locator('.seg-btn', { hasText: 'Weekly' })).toHaveAttribute('aria-pressed', 'true');
 
@@ -276,7 +278,7 @@ test('a deliberate choice survives the next lookup on the same shoe', async ({ p
 
 test('but a NEW shoe starts fresh — the last shoe’s override is not evidence', async ({ page }) => {
   await openCalc(page);
-  await stubLookup(page, withVelocity({ sold_total: 20, sold_30d: 16, sold_90d: 20, per_week: 3.7, liquidity: 'weekly' }));
+  await stubLookup(page, withVelocity({ sold: 16, days: 30, per_week: 3.7, liquidity: 'weekly', channels: { GOAT: 11, StockX: 5 } }));
   await pickSize(page);
   await page.locator('.seg-btn', { hasText: 'Daily' }).click();
   // Search again: a different pair, and their call about the last one means nothing here.
@@ -288,15 +290,15 @@ test('but a NEW shoe starts fresh — the last shoe’s override is not evidence
 
 test('no sales on record says so, rather than implying "slow"', async ({ page }) => {
   await openCalc(page);
-  await stubLookup(page, withVelocity({ sold_total: 0, sold_30d: 0, sold_90d: 0, per_week: 0, liquidity: 'monthly' }));
+  await stubLookup(page, withVelocity({ sold: 0, days: 30, per_week: 0, liquidity: 'monthly', channels: {} }));
   await pickSize(page);
   // Never sold is not the same as sells monthly — filling in "Monthly" here would put a
   // measurement on the screen that nothing measured.
   await expect(page.locator('.seg-btn', { hasText: 'Monthly' })).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('.pc-liq-why')).toContainText('no sales on record');
+  await expect(page.locator('.pc-liq-why')).toContainText('no sales in the last 30 days');
 });
 
-test('with no export loaded the picker stays a question', async ({ page }) => {
+test('with no sales feed the picker stays a question', async ({ page }) => {
   await openCalc(page);
   await stubLookup(page, withVelocity(null));
   await pickSize(page);

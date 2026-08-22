@@ -395,53 +395,28 @@ export async function advisorSkuHistory(sku, size = null) {
   return rows[0] || null;
 }
 
-// How fast a style ACTUALLY sells, from the platform sales export (`sales_history`,
-// loaded by scripts/import-sales.mjs). This is the honest answer to "is it a fast
-// mover" — `advisorSkuHistory` can only see pairs that went through our own status
-// flow, while this counts every sale.
-//
-// Matching splits BOTH SIDES on "/" and asks whether they overlap, because the dual-SKU
-// notation turns up on either end:
-//   · the export writes "315115-112/DD8959-100" for one sale, and
-//   · the SKU used during an inquiry can itself be a dual — that's how our catalogue and
-//     the PH grid carry a shoe listed under two codes.
-// So a lookup for DD8959-100, for 315115-112, or for the whole "315115-112/DD8959-100"
-// all find that sale — and find it ONCE, because it is still one row. Matching only one
-// direction (the query as a whole string) silently returned zero sales for exactly the
-// shoes most likely to be dual-listed.
-//
-// Windows are EST, like every date filter in this app: `current_date` would follow the
-// host's clock, and the PH team's day is a day ahead of the one we file sales under.
-export async function salesVelocity(sku) {
+// What OUR OWN records say about where a style is listed. Not the platforms' truth —
+// these are the flags PH ticks as they push a pair to each store. Worth reporting
+// alongside a real StockX read precisely because the two can disagree, and a
+// disagreement is the interesting part: "we've marked 6 listed on Alias" next to
+// "StockX says 0 active" is a question somebody should answer.
+export async function ourListingFlags(sku) {
   const codes = String(sku || '').split('/').map((c) => c.trim().toUpperCase()).filter(Boolean);
   if (!codes.length) return null;
-  // `&&` is array overlap, and it uses the GIN index on codes. NB: no `--` comments
-  // inside these templates — the shim collapses the query to one line, which would turn
-  // everything after the marker into a comment and truncate the statement.
-  const rows = await db()`
-    WITH today AS (SELECT (now() AT TIME ZONE 'America/New_York')::date AS d),
-    mine AS (SELECT sale_date FROM sales_history WHERE codes && ${codes}::text[])
+  const [row] = await db()`
     SELECT
-      (SELECT count(*)::int FROM mine)                                        AS sold_total,
-      (SELECT count(*)::int FROM mine, today WHERE sale_date > d - 30)        AS sold_30d,
-      (SELECT count(*)::int FROM mine, today WHERE sale_date > d - 90)        AS sold_90d,
-      (SELECT min(sale_date) FROM mine)                                       AS first_sale,
-      (SELECT max(sale_date) FROM mine)                                       AS last_sale,
-      (SELECT min(sale_date) FROM sales_history)                              AS data_from,
-      (SELECT max(sale_date) FROM sales_history)                              AS data_to
+      count(*) FILTER (WHERE sellable)::int                         AS on_hand,
+      count(*) FILTER (WHERE sellable AND added_to_intel_inv)::int   AS on_intel_inv,
+      count(*) FILTER (WHERE sellable AND synced_alias)::int         AS listed_alias,
+      count(*) FILTER (WHERE sellable AND synced_stockx)::int        AS listed_stockx,
+      count(*) FILTER (WHERE sellable AND synced_shopify)::int       AS listed_shopify
+    FROM (
+      SELECT i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify,
+             (i.status NOT IN ('sold','shipped','missing','issue','no_box')) AS sellable
+      FROM items i WHERE upper(i.sku) = ANY(${codes}::text[])
+    ) t
   `;
-  const r = rows[0];
-  // No sales_history at all is a DIFFERENT answer from "this style never sold", and the
-  // advisor must be able to tell them apart — one is missing data, the other is a fact.
-  if (!r || !r.data_from) return null;
-  const perWeek30 = r.sold_30d / (30 / 7);
-  return {
-    ...r,
-    per_week: Math.round(perWeek30 * 10) / 10,
-    // The same three bands the calculator's liquidity picker offers, so a suggestion
-    // here can fill that field without translation.
-    liquidity: perWeek30 >= 7 ? 'daily' : perWeek30 >= 1 ? 'weekly' : 'monthly',
-  };
+  return row || null;
 }
 
 /* ---------------------- Distributed lock (mutex) ---------------------- */

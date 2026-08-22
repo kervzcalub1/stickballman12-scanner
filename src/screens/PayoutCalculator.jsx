@@ -211,7 +211,7 @@ export function PayoutCalculator({ onHome, onSignOut }) {
       // hide a StockX quote we did get, and vice versa.
       // Per style, not per size — it rides beside the results.
       setVelocity(res.velocity || null);
-      if (res.velocity?.liquidity && res.velocity.sold_total > 0 && !liquidityTouched) {
+      if (res.velocity?.liquidity && res.velocity.sold > 0 && !liquidityTouched) {
         setLiquidity(res.velocity.liquidity);
       }
       setSx({
@@ -249,7 +249,7 @@ export function PayoutCalculator({ onHome, onSignOut }) {
   // "Measured" only while it still matches the data — the moment someone overrides it,
   // the number on screen is theirs. The evidence line still shows (what the shoe did is
   // true either way); this flag is what tells the advisor whose call the band is.
-  const measured = !!velocity && velocity.sold_total > 0 && !liquidityTouched && liquidity === velocity.liquidity;
+  const measured = !!velocity && velocity.sold > 0 && !liquidityTouched && liquidity === velocity.liquidity;
 
   // Publish what this screen is showing, so the app-wide advisor (the floating button)
   // can answer about the pair in front of you. Rebuilt whenever the numbers change, so a
@@ -276,9 +276,9 @@ export function PayoutCalculator({ onHome, onSignOut }) {
     liquidity,
     // Without this he'd cheerfully argue with a figure that came from the same table he
     // reads — "you've marked it weekly, but…" is only useful against a human guess.
-    liquiditySource: measured ? 'measured from our sales data' : (liquidity ? 'chosen by the buyer' : 'not set'),
-    salesVelocity: velocity && velocity.sold_total > 0
-      ? `${velocity.sold_30d} sold in 30 days, ${velocity.sold_90d} in 90, ${velocity.per_week}/week`
+    liquiditySource: measured ? 'measured from Shopify sales, all channels' : (liquidity ? 'chosen by the buyer' : 'not set'),
+    salesVelocity: velocity && velocity.sold > 0
+      ? `${velocity.sold} sold in ${velocity.days} days (${Object.entries(velocity.channels || {}).map(([c, n]) => `${c} ${n}`).join(', ')}), ${velocity.per_week}/week`
       : null,
     verdict: verdict
       ? `${CALL_LABEL[verdict.call]} — best on ${verdict.best.label}, profit ${money(verdict.best.profit)}, ROI ${pct(verdict.best.roi)}, risk ${RISK_LABEL[verdict.risk]}`
@@ -490,15 +490,16 @@ export function PayoutCalculator({ onHome, onSignOut }) {
           </div>
           {/* Say WHERE the answer came from. A picker that fills itself and doesn't
               explain why is a number nobody trusts — and this one drives the risk band. */}
-          {velocity && velocity.sold_total > 0 ? (
+          {velocity && velocity.sold > 0 ? (
             <span className="pc-liq-why muted sm">
-              from our sales: <strong>{velocity.sold_30d}</strong> sold in 30 days
-              {velocity.sold_90d > velocity.sold_30d ? `, ${velocity.sold_90d} in 90` : ''}
-              {' · '}{velocity.per_week}/week
+              <strong>{velocity.sold}</strong> sold in {velocity.days} days · {velocity.per_week}/week
+              {Object.keys(velocity.channels || {}).length
+                ? ` · ${Object.entries(velocity.channels).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} ${n}`).join(', ')}`
+                : ''}
               {liquidityTouched ? ' — you overrode this' : ''}
             </span>
           ) : velocity ? (
-            <span className="pc-liq-why muted sm">no sales on record for this style — pick one</span>
+            <span className="pc-liq-why muted sm">no sales in the last {velocity.days} days — pick one</span>
           ) : null}
         </div>
 

@@ -9,10 +9,10 @@
 //   · **Alias** — `configured` + `results[]` (Global Indicator, lowest listing,
 //     highest offer, last sold). Shares PH Price Inquiry's engine,
 //     `priceInquiryForSkuSizes`.
-//   · **velocity** — how fast this style actually sells, from the sales export
-//     (`sales_history`). Per STYLE, not per size, so it sits beside the results rather
-//     than inside them. Null when no export is loaded, which the screen must treat as
-//     "unknown", never as "slow".
+//   · **velocity** — how fast this style actually sells, from Shopify, which carries
+//     EVERY channel (GOAT, StockX, eBay, TikTok, the store). Per STYLE, not per size, so
+//     it sits beside the results rather than inside them. Null when Shopify isn't
+//     configured, which the screen must treat as "unknown", never as "slow".
 //   · **StockX** — `stockx.results[]` (lowest ask, highest bid) from the OFFICIAL
 //     Public API (api/_lib/stockx.js). Optional: with no StockX credentials set the
 //     endpoint still answers with Alias prices and `stockx.configured:false`, and the
@@ -26,9 +26,10 @@
 // endpoint is what makes the tool usable by the person actually holding the shoe —
 // Price Inquiry (api/ph/price-inquiry.js) stays PH + admin.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, salesVelocity } from '../_lib/db.js';
+import { dbConfigured } from '../_lib/db.js';
 import { priceInquiryForSkuSizes } from '../_lib/intake.js';
 import { stockxConfigured, stockxPriceForSkuSize } from '../_lib/stockx.js';
+import { shopifyConfigured, shopifyVelocity } from '../_lib/shopify.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -61,7 +62,7 @@ export default async function handler(req, res) {
     const [alias, sx, vel] = await Promise.allSettled([
       priceInquiryForSkuSizes(sku, sizes, { consigned }),
       quoteStockx(sku, sizes, upc),
-      dbConfigured() ? salesVelocity(sku) : Promise.resolve(null),
+      shopifyConfigured() ? shopifyVelocity(sku, { days: 30 }) : Promise.resolve(null),
     ]);
     if (alias.status === 'rejected') throw alias.reason;
     const { configured, results } = alias.value;
@@ -71,7 +72,8 @@ export default async function handler(req, res) {
       // would read as "StockX has no ask for this shoe", which is a different claim.
       : { configured: stockxConfigured(), results: [], error: 'StockX prices are unavailable right now.' };
     // Velocity is a bonus on this endpoint — a failed lookup must not cost the prices.
-    const velocity = vel.status === 'fulfilled' ? vel.value : null;
+    const v = vel.status === 'fulfilled' ? vel.value : null;
+    const velocity = v && !v.error ? v : null;
     return send(res, 200, { ok: true, configured, results, consigned, stockx, velocity });
   } catch (e) {
     console.error('[payout/quote]', e.message);

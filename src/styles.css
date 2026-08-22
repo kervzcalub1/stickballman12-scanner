@@ -78,10 +78,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Safe areas. `viewport-fit=cover` (index.html) lets the page use the full screen on a
+   notched phone, which means WE now owe the insets — otherwise the status bar sits on
+   the header and the home indicator sits on whatever is at the bottom. Every value is
+   `max(design padding, inset)` so nothing shrinks on a device without notches. */
 .app {
   max-width: 760px;
   margin: 0 auto;
-  padding: 16px 20px;
+  padding: max(16px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+           max(16px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
   width: 100%;
 }
 /* Use more of the screen on larger displays (desktop/large desktop). */
@@ -604,9 +609,17 @@ body {
 /* History defect-photo viewer */
 .tl-photos { margin-left: 8px; vertical-align: middle; }
 .btn.xs { padding: 1px 8px; font-size: 11px; min-height: 0; line-height: 1.6; }
-.lightbox-overlay { position: fixed; inset: 0; z-index: 250; background: rgba(0, 0, 0, 0.88); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.lightbox-overlay {
+  position: fixed; inset: 0; z-index: 250; background: rgba(0, 0, 0, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+           max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+}
 .lightbox { position: relative; max-width: 100%; max-height: 100%; overflow: auto; }
-.lightbox-close { position: fixed; top: 12px; right: 14px; z-index: 251; color: #fff; font-size: 26px; }
+.lightbox-close {
+  position: fixed; z-index: 251; color: #fff; font-size: 26px;
+  top: max(12px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right));
+}
 .lightbox-imgs { display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .lightbox-imgs img { max-width: 90vw; max-height: 85vh; object-fit: contain; border-radius: 8px; }
 
@@ -1771,7 +1784,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+           max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   z-index: 100;
   animation: overlay-in 0.15s ease-out;
 }
@@ -2190,7 +2204,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 @media (prefers-reduced-motion: reduce) { .copytext-cue { transition: opacity 0.12s; } }
 
 /* ---- Purchase Orders: supplier scan-out + PH create (Phase 1) ---- */
-.wrap-narrow { max-width: 720px; margin: 0 auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.wrap-narrow {
+  max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+           max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
 .empty-state { color: var(--muted); text-align: center; padding: 28px 18px; line-height: 1.5; }
 .po-err { background: rgba(213,69,63,0.12); border: 1px solid rgba(213,69,63,0.4); color: var(--err); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
 .po-flash { background: rgba(26,157,99,0.12); border: 1px solid rgba(26,157,99,0.4); color: var(--ok); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
@@ -3141,3 +3159,258 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* PO report format picker (PDF | CSV) — sits with the download buttons it governs. */
 .mf-fmt { flex: none; }
 .mf-fmt .seg-btn { padding: 3px 10px; font-size: 12px; }
+
+/* ------------------------------------------------------------------ */
+/* Payout Calculator (/payout, /ph/payout — screens/PayoutCalculator)  */
+/* Phone-first: warehouse runs this one-handed in a store aisle, so    */
+/* every field pair collapses to a single column under 560px and the   */
+/* verdict stays big enough to read at arm's length.                   */
+/* ------------------------------------------------------------------ */
+.pc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pc-head p { margin: 0; }
+.pc-h {
+  margin: 22px 0 10px; font-size: 13px; font-weight: 700; letter-spacing: 0.4px;
+  text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.pc-h .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.pc-note { margin: 8px 0 0; }
+
+.pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.pc-grid.three { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 560px) {
+  .pc-grid, .pc-grid.three { grid-template-columns: 1fr 1fr; }
+}
+.pc-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.pc-field-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.pc-field-hint { font-size: 11px; }
+/* The $ / % sits INSIDE the box: a dollar figure and a percentage look identical at
+   a glance, and on this screen mixing them up is the difference between a buy and a
+   loss. Padding is reserved for the affix so a long number can't slide under it. */
+.pc-input-wrap { position: relative; display: block; }
+.pc-input-wrap input { width: 100%; }
+.pc-input-wrap.has-prefix input { padding-left: 22px; }
+.pc-input-wrap.has-suffix input { padding-right: 26px; }
+.pc-affix {
+  position: absolute; top: 50%; transform: translateY(-50%); left: 10px;
+  color: var(--muted); font-size: 13px; pointer-events: none;
+}
+.pc-affix.suffix { left: auto; right: 10px; }
+
+/* Live Alias market strip — each cell is a button that fills the sale price. */
+.pc-market { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 10px 12px; }
+.pc-market-head { margin-bottom: 8px; }
+.pc-market-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 560px) { .pc-market-grid { grid-template-columns: 1fr 1fr; } }
+.pc-market-cell {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); color: var(--text); cursor: pointer; text-align: left;
+}
+.pc-market-cell:hover:not(:disabled) { border-color: var(--primary); }
+.pc-market-cell:disabled { opacity: 0.45; cursor: default; }
+.pc-market-label { font-size: 11px; color: var(--muted); }
+.pc-market-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.pc-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.pc-stat { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 10px 12px; }
+.pc-stat-label { display: block; font-size: 12px; color: var(--muted); }
+.pc-stat-val { display: block; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pc-stat-val.up { color: var(--ok); }
+
+.pc-details { margin-top: 10px; }
+.pc-details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.pc-break { width: 100%; margin-top: 8px; font-size: 13px; border-collapse: collapse; }
+.pc-break td { padding: 3px 0; color: var(--muted); }
+.pc-break-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+.pc-break-val.down { color: var(--err); }
+.pc-break-val.up { color: var(--muted); }
+.pc-break-total td { border-top: 1px solid var(--border); padding-top: 6px; font-weight: 700; color: var(--text); }
+.pc-profit td { font-weight: 700; }
+.pc-profit.up td, .pc-profit.up .pc-break-val { color: var(--ok); }
+.pc-profit.down td, .pc-profit.down .pc-break-val { color: var(--err); }
+
+.pc-payouts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .pc-payouts { grid-template-columns: 1fr; } }
+.pc-payout { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 12px; }
+.pc-payout-head { font-weight: 700; letter-spacing: 0.3px; }
+.pc-payout-empty { margin: 10px 0 0; }
+
+.pc-liq { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+
+/* The call. Colour carries it — this is read from arm's length, mid-aisle. */
+.pc-verdict { border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--panel-2); }
+.pc-verdict.buy { border-color: rgba(46, 204, 113, 0.45); background: rgba(46, 204, 113, 0.08); }
+.pc-verdict.watch { border-color: rgba(224, 164, 88, 0.45); background: rgba(224, 164, 88, 0.08); }
+.pc-verdict.pass { border-color: rgba(255, 107, 107, 0.45); background: rgba(255, 107, 107, 0.08); }
+.pc-verdict-top { display: flex; align-items: baseline; gap: 10px; }
+.pc-verdict-call { font-size: 26px; font-weight: 800; letter-spacing: 0.5px; }
+.pc-verdict.buy .pc-verdict-call { color: var(--ok); }
+.pc-verdict.watch .pc-verdict-call { color: #e0a458; }
+.pc-verdict.pass .pc-verdict-call { color: var(--err); }
+.pc-verdict-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px 16px; margin-top: 12px; }
+.pc-verdict-rows > div { display: flex; flex-direction: column; gap: 2px; }
+.pc-verdict-rows span:last-child { font-weight: 700; font-variant-numeric: tabular-nums; }
+.pc-verdict-rows .up { color: var(--ok); }
+.pc-verdict-rows .down { color: var(--err); }
+.pc-risk.low { color: var(--ok); }
+.pc-risk.medium { color: #e0a458; }
+.pc-risk.high { color: #e08f5a; }
+.pc-risk.loss { color: var(--err); }
+.pc-verdict-note { margin: 12px 0 0; font-size: 13px; color: var(--text); }
+/* A catalogue near-miss on StockX — the right shoe in the wrong colourway prices
+   very differently, so the warning sits ON the strip, not in a tooltip. */
+.pc-market-note {
+  margin: 0 0 8px; padding: 6px 9px; border-radius: 8px; font-size: 12px;
+  color: #e0a458; background: rgba(224, 164, 88, 0.12); border: 1px solid rgba(224, 164, 88, 0.3);
+}
+/* Alias basis toggle — sits with the size chips because it governs what a tap fetches. */
+.pc-basis { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+
+/* Payout advisor — a chat that reads the calculation above it. */
+/* The advisor's inline code — a SKU or a field name, not a code block. */
+.pc-msg-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+  border-radius: 5px; padding: 0 4px;
+}
+.pc-msg-body strong { font-weight: 700; color: var(--text); }
+
+/* ------------------------------------------------------------------ */
+/* The app-wide advisor — floating button + panel (components/Advisor)  */
+/* ------------------------------------------------------------------ */
+.advisor-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 60;
+  width: 54px; height: 54px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: var(--panel-2); color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); cursor: pointer;
+}
+.advisor-fab svg { width: 36px; height: 36px; }
+.advisor-fab:hover { border-color: var(--primary); background: var(--panel); }
+.advisor-fab.on { background: var(--panel-2); color: var(--text); border-color: var(--border); font-size: 18px; }
+/* Clear of the iPhone home indicator, which sits exactly where a bottom-right FAB wants to be. */
+@supports (padding: max(0px)) {
+  .advisor-fab { bottom: max(18px, env(safe-area-inset-bottom)); }
+}
+
+.advisor-panel {
+  position: fixed; right: 18px; bottom: 82px; z-index: 60;
+  width: min(420px, calc(100vw - 36px)); max-height: min(70vh, 620px);
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55); padding: 12px;
+}
+/* On a phone it's a bottom sheet — a 420px card floating over a 390px screen is just
+   a worse full-width panel. */
+@media (max-width: 560px) {
+  .advisor-panel {
+    right: 0; left: 0; bottom: 0; width: 100%; max-height: 82vh;
+    border-radius: 16px 16px 0 0; padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .advisor-fab { bottom: max(14px, env(safe-area-inset-bottom)); right: 14px; }
+}
+.advisor-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.advisor-title { font-weight: 700; letter-spacing: 0.3px; }
+.advisor-head .btn { margin-left: auto; }
+.advisor-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
+.advisor-suggest { display: flex; flex-wrap: wrap; gap: 8px; }
+.advisor-ask { display: flex; gap: 8px; margin-top: 10px; }
+.advisor-ask input { flex: 1; min-width: 0; }
+.advisor-ask .btn { flex: none; }
+.advisor-note { margin: 8px 0 0; }
+.advisor-empty { margin: 0; }
+
+/* Alex Head — the thread. Reads like a messaging app: his replies on the left behind an
+   avatar, yours on the right, each stamped in EST like every other time in this app. */
+.ah-avatar {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+}
+.ah-avatar.sm { width: 24px; height: 24px; font-size: 9px; align-self: flex-end; margin-bottom: 2px; }
+.advisor-head .ah-sub { margin-left: 2px; }
+
+.ah-row { display: flex; gap: 8px; align-items: flex-end; }
+.ah-row.user { justify-content: flex-end; }
+
+.ah-msg {
+  display: flex; flex-direction: column; gap: 3px;
+  max-width: 84%; padding: 8px 11px; border-radius: 14px;
+}
+/* The tail corners: his bubbles square off bottom-left, yours bottom-right, which is
+   what makes a stack of them read as one conversation rather than a list of cards. */
+.ah-msg.assistant, .ah-msg.error { border-bottom-left-radius: 5px; }
+.ah-msg.user { border-bottom-right-radius: 5px; }
+.ah-msg.assistant { background: var(--panel-2); border: 1px solid var(--border); }
+.ah-msg.user { background: rgba(79, 124, 255, 0.16); border: 1px solid rgba(79, 124, 255, 0.3); }
+.ah-msg.error { background: rgba(255, 107, 107, 0.10); border: 1px solid rgba(255, 107, 107, 0.3); }
+
+.ah-who {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted);
+}
+.ah-time { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 10px; opacity: 0.7; }
+/* Keep the model's line breaks — it lays arithmetic out across lines. */
+.ah-body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.ah-body strong { font-weight: 700; color: var(--text); }
+.ah-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+  border-radius: 5px; padding: 0 4px;
+}
+
+/* Typing dots while he's looking something up — a tool call can take a few seconds, and
+   a frozen panel reads as broken. */
+.ah-typing { display: inline-flex; gap: 4px; align-items: center; height: 18px; }
+.ah-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: ah-bounce 1.2s infinite; }
+.ah-typing i:nth-child(2) { animation-delay: 0.15s; }
+.ah-typing i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ah-bounce { 0%, 60%, 100% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .ah-typing i { animation: none; } }
+/* Why the liquidity band says what it says. */
+.pc-liq-why { flex-basis: 100%; }
+.pc-liq-why strong { color: var(--text); }
+/* Alex Head's answers: paragraphs, short lists, and the stock caveat. */
+.ah-body .ah-p { margin: 0 0 6px; }
+.ah-body .ah-p:last-child { margin-bottom: 0; }
+.ah-list { margin: 2px 0 6px; padding-left: 16px; list-style: disc; }
+.ah-list li { margin: 1px 0; }
+/* Attached by the UI under every stock answer, so it can't be forgotten or reworded. */
+.ah-caveat {
+  display: block; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border);
+  font-size: 11px; line-height: 1.45; color: var(--muted);
+}
+
+/* Closing the panel. The FAB used to double as the close control — fine on desktop
+   where it sits beside the panel, a trap on a phone where the bottom sheet covers it
+   completely. So: an explicit ✕ in the header, plus a tappable backdrop. */
+.advisor-close {
+  flex: none; width: 28px; height: 28px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  font-size: 13px; line-height: 1; cursor: pointer;
+}
+.advisor-close:hover { color: var(--text); border-color: var(--primary); }
+.advisor-head .btn.ghost.sm { margin-left: auto; }
+.advisor-head .btn.ghost.sm + .advisor-close { margin-left: 6px; }
+.advisor-head .advisor-close:first-of-type { margin-left: auto; }
+
+/* Desktop: no backdrop — the panel is a corner popover and the page behind it stays
+   usable. Phone: a dim layer that closes on tap, which is what a sheet implies. */
+.advisor-backdrop { display: none; }
+@media (max-width: 560px) {
+  .advisor-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 59;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  /* The sheet covers it, so a floating button there is just an invisible tap target. */
+  .advisor-fab.on { display: none; }
+}
+/* On a phone the header has a name, a subtitle, Clear and ✕ in ~340px. The subtitle is
+   the one that can go — it explains the panel, and by the time you've opened it you
+   know. Keeping it wrapped "Alex Head" onto two lines instead. */
+@media (max-width: 560px) {
+  .advisor-head .ah-sub { display: none; }
+  .advisor-title { white-space: nowrap; }
+}

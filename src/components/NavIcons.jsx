@@ -87,6 +87,14 @@ const PATHS = {
     <circle cx="7.5" cy="7.5" r="1.2" />
     <path d="M10.5 13.5l2 2 4-4" />
   </>),
+  // Payout Calculator — a calculator: keypad, display, and a bottom row that reads
+  // as the total, since what the screen is for is the number at the end.
+  payout: (<>
+    <rect x="5" y="2.5" width="14" height="19" rx="2" />
+    <path d="M8 6.5h8" />
+    <path d="M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5h.01" />
+    <path d="M8.5 18h7" />
+  </>),
   // In-Store Buying — a shopping bag
   instore: (<>
     <path d="M6 8h12l1 12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
@@ -146,6 +154,10 @@ const INLINE = {
   tag: (<>
     <path d="M3 11.5V4a1 1 0 0 1 1-1h7.5a1 1 0 0 1 .7.3l8.5 8.5a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-8.5-8.5a1 1 0 0 1-.3-.7z" />
     <circle cx="7.5" cy="7.5" r="1.2" />
+  </>),
+  // Advisor — a speech bubble. Used by the floating advisor button.
+  chat: (<>
+    <path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
   </>),
   gear: (<>
     <circle cx="12" cy="12" r="3" />

@@ -26,7 +26,9 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
   aliasAuthed(fn), aliasPost(path,body)`.
 - **Auto-relogin on 401**: `aliasAuthed` detects an auth failure, calls
   `aliasLogin()` (env `ALIAS_EMAIL` / `ALIAS_PASSWORD`), and retries once.
-- ⚠️ Auto-relogin is **Alias-only — never StockX**.
+- ⚠️ Auto-relogin is **Alias-only — never the StockX *UPC proxy***. (The separate
+  **official StockX Public API** client added 2026-08-22 *does* re-mint its token on a
+  401 — see the section below. Different client, different rule.)
 - Login + UPC search use the Railway bypass proxy
   (`bypass-alias-host-railway-alias.up.railway.app`, `/alias-login` +
   `/alias-upc-search`).
@@ -175,8 +177,63 @@ server-side image fetch is unioned in **`api/_lib/imgsources.js`**.
   a personal/noncommercial licence only; the adidas set is third-party republished. Compositing
   into Brand & Fill carries the same exposure as direct use. Unresolved — a business decision.
 
+## StockX Public API — official (`api/_lib/stockx.js`)
+Added 2026-08-22 for the **Payout Calculator**'s lowest-ask / highest-bid column.
+Entirely separate from the keyless UPC proxy below, and from KicksDB.
+
+- **Base** `https://api.stockx.com/v2` · token endpoint
+  `https://accounts.stockx.com/oauth/token` (audience `gateway.stockx.com`).
+- **Two credentials on every call**: `x-api-key: STOCKX_API_KEY` **and**
+  `Authorization: Bearer <access token>`. The access token (~12 h) is minted here from
+  a long-lived `STOCKX_REFRESH_TOKEN`, cached, and renewed 5 min early; a 401 clears
+  it and retries **once**. Getting the refresh token the first time is a
+  PerimeterX-guarded **browser** flow a human does once in the portal — the server
+  never automates that step. `invalid_grant` on refresh = revoked, redo it.
+- **Path**: `/catalog/search` (style ID matched EXACTLY afterwards against
+  `products[].styleId`, so `DZ5485` can't silently return `DZ5485-400` — an inexact hit
+  is returned flagged, and the screen warns) → `/catalog/products/{id}/variants` (a bare
+  ARRAY of `ProductVariant`; size = `variantValue`, falling back to a US row of
+  `sizeChart.availableConversions[]`) → `/catalog/products/{id}/variants/{variantId}/market-data?currencyCode=USD`.
+  ⚠️ **Never send `country`.** The published spec still lists it as optional; the live
+  API returns **400 — "not supported anymore. Market data will be based on your
+  market."** Found by `probe-stockx.mjs` on the first real call, and pinned by a test.
+- **Shortcut when a UPC is in hand**: `/catalog/products/variants/gtins/{gtin}`
+  (`stockxVariantByGtin`) returns productId AND variantId in ONE call — no text search,
+  no size matching, so it cannot land on the wrong colourway or size. `payout/quote`
+  takes an optional `upc` and prefers this path. The screen doesn't send one yet;
+  wiring the scanner to it is the obvious next step.
+- **Field names come from the OpenAPI spec** (`developer.stockx.com/swagger.json`,
+  "StockX Public API" 2.0.0, read 2026-08-22), not from guesswork:
+  `lowestAskAmount`, `highestBidAmount`, `sellFasterAmount`, `earnMoreAmount` —
+  with `standardMarketData.{lowestAsk,highestBidAmount,earnMore,sellFaster}` as the
+  fallback. **Every amount is a decimal STRING** (`"100"`), so parse, but never
+  cents-correct: these are whole currency units and a $150,000 grail must survive.
+  `flexMarketData` / `directMarketData` are deliberately ignored — different
+  fulfilment programmes, prices we can't actually sell at.
+- ⚠️ **There is NO last-sale field in the Public API.** stockx.com shows one and the
+  Android gateway returns one; the sanctioned API does not (the string `lastSale`
+  appears nowhere in the spec). The calculator shows ask, bid, "earn more" and "sell
+  faster" for StockX. Don't add a Last-sale column expecting it to fill in.
+- **Quota is 25,000 requests / 24 h, account-wide**, so everything caches: catalogue
+  12 h, market data 10 min, and a multi-size quote runs **sequentially** to reuse the
+  cached product/variant list instead of re-fetching it per size.
+- **Optional by design.** `stockxConfigured()` requires all four env vars; without
+  them the quote endpoint still answers with Alias prices and the calculator keeps its
+  StockX column manual. StockX being down must never cost the buyer their Alias number.
+- **`node scripts/probe-stockx.mjs <SKU> <size>`** walks token → search → variants →
+  market data and names the link that broke; `--raw` prints the untouched JSON if the
+  responses ever drift from the spec.
+- 🚫 **What this is not.** Scraper projects reach StockX market data through
+  `gateway.stockx.com/api/graphql` using an `x-api-key` extracted from the decompiled
+  Android APK, queries decompiled from `BrowseQuery.java`, and a spoofed `okhttp4_android_13`
+  TLS fingerprint to defeat bot detection. We deliberately do **not** do that: it's
+  circumvention, it dies whenever StockX rotates the key, and it fails by showing
+  silently wrong prices on a buy call. If `tlsclientwrapper` or a hardcoded StockX key
+  ever appears in this repo, delete it.
+
 ## Railway proxies
-- StockX: separate keyless Railway host (no auto-relogin).
+- StockX **UPC search**: separate keyless Railway host (no auto-relogin). Unrelated to
+  the official Public API client above.
 - Alias: the bypass proxy above.
 
 ## Object storage — Cloudflare R2 (V6 photos)

@@ -24,6 +24,7 @@ import { ItemCosts } from './ItemCosts.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { ImageFinder } from './ImageFinder.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
+import { PayoutCalculator } from './PayoutCalculator.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
@@ -58,6 +59,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'payout') return <PayoutCalculator onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'postatus') return <PoOverview onHome={() => goPage(null)} onSignOut={onSignOut} />;
   // PH closes out the stragglers too — they're the ones chasing the supplier over a
@@ -98,6 +100,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="inventory" /></span>
             <span className="home-card-title">Price Inquiry</span>
             <span className="home-card-sub">Look up live Alias prices for any SKU — lowest ask, highest offer, last sold &amp; Global Indicator</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('payout')}>
+            <span className="home-card-icon"><NavIcon name="payout" /></span>
+            <span className="home-card-title">Payout Calculator</span>
+            <span className="home-card-sub">Cost after discounts vs. what Alias/StockX pay out after fees — is this pair a buy?</span>
           </button>
           <button className="home-card" onClick={() => goPage('inventory')}>
             <span className="home-card-icon"><NavIcon name="inventory" /></span>

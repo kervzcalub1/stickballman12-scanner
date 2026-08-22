@@ -75,6 +75,15 @@ export const articleById = (id) => SOP_ARTICLES.find((a) => a.id === id);
 // lists, so supervising still works without a blanket override: previously
 // `role === 'admin'` returned true for EVERYTHING, which meant an admin browsing as
 // "Supplier" was shown warehouse procedures too.
+// Which SOP role an ACCOUNT is allowed to read. warehouse / ph_team / supplier are
+// LOCKED to their own desk's procedures; admin and superadmin browse everything.
+//
+// This is a permission rule, not a filter default, so it lives beside the search it
+// governs — the SOP screen and the app-wide advisor both apply it, and a rule copied
+// into two files is a rule that eventually disagrees with itself.
+export const SOP_LOCKED_ROLES = ['warehouse', 'ph_team', 'supplier'];
+export const sopRoleForAccount = (role) => (SOP_LOCKED_ROLES.includes(role) ? role : 'all');
+
 export function visibleTo(article, role) {
   if (role === 'all') return true;
   return article.roles.includes(role);

@@ -16,6 +16,12 @@ export const DEFAULTS = {
   // signed paper and the person who works in a spreadsheet are doing the same job two
   // different ways, and neither should flip the other's default.
   reportFormat: 'pdf',
+  // Payout Calculator RATES (store %, promo %, gift card %, cashback %, tax %). Per
+  // device because they're per store trip: the same discount stack and sales tax hold
+  // all afternoon in one shop, and retyping them for every pair is how a wrong number
+  // ends up in a buy call. The per-pair amounts (shelf price, coupon, tip, shipping,
+  // sale prices) are deliberately NOT kept — they must start empty for each shoe.
+  payoutRates: {},
 };
 
 export function loadPrefs() {

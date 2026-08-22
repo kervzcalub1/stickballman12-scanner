@@ -25,6 +25,8 @@ import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
 import { ShelvePage } from './screens/ShelvePage.jsx';
 import { Locations } from './screens/Locations.jsx';
 import { InstoreListing } from './screens/InstoreListing.jsx';
+import { PayoutCalculator } from './screens/PayoutCalculator.jsx';
+import { Advisor } from './components/Advisor.jsx';
 import { ExistingStock } from './screens/ExistingStock.jsx';
 import { SupplierApp } from './screens/SupplierApp.jsx';
 import { Reconciliation } from './screens/Reconciliation.jsx';
@@ -114,6 +116,12 @@ export default function App() {
   // (the server also rejects role-gated calls with 428 until this is done).
   if (user.mustChange) return <ForcedPasswordChange user={user} onChanged={onAuthed} onSignOut={signOut} />;
 
+  // The advisor rides along on every STAFF screen, attached here rather than in each of
+  // the twenty-five screens below. Deliberately absent from the three returns above it:
+  // Auth and the forced password change are pre-auth, and the supplier portal is a
+  // different app with none of this data in it.
+  const withAdvisor = (screen) => (<>{screen}<Advisor user={user} /></>);
+
   const enterPh = () => { setPhMode(true); if (window.location.pathname !== '/ph') window.history.pushState(null, '', '/ph'); };
   const exitPh = () => { setPhMode(false); window.history.pushState(null, '', pathForView('home')); setView('home'); };
 
@@ -134,8 +142,8 @@ export default function App() {
     );
   }
 
-  if (user.role === 'ph_team') return <PHTeamApp user={user} onSignOut={signOut} />;
-  if (user.role === 'superadmin' && phMode) return <PHTeamApp user={user} onSignOut={signOut} onExit={exitPh} />;
+  if (user.role === 'ph_team') return withAdvisor(<PHTeamApp user={user} onSignOut={signOut} />);
+  if (user.role === 'superadmin' && phMode) return withAdvisor(<PHTeamApp user={user} onSignOut={signOut} onExit={exitPh} />);
 
   const go = (v) => {
     setView(v);
@@ -148,33 +156,34 @@ export default function App() {
   // Jump straight from "batch saved, but this PO is 2 short" into that PO's report.
   // go() lands on /reconcile and clears the query, so the ?po= is written after.
   const openReconcile = (poId) => { setBatchContext(null); go('reconcile'); writeParam('po', poId); };
-  if (view === 'receiving') return <Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onOpenReconcile={openReconcile} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />;
-  if (view === 'rescale') return <Receiving mode="rescale" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'receiving') return withAdvisor(<Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onOpenReconcile={openReconcile} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />);
+  if (view === 'rescale') return withAdvisor(<Receiving mode="rescale" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
   // In-store buying: admin/warehouse only. ph_team never reaches here (they short-
   // circuit to PHTeamApp above), so the normal Home/router already gates it.
-  if (view === 'instore') return <Receiving mode="instore" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'instore-listing') return <InstoreListing onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'instore') return withAdvisor(<Receiving mode="instore" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'instore-listing') return withAdvisor(<InstoreListing onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'payout') return withAdvisor(<PayoutCalculator onHome={() => go('home')} onSignOut={signOut} />);
   // Existing (old) stock: same admin/warehouse gate as in-store — ph_team short-
   // circuits to PHTeamApp above and never reaches this router.
-  if (view === 'existing-stock') return <ExistingStock navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'existing-stock') return withAdvisor(<ExistingStock navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
   // `box` is set when continuing an EXISTING pending box; absent = add a new one.
-  if (view === 'batches') return <BatchPage initialBatchId={batchReturnId} onAddBox={(batch, box = null) => { setBatchContext({ ...batch, box }); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'inventory') return <Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'report') return <PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'deleted') return <DeletedItems onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'vin-stock') return <VinStock onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'access') return <CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'settings') return <Settings onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'nobox') return <NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />;
+  if (view === 'batches') return withAdvisor(<BatchPage initialBatchId={batchReturnId} onAddBox={(batch, box = null) => { setBatchContext({ ...batch, box }); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'inventory') return withAdvisor(<Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'report') return withAdvisor(<PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'deleted') return withAdvisor(<DeletedItems onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'access') return withAdvisor(<CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'settings') return withAdvisor(<Settings onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'nobox') return withAdvisor(<NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Replacement box labels — admin/warehouse (ph_team short-circuits to PHTeamApp above).
-  if (view === 'costs') return <ItemCosts onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'box-labels') return <BoxLabels navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'sold') return <StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'shipped') return <StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'rescalereq') return <RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'shelve') return <ShelvePage navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'locations') return <Locations onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'reconcile') return <Reconciliation canReconcile={user.role === 'warehouse' || isPrivilegedRole(user.role)} onHome={() => go('home')} onSignOut={signOut} />;
-  if (view === 'sop') return <Sop user={user} navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />;
-  return <Home user={user} onPick={(v) => { setBatchContext(null); if (v === 'ph') return enterPh(); go(v); }} onSignOut={signOut} />;
+  if (view === 'costs') return withAdvisor(<ItemCosts onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'box-labels') return withAdvisor(<BoxLabels navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'sold') return withAdvisor(<StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'shipped') return withAdvisor(<StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'rescalereq') return withAdvisor(<RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'shelve') return withAdvisor(<ShelvePage navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'locations') return withAdvisor(<Locations onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'reconcile') return withAdvisor(<Reconciliation canReconcile={user.role === 'warehouse' || isPrivilegedRole(user.role)} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'sop') return withAdvisor(<Sop user={user} navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
+  return withAdvisor(<Home user={user} onPick={(v) => { setBatchContext(null); if (v === 'ph') return enterPh(); go(v); }} onSignOut={signOut} />);
 }

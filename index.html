@@ -2,7 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) resolve to anything but
+         zero on iOS. Without it the safe-area padding written across this app — the
+         camera overlay, the advisor sheet, the top bar — is silently inert, which is
+         why the status bar was sitting on top of the header. Paired with insets on
+         .app and the fixed elements below; the two only work together. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
     <meta name="referrer" content="no-referrer" />
     <!-- Circular SVG favicon for modern browsers; square PNG fallback (Safari) -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

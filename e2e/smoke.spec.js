@@ -152,8 +152,17 @@ test.describe('manifest print', () => {
     // rather than fail on unrelated data.
     if (!(await appears(first))) test.skip(true, 'no open POs');
     await first.click();
-    await expect(page.locator('.po-receive-banner .mf-print')).toBeVisible();
-    await expect(page.locator('.po-receive-banner .mf-print button')).toHaveCount(2);
+    const mf = page.locator('.po-receive-banner .mf-print');
+    await expect(mf).toBeVisible();
+    // Assert the CONTROLS, not a button count. `.mf-print` holds the two downloads the
+    // banner always offers, the PDF|CSV picker that governs them, and up to two more
+    // buttons that appear only once stock has been received or a box actually differs.
+    // A bare toHaveCount(2) was written before the format picker existed, so it broke
+    // the moment a PO with any data was on screen — and it passed in CI only because
+    // the seeded DB has no open PO, which skips the test entirely. Green by absence.
+    await expect(mf.getByRole('button', { name: 'Per box' })).toBeVisible();
+    await expect(mf.getByRole('button', { name: 'Whole order' })).toBeVisible();
+    await expect(mf.locator('.mf-fmt .seg-btn')).toHaveCount(2); // PDF | CSV
   });
 
   test('warehouse: on the PO Reconciliation report', async ({ page }) => {

@@ -11,7 +11,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
-import { getAdvisorContext } from '../lib/advisorContext.js';
+import { getAdvisorContext, ADVISOR_NAME, ADVISOR_INITIALS } from '../lib/advisorContext.js';
+import { estClock } from '../lib/format.js';
 
 // The advisor writes markdown — mostly **bold** around the numbers or the step that
 // carries the answer, occasionally `code` for a SKU or VIN. Render that as React
@@ -67,18 +68,18 @@ export function Advisor({ user }) {
   async function ask(text) {
     const q = String(text ?? question).trim();
     if (!q || asking) return;
-    const next = [...chat, { role: 'user', content: q }];
+    const next = [...chat, { role: 'user', content: q, at: Date.now() }];
     setChat(next); setQuestion(''); setAsking(true);
     try {
       // Read the context at ASK time, not at open time: someone types a cost, then
       // asks. The answer must reflect the screen as it is now.
       const res = await api.advisorAsk(next, getAdvisorContext());
-      setChat([...next, { role: 'assistant', content: res.reply }]);
+      setChat([...next, { role: 'assistant', content: res.reply, at: Date.now() }]);
     } catch (err) {
       // 503 is a setup fact, not a failed question — retire the panel rather than
       // leaving an error bubble that invites a retry which cannot work.
       if (err.status === 503) { setOff(err.message); setChat(chat); return; }
-      setChat([...next, { role: 'error', content: err.message }]);
+      setChat([...next, { role: 'error', content: err.message, at: Date.now() }]);
     } finally { setAsking(false); }
   }
 
@@ -88,17 +89,18 @@ export function Advisor({ user }) {
   return (
     <>
       <button type="button" className={`advisor-fab${open ? ' on' : ''}`}
-        aria-label={open ? 'Close the advisor' : 'Ask the advisor'} aria-expanded={open}
+        aria-label={open ? `Close ${ADVISOR_NAME}` : `Ask ${ADVISOR_NAME}`} aria-expanded={open}
         onClick={() => { setOpen((o) => !o); setTimeout(() => inputRef.current?.focus(), 60); }}>
         {open ? <span aria-hidden="true">✕</span> : <Icon name="chat" />}
       </button>
 
       {open && (
-        <div className="advisor-panel" role="dialog" aria-label="Advisor">
+        <div className="advisor-panel" role="dialog" aria-label={ADVISOR_NAME}>
           <div className="advisor-head">
-            <span className="advisor-title">Advisor</span>
-            <span className="muted sm">
-              {ctx?.page ? `sees ${ctx.page}` : 'ask about stock, backlog or how to do something'}
+            <span className="ah-avatar" aria-hidden="true">{ADVISOR_INITIALS}</span>
+            <span className="advisor-title">{ADVISOR_NAME}</span>
+            <span className="muted sm ah-sub">
+              {ctx?.page ? `sees ${ctx.page}` : 'stock, backlog & how-to'}
             </span>
             {chat.length > 0 && (
               <button type="button" className="btn ghost sm" onClick={() => setChat([])}>Clear</button>
@@ -119,17 +121,28 @@ export function Advisor({ user }) {
                   </div>
                 )}
                 {chat.map((m, i) => (
-                  <div className={`pc-msg ${m.role}`} key={i}>
-                    <span className="pc-msg-who">{m.role === 'user' ? 'You' : m.role === 'error' ? 'Couldn’t answer' : 'Advisor'}</span>
-                    <span className="pc-msg-body">
-                      {m.role === 'assistant' ? <RichText text={m.content} /> : m.content}
-                    </span>
+                  <div className={`ah-row ${m.role}`} key={i}>
+                    {m.role !== 'user' && <span className="ah-avatar sm" aria-hidden="true">{ADVISOR_INITIALS}</span>}
+                    <div className={`ah-msg ${m.role}`}>
+                      <span className="ah-who">
+                        {m.role === 'user' ? 'You' : m.role === 'error' ? `${ADVISOR_NAME} couldn’t answer` : ADVISOR_NAME}
+                        {m.at ? <span className="ah-time">{estClock(m.at)}</span> : null}
+                      </span>
+                      <span className="ah-body">
+                        {m.role === 'assistant' ? <RichText text={m.content} /> : m.content}
+                      </span>
+                    </div>
                   </div>
                 ))}
                 {asking && (
-                  <div className="pc-msg assistant">
-                    <span className="pc-msg-who">Advisor</span>
-                    <span className="pc-msg-body muted">Looking it up…</span>
+                  <div className="ah-row assistant">
+                    <span className="ah-avatar sm" aria-hidden="true">{ADVISOR_INITIALS}</span>
+                    <div className="ah-msg assistant">
+                      <span className="ah-who">{ADVISOR_NAME}</span>
+                      <span className="ah-body ah-typing" aria-label="typing">
+                        <i /><i /><i />
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -137,14 +150,14 @@ export function Advisor({ user }) {
               <form className="advisor-ask" onSubmit={(e) => { e.preventDefault(); ask(); }}>
                 <input ref={inputRef} type="text" value={question} disabled={asking}
                   onChange={(e) => setQuestion(e.target.value)}
-                  placeholder="Ask about stock, a price, or how to do something…"
+                  placeholder={`Message ${ADVISOR_NAME}…`}
                   aria-label="Ask the advisor" />
                 <button type="submit" className="btn" disabled={asking || !question.trim()}>
                   {asking ? '…' : 'Ask'}
                 </button>
               </form>
               <p className="advisor-note muted sm">
-                It reads our stock and our written procedures. It can be wrong — the screens are the source of truth.
+{ADVISOR_NAME} reads our stock and our written procedures. He can be wrong — the screens are the source of truth.
               </p>
             </>
           )}

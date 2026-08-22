@@ -43,7 +43,7 @@ test('it opens, answers, and closes on Escape', async ({ page }) => {
   await expect(panel(page)).toBeVisible();
   await panel(page).locator('.advisor-ask input').fill('how do I shelve a pair?');
   await panel(page).locator('.advisor-ask button').click();
-  await expect(panel(page).locator('.pc-msg.assistant')).toContainText('Scan the shelf');
+  await expect(panel(page).locator('.ah-msg.assistant')).toContainText('Scan the shelf');
   await page.keyboard.press('Escape');
   await expect(panel(page)).toHaveCount(0);
 });
@@ -56,7 +56,7 @@ test('a screen with no context still gets a working advisor', async ({ page }) =
   await fab(page).click();
   await panel(page).locator('.advisor-ask input').fill('what needs doing?');
   await panel(page).locator('.advisor-ask button').click();
-  await expect(panel(page).locator('.pc-msg.assistant')).toBeVisible();
+  await expect(panel(page).locator('.ah-msg.assistant')).toBeVisible();
   // No page context is a valid state — the server can still use its own tools.
   expect(sent.context).toEqual({});
 });
@@ -82,7 +82,7 @@ test('on the calculator it carries that screen’s numbers', async ({ page }) =>
   await fab(page).click();
   await panel(page).locator('.advisor-ask input').fill('good buy?');
   await panel(page).locator('.advisor-ask button').click();
-  await expect(panel(page).locator('.pc-msg.assistant')).toBeVisible();
+  await expect(panel(page).locator('.ah-msg.assistant')).toBeVisible();
 
   expect(sent.context.page).toContain('Payout Calculator');
   expect(sent.context.sku).toBe('DD1391-100');
@@ -102,7 +102,7 @@ test('leaving a screen drops its context — a stale answer is worse than none',
   await fab(page).click();
   await panel(page).locator('.advisor-ask input').fill('anything?');
   await panel(page).locator('.advisor-ask button').click();
-  await expect(panel(page).locator('.pc-msg.assistant')).toBeVisible();
+  await expect(panel(page).locator('.ah-msg.assistant')).toBeVisible();
   expect(sent.context.page).toBeUndefined();
 });
 
@@ -114,7 +114,7 @@ test('an unconfigured server retires the panel instead of erroring at you', asyn
   await panel(page).locator('.advisor-ask input').fill('hello');
   await panel(page).locator('.advisor-ask button').click();
   await expect(page.getByText(/isn’t configured on this server/)).toBeVisible();
-  await expect(panel(page).locator('.pc-msg')).toHaveCount(0);
+  await expect(panel(page).locator('.ah-msg')).toHaveCount(0);
   await expect(panel(page).locator('.advisor-ask')).toHaveCount(0);
 });
 
@@ -125,8 +125,8 @@ test('a failed answer shows as a failure, never as advice', async ({ page }) => 
   await fab(page).click();
   await panel(page).locator('.advisor-ask input').fill('hello');
   await panel(page).locator('.advisor-ask button').click();
-  await expect(panel(page).locator('.pc-msg.error')).toContainText('couldn’t answer');
-  await expect(panel(page).locator('.pc-msg.user')).toHaveCount(1); // kept, so it can be retried
+  await expect(panel(page).locator('.ah-msg.error')).toContainText('couldn’t answer');
+  await expect(panel(page).locator('.ah-msg.user')).toHaveCount(1); // kept, so it can be retried
 });
 
 test('the thread carries forward, and Clear wipes it', async ({ page }) => {
@@ -137,12 +137,12 @@ test('the thread carries forward, and Clear wipes it', async ({ page }) => {
   await fab(page).click();
   await panel(page).locator('.advisor-ask input').fill('first');
   await panel(page).locator('.advisor-ask button').click();
-  await expect(panel(page).locator('.pc-msg.assistant')).toHaveCount(1);
+  await expect(panel(page).locator('.ah-msg.assistant')).toHaveCount(1);
   await panel(page).locator('.advisor-ask input').fill('and then?');
   await panel(page).locator('.advisor-ask button').click();
   await expect.poll(() => sent.messages.length).toBe(3); // "and then?" means nothing alone
   await panel(page).getByRole('button', { name: 'Clear' }).click();
-  await expect(panel(page).locator('.pc-msg')).toHaveCount(0);
+  await expect(panel(page).locator('.ah-msg')).toHaveCount(0);
 });
 
 test('markdown renders as elements — model output is never HTML', async ({ page }) => {
@@ -152,7 +152,7 @@ test('markdown renders as elements — model output is never HTML', async ({ pag
   await fab(page).click();
   await panel(page).locator('.advisor-ask input').fill('go');
   await panel(page).locator('.advisor-ask button').click();
-  const body = panel(page).locator('.pc-msg.assistant .pc-msg-body');
+  const body = panel(page).locator('.ah-msg.assistant .ah-body');
   await expect(body.locator('strong')).toHaveText('1 pair');
   await expect(body.locator('code')).toHaveText('DD1391-100');
   await expect(body).not.toContainText('**');
@@ -160,4 +160,36 @@ test('markdown renders as elements — model output is never HTML', async ({ pag
   // and our SOPs. None of it may become a node.
   await expect(body.locator('img')).toHaveCount(0);
   await expect(body).toContainText('<img src=x onerror=alert(1)>');
+});
+
+test('the thread survives moving between screens — it is one conversation', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stub(page, reply('Scan the shelf first.'));
+  await page.goto('/');
+  await fab(page).click();
+  await panel(page).locator('.advisor-ask input').fill('how do I shelve?');
+  await panel(page).locator('.advisor-ask button').click();
+  await expect(panel(page).locator('.ah-msg.assistant')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+
+  // Navigate INSIDE the app (not a reload) — the advisor is mounted beside the router,
+  // so the conversation must not restart every time someone changes page.
+  await page.locator('.home-card', { hasText: 'Inventory' }).first().click();
+  await expect(page).toHaveURL(/inventory/);
+  await fab(page).click();
+  await expect(panel(page).locator('.ah-msg.assistant')).toContainText('Scan the shelf first.');
+  await expect(panel(page).locator('.ah-msg.user')).toHaveCount(1);
+});
+
+test('his messages carry his name and an EST time', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stub(page, reply('Yes.'));
+  await page.goto('/');
+  await fab(page).click();
+  await panel(page).locator('.advisor-ask input').fill('ok?');
+  await panel(page).locator('.advisor-ask button').click();
+  await expect(panel(page).locator('.ah-msg.assistant .ah-who')).toContainText('Alex Head');
+  // estClock formats America/New_York to the minute — the browser clock is irrelevant
+  // here by design, and seconds are noise in a thread.
+  await expect(panel(page).locator('.ah-msg.assistant .ah-time')).toHaveText(/^\d{1,2}:\d{2}\s?(AM|PM)$/);
 });

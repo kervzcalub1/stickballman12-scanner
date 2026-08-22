@@ -3250,22 +3250,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .pc-basis { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 
 /* Payout advisor — a chat that reads the calculation above it. */
-.pc-chat { display: flex; flex-direction: column; gap: 10px; }
-.pc-chat-log {
-  display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto;
-  border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 10px;
-}
-.pc-msg { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 10px; }
-.pc-msg.user { background: rgba(79, 124, 255, 0.10); border: 1px solid rgba(79, 124, 255, 0.22); }
-.pc-msg.assistant { background: var(--panel); border: 1px solid var(--border); }
-.pc-msg.error { background: rgba(255, 107, 107, 0.10); border: 1px solid rgba(255, 107, 107, 0.3); }
-.pc-msg-who { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
-/* Keep the model's line breaks — it lays out arithmetic across lines. */
-.pc-msg-body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
-.pc-chat-suggest { display: flex; flex-wrap: wrap; gap: 8px; }
-.pc-chat-ask { display: flex; gap: 8px; }
-.pc-chat-ask input { flex: 1; min-width: 0; }
-.pc-chat-ask .btn { flex: none; }
 /* The advisor's inline code — a SKU or a field name, not a code block. */
 .pc-msg-body code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em;
@@ -3318,3 +3302,51 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .advisor-ask .btn { flex: none; }
 .advisor-note { margin: 8px 0 0; }
 .advisor-empty { margin: 0; }
+
+/* Alex Head — the thread. Reads like a messaging app: his replies on the left behind an
+   avatar, yours on the right, each stamped in EST like every other time in this app. */
+.ah-avatar {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+}
+.ah-avatar.sm { width: 24px; height: 24px; font-size: 9px; align-self: flex-end; margin-bottom: 2px; }
+.advisor-head .ah-sub { margin-left: 2px; }
+
+.ah-row { display: flex; gap: 8px; align-items: flex-end; }
+.ah-row.user { justify-content: flex-end; }
+
+.ah-msg {
+  display: flex; flex-direction: column; gap: 3px;
+  max-width: 84%; padding: 8px 11px; border-radius: 14px;
+}
+/* The tail corners: his bubbles square off bottom-left, yours bottom-right, which is
+   what makes a stack of them read as one conversation rather than a list of cards. */
+.ah-msg.assistant, .ah-msg.error { border-bottom-left-radius: 5px; }
+.ah-msg.user { border-bottom-right-radius: 5px; }
+.ah-msg.assistant { background: var(--panel-2); border: 1px solid var(--border); }
+.ah-msg.user { background: rgba(79, 124, 255, 0.16); border: 1px solid rgba(79, 124, 255, 0.3); }
+.ah-msg.error { background: rgba(255, 107, 107, 0.10); border: 1px solid rgba(255, 107, 107, 0.3); }
+
+.ah-who {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted);
+}
+.ah-time { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 10px; opacity: 0.7; }
+/* Keep the model's line breaks — it lays arithmetic out across lines. */
+.ah-body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.ah-body strong { font-weight: 700; color: var(--text); }
+.ah-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+  border-radius: 5px; padding: 0 4px;
+}
+
+/* Typing dots while he's looking something up — a tool call can take a few seconds, and
+   a frozen panel reads as broken. */
+.ah-typing { display: inline-flex; gap: 4px; align-items: center; height: 18px; }
+.ah-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: ah-bounce 1.2s infinite; }
+.ah-typing i:nth-child(2) { animation-delay: 0.15s; }
+.ah-typing i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ah-bounce { 0%, 60%, 100% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .ah-typing i { animation: none; } }

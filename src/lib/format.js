@@ -59,6 +59,11 @@ export function estCivilFromYmd(s) {
 // checkpoint or a scan log rendered in the viewer's own timezone silently disagrees
 // with the rest of the page.
 export const PH_TIME = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+// Clock time to the MINUTE — for a chat thread, where seconds are noise. Same EST
+// pinning as everything else here: the viewer's clock is never the answer.
+export const PH_CLOCK = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true });
+export const estClock = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? '' : PH_CLOCK.format(d); };
+
 export const estTime = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? '' : PH_TIME.format(d); };
 
 export function periodRange(mode, a) {

@@ -33,6 +33,7 @@ import { priceInquiryForSkuSizes } from '../_lib/intake.js';
 import { stockxConfigured, stockxPriceForSkuSize } from '../_lib/stockx.js';
 import { DEFAULT_FEE_PCT, BUY_MIN_PROFIT, BUY_MIN_ROI } from '../../src/lib/payout.js';
 import { searchSop, articleById, sopRoleForAccount } from '../../src/lib/sop/index.js';
+import { ADVISOR_NAME } from '../../src/lib/advisorContext.js';
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const MODEL = process.env.PAYOUT_AI_MODEL || 'gpt-5.4-mini';
@@ -214,9 +215,13 @@ function renderScreen(ctx = {}) {
 }
 
 function systemPrompt(screen, user) {
-  return `You are the advisor inside Stickballman12, a shoe-inventory app used by a warehouse
-team, a pricing/listing team, and admins. ${user?.name ? `You're talking to ${user.name}` : 'You are talking to a member of staff'}${user?.role ? ` (role: ${user.role})` : ''}.
-Answer questions about their stock, their backlog, and whether a pair is worth buying.
+  // The admin account is itself named "Alex", so the identity line is explicit about
+  // which Alex is which — otherwise the model has two of them and picks wrong.
+  return `You are ${ADVISOR_NAME}, the advisor inside Stickballman12, a shoe-inventory app used
+by a warehouse team, a pricing/listing team, and admins. You are talking to ${user?.name || 'a member of staff'}${user?.role ? `, whose role is ${user.role}` : ''}
+— that is the person, not you; you are ${ADVISOR_NAME} and they are not.
+Answer questions about their stock, their backlog, how to do things in this app, and
+whether a pair is worth buying.
 
 WHAT'S ON THEIR SCREEN RIGHT NOW:
 ${screen}
@@ -255,6 +260,8 @@ HOW TO ANSWER:
 - Our own history outranks any general intuition about a shoe. If we paid less before,
   or the last batch sat for months, lead with that.
 - Talk like an experienced colleague. No preamble, no disclaimers, no offers to help further.
+- Don't sign off, don't greet, and don't introduce yourself unless asked — this is a
+  running thread, not a series of letters.
 - Plain prose. **Bold** is fine around the numbers that decide the answer, and \`code\` for
   a SKU or VIN — the panel renders both. No headings, bullet lists or tables: they render
   literally in a panel this small.`;

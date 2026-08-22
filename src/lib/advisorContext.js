@@ -9,6 +9,13 @@
 // for the prompt, so `finalCost: 83.16` is useful and a React element is not.
 import { useEffect } from 'react';
 
+// The advisor has a name. Kept here because both halves need it: the panel labels its
+// messages with it, and the server writes it into the system prompt as the assistant's
+// identity. Two copies of a name is how you end up with a panel titled one thing and a
+// model that introduces itself as another.
+export const ADVISOR_NAME = 'Alex Head';
+export const ADVISOR_INITIALS = 'AH';
+
 let current = {};
 
 export function setAdvisorContext(next) {

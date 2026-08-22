@@ -1,8 +1,16 @@
-# The advisor (app-wide)
+# Alex Head — the app-wide advisor
 
 Button + panel: `src/components/Advisor.jsx`, mounted **once** beside the router
 (`App.jsx`, `withAdvisor`). Screen context: `src/lib/advisorContext.js`. Endpoint:
 `api/advisor/ask.js`. E2E: `e2e/advisor.spec.js`.
+
+The advisor is named **Alex Head** (`ADVISOR_NAME` in `src/lib/advisorContext.js` — one
+constant, read by the panel *and* written into the system prompt, so the label and the
+model's self-description can't diverge).
+
+⚠️ **The admin account is also called Alex** (`admin` / name "Alex"). The identity line
+in the prompt is explicit about which is which — *"you are Alex Head and they are not"* —
+because otherwise the model has two Alexes in front of it and picks wrong.
 
 A floating button on every **staff** screen. It answers two different kinds of question,
 which is why it isn't bolted to one page:
@@ -62,6 +70,19 @@ disagrees with. Two guardrails worth keeping:
   to the wrong aisle, and an invented procedure is worse: it reads exactly like a real one.
 - *"For 'how do I' questions, search_sop FIRST"* — a generally sensible warehouse process
   that isn't ours is a wrong answer.
+
+## It's a thread, not a form
+The panel reads like a messaging app: his replies on the left behind an **AH** avatar,
+yours on the right, each stamped with `estClock` — **EST to the minute**, like every
+other time in this app (seconds are noise in a chat; `estTime` still exists for the
+grids that want them). Typing dots run while he's calling a tool, because a lookup takes
+a few seconds and a frozen panel reads as broken.
+
+**The conversation survives navigation.** The advisor is mounted beside the router, so
+moving between screens keeps one thread — "which of those should I do first?" works
+against the answer he gave you two screens ago. It does *not* survive a reload, and
+deliberately: a stale thread costs tokens on every turn and is rarely what anyone wants
+back. **Clear** empties it on demand.
 
 ## Rendering
 Assistant replies are markdown-lite — `**bold**` and `` `code` `` — rendered as **React

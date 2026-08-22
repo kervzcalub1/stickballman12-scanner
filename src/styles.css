@@ -3273,3 +3273,48 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   border-radius: 5px; padding: 0 4px;
 }
 .pc-msg-body strong { font-weight: 700; color: var(--text); }
+
+/* ------------------------------------------------------------------ */
+/* The app-wide advisor — floating button + panel (components/Advisor)  */
+/* ------------------------------------------------------------------ */
+.advisor-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 60;
+  width: 52px; height: 52px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--primary); background: var(--primary); color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); cursor: pointer;
+}
+.advisor-fab svg { width: 22px; height: 22px; }
+.advisor-fab:hover { background: var(--primary-d); }
+.advisor-fab.on { background: var(--panel-2); color: var(--text); border-color: var(--border); font-size: 18px; }
+/* Clear of the iPhone home indicator, which sits exactly where a bottom-right FAB wants to be. */
+@supports (padding: max(0px)) {
+  .advisor-fab { bottom: max(18px, env(safe-area-inset-bottom)); }
+}
+
+.advisor-panel {
+  position: fixed; right: 18px; bottom: 82px; z-index: 60;
+  width: min(420px, calc(100vw - 36px)); max-height: min(70vh, 620px);
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55); padding: 12px;
+}
+/* On a phone it's a bottom sheet — a 420px card floating over a 390px screen is just
+   a worse full-width panel. */
+@media (max-width: 560px) {
+  .advisor-panel {
+    right: 0; left: 0; bottom: 0; width: 100%; max-height: 82vh;
+    border-radius: 16px 16px 0 0; padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .advisor-fab { bottom: max(14px, env(safe-area-inset-bottom)); right: 14px; }
+}
+.advisor-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.advisor-title { font-weight: 700; letter-spacing: 0.3px; }
+.advisor-head .btn { margin-left: auto; }
+.advisor-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
+.advisor-suggest { display: flex; flex-wrap: wrap; gap: 8px; }
+.advisor-ask { display: flex; gap: 8px; margin-top: 10px; }
+.advisor-ask input { flex: 1; min-width: 0; }
+.advisor-ask .btn { flex: none; }
+.advisor-note { margin: 8px 0 0; }
+.advisor-empty { margin: 0; }

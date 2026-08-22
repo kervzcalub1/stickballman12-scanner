@@ -15,7 +15,7 @@ import { useMediaQuery } from '../hooks.js';
 import { readParam, writeParam } from '../lib/urlstate.js';
 import {
   SOP_ROLES, SOP_AREAS, SOP_ARTICLES, FAQ, SOP_KEYWORDS,
-  areaLabel, areaAccent, roleLabelSop, articleById, visibleTo, searchSop,
+  areaLabel, areaAccent, roleLabelSop, articleById, visibleTo, searchSop, SOP_LOCKED_ROLES,
 } from '../lib/sop/index.js';
 
 // A warehouse, PH or supplier account only ever sees ITS OWN procedures — the role
@@ -27,8 +27,10 @@ import {
 // admin/superadmin are deliberately NOT locked: they supervise every desk and are the
 // people answering "how does receiving do X?", so they keep the switcher and default
 // to All roles.
-const LOCKED_ROLES = ['warehouse', 'ph_team', 'supplier'];
-const lockedRoleFor = (role) => (LOCKED_ROLES.includes(role) ? role : null);
+// The list lives in lib/sop (SOP_LOCKED_ROLES) so the advisor applies the same rule.
+// Kept local here only to preserve the null return, which distinguishes "locked to this
+// role" from "free to switch roles" — the advisor has no such choice to make.
+const lockedRoleFor = (role) => (SOP_LOCKED_ROLES.includes(role) ? role : null);
 
 export function Sop({ user, navBack, onHome, onSignOut }) {
   const lockedRole = lockedRoleFor(user?.role);

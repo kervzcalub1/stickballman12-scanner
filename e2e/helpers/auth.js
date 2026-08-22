@@ -28,6 +28,8 @@ const USERS = {
   superadmin: { uid: 'superadmin', username: 'superadmin', name: 'Super Admin', role: 'superadmin' },
   warehouse:  { uid: 'e2e-wh', username: 'e2e_wh', name: 'E2E Warehouse', role: 'warehouse' },
   ph_team:    { uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' },
+  // Suppliers see a different app entirely — used to prove what they DON'T get.
+  supplier:   { uid: 'e2e-sup', username: 'e2e_sup', name: 'E2E Supplier', role: 'supplier' },
 };
 
 // Inject a signed session for `role` so the app boots authenticated. Must be

@@ -1,0 +1,107 @@
+Custom Vendor Names: Users can add and auto-save new vendor names like "JD Sports" to reduce manual entry and speed batches.
+Batch Review & Edits: New screen lets users edit, delete, add issue notes, and photos per item before finalizing batches.
+Photo Capture: Integrates 3-5 photos per shoe for listings and issues, cutting failed syncs on ~1,500 weekly eBay listings.
+Flexible Batch System: Supports multiple boxes per batch with tracking, out-of-order scans, and batch tag names for fragmented shipments.
+Duplicate Tracking Alerts: Flags duplicate tracking numbers by creating flagged separate batches to avoid shipment confusion.
+Target Timeline: Aim for early July release focusing on quality, with ongoing warehouse feedback and $100 dev plan upgrade approved.
+
+Notes
+Product Features and Enhancements
+The team agreed on multiple key feature improvements to streamline inventory intake and issue tracking.
+Custom Vendor Names with Auto-Save will be added to the vendor dropdown, letting users add and reuse new vendor names like "JD Sports" automatically (04:15)
+This will reduce manual entry and speed up batch processing
+Kirby confirmed implementation will include saving custom entries for repeated use
+This reflects a need to accommodate diverse vendor inputs without losing data integrity
+Newest Scanned Item Displayed on Top to improve batch visibility and reduce screen scrolling during intake (06:56)
+Brent requested this to make recent inputs easier to review
+Kirby agreed to reorder scanned items dynamically for better UX
+This supports faster error spotting and item verification
+Batch Review Screen with Edit Capability will be introduced after finishing a batch, allowing users to review, modify, or delete scanned items before final submission (13:01)
+Enables error correction such as missing scans or duplicates
+Users can also add issue notes and photos per item in this stage
+This prevents rescanning and streamlines batch accuracy checks
+Photo Capture for Listing and Issues will be integrated during scanning, allowing 3 to 5 photos per shoe for listings and separate photos for defective items (16:20)
+The system will detect existing photos to avoid duplicates, saving storage and effort
+Photos are critical both for eBay listings and documenting shipment issues
+Brent emphasized the importance of pictures for about 1,500 weekly eBay listings and reducing failed syncs caused by missing photos
+Kirby will research cost-effective, secure cloud storage options for image hosting
+Sorting Items by Size in Review will be implemented, defaulting to smallest-to-largest order for easier item navigation and consistency (36:14)
+Brent highlighted current size order inconsistencies affecting workflow
+This small UX fix will aid faster identification and processing of inventory
+Duplicate Tracking Number Alerts will notify users if a tracking number has been scanned before, preventing confusion from repeated shipments (37:29)
+The second instance will create a separate batch but be clearly flagged as duplicate
+This helps manage supplier errors and unexpected free shipments
+The feature is low priority but considered important for operational clarity
+Batch and Shipment Management
+A more flexible batch system was outlined to handle complex, multi-package shipments arriving over time.
+Batch Tagging and Multiple Boxes per Batch will be enabled, allowing users to define total expected boxes and assign individual tracking numbers per box (25:26)
+Users can scan boxes out of order and across multiple days without losing batch context
+Kirby will add a field for expected box count and batch tag name for grouping related shipments
+This supports real-world scenarios where shipments arrive fragmented or delayed
+Sequential Box Handling Within Batches requires scanning and completing items per box before moving to the next, linking items to their specific box tracking number (28:08)
+This ensures precise tracking of inventory per package
+It also enables partial batch completion and resuming work later without confusion
+Batch Progress Visibility and Resumption was emphasized by Alex, explaining how shipments from multiple suppliers arrive throughout the day and over several days (29:44)
+The system must allow multiple users to update the same batch without overwriting information
+Batch tags with supplier name, location, and code words will help identify shipments clearly
+Kirby will coordinate with Alex to receive example batch labels and videos for precise implementation
+Operational Workflow Improvements
+The new features aim to reduce manual errors, speed up processing, and improve shipment issue handling.
+Isolating Problematic Items in Batches via issue flags and photos per VIN will allow granular tracking of damaged or dirty shoes without rescanning whole batches (07:20)
+Brent suggested adding photo uploads in the shipment issues section rather than per scan
+Kirby confirmed users can mark individual VINs with issues and attach photos on the review screen
+Alex proposed isolating problematic items by rescanning them separately, but team agreed review screen edits are sufficient and more efficient
+Enhanced Issue Documentation with photo support will help downstream teams such as eBay listers avoid confusion and reduce item returns or complaints (16:08)
+Photos for defects and listings serve different purposes but both are necessary
+Storing photos only when needed avoids excessive storage costs
+Brent noted about 100 items currently failing sync due to photo issues
+Reducing Duplicate Photo Work by detecting existing images in the database will prevent redundant photo capture across different shipments or team members (21:43)
+This smart feature will save time and storage space
+Kirby will implement SKU recognition to prompt photo capture only for new items
+Technical Infrastructure and Resource Planning
+The discussion included considerations on technical limits and storage solutions for new features.
+Upgrading Development Plan for Code Limits was requested by Kirby to allow more extensive coding without token restrictions (44:00)
+Alex approved a $100 upgrade to the maximum plan immediately
+This investment supports faster feature development and iteration
+Cloud Storage Research for Photos is underway with prospects including Amazon and Cloudflare (44:26)
+Kirby is prioritizing secure, scalable, and cost-effective options
+This storage solution is crucial for handling the large volume of listing and issue photos
+Timelines, Priorities, and Quality Focus
+The team agreed on a balanced timeline emphasizing quality over speed for the next release.
+Target Completion by Early July with a focus on delivering a high-quality, stable update rather than rushing incomplete features (45:31)
+Kirby committed to finishing the main updates by the first or second week of July if not over the weekend
+Alex and Brent emphasized quality as a priority to ensure usability and reduce rework
+Ongoing Communication and Support is assured with Brent actively working in the warehouse to provide real-time feedback (46:50)
+Brent will continue testing features like "mark sold" and "mark shipped," already showing positive results (47:20)
+This close collaboration will help refine features before wider rollout
+Team Confidence in Progress was expressed with Brent stating the system is already useful and improvements will bring it closer to perfection (46:29)
+The incremental approach allows partial deployment of critical features even before full completion
+Summary of Key Feature Recap
+Kirby summarized the agreed feature list to ensure alignment before development:
+Add JD Sports and allow custom vendor names saved for reuse
+Show newest scanned item at top of batch list
+Add batch review screen with ability to edit, delete, add issues, and attach photos to VINs with problems
+Add photo capture for listing items only if not already in database, minimum 3, maximum 5 photos
+Sort items in review by size, smallest to biggest
+Set expected number of boxes per batch with batch tag name and assign tracking numbers accordingly
+Detect and flag duplicate tracking numbers, creating separate batches but alerting users
+Alex and Brent confirmed no items were missed and expressed enthusiasm for the upcoming updates (40:45, 43:38).
+
+Action items
+Kirby
+Add JD Sports to the vendor dropdown and implement auto-saving of custom vendor names for reuse to streamline data entry (00:04)
+Set the default buyer on intake forms to “stick ball man” to reduce manual input (00:05)
+Modify batch scanning interface to display newest scanned items at the top for easier access during scanning (00:06)
+Develop an “Add Issue” button for each scanned item to report shipment problems, including the ability to attach photos to issue reports (00:07)
+Implement a batch review screen allowing users to edit, delete scanned items, and mark issues with photo attachments before final submission (00:12)
+Integrate photo upload functionality for listing new shoe items only, requiring a minimum of 3 and maximum of 5 photos per item (00:16)
+Build system logic to detect existing photos for SKUs to prevent duplicate photo uploads and improve storage efficiency (00:22)
+Add batch shipment management features to input expected number of boxes, assign tracking numbers per box, and scan items box-by-box supporting non-sequential arrivals and batch resumption (00:24)
+Update the review screen to default sort scanned items by size from smallest to largest for easier inventory management (00:36)
+Add a duplicate tracking number warning system that alerts users when duplicates occur, assigning duplicates to separate batches but clearly flagging them (00:37)
+Research and select a cost-effective and secure photo storage solution, considering options like Amazon or Cloudflare, to support the image upload functionality (00:44)
+Alex
+Provide Kirby with warehouse operational context, batch handling procedures, and supplier shipping label samples/videos to ensure accurate feature development (00:24)
+Test new and existing features such as marked sold and shipped, and provide feedback to the development team for improvements (00:47)
+Brent
+Continue hands-on warehouse validation of features and communicate practical needs and feedback to Kirby for iterative improvements (00:02)

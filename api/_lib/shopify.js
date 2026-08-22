@@ -13,20 +13,26 @@
 //    `styleFromTitle` gets ~97% of them; the rest genuinely have no code in the title
 //    and are counted as unmatched rather than quietly dropped.
 //
-// 2. **`read_orders` sees 60 days.** Measured, not assumed: 55–60 days back returns
-//    rows, 70–75 does not. Older history needs the `read_all_orders` scope from
-//    Shopify. Windows are therefore capped at 60.
+// 2. **How far back depends on the SCOPE.** With plain `read_orders` Shopify serves the
+//    last 60 days and silently returns nothing older (measured: 55–60 days back returns
+//    rows, 70–75 does not). With `read_all_orders` the limit lifts — 180 days confirmed.
+//    `MAX_WINDOW_DAYS` is our own cost bound on top of that, not Shopify's.
 //
-// 3. **Inventory needs scopes we may not have.** read_products / read_inventory are
-//    separate grants and currently 403. Those calls degrade to a clear "not permitted"
-//    rather than an error or, worse, a zero.
+// 3. **Inventory needs its own scopes.** read_products / read_inventory are separate
+//    grants from read_orders. When they're absent the call degrades to a clear
+//    "not permitted" rather than an error or, worse, a zero — "none left" and "we can't
+//    see it" are opposite answers, and only one of them sends someone to a shelf.
 import { cacheGet, cacheSet } from './util.js';
 
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2026-07';
 const SALES_TTL = 30 * 60 * 1000;
 const PAGE = 250;
 const MAX_PAGES = 60;          // 15,000 orders — a stop, not a target
-export const MAX_WINDOW_DAYS = 60;   // what read_orders will actually return
+// A COST bound, not a permission one. With `read_all_orders` granted, Shopify will
+// serve 180 days and more — but this store does ~1,400 orders a week, so a 180-day
+// window is ~36,000 orders and 140+ pages. 90 days is the most that answers inside a
+// chat turn. Raise it only alongside a smarter fetch (incremental, or persisted).
+export const MAX_WINDOW_DAYS = 90;
 
 export function shopifyConfigured() {
   return !!(process.env.SHOPIFY_STORE_DOMAIN && process.env.SHOPIFY_ACCESS_TOKEN);

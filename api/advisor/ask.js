@@ -109,7 +109,7 @@ const TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          days: { type: 'integer', description: 'Window in days. 7 = this week, 30 = this month. 60 is the maximum — the sales feed does not reach further back.' },
+          days: { type: 'integer', description: 'Window in days. 7 = this week, 30 = this month. 90 is the maximum this feed is queried over.' },
           limit: { type: 'integer', description: 'How many styles to return. Default 10, max 50.' },
         },
       },
@@ -305,7 +305,7 @@ LOOKING THINGS UP:
 - **Sales come from Shopify, which carries EVERY channel** — GOAT, StockX, eBay, TikTok,
   the online store — so a total is a real total. Give the channel split when it changes
   what someone would do: "44 sold, 24 of them on GOAT" tells them where to list next.
-- **The sales feed reaches 60 days.** Never state or imply anything about older sales.
+- **The sales feed reaches 90 days.** Never state or imply anything about older sales.
 - **Asked how many we HAVE, give the numbers and then pass on the disclaimer the tool
   returns**, every time: these are Shopify's figures and our sync flags, not a physical
   count, and the warehouse is the place to get a number worth acting on. Do not drop that

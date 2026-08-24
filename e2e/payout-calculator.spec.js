@@ -307,3 +307,104 @@ test('with no sales feed the picker stays a question', async ({ page }) => {
   }
   await expect(page.locator('.pc-liq-why')).toHaveCount(0);
 });
+
+/* ------------------------------------------------------------------ */
+/* Supplier presets. The list is STUBBED — these tests are about what   */
+/* applying and editing a preset does to the numbers on the screen, not */
+/* about what happens to be seeded in whatever database is running.     */
+/* ------------------------------------------------------------------ */
+
+const ANDREW = { id: 1, name: 'Andrew', tipAmt: 5, shippingAmt: 8.25, taxPct: 8.25, giftPct: 8, storePct: 0, promoPct: 0, cashbackPct: 0, note: '' };
+const COUNCIL = { id: 5, name: 'Council', tipAmt: 5, shippingAmt: 8.25, taxPct: 0, giftPct: 8, storePct: 0, promoPct: 0, cashbackPct: 0, note: 'No sales tax' };
+
+async function stubPresets(page, presets = [ANDREW, COUNCIL], onSave) {
+  await page.route('**/api/payout/presets', async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { ok: true, presets } });
+    const body = route.request().postDataJSON() || {};
+    if (body.deleteId != null) return route.fulfill({ json: { ok: true, deleted: { id: body.deleteId } } });
+    const preset = { ...ANDREW, ...body.preset, id: body.preset.id || 99 };
+    onSave?.(body.preset);
+    return route.fulfill({ json: { ok: true, preset } });
+  });
+}
+
+test('a supplier fills the whole cost stack in one tap', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stubPresets(page);
+  await page.goto('/payout');
+  await page.locator('.pc-preset-chips .pi-chip', { hasText: 'Andrew' }).click();
+  await expect(field(page, 'Tax')).toHaveValue('8.25');
+  await expect(field(page, 'Gift card')).toHaveValue('8');
+  await expect(field(page, 'Tip')).toHaveValue('5');
+  await expect(field(page, 'Shipping')).toHaveValue('8.25');
+  await expect(page.locator('.pc-preset-why')).toContainText('Andrew: tip $5.00');
+});
+
+test('no tax is a fact the preset states, not a blank it leaves behind', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stubPresets(page);
+  await page.goto('/payout');
+  // Andrew first, so 8.25% tax is already on screen: switching to a no-tax supplier has
+  // to CLEAR it. A preset that only wrote the fields it cared about would quietly tax a
+  // Council buy at the last supplier's rate.
+  await page.locator('.pc-preset-chips .pi-chip', { hasText: 'Andrew' }).click();
+  await page.locator('.pc-preset-chips .pi-chip', { hasText: 'Council' }).click();
+  await expect(field(page, 'Tax')).toHaveValue('0');
+  await expect(page.locator('.pc-preset-why')).toContainText('No sales tax');
+});
+
+test('editing a field by hand stops the chip claiming the supplier', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stubPresets(page);
+  await page.goto('/payout');
+  await page.locator('.pc-preset-chips .pi-chip', { hasText: 'Andrew' }).click();
+  await field(page, 'Tip').fill('12');
+  await expect(page.locator('.pc-preset-why')).toContainText('edited below');
+});
+
+test('a new supplier can be added from the calculator', async ({ page }) => {
+  let saved = null;
+  await loginAs(page, 'warehouse');
+  await stubPresets(page, [ANDREW], (p) => { saved = p; });
+  await page.goto('/payout');
+  await page.getByRole('button', { name: 'Manage' }).click();
+  await page.getByRole('button', { name: '＋ New supplier' }).click();
+  await page.locator('.pc-preset-form input[type="text"]').first().fill('Marcus');
+  await page.locator('.pc-preset-form .pc-field', { hasText: 'Tip fee' }).locator('input').fill('6.5');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect.poll(() => saved?.name).toBe('Marcus');
+  expect(Number(saved.tipAmt)).toBe(6.5);
+  // It lands in the picker straight away — the buyer added it because they're using it now.
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.locator('.pc-preset-chips .pi-chip', { hasText: 'Marcus' })).toBeVisible();
+});
+
+test('an edited supplier moves the numbers already on screen', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stubPresets(page);
+  await page.goto('/payout');
+  await page.locator('.pc-preset-chips .pi-chip', { hasText: 'Andrew' }).click();
+  await page.getByRole('button', { name: 'Manage' }).click();
+  await page.locator('.pc-preset-row', { hasText: 'Andrew' }).getByRole('button', { name: 'Edit' }).click();
+  await page.locator('.pc-preset-form .pc-field', { hasText: 'Tip fee' }).locator('input').fill('9');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
+  // Leaving the old $5 on screen under a chip that says "Andrew" is the failure mode.
+  await expect(field(page, 'Tip')).toHaveValue('9');
+  await expect(page.locator('.pc-preset-why')).toContainText('tip $9.00');
+});
+
+test('deleting a supplier drops its chip and its claim on the numbers', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await stubPresets(page);
+  await page.goto('/payout');
+  await page.locator('.pc-preset-chips .pi-chip', { hasText: 'Andrew' }).click();
+  await page.getByRole('button', { name: 'Manage' }).click();
+  await page.locator('.pc-preset-row', { hasText: 'Andrew' }).getByRole('button', { name: 'Delete' }).click();
+  await page.locator('.pc-preset-confirm').getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.locator('.pc-preset-chips .pi-chip', { hasText: 'Andrew' })).toHaveCount(0);
+  await expect(page.locator('.pc-preset-why')).toContainText('Tap one to fill');
+  // The cost stack it filled STAYS — it's what the pair in your hand is being bought at.
+  await expect(field(page, 'Tip')).toHaveValue('5');
+});

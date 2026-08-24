@@ -10,7 +10,12 @@
 // Public API — so the sale prices fill themselves instead of being typed off another
 // app. StockX is optional: with no StockX credentials on the server that column just
 // stays manual, and the Alias half still works.
-import React, { useMemo, useState } from 'react';
+//
+// The other thing it reads: SUPPLIER PRESETS (api/payout/presets.js) — the fixed cost
+// stack a given supplier buys at (tip fee, shipping, sales tax, gift-card discount).
+// Those live in the DATABASE, not in prefs, because a supplier's tip fee is a fact
+// about the supplier rather than about the phone it was typed on.
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, ShoeThumb } from '../components/common.jsx';
@@ -26,6 +31,10 @@ const money = (v) => `$${Number(v || 0).toLocaleString('en-US', { minimumFractio
 // Alias reports 0 for a size with no listing/offer/sale, so 0 reads as "no data" here.
 const quoted = (v) => (v == null || Number(v) <= 0 ? null : Number(v));
 const pct = (v) => `${Number(v || 0).toFixed(1)}%`;
+// Rates people TYPE are quoted back exactly: a sales tax of 8.25% is not 8.3%, and a
+// supplier chip that rounds the number it just filled in reads as a different number.
+// pct() keeps its one decimal for the things we CALCULATE — ROI, margin, fees.
+const ratePct = (v) => `${Number(Number(v || 0).toFixed(3))}%`;
 
 const CALL_LABEL = { buy: 'Buy', watch: 'Watch', pass: 'Pass' };
 const RISK_LABEL = { low: 'Low', medium: 'Medium', high: 'High', loss: 'Loss' };
@@ -49,6 +58,27 @@ const SX_MARKET_COLS = [
   ['earn_more', 'Earn more'],
   ['sell_faster', 'Sell faster'],
 ];
+
+// A supplier preset carries the WHOLE register stack, not just the four numbers that
+// differ between suppliers. Applying one that left store/promo/cashback alone would
+// quietly carry the last store trip's discount into the next supplier's cost — the
+// exact wrong-number-in-a-buy-call this screen exists to prevent.
+//   · rate keys (RATE_KEYS) go to prefs.payoutRates, which persists per device
+//   · amount keys (tip, shipping) are per-pair fields, which do not
+const RATE_KEYS = ['taxPct', 'giftPct', 'storePct', 'promoPct', 'cashbackPct'];
+const PRESET_FIELDS = [
+  ['tipAmt', 'Tip fee', '$'],
+  ['shippingAmt', 'Shipping', '$'],
+  ['taxPct', 'Sales tax', '%'],
+  ['giftPct', 'Gift card', '%'],
+  ['storePct', 'Store discount', '%'],
+  ['promoPct', 'Promo / birthday', '%'],
+  ['cashbackPct', 'Cashback', '%'],
+];
+const BLANK_PRESET = { id: null, name: '', note: '', tipAmt: '', shippingAmt: '', taxPct: '', giftPct: '', storePct: '', promoPct: '', cashbackPct: '' };
+// Empty box === 0, so a preset always states the whole stack. Compared numerically
+// because '8.25' from the form and 8.25 from the server are the same fee.
+const same = (a, b) => Number(a || 0) === Number(b || 0);
 
 // One market strip — a row of tappable quotes that fill a platform's sale price.
 function MarketStrip({ title, cols, row, onUse, note }) {
@@ -101,6 +131,152 @@ function BreakRow({ label, value, sign, bold }) {
   );
 }
 
+// The supplier editor. Its own overlay rather than <Modal>, whose children all land in
+// a single flex row — this is a form, not a row of buttons.
+//
+// One list, one form, no separate "add" screen: the ＋ button just opens the same form
+// with a blank preset, because "add Marcus" and "Chris charges $7 now" are the same
+// job, done in the same aisle, on the same phone.
+function PresetManager({ presets, onClose, onSaved, onDeleted, onSignOut }) {
+  const [draft, setDraft] = useState(null);   // null = the list; otherwise the form
+  const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [err, setErr] = useState('');
+
+  const field = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+
+  // Escape backs out one level — the form first, then the overlay — the way <Modal>
+  // does, so the two dialogs on this screen don't behave differently.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || busy) return;
+      if (draft) setDraft(null); else onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [draft, busy, onClose]);
+
+  async function save(e) {
+    e?.preventDefault();
+    if (!String(draft.name || '').trim()) { setErr('Give the supplier a name.'); return; }
+    setBusy(true); setErr('');
+    try {
+      const { preset } = await api.payoutPresetSave(draft);
+      onSaved(preset);
+      setDraft(null);
+    } catch (ex) {
+      if (ex.unauthorized) return onSignOut();
+      setErr(ex.message);
+    } finally { setBusy(false); }
+  }
+
+  async function remove(p) {
+    setBusy(true); setErr('');
+    try {
+      await api.payoutPresetDelete(p.id);
+      onDeleted(p.id);
+      setConfirmDel(null);
+    } catch (ex) {
+      if (ex.unauthorized) return onSignOut();
+      setErr(ex.message);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <div className="modal pc-preset-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">{draft ? (draft.id ? `Edit ${draft.name || 'supplier'}` : 'New supplier') : 'Suppliers'}</h3>
+        <p className="modal-msg">
+          {draft
+            ? 'What this supplier costs on every pair. A blank box is zero — the preset states the whole stack.'
+            : 'The cost stack each supplier buys at. Tap one on the calculator to fill Store cost in one go.'}
+        </p>
+
+        {!draft && (
+          <div className="pc-preset-list">
+            {presets.length === 0 && <p className="muted sm">No suppliers yet — add the first one.</p>}
+            {presets.map((p) => (
+              <div className="pc-preset-row" key={p.id}>
+                <div className="pc-preset-row-main">
+                  <span className="pc-preset-row-name">{p.name}</span>
+                  <span className="muted sm">
+                    tip {money(p.tipAmt)} · ship {money(p.shippingAmt)} · tax {ratePct(p.taxPct)} · gift {ratePct(p.giftPct)}
+                    {p.storePct || p.promoPct || p.cashbackPct
+                      ? ` · store ${ratePct(p.storePct)} · promo ${ratePct(p.promoPct)} · cashback ${ratePct(p.cashbackPct)}`
+                      : ''}
+                    {p.note ? ` · ${p.note}` : ''}
+                  </span>
+                </div>
+                <div className="pc-preset-row-acts">
+                  <button type="button" className="btn ghost sm" disabled={busy}
+                    onClick={() => { setErr(''); setDraft({ ...BLANK_PRESET, ...p }); }}>Edit</button>
+                  <button type="button" className="btn ghost sm danger" disabled={busy}
+                    onClick={() => { setErr(''); setConfirmDel(p); }}>Delete</button>
+                </div>
+                {confirmDel?.id === p.id && (
+                  <div className="pc-preset-confirm">
+                    <span>Delete {p.name}? Nothing else references it.</span>
+                    <button type="button" className="btn danger sm" disabled={busy} onClick={() => remove(p)}>
+                      {busy ? 'Deleting…' : 'Delete'}
+                    </button>
+                    <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setConfirmDel(null)}>Keep</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {draft && (
+          <form className="pc-preset-form" onSubmit={save}>
+            <label className="pc-field">
+              <span className="pc-field-label">Supplier</span>
+              <input type="text" value={draft.name} maxLength={60} placeholder="e.g. Andrew"
+                onChange={(e) => field('name', e.target.value)} />
+            </label>
+            <div className="pc-grid">
+              <NumField label="Tip fee" prefix="$" value={draft.tipAmt} onChange={(v) => field('tipAmt', v)} placeholder="0.00" />
+              <NumField label="Shipping" prefix="$" value={draft.shippingAmt} onChange={(v) => field('shippingAmt', v)} placeholder="0.00"
+                hint="incl. box swap fee + labour" />
+            </div>
+            <div className="pc-grid">
+              <NumField label="Sales tax" suffix="%" value={draft.taxPct} onChange={(v) => field('taxPct', v)} hint="0 for a no-tax state" />
+              <NumField label="Gift card" suffix="%" value={draft.giftPct} onChange={(v) => field('giftPct', v)} />
+            </div>
+            <div className="pc-grid three">
+              <NumField label="Store discount" suffix="%" value={draft.storePct} onChange={(v) => field('storePct', v)} />
+              <NumField label="Promo" suffix="%" value={draft.promoPct} onChange={(v) => field('promoPct', v)} />
+              <NumField label="Cashback" suffix="%" value={draft.cashbackPct} onChange={(v) => field('cashbackPct', v)} />
+            </div>
+            <label className="pc-field">
+              <span className="pc-field-label">Note <span className="muted sm">optional</span></span>
+              <input type="text" value={draft.note} maxLength={200} placeholder="e.g. No sales tax"
+                onChange={(e) => field('note', e.target.value)} />
+            </label>
+          </form>
+        )}
+
+        {err && <div className="error mt">{err}</div>}
+
+        <div className="modal-actions">
+          {draft ? (
+            <>
+              <button type="button" className="btn" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => { setDraft(null); setErr(''); }}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn" disabled={busy}
+                onClick={() => { setErr(''); setDraft({ ...BLANK_PRESET }); }}>＋ New supplier</button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>Done</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PayoutCalculator({ onHome, onSignOut }) {
   // The shoe rides in the URL so a refresh (or a link to the person who asked) comes
   // back to the same pair. The money is NOT in the URL: a shared link that carries
@@ -150,6 +326,55 @@ export function PayoutCalculator({ onHome, onSignOut }) {
   const [liquidity, setLiquidity] = useState('');
   const [liquidityTouched, setLiquidityTouched] = useState(false);
   const [velocity, setVelocity] = useState(null);   // { sold_30d, per_week, liquidity, … }
+
+  // Supplier presets — the fixed cost stack a given supplier buys at. These live in the
+  // DATABASE, unlike the rates above: a supplier's tip fee is a fact about the supplier,
+  // not about this phone, so the buyer on the floor and whoever checks the maths later
+  // must read the same one. `presetId` is only a label for what was applied — every
+  // field stays editable afterwards.
+  const [presets, setPresets] = useState([]);
+  const [presetId, setPresetId] = useState(null);
+  const [manageOpen, setManageOpen] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api.payoutPresets()
+      .then(({ presets: list }) => { if (live) setPresets(list || []); })
+      // A preset list that won't load must not break the calculator: every number it
+      // fills is typeable by hand, which is how this screen worked before presets existed.
+      .catch((e) => { if (e.unauthorized) onSignOut(); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const activePreset = presets.find((p) => p.id === presetId) || null;
+  // Derived, never a flag: the moment a number diverges from the supplier the chip
+  // claims, the chip has to stop claiming it.
+  const presetEdited = !!activePreset && (
+    !same(tipAmt, activePreset.tipAmt)
+    || !same(shippingAmt, activePreset.shippingAmt)
+    || RATE_KEYS.some((k) => !same(rates[k], activePreset[k]))
+  );
+
+  // Applying replaces the WHOLE register stack in one write — the rates into prefs
+  // (which persist per device), tip and shipping into the per-pair fields (which don't).
+  // Tapping the applied supplier again drops the label but LEAVES the numbers: they're
+  // what you're about to buy at, and zeroing them mid-decision would be worse.
+  // `toggle:false` is how a just-edited preset re-applies itself: presetId is still the
+  // stale value in that render, so the toggle would read it as a second tap and turn the
+  // supplier off instead of taking its new numbers.
+  function applyPreset(p, { toggle = true } = {}) {
+    if (toggle && presetId === p.id) { setPresetId(null); return; }
+    setPrefs((prev) => {
+      const next = { ...prev, payoutRates: { ...(prev.payoutRates || {}) } };
+      for (const k of RATE_KEYS) next.payoutRates[k] = String(p[k] ?? 0);
+      savePrefs(next);
+      return next;
+    });
+    setTipAmt(String(p.tipAmt ?? ''));
+    setShippingAmt(String(p.shippingAmt ?? ''));
+    setPresetId(p.id);
+  }
 
 
   const breakdown = useMemo(() => calcCostBreakdown({
@@ -241,6 +466,9 @@ export function PayoutCalculator({ onHome, onSignOut }) {
     setLiquidity(''); setLiquidityTouched(false); setVelocity(null);
     setMarket(null); setSx(null); setSize(''); setProduct(null); setSkuInput('');
     setError(''); setNotConfigured(false);
+    // The rates survive Clear (they're the store trip), but tip and shipping don't — so
+    // the stack no longer IS the supplier's, and the chip must stop saying it is.
+    setPresetId(null);
   }
 
   const sizes = product?.sizes || [];
@@ -260,6 +488,7 @@ export function PayoutCalculator({ onHome, onSignOut }) {
     name: product?.name || null,
     size: size || null,
     basis,
+    supplier: activePreset ? `${activePreset.name}${presetEdited ? ' (stack edited by hand)' : ''}` : null,
     cost: {
       shelf: shelfPrice, storePct: rates.storePct, promoPct: rates.promoPct,
       giftPct: rates.giftPct, couponAmt, cashbackPct: rates.cashbackPct,
@@ -284,7 +513,8 @@ export function PayoutCalculator({ onHome, onSignOut }) {
       ? `${CALL_LABEL[verdict.call]} — best on ${verdict.best.label}, profit ${money(verdict.best.profit)}, ROI ${pct(verdict.best.roi)}, risk ${RISK_LABEL[verdict.risk]}`
       : 'not enough entered for a call yet',
   }), [product, size, basis, shelfPrice, couponAmt, tipAmt, shippingAmt, liquidity,
-    breakdown.finalCost, payouts, market, sxRow, rates, velocity, measured]);
+    breakdown.finalCost, payouts, market, sxRow, rates, velocity, measured,
+    activePreset, presetEdited]);
 
   return (
     <div className="app">
@@ -387,6 +617,30 @@ export function PayoutCalculator({ onHome, onSignOut }) {
 
         {/* 2 — what it costs at the register */}
         <h3 className="pc-h">Store cost</h3>
+        {/* Who's buying it. One tap fills the whole stack below — four numbers nobody
+            should be retyping per pair, on a phone, in a shop. */}
+        <div className="pc-preset-bar">
+          <span className="pc-field-label">Supplier</span>
+          <div className="pc-preset-chips">
+            {presets.map((p) => (
+              <button type="button" key={p.id}
+                className={`pi-chip ${p.id === presetId ? 'on' : ''}`.trim()}
+                aria-pressed={p.id === presetId}
+                title={`tip ${money(p.tipAmt)} · shipping ${money(p.shippingAmt)} · tax ${ratePct(p.taxPct)} · gift card ${ratePct(p.giftPct)}`}
+                onClick={() => applyPreset(p)}>{p.name}</button>
+            ))}
+            <button type="button" className="btn ghost sm" onClick={() => setManageOpen(true)}>
+              {presets.length ? 'Manage' : '＋ Add a supplier'}
+            </button>
+          </div>
+          <span className="muted sm pc-preset-why">
+            {!activePreset
+              ? 'Tap one to fill the whole stack below, or just type it.'
+              : presetEdited
+                ? `${activePreset.name}’s stack, edited below — the numbers on screen are the ones being used.`
+                : `${activePreset.name}: tip ${money(activePreset.tipAmt)} · shipping ${money(activePreset.shippingAmt)} · tax ${ratePct(activePreset.taxPct)} · gift card ${ratePct(activePreset.giftPct)}${activePreset.note ? ` · ${activePreset.note}` : ''}`}
+          </span>
+        </div>
         <div className="pc-grid">
           <NumField label="Shelf price" prefix="$" value={shelfPrice} onChange={setShelfPrice} placeholder="0.00" />
           <NumField label="Tax" suffix="%" value={rates.taxPct ?? ''} onChange={(v) => setRate('taxPct', v)} />
@@ -407,6 +661,7 @@ export function PayoutCalculator({ onHome, onSignOut }) {
         <p className="pc-note muted sm">
           The three percentages compound — each comes off what’s left, not off the shelf price — then the coupon, then tax.
           Rates stick on this device; the shelf price, coupon, tip and shipping clear with every pair.
+          A supplier preset fills all of it at once and is shared with the whole team.
         </p>
 
         <div className="pc-stats">
@@ -425,12 +680,12 @@ export function PayoutCalculator({ onHome, onSignOut }) {
           <table className="pc-break">
             <tbody>
               <BreakRow label="Shelf" value={breakdown.shelf} />
-              <BreakRow label={`Store discount (${pct(rates.storePct)})`} value={breakdown.storeSaved} sign="−" />
-              <BreakRow label={`Promo (${pct(rates.promoPct)})`} value={breakdown.promoSaved} sign="−" />
-              <BreakRow label={`Gift card (${pct(rates.giftPct)})`} value={breakdown.giftSaved} sign="−" />
+              <BreakRow label={`Store discount (${ratePct(rates.storePct)})`} value={breakdown.storeSaved} sign="−" />
+              <BreakRow label={`Promo (${ratePct(rates.promoPct)})`} value={breakdown.promoSaved} sign="−" />
+              <BreakRow label={`Gift card (${ratePct(rates.giftPct)})`} value={breakdown.giftSaved} sign="−" />
               {breakdown.couponSaved > 0 && <BreakRow label="Coupon" value={breakdown.couponSaved} sign="−" />}
-              {breakdown.cashback > 0 && <BreakRow label={`Cashback (${pct(rates.cashbackPct)})`} value={breakdown.cashback} sign="−" />}
-              <BreakRow label={`Tax (${pct(rates.taxPct)})`} value={breakdown.tax} sign="+" />
+              {breakdown.cashback > 0 && <BreakRow label={`Cashback (${ratePct(rates.cashbackPct)})`} value={breakdown.cashback} sign="−" />}
+              <BreakRow label={`Tax (${ratePct(rates.taxPct)})`} value={breakdown.tax} sign="+" />
               {breakdown.tip > 0 && <BreakRow label="Tip" value={breakdown.tip} sign="+" />}
               {breakdown.shipping > 0 && <BreakRow label="Shipping" value={breakdown.shipping} sign="+" />}
               <BreakRow label="Final cost" value={breakdown.finalCost} bold />
@@ -528,6 +783,29 @@ export function PayoutCalculator({ onHome, onSignOut }) {
         </p>
 
       </div>
+
+      {manageOpen && (
+        <PresetManager
+          presets={presets}
+          onClose={() => setManageOpen(false)}
+          onSignOut={onSignOut}
+          onSaved={(saved) => {
+            setPresets((list) => {
+              const next = list.some((x) => x.id === saved.id)
+                ? list.map((x) => (x.id === saved.id ? saved : x))
+                : [...list, saved];
+              return next.sort((a, b) => a.name.localeCompare(b.name));
+            });
+            // Editing the supplier currently applied has to move the numbers on screen
+            // too — otherwise the chip names a stack the calculator isn't using.
+            if (saved.id === presetId) applyPreset(saved, { toggle: false });
+          }}
+          onDeleted={(id) => {
+            setPresets((list) => list.filter((x) => x.id !== id));
+            if (id === presetId) setPresetId(null);
+          }}
+        />
+      )}
     </div>
   );
 }

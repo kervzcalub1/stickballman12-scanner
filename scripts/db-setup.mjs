@@ -725,6 +725,62 @@ await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES 
 await sql(`CREATE INDEX IF NOT EXISTS batches_po_idx ON batches (po_id)`);
 
 
+/* ---- Payout Calculator: supplier presets ---- */
+// A "supplier" here is the person who buys the pair at retail for us — Andrew,
+// Esteban, Chris — and each one comes with a fixed cost stack: what they charge as a
+// tip, what the box swap + labour ships for, the sales tax where they shop, and the
+// gift-card discount they buy with. Retyping those four numbers for every pair, in a
+// store aisle, on a phone, is how a wrong number ends up in a buy call.
+//
+// SHARED, not per device (unlike prefs.payoutRates): a supplier's tip fee is a fact
+// about the supplier, so the buyer on the floor and the person checking the maths
+// afterwards must see the same one. Edited in-app from the calculator.
+//
+// Every rate is stored, not just the four on the brief: applying a preset replaces the
+// WHOLE cost stack, and a preset that left store/promo/cashback alone would quietly
+// carry the last store trip's discount into the next supplier's numbers.
+await sql(`
+  CREATE TABLE IF NOT EXISTS payout_presets (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name         TEXT          NOT NULL,
+    tip_amt      NUMERIC(12,2) NOT NULL DEFAULT 0,
+    shipping_amt NUMERIC(12,2) NOT NULL DEFAULT 0,
+    tax_pct      NUMERIC(6,3)  NOT NULL DEFAULT 0,
+    gift_pct     NUMERIC(6,3)  NOT NULL DEFAULT 0,
+    store_pct    NUMERIC(6,3)  NOT NULL DEFAULT 0,
+    promo_pct    NUMERIC(6,3)  NOT NULL DEFAULT 0,
+    cashback_pct NUMERIC(6,3)  NOT NULL DEFAULT 0,
+    note         TEXT,
+    created_by   TEXT,
+    created_at   TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    updated_by   TEXT,
+    updated_at   TIMESTAMPTZ   NOT NULL DEFAULT now()
+  )
+`);
+// Case-insensitive, so "andrew" can't become a second Andrew with different fees.
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS payout_presets_name_idx ON payout_presets (lower(btrim(name)))`);
+
+// Seed the known suppliers — but ONLY into an empty table, never ON CONFLICT DO
+// NOTHING. db:setup runs on every deploy, and a preset someone deliberately deleted
+// must stay deleted rather than reappearing on the next push.
+{
+  const { rows: [{ n }] } = await sql(`SELECT count(*)::int AS n FROM payout_presets`);
+  if (n === 0) {
+    // tip · shipping (incl. box swap fee + labour) · sales tax · gift-card discount.
+    // Council shops somewhere with no sales tax — that 0 is a fact, not a blank.
+    await sql(`
+      INSERT INTO payout_presets (name, tip_amt, shipping_amt, tax_pct, gift_pct, note) VALUES
+        ('Andrew',  5.00, 8.25, 8.25, 8, NULL),
+        ('Esteban', 5.00, 8.25, 8.25, 8, NULL),
+        ('Chris',   7.00, 8.25, 8.25, 8, NULL),
+        ('Joey',    5.00, 8.25, 8.25, 8, NULL),
+        ('Council', 5.00, 8.25, 0,    8, 'No sales tax')
+    `);
+    console.log('  seeded 5 payout supplier presets');
+  }
+}
+
+
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);
 const { rows: [{ po }] } = await sql(`SELECT count(*)::int AS po FROM purchase_orders`);

@@ -419,6 +419,61 @@ export async function ourListingFlags(sku) {
   return row || null;
 }
 
+// Per-SIZE listing breakdown for one style, in the PH grid's own buckets. This is the
+// "how many do we have, listed or not?" answer, and the naive version of it — on_hand
+// minus listed_alias — is wrong three ways, which is why it's a query and not a
+// subtraction:
+//   · **In-progress is a third bucket.** A pair with SOME of its required stores ticked
+//     is neither listed nor pending; it sits in In-Progress on the grid. Counting it as
+//     "not listed" would send someone to list a pair that's half done.
+//   · **Which stores are REQUIRED depends on the pair.** A `goat_only` shoe lists to
+//     Alias alone, so one tick finishes it; anything else needs II + Alias + StockX +
+//     Shopify. (Mirrors requiredFlags/unitListingStatus in src/lib/ph.js — keep in step.)
+//   · **The PH grid doesn't see everything we own.** In-store buys and existing stock
+//     never enter PH's world (PH_EXCLUDED_KINDS), and no-box units are hidden from New
+//     Inventory because they aren't postable. Those are counted separately rather than
+//     dropped, so the buckets still add up to what's on the shelf.
+// Sold and shipped are out entirely: the question is what we HAVE.
+//
+// NOT date-windowed, unlike the grid itself. The grid shows one date range at a time;
+// a question about a style wants every pair of it we're holding, so the caller must say
+// which of the two it's quoting (api/advisor/ask.js does).
+export async function phListingBySizeForSku(sku) {
+  const codes = String(sku || '').split('/').map((c) => c.trim().toUpperCase()).filter(Boolean);
+  if (!codes.length) return null;
+  const rows = await db()`
+    WITH u AS (
+      SELECT coalesce(nullif(btrim(i.size), ''), '?') AS size,
+             i.status,
+             (b.kind IS NOT NULL AND b.kind = ANY(${PH_EXCLUDED_KINDS})) AS off_ph,
+             CASE
+               WHEN coalesce(i.goat_only, false)
+                 THEN CASE WHEN coalesce(i.synced_alias, false) THEN 'listed' ELSE 'pending' END
+               WHEN coalesce(i.added_to_intel_inv, false) AND coalesce(i.synced_alias, false)
+                AND coalesce(i.synced_stockx, false)      AND coalesce(i.synced_shopify, false)
+                 THEN 'listed'
+               WHEN coalesce(i.added_to_intel_inv, false) OR coalesce(i.synced_alias, false)
+                 OR coalesce(i.synced_stockx, false)      OR coalesce(i.synced_shopify, false)
+                 THEN 'in_progress'
+               ELSE 'pending'
+             END AS bucket
+        FROM items i
+        LEFT JOIN batches b ON b.id = i.batch_id
+       WHERE upper(i.sku) = ANY(${codes}::text[])
+         AND i.status NOT IN ('sold', 'shipped')
+    )
+    SELECT size,
+           count(*) FILTER (WHERE NOT off_ph AND status <> 'no_box' AND bucket = 'pending')::int     AS pending,
+           count(*) FILTER (WHERE NOT off_ph AND status <> 'no_box' AND bucket = 'in_progress')::int AS in_progress,
+           count(*) FILTER (WHERE NOT off_ph AND status <> 'no_box' AND bucket = 'listed')::int      AS listed,
+           count(*) FILTER (WHERE NOT off_ph AND status = 'no_box')::int                             AS no_box,
+           count(*) FILTER (WHERE off_ph)::int                                                       AS in_store_or_existing
+      FROM u
+     GROUP BY size
+  `;
+  return rows;
+}
+
 /* ---------------------- Distributed lock (mutex) ---------------------- */
 // Atomic acquire: insert the key, or steal it if the prior holder's lease
 // expired. Returns true if acquired. One round trip, safe over the HTTP driver.

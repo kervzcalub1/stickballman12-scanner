@@ -49,7 +49,7 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 | `pending_work` | "what are we behind on?" | `pendingCounts` |
 | `search_sop` | "how do I…?" / "what's the rule about…?" | `searchSop` (lib/sop) |
 | `top_sellers` | "what's selling this week?" | `shopifyTopSellers` — every channel |
-| `stock_status` | "how many do we have?" | Shopify inventory + our sync flags |
+| `stock_status` | "how many do we have — listed or not, per size?" | Shopify inventory + our per-size Pending/In-Progress/Listed |
 | `market_price` | "what's it worth right now?" | Alias + StockX |
 
 - **Read-only is structural, not a promise.** All five are existing queries; nothing here
@@ -61,6 +61,35 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 - **`MAX_TOOL_HOPS = 4`**, and the last hop drops the tools entirely — that forces an
   answer rather than a fifth lookup the user is still waiting on.
 - Tool results are trimmed before they enter the prompt (25 pairs, 3 SOP hits, 14 steps).
+- **The three sources behind `stock_status` fail independently** (`Promise.allSettled`).
+  Shopify being down or unscoped must not cost the two counts that came out of our own
+  database — *"how many are pending?"* is answerable with Shopify face-down.
+
+### "Listed or not listed", per size
+`by_size` (from `phListingBySizeForSku`) is the answer to the question people actually
+ask, and it is **three buckets, not two** — the same rule the PH New Inventory grid uses
+(`requiredFlags` / `unitListingStatus` in `src/lib/ph.js`; keep the two in step):
+
+- **listed** — every store the pair needs is ticked. A `goat_only` shoe needs Alias
+  alone, so one tick finishes it; everything else needs II + Alias + StockX + Shopify.
+- **pending** — held, ticked to nothing. This IS the grid's Pending tab.
+- **in_progress** — some required stores ticked, not all.
+
+**Why it's a query and not `on_hand − listed_alias`.** That subtraction is wrong three
+ways: it swallows In-Progress into "not listed" (sending someone to list a half-done
+pair), it ignores that *which* stores are required varies per pair, and it counts stock
+the grid never shows. So `no_box` and `in_store_or_existing` are returned separately —
+real pairs on a real shelf that can't appear in Pending — with a `must_mention` line in
+the payload when either is non-zero. A prompt rule alone got skipped in testing; the
+data says it now.
+
+**Not date-windowed, unlike the grid**, which shows one date range at a time. A question
+about a style wants every pair of it we hold, so a Pending total here can exceed what's
+on their screen — the prompt makes the advisor say which it's quoting.
+
+**Sizes are matched to Shopify's variant titles on an exact label and nothing cleverer.**
+"7.5" and "7.5W" are different shoes on different feet; anything we can't match comes
+back under `shopify_sizes_we_could_not_match` rather than being folded in.
 
 ### Sales velocity — measured, not estimated
 Sales come from **Shopify, which carries every channel** (GOAT, StockX, eBay, TikTok…),

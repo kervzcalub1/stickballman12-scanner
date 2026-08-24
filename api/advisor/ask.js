@@ -29,7 +29,7 @@
 //    of these roles can open.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { advisorSkuHistory, findStockByCode, pendingCounts,
-  ourListingFlags, dbConfigured } from '../_lib/db.js';
+  ourListingFlags, phListingBySizeForSku, dbConfigured } from '../_lib/db.js';
 import { priceInquiryForSkuSizes } from '../_lib/intake.js';
 import { stockxConfigured, stockxPriceForSkuSize } from '../_lib/stockx.js';
 import { shopifyConfigured, shopifyTopSellers, shopifyVelocity,
@@ -119,7 +119,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'stock_status',
-      description: "How many of a style we appear to have: Shopify's inventory figures by size, plus what OUR OWN records say is on hand and listed to each store. Use for \"do we have it\", \"how many are left\", \"what sizes do we have\". The result carries a disclaimer about accuracy — repeat it.",
+      description: "How many of a style we appear to have, LISTED and NOT LISTED, broken down per size. Shopify's inventory figures by size (what's live on the stores), plus our own per-size split into Pending / In-Progress / Listed — the same buckets the PH New Inventory grid uses. Use for \"do we have it\", \"how many are left\", \"what sizes do we have\", \"how many are listed vs not listed\". The result carries a disclaimer about accuracy — repeat it.",
       parameters: {
         type: 'object',
         properties: { sku: { type: 'string', description: 'Style ID, e.g. DD1391-100' } },
@@ -229,10 +229,18 @@ async function runTool(name, args, user) {
     }
     case 'stock_status': {
       if (!sku) return { error: 'no sku given' };
-      const [shop, ours] = await Promise.all([
+      // allSettled, not all: these are three independent sources and a Shopify outage
+      // must not cost us the two numbers that came out of our own database. "How many
+      // are pending?" is answerable with Shopify face-down.
+      const [shopR, oursR, bySizeR] = await Promise.allSettled([
         shopifyConfigured() ? shopifyInventoryForSku(sku) : Promise.resolve(null),
         dbConfigured() ? ourListingFlags(sku) : Promise.resolve(null),
+        dbConfigured() ? phListingBySizeForSku(sku) : Promise.resolve(null),
       ]);
+      const shop = shopR.status === 'fulfilled' ? shopR.value
+        : { error: 'Shopify inventory is unavailable right now — say so, do not report zero' };
+      const ours = oursR.status === 'fulfilled' ? oursR.value : null;
+      const bySize = bySizeR.status === 'fulfilled' ? bySizeR.value : null;
       return {
         // Asked "how many do we have", give the numbers and then SAY THIS, every time.
         // Shopify's count is what Shopify believes; our flags are what PH ticked. A pair
@@ -241,6 +249,7 @@ async function runTool(name, args, user) {
         how_many_disclaimer: 'These are Shopify inventory figures and our own sync flags — NOT a physical count. They can be stale or wrong in both directions. For a number to act on, ask the warehouse.',
         shopify: shop || { note: 'Shopify is not configured on this server — say so, do not infer' },
         our_records: ours || { note: 'database unavailable' },
+        by_size: bySize ? sizeBreakdown(bySize, shop) : { note: 'database unavailable' },
       };
     }
     case 'market_price': {
@@ -264,6 +273,83 @@ async function runTool(name, args, user) {
     default:
       return { error: `unknown tool ${name}` };
   }
+}
+
+// Merge our per-size listing buckets with Shopify's per-size inventory into ONE table,
+// which is what "how many do we have, listed or not, per size" actually wants.
+//
+// Sizes are matched on an exact (trimmed, lowercased) label and nothing cleverer.
+// "7.5" and "7.5W" are different shoes on different feet, and a fuzzy match that folded
+// them together would invent stock that doesn't exist. Shopify labels we can't match
+// are handed back under their own key rather than dropped — an unmatched size is a real
+// finding (usually a variant titled differently), not a rounding error.
+function sizeBreakdown(rows, shop) {
+  const key = (v) => String(v ?? '').trim().toLowerCase();
+  const shopSizes = shop && !shop.error && !shop.permission ? { ...(shop.sizes || {}) } : {};
+  const shopByKey = new Map(Object.entries(shopSizes).map(([k, v]) => [key(k), { label: k, qty: v }]));
+
+  const sizes = (rows || []).map((r) => {
+    const hit = shopByKey.get(key(r.size));
+    if (hit) shopByKey.delete(key(r.size));
+    return {
+      size: r.size,
+      pending: r.pending,
+      in_progress: r.in_progress,
+      listed: r.listed,
+      ...(r.no_box ? { no_box: r.no_box } : {}),
+      ...(r.in_store_or_existing ? { in_store_or_existing: r.in_store_or_existing } : {}),
+      shopify_qty: hit ? hit.qty : (shop && (shop.error || shop.permission) ? 'unavailable' : 0),
+    };
+  });
+  // Numeric where it can be — 9, 9.5, 10 — so the table reads like a size run.
+  sizes.sort((a, b) => {
+    const n = (v) => { const m = String(v).match(/[\d.]+/); return m ? Number(m[0]) : NaN; };
+    const [x, y] = [n(a.size), n(b.size)];
+    if (Number.isFinite(x) && Number.isFinite(y) && x !== y) return x - y;
+    return String(a.size).localeCompare(String(b.size));
+  });
+
+  const sum = (f) => (rows || []).reduce((t, r) => t + (r[f] || 0), 0);
+  const out = {
+    what_the_buckets_mean:
+      'pending / in_progress / listed are OUR OWN per-size counts, using the same rule as the PH New Inventory grid: '
+      + 'pending = held, not ticked to ANY required store (this is the grid\'s Pending tab); '
+      + 'in_progress = some required stores ticked but not all; '
+      + 'listed = every required store ticked. A "GOAT only" pair needs Alias alone, so one tick finishes it; '
+      + 'everything else needs Intelligent Inventory + Alias + StockX + Shopify. '
+      + 'shopify_qty is what SHOPIFY says is on hand for that size — a different source, not our tick.',
+    scope:
+      'Sold and shipped pairs are excluded — this is what we HOLD. Counts cover every date, '
+      + 'whereas the New Inventory grid shows one date window at a time, so a Pending total here can be '
+      + 'larger than the one on their screen. no_box and in_store_or_existing are pairs we hold that the '
+      + 'PH grid never shows (no-box units are not postable; in-store buys and existing stock bypass PH entirely).',
+    sizes,
+    totals: {
+      pending: sum('pending'),
+      in_progress: sum('in_progress'),
+      listed: sum('listed'),
+      no_box: sum('no_box'),
+      in_store_or_existing: sum('in_store_or_existing'),
+    },
+  };
+  // A held pair the PH grid can't show is the easiest number on this screen to lose:
+  // it isn't pending, isn't listed, and isn't in the totals people quote. Say it out
+  // loud IN THE DATA — a rule in the prompt alone got skipped.
+  if (out.totals.no_box || out.totals.in_store_or_existing) {
+    const bits = [];
+    if (out.totals.no_box) bits.push(`${out.totals.no_box} bought without a box (not postable, so not in Pending)`);
+    if (out.totals.in_store_or_existing) bits.push(`${out.totals.in_store_or_existing} in-store or existing stock (never handled by PH)`);
+    out.must_mention = `We ALSO hold ${bits.join(' and ')}. Say this — it is real stock on a shelf, `
+      + 'and leaving it out makes the totals disagree with what the warehouse can see.';
+  }
+  if (shopByKey.size) {
+    out.shopify_sizes_we_could_not_match = Object.fromEntries(
+      [...shopByKey.values()].map((v) => [v.label, v.qty]),
+    );
+    out.unmatched_note = 'Shopify lists these sizes under labels that do not match any size we hold for this style. '
+      + 'Report them separately — do not merge them into a size above.';
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -309,6 +395,26 @@ LOOKING THINGS UP:
 - **Asked how many we HAVE, just give the numbers.** Do NOT write out the "not a
   physical count / ask the warehouse" caveat — the panel attaches it under every stock
   answer automatically, and repeating it in your text says it twice.
+- **"Listed or not listed" is stock_status's \`by_size\` block, and it is THREE buckets,
+  not two.** Give the size table.
+  - **listed** — every store the pair needs is ticked. A "GOAT only" shoe needs Alias
+    alone; everything else needs Intelligent Inventory + Alias + StockX + Shopify.
+  - **pending** — held and ticked to NOTHING. This is the Pending tab of New Inventory,
+    i.e. the pairs still waiting to be listed.
+  - **in_progress** — some required stores ticked, not all. Say it separately. Folding it
+    into "not listed" sends someone to list a pair that is half done, and folding it into
+    "listed" claims a pair is live on stores it was never pushed to.
+  - Never compute "not listed" by subtracting listed from on-hand. Quote the buckets.
+- **\`shopify_qty\` and our buckets are two different sources, not two views of one.**
+  Shopify is what the stores say is on hand; the buckets are what PH ticked here. Where
+  they disagree per size, say so — that gap is the point, and it is usually the answer
+  somebody is actually looking for.
+- **The Pending total can exceed what their screen shows.** \`by_size\` covers every date;
+  the New Inventory grid shows one date window at a time. If they're comparing against
+  the page, say which you're quoting.
+- **\`no_box\` and \`in_store_or_existing\` are pairs we hold that the PH grid never shows.**
+  Mention them when they're non-zero, so the numbers add up to what's on the shelf — but
+  never inside the pending count, because nobody is going to list them from that page.
 - If a tool reports a \`permission\` problem, say the figure is unavailable. Never
   substitute a zero — "none left" and "we can't see it" are opposite answers.
 - Be precise about WHOSE truth you are quoting. Sales and inventory come from Shopify;
@@ -421,7 +527,7 @@ export default async function handler(req, res) {
         const name = call.function?.name;
         used.push(name);
         let result;
-        try { result = await runTool(name, args, user); } catch (e) { result = { error: e.message }; }
+        try { result = await runTool(name, args, user); } catch (e) { console.error('[advisor:tool]', name, e.message); result = { error: e.message }; }
         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result).slice(0, 8000) });
       }
     }

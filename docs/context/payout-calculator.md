@@ -1,7 +1,8 @@
 # Payout Calculator
 
 Screen: `src/screens/PayoutCalculator.jsx`. Maths: `src/lib/payout.js` (pure).
-Endpoint: `api/payout/quote.js`. Routes: **`/payout`** (admin + warehouse home,
+Endpoints: `api/payout/quote.js` (live prices) + `api/payout/presets.js` (supplier
+presets). Routes: **`/payout`** (admin + warehouse home,
 In-Store Mode section) and **`/ph/payout`** (PH home, Pricing & Listing section).
 E2E: `e2e/payout-calculator.spec.js`.
 
@@ -50,7 +51,8 @@ want them.
      switch** — relabelling a stale number would be worse than showing none. The Alias
      strip names the basis so a screenshot of it can't be misread later.
 2. **Store cost** — shelf price, the discount stack, tax, tip, shipping → **Final
-   cost** + **Saved off sticker**, with a collapsible line-by-line breakdown.
+   cost** + **Saved off sticker**, with a collapsible line-by-line breakdown. A row of
+   **supplier presets** sits on top of it (below).
 3. **Liquidity — filled from our own sales, not guessed.** `api/payout/quote.js` returns
    `velocity` for the style alongside the prices (`salesVelocity`, see
    `sales-history.md`), and the picker selects the matching band with the evidence
@@ -69,6 +71,47 @@ want them.
      would put a measurement on screen that nothing measured.
 4. **Expected payouts → The call** — per-platform fees → payout / profit / ROI, then a
    **Buy / Watch / Pass** verdict with risk and platform spread.
+
+## Supplier presets — the one thing here that ISN'T per device
+Table `payout_presets`, endpoint `api/payout/presets.js` (GET list · POST save · POST
+`{deleteId}`), editor in `PresetManager` inside the screen. Seeded from the five
+suppliers the floor already buys through: **Andrew, Esteban, Joey** ($5 tip), **Chris**
+($7), **Council** (no sales tax) — all $8.25 shipping (box swap fee + labour) and an 8%
+gift-card discount.
+
+A "supplier" here is the person who buys the pair at retail for us, and each one comes
+with a fixed cost stack. Tapping their chip fills the whole Store cost step; the four
+numbers are then just there, instead of being retyped per pair on a phone in a shop.
+
+- **Shared in the database, not in `prefs`.** Everything else on this screen persists
+  per device because it's per store *trip*. A supplier's tip fee is a different kind of
+  fact — it's about the supplier — so the buyer on the floor and whoever checks the
+  maths afterwards have to be reading the same one. One person raising Chris to $7
+  raises him for everybody.
+- **A preset states the WHOLE stack**, all seven rates, not only the four that differ
+  between suppliers. One that left store/promo/cashback alone would quietly carry the
+  last trip's discount into the next supplier's cost — and *"Council: no sales tax"* has
+  to actually clear the 8.25% the previous supplier left in the box, which is what the
+  e2e test asserts.
+- **Blank means zero, not "skip this field".** Council's 0% tax is a fact about where
+  they shop, and the row says so with a note.
+- **Applying is a label, not a lock.** Every field stays editable; the moment one
+  diverges the chip stops claiming the supplier and the line reads *"…'s stack, edited
+  below — the numbers on screen are the ones being used."* That's derived from the
+  values, never a flag, so it can't go stale.
+- **Tapping the applied supplier again drops the label but LEAVES the numbers** — they
+  are what the pair in your hand is being bought at, and zeroing them mid-decision would
+  be worse than a chip that stops highlighting. Same for deleting a preset.
+- **Typed rates are quoted back exactly** (`ratePct`, not `pct`): a sales tax of 8.25% is
+  not 8.3%, and a chip that rounds the number it just filled in reads as a different one.
+  `pct`'s one decimal stays for the things we *calculate* — ROI, margin, fees.
+- **Writes are open to warehouse + PH**, like `api/payout/quote.js` and unlike the rest of
+  pricing. Gating edits to admin would mean the person who just agreed a new tip fee with
+  a supplier, standing in the store, can't record it — and a preset references nothing
+  and saves nothing, so a bad one costs a retype. Duplicate names are refused
+  case-insensitively (409), and every rate is validated non-negative and ≤100%.
+- **Seeding runs only into an EMPTY table**, never `ON CONFLICT DO NOTHING`: `db:setup`
+  runs on every deploy, and a supplier someone deliberately deleted must stay deleted.
 
 ## The cost maths (`calcCostBreakdown`) — order is the point
 `shelf → store % → promo % → gift card % → coupon → tax → + tip + shipping − cashback`
@@ -140,7 +183,8 @@ catalogue for 12 h and market data for 10 min.
 - **Rates persist per device** in `prefs.payoutRates` (`src/prefs.js`): store %, promo
   %, gift card %, cashback %, tax %. They're per store *trip* — the same stack holds
   all afternoon in one shop, and retyping them for every pair is how a wrong number
-  ends up in a buy call.
+  ends up in a buy call. A supplier preset writes straight into these,
+  so a tap on a chip is also what sticks on the device.
 - **Per-pair amounts never persist**: shelf price, coupon, tip, shipping, both sale
   prices, both fee overrides, liquidity. They start empty for every shoe, on purpose.
 - **The URL carries the shoe only** (`?sku=`, `?size=`), so a refresh or a link to

@@ -4066,3 +4066,90 @@ export async function listArchivedPos({ limit = 100 } = {}) {
     ORDER BY p.reconciled_at DESC NULLS LAST, p.created_at DESC
     LIMIT ${limit}`;
 }
+
+/* ------------------------ Payout supplier presets ------------------------ */
+// The fixed cost stack a given supplier buys at — tip, shipping (box swap + labour),
+// sales tax, gift-card discount, and the rest of the register percentages. Shared
+// across the team on purpose: a supplier's tip fee is a fact about the supplier, not
+// about the phone it's typed on (docs/context/payout-calculator.md).
+
+// Numerics come back from `pg` as STRINGS. The calculator does arithmetic with these,
+// so cast on the way out — '8.25' + 5 is '8.255' and nobody would spot it on screen.
+const presetOut = (r) => (r ? {
+  id: Number(r.id),
+  name: r.name,
+  tipAmt: Number(r.tip_amt),
+  shippingAmt: Number(r.shipping_amt),
+  taxPct: Number(r.tax_pct),
+  giftPct: Number(r.gift_pct),
+  storePct: Number(r.store_pct),
+  promoPct: Number(r.promo_pct),
+  cashbackPct: Number(r.cashback_pct),
+  note: r.note || '',
+  updatedBy: r.updated_by || null,
+  updatedAt: r.updated_at || null,
+} : null);
+
+export async function listPayoutPresets() {
+  const rows = await db()`
+    SELECT id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct, promo_pct,
+           cashback_pct, note, updated_by, updated_at
+      FROM payout_presets
+     ORDER BY lower(btrim(name))`;
+  return rows.map(presetOut);
+}
+
+/**
+ * Create or rename/retune one preset. `id` null = create.
+ * Throws a tagged error on a duplicate name so the endpoint can answer 409 instead of
+ * leaking a Postgres constraint string at someone standing in a shop.
+ */
+export async function savePayoutPreset(p, updatedBy) {
+  const sql = db();
+  const name = String(p.name || '').trim();
+  const n = (v) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? x : 0;
+  };
+  const [tip, ship, tax, gift, store, promo, cash] = [
+    n(p.tipAmt), n(p.shippingAmt), n(p.taxPct), n(p.giftPct),
+    n(p.storePct), n(p.promoPct), n(p.cashbackPct),
+  ];
+  const note = String(p.note || '').trim() || null;
+  try {
+    // The shim can't nest sql fragments, so insert and update are two whole statements.
+    const rows = p.id
+      ? await sql`
+          UPDATE payout_presets
+             SET name = ${name}, tip_amt = ${tip}, shipping_amt = ${ship},
+                 tax_pct = ${tax}, gift_pct = ${gift}, store_pct = ${store},
+                 promo_pct = ${promo}, cashback_pct = ${cash}, note = ${note},
+                 updated_by = ${updatedBy || null}, updated_at = now()
+           WHERE id = ${p.id}
+       RETURNING id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct,
+                 promo_pct, cashback_pct, note, updated_by, updated_at`
+      : await sql`
+          INSERT INTO payout_presets
+            (name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct, promo_pct,
+             cashback_pct, note, created_by, updated_by)
+          VALUES (${name}, ${tip}, ${ship}, ${tax}, ${gift}, ${store}, ${promo},
+                  ${cash}, ${note}, ${updatedBy || null}, ${updatedBy || null})
+       RETURNING id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct,
+                 promo_pct, cashback_pct, note, updated_by, updated_at`;
+    return presetOut(rows[0]);
+  } catch (e) {
+    if (String(e.message || '').includes('payout_presets_name_idx')) {
+      const err = new Error(`There's already a supplier called “${name}”.`);
+      err.duplicate = true;
+      throw err;
+    }
+    throw e;
+  }
+}
+
+// Hard delete: a preset is a convenience, referenced by nothing — the calculator saves
+// no rows at all, so there is no history to orphan.
+export async function deletePayoutPreset(id) {
+  const rows = await db()`DELETE FROM payout_presets WHERE id = ${id} RETURNING id, name`;
+  return rows[0] || null;
+}

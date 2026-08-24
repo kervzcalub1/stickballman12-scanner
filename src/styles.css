@@ -3267,6 +3267,30 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* Alias basis toggle — sits with the size chips because it governs what a tap fetches. */
 .pc-basis { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 
+/* Supplier presets — the row of chips above Store cost, and the editor overlay.
+   Phone-first: the chips wrap and the "why" line takes the full width under them, so a
+   long stack summary never squeezes the chips into one-word columns. */
+.pc-preset-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
+.pc-preset-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pc-preset-why { flex-basis: 100%; }
+
+.pc-preset-modal { max-width: 620px; width: min(620px, calc(100vw - 32px)); text-align: left; }
+.pc-preset-modal .modal-title, .pc-preset-modal .modal-msg { text-align: left; }
+.pc-preset-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; max-height: 46vh; overflow-y: auto; }
+.pc-preset-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); padding: 9px 11px;
+}
+.pc-preset-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 220px; }
+.pc-preset-row-name { font-weight: 700; }
+.pc-preset-row-acts { display: flex; gap: 6px; flex: none; }
+.pc-preset-confirm {
+  flex-basis: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; font-size: 13px;
+}
+.pc-preset-form { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.pc-preset-form .pc-field input { width: 100%; }
+
 /* Payout advisor — a chat that reads the calculation above it. */
 /* The advisor's inline code — a SKU or a field name, not a code block. */
 .pc-msg-body code {

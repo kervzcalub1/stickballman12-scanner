@@ -53,9 +53,15 @@ async function gql(query, variables) {
   });
   const data = await r.json().catch(() => null);
   // Shopify answers 200 with an `errors` array for permission problems, so a bare
-  // `r.ok` check would read a refusal as success.
-  const denied = (data?.errors || []).find((e) => /access denied|scope/i.test(e?.message || ''));
-  return { ok: r.ok && !data?.errors, status: r.status, data: data?.data, errors: data?.errors, denied: !!denied };
+  // `r.ok` check would read a refusal as success. It is not ALWAYS an array, though:
+  // an auth-level failure comes back as `{"errors": "Invalid API key or access token"}`,
+  // a bare string, and calling .find on that threw — taking down every caller of this
+  // helper, including tools that had perfectly good non-Shopify data to return.
+  const errs = Array.isArray(data?.errors)
+    ? data.errors
+    : (data?.errors ? [{ message: String(data.errors) }] : []);
+  const denied = errs.find((e) => /access denied|scope|invalid api key|access token/i.test(e?.message || ''));
+  return { ok: r.ok && !errs.length, status: r.status, data: data?.data, errors: errs.length ? errs : undefined, denied: !!denied };
 }
 
 /* ------------------------------------------------------------------ */

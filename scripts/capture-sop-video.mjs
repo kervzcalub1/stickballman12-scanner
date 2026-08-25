@@ -344,8 +344,18 @@ async function playBeats(page, beats, report, track) {
     }
     // Hold for as long as the line actually takes to speak. A guessed hold either
     // clips the sentence or leaves dead air; the rendered audio knows the truth.
+    //
+    // `hold` is a FLOOR, not a replacement (fixed 2026-08-26). It used to override the
+    // spoken length outright, so a beat asking to linger — `hold: 1500` on a six-second
+    // line — cut its own narration off and the next line started on top of it. Four
+    // lines of the payout tutorial overlapped that way, including both of the ones the
+    // video exists to deliver. Every author writing `hold` means "stay a bit longer",
+    // never "stop talking early", so the two are simply maxed. Short-line beats that
+    // hold deliberately (`say: 'Find.', hold: 2600`) are unaffected: their floor is
+    // still the larger number.
     const spoken = clip ? clip.seconds * 1000 + 550 : null;
-    await wait(page, b.hold ?? spoken ?? (b.say ? Math.min(5200, 1500 + String(b.say).length * 52) : 700));
+    const guess = b.say ? Math.min(5200, 1500 + String(b.say).length * 52) : 700;
+    await wait(page, Math.max(b.hold ?? 0, spoken ?? guess));
     if (wantZoom && track) track.zoomEnd();
   }
 }

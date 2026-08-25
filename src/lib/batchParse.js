@@ -25,11 +25,26 @@
 
 // A style code (DD1391-100, FQ8080-133) or a bare UPC. Kept loose on purpose: adidas,
 // New Balance and Nike all shape these differently.
-const SKU_TOKEN_RE = /\b[A-Z0-9]{2,10}-[A-Z0-9]{2,5}\b|\b\d{12,14}\b/i;
+//
+// The third alternative is the code written with a SPACE instead of a hyphen —
+// "IB8857 141" — because that is how people actually type it, and a paste that fails
+// with "nothing recognisable" teaches them the tool is broken rather than that they
+// missed a dash. It is deliberately stricter than the hyphen form: BOTH halves must
+// contain a digit. Without that, "RM Hemp" out of "Jordan 4 RM Hemp" reads as a style
+// code and the whole shoe name becomes a header for sizes that were never under it.
+const SKU_TOKEN_RE = /\b[A-Z0-9]{2,10}-[A-Z0-9]{2,5}\b|\b\d{12,14}\b|\b(?=[A-Z0-9]*\d)[A-Z0-9]{2,10}[ \t]+(?=[A-Z0-9]*\d)[A-Z0-9]{2,5}\b/i;
+// However it was written, it is stored hyphenated and upper-case — one SKU, one key,
+// so "ib8857 141" and "IB8857-141" group together instead of being priced twice.
+const normSku = (raw) => String(raw || '').trim().toUpperCase().replace(/[ \t]+/g, '-');
 // "9 x 2", "9.5 × 1", "10W x 3" — a size, a multiplier, a count.
-const SIZE_QTY_RE = /^\s*([0-9]+(?:[.,][05])?\s*(?:[CYWcyw])?)\s*[x×X*]\s*([0-9]+)\s*(?:pairs?|prs?)?\s*$/;
+//
+// The size is capped at TWO digits, and that cap is load-bearing: a numeric style code
+// written with a space ("315121 115") otherwise reads as "size 315121, quantity 115" and
+// is swallowed as a size line before it can be recognised as the header it is. No shoe
+// is a size 315121.
+const SIZE_QTY_RE = /^\s*([0-9]{1,2}(?:[.,][05])?\s*(?:[CYWcyw])?)\s*[x×X*]\s*([0-9]+)\s*(?:pairs?|prs?)?\s*$/;
 // "9 - 2", "9: 2", "9/2" — same thing with any separator. Looser, so it runs second.
-const SIZE_QTY_LOOSE_RE = /^\s*([0-9]+(?:[.,][05])?\s*[CYWcyw]?)[^0-9]+([0-9]+)\s*(?:pairs?|prs?)?\s*$/;
+const SIZE_QTY_LOOSE_RE = /^\s*([0-9]{1,2}(?:[.,][05])?\s*[CYWcyw]?)[^0-9]+([0-9]+)\s*(?:pairs?|prs?)?\s*$/;
 const SEPARATOR_RE = /^[\s\-–—⸻=_*•·.]+$/;
 const TOTAL_RE = /^\s*(?:total|subtotal|grand\s+total|sum|qty)\b/i;
 
@@ -53,6 +68,10 @@ function costFromLine(text) {
 }
 
 function headerLine(line) {
+  // A size run is never a header, whatever else the line looks like. Belt and braces:
+  // the size patterns are checked first at the call site too, but only once a group is
+  // already open — the FIRST line of a paste has no group yet.
+  if (sizeQtyLine(line)) return null;
   const m = line.match(SKU_TOKEN_RE);
   if (!m) return null;
   const name = line
@@ -62,7 +81,7 @@ function headerLine(line) {
     .replace(/[–—|·•:\-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return { sku: m[0].toUpperCase(), name: name || '', cost: costFromLine(line) };
+  return { sku: normSku(m[0]), name: name || '', cost: costFromLine(line) };
 }
 
 function sizeQtyLine(line) {
@@ -74,7 +93,7 @@ function sizeQtyLine(line) {
 let rowSeq = 1;
 const mkRow = (r) => ({
   key: `br${rowSeq++}`,
-  sku: (r.sku || '').toUpperCase(),
+  sku: normSku(r.sku),
   name: r.name || '',
   size: r.size || '',
   qty: Math.max(1, Math.round(Number(r.qty) || 1)),
@@ -125,7 +144,7 @@ export function parsePerLine(text) {
       .replace(/[–—|·•:\-]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-    rows.push(mkRow({ sku, name, size: size ? normSize(size) : '', qty, cost: costFromLine(rest) }));
+    rows.push(mkRow({ sku: normSku(sku), name, size: size ? normSize(size) : '', qty, cost: costFromLine(rest) }));
   }
   return rows.slice(0, MAX_ROWS);
 }

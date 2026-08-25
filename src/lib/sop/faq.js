@@ -406,4 +406,42 @@ export const FAQ = [
     area: 'start', roles: ALL, see: 'password-reset',
     keywords: ['must change', 'forced', 'temp password', 'blocked', '428'],
   },
+
+  // ------------------------------------------------------------- payout ----
+  {
+    id: 'faq-payout-autofilled-price',
+    q: 'The calculator filled in a sale price I never picked. Where did it come from?',
+    a: 'Each platform takes its OWN lowest ask the moment the market loads — Alias from Alias, StockX from StockX. The lowest ask is what the pair actually sells for, so it is the default and you get a call without tapping anything. The highlighted cell is the number in use; tap Highest offer, Last sold or Global indicator to switch, or type your own and no cell stays highlighted. Changing the size or the Alias basis re-fills it, because both make the old number a statement about something else.',
+    area: 'listing',
+    roles: STAFF,
+    see: 'payout-calculator',
+    keywords: ['lowest ask', 'sale price', 'autofill', 'payout'],
+  },
+  {
+    id: 'faq-payout-markup-changed-call',
+    q: 'It said Watch, I turned markup on, and now it says Buy. Which one is true?',
+    a: 'Both, of different prices — and that is exactly what the amber panel is telling you. The Watch is what the pair is worth at the market price today. The Buy assumes it sells at your marked-up price, which nobody has offered yet. The panel names both figures side by side on purpose. Treat an amber Buy as "worth it IF it sells there", not as a decision already made. It only appears when the markup actually changed the call — a markup that leaves the call alone gets a quiet grey line instead.',
+    area: 'listing',
+    roles: STAFF,
+    see: 'payout-markup',
+    keywords: ['markup', 'buy call', 'amber', 'watch'],
+  },
+  {
+    id: 'faq-payout-nothing-recognisable',
+    q: 'I pasted a supplier list and it said "Nothing recognisable in that."',
+    a: 'Every line needs a style code and a size — or a header line carrying the code, with its sizes underneath it. A space instead of a dash is fine ("IB8857 141" reads the same as "IB8857-141"). What it cannot do is guess: a paste of nothing but "10 x 5 / 11 x 5" has no shoe attached to it, so there is nothing to price. Add the style code above those lines and read it again.',
+    area: 'listing',
+    roles: STAFF,
+    see: 'payout-batch',
+    keywords: ['batch', 'paste', 'style code', 'nothing recognisable'],
+  },
+  {
+    id: 'faq-payout-saves-nothing',
+    q: 'Does the Payout Calculator change stock or prices?',
+    a: 'No. It writes nothing at all — no item, no batch, no price, no listing. It is a scratchpad with the right arithmetic in it, and closing the page throws everything away. The one exception is the supplier presets, which ARE shared with the team: editing one changes it for everybody, because a supplier fee is a fact about the supplier and not about your phone.',
+    area: 'listing',
+    roles: STAFF,
+    see: 'payout-calculator',
+    keywords: ['payout', 'saved', 'inventory', 'preset'],
+  },
 ];

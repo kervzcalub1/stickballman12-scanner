@@ -27,8 +27,11 @@ search, and cross-linked without duplicating copy.
   diagram?, shot?, related?: [id], keywords?: [string] }
 ```
 
-- **Files:** `articles.warehouse.js` · `articles.ph.js` · `articles.supplier.js` ·
-  `articles.admin.js` · `articles.reference.js` · `faq.js`. `index.js` concatenates
+- **Files:** `articles.warehouse.js` · `articles.ph.js` · `articles.payout.js` ·
+  `articles.supplier.js` · `articles.admin.js` · `articles.reference.js` · `faq.js`.
+  `articles.payout.js` exists because the Payout Calculator belongs to no single desk —
+  warehouse, PH and admin all buy off it — so its three articles carry the full staff
+  role list rather than being duplicated into two files. `index.js` concatenates
   them and owns the vocabulary (`SOP_ROLES`, `SOP_AREAS`, `SOP_KEYWORDS`).
 - **Roles — scoped to the account, not a free filter.** `visibleTo(article, role)`
   is a plain `article.roles.includes(role)`; there is no admin blanket-true (that

@@ -608,6 +608,19 @@ order sets `?po=<id>` and renders `PoDetail.jsx` full-screen, with **← All pur
 back to the list. It used to unfold inside the list row, and on a nine-label order (PO-100005)
 that buried the order's own details under the first label and ran every box together. The
 deep link is unchanged, so a shared `/ph/po-status?po=123` still lands on the order.
+- **Filter the list by supplier and/or purchase date (2026-08-25).** Above the list: a
+  supplier select (built from the suppliers actually on the orders, not a hard-coded list)
+  and a **Purchased from / to** date range, all three combining (AND, not OR) with a
+  **Clear** button and a "Showing X of Y orders" count. They ride in the URL
+  (`?supplier=&from=&to=`) like `?po=`, so a refresh or a shared link keeps the view.
+  - Filtering happens **in the browser**, over the orders `po/list` already returned in one
+    go — no endpoint or query change.
+  - **The date a filter means** is `date_of_purchase` (what PH typed on the form) and, only
+    when that was left blank, the EST day the order was opened (`created_at` through
+    `estDate`). Reading `created_at` in UTC would file an order opened at 9pm EST under the
+    next day. Both ends of the range are inclusive.
+  - The row now also prints the **supplier name and that date** — a filtered list has to show
+    the fact each row was matched by. Guarded by `e2e/po-list-filters.spec.js`.
 - The page reads: **order card** (who it's from, where it is, declared vs received, the
   order-level actions + Edit details + labels PDF + "Received into") → whole-order manifest →
   manifest-PDF import → **Labels (N)** with + Add label → **one card per label** → the

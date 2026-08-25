@@ -7,6 +7,7 @@ import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
 import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText, Modal, RemoveUnitsModal } from '../components/common.jsx';
+import { RescaleRequestModal } from '../components/RescaleRequestModal.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges } from '../lib/constants.js';
@@ -363,6 +364,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       const { rows: r } = await api.phList(from, to, kind);
       knownVinsRef.current = null; newVinsRef.current = new Set(); noteArrivals(r);
       setRows(r); setEditing(new Set()); setDrafts({}); setExpanded(new Set());
+      // Re-read the open rescale requests on an explicit reload, so the row chip
+      // clears once the warehouse audits one. The 15s quiet poll deliberately does
+      // NOT — it's a courtesy chip, not worth 500 rows every tick.
+      loadOpenRequests();
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setLoading(false); }
   }
@@ -592,6 +597,40 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // and Shopify for good, and nothing downstream ever flags a wrongly-flagged pair.
   const [goatConfirm, setGoatConfirm] = useState(null); // { g, goatOnly, fresh: [vin] }
   const [removing, setRemoving] = useState(null);       // { title, sku, units } — remove-pairs modal
+  // "Send for rescale": raise a rescale request off a New Inventory row (see
+  // components/RescaleRequestModal.jsx). `openReqs` is a SKU -> open request map, used
+  // both for the row chip and to warn before a second request for the same shelf.
+  const [rescaleFor, setRescaleFor] = useState(null);   // the group whose modal is open
+  const [openReqs, setOpenReqs] = useState({});         // sku -> { id, requested_by, created_at }
+  const canRescaleRequest = canEdit && kind === 'receiving';
+  async function loadOpenRequests() {
+    if (!canRescaleRequest) return;
+    try {
+      // Every open request, not just this page's date range — a request raised last
+      // month is still open work against this SKU, and the chip has to say so.
+      const { requests } = await api.rescaleRequestList('open');
+      const m = {};
+      for (const r of requests || []) if (r.sku && !m[r.sku]) m[r.sku] = r; // newest first from the server
+      setOpenReqs(m);
+    } catch { /* the chip is a courtesy — a failed fetch must not break the grid */ }
+  }
+  useEffect(() => { loadOpenRequests(); }, [canRescaleRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+  function onRescaleSent(res) {
+    setRescaleFor(null);
+    setNotice(`Rescale requested for ${res.sku} — ${res.qty} pair${res.qty === 1 ? '' : 's'} reported. The warehouse will count the shelf and you'll see reported vs actual under Rescale Requests.`);
+    loadOpenRequests();
+  }
+  // The row's "already asked" chip. Also the button's own guard-rail: it opens the
+  // modal, which repeats the warning with who asked and when.
+  const rescaleChip = (g) => {
+    const r = g.sku ? openReqs[g.sku] : null;
+    if (!r) return null;
+    return (
+      <span className="ph-rescale-chip" title={`${r.requested_by || 'Someone'} asked the warehouse to recount this SKU${r.created_at ? ` on ${PH_DATETIME.format(new Date(r.created_at))} EST` : ''}. It's still open.`}>
+        ⟳ Rescale requested
+      </span>
+    );
+  };
   // A removal deletes rows, so there's nothing local to patch — reload and report,
   // including whatever the server refused (sold/shipped can't be removed).
   function onRemoved(res) {
@@ -772,6 +811,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
                     {splitChip(g)}
+                    {rescaleChip(g)}
                     {g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}
                   </div>
                   <button type="button" className="ph-card-sizes ph-card-sizes-btn" onClick={() => toggleExpand(g.key)} aria-expanded={open}>
@@ -867,6 +907,13 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                             onClick={() => setRemoving({ title: g.name || g.sku || 'Unknown shoe', sku: g.sku, units: unitsOf(g) })}>
                             Remove…
                           </button>
+                          {canRescaleRequest && (
+                            <button className="btn sm ghost" disabled={editing.size > 0}
+                              title="Ask the warehouse to recount this SKU — you report your count, they count the shelf"
+                              onClick={() => setRescaleFor(g)}>
+                              ⟳ Rescale…
+                            </button>
+                          )}
                           {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
                         </span>
                       );
@@ -889,7 +936,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   <th style={frozenStyle(2)} className="ph-frozen">SKU</th>
                   <th style={frozenStyle(3)} className="ph-frozen ph-frozen-last">Qty</th>
                   <th>Sizes (qty)</th><th>Gender</th><th>Status</th><th>Listed / synced</th><th>Scanned by</th>
-                  <th style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first">Action</th>
+                  <th style={rightStyle('action', canRescaleRequest)} className="ph-rfrozen ph-rfrozen-first">Action</th>
                   <th style={rightStyle('addedby')}>Added by</th>
                 </tr>
               </thead>
@@ -907,10 +954,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                         <td>{g.gender || '—'}</td>
-                        <td><StatusPill status={g.status} /></td>
+                        <td className="ph-status-cell"><StatusPill status={g.status} />{rescaleChip(g)}</td>
                         <td><div className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}</div></td>
                         <td>{g._mixedBy ? <span className="muted">multiple</span> : (g.created_by || '—')}</td>
-                        <td style={rightStyle('action')} className="ph-rfrozen ph-rfrozen-first" onClick={(e) => e.stopPropagation()}>
+                        <td style={rightStyle('action', canRescaleRequest)} className="ph-rfrozen ph-rfrozen-first" onClick={(e) => e.stopPropagation()}>
                           {!canEdit ? <span className="muted">—</span>
                             : ed
                               ? (<span className="ph-edit-actions">
@@ -923,6 +970,13 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                   ? <span className="presence-badge" title={`${lockHolder(g)} is editing this right now`}>{lockHolder(g)} editing…</span>
                                   : (<span className="ph-edit-actions">
                                       <button className="btn sm ghost" disabled={editing.size > 0} title={editing.size > 0 ? 'Finish your current edit first' : ''} onClick={() => startEdit(g)}>Edit</button>
+                                      {canRescaleRequest && (
+                                        <button className="btn sm ghost ph-rescale-btn" disabled={editing.size > 0}
+                                          title="Ask the warehouse to recount this SKU — you report your count, they count the shelf"
+                                          onClick={() => setRescaleFor(g)}>
+                                          ⟳ Rescale…
+                                        </button>
+                                      )}
                                       {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
                                     </span>))}
                         </td>
@@ -1011,6 +1065,14 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       {historyFor && <HistoryModal vins={historyFor.vins} title={historyFor.title} onClose={() => setHistoryFor(null)} />}
       {goatConfirmModal}
       {removing && <RemoveUnitsModal {...removing} onClose={() => setRemoving(null)} onDone={onRemoved} />}
+      {rescaleFor && (
+        <RescaleRequestModal
+          group={rescaleFor}
+          existing={rescaleFor.sku ? openReqs[rescaleFor.sku] : null}
+          onClose={() => setRescaleFor(null)}
+          onDone={onRescaleSent}
+        />
+      )}
       {photosSku && <PhotosModal sku={photosSku} onClose={() => setPhotosSku(null)} onSignOut={onSignOut} />}
     </div>
   );

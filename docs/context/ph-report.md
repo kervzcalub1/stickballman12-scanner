@@ -105,6 +105,10 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   `canCopy` (excludes the admin/warehouse `kind=null` "Listings & Sync" grid).
   Admin/warehouse get the same affordance on **Inventory** and **Box Labels**
   (`inventory.md`, `no-box.md`), not on this grid.
+- **Send for rescale (New Inventory only):** a **⟳ Rescale…** action per row raises a
+  rescale request straight off the worklist, pre-filled with the row's own per-size
+  counts; a SKU with one already open is chipped **⟳ Rescale requested** beside its
+  status. Full behaviour in `rescale.md`.
 - **Frozen columns** (`ph.js` `frozenStyle`/`rightStyle`): left = Date/Title/SKU/Qty;
   right = **Action + Added by** (both sticky, kept together). Their contents **wrap**
   inside the fixed column width (`.ph-addedby`, `.ph-rfrozen-first`) rather than

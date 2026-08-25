@@ -1,8 +1,8 @@
 # Payout Calculator
 
 Screen: `src/screens/PayoutCalculator.jsx`. Maths: `src/lib/payout.js` (pure).
-Batch mode: `src/components/BatchAnalysis.jsx` + `src/lib/batchParse.js` +
-`src/lib/batch.js`. Endpoints: `api/payout/quote.js` (live prices),
+Batch analysis (bottom of the same screen): `src/components/BatchAnalysis.jsx` +
+`src/lib/batchParse.js` + `src/lib/batch.js`. Endpoints: `api/payout/quote.js` (live prices),
 `api/payout/batch.js` (a whole list) + `api/payout/presets.js` (supplier presets). Routes: **`/payout`** (admin + warehouse home,
 In-Store Mode section), **`/ph/payout`** (PH home, Pricing & Listing section), and
 **`/payout` on the supplier portal** (their own home — see "Suppliers get this screen"
@@ -151,10 +151,13 @@ buying, which is the question this screen exists to answer.
   it for suppliers if that ever stops being wanted.
 - Guarded by `e2e/supplier-payout.spec.js`.
 
-## Batch mode — a whole list at once (2026-08-26)
-`?mode=batch` on the same screen, behind a **One pair / A whole list** toggle. Two modes
-rather than two screens: a batch is priced with the same fee overrides and the same basis
-sitting above it, and splitting them would mean maintaining the register twice.
+## Batch analysis — a whole list at once (2026-08-26)
+**"Or price a whole list", at the BOTTOM of the one-pair page**, under the Store cost
+step — not behind a mode toggle, and the placement is the feature. Every pasted price is
+run through the register that's already on screen, so **one tap on a supplier preset at
+the top prices forty rows**. Behind a toggle, every batch meant re-entering a stack that
+was right there. (It shipped as a toggle and was moved the same day, for exactly that
+reason.)
 
 **Paste → Review → Analyse, and the middle step is not optional.** Parsing a chat message
 is guesswork however carefully it's done, so every row lands in an **editable table**
@@ -192,10 +195,22 @@ dropped.
    function is what the calculator, the advisor prompt and this all read.
 2. **No estimated eBay / Stadium Goods columns.** The source multiplies the Alias ask by
    1.25 and 1.2 and prints them as prices. They're a guess wearing a currency symbol.
-3. **No cost stack.** A row's cost is the **landed cost per pair** — what an offer sheet
-   already is. The register stack belongs to one store trip and a pasted list routinely
-   spans several, so it isn't applied; the screen says so in a line under the table.
-   Price sticker prices in one-pair mode, where that stack is visible.
+3. **The cost stack applies, and the coupon deliberately doesn't.** Two modes on the
+   table itself:
+   - **Shelf prices** (default) — each pasted price runs through the stack above:
+     the three compounding discounts, tax, cashback, and the per-pair tip and shipping.
+     A row then shows both numbers, `Cost $115.31 (from $150.00)`, which is the line
+     someone checks when a call surprises them.
+   - **Already my cost** — the number is the landed cost, exactly as typed. A supplier's
+     offer sheet is this: they quote you a price, not a sticker you then discount.
+
+   **The coupon is never applied, in either mode.** It's a flat amount off one
+   transaction, not a rate — carrying a $10 coupon into forty rows would quietly take
+   $400 off the batch and turn a Pass into a Buy. The line under the table names what the
+   stack *will* do in the words of the fields above ("30% store, 8% tax, $5.00 tip…"), and
+   says so when the stack is empty; silently applying nothing looks identical to applying
+   something. Changing any of it clears the last analysis rather than leaving a stale one
+   looking current.
 
 **The gaps are named, and kept out of the totals.** `no_price` (no market for that size)
 and `no_cost` (nobody entered one) are counted and printed separately — averaging a blank
@@ -204,7 +219,9 @@ Watch → Pass → gaps, and within a status by **line** profit: a $6 margin ove
 outranks $40 over one. Green means "take it", not "the arithmetic came out positive" — an
 $11 profit at 11.9% ROI is a Pass and must not read green beside its own red chip.
 
-Suppliers get batch mode too, on their own portal. E2E: `e2e/payout-batch.spec.js`.
+Suppliers get it too, on their own portal — with their own preset filling the stack
+above it. E2E: `e2e/payout-batch.spec.js` (incl. an assertion pinned to $115.31, which is
+the number that proves the coupon stayed out — with it, the row would land at $104.51).
 
 ## The cost maths (`calcCostBreakdown`) — order is the point
 `shelf → store % → promo % → gift card % → coupon → tax → + tip + shipping − cashback`

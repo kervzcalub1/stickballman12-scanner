@@ -60,8 +60,23 @@ async function gql(query, variables) {
   const errs = Array.isArray(data?.errors)
     ? data.errors
     : (data?.errors ? [{ message: String(data.errors) }] : []);
-  const denied = errs.find((e) => /access denied|scope|invalid api key|access token/i.test(e?.message || ''));
-  return { ok: r.ok && !errs.length, status: r.status, data: data?.data, errors: errs.length ? errs : undefined, denied: !!denied };
+  const text = errs.map((e) => e?.message || '').join(' | ');
+  // TWO different refusals, and they had one name between them (2026-08-26). A dead
+  // token answers 401 "Invalid API key or access token"; a live token missing a grant
+  // answers 200 with "Access denied for orders field". Both used to surface as "not
+  // permitted", which sends whoever reads it to the scopes screen — where a revoked
+  // token looks perfectly fine, because the scopes ARE right. The fixes are different
+  // people doing different things, so the diagnosis has to be too.
+  const unauthorized = r.status === 401 || /invalid api key|unrecognized login|wrong password/i.test(text);
+  const denied = !unauthorized && /access denied|scope|not approved/i.test(text);
+  return {
+    ok: r.ok && !errs.length,
+    status: r.status,
+    data: data?.data,
+    errors: errs.length ? errs : undefined,
+    unauthorized,
+    denied,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -136,7 +151,15 @@ export async function shopifySales({ days = 7 } = {}) {
 
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const r = await gql(ORDERS_QUERY, { q: `created_at:>=${estDaysAgo(d)}`, after });
-    if (!r.ok) return { error: r.denied ? 'not permitted' : 'Shopify sales lookup failed', days: d };
+    if (!r.ok) {
+      if (r.unauthorized) console.error('[shopify] SHOPIFY_ACCESS_TOKEN rejected (401) — the token is wrong, revoked, or from another store.');
+      return {
+        error: r.unauthorized
+          ? 'Shopify rejected our access token — it is revoked or wrong, so no sales can be read until it is replaced.'
+          : r.denied ? 'not permitted' : 'Shopify sales lookup failed',
+        days: d,
+      };
+    }
     const conn = r.data?.orders;
     for (const { node } of conn?.edges || []) {
       orders += 1;
@@ -237,9 +260,11 @@ export async function shopifyInventoryForSku(sku) {
 
   const r = await gql(INVENTORY_QUERY, { q: term });
   if (!r.ok) {
-    const out = r.denied
-      ? { permission: 'Shopify inventory needs the read_products / read_inventory scopes, which this token does not have. Say the quantity is unavailable — do not report zero.' }
-      : { error: 'Shopify inventory lookup failed' };
+    const out = r.unauthorized
+      ? { permission: 'Shopify rejected our access token — it is revoked or wrong. Say the quantity is unavailable and that the Shopify connection needs reconnecting; do not report zero.' }
+      : r.denied
+        ? { permission: 'Shopify inventory needs the read_products / read_inventory scopes, which this token does not have. Say the quantity is unavailable — do not report zero.' }
+        : { error: 'Shopify inventory lookup failed' };
     // 60s, not the 5 minutes this used to be. A permissions failure gets fixed within
     // seconds of someone noticing it, and caching the refusal makes the fix look like
     // it didn't work — which is exactly how an afternoon gets lost.

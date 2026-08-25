@@ -91,10 +91,11 @@ test.describe('calling the list', () => {
 });
 
 test.describe('the screen', () => {
+  // It lives at the bottom of the one-pair page, under the cost stack — that placement
+  // is the feature, so the test navigates the way a person does rather than to a mode.
   async function openBatch(page) {
     await loginAs(page, 'warehouse');
     await page.goto('/payout');
-    await page.getByRole('button', { name: 'A whole list' }).click();
     await expect(page.locator('.pc-batch-text')).toBeVisible();
   }
 
@@ -112,7 +113,8 @@ test.describe('the screen', () => {
     await expect(row.locator('.pc-batch-sku input')).toHaveValue('DD1391-100');
     await expect(row.locator('.pc-batch-size')).toHaveValue('9');
     await expect(row.locator('.pc-batch-qty')).toHaveValue('2');
-    // …and it's editable: fix the cost, then price.
+    // …and it's editable: fix the cost, then price. The stack above is empty in this
+    // test, so a shelf price of 100 lands as a cost of 100.
     await row.locator('.pc-batch-cost').fill('100');
     await page.getByRole('button', { name: /Analyse 1 row/ }).click();
 
@@ -124,15 +126,50 @@ test.describe('the screen', () => {
     await expect(page.locator('.pc-batch-stats')).toContainText('$70.30');
   });
 
-  test('the mode rides in the URL, and the one-pair form is not left underneath', async ({ page }) => {
+  test('the Store cost stack above prices every pasted row', async ({ page }) => {
+    await page.route('**/api/payout/batch', (route) => route.fulfill({
+      json: { ok: true, quotes: { 'DD1391-100': { alias: { results: [{ size: '9', lowest_listing: 220 }] }, stockx: { results: [] } } } },
+    }));
     await openBatch(page);
-    await expect(page).toHaveURL(/mode=batch/);
-    await expect(page.getByPlaceholder('Enter a SKU (e.g. DZ5485-612)')).toHaveCount(0);
-    await page.reload();
-    await expect(page.locator('.pc-batch-text')).toBeVisible();
-    await page.getByRole('button', { name: 'One pair' }).click();
-    await expect(page.getByPlaceholder('Enter a SKU (e.g. DZ5485-612)')).toBeVisible();
-    await expect(page.locator('.pc-batch-text')).toHaveCount(0);
+    // Fill the register once, at the top of the page.
+    const field = (label) => page.locator('.pc-field', { hasText: label }).first().locator('input');
+    await field('Store discount').fill('30');
+    await field('Promo / birthday').fill('10');
+    await field('Tax').fill('8');
+    await field('Tip').fill('5');
+    await field('Shipping').fill('8.25');
+    // A coupon must NOT reach the batch: it's one amount off one transaction, and
+    // carrying it into every row would quietly take $10 a pair off the whole list.
+    await field('Coupon').fill('10');
+
+    await page.locator('.pc-batch-text').fill('DD1391-100 Dunk Low Panda $150\n9 x 1');
+    await page.getByRole('button', { name: 'Read the list' }).click();
+    // The column is a SHELF price now, and the line says what will happen to it.
+    await expect(page.locator('.pc-batch-row.head')).toContainText('Shelf price');
+    await expect(page.locator('.pc-batch-stackline')).toContainText('30% store');
+    await expect(page.locator('.pc-batch-stackline')).toContainText('$8.25 shipping');
+    await page.getByRole('button', { name: /Analyse 1 row/ }).click();
+
+    // 150 → −30% → 105 → −10% → 94.50 → +8% tax → 102.06 → +5 tip +8.25 shipping = 115.31.
+    // With the coupon it would have been 104.51 — so this number is the assertion that
+    // the coupon stayed out.
+    await expect(page.locator('.pc-batch-result-nums')).toContainText('$115.31');
+    await expect(page.locator('.pc-batch-result-nums')).toContainText('(from $150.00)');
+  });
+
+  test('“Already my cost” takes the pasted number as-is', async ({ page }) => {
+    await page.route('**/api/payout/batch', (route) => route.fulfill({
+      json: { ok: true, quotes: { 'DD1391-100': { alias: { results: [{ size: '9', lowest_listing: 220 }] }, stockx: { results: [] } } } },
+    }));
+    await openBatch(page);
+    await page.locator('.pc-field', { hasText: 'Store discount' }).first().locator('input').fill('30');
+    await page.locator('.pc-batch-text').fill('DD1391-100 $150\n9 x 1');
+    await page.getByRole('button', { name: 'Read the list' }).click();
+    await page.getByRole('button', { name: 'Already my cost' }).click();
+    await expect(page.locator('.pc-batch-row.head')).toContainText('Cost / pair');
+    await page.getByRole('button', { name: /Analyse 1 row/ }).click();
+    await expect(page.locator('.pc-batch-result-nums')).toContainText('Cost $150.00');
+    await expect(page.locator('.pc-batch-result-nums')).not.toContainText('(from');
   });
 
   test('a list it cannot read says so instead of showing an empty table', async ({ page }) => {

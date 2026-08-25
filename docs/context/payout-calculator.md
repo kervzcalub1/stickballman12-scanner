@@ -3,7 +3,9 @@
 Screen: `src/screens/PayoutCalculator.jsx`. Maths: `src/lib/payout.js` (pure).
 Endpoints: `api/payout/quote.js` (live prices) + `api/payout/presets.js` (supplier
 presets). Routes: **`/payout`** (admin + warehouse home,
-In-Store Mode section) and **`/ph/payout`** (PH home, Pricing & Listing section).
+In-Store Mode section), **`/ph/payout`** (PH home, Pricing & Listing section), and
+**`/payout` on the supplier portal** (their own home — see "Suppliers get this screen"
+below).
 E2E: `e2e/payout-calculator.spec.js`.
 
 Answers one question, standing in a store with a shoe in your hand: **should I buy
@@ -105,13 +107,48 @@ numbers are then just there, instead of being retyped per pair on a phone in a s
 - **Typed rates are quoted back exactly** (`ratePct`, not `pct`): a sales tax of 8.25% is
   not 8.3%, and a chip that rounds the number it just filled in reads as a different one.
   `pct`'s one decimal stays for the things we *calculate* — ROI, margin, fees.
-- **Writes are open to warehouse + PH**, like `api/payout/quote.js` and unlike the rest of
-  pricing. Gating edits to admin would mean the person who just agreed a new tip fee with
+- **Writes are open to warehouse + PH** (and never to the supplier the preset is
+  about — see below), like `api/payout/quote.js` and unlike the rest of pricing. Gating edits to admin would mean the person who just agreed a new tip fee with
   a supplier, standing in the store, can't record it — and a preset references nothing
   and saves nothing, so a bad one costs a retype. Duplicate names are refused
   case-insensitively (409), and every rate is validated non-negative and ≤100%.
 - **Seeding runs only into an EMPTY table**, never `ON CONFLICT DO NOTHING`: `db:setup`
   runs on every deploy, and a supplier someone deliberately deleted must stay deleted.
+
+## Suppliers get this screen too — with their own stack only (2026-08-26)
+A supplier account signs in and sees **two cards** instead of landing straight on the PO
+list: **Purchase Orders** and **Payout Calculator** (`SupplierHome` in
+`src/screens/SupplierApp.jsx`, its own little router — `/orders`, `/payout`, anything
+else = home). They're the person standing in a shop deciding whether a pair is worth
+buying, which is the question this screen exists to answer.
+
+- **The scope keys on `payout_presets.supplier_user_id`, never on the preset's name.**
+  A name match would break silently the first time either side is renamed, and its
+  failure mode is one supplier reading another's cost stack. NULL = staff-only, which is
+  every preset until someone links one. **New column → `db:setup` required.**
+- **Staff link it** in `PresetManager` → *Supplier sign-in* (a select of approved
+  supplier accounts, from `api/po/suppliers.js` — which gained the `warehouse` role for
+  this caller, since preset writes were already open to warehouse). Linked presets show
+  a **⇄ signs in as …** chip in the manager list. The endpoint re-checks the id against
+  the real supplier list rather than trusting it: a bad id would otherwise attach the
+  stack to a staff account.
+- **Read yes, write never.** A supplier's cost stack is an input to *our* buy call, so
+  letting them raise their own tip fee would let them move the verdict. GET is scoped;
+  every POST (save **and** delete) answers 403. The screen hides Manage to match, but
+  the server refuses on its own.
+- **It applies itself.** Their list holds exactly one stack, so there's nothing to pick
+  between — it's applied on load and every field stays editable (a one-off promo
+  shouldn't need a call to the office). With no preset linked, the bar says so and the
+  calculator still works by hand.
+- **A uid that isn't a real row id fails CLOSED** (scoped to `-1`, i.e. nothing) rather
+  than reaching the query as `supplier_user_id = NaN`.
+- **What this shows them, deliberately:** the live Alias/StockX market, our fee
+  assumptions, and the profit/ROI/verdict on the pair in their hand — plus the
+  liquidity evidence, which is **our own sales history** (`velocity` from
+  `payout/quote.js`). That last one is the only figure here they couldn't get
+  elsewhere; it's included because it's what drives the risk band on the verdict. Gate
+  it for suppliers if that ever stops being wanted.
+- Guarded by `e2e/supplier-payout.spec.js`.
 
 ## The cost maths (`calcCostBreakdown`) — order is the point
 `shelf → store % → promo % → gift card % → coupon → tax → + tip + shipping − cashback`

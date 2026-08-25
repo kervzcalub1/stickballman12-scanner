@@ -162,7 +162,7 @@ export default function App() {
   // circuit to PHTeamApp above), so the normal Home/router already gates it.
   if (view === 'instore') return withAdvisor(<Receiving mode="instore" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'instore-listing') return withAdvisor(<InstoreListing onHome={() => go('home')} onSignOut={signOut} />);
-  if (view === 'payout') return withAdvisor(<PayoutCalculator onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'payout') return withAdvisor(<PayoutCalculator user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Existing (old) stock: same admin/warehouse gate as in-store — ph_team short-
   // circuits to PHTeamApp above and never reaches this router.
   if (view === 'existing-stock') return withAdvisor(<ExistingStock navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);

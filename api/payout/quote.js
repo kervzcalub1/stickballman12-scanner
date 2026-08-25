@@ -34,7 +34,12 @@ import { shopifyConfigured, shopifyVelocity } from '../_lib/shopify.js';
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['warehouse', 'ph_team']); // admin/superadmin auto-allowed
+  // Supplier accounts get this too (2026-08-26): they're the ones standing in a shop
+  // deciding whether to buy a pair for us, which is the question this endpoint answers.
+  // Note what that shows them — the live market AND, through the screen, our profit/ROI
+  // on the pair they're holding. That's the point of handing them the calculator; it is
+  // not a leak that slipped in.
+  const user = requireRole(req, res, ['warehouse', 'ph_team', 'supplier']); // admin/superadmin auto-allowed
   if (!user) return;
   // One upstream Alias call per size — throttle it like Price Inquiry does.
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))

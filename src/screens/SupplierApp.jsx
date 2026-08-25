@@ -4,9 +4,17 @@
 // each label. The batch closes (PO → 'shipped') once every label is shipped.
 // Reuses the shared product search (UPC/SKU) and camera scanner; writes only the
 // PO tables via /api/po/* (never the receiving path). See docs/context/purchase-orders.md.
+//
+// **Two things now, so there's a home in front of them** (2026-08-26): the shipments
+// they pack for us, and the **Payout Calculator** — they're the person standing in a
+// shop deciding whether a pair is worth buying, which is exactly what that screen
+// answers. The calculator shows them their OWN cost stack and no one else's
+// (`api/payout/presets.js` scopes on `supplier_user_id`), and they can't edit it.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, TrackingTimeline } from '../components/common.jsx';
+import { NavIcon } from '../components/NavIcons.jsx';
+import { PayoutCalculator } from './PayoutCalculator.jsx';
 import { Sop } from './Sop.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
@@ -69,7 +77,57 @@ function ShipToCard({ shipTo }) {
   );
 }
 
+// Which of the supplier's two screens a path means. Their own tiny router, the same
+// shape as the PH one: the page lives in the path so a refresh (or a link) comes back
+// to it, and anything unrecognised falls to the home chooser rather than a blank app.
+const SUP_PATHS = { orders: '/orders', payout: '/payout' };
+const supPathForPage = (p) => SUP_PATHS[p] || '/';
+const supPageForPath = (p) => {
+  const path = String(p || '/').replace(/\/+$/, '') || '/';
+  return Object.keys(SUP_PATHS).find((k) => SUP_PATHS[k] === path) || null;
+};
+
+// The supplier's home. Two cards, because they have two jobs here.
+function SupplierHome({ user, onPick, onSignOut, onHelp }) {
+  return (
+    <div className="app">
+      <TopBar onSignOut={onSignOut}
+        right={<button className="btn ghost sm" onClick={onHelp}>How-to</button>} />
+      <div className="home-greeting">Hi {user.name || user.username} <span className="role-badge">Supplier</span></div>
+      <section className="home-section" data-accent="orders">
+        <h2 className="home-section-title">Your work</h2>
+        <div className="home-grid">
+          <button className="home-card" onClick={() => onPick('orders')}>
+            <span className="home-card-icon"><NavIcon name="shipped" /></span>
+            <span className="home-card-title">Purchase Orders</span>
+            <span className="home-card-sub">The batches Stickballman12 opened for you — scan each box and ship its label.</span>
+          </button>
+          <button className="home-card" onClick={() => onPick('payout')}>
+            <span className="home-card-icon"><NavIcon name="payout" /></span>
+            <span className="home-card-title">Payout Calculator</span>
+            <span className="home-card-sub">Standing in the store: what a pair pays out, and whether to buy it.</span>
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function SupplierApp({ user, onSignOut }) {
+  const [page, setPage] = useState(() => supPageForPath(window.location.pathname));
+  const goPage = (p) => {
+    setPage(p);
+    const path = supPathForPage(p);
+    // Leaving a page drops its query (?sku= on the calculator) — it means nothing on
+    // the next screen, same rule as the staff and PH routers.
+    if (window.location.pathname !== path) window.history.pushState(null, '', path);
+    else if (window.location.search) window.history.replaceState(null, '', path);
+  };
+  useEffect(() => {
+    const onPop = () => setPage(supPageForPath(window.location.pathname));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [pos, setPos] = useState(null);
   const [error, setError] = useState('');
   const [openId, setOpenId] = useState(null);
@@ -181,11 +239,20 @@ export function SupplierApp({ user, onSignOut }) {
 
   if (help) return <Sop user={user} onHome={() => setHelp(false)} onSignOut={onSignOut} />;
 
+  if (page == null) {
+    return <SupplierHome user={user} onPick={goPage} onSignOut={onSignOut} onHelp={() => setHelp(true)} />;
+  }
+  // `user` is what tells the calculator to draw its supplier view — the preset is
+  // theirs alone and read-only. The server scopes and refuses independently.
+  if (page === 'payout') {
+    return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  }
+
   // ---- List view ----------------------------------------------------------
   if (!openId) {
     return (
       <div className="app">
-        <TopBar title="Outbound Shipments" onSignOut={onSignOut}
+        <TopBar title="Outbound Shipments" onHome={() => goPage(null)} onSignOut={onSignOut}
           right={<button className="btn ghost sm" onClick={() => setHelp(true)}>How-to</button>} />
         <div className="wrap-narrow">
           <p className="muted sm">Signed in as <b>{user.name || user.username}</b> · your batches from Stickballman12.</p>

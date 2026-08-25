@@ -4141,16 +4141,36 @@ const presetOut = (r) => (r ? {
   promoPct: Number(r.promo_pct),
   cashbackPct: Number(r.cashback_pct),
   note: r.note || '',
+  supplierUserId: r.supplier_user_id == null ? null : Number(r.supplier_user_id),
+  supplierUsername: r.supplier_username || null, // only selected for the staff editor
   updatedBy: r.updated_by || null,
   updatedAt: r.updated_at || null,
 } : null);
 
-export async function listPayoutPresets() {
-  const rows = await db()`
-    SELECT id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct, promo_pct,
-           cashback_pct, note, updated_by, updated_at
-      FROM payout_presets
-     ORDER BY lower(btrim(name))`;
+/**
+ * Every preset, or — with `supplierUserId` — only the one(s) linked to that supplier
+ * account. The filter is applied HERE rather than in the endpoint so there's one place
+ * a supplier's scope can be got wrong, and it keys on the id, never the name.
+ */
+export async function listPayoutPresets({ supplierUserId = null } = {}) {
+  const sql = db();
+  // The shim can't nest sql fragments — branch with if/else.
+  if (supplierUserId != null) {
+    const rows = await sql`
+      SELECT id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct, promo_pct,
+             cashback_pct, note, supplier_user_id, updated_by, updated_at
+        FROM payout_presets
+       WHERE supplier_user_id = ${supplierUserId}
+       ORDER BY lower(btrim(name))`;
+    return rows.map(presetOut);
+  }
+  const rows = await sql`
+    SELECT p.id, p.name, p.tip_amt, p.shipping_amt, p.tax_pct, p.gift_pct, p.store_pct,
+           p.promo_pct, p.cashback_pct, p.note, p.supplier_user_id, p.updated_by, p.updated_at,
+           u.username AS supplier_username
+      FROM payout_presets p
+      LEFT JOIN users u ON u.id = p.supplier_user_id
+     ORDER BY lower(btrim(p.name))`;
   return rows.map(presetOut);
 }
 
@@ -4171,6 +4191,8 @@ export async function savePayoutPreset(p, updatedBy) {
     n(p.storePct), n(p.promoPct), n(p.cashbackPct),
   ];
   const note = String(p.note || '').trim() || null;
+  // null unlinks; the endpoint has already checked the id is a real approved supplier.
+  const supplierUserId = p.supplierUserId == null || p.supplierUserId === '' ? null : Number(p.supplierUserId);
   try {
     // The shim can't nest sql fragments, so insert and update are two whole statements.
     const rows = p.id
@@ -4179,18 +4201,19 @@ export async function savePayoutPreset(p, updatedBy) {
              SET name = ${name}, tip_amt = ${tip}, shipping_amt = ${ship},
                  tax_pct = ${tax}, gift_pct = ${gift}, store_pct = ${store},
                  promo_pct = ${promo}, cashback_pct = ${cash}, note = ${note},
+                 supplier_user_id = ${supplierUserId},
                  updated_by = ${updatedBy || null}, updated_at = now()
            WHERE id = ${p.id}
        RETURNING id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct,
-                 promo_pct, cashback_pct, note, updated_by, updated_at`
+                 promo_pct, cashback_pct, note, supplier_user_id, updated_by, updated_at`
       : await sql`
           INSERT INTO payout_presets
             (name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct, promo_pct,
-             cashback_pct, note, created_by, updated_by)
+             cashback_pct, note, supplier_user_id, created_by, updated_by)
           VALUES (${name}, ${tip}, ${ship}, ${tax}, ${gift}, ${store}, ${promo},
-                  ${cash}, ${note}, ${updatedBy || null}, ${updatedBy || null})
+                  ${cash}, ${note}, ${supplierUserId}, ${updatedBy || null}, ${updatedBy || null})
        RETURNING id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct,
-                 promo_pct, cashback_pct, note, updated_by, updated_at`;
+                 promo_pct, cashback_pct, note, supplier_user_id, updated_by, updated_at`;
     return presetOut(rows[0]);
   } catch (e) {
     if (String(e.message || '').includes('payout_presets_name_idx')) {

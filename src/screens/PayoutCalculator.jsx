@@ -75,7 +75,7 @@ const PRESET_FIELDS = [
   ['promoPct', 'Promo / birthday', '%'],
   ['cashbackPct', 'Cashback', '%'],
 ];
-const BLANK_PRESET = { id: null, name: '', note: '', tipAmt: '', shippingAmt: '', taxPct: '', giftPct: '', storePct: '', promoPct: '', cashbackPct: '' };
+const BLANK_PRESET = { id: null, name: '', note: '', supplierUserId: '', tipAmt: '', shippingAmt: '', taxPct: '', giftPct: '', storePct: '', promoPct: '', cashbackPct: '' };
 // Empty box === 0, so a preset always states the whole stack. Compared numerically
 // because '8.25' from the form and 8.25 from the server are the same fee.
 const same = (a, b) => Number(a || 0) === Number(b || 0);
@@ -142,6 +142,17 @@ function PresetManager({ presets, onClose, onSaved, onDeleted, onSignOut }) {
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
   const [err, setErr] = useState('');
+  // Supplier ACCOUNTS (users with role 'supplier'), for the link that decides who can
+  // read this stack from their own sign-in. Same list the create-PO picker uses. It
+  // failing is not fatal — the rest of the form still saves.
+  const [accounts, setAccounts] = useState([]);
+  useEffect(() => {
+    let live = true;
+    api.poSuppliers()
+      .then(({ suppliers }) => { if (live) setAccounts(suppliers || []); })
+      .catch(() => { /* the link field just stays empty */ });
+    return () => { live = false; };
+  }, []);
 
   const field = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
 
@@ -206,6 +217,11 @@ function PresetManager({ presets, onClose, onSaved, onDeleted, onSignOut }) {
                       : ''}
                     {p.note ? ` · ${p.note}` : ''}
                   </span>
+                  {p.supplierUserId && (
+                    <span className="pc-preset-linked" title="This supplier signs in and sees this stack on their own Payout Calculator">
+                      ⇄ signs in as {p.supplierUsername || `#${p.supplierUserId}`}
+                    </span>
+                  )}
                 </div>
                 <div className="pc-preset-row-acts">
                   <button type="button" className="btn ghost sm" disabled={busy}
@@ -253,6 +269,19 @@ function PresetManager({ presets, onClose, onSaved, onDeleted, onSignOut }) {
               <input type="text" value={draft.note} maxLength={200} placeholder="e.g. No sales tax"
                 onChange={(e) => field('note', e.target.value)} />
             </label>
+            {/* The link is by ACCOUNT ID, not by matching the name above — rename
+                either side and a name match would start showing one supplier another's
+                costs. Linked is also the ONLY way a supplier sees this screen filled. */}
+            <label className="pc-field">
+              <span className="pc-field-label">Supplier sign-in <span className="muted sm">optional</span></span>
+              <select value={draft.supplierUserId ?? ''} onChange={(e) => field('supplierUserId', e.target.value)}>
+                <option value="">Not linked — staff only</option>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.username})</option>)}
+              </select>
+              <span className="muted sm">
+                Linked, this supplier sees this stack — and only this one — on their own Payout Calculator. They can’t edit it.
+              </span>
+            </label>
           </form>
         )}
 
@@ -277,7 +306,13 @@ function PresetManager({ presets, onClose, onSaved, onDeleted, onSignOut }) {
   );
 }
 
-export function PayoutCalculator({ onHome, onSignOut }) {
+export function PayoutCalculator({ user, onHome, onSignOut }) {
+  // A SUPPLIER gets this screen too (they're the one in the shop). Two differences, and
+  // the server enforces both independently — this flag only decides what's drawn:
+  //   · the preset list they receive holds their own stack and nothing else, so there's
+  //     no supplier row to pick BETWEEN; it applies itself,
+  //   · and they can't edit it — their cost stack is an input to our buy call.
+  const isSupplier = user?.role === 'supplier';
   // The shoe rides in the URL so a refresh (or a link to the person who asked) comes
   // back to the same pair. The money is NOT in the URL: a shared link that carries
   // someone else's cost basis around is a leak, not a convenience.
@@ -339,7 +374,15 @@ export function PayoutCalculator({ onHome, onSignOut }) {
   useEffect(() => {
     let live = true;
     api.payoutPresets()
-      .then(({ presets: list }) => { if (live) setPresets(list || []); })
+      .then(({ presets: list }) => {
+        if (!live) return;
+        setPresets(list || []);
+        // A supplier's list is their own stack. Nobody should have to tap their own
+        // name to get the numbers they always buy at — so it applies itself, once, on
+        // load. Still fully editable afterwards: the coupon and the shelf price change
+        // per pair, and a one-off promo shouldn't need a call to the office.
+        if (isSupplier && (list || []).length === 1) applyPreset(list[0], { toggle: false });
+      })
       // A preset list that won't load must not break the calculator: every number it
       // fills is typeable by hand, which is how this screen worked before presets existed.
       .catch((e) => { if (e.unauthorized) onSignOut(); });
@@ -620,7 +663,7 @@ export function PayoutCalculator({ onHome, onSignOut }) {
         {/* Who's buying it. One tap fills the whole stack below — four numbers nobody
             should be retyping per pair, on a phone, in a shop. */}
         <div className="pc-preset-bar">
-          <span className="pc-field-label">Supplier</span>
+          <span className="pc-field-label">{isSupplier ? 'Your cost stack' : 'Supplier'}</span>
           <div className="pc-preset-chips">
             {presets.map((p) => (
               <button type="button" key={p.id}
@@ -629,16 +672,23 @@ export function PayoutCalculator({ onHome, onSignOut }) {
                 title={`tip ${money(p.tipAmt)} · shipping ${money(p.shippingAmt)} · tax ${ratePct(p.taxPct)} · gift card ${ratePct(p.giftPct)}`}
                 onClick={() => applyPreset(p)}>{p.name}</button>
             ))}
-            <button type="button" className="btn ghost sm" onClick={() => setManageOpen(true)}>
-              {presets.length ? 'Manage' : '＋ Add a supplier'}
-            </button>
+            {/* Suppliers don't get Manage: their stack is what WE buy at through them,
+                so it's the floor's number to change, not theirs. */}
+            {!isSupplier && (
+              <button type="button" className="btn ghost sm" onClick={() => setManageOpen(true)}>
+                {presets.length ? 'Manage' : '＋ Add a supplier'}
+              </button>
+            )}
           </div>
           <span className="muted sm pc-preset-why">
-            {!activePreset
-              ? 'Tap one to fill the whole stack below, or just type it.'
-              : presetEdited
-                ? `${activePreset.name}’s stack, edited below — the numbers on screen are the ones being used.`
-                : `${activePreset.name}: tip ${money(activePreset.tipAmt)} · shipping ${money(activePreset.shippingAmt)} · tax ${ratePct(activePreset.taxPct)} · gift card ${ratePct(activePreset.giftPct)}${activePreset.note ? ` · ${activePreset.note}` : ''}`}
+            {isSupplier && !presets.length
+              ? 'No cost stack set up for you yet — ask the Stickballman12 team, or just type the numbers below.'
+              : !activePreset
+                ? (isSupplier ? 'Tap your name to refill the stack below, or just type it.'
+                  : 'Tap one to fill the whole stack below, or just type it.')
+                : presetEdited
+                  ? `${activePreset.name}’s stack, edited below — the numbers on screen are the ones being used.`
+                  : `${activePreset.name}: tip ${money(activePreset.tipAmt)} · shipping ${money(activePreset.shippingAmt)} · tax ${ratePct(activePreset.taxPct)} · gift card ${ratePct(activePreset.giftPct)}${activePreset.note ? ` · ${activePreset.note}` : ''}`}
           </span>
         </div>
         <div className="pc-grid">

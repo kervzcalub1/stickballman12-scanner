@@ -60,13 +60,22 @@
   tricked into `supplier` (Host-gated server-side, not client-trusted). Admin can also
   set the role manually. Scoped to their own POs on every PO endpoint. See
   `purchase-orders.md`.
+  **Two screens, behind a home chooser** (2026-08-26): Purchase Orders and the
+  **Payout Calculator**. On the calculator they can READ their own cost stack — scoped
+  by `payout_presets.supplier_user_id`, so Andrew sees Andrew — and **never write it**:
+  that stack is an input to our buy call, so `payout/presets` answers 403 to every
+  supplier POST. They also gained `payout/quote` (live market prices).
+  See `payout-calculator.md`.
   **Login portal gate (`api/auth/login.js`, Host-based):** a `supplier` account can
   authenticate **only** on `supplier.*`, and the `supplier.` subdomain accepts **only**
   suppliers (staff get a 403 pointing them to the main site). admin/superadmin (env
   accounts) are exempt; `localhost`/`*.localhost` is exempt so local/dev testing isn't
   blocked. Enforced server-side; a wrong-portal login is a clean 403, not a failed attempt.
 - `requireRole(req,res,[...])` returns the user or sends 401/403; **admin is
-  auto-allowed**. `sku-search` allows `warehouse` + `ph_team`.
+  auto-allowed**. `sku-search` allows `warehouse` + `ph_team` + `supplier`.
+  **`isPrivileged` is never the right check for a supplier scope** — role `supplier` is
+  never privileged, and an admin isn't scoped to a supplier id, so scoping code branches
+  on `role === 'supplier'` directly (`po/list`, `payout/presets`).
 
 ## Sessions
 - HMAC bearer tokens (`SESSION_SECRET`, ≥16 chars, enforced), ~8h TTL.

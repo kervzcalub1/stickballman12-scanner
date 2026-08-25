@@ -16,7 +16,7 @@
 //     guess wearing a currency symbol, and this app doesn't put those on screen.
 //  3. **A missing cost is not a zero.** A row nobody priced comes back "Needs cost" and
 //     is left out of the totals, rather than reading as a free pair with infinite ROI.
-import { calcPayout, bestPayout, dealVerdict, DEFAULT_FEE_PCT } from './payout.js';
+import { calcPayout, calcCostBreakdown, bestPayout, dealVerdict, DEFAULT_FEE_PCT } from './payout.js';
 
 const num = (v) => {
   const n = Number(String(v ?? '').replace(/[$,\s]/g, ''));
@@ -33,13 +33,20 @@ const money = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? 0 :
 /**
  * Price one parsed row against a SKU's quotes.
  *
- * A row's cost is taken as the LANDED cost per pair — what you'll actually pay — which
- * is what an offer sheet already is. The register stack (discounts, tax, tip, shipping)
- * is not applied here: it belongs to one store trip and a pasted list routinely spans
- * several. Someone pricing sticker prices runs a line through the one-pair mode, where
- * that stack is on screen and can be seen to be the right one.
+ * `costMode` says what the number in the list MEANS:
+ *   · 'shelf' — a sticker price, so the Store cost stack filled in above this section
+ *     runs over every row: the three compounding discounts, tax, cashback, and the
+ *     per-pair tip and shipping. This is the default, because the stack is on screen
+ *     right there and it is the whole reason the two live on one page.
+ *   · 'final' — the number is already what the pair costs, landed. A supplier's offer
+ *     sheet is this: they quote you a price, not a shelf price you then discount.
+ *
+ * **The COUPON is deliberately never applied**, in either mode. It's a flat amount off
+ * one transaction, not a rate — carrying a $10 coupon into forty rows would quietly take
+ * $400 off the batch and turn a Pass into a Buy. Whoever wants it applies it to the one
+ * pair it belongs to, upstairs.
  */
-export function analyseRow(row, quote, { feePct = {} } = {}) {
+export function analyseRow(row, quote, { costMode = 'shelf', stack = {}, feePct = {} } = {}) {
   const out = { ...row, alias: null, stockx: null, best: null, verdict: null };
   const aliasRow = forSize(quote?.alias?.results, row.size);
   const sxRow = forSize(quote?.stockx?.results, row.size);
@@ -58,7 +65,17 @@ export function analyseRow(row, quote, { feePct = {} } = {}) {
     return out;
   }
 
-  out.finalCost = num(row.cost);
+  const listed = num(row.cost);
+  out.listedCost = listed;
+  out.finalCost = costMode === 'shelf'
+    // couponAmt is NOT spread in — see the note above.
+    ? calcCostBreakdown({
+      shelfPrice: listed,
+      storePct: stack.storePct, promoPct: stack.promoPct, giftPct: stack.giftPct,
+      cashbackPct: stack.cashbackPct, taxPct: stack.taxPct,
+      tipAmt: stack.tipAmt, shippingAmt: stack.shippingAmt,
+    }).finalCost
+    : listed;
 
   const fee = (k) => (String(feePct[k] ?? '').trim() === '' ? DEFAULT_FEE_PCT[k] : num(feePct[k]));
   const payouts = [

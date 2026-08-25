@@ -3314,7 +3314,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    Paste -> Review -> Analyse. The review table is the point of the middle step, so it
    is a real editable grid rather than a preview: a misread size prices a different shoe,
    and it has to be fixable where you notice it. */
-.pc-mode { margin: 4px 0 14px; }
+/* The batch section, under the one-pair flow. A rule and a bit of air, so it reads as
+   "and now a different question" rather than a sixth step of the same one. */
+.pc-batch-sep { margin-top: 26px; padding-top: 6px; border-top: 1px solid var(--border); }
+.pc-batch-intro { margin: 0 0 10px; line-height: 1.5; }
+.pc-batch-costmode { flex: none; }
+.pc-batch-stackline { margin: 8px 0 0; line-height: 1.5; }
 .pc-batch-help { margin: 0 0 8px; line-height: 1.5; }
 .pc-batch-help code { font-size: 12px; }
 .pc-batch-text {

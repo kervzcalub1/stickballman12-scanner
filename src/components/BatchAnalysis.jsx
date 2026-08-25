@@ -10,6 +10,12 @@
 // every row lands in an editable table first: you can see what it read, fix a size it
 // misread, and delete the line that was actually a greeting. Going straight from text to
 // verdicts would mean a wrong number decided a purchase and nobody saw it happen.
+//
+// It sits at the BOTTOM of the one-pair page rather than behind a mode switch, and that
+// placement is the feature: the Store cost stack — the discounts, tax, tip and shipping
+// already filled in above, or filled in by one tap on a supplier preset — is what turns
+// each pasted sticker price into a landed cost. Hidden behind a toggle, every batch
+// would have meant re-entering a register that was already on screen.
 import React, { useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { parseBatch, blankBatchRow, MAX_ROWS } from '../lib/batchParse.js';
@@ -34,7 +40,23 @@ const ORDER = { buy: 0, watch: 1, pass: 2, no_cost: 3, no_price: 4 };
 
 const tone = (r) => (r.best?.profit < 0 ? 'down' : r.status === 'buy' ? 'up' : '');
 
-export function BatchAnalysis({ feeOverride, basis, onSignOut }) {
+// Name what the stack will actually do, in the words of the fields above — "8% off,
+// 8.25% tax, +$5 tip, +$8.25 shipping". An empty stack says so, because silently
+// applying nothing looks identical to applying something.
+function stackWords(stack = {}) {
+  const n = (v) => Number(String(v ?? '').replace(/[$,\s]/g, '')) || 0;
+  const bits = [];
+  for (const [k, label] of [['storePct', 'store'], ['promoPct', 'promo'], ['giftPct', 'gift card']]) {
+    if (n(stack[k])) bits.push(`${n(stack[k])}% ${label}`);
+  }
+  if (n(stack.cashbackPct)) bits.push(`${n(stack.cashbackPct)}% cashback`);
+  if (n(stack.taxPct)) bits.push(`${n(stack.taxPct)}% tax`);
+  if (n(stack.tipAmt)) bits.push(`$${n(stack.tipAmt).toFixed(2)} tip`);
+  if (n(stack.shippingAmt)) bits.push(`$${n(stack.shippingAmt).toFixed(2)} shipping`);
+  return bits.length ? bits.join(', ') : 'which is currently empty, so the price is used as-is';
+}
+
+export function BatchAnalysis({ stack, feeOverride, basis, onSignOut }) {
   const [text, setText] = useState('');
   const [rows, setRows] = useState(null);      // parsed + editable, before pricing
   const [shape, setShape] = useState('');
@@ -43,6 +65,10 @@ export function BatchAnalysis({ feeOverride, basis, onSignOut }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [filter, setFilter] = useState('all');
+  // What the number in the list means. 'shelf' by default — the stack is right above
+  // this, and running it is the reason the two share a page. A supplier's offer sheet
+  // is 'final': they quote you a price, not a sticker you then discount.
+  const [costMode, setCostMode] = useState('shelf');
 
   function doParse(src) {
     const t = String(src ?? text);
@@ -54,6 +80,10 @@ export function BatchAnalysis({ feeOverride, basis, onSignOut }) {
   }
 
   const setRow = (key, patch) => { setRows((a) => a.map((r) => (r.key === key ? { ...r, ...patch } : r))); setAnalysed(null); };
+  // The stack above is live: change a discount and the last analysis is stale, so it
+  // goes rather than sitting there looking current.
+  const stackKey = JSON.stringify(stack || {});
+  React.useEffect(() => { setAnalysed(null); }, [stackKey, costMode]);
   const dropRow = (key) => { setRows((a) => a.filter((r) => r.key !== key)); setAnalysed(null); };
   const addRow = () => { setRows((a) => [...(a || []), blankBatchRow()]); setAnalysed(null); };
 
@@ -72,7 +102,7 @@ export function BatchAnalysis({ feeOverride, basis, onSignOut }) {
       }
       const payload = [...bySku.entries()].map(([sku, sizes]) => ({ sku, sizes: [...sizes] }));
       const res = await api.payoutBatch(payload, basis === 'consigned');
-      setAnalysed(analyseBatch(ready, res.quotes, { feePct: feeOverride }));
+      setAnalysed(analyseBatch(ready, res.quotes, { costMode, stack, feePct: feeOverride }));
       if (res.skipped) setNotice(`${res.skipped} style${res.skipped === 1 ? '' : 's'} past the ${res.limit}-style limit weren’t priced — run them as a second batch.`);
     } catch (e) {
       if (e.unauthorized) return onSignOut();
@@ -119,7 +149,8 @@ export function BatchAnalysis({ feeOverride, basis, onSignOut }) {
           </p>
           <div className="pc-batch-rows">
             <div className="pc-batch-row head muted xs">
-              <span>Style</span><span>Size</span><span>Qty</span><span>Cost / pair</span><span />
+              <span>Style</span><span>Size</span><span>Qty</span>
+              <span>{costMode === 'shelf' ? 'Shelf price' : 'Cost / pair'}</span><span />
             </div>
             {rows.map((r) => (
               <div className={`pc-batch-row ${String(r.sku).trim() && String(r.size).trim() ? '' : 'incomplete'}`} key={r.key}>
@@ -141,11 +172,18 @@ export function BatchAnalysis({ feeOverride, basis, onSignOut }) {
 
           <div className="pc-batch-foot">
             <button type="button" className="btn ghost sm" onClick={addRow}>+ Add a row</button>
-            {/* Said once, plainly: the register stack from the one-pair mode is NOT applied
-                here. A pasted list routinely spans several store trips, so there is no one
-                stack that's right for it. */}
-            <span className="muted sm">Cost is what you’ll pay per pair, landed — no discounts or tax are applied to it here.</span>
+            <div className="seg sm pc-batch-costmode">
+              <button type="button" className={`seg-btn ${costMode === 'shelf' ? 'on' : ''}`} aria-pressed={costMode === 'shelf'}
+                onClick={() => setCostMode('shelf')}>Shelf prices</button>
+              <button type="button" className={`seg-btn ${costMode === 'final' ? 'on' : ''}`} aria-pressed={costMode === 'final'}
+                onClick={() => setCostMode('final')}>Already my cost</button>
+            </div>
           </div>
+          <p className="muted sm pc-batch-stackline">
+            {costMode === 'shelf'
+              ? <>Each price runs through the <b>Store cost</b> stack above — {stackWords(stack)}. The coupon is left out: it’s one amount off one transaction, not a rate.</>
+              : <>Taken as the landed cost per pair, exactly as typed. Nothing from the Store cost stack above is applied.</>}
+          </p>
 
           <div className="pc-batch-actions">
             <button type="button" className="btn primary" disabled={busy || !ready.length} onClick={analyse}>
@@ -201,7 +239,13 @@ export function BatchAnalysis({ feeOverride, basis, onSignOut }) {
                 <div className="pc-batch-result-nums muted sm">
                   <span>Alias {r.aliasSale ? money(r.aliasSale) : '—'}</span>
                   <span>StockX {r.stockxSale ? money(r.stockxSale) : '—'}</span>
-                  <span>Cost {r.finalCost ? money(r.finalCost) : '—'}</span>
+                  {/* Both numbers when the stack moved one into the other: "$150 → $115.31"
+                      is the line someone checks when a call surprises them. */}
+                  <span>
+                    Cost {r.finalCost ? money(r.finalCost) : '—'}
+                    {r.listedCost > 0 && Math.abs(r.listedCost - r.finalCost) >= 0.005
+                      && <span className="muted"> (from {money(r.listedCost)})</span>}
+                  </span>
                   {r.best && <span>Payout <b>{money(r.best.payout)}</b> · {r.best.label}</span>}
                 </div>
                 {r.best ? (

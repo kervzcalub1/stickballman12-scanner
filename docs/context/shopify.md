@@ -37,6 +37,23 @@ IW3808-400 46).
 3. **Channel names need GraphQL.** REST exposes only a numeric `app_id`;
    `channelInformation.channelDefinition.channelName` gives "GOAT", "StockX", "eBay".
 
+## A dead token and a missing scope are different failures (2026-08-26)
+They used to share one name — `not permitted` — and that name points at the scopes
+screen, where a **revoked** token looks perfectly fine because the scopes *are* right.
+`gql` now separates them:
+
+| | What Shopify answers | What we say | Who fixes it |
+|---|---|---|---|
+| `unauthorized` | **401** `Invalid API key or access token` | "Shopify rejected our access token — it is revoked or wrong" (+ a server-log line naming `SHOPIFY_ACCESS_TOKEN`) | mint a new Admin API token and reset the env var |
+| `denied` | **200** with `Access denied for … field` | "needs the read_products / read_inventory scopes" | re-grant scopes on the existing app |
+
+Symptom that started this: *"what is our best selling last week"* → **"I can't see that
+figure right now — the sales feed is unavailable to me."** The advisor was right to
+refuse (it must never substitute a zero), but the diagnosis underneath sent you to the
+wrong screen. A 401 here takes out `top_sellers`, the velocity on the Payout Calculator
+and the Shopify half of `stock_status` **all at once** — if all three go quiet together,
+check the token before anything else.
+
 ## Shape of the calls
 - `shopifySales({days})` — pages the window **once**, aggregates by style, caches 30
   min. Both `shopifyTopSellers` and `shopifyVelocity` read that aggregate, so a per-SKU

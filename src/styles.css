@@ -3278,6 +3278,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   background: var(--panel); color: var(--text); cursor: pointer; text-align: left;
 }
 .pc-market-cell:hover:not(:disabled) { border-color: var(--primary); }
+/* The number currently driving the payout below — the lowest ask by default, or
+   whichever cell was tapped. Without it, an auto-filled sale price looks like a number
+   somebody typed. */
+.pc-market-cell.on { border-color: var(--primary); background: rgba(79, 124, 255, 0.12); }
+.pc-market-cell.on .pc-market-val { color: var(--primary); }
 .pc-market-cell:disabled { opacity: 0.45; cursor: default; }
 .pc-market-label { font-size: 11px; color: var(--muted); }
 .pc-market-val { font-weight: 700; font-variant-numeric: tabular-nums; }

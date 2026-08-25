@@ -82,7 +82,7 @@ const BLANK_PRESET = { id: null, name: '', note: '', supplierUserId: '', tipAmt:
 const same = (a, b) => Number(a || 0) === Number(b || 0);
 
 // One market strip — a row of tappable quotes that fill a platform's sale price.
-function MarketStrip({ title, cols, row, onUse, note }) {
+function MarketStrip({ title, cols, row, onUse, note, activeValue }) {
   return (
     <div className="pc-market mt">
       <div className="pc-market-head muted sm">{title}</div>
@@ -90,9 +90,13 @@ function MarketStrip({ title, cols, row, onUse, note }) {
       <div className="pc-market-grid">
         {cols.map(([key, label]) => {
           const v = quoted(row[key]);
+          // Which number is actually being used. Derived from the sale price rather
+          // than remembered, so it follows a tap, follows the auto-fill, and quietly
+          // goes away the moment someone types a price of their own.
+          const on = !!v && String(activeValue ?? '').trim() !== '' && Number(activeValue) === v;
           return (
-            <button type="button" key={key} className="pc-market-cell" disabled={!v}
-              onClick={() => onUse(String(v))}>
+            <button type="button" key={key} className={`pc-market-cell${on ? ' on' : ''}`} disabled={!v}
+              aria-pressed={on} onClick={() => onUse(String(v))}>
               <span className="pc-market-label">{label}</span>
               <span className="pc-market-val">{v ? money(v) : '—'}</span>
             </button>
@@ -484,13 +488,28 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
       if (res.velocity?.liquidity && res.velocity.sold > 0 && !liquidityTouched) {
         setLiquidity(res.velocity.liquidity);
       }
+      const sxHit = res.stockx?.results?.[0] || null;
       setSx({
         configured: !!res.stockx?.configured,
-        row: res.stockx?.results?.[0] || null,
+        row: sxHit,
         error: res.stockx?.error || '',
       });
+      const aliasHit = res.results?.[0] || null;
+      // **Lowest ask fills the sale price, per platform, without a tap.** It's the first
+      // column for a reason — it's what the pair actually sells for — and needing a tap
+      // before any verdict appeared meant the screen looked like it had no opinion.
+      // Each platform fills from ITS OWN ask; the other three cells are still one tap
+      // away, and typing over it wins.
+      //
+      // Overwriting on every fetch is deliberate: a fetch only happens on a new SIZE or
+      // a basis switch, and both make the previous number a statement about a different
+      // thing. (Basis switching already re-prices for exactly this reason.)
+      setSale({
+        alias: quoted(aliasHit?.lowest_listing) ? String(quoted(aliasHit.lowest_listing)) : '',
+        stockx: quoted(sxHit?.lowest_ask) ? String(quoted(sxHit.lowest_ask)) : '',
+      });
       if (!res.configured) { setNotConfigured(true); return; }
-      setMarket(res.results?.[0] || { size: String(sz), _empty: true });
+      setMarket(aliasHit || { size: String(sz), _empty: true });
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
@@ -639,15 +658,15 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
 
         {hasMarket && (
           <MarketStrip
-            title={`Size ${market.size} · live Alias market · ${basis === 'with_you' ? 'With You' : 'Consigned'} — tap one to use it as the sale price`}
-            cols={MARKET_COLS} row={market}
+            title={`Size ${market.size} · live Alias market · ${basis === 'with_you' ? 'With You' : 'Consigned'} — lowest ask is filled in below; tap another to use it instead`}
+            cols={MARKET_COLS} row={market} activeValue={sale.alias}
             onUse={(v) => setSale((s) => ({ ...s, alias: v }))} />
         )}
 
         {sxRow && (
           <MarketStrip
-            title={`Size ${size} · live StockX market — tap one to use it as the sale price`}
-            cols={SX_MARKET_COLS} row={sxRow}
+            title={`Size ${size} · live StockX market — lowest ask is filled in below; tap another to use it instead`}
+            cols={SX_MARKET_COLS} row={sxRow} activeValue={sale.stockx}
             onUse={(v) => setSale((s) => ({ ...s, stockx: v }))}
             // A near-miss on the catalogue is usually the right shoe in the wrong
             // colourway. Better to say so than to price the wrong pair silently.

@@ -188,6 +188,7 @@ export const api = {
   // Same engine as phPriceInquiry, but reachable by the WAREHOUSE too — the Payout
   // Calculator is used standing in a store deciding whether to buy (api/payout/quote.js).
   payoutQuote: (sku, sizes, consigned = true) => post('/api/payout/quote', { sku, sizes, consigned }),
+  payoutBatch: (skus, consigned = false) => post('/api/payout/batch', { skus, consigned }),
   // Supplier presets for the calculator's Store cost step (api/payout/presets.js).
   // SHARED, unlike prefs.payoutRates: a supplier's tip fee is a fact about the
   // supplier, not about the device it was typed on.

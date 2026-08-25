@@ -19,6 +19,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, ShoeThumb } from '../components/common.jsx';
+import { BatchAnalysis } from '../components/BatchAnalysis.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { useAdvisorContext } from '../lib/advisorContext.js';
@@ -313,6 +314,12 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
   //     no supplier row to pick BETWEEN; it applies itself,
   //   · and they can't edit it — their cost stack is an input to our buy call.
   const isSupplier = user?.role === 'supplier';
+  // One pair, or a whole list. Two modes rather than two screens: a batch is priced
+  // against the SAME cost stack and the same fee overrides sitting above it, so
+  // splitting them would mean maintaining (and re-entering) the register twice. Rides
+  // in `?mode=` like the SKU does, so a batch survives a refresh.
+  const [mode, setMode] = useQueryParam('mode', 'pair');
+  const batchMode = mode === 'batch';
   // The shoe rides in the URL so a refresh (or a link to the person who asked) comes
   // back to the same pair. The money is NOT in the URL: a shared link that carries
   // someone else's cost basis around is a leak, not a convenience.
@@ -566,12 +573,28 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
       <div className="card">
         <div className="pc-head">
           <p className="muted sm">
-            What a pair costs at the register, what each store pays out after fees, and whether that’s a buy.
-            Nothing here is saved — it never touches inventory.
+            {batchMode
+              ? 'A whole list at once: paste what you were sent, check what it read, and get a call on every line. Nothing here is saved — it never touches inventory.'
+              : 'What a pair costs at the register, what each store pays out after fees, and whether that’s a buy. Nothing here is saved — it never touches inventory.'}
           </p>
-          <button type="button" className="btn ghost sm" onClick={resetPair}>Clear</button>
+          {!batchMode && <button type="button" className="btn ghost sm" onClick={resetPair}>Clear</button>}
         </div>
 
+        <div className="pc-mode seg">
+          <button type="button" className={`seg-btn ${batchMode ? '' : 'on'}`} aria-pressed={!batchMode}
+            onClick={() => setMode('pair')}>One pair</button>
+          <button type="button" className={`seg-btn ${batchMode ? 'on' : ''}`} aria-pressed={batchMode}
+            onClick={() => setMode('batch')}>A whole list</button>
+        </div>
+
+        {batchMode && (
+          <BatchAnalysis feeOverride={feeOverride} basis={basis} onSignOut={onSignOut} />
+        )}
+
+        {/* The one-pair flow, steps 1-4. Hidden rather than unmounted-and-rebuilt would
+            be nice, but a half-filled pair under a batch is noise — and the state all
+            survives the switch either way, because it lives in this component. */}
+        {!batchMode && (<>
         {/* 1 — the shoe (optional: the maths works with a typed sale price alone) */}
         <h3 className="pc-h">Shoe <span className="muted sm">optional — fills the sale prices for you</span></h3>
         <form className="pi-lookup" onSubmit={lookUp}>
@@ -831,6 +854,7 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
         <p className="pc-note muted sm">
           “Buy” needs both: at least {money(BUY_MIN_PROFIT)} profit a pair and {pct(BUY_MIN_ROI)} ROI. One of the two is a “Watch”.
         </p>
+        </>)}
 
       </div>
 

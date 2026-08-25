@@ -3287,6 +3287,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .pc-stat-label { display: block; font-size: 12px; color: var(--muted); }
 .pc-stat-val { display: block; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .pc-stat-val.up { color: var(--ok); }
+.pc-stat-val.down { color: var(--err); }
 
 .pc-details { margin-top: 10px; }
 .pc-details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
@@ -3309,6 +3310,65 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .pc-liq { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 
 /* The call. Colour carries it — this is read from arm's length, mid-aisle. */
+/* ---- Batch analysis: the calculator with a list in front of it ------------------
+   Paste -> Review -> Analyse. The review table is the point of the middle step, so it
+   is a real editable grid rather than a preview: a misread size prices a different shoe,
+   and it has to be fixable where you notice it. */
+.pc-mode { margin: 4px 0 14px; }
+.pc-batch-help { margin: 0 0 8px; line-height: 1.5; }
+.pc-batch-help code { font-size: 12px; }
+.pc-batch-text {
+  width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.6; resize: vertical; min-height: 120px;
+}
+.pc-batch-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.pc-batch-shape { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.pc-batch-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.pc-batch-row { display: grid; grid-template-columns: minmax(0,1fr) 5.5em 4.5em 7em 2em; gap: 8px; align-items: center; }
+.pc-batch-row.head { padding: 0 2px; }
+.pc-batch-row input { padding: 8px 10px; font-size: 15px; min-width: 0; width: 100%; }
+/* A row that can't be priced yet says so before you press the button, not after. */
+.pc-batch-row.incomplete input { border-color: rgba(224,168,120,0.5); }
+.pc-batch-sku { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pc-batch-sku input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pc-batch-sku span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-batch-qty, .pc-batch-cost { text-align: center; }
+.pc-batch-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.pc-batch-stats { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.pc-batch-gaps { margin: 10px 0 0; line-height: 1.5; }
+.pc-batch-filters { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 10px; }
+.pc-batch-results { display: flex; flex-direction: column; gap: 8px; }
+.pc-batch-result { border: 1px solid var(--border); border-left-width: 3px; border-radius: 10px; padding: 10px 12px; background: var(--panel-2); }
+.pc-batch-result.buy { border-left-color: var(--ok); }
+.pc-batch-result.watch { border-left-color: #e0a458; }
+.pc-batch-result.pass { border-left-color: var(--err); }
+.pc-batch-result.no_cost, .pc-batch-result.no_price { border-left-color: var(--muted); }
+.pc-batch-result-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.pc-batch-result-name { margin-top: 2px; }
+.pc-batch-result-nums { display: flex; gap: 4px 14px; flex-wrap: wrap; margin-top: 6px; }
+.pc-batch-result-money { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.pc-batch-result-money .up { color: var(--ok); }
+.pc-batch-result-money .down { color: var(--err); }
+/* The call, at chip size — the same three words the one-pair verdict uses, so the two
+   modes can't be read as two different opinions. */
+.pc-call { font-size: 11px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.pc-call.buy { color: var(--ok); border-color: rgba(46,204,113,0.5); background: rgba(46,204,113,0.12); }
+.pc-call.watch { color: #e0a458; border-color: rgba(224,164,88,0.5); background: rgba(224,164,88,0.12); }
+.pc-call.pass { color: var(--err); border-color: rgba(255,107,107,0.45); background: rgba(255,107,107,0.1); }
+.pc-batch-warn { font-size: 11px; font-weight: 700; color: #e0a458; }
+@media (max-width: 600px) {
+  /* Style code on its own line — at 390px a five-column grid gives it 60px, which is
+     half a style code and unreadable. */
+  .pc-batch-row { grid-template-columns: minmax(0,1fr) 4.5em 5em 2em; grid-template-areas: 'sku sku sku rm' 'size qty cost .'; gap: 6px; }
+  .pc-batch-row.head { display: none; }
+  .pc-batch-sku { grid-area: sku; }
+  .pc-batch-size { grid-area: size; }
+  .pc-batch-qty { grid-area: qty; }
+  .pc-batch-cost { grid-area: cost; }
+  .pc-batch-row .remove { grid-area: rm; }
+  .pc-batch-row + .pc-batch-row { border-top: 1px dashed var(--border); padding-top: 8px; }
+}
+
 .pc-verdict { border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--panel-2); }
 .pc-verdict.buy { border-color: rgba(46, 204, 113, 0.45); background: rgba(46, 204, 113, 0.08); }
 .pc-verdict.watch { border-color: rgba(224, 164, 88, 0.45); background: rgba(224, 164, 88, 0.08); }

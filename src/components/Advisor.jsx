@@ -1,4 +1,6 @@
-// The advisor — a floating button on every staff screen, and the panel it opens.
+// The advisor — a floating button on every staff screen and on the supplier portal,
+// and the panel it opens. A supplier's is deliberately narrower: same panel, but the
+// server hands it three tools and a different prompt (api/advisor/ask.js).
 //
 // Mounted ONCE, next to the router in App.jsx, so no individual screen has to know it
 // exists. A screen that wants the advisor to see what it's showing calls
@@ -83,6 +85,13 @@ export function RichText({ text }) {
 // Openers, chosen from what the screen is showing. An empty box asking to be impressed
 // gets used once; three concrete questions get used daily.
 function suggestionsFor(ctx, role) {
+  // A supplier's advisor only answers three questions (api/advisor/ask.js), so the
+  // openers ARE those three — an opener they'll be declined for is a bad first impression.
+  if (role === 'supplier') {
+    return ctx?.sku
+      ? ['Should we buy this?', 'How many should I get?', 'How many do we have already?']
+      : ['Should we buy SKU…?', 'How many should I get of…?', 'How many do we have of…?'];
+  }
   if (ctx?.sku) {
     return ['Is this a good buy?', 'What if I get it $20 cheaper?', 'Have we sold this before?'];
   }
@@ -153,7 +162,9 @@ export function Advisor({ user }) {
             <span className="ah-avatar" aria-hidden="true">{ADVISOR_INITIALS}</span>
             <span className="advisor-title">{ADVISOR_NAME}</span>
             <span className="muted sm ah-sub">
-              {ctx?.page ? `sees ${ctx.page}` : 'stock, backlog & how-to'}
+              {ctx?.page ? `sees ${ctx.page}`
+                : user?.role === 'supplier' ? 'buy calls & stock on a style'
+                : 'stock, backlog & how-to'}
             </span>
             {chat.length > 0 && (
               <button type="button" className="btn ghost sm" onClick={() => setChat([])}>Clear</button>

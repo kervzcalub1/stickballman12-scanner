@@ -28,10 +28,12 @@ test('PH accounts get it too', async ({ page }) => {
   await expect(fab(page)).toBeVisible();
 });
 
-test('suppliers never see it — different app, none of this data', async ({ page }) => {
+// Changed 2026-08-26: suppliers DO get an advisor now — a narrower one. What it can
+// and can't reach is in e2e/supplier-advisor.spec.js.
+test('suppliers get it too, on their own portal', async ({ page }) => {
   await loginAs(page, 'supplier');
   await page.goto('/');
-  await expect(fab(page)).toHaveCount(0);
+  await expect(fab(page)).toBeVisible();
 });
 
 test('it opens, answers, and closes on Escape', async ({ page }) => {

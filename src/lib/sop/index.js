@@ -22,6 +22,7 @@ import { PH_ARTICLES } from './articles.ph.js';
 import { SUPPLIER_ARTICLES } from './articles.supplier.js';
 import { ADMIN_ARTICLES } from './articles.admin.js';
 import { REFERENCE_ARTICLES } from './articles.reference.js';
+import { PAYOUT_ARTICLES } from './articles.payout.js';
 import { FAQ } from './faq.js';
 
 // Roles, in the order the filter bar shows them. `key` matches users.role except
@@ -54,6 +55,9 @@ export const SOP_AREAS = [
 export const SOP_ARTICLES = [
   ...WAREHOUSE_ARTICLES,
   ...PH_ARTICLES,
+  // Its own file because it belongs to no single desk — warehouse, PH and admin all
+  // buy off it. See the note at the top of articles.payout.js.
+  ...PAYOUT_ARTICLES,
   ...SUPPLIER_ARTICLES,
   ...ADMIN_ARTICLES,
   ...REFERENCE_ARTICLES,
@@ -135,4 +139,5 @@ export const SOP_KEYWORDS = [
   'rescale', 'restock', 'global indicator', 'final price', 'margin', 'sync',
   'Intelligent Inventory', 'Alias', 'StockX', 'Shopify', 'GOAT only', 'in-store',
   'sold', 'shipped', 'labels', 'print', 'photos', 'password', 'roles', 'in stock',
+  'payout', 'markup', 'ROI', 'buy call',
 ];

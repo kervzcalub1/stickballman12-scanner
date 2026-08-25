@@ -191,6 +191,19 @@ with no style code is skipped rather than guessed at; a size keeps its letter (`
 a different shoe); and a missing cost stays **blank, never 0** — "they didn't say" and
 "it's free" produce different verdicts. Capped at 300 rows.
 
+**A style code written with a SPACE counts (`IB8857 141`)** — added 2026-08-26 after a
+paste of exactly that came back *"Nothing recognisable"*. It's how people type it, and
+failing teaches them the tool is broken rather than that they missed a dash. Whatever the
+spelling, it's stored hyphenated and upper-case, so the two forms group together instead
+of being priced twice. Two guards keep it honest:
+- **Both halves must contain a digit.** Without that, `RM Hemp` out of *"Jordan 4 RM
+  Hemp"* reads as a style code and the sizes below it get filed under a shoe that doesn't
+  exist. The hyphenated form stays as loose as it was.
+- **The size pattern is capped at two digits**, and that cap is load-bearing: an
+  all-numeric code like `315121 115` otherwise reads as *"size 315121, quantity 115"* and
+  is eaten as a size line before it can be recognised as the header it is. A line that
+  parses as a size run is never treated as a header.
+
 **Pricing** is one round trip (`api/payout/batch.js`): rows are grouped by style, and
 each style gets the same two lookups `quote.js` does — deliberately the same functions,
 so a batch row and a single-pair row can never be priced by two code paths that disagree.

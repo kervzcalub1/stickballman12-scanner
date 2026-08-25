@@ -38,6 +38,41 @@ Total: 6 pairs`);
     ]);
   });
 
+  test('a style code written with a SPACE is still a style code', () => {
+    // Reported from prod: "ib8857 141 / 10 x 5 / 11 x 5" came back "Nothing
+    // recognisable". That is how people type it, and failing teaches them the tool is
+    // broken rather than that they missed a dash. Stored hyphenated so the two spellings
+    // group together instead of being priced twice.
+    const { rows, shape } = parseBatch('ib8857 141\n10 x 5\n11 x 5');
+    expect(shape).toBe('grouped');
+    expect(rows.map((r) => [r.sku, r.size, r.qty])).toEqual([
+      ['IB8857-141', '10', 5],
+      ['IB8857-141', '11', 5],
+    ]);
+  });
+
+  test('a shoe NAME is never mistaken for a spaced style code', () => {
+    // The reason the spaced form demands a digit in both halves: otherwise "RM Hemp"
+    // out of "Jordan 4 RM Hemp" reads as a code, and the sizes below it get filed under
+    // a shoe that does not exist.
+    expect(parseBatch('Jordan 4 RM Hemp\n10 x 2').rows).toHaveLength(0);
+    expect(parseBatch('Air Max 90 $110\n10 x 3').rows).toHaveLength(0);
+    // …but a real spaced code on the same line as the name is still found.
+    const { rows } = parseBatch('ib8857 141 Jordan 4 RM Hemp $95\n10 x 2');
+    expect(rows.map((r) => [r.sku, r.cost])).toEqual([['IB8857-141', '95']]);
+  });
+
+  test('an all-numeric code is a header, not a size of 315121', () => {
+    // The size pattern is capped at two digits precisely so this line can't be eaten as
+    // "size 315121, quantity 115" before it is recognised as the header it is.
+    const { rows, shape } = parseBatch('315121 115\n9 x 1\n10 x 2');
+    expect(shape).toBe('grouped');
+    expect(rows.map((r) => [r.sku, r.size, r.qty])).toEqual([
+      ['315121-115', '9', 1],
+      ['315121-115', '10', 2],
+    ]);
+  });
+
   test('a missing cost stays blank — never a zero', () => {
     // "They didn't say" and "it's free" are different, and only one of them should
     // produce a verdict at all.

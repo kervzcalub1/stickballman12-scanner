@@ -83,8 +83,8 @@ want them. Their **bulk/batch analyser** was, on 2026-08-26 — see below.
    - **Never sold ≠ sells monthly.** Zero sales leaves the picker empty and says "no
      sales on record"; no export loaded leaves it silent. Filling in "Monthly" for either
      would put a measurement on screen that nothing measured.
-4. **Expected payouts → The call** — per-platform fees → payout / profit / ROI, then a
-   **Buy / Watch / Pass** verdict with risk and platform spread.
+4. **Expected payouts → The call** — per-platform **markup** and **fees** → payout /
+   profit / ROI, then a **Buy / Watch / Pass** verdict with risk and platform spread.
 
 ## Supplier presets — the one thing here that ISN'T per device
 Table `payout_presets`, endpoint `api/payout/presets.js` (GET list · POST save · POST
@@ -254,9 +254,40 @@ the number that proves the coupon stayed out — with it, the row would land at 
   with the numbers people are already trading — so if we *do* change them, say so out
   loud rather than fixing it quietly.
 
+## Markup — listing above the ask (2026-08-26)
+A **Markup %** box per platform, beside the fee. The breakdown reads
+**`sale + markup − fees = payout`**, with a *Listed at* row for the price the pair is
+actually sold at:
+
+```
+Sale            $130.00
+Markup (10%)    +$13.00
+Listed at       $143.00
+Fees (9.9%)     −$14.16
+Payout          $128.84
+Profit           $39.84
+ROI               44.8%
+```
+
+- **The fee is a cut of the LISTED price, not the ask.** A platform takes its percentage
+  of the real sale; charging it against the number you started from would understate the
+  fee on every marked-up pair.
+- **Per platform, like the fee** — 10% over Alias's ask is a different dollar amount from
+  10% over StockX's, and the two are routinely worked differently.
+- **The verdict is judged at the MARKET price, deliberately** (`marketPayouts`, the same
+  payouts with markup 0). A markup is a price you *hope* to get; letting it drive the
+  call would turn a Pass into a Buy on a number nobody has offered — the e2e pins exactly
+  that case (a 40% markup on a $118/$100 Pass leaves it a Pass). When any markup is set
+  the verdict says so out loud, because the tables above it are showing bigger numbers
+  and the two must not disagree in silence.
+- **Blank is 0**, so every number reads exactly as it always has until someone asks for a
+  markup. `calcPayout`'s 5th argument defaults to 0, which is why batch analysis and
+  every other caller are untouched. `margin` now divides by `listedPrice` (equal to
+  `salePrice` with no markup) — that's the price the risk bands should read.
+
 ## The payout maths (`calcPayout`)
-`payout = sale − sale × fee%` · `profit = payout − finalCost` ·
-`roi = profit / finalCost` · `margin = profit / sale`
+`listed = sale + sale × markup%` · `payout = listed − listed × fee%` ·
+`profit = payout − finalCost` · `roi = profit / finalCost` · `margin = profit / listed`
 
 - **Default fees** (`DEFAULT_FEE_PCT`): **Alias 9.9%** (7% commission + 2.9% ACH),
   **StockX 10%** (7% seller + 3% payment). Defaults, not law — both are overridable

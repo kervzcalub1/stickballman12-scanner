@@ -99,17 +99,29 @@ export function calcCostBreakdown(inputs = {}) {
  * What one platform actually pays and what's left after cost.
  * `feePct` is a percent (9.9), not a fraction.
  */
-export function calcPayout(platform, salePrice, finalCost, feePct) {
+export function calcPayout(platform, salePrice, finalCost, feePct, markupPct = 0) {
   const sale = num(salePrice);
   const cost = num(finalCost);
   const pct = num(feePct);
-  const feeAmount = sale * (pct / 100);
-  const payout = sale - feeAmount;
+  // Listing ABOVE the market: "the ask is $130, I'll list at +10%". The markup is a
+  // percentage OF the sale price, and everything downstream is computed on the price
+  // you'd actually be paid at — fees included, because a platform takes its cut of the
+  // real sale, not of the ask you started from.
+  const markup = num(markupPct);
+  const markupAmount = sale * (markup / 100);
+  const listedPrice = sale + markupAmount;
+  const feeAmount = listedPrice * (pct / 100);
+  const payout = listedPrice - feeAmount;
   const profit = payout - cost;
   return {
     platform,
     label: PLATFORMS.find((p) => p.key === platform)?.label || platform,
     salePrice: sale,
+    markupPct: markup,
+    markupAmount,
+    // What the pair is actually sold at. Equals salePrice when there's no markup, which
+    // is why every existing caller keeps its old numbers exactly.
+    listedPrice,
     feePct: pct,
     feeAmount,
     payout,
@@ -118,7 +130,8 @@ export function calcPayout(platform, salePrice, finalCost, feePct) {
     // it's an unanswered question. Left at 0 so the verdict falls through to Need data.
     roi: cost > 0 ? (profit / cost) * 100 : 0,
     // Margin is profit over the SALE price (not cost) — that's what the risk bands read.
-    margin: sale > 0 ? (profit / sale) * 100 : 0,
+    // The LISTED price, not the ask: with a markup, that's the number the pair sells at.
+    margin: listedPrice > 0 ? (profit / listedPrice) * 100 : 0,
   };
 }
 

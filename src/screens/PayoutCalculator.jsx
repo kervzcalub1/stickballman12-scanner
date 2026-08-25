@@ -360,6 +360,10 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
   const [tipAmt, setTipAmt] = useState('');
   const [shippingAmt, setShippingAmt] = useState('');
   const [sale, setSale] = useState({ alias: '', stockx: '' });
+  // Listing ABOVE the market. Per platform, like the fee beside it — a 10% markup over
+  // Alias's ask is a different dollar amount from one over StockX's, and the two
+  // platforms are routinely worked differently.
+  const [markup, setMarkup] = useState({ alias: '', stockx: '' });
   const [feeOverride, setFeeOverride] = useState({ alias: '', stockx: '' });
   // Liquidity: measured if we have sales data, chosen if the buyer picked. `touched`
   // is what stops a measured value from stomping a deliberate choice — someone who
@@ -440,14 +444,25 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
     ? DEFAULT_FEE_PCT[key]
     : Number(feeOverride[key]));
 
+  const markupFor = (key) => (String(markup[key] ?? '').trim() === '' ? 0 : Number(markup[key]));
   const payouts = useMemo(
+    () => PLATFORMS.map((p) => calcPayout(p.key, sale[p.key], breakdown.finalCost, feeFor(p.key), markupFor(p.key))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sale.alias, sale.stockx, breakdown.finalCost, feeOverride.alias, feeOverride.stockx, markup.alias, markup.stockx],
+  );
+  // The SAME payouts with no markup — this is what the call is made on. A markup is a
+  // price you hope to get, not one the market is paying, and letting it drive the
+  // verdict would turn a Pass into a Buy on a number nobody has offered. The tables
+  // above show the marked-up figures; the verdict says which price it judged.
+  const marketPayouts = useMemo(
     () => PLATFORMS.map((p) => calcPayout(p.key, sale[p.key], breakdown.finalCost, feeFor(p.key))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sale.alias, sale.stockx, breakdown.finalCost, feeOverride.alias, feeOverride.stockx],
   );
+  const anyMarkup = PLATFORMS.some((p) => markupFor(p.key) > 0);
   const verdict = useMemo(
-    () => dealVerdict(payouts, breakdown.finalCost, liquidity),
-    [payouts, breakdown.finalCost, liquidity],
+    () => dealVerdict(marketPayouts, breakdown.finalCost, liquidity),
+    [marketPayouts, breakdown.finalCost, liquidity],
   );
 
   async function lookUp(e) {
@@ -527,6 +542,7 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
   function resetPair() {
     setShelfPrice(''); setCouponAmt(''); setTipAmt(''); setShippingAmt('');
     setSale({ alias: '', stockx: '' }); setFeeOverride({ alias: '', stockx: '' });
+    setMarkup({ alias: '', stockx: '' });
     setLiquidity(''); setLiquidityTouched(false); setVelocity(null);
     setMarket(null); setSx(null); setSize(''); setProduct(null); setSkuInput('');
     setError(''); setNotConfigured(false);
@@ -560,8 +576,12 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
     },
     payouts: payouts.map((p) => ({
       label: p.label, salePrice: p.salePrice, feePct: p.feePct,
+      // Named so the advisor can't read a marked-up payout as the market's answer.
+      markupPct: p.markupPct || undefined,
+      listedPrice: p.markupPct ? p.listedPrice : undefined,
       payout: p.payout, profit: p.profit, roi: p.roi,
     })),
+    verdictJudgedAt: anyMarkup ? 'the market price, ignoring the markup' : undefined,
     market: {
       alias: hasMarket ? MARKET_COLS.map(([k, l]) => `${l} ${quoted(market[k]) ? money(quoted(market[k])) : '—'}`).join(', ') : null,
       stockx: sxRow ? SX_MARKET_COLS.map(([k, l]) => `${l} ${quoted(sxRow[k]) ? money(quoted(sxRow[k])) : '—'}`).join(', ') : null,
@@ -770,9 +790,14 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
           {payouts.map((p) => (
             <div className="pc-payout" key={p.platform}>
               <div className="pc-payout-head">{p.label}</div>
-              <div className="pc-grid">
+              <div className="pc-grid three">
                 <NumField label="Sale price" prefix="$" value={sale[p.platform]}
                   onChange={(v) => setSale((s) => ({ ...s, [p.platform]: v }))} placeholder="0.00" />
+                {/* Listing above the market. Blank is 0 — no markup — so the numbers
+                    read exactly as they always have until someone asks for one. */}
+                <NumField label="Markup" suffix="%" value={markup[p.platform]}
+                  onChange={(v) => setMarkup((m) => ({ ...m, [p.platform]: v }))}
+                  placeholder="0" hint="list above the ask" />
                 <NumField label="Fee" suffix="%" value={feeOverride[p.platform]}
                   onChange={(v) => setFeeOverride((f) => ({ ...f, [p.platform]: v }))}
                   placeholder={String(DEFAULT_FEE_PCT[p.platform])}
@@ -782,6 +807,14 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
                 <table className="pc-break">
                   <tbody>
                     <BreakRow label="Sale" value={p.salePrice} />
+                    {p.markupAmount > 0 && (
+                      <>
+                        <BreakRow label={`Markup (${ratePct(p.markupPct)})`} value={p.markupAmount} sign="+" />
+                        {/* The number the pair is actually sold at — the fee below is a
+                            cut of THIS, not of the ask it started from. */}
+                        <BreakRow label="Listed at" value={p.listedPrice} />
+                      </>
+                    )}
                     <BreakRow label={`Fees (${pct(p.feePct)})`} value={p.feeAmount} sign="−" />
                     <tr className="pc-break-total"><td>Payout</td><td className="pc-break-val">{money(p.payout)}</td></tr>
                     <tr className={p.profit >= 0 ? 'pc-profit up' : 'pc-profit down'}>
@@ -845,6 +878,15 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
               )}
             </div>
             <p className="pc-verdict-note">{verdict.note}</p>
+            {/* The tables above are showing bigger numbers than this. Say why, rather
+                than letting the two disagree in silence. */}
+            {anyMarkup && (
+              <p className="pc-verdict-note muted sm">
+                Judged at the market price, not your markup — that’s a price you hope to get,
+                and it shouldn’t be what turns a pair into a buy. The payouts above show what it
+                would pay if it sells there.
+              </p>
+            )}
           </div>
         ) : (
           <p className="muted mt">Enter a shelf price and at least one sale price to get a call.</p>

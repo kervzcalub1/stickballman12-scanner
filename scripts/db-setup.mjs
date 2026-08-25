@@ -759,6 +759,14 @@ await sql(`
 `);
 // Case-insensitive, so "andrew" can't become a second Andrew with different fees.
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS payout_presets_name_idx ON payout_presets (lower(btrim(name)))`);
+// Which supplier ACCOUNT this stack belongs to (2026-08-26). A supplier signing in
+// gets the Payout Calculator with only their own preset on it, so the link has to be
+// an explicit id set by staff — matching on the preset's free-text name would break
+// silently the first time either side is renamed, and the failure mode is one
+// supplier reading another's cost stack. NULL = a preset with no account attached
+// (staff-only, which is every preset until someone links one).
+await sql(`ALTER TABLE payout_presets ADD COLUMN IF NOT EXISTS supplier_user_id BIGINT REFERENCES users(id)`);
+await sql(`CREATE INDEX IF NOT EXISTS payout_presets_supplier_idx ON payout_presets (supplier_user_id)`);
 
 // Seed the known suppliers — but ONLY into an empty table, never ON CONFLICT DO
 // NOTHING. db:setup runs on every deploy, and a preset someone deliberately deleted

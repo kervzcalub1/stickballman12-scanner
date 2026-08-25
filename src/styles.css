@@ -3352,6 +3352,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); padding: 9px 11px;
 }
 .pc-preset-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 220px; }
+/* "⇄ signs in as andrew" — this preset is attached to a supplier ACCOUNT, so that
+   person sees it (and only it) on their own Payout Calculator. */
+.pc-preset-linked {
+  align-self: flex-start; margin-top: 2px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  padding: 1px 7px; border-radius: 5px;
+  color: #8fb3ff; border: 1px solid rgba(143,179,255,0.45); background: rgba(143,179,255,0.12);
+}
 .pc-preset-row-name { font-weight: 700; }
 .pc-preset-row-acts { display: flex; gap: 6px; flex: none; }
 .pc-preset-confirm {

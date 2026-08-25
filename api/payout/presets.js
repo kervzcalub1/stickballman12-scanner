@@ -16,8 +16,17 @@
 // including for writes. Gating edits to admin would mean the person who just agreed a
 // new tip fee with a supplier, standing in the store, can't record it; and a preset
 // references nothing and saves nothing, so a bad one costs a retype.
+//
+// **A SUPPLIER may READ, and only their own** (2026-08-26). A supplier account signing
+// in gets the Payout Calculator, and the preset it fills from must be theirs alone —
+// Andrew sees Andrew. Two rules hold that line:
+//   · The scope keys on `supplier_user_id`, never on the preset's name. Names drift;
+//     the failure mode of a name match is one supplier reading another's cost stack.
+//   · **Writes stay staff-only.** A supplier's cost stack is an input to OUR buy calls,
+//     so letting the supplier raise their own tip fee would let them move the verdict.
+//     They get a read-only chip; changing it is a conversation with the floor.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, listPayoutPresets, savePayoutPreset, deletePayoutPreset } from '../_lib/db.js';
+import { dbConfigured, listPayoutPresets, savePayoutPreset, deletePayoutPreset, listSupplierUsers } from '../_lib/db.js';
 
 const MAX_NAME = 60;
 const MAX_NOTE = 200;
@@ -26,20 +35,37 @@ export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'GET' && req.method !== 'POST')
     return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['warehouse', 'ph_team']); // admin/superadmin auto-allowed
+  const user = requireRole(req, res, ['warehouse', 'ph_team', 'supplier']); // admin/superadmin auto-allowed
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
+  // A supplier reads their own row and nothing else. `isPrivileged` is deliberately NOT
+  // consulted here: role 'supplier' is never privileged, and an admin account is not
+  // scoped to a supplier id.
+  const isSupplier = user.role === 'supplier';
+  // Fail CLOSED on a uid that isn't a real row id. A NaN would reach the query as
+  // `supplier_user_id = NaN` — an error at best, and the wrong kind of surprise on an
+  // endpoint whose whole job here is "yours and nobody else's".
+  const uid = Number(user.uid);
+  const supplierScope = isSupplier ? (Number.isInteger(uid) && uid > 0 ? uid : -1) : null;
+
   if (req.method === 'GET') {
     try {
-      return send(res, 200, { ok: true, presets: await listPayoutPresets() });
+      const presets = await listPayoutPresets(
+        supplierScope != null ? { supplierUserId: supplierScope } : {},
+      );
+      return send(res, 200, { ok: true, presets });
     } catch (e) {
       console.error('[payout/presets]', e.message);
       return send(res, 500, { ok: false, error: 'Could not load supplier presets.' });
     }
   }
+
+  // Every write below is staff-only — see the note at the top of the file.
+  if (isSupplier)
+    return send(res, 403, { ok: false, error: 'Ask the Stickballman12 team to change your cost stack.' });
 
   const body = await getJsonBody(req);
   const who = user.name || user.username || null;
@@ -60,11 +86,24 @@ export default async function handler(req, res) {
   if (!name) return send(res, 400, { ok: false, error: 'Give the supplier a name.' });
   if (name.length > MAX_NAME) return send(res, 400, { ok: false, error: 'That name is too long.' });
 
+  // The linked supplier ACCOUNT decides who can read this stack, so it's checked
+  // against the real list rather than trusted: an id that isn't an approved supplier
+  // would either fail the FK or, worse, quietly attach the stack to a staff account.
+  let supplierUserId = null;
+  if (p.supplierUserId != null && String(p.supplierUserId).trim() !== '') {
+    supplierUserId = Number(p.supplierUserId);
+    if (!Number.isInteger(supplierUserId) || supplierUserId <= 0)
+      return send(res, 400, { ok: false, error: 'That supplier account is not valid.' });
+    const known = await listSupplierUsers();
+    if (!known.some((u) => Number(u.id) === supplierUserId))
+      return send(res, 400, { ok: false, error: 'That supplier account is not valid.' });
+  }
+
   // Every field is a plain non-negative number. A negative tax or a 300% gift card is a
   // typo, and it would come back as a buy call — reject it here rather than let the
   // arithmetic run on it.
   const nums = ['tipAmt', 'shippingAmt', 'taxPct', 'giftPct', 'storePct', 'promoPct', 'cashbackPct'];
-  const clean = { id: p.id ? Number(p.id) : null, name, note: String(p.note ?? '').slice(0, MAX_NOTE) };
+  const clean = { id: p.id ? Number(p.id) : null, name, note: String(p.note ?? '').slice(0, MAX_NOTE), supplierUserId };
   for (const k of nums) {
     const raw = String(p[k] ?? '').trim();
     const v = raw === '' ? 0 : Number(raw);

@@ -603,6 +603,13 @@ The chip is a **statement about reality, not a workflow state**; the reconciliat
 (`poChip` in `Reconciliation.jsx`) still owns what happens next.
 
 ## The PO screen's layout (PoOverview → PoDetail, + SupplierApp)
+**The supplier portal has a home now (2026-08-26).** `SupplierApp` used to land straight
+on the shipment list; it now opens a two-card chooser — **Purchase Orders** and **Payout
+Calculator** — with its own router (`/orders`, `/payout`, anything else = home) so a
+refresh or a shared link comes back to the right screen. The shipment list and its
+detail are unchanged apart from a **← Home** in the top bar. See
+`payout-calculator.md` for what the supplier does and doesn't get on the calculator.
+
 **An order opens on its own page (2026-08-21).** `PoOverview` is now just the list: tapping an
 order sets `?po=<id>` and renders `PoDetail.jsx` full-screen, with **← All purchase orders**
 back to the list. It used to unfold inside the list row, and on a nine-label order (PO-100005)

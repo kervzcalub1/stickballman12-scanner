@@ -60,7 +60,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'payout') return <PayoutCalculator onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'postatus') return <PoOverview onHome={() => goPage(null)} onSignOut={onSignOut} />;
   // PH closes out the stragglers too — they're the ones chasing the supplier over a

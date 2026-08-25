@@ -119,7 +119,28 @@ async function pickSize(page, size = '10') {
 
 const ALIAS_ROW = { size: '10', global_indicator: 100, price: 120, lowest_listing: 130, highest_offer: 90, last_sold: 118 };
 
-test('both markets fill their own sale price box', async ({ page }) => {
+const saleBox = (page, platform) => page.locator('.pc-payout', { hasText: platform })
+  .locator('.pc-field', { hasText: 'Sale price' }).locator('input');
+
+test('the lowest ask fills each sale price by itself, per platform', async ({ page }) => {
+  await openCalc(page);
+  await stubLookup(page, {
+    ok: true, configured: true, results: [ALIAS_ROW],
+    stockx: { configured: true, results: [{ size: '10', lowest_ask: 145, highest_bid: 101, earn_more: 152, sell_faster: 144 }] },
+  });
+  await pickSize(page);
+  // No tap needed: each platform takes ITS OWN lowest ask, so there's a verdict on
+  // screen the moment the market lands. Crossing these would price off the wrong market.
+  await expect(saleBox(page, 'Alias')).toHaveValue('130');
+  await expect(saleBox(page, 'StockX')).toHaveValue('145');
+  // And the strip says WHICH number is in play, so an auto-filled price can't read as
+  // one somebody typed.
+  const strips = page.locator('.pc-market');
+  await expect(strips.first().locator('.pc-market-cell.on')).toContainText('Lowest ask');
+  await expect(strips.nth(1).locator('.pc-market-cell.on')).toContainText('Lowest ask');
+});
+
+test('tapping another cell overrides the default, and moves the highlight', async ({ page }) => {
   await openCalc(page);
   await stubLookup(page, {
     ok: true, configured: true, results: [ALIAS_ROW],
@@ -127,13 +148,24 @@ test('both markets fill their own sale price box', async ({ page }) => {
   });
   await pickSize(page);
   const strips = page.locator('.pc-market');
-  await expect(strips).toHaveCount(2);
-  // Alias strip → Alias box.
-  await strips.first().locator('.pc-market-cell', { hasText: 'Lowest ask' }).click();
-  await expect(page.locator('.pc-payout', { hasText: 'Alias' }).locator('.pc-field', { hasText: 'Sale price' }).locator('input')).toHaveValue('130');
-  // StockX strip → StockX box. Crossing these would price a pair off the wrong market.
+  await strips.first().locator('.pc-market-cell', { hasText: 'Last sold' }).click();
+  await expect(saleBox(page, 'Alias')).toHaveValue('118');
+  await expect(strips.first().locator('.pc-market-cell.on')).toContainText('Last sold');
+  // StockX is untouched — the two strips fill two different boxes.
+  await expect(saleBox(page, 'StockX')).toHaveValue('145');
   await strips.nth(1).locator('.pc-market-cell', { hasText: 'Highest bid' }).click();
-  await expect(page.locator('.pc-payout', { hasText: 'StockX' }).locator('.pc-field', { hasText: 'Sale price' }).locator('input')).toHaveValue('101');
+  await expect(saleBox(page, 'StockX')).toHaveValue('101');
+});
+
+test('a typed sale price wins, and no cell claims to be the one in use', async ({ page }) => {
+  await openCalc(page);
+  await stubLookup(page, {
+    ok: true, configured: true, results: [ALIAS_ROW],
+    stockx: { configured: true, results: [{ size: '10', lowest_ask: 145, highest_bid: 101 }] },
+  });
+  await pickSize(page);
+  await saleBox(page, 'Alias').fill('177');
+  await expect(page.locator('.pc-market').first().locator('.pc-market-cell.on')).toHaveCount(0);
 });
 
 test('with StockX unconfigured the Alias half still works, and the screen says why', async ({ page }) => {
@@ -145,8 +177,9 @@ test('with StockX unconfigured the Alias half still works, and the screen says w
   await pickSize(page);
   await expect(page.locator('.pc-market')).toHaveCount(1); // Alias only
   await expect(page.locator('.pc-payout', { hasText: 'StockX' })).toContainText('aren’t configured');
-  await page.locator('.pc-market-cell', { hasText: 'Lowest ask' }).click();
-  await expect(page.locator('.pc-payout', { hasText: 'Alias' }).locator('.pc-field', { hasText: 'Sale price' }).locator('input')).toHaveValue('130');
+  await expect(saleBox(page, 'Alias')).toHaveValue('130');
+  // Nothing to fill the StockX box from, so it stays empty rather than borrowing Alias's.
+  await expect(saleBox(page, 'StockX')).toHaveValue('');
 });
 
 test('a StockX outage is reported, not read as "no market"', async ({ page }) => {

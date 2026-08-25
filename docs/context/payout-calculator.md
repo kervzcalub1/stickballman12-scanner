@@ -31,7 +31,18 @@ want them. Their **bulk/batch analyser** was, on 2026-08-26 — see below.
    **Alias** (lowest ask / highest offer / last sold / Global Indicator) and **StockX**
    (lowest ask / highest bid / earn more / sell faster, via the official Public API —
    `api/_lib/stockx.js`, see `integrations.md`). Each cell fills **its own** platform's
-   sale price. Note the asymmetry: **StockX has no last sale** — no such field exists in
+   sale price.
+   - **The lowest ask fills itself, per platform, without a tap (2026-08-26).** It's the
+     first column because it's what the pair actually sells for, and requiring a tap
+     before any verdict appeared made the screen look like it had no opinion. The other
+     three cells are still one tap away, and typing over the box wins. The cell driving
+     the payout is **highlighted**, derived from the sale price rather than remembered —
+     so it follows a tap, follows the auto-fill, and disappears the moment someone types
+     a price of their own; an auto-filled number must not read as one somebody chose.
+     Overwriting on every fetch is deliberate: a fetch only happens on a new **size** or
+     a **basis switch**, and both make the previous number a statement about a different
+     thing. This also puts the single-pair screen in step with batch mode, which has
+     always priced off the lowest ask. Note the asymmetry: **StockX has no last sale** — no such field exists in
    their Public API — so that comparison can only be made on the Alias side. The whole step is skippable: type a sale price and the maths works.
    - The two sources **fail independently** (`Promise.allSettled`): a StockX outage
      can't take the Alias half of the answer down, and the screen distinguishes

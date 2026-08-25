@@ -3250,6 +3250,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .pc-grid.three { grid-template-columns: repeat(3, 1fr); }
 @media (max-width: 560px) {
   .pc-grid, .pc-grid.three { grid-template-columns: 1fr 1fr; }
+  /* Sale price / Markup / Fee wraps 2+1 on a phone, which strands Fee beside an empty
+     column. Give the dollar amount the full row and pair the two percentages instead —
+     they're the same kind of field and they read as a pair. */
+  .pc-payout .pc-grid.three > :first-child { grid-column: 1 / -1; }
 }
 .pc-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .pc-field-label { font-size: 12px; color: var(--muted); font-weight: 600; }

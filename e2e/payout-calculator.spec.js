@@ -46,6 +46,54 @@ test('a sale price turns into payout, profit and ROI at the default fee', async 
   await expect(alias.locator('.pc-profit', { hasText: 'Profit' }).locator('.pc-break-val')).toHaveText('$72.62');
 });
 
+test('a markup rides on top of the sale price, and the fee is a cut of the total', async ({ page }) => {
+  await openCalc(page);
+  await field(page, 'Shelf price').fill('89');
+  const alias = page.locator('.pc-payout', { hasText: 'Alias' });
+  await alias.locator('.pc-field', { hasText: 'Sale price' }).locator('input').fill('130');
+  // No markup yet: 130 − 9.9% = 117.13, − 89 cost = 28.13.
+  await expect(alias.locator('.pc-break-total', { hasText: 'Payout' }).locator('.pc-break-val')).toHaveText('$117.13');
+
+  await alias.locator('.pc-field', { hasText: 'Markup' }).locator('input').fill('10');
+  // sale + markup − fees = payout. 130 + 13 = 143; the fee is 9.9% of 143 ($14.16),
+  // NOT of the 130 it started from — the platform takes its cut of the real sale.
+  await expect(alias.locator('tr', { hasText: 'Markup' }).locator('.pc-break-val')).toHaveText('+$13.00');
+  await expect(alias.locator('tr', { hasText: 'Listed at' }).locator('.pc-break-val')).toHaveText('$143.00');
+  await expect(alias.locator('tr', { hasText: 'Fees' }).locator('.pc-break-val')).toHaveText('−$14.16');
+  await expect(alias.locator('.pc-break-total', { hasText: 'Payout' }).locator('.pc-break-val')).toHaveText('$128.84');
+  await expect(alias.locator('.pc-profit', { hasText: 'Profit' }).locator('.pc-break-val')).toHaveText('$39.84');
+});
+
+test('the markup is per platform — it does not leak across', async ({ page }) => {
+  await openCalc(page);
+  await field(page, 'Shelf price').fill('89');
+  const alias = page.locator('.pc-payout', { hasText: 'Alias' });
+  const stockx = page.locator('.pc-payout', { hasText: 'StockX' });
+  await alias.locator('.pc-field', { hasText: 'Sale price' }).locator('input').fill('130');
+  await stockx.locator('.pc-field', { hasText: 'Sale price' }).locator('input').fill('130');
+  await alias.locator('.pc-field', { hasText: 'Markup' }).locator('input').fill('10');
+  await expect(alias.locator('tr', { hasText: 'Listed at' })).toHaveCount(1);
+  await expect(stockx.locator('tr', { hasText: 'Listed at' })).toHaveCount(0);
+});
+
+test('the verdict is judged at the market price, never at the markup', async ({ page }) => {
+  await openCalc(page);
+  // $100 cost, $118 sale → 118 − 9.9% = 106.32, profit 6.32, 6.3% ROI. Neither
+  // threshold → Pass.
+  await field(page, 'Shelf price').fill('100');
+  const alias = page.locator('.pc-payout', { hasText: 'Alias' });
+  await alias.locator('.pc-field', { hasText: 'Sale price' }).locator('input').fill('118');
+  await expect(page.locator('.pc-verdict-call')).toHaveText('Pass');
+
+  // A 40% markup would make it $165.20 → $148.85 payout → $48.85 profit at 48.8% ROI,
+  // i.e. a Buy. It must NOT become one: nobody has offered that price.
+  await alias.locator('.pc-field', { hasText: 'Markup' }).locator('input').fill('40');
+  await expect(alias.locator('.pc-profit', { hasText: 'Profit' }).locator('.pc-break-val')).toHaveText('$48.85');
+  await expect(page.locator('.pc-verdict-call')).toHaveText('Pass');
+  // …and the screen says why the two disagree.
+  await expect(page.locator('.pc-verdict')).toContainText('Judged at the market price');
+});
+
 test('a blank fee box means the default rate, never 0%', async ({ page }) => {
   await openCalc(page);
   await field(page, 'Shelf price').fill('100');

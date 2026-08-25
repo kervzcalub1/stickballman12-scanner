@@ -3318,6 +3318,31 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 
 .pc-liq { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 
+/* Expected payouts header + its Markup off/on switch. */
+.pc-h-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pc-h-row .pc-h { margin-bottom: 0; }
+.pc-markup-switch { display: flex; align-items: center; gap: 8px; }
+.pc-markup-help { margin: 6px 0 0; }
+
+/* "Markup changed this call" — the loudest thing on the screen, and deliberately so.
+   Everything else here reports; this one interrupts. Amber rather than red: the number
+   isn't wrong, it's conditional on a price nobody has offered yet. The flag sits ABOVE
+   the sentence so it reads at a glance from arm's length, which is how this screen is
+   used — standing in a shop, deciding. */
+.pc-markup-alert {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid rgba(224, 164, 88, 0.6); background: rgba(224, 164, 88, 0.14);
+}
+.pc-markup-alert-flag {
+  display: inline-block; margin-bottom: 4px;
+  font-size: 11px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase;
+  color: #e0a458;
+}
+.pc-markup-alert p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--text); }
+/* The card itself picks up the warning edge, so the call and its caveat can't be read
+   apart — someone glancing at a big green "Buy" has to see that something qualifies it. */
+.pc-verdict.markup-moved { border-color: rgba(224, 164, 88, 0.6); }
+
 /* The call. Colour carries it — this is read from arm's length, mid-aisle. */
 /* ---- Batch analysis: the calculator with a list in front of it ------------------
    Paste -> Review -> Analyse. The review table is the point of the middle step, so it

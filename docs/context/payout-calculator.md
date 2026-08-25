@@ -274,12 +274,26 @@ ROI               44.8%
   fee on every marked-up pair.
 - **Per platform, like the fee** — 10% over Alias's ask is a different dollar amount from
   10% over StockX's, and the two are routinely worked differently.
-- **The verdict is judged at the MARKET price, deliberately** (`marketPayouts`, the same
-  payouts with markup 0). A markup is a price you *hope* to get; letting it drive the
-  call would turn a Pass into a Buy on a number nobody has offered — the e2e pins exactly
-  that case (a 40% markup on a $118/$100 Pass leaves it a Pass). When any markup is set
-  the verdict says so out loud, because the tables above it are showing bigger numbers
-  and the two must not disagree in silence.
+- **Behind an OFF/ON switch in the section header, off by default.** Turning it on
+  changes the CALL, so it has to be something someone chose and can see they chose. While
+  it's off the markup box isn't rendered at all: a box holding a number that isn't being
+  applied reads as though it counts. The number is remembered across a toggle, but only
+  applied while the switch is on.
+- **With the switch ON the verdict follows the markup** — that's the point of turning it
+  on. `marketPayouts` (the same payouts at markup 0) is still computed, because the
+  interesting question isn't *"what does the markup pay"* but *"is the markup the only
+  reason this is a buy"*, and that needs both.
+- **When the markup MOVES the call, the screen interrupts.** An amber
+  `.pc-markup-alert` inside the verdict card — flag line **"Markup changed this call"**,
+  then both answers named: *"This is a **Buy** because of the markup you set. At the
+  market price it's a **Pass** — $6.32 a pair at 6.3% ROI, against $48.85 at 48.8% if it
+  sells at your price."* The card's own border goes amber too, so a glance at the big
+  green **Buy** can't miss that something qualifies it.
+  - It fires on the **call changing**, not on the profit moving — a markup always moves
+    the profit, and a note that fires every time is a note nobody reads. A markup that
+    leaves the call alone gets one quiet grey line instead.
+  - A warning that doesn't say *what* changed just makes people distrust the panel, so it
+    quotes the market figures rather than only waving.
 - **Blank is 0**, so every number reads exactly as it always has until someone asks for a
   markup. `calcPayout`'s 5th argument defaults to 0, which is why batch analysis and
   every other caller are untouched. `margin` now divides by `listedPrice` (equal to

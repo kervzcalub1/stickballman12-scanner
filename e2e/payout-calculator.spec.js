@@ -46,8 +46,23 @@ test('a sale price turns into payout, profit and ROI at the default fee', async 
   await expect(alias.locator('.pc-profit', { hasText: 'Profit' }).locator('.pc-break-val')).toHaveText('$72.62');
 });
 
+// The markup box only exists while the switch is on — see below for why.
+async function markupOn(page) {
+  await page.locator('.pc-markup-switch').getByRole('button', { name: 'On' }).click();
+}
+
+test('markup is off by default, and its box is not even there', async ({ page }) => {
+  await openCalc(page);
+  // A markup box sitting there with a number in it that isn't being applied would be
+  // worse than no box: it reads as though it counts.
+  await expect(page.locator('.pc-field', { hasText: 'Markup' })).toHaveCount(0);
+  await markupOn(page);
+  await expect(page.locator('.pc-field', { hasText: 'Markup' })).toHaveCount(2); // one per platform
+});
+
 test('a markup rides on top of the sale price, and the fee is a cut of the total', async ({ page }) => {
   await openCalc(page);
+  await markupOn(page);
   await field(page, 'Shelf price').fill('89');
   const alias = page.locator('.pc-payout', { hasText: 'Alias' });
   await alias.locator('.pc-field', { hasText: 'Sale price' }).locator('input').fill('130');
@@ -66,6 +81,7 @@ test('a markup rides on top of the sale price, and the fee is a cut of the total
 
 test('the markup is per platform — it does not leak across', async ({ page }) => {
   await openCalc(page);
+  await markupOn(page);
   await field(page, 'Shelf price').fill('89');
   const alias = page.locator('.pc-payout', { hasText: 'Alias' });
   const stockx = page.locator('.pc-payout', { hasText: 'StockX' });
@@ -76,22 +92,59 @@ test('the markup is per platform — it does not leak across', async ({ page }) 
   await expect(stockx.locator('tr', { hasText: 'Listed at' })).toHaveCount(0);
 });
 
-test('the verdict is judged at the market price, never at the markup', async ({ page }) => {
+test('with markup OFF the call is the market’s, whatever is typed in the box', async ({ page }) => {
   await openCalc(page);
-  // $100 cost, $118 sale → 118 − 9.9% = 106.32, profit 6.32, 6.3% ROI. Neither
-  // threshold → Pass.
+  // $100 cost, $118 sale → 118 − 9.9% = 106.32, profit 6.32, 6.3% ROI → Pass.
+  await field(page, 'Shelf price').fill('100');
+  const alias = page.locator('.pc-payout', { hasText: 'Alias' });
+  await alias.locator('.pc-field', { hasText: 'Sale price' }).locator('input').fill('118');
+  await expect(page.locator('.pc-verdict-call')).toHaveText('Pass');
+  // Type a markup, then switch it off: the number is remembered but not applied, and
+  // nothing about the call moves.
+  await markupOn(page);
+  await alias.locator('.pc-field', { hasText: 'Markup' }).locator('input').fill('40');
+  await page.locator('.pc-markup-switch').getByRole('button', { name: 'Off' }).click();
+  await expect(page.locator('.pc-verdict-call')).toHaveText('Pass');
+  await expect(alias.locator('.pc-profit', { hasText: 'Profit' }).locator('.pc-break-val')).toHaveText('$6.32');
+  await expect(page.locator('.pc-markup-alert')).toHaveCount(0);
+});
+
+test('with markup ON the call follows it — and says loudly that it did', async ({ page }) => {
+  await openCalc(page);
   await field(page, 'Shelf price').fill('100');
   const alias = page.locator('.pc-payout', { hasText: 'Alias' });
   await alias.locator('.pc-field', { hasText: 'Sale price' }).locator('input').fill('118');
   await expect(page.locator('.pc-verdict-call')).toHaveText('Pass');
 
-  // A 40% markup would make it $165.20 → $148.85 payout → $48.85 profit at 48.8% ROI,
-  // i.e. a Buy. It must NOT become one: nobody has offered that price.
+  await markupOn(page);
   await alias.locator('.pc-field', { hasText: 'Markup' }).locator('input').fill('40');
+  // 118 × 1.4 = 165.20 → −9.9% = 148.85 payout → 48.85 profit, 48.8% ROI → Buy.
   await expect(alias.locator('.pc-profit', { hasText: 'Profit' }).locator('.pc-break-val')).toHaveText('$48.85');
-  await expect(page.locator('.pc-verdict-call')).toHaveText('Pass');
-  // …and the screen says why the two disagree.
-  await expect(page.locator('.pc-verdict')).toContainText('Judged at the market price');
+  await expect(page.locator('.pc-verdict-call')).toHaveText('Buy');
+
+  // …and the screen refuses to let that pass unremarked. A warning that doesn't name
+  // what changed just makes people distrust the panel, so it quotes both answers.
+  const alert = page.locator('.pc-markup-alert');
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText('Markup changed this call');
+  await expect(alert).toContainText('At the market price it’s a');
+  await expect(alert).toContainText('$6.32');   // what it pays without the markup
+  await expect(alert).toContainText('$48.85');  // what it pays with it
+  await expect(page.locator('.pc-verdict.markup-moved')).toHaveCount(1);
+});
+
+test('a markup that does NOT change the call gets a quiet line, not the alarm', async ({ page }) => {
+  await openCalc(page);
+  // $89 cost, $130 sale → $28.13 profit at 31.6% ROI → already a Buy without any markup.
+  await field(page, 'Shelf price').fill('89');
+  const alias = page.locator('.pc-payout', { hasText: 'Alias' });
+  await alias.locator('.pc-field', { hasText: 'Sale price' }).locator('input').fill('130');
+  await markupOn(page);
+  await alias.locator('.pc-field', { hasText: 'Markup' }).locator('input').fill('10');
+  await expect(page.locator('.pc-verdict-call')).toHaveText('Buy');
+  // A note that fires every time is a note nobody reads.
+  await expect(page.locator('.pc-markup-alert')).toHaveCount(0);
+  await expect(page.locator('.pc-verdict')).toContainText('the call is the same at the market price');
 });
 
 test('a blank fee box means the default rate, never 0%', async ({ page }) => {

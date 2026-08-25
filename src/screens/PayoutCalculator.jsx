@@ -363,6 +363,11 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
   // Listing ABOVE the market. Per platform, like the fee beside it — a 10% markup over
   // Alias's ask is a different dollar amount from one over StockX's, and the two
   // platforms are routinely worked differently.
+  //
+  // Behind an explicit OFF/ON switch, because turning it on changes the CALL. A markup
+  // is a price you hope to get, so it moving a Pass to a Buy has to be something someone
+  // chose and can see they chose — never a side effect of a number left in a box.
+  const [markupOn, setMarkupOn] = useState(false);
   const [markup, setMarkup] = useState({ alias: '', stockx: '' });
   const [feeOverride, setFeeOverride] = useState({ alias: '', stockx: '' });
   // Liquidity: measured if we have sales data, chosen if the buyer picked. `touched`
@@ -444,26 +449,36 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
     ? DEFAULT_FEE_PCT[key]
     : Number(feeOverride[key]));
 
-  const markupFor = (key) => (String(markup[key] ?? '').trim() === '' ? 0 : Number(markup[key]));
+  const markupFor = (key) => (!markupOn || String(markup[key] ?? '').trim() === '' ? 0 : Number(markup[key]));
   const payouts = useMemo(
     () => PLATFORMS.map((p) => calcPayout(p.key, sale[p.key], breakdown.finalCost, feeFor(p.key), markupFor(p.key))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sale.alias, sale.stockx, breakdown.finalCost, feeOverride.alias, feeOverride.stockx, markup.alias, markup.stockx],
+    [sale.alias, sale.stockx, breakdown.finalCost, feeOverride.alias, feeOverride.stockx, markup.alias, markup.stockx, markupOn],
   );
-  // The SAME payouts with no markup — this is what the call is made on. A markup is a
-  // price you hope to get, not one the market is paying, and letting it drive the
-  // verdict would turn a Pass into a Buy on a number nobody has offered. The tables
-  // above show the marked-up figures; the verdict says which price it judged.
+  // The SAME payouts with no markup. Kept whether or not the switch is on, because the
+  // interesting question isn't "what does the markup pay" — it's whether the markup is
+  // what turned this into a buy. You can only answer that by holding both.
   const marketPayouts = useMemo(
     () => PLATFORMS.map((p) => calcPayout(p.key, sale[p.key], breakdown.finalCost, feeFor(p.key))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sale.alias, sale.stockx, breakdown.finalCost, feeOverride.alias, feeOverride.stockx],
   );
   const anyMarkup = PLATFORMS.some((p) => markupFor(p.key) > 0);
+  // With the switch ON the call is made on the marked-up prices — that's the whole
+  // point of turning it on. `marketVerdict` is what the same pair would be called at
+  // the market price, and the gap between the two is what gets shouted about below.
   const verdict = useMemo(
+    () => dealVerdict(payouts, breakdown.finalCost, liquidity),
+    [payouts, breakdown.finalCost, liquidity],
+  );
+  const marketVerdict = useMemo(
     () => dealVerdict(marketPayouts, breakdown.finalCost, liquidity),
     [marketPayouts, breakdown.finalCost, liquidity],
   );
+  // The case worth interrupting someone over: the markup is the ONLY reason this reads
+  // the way it does. Comparing the calls, not the profits — a markup always moves the
+  // profit, and a note that fires every time is a note nobody reads.
+  const markupMovedCall = !!(anyMarkup && verdict && marketVerdict && verdict.call !== marketVerdict.call);
 
   async function lookUp(e) {
     e?.preventDefault();
@@ -542,7 +557,7 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
   function resetPair() {
     setShelfPrice(''); setCouponAmt(''); setTipAmt(''); setShippingAmt('');
     setSale({ alias: '', stockx: '' }); setFeeOverride({ alias: '', stockx: '' });
-    setMarkup({ alias: '', stockx: '' });
+    setMarkup({ alias: '', stockx: '' }); setMarkupOn(false);
     setLiquidity(''); setLiquidityTouched(false); setVelocity(null);
     setMarket(null); setSx(null); setSize(''); setProduct(null); setSkuInput('');
     setError(''); setNotConfigured(false);
@@ -581,7 +596,11 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
       listedPrice: p.markupPct ? p.listedPrice : undefined,
       payout: p.payout, profit: p.profit, roi: p.roi,
     })),
-    verdictJudgedAt: anyMarkup ? 'the market price, ignoring the markup' : undefined,
+    verdictJudgedAt: anyMarkup ? 'the MARKED-UP price, because the markup switch is on' : undefined,
+    // So the advisor can make the same point the panel does, if asked.
+    markupMovedTheCall: markupMovedCall
+      ? `Without the markup this would be a ${CALL_LABEL[marketVerdict.call]} at ${money(marketVerdict.best.profit)} a pair.`
+      : undefined,
     market: {
       alias: hasMarket ? MARKET_COLS.map(([k, l]) => `${l} ${quoted(market[k]) ? money(quoted(market[k])) : '—'}`).join(', ') : null,
       stockx: sxRow ? SX_MARKET_COLS.map(([k, l]) => `${l} ${quoted(sxRow[k]) ? money(quoted(sxRow[k])) : '—'}`).join(', ') : null,
@@ -785,19 +804,37 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
         </details>
 
         {/* 3 — what each platform pays */}
-        <h3 className="pc-h">Expected payouts</h3>
+        <div className="pc-h-row">
+          <h3 className="pc-h">Expected payouts</h3>
+          <div className="pc-markup-switch">
+            <span className="muted sm">Markup</span>
+            <div className="seg sm">
+              <button type="button" className={`seg-btn ${markupOn ? '' : 'on'}`} aria-pressed={!markupOn}
+                onClick={() => setMarkupOn(false)}>Off</button>
+              <button type="button" className={`seg-btn ${markupOn ? 'on' : ''}`} aria-pressed={markupOn}
+                onClick={() => setMarkupOn(true)}>On</button>
+            </div>
+          </div>
+        </div>
+        {markupOn && (
+          <p className="muted sm pc-markup-help">
+            List above the ask. The call below is made on the marked-up prices while this is on.
+          </p>
+        )}
         <div className="pc-payouts">
           {payouts.map((p) => (
             <div className="pc-payout" key={p.platform}>
               <div className="pc-payout-head">{p.label}</div>
-              <div className="pc-grid three">
+              <div className={`pc-grid ${markupOn ? 'three' : ''}`.trim()}>
                 <NumField label="Sale price" prefix="$" value={sale[p.platform]}
                   onChange={(v) => setSale((s) => ({ ...s, [p.platform]: v }))} placeholder="0.00" />
-                {/* Listing above the market. Blank is 0 — no markup — so the numbers
-                    read exactly as they always have until someone asks for one. */}
-                <NumField label="Markup" suffix="%" value={markup[p.platform]}
-                  onChange={(v) => setMarkup((m) => ({ ...m, [p.platform]: v }))}
-                  placeholder="0" hint="list above the ask" />
+                {/* Only while the switch is on — a markup box sitting there with a number
+                    in it that isn't being applied is worse than no box at all. */}
+                {markupOn && (
+                  <NumField label="Markup" suffix="%" value={markup[p.platform]}
+                    onChange={(v) => setMarkup((m) => ({ ...m, [p.platform]: v }))}
+                    placeholder="0" hint="above the ask" />
+                )}
                 <NumField label="Fee" suffix="%" value={feeOverride[p.platform]}
                   onChange={(v) => setFeeOverride((f) => ({ ...f, [p.platform]: v }))}
                   placeholder={String(DEFAULT_FEE_PCT[p.platform])}
@@ -863,7 +900,7 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
         </div>
 
         {verdict ? (
-          <div className={`pc-verdict ${verdict.call}`}>
+          <div className={`pc-verdict ${verdict.call}${markupMovedCall ? ' markup-moved' : ''}`}>
             <div className="pc-verdict-top">
               <span className="pc-verdict-call">{CALL_LABEL[verdict.call]}</span>
               <span className="muted sm">best on {verdict.best.label}</span>
@@ -878,13 +915,25 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
               )}
             </div>
             <p className="pc-verdict-note">{verdict.note}</p>
-            {/* The tables above are showing bigger numbers than this. Say why, rather
-                than letting the two disagree in silence. */}
-            {anyMarkup && (
+            {/* The one thing on this screen worth interrupting someone over: the call
+                they're reading is their markup's, not the market's. Loud, specific, and
+                it names what the answer would be without it — a warning that doesn't say
+                what changed just makes people distrust the whole panel. */}
+            {markupMovedCall && (
+              <div className="pc-markup-alert" role="status">
+                <span className="pc-markup-alert-flag">Markup changed this call</span>
+                <p>
+                  This is a <b>{CALL_LABEL[verdict.call]}</b> because of the markup you set.
+                  At the market price it’s a <b>{CALL_LABEL[marketVerdict.call]}</b> —
+                  {' '}{money(marketVerdict.best.profit)} a pair at {pct(marketVerdict.best.roi)} ROI,
+                  against {money(verdict.best.profit)} at {pct(verdict.best.roi)} if it sells at your price.
+                  A markup is a price you hope to get, not one anyone has offered yet.
+                </p>
+              </div>
+            )}
+            {anyMarkup && !markupMovedCall && (
               <p className="pc-verdict-note muted sm">
-                Judged at the market price, not your markup — that’s a price you hope to get,
-                and it shouldn’t be what turns a pair into a buy. The payouts above show what it
-                would pay if it sells there.
+                Judged with your markup — the call is the same at the market price.
               </p>
             )}
           </div>

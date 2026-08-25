@@ -1,8 +1,9 @@
 # Payout Calculator
 
 Screen: `src/screens/PayoutCalculator.jsx`. Maths: `src/lib/payout.js` (pure).
-Endpoints: `api/payout/quote.js` (live prices) + `api/payout/presets.js` (supplier
-presets). Routes: **`/payout`** (admin + warehouse home,
+Batch mode: `src/components/BatchAnalysis.jsx` + `src/lib/batchParse.js` +
+`src/lib/batch.js`. Endpoints: `api/payout/quote.js` (live prices),
+`api/payout/batch.js` (a whole list) + `api/payout/presets.js` (supplier presets). Routes: **`/payout`** (admin + warehouse home,
 In-Store Mode section), **`/ph/payout`** (PH home, Pricing & Listing section), and
 **`/payout` on the supplier portal** (their own home — see "Suppliers get this screen"
 below).
@@ -19,9 +20,9 @@ Next.js + TypeScript + Tailwind, so this is a re-implementation in our idiom rat
 a copy. The **arithmetic is faithful**,
 deliberately — including the two quirks below — because the floor already quotes each
 other numbers out of that tool, and a screen that silently disagrees with it is worse
-than no screen. Their inventory intake, barcode scanner, product search, bulk/batch
-analyser and AI advisor were **not** ported: we already have all of those, or don't
-want them.
+than no screen. Their inventory intake, barcode scanner, product search
+and AI advisor were **not** ported: we already have all of those, or don't
+want them. Their **bulk/batch analyser** was, on 2026-08-26 — see below.
 
 ## The steps down the page
 1. **Shoe** (optional) — SKU → Alias catalogue (`api/sku-search.js`, shared with PH's
@@ -149,6 +150,61 @@ buying, which is the question this screen exists to answer.
   elsewhere; it's included because it's what drives the risk band on the verdict. Gate
   it for suppliers if that ever stops being wanted.
 - Guarded by `e2e/supplier-payout.spec.js`.
+
+## Batch mode — a whole list at once (2026-08-26)
+`?mode=batch` on the same screen, behind a **One pair / A whole list** toggle. Two modes
+rather than two screens: a batch is priced with the same fee overrides and the same basis
+sitting above it, and splitting them would mean maintaining the register twice.
+
+**Paste → Review → Analyse, and the middle step is not optional.** Parsing a chat message
+is guesswork however carefully it's done, so every row lands in an **editable table**
+first — you can see what it read, fix a size it misread, and delete the line that was
+actually a greeting. Going straight from text to verdicts would let a wrong number decide
+a purchase with nobody seeing it happen. (The source falls back to a model when its own
+parse looks shaky; this doesn't. A parse you can see and correct beats one that costs
+money and can still be wrong in a way nobody notices.)
+
+**Two input shapes** (`src/lib/batchParse.js`), because sellers send two:
+- **Grouped** — a header line with the style code (and often a price and a name), then
+  `9 x 2` / `9.5 x 1` underneath, groups split by a blank line or a `⸻`. The header's
+  price and name carry down to every size under it. `Total: 6 pairs` is a footer, not a
+  row.
+- **Per line** — a style code, size, qty and price all on one line.
+
+Grouped is tried **first** and only accepted if a header was actually found, because the
+per-line parser would happily read `9 x 2` as a nameless row and produce garbage. A line
+with no style code is skipped rather than guessed at; a size keeps its letter (`7.5W` is
+a different shoe); and a missing cost stays **blank, never 0** — "they didn't say" and
+"it's free" produce different verdicts. Capped at 300 rows.
+
+**Pricing** is one round trip (`api/payout/batch.js`): rows are grouped by style, and
+each style gets the same two lookups `quote.js` does — deliberately the same functions,
+so a batch row and a single-pair row can never be priced by two code paths that disagree.
+Bounded at **40 styles × 24 sizes, 4 concurrent**, with sizes sequential *within* a style
+(they share a cached StockX product; in parallel on a cold cache they'd repeat the same
+catalogue calls). One style failing returns an empty result for that style, never a
+failed request — and anything past the cap is reported as `skipped` rather than silently
+dropped.
+
+**Three deliberate divergences from the source** (`src/lib/batch.js`):
+1. **The verdict is ours.** The source calls a Watch on `profit > 0 && roi >= 5`;
+   `dealVerdict` says a Buy needs BOTH thresholds and either alone is a Watch. That
+   function is what the calculator, the advisor prompt and this all read.
+2. **No estimated eBay / Stadium Goods columns.** The source multiplies the Alias ask by
+   1.25 and 1.2 and prints them as prices. They're a guess wearing a currency symbol.
+3. **No cost stack.** A row's cost is the **landed cost per pair** — what an offer sheet
+   already is. The register stack belongs to one store trip and a pasted list routinely
+   spans several, so it isn't applied; the screen says so in a line under the table.
+   Price sticker prices in one-pair mode, where that stack is visible.
+
+**The gaps are named, and kept out of the totals.** `no_price` (no market for that size)
+and `no_cost` (nobody entered one) are counted and printed separately — averaging a blank
+into a blended ROI is how a bad batch reads as an acceptable one. Results sort Buy →
+Watch → Pass → gaps, and within a status by **line** profit: a $6 margin over forty pairs
+outranks $40 over one. Green means "take it", not "the arithmetic came out positive" — an
+$11 profit at 11.9% ROI is a Pass and must not read green beside its own red chip.
+
+Suppliers get batch mode too, on their own portal. E2E: `e2e/payout-batch.spec.js`.
 
 ## The cost maths (`calcCostBreakdown`) — order is the point
 `shelf → store % → promo % → gift card % → coupon → tax → + tip + shipping − cashback`

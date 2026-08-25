@@ -64,7 +64,8 @@
   **Payout Calculator**. On the calculator they can READ their own cost stack — scoped
   by `payout_presets.supplier_user_id`, so Andrew sees Andrew — and **never write it**:
   that stack is an input to our buy call, so `payout/presets` answers 403 to every
-  supplier POST. They also gained `payout/quote` (live market prices).
+  supplier POST. They also gained `payout/quote` (live market prices) and a **narrowed
+  advisor** — three tools, its own prompt, results projected to counts (`advisor.md`).
   See `payout-calculator.md`.
   **Login portal gate (`api/auth/login.js`, Host-based):** a `supplier` account can
   authenticate **only** on `supplier.*`, and the `supplier.` subdomain accepts **only**

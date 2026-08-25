@@ -27,6 +27,21 @@
 //    one tool that returns per-pair rows (a VIN and a shelf) — because "which pair, and
 //    where" is the question, and that data is already on the Inventory screen every one
 //    of these roles can open.
+//
+// 6. **A SUPPLIER gets a much smaller advisor** (2026-08-26). They're an external
+//    partner, so theirs answers exactly three questions — should we buy this SKU, how
+//    many, and how many do we already hold — and the narrowing is done in THREE places
+//    rather than trusted to the prompt:
+//      · `toolsFor` — the model is only shown the three tools those questions need, so
+//        there is no `pending_work` or `find_stock` for it to reach for,
+//      · `runTool` — a call to anything off that list is refused even if the model
+//        invents the name, because a tool list is a suggestion to a model and an
+//        allowlist is not,
+//      · `supplierView` — the two rich payloads are projected down to counts, dropping
+//        our per-size LISTING state and the per-channel sales split. Neither answers any
+//        of the three questions, and both are our own operations.
+//    The prompt then refuses off-topic questions, but it is the last line, not the only
+//    one.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { advisorSkuHistory, findStockByCode, pendingCounts,
   ourListingFlags, phListingBySizeForSku, dbConfigured } from '../_lib/db.js';
@@ -159,7 +174,66 @@ function renderArticle(a) {
   };
 }
 
-async function runTool(name, args, user) {
+// The three tools a supplier's three questions need, and nothing else. `find_stock`
+// (VINs and shelf locations), `pending_work` (our backlog), `top_sellers` (our
+// cross-SKU ranking) and `search_sop` (our internal procedures) are all off the list.
+export const SUPPLIER_TOOLS = new Set(['sku_history', 'stock_status', 'market_price']);
+const isSupplier = (user) => user?.role === 'supplier';
+export const toolsFor = (user) => (isSupplier(user)
+  ? TOOLS.filter((t) => SUPPLIER_TOOLS.has(t.function.name))
+  : TOOLS);
+
+/**
+ * Project a tool result down to what a supplier asked about: counts of pairs and the
+ * market, never our operations.
+ *
+ * `stock_status` normally answers "where are we in LISTING this" — three buckets per
+ * size. A supplier asked "how many do we have", so the buckets are summed into one
+ * held count per size and the listing state never leaves the building. `sku_history`
+ * keeps what we hold and what we pay (that's the buy threshold, and it's useful TO
+ * them) and drops the per-channel sales split, which is where WE choose to list.
+ */
+export function supplierView(name, result) {
+  if (name === 'stock_status') {
+    const rows = Array.isArray(result?.by_size?.sizes) ? result.by_size.sizes : [];
+    const held = (r) => (r.pending || 0) + (r.in_progress || 0) + (r.listed || 0)
+      + (r.no_box || 0) + (r.in_store_or_existing || 0);
+    return {
+      how_many_disclaimer: result?.how_many_disclaimer,
+      scope: 'Pairs we currently HOLD of this style, per size. Sold and shipped pairs are excluded.',
+      sizes: rows.map((r) => ({ size: r.size, on_hand: held(r) })),
+      on_hand_total: rows.reduce((t, r) => t + held(r), 0),
+      ...(result?.by_size?.note ? { note: result.by_size.note } : {}),
+    };
+  }
+  if (name === 'sku_history') {
+    const sales = result?.sales || {};
+    return {
+      inventory: result?.inventory,
+      sales: sales.note && sales.sold == null
+        ? { note: sales.note }
+        : {
+          days: sales.days, sold: sales.sold, per_week: sales.per_week,
+          liquidity: sales.liquidity, sizes: sales.sizes, last_sold: sales.last_sold,
+          avg_price: sales.avg_price, note: sales.note,
+        },
+    };
+  }
+  return result;
+}
+
+export async function runTool(name, args, user) {
+  // An allowlist, not a filtered menu: the tool list handed to the model is a
+  // suggestion, and a model can call a name it was never offered.
+  if (isSupplier(user) && !SUPPLIER_TOOLS.has(name)) {
+    return { error: 'not available on this account — you can ask about a style: whether to buy it, how many, and how many we hold' };
+  }
+  const out = await dispatchTool(name, args, user);
+  // Projected HERE, not at the call site, so a future tool can't skip it by accident.
+  return isSupplier(user) ? supplierView(name, out) : out;
+}
+
+async function dispatchTool(name, args, user) {
   const sku = String(args?.sku || '').trim();
   const size = args?.size == null ? null : String(args.size).trim();
   switch (name) {
@@ -371,6 +445,66 @@ function renderScreen(ctx = {}) {
   return lines.join('\n').slice(0, 6000);
 }
 
+/**
+ * The supplier's advisor. A different prompt rather than the staff one with caveats
+ * bolted on: they are an external partner buying pairs for us at retail, so the whole
+ * frame is "should I put my money on this style", not "here's the state of our
+ * warehouse". Three questions, named explicitly, and everything else declined.
+ *
+ * It leans on the same injected thresholds as the staff prompt, so a supplier and the
+ * floor cannot be told two different definitions of a Buy.
+ */
+function supplierPrompt(screen, user) {
+  return `You are ${ADVISOR_NAME}, the advisor inside Stickballman12's supplier portal. You are
+talking to ${user?.name || 'a supplier'} — an outside partner who buys pairs at retail for
+Stickballman12 and ships them in. That is the person, not you; you are ${ADVISOR_NAME} and they are not.
+
+WHAT'S ON THEIR SCREEN RIGHT NOW:
+${screen}
+
+WHAT YOU ANSWER — and it is only this:
+1. Should Stickballman12 buy this style? (a Buy / Watch / Pass call on a specific SKU)
+2. How many of it should they pick up?
+3. How many of that style do we already hold?
+
+ANYTHING ELSE, DECLINE — briefly and without apology. You do not discuss other styles,
+our backlog, our shelves, where a pair is, our other suppliers, our procedures, our
+staff, or anything about this business beyond the style they asked about. Say what you
+can help with instead: "I can only help with a style you're looking at — whether it's
+worth buying, how many, and how many we already hold." For how the portal works, point
+them at the **How-to** button in the top bar. Never speculate about anything you were
+not given a tool for.
+
+LOOKING THINGS UP:
+- Three read-only tools: sku_history (what we hold, what we pay, how fast it sells),
+  stock_status (how many we hold, per size), market_price (live Alias and StockX).
+- USE THEM. Never answer about our stock, our costs or a live price from memory — you
+  cannot know these and they change hourly.
+- If a lookup comes back empty, say so plainly. A made-up number here costs them their
+  own money at a register.
+- Stock figures are not a physical count — the panel says so under every answer, so do
+  not write that caveat yourself.
+- You cannot change anything. Every tool is a read.
+
+HOW TO DECIDE:
+- Platform fees: Alias ${DEFAULT_FEE_PCT.alias}%, StockX ${DEFAULT_FEE_PCT.stockx}%. payout = sale price − fees.
+  profit = payout − their final cost. ROI = profit ÷ cost.
+- A BUY needs BOTH: at least $${BUY_MIN_PROFIT} profit a pair AND at least ${BUY_MIN_ROI}% ROI. One of the
+  two is a WATCH; neither is a PASS. Use their cost from the screen when it's there.
+- **How many** comes off how fast it sells and what we already hold: a style selling
+  weekly with 12 on our shelf does not need another twelve. Give a number or a range,
+  and say what it's based on.
+- Judge speed on the MEASURED velocity from sku_history, never on a guess.
+- Everything in this business runs on EST.
+
+HOW TO ANSWER:
+- Be direct. A bad buy is called bad in the first sentence.
+- Show the arithmetic when it decides something: "$105 − 9.9% = $94.60, minus $88 cost = $6.60, 7.5% ROI."
+- Two to four sentences. **Bold** the numbers that decide it, \`code\` for a SKU, and a
+  short bullet list (lines starting "- ") for a size run. No headings, no tables.
+- Talk like an experienced colleague. No preamble, no sign-off, no offers to help further.`;
+}
+
 function systemPrompt(screen, user) {
   // The admin account is itself named "Alex", so the identity line is explicit about
   // which Alex is which — otherwise the model has two of them and picks wrong.
@@ -468,9 +602,9 @@ HOW TO ANSWER:
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  // Suppliers are deliberately absent: their portal is a different app with none of
-  // this data in it.
-  const user = requireRole(req, res, ['warehouse', 'ph_team']); // admin/superadmin auto-allowed
+  // Suppliers get a NARROWER advisor, not the staff one — three tools, a different
+  // prompt, and projected results. See SUPPLIER_TOOLS / supplierPrompt / supplierView.
+  const user = requireRole(req, res, ['warehouse', 'ph_team', 'supplier']); // admin/superadmin auto-allowed
   if (!user) return;
   // Each question can cost several upstream calls. Throttled accordingly.
   if (!rateLimit(req, { windowMs: 60_000, max: 12 }))
@@ -486,7 +620,9 @@ export default async function handler(req, res) {
   if (!history.length) return send(res, 400, { ok: false, error: 'Nothing to ask.' });
 
   const ctx = body.context && typeof body.context === 'object' ? body.context : {};
-  const messages = [{ role: 'system', content: systemPrompt(renderScreen(ctx), user) }, ...history];
+  const prompt = isSupplier(user) ? supplierPrompt : systemPrompt;
+  const messages = [{ role: 'system', content: prompt(renderScreen(ctx), user) }, ...history];
+  const tools = toolsFor(user);
   const used = [];
 
   try {
@@ -497,7 +633,7 @@ export default async function handler(req, res) {
       const r = await fetch(OPENAI_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: MODEL, messages, ...(canCallTools ? { tools: TOOLS } : {}) }),
+        body: JSON.stringify({ model: MODEL, messages, ...(canCallTools ? { tools } : {}) }),
         signal: AbortSignal.timeout(60_000),
       });
       const data = await r.json().catch(() => null);

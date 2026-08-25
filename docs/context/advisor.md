@@ -21,11 +21,40 @@ which is why it isn't bolted to one page:
 
 ## Where it appears, and where it must not
 `withAdvisor(...)` wraps every staff return in `App.jsx` (all 23 view routes, both PH
-shells, and Home). It is deliberately **absent** from the three returns above it: `Auth`
-and the forced password change are pre-auth, and the **supplier portal is a different
-app with none of this data in it**. `api/advisor/ask.js` is gated
-`['warehouse','ph_team']` (admin/superadmin auto-allowed) — suppliers are excluded on
-both sides, and a test signs in as one to prove the button isn't there.
+shells, and Home) **and the supplier portal (2026-08-26)**. It is deliberately **absent**
+from the two returns above it: `Auth` and the forced password change are pre-auth.
+`api/advisor/ask.js` is gated `['warehouse','ph_team','supplier']` (admin/superadmin
+auto-allowed).
+
+### The supplier's advisor is a different, much smaller thing
+A supplier is an outside partner, so theirs answers exactly three questions: **should we
+buy this style, how many, and how many do we already hold.** The narrowing is enforced in
+**three places**, because a prompt is the only one of them a model can talk its way past:
+
+| Where | What it does |
+|---|---|
+| `toolsFor(user)` | The model is only *shown* `sku_history`, `stock_status`, `market_price`. |
+| `runTool` | An **allowlist**. A call to any other name is refused even if the model invents it — a tool list is a suggestion, an allowlist is not. |
+| `supplierView` | Projects the two rich payloads down before they reach the prompt. |
+| `supplierPrompt` | Its own prompt: names the three questions, declines everything else, points procedure questions at the portal's **How-to** button. |
+
+**What `supplierView` drops, and why:**
+- `stock_status` normally answers *"where are we in listing this"* — three buckets per
+  size. A supplier asked *"how many do we have"*, so the buckets are **summed into one
+  held count per size**; our listing state, `shopify_qty`, `no_box` and
+  `in_store_or_existing` never leave the building.
+- `sku_history` keeps what we hold, **what we pay** (that's the buy threshold, and it's
+  useful *to* them) and the measured velocity — and drops the **per-channel split**,
+  which is where *we* choose to list.
+
+Off the list entirely: `find_stock` (VINs and shelf locations), `pending_work` (our
+backlog), `top_sellers` (our cross-SKU ranking), `search_sop` (our internal procedures).
+
+Both prompts inject the same `BUY_MIN_PROFIT` / `BUY_MIN_ROI` from `src/lib/payout.js`,
+so a supplier and the floor can never be told two different definitions of a Buy. The
+panel's openers are role-aware too — a supplier is offered the three questions they'll
+actually get answers to, since an opener that earns a refusal is a bad first impression.
+Guarded by `e2e/supplier-advisor.spec.js`.
 
 ## Screen context
 A screen opts in with `useAdvisorContext(() => ({...}), [deps])`. It's a **module-level
@@ -52,6 +81,7 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 | `stock_status` | "how many do we have — listed or not, per size?" | Shopify inventory + our per-size Pending/In-Progress/Listed |
 | `market_price` | "what's it worth right now?" | Alias + StockX |
 
+- **Suppliers get three of the seven** — see above. The table here is the staff set.
 - **Read-only is structural, not a promise.** All five are existing queries; nothing here
   can write. The prompt tells it to name the screen that does the job instead.
 - **`search_sop` is role-scoped** through `sopRoleForAccount` — the same rule the `/sop`

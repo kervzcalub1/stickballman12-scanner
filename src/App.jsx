@@ -116,10 +116,11 @@ export default function App() {
   // (the server also rejects role-gated calls with 428 until this is done).
   if (user.mustChange) return <ForcedPasswordChange user={user} onChanged={onAuthed} onSignOut={signOut} />;
 
-  // The advisor rides along on every STAFF screen, attached here rather than in each of
-  // the twenty-five screens below. Deliberately absent from the three returns above it:
-  // Auth and the forced password change are pre-auth, and the supplier portal is a
-  // different app with none of this data in it.
+  // The advisor rides along on every staff screen, attached here rather than in each of
+  // the twenty-five screens below — and, since 2026-08-26, on the supplier portal too,
+  // where it is a much narrower thing: three tools, its own prompt, and results
+  // projected down to counts (see api/advisor/ask.js). Still absent from the two
+  // returns above it — Auth and the forced password change are pre-auth.
   const withAdvisor = (screen) => (<>{screen}<Advisor user={user} /></>);
 
   const enterPh = () => { setPhMode(true); if (window.location.pathname !== '/ph') window.history.pushState(null, '', '/ph'); };
@@ -129,11 +130,11 @@ export default function App() {
   // Superadmin reuses the same workspace when they've entered PH mode; exitPh takes
   // them back to the main admin home.
   // Suppliers only ever see the scan-out portal (any host).
-  if (user.role === 'supplier') return <SupplierApp user={user} onSignOut={signOut} />;
+  if (user.role === 'supplier') return withAdvisor(<SupplierApp user={user} onSignOut={signOut} />);
   // On the supplier subdomain, staff don't belong — admins pass through for oversight,
   // everyone else is pointed at the main site.
   if (SUPPLIER_HOST) {
-    if (isPrivilegedRole(user.role)) return <SupplierApp user={user} onSignOut={signOut} />;
+    if (isPrivilegedRole(user.role)) return withAdvisor(<SupplierApp user={user} onSignOut={signOut} />);
     return (
       <div className="app"><div className="wrap-narrow"><div className="card empty-state">
         This portal is for suppliers. Staff — please use <a href="https://stickballman12.com">stickballman12.com</a>.

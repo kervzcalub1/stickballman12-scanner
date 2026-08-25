@@ -63,6 +63,34 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
   "Aug 18" and then stamped it "8/19, 12:18 AM". Fixed here and in the Inventory
   item-history timeline, which had the same `toLocaleString()`.
 
+## "Send for rescale" from a New Inventory row (2026-08-25)
+PH doesn't have to leave the worklist to raise a request. Every row on **New Inventory**
+(`PHGrid kind='receiving'`) carries a **⟳ Rescale…** button beside Edit; it opens
+`components/RescaleRequestModal.jsx` and creates **the same `open` `rescale_requests` row**
+`create.js` has always created, so everything downstream (warehouse audit → reported-vs-actual
+→ PH listing after audit) is untouched. No schema change, no new endpoint.
+- **It does NOT set `restock_pending`.** A request is an audit *ask*; the flag is the
+  warehouse's to set when it actually rescales. The two halves stay separate.
+- **Pre-filled from the row**: every size at the qty we hold, the shoe name, the SKU, and the
+  current price — but the price only when every size that has one *agrees*, since the request
+  has a single price field and picking one of several would put a number on it nobody chose.
+  A size held with no size on file (`'—'`) comes in blank rather than sending the warehouse a
+  dash to count.
+- **Our count stays on screen** in an "On file" column between the size and PH's own box, and a
+  row whose two counts differ goes amber with a `N reported vs M on file` total. That comparison
+  is the reason for the request, and retyping it from memory on another screen is where it used
+  to get lost.
+- **Duplicate guard, not a block.** The grid loads every open request once (`rescale-requests/list?status=open`,
+  no date range — a request raised last month is still open work) and keys them by SKU: rows with one
+  get a blue **⟳ Rescale requested** chip beside the status, and the modal names who asked and when.
+  A second request is still allowed — a later recount can be exactly the point. Re-read on an
+  explicit reload (so the chip clears once the warehouse audits) but NOT on the 15s quiet poll.
+- **PH only, and only on New Inventory** (`canEdit && kind === 'receiving'`). Admin/warehouse read the
+  same component at `/report` (kind=null) where they're read-only; the warehouse doesn't raise
+  requests against itself. Guarded by `e2e/ph-send-for-rescale.spec.js`.
+- The pinned Action column widens to 124px on this page only (`rightStyle(which, wide)`) — at 104px
+  the button's label broke across two lines inside the button.
+
 ## Notes
 - **`api/items/rescale.js` rejects an in-store VIN (409)** — rescaling sets
   `restock_pending`, which would leak an in-store pair onto the PH Rescale grid;

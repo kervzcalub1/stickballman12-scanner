@@ -15,9 +15,16 @@ export const frozenStyle = (i) => ({ position: 'sticky', left: PH_LEFTS[i], minW
 // by now scrolls with the rest of the row — only Action (the narrower, more
 // frequently-needed column) stays pinned.
 const PH_ACTION_W = 104;
-export const rightStyle = (which) => (which === 'addedby'
-  ? {}
-  : { position: 'sticky', right: 0, minWidth: PH_ACTION_W, width: PH_ACTION_W });
+// New Inventory carries one more action ("Send for rescale"), and at 104px its label
+// broke across two lines inside the button. The wider column is asked for by the page
+// that needs it rather than given to all of them — every pixel here is painted over
+// the scrolling row beneath.
+const PH_ACTION_WIDE = 124;
+export const rightStyle = (which, wide = false) => {
+  if (which === 'addedby') return {};
+  const w = wide ? PH_ACTION_WIDE : PH_ACTION_W;
+  return { position: 'sticky', right: 0, minWidth: w, width: w };
+};
 
 export const PH_FLAGS = [
   ['added_to_intel_inv', 'Intelligent Inv.'], ['synced_alias', 'Alias'],

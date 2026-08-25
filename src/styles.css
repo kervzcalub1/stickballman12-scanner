@@ -932,6 +932,17 @@ body {
 }
 .ph-split-chip.done { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
 .ph-split-chip.in_progress { color: #e0a878; border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.12); }
+/* "Rescale requested" — this SKU already has an OPEN request in the warehouse's
+   queue. Same shape as the split chip; blue, because it isn't a problem with the
+   row, it's work already in flight somewhere else. */
+/* Beside the status, not in the shoe title: the title column is frozen at a fixed
+   width, and a chip in there squeezed the name down to one word per line. */
+.ph-status-cell { white-space: nowrap; }
+.ph-rescale-chip {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;
+  padding: 1px 6px; border-radius: 5px; margin-left: 6px;
+  color: #8fb3ff; border: 1px solid rgba(143,179,255,0.5); background: rgba(143,179,255,0.12);
+}
 
 /* Partly done — some of the group's units carry the flag, not all. Amber sits
    between the dim "not yet" and the green "all done" it must not be mistaken for,
@@ -1093,6 +1104,9 @@ body {
 .ph-addedby > div { overflow: hidden; text-overflow: ellipsis; }
 .ph-rfrozen-first { white-space: normal; }
 .ph-rfrozen-first .ph-edit-actions { flex-wrap: wrap; justify-content: flex-end; }
+/* "⟳ Rescale…" in the pinned Action column: the column wraps BUTTONS onto a second
+   line, which is fine — a label broken across two lines inside one button is not. */
+.ph-rescale-btn { white-space: nowrap; padding-left: 9px; padding-right: 9px; }
 
 /* Expandable PH rows */
 .ph-trow { cursor: pointer; }
@@ -1922,6 +1936,45 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .del-hist ul { list-style: none; margin: 6px 0 0; padding: 0; }
 .del-hist li { padding: 2px 0; font-size: 13px; }
 
+/* "Send for rescale" modal (PH New Inventory row -> a rescale request).
+   Four columns, and the middle one is the point: OUR count sits between the size and
+   the box PH types theirs into, so the number they're disagreeing with is never
+   off-screen. A row whose two counts differ gets the amber the rest of the app uses
+   for "these two numbers should match and don't". */
+.modal.rescale-ask { max-width: 560px; text-align: left; }
+.modal.rescale-ask .modal-title, .modal.rescale-ask .modal-msg { text-align: center; }
+.ra-dupe {
+  margin: 12px 0 0; padding: 9px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+  color: #e0a878; border: 1px solid rgba(224,168,120,0.45); background: rgba(224,168,120,0.1);
+}
+.ra-help { margin: 12px 0 4px; line-height: 1.5; }
+.ra-rows { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px; max-height: 40vh; overflow-y: auto; }
+.ra-head, .ra-row { display: grid; grid-template-columns: 1fr 4.5em auto 2em; gap: 8px; align-items: center; }
+.ra-head { padding: 0 2px; }
+.ra-head span:nth-child(2), .ra-onfile { text-align: center; }
+.ra-row { border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; background: var(--panel-2); }
+.ra-row.diff { border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.08); }
+.ra-row .sz { min-width: 0; padding: 8px 10px; }
+.ra-row .qty { width: 56px; flex: none; text-align: center; }
+.ra-rows-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.ra-delta { color: #e0a878; }
+.ra-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.ra-fields label { display: flex; flex-direction: column; gap: 4px; }
+.ra-fields .ra-note { grid-column: 1 / -1; }
+@media (max-width: 560px) {
+  /* The header row can't survive the squeeze — the labels move into the controls'
+     own placeholders and "on file" keeps its ×N, which reads on its own. */
+  .ra-head { display: none; }
+  /* Everything else gives up width to the size box: at 390px the stepper and the two
+     icon buttons left it 45px, which clips a size like 11.5 to "11.!". */
+  .ra-row { grid-template-columns: 1fr auto auto auto; gap: 6px; padding: 6px; }
+  .ra-row .sz { padding: 8px; }
+  .ra-row .qty { width: 40px; }
+  .ra-row .btn.icon.remove { width: 28px; height: 28px; }
+  .ra-onfile { min-width: 2.4em; }
+  .ra-fields { grid-template-columns: 1fr; }
+}
+
 /* Remove-pairs modal (Inventory + PH New Inventory). Wider than a plain confirm:
    it carries a per-size quantity editor and names every VIN that's about to go. */
 .modal.remove-units { max-width: 520px; text-align: left; }
@@ -2656,6 +2709,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-track-refresh-one { margin-top: 10px; min-height: 44px; }
 
 /* PH Purchase Orders overview (read-only list + expandable tracking) */
+/* Filter bar: supplier + purchase-date range. One row per control on a phone — a native
+   date input won't render below ~180px, so squeezing two onto a row clips the date
+   itself, and a filter you can't read the value of is worse than an extra row. */
+.po-ov-filters { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: flex-end; margin: 12px 0 10px; }
+.po-ov-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.po-ov-filters select { min-width: 150px; }
+.po-ov-filters input[type="date"] { min-width: 140px; }
+.po-ov-count { margin-bottom: 10px; }
+@media (max-width: 480px) {
+  .po-ov-filters label:first-child { flex: 1 1 100%; }
+  .po-ov-filters select { width: 100%; }
+  .po-ov-filters input[type="date"] { min-width: 0; width: 100%; }
+  .po-ov-filters label:not(:first-child) { flex: 1 1 100%; }
+  /* Full-width Clear, under the range it clears — wedged beside a date it's a 70px
+     target next to a 342px one. */
+  .po-ov-filters .btn { flex: 1 1 100%; }
+}
 .po-ov { padding: 0; overflow: hidden; display: flex; align-items: center; }
 .po-ov:hover { border-color: #3a4150; }
 .po-ov-head { display: grid; grid-template-columns: 1fr; align-items: center; gap: 4px 10px; flex: 1; min-width: 0; text-align: left; background: none; border: 0; cursor: pointer; padding: 14px 16px; color: var(--text); }

@@ -477,6 +477,36 @@ body {
 .recv-size-row .sz.need, .review-size-row .sz.need { flex: 1; min-width: 0; max-width: 120px; border-color: var(--err); }
 .recv-size-row.needs-size .recv-size-qty { margin-left: auto; }
 
+/* "Pick the style code on the box" — a shoe sold under more than one code
+   ("315122-111/CW2288-111"). Amber, not red: nothing is wrong, the scan just can't
+   know which code this box carries. Sits on the line because rapid scan never opens
+   a dialog; it blocks Review the same way an unknown size does. */
+.recv-sku-pick {
+  display: flex; flex-direction: column; gap: 6px; margin-top: 6px;
+  padding: 8px 10px; border-radius: 8px;
+  background: rgba(224, 168, 120, 0.10); border: 1px solid rgba(224, 168, 120, 0.42);
+}
+.recv-sku-pick-lbl { font-size: 12px; line-height: 1.4; color: #e0a878; }
+.recv-sku-pick-lbl b { color: #f0cba6; }
+.recv-sku-pick-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Tap targets: the warehouse is on a phone, and these codes look alike. */
+.recv-sku-pick-opts .btn {
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px; font-weight: 700;
+  min-height: 36px; padding: 6px 12px;
+  border-color: rgba(224, 168, 120, 0.5); color: #f0cba6;
+}
+.recv-sku-pick-opts .btn:hover { background: rgba(224, 168, 120, 0.16); }
+
+/* Per-line money on a supplier's own manifest lines — what they entered against this
+   shoe, next to what they entered about it. Sits under the SKU/size meta, quieter than
+   the name and louder than the attribution. A line with nothing entered says so rather
+   than showing a total that skipped it. */
+.po-line-money { display: block; font-size: 12px; font-weight: 600; color: #7bc99a; }
+.po-line-money.none { color: var(--muted); font-weight: 400; font-style: italic; }
+/* The "Prices" toggle beside the PDF/CSV picker on the manifest downloads. */
+.mf-prices { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.mf-prices input { accent-color: var(--primary); }
+
 /* Per-shoe listing photos — moved out of the scan flow onto the cart row, so the
    count is what tells you which shoes still need shooting. */
 /* Sized as a thumb target, not a chip — it's tapped with a shoe in the other hand. */

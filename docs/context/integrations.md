@@ -21,6 +21,17 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
   null (catalog is per-SKU). Allowed for warehouse + ph_team.
 - Both return `{ name, sku, upc, image, brand, colorway, sizes[], gender, source }`.
 
+### Multi-code style ids
+The StockX UPC proxy's `styleId` can carry EVERY code a shoe was sold under
+(`315122-111/CW2288-111`); the Alias catalog knows one code at a time. `skuCodes()`
+(`util.js`) keeps them all and `upc-search`/`sku-search` return them as `skuOptions` —
+full behaviour, and how the warehouse picks one, in `receiving.md`.
+
+> One UPC can also come back as several **variants across different products** (the same
+> scan returned the standard AF1 '07, a Travis Scott edition and a Fragment). The
+> lookup takes `variants[0]`, so the **scanned size is a guess** on such a code — Review
+> is where that gets caught, as with any other wrong-product answer.
+
 ## Alias client (`api/_lib/alias.js`)
 - Shared: `aliasLogin, getAliasToken, clearAliasToken, looksLikeAuthFailure,
   aliasAuthed(fn), aliasPost(path,body)`.

@@ -164,24 +164,43 @@ function drawTableHead(doc, y, cols) {
   return y + 7;
 }
 
-// Column layout for the item table.
-function itemCols() {
+// A declared amount, or null. BLANK IS NOT ZERO here — a supplier who skipped the
+// cost on a line has said nothing about it, and printing "$0.00" would put a number
+// on the sheet nobody typed (see docs/context/costs.md).
+const declared = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+const usd = (n) => (n == null ? '' : `$${n.toFixed(2)}`);
+
+// Column layout for the item table. `prices` widens it to what the supplier typed
+// per size — cost and tip are both PER PAIR, so the line column is qty x (cost + tip).
+function itemCols(prices = false) {
   const left = MARGIN + 3;
   const right = PAGE_W - MARGIN - 3;
+  if (!prices) {
+    return [
+      { key: 'name', label: 'ITEM', x: left, w: 86 },
+      { key: 'sku', label: 'SKU', x: left + 90, w: 34 },
+      { key: 'size', label: 'SIZE', x: left + 128, w: 18 },
+      { key: 'qty', label: 'PAIRS', x: right - 2, w: 0, align: 'right' },
+    ];
+  }
   return [
-    { key: 'name', label: 'ITEM', x: left, w: 86 },
-    { key: 'sku', label: 'SKU', x: left + 90, w: 34 },
-    { key: 'size', label: 'SIZE', x: left + 128, w: 18 },
-    { key: 'qty', label: 'PAIRS', x: right - 2, w: 0, align: 'right' },
+    { key: 'name', label: 'ITEM', x: left, w: 54 },
+    { key: 'sku', label: 'SKU', x: left + 57, w: 30 },
+    { key: 'size', label: 'SIZE', x: left + 90, w: 14 },
+    { key: 'qty', label: 'PAIRS', x: left + 118, w: 0, align: 'right' },
+    { key: 'cost', label: 'COST/PR', x: left + 145, w: 0, align: 'right' },
+    { key: 'tip', label: 'TIP/PR', x: left + 168, w: 0, align: 'right' },
+    { key: 'line', label: 'LINE TOTAL', x: right - 2, w: 0, align: 'right' },
   ];
 }
 
 // Render a list of item rows, paginating with a repeated header when a page fills.
 // `header()` re-draws the page header on each new page. Returns { doc, totalPairs }.
-function drawItemTable(doc, startY, items, headerFn) {
-  const cols = itemCols();
+function drawItemTable(doc, startY, items, headerFn, prices = false) {
+  const cols = itemCols(prices);
   let y = drawTableHead(doc, startY, cols);
   let total = 0;
+  let costTotal = 0; let tipTotal = 0; let blankLines = 0;
   const rowH = 7;
   items.forEach((it, i) => {
     if (y + rowH > PAGE_H - 20) {
@@ -201,6 +220,17 @@ function drawItemTable(doc, startY, items, headerFn) {
     doc.text(String(it.size || '-'), cols[2].x, y + 4.8);
     doc.setFont('helvetica', 'bold');
     doc.text(String(qty), cols[3].x, y + 4.8, { align: 'right' });
+    if (prices) {
+      const c = declared(it.unit_cost); const t = declared(it.tip);
+      if (c == null && t == null) blankLines += 1;
+      costTotal += (c || 0) * qty; tipTotal += (t || 0) * qty;
+      const line = c == null && t == null ? null : ((c || 0) + (t || 0)) * qty;
+      doc.setFont('helvetica', 'normal');
+      doc.text(usd(c) || '--', cols[4].x, y + 4.8, { align: 'right' });
+      doc.text(usd(t) || '--', cols[5].x, y + 4.8, { align: 'right' });
+      doc.setFont('helvetica', 'bold');
+      doc.text(usd(line) || '--', cols[6].x, y + 4.8, { align: 'right' });
+    }
     doc.setDrawColor(...HAIR); doc.setLineWidth(0.2);
     doc.line(MARGIN, y + rowH, PAGE_W - MARGIN, y + rowH);
     y += rowH;
@@ -213,6 +243,26 @@ function drawItemTable(doc, startY, items, headerFn) {
   doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...INK);
   doc.text('TOTAL PAIRS', PAGE_W - MARGIN - 70, y);
   doc.text(String(total), PAGE_W - MARGIN, y, { align: 'right' });
+  if (prices) {
+    const row = (label, value, bold) => {
+      y += 5.6;
+      doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(bold ? 10.5 : 9.5);
+      doc.setTextColor(...(bold ? INK : MUTED));
+      doc.text(label, PAGE_W - MARGIN - 70, y);
+      doc.text(value, PAGE_W - MARGIN, y, { align: 'right' });
+    };
+    row('Cost', usd(costTotal));
+    if (tipTotal > 0) row('Tips', usd(tipTotal));
+    row('TOTAL DECLARED', usd(costTotal + tipTotal), true);
+    if (blankLines) {
+      // Said out loud, because a total that silently skipped lines reads as complete.
+      y += 5;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTED);
+      doc.text(`${blankLines} line${blankLines === 1 ? '' : 's'} with no cost or tip entered - not counted in the total`,
+        PAGE_W - MARGIN, y, { align: 'right' });
+    }
+    doc.setTextColor(...INK);
+  }
   return { y, total };
 }
 
@@ -351,7 +401,7 @@ function drawNote(doc, y, text) {
 // `boxId` narrows 'perbox' to ONE label — the sheet a supplier prints for the box they
 // just closed, to tape to that box before sealing it. The "Box N of M" denominator still
 // counts every label on the order, so a single sheet says which box of the shipment it is.
-export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null, receivedBoxes = null, compare = null, boxDiffs = null }) {
+export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null, receivedBoxes = null, compare = null, boxDiffs = null, prices = false }) {
   const jsPDF = await loadJsPDF();
   const doc = new jsPDF({ unit: 'mm', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
   const stamp = generatedAt || '';
@@ -383,7 +433,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
       });
       const startY = header();
       const items = sortLines(linesForBox(lines, box.id));
-      if (items.length) drawItemTable(doc, startY, items, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po }));
+      if (items.length) drawItemTable(doc, startY, items, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po }), prices);
       else if (orderLines.length) drawNote(doc, startY, 'This order was manifested as one whole-order list, not box by box - the full item list is on the last page.');
       else drawNote(doc, startY, 'No items recorded for this box.');
     });
@@ -396,7 +446,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
         trackingNumbers: trackingList(boxes),
         subtitle: { label: 'Scope', value: 'Whole order - not broken out by box' },
       });
-      drawItemTable(doc, header(), orderLines, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest - Whole Order', po }));
+      drawItemTable(doc, header(), orderLines, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest - Whole Order', po }), prices);
     }
 
     // No labels and nothing manifested — still produce a readable sheet.
@@ -491,7 +541,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
     });
     const startY = header();
     const allItems = sortLines(lines);
-    if (allItems.length) drawItemTable(doc, startY, allItems, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest - Whole Order', po }));
+    if (allItems.length) drawItemTable(doc, startY, allItems, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest - Whole Order', po }), prices);
     else drawNote(doc, startY, 'No items recorded on this order yet.');
   }
 

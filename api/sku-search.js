@@ -5,7 +5,7 @@
 
 import {
   getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku,
-  cacheGet, cacheSet, normalizeGender,
+  cacheGet, cacheSet, normalizeGender, skuCodes,
 } from './_lib/util.js';
 import { aliasCatalogBySku } from './_lib/alias.js';
 
@@ -27,10 +27,17 @@ function sortSizes(list) {
 // here (the catalog is per-SKU; UPCs are per-size) — same as the old behavior.
 function normalize(c, querySku) {
   if (!c) return null;
-  const sku = (c.sku || querySku || '').replace(/\s+/g, '-') || null;
+  // A dual code the user typed ("315122-111/CW2288-111") has to survive the round
+  // trip: Alias searched on the first code and answers with that one alone, so
+  // trusting its reply here would quietly halve what was asked for.
+  const typed = skuCodes(querySku);
+  const sku = typed.length > 1
+    ? typed.join('/')
+    : ((c.sku || querySku || '').replace(/\s+/g, '-') || null);
   return {
     name: c.name || 'Unknown product',
     sku,
+    skuOptions: typed.length > 1 ? typed : [],
     upc: null,
     image: c.image || null,
     brand: c.brand || null,

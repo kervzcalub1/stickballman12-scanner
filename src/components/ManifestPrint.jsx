@@ -48,6 +48,25 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
 
   if (!poId) return null;
 
+  // One line under each button saying what it is and when to reach for it. The four
+  // reports split two ways and the split is the thing worth teaching: the first two are
+  // the SUPPLIER's declaration in two shapes, the last two are OUR count. Reach for a
+  // supplier-side sheet to plan or unpack, an our-side sheet to settle an argument.
+  const REPORTS = {
+    perbox: ['Per box', 'What the supplier declared, one page per label — the only one with tracking numbers. Print it and tick pairs off as you unpack.'],
+    whole: ['Whole order', 'Everything declared as one merged list, no boxes. The total — for checking an invoice, or a manifest they just submitted.'],
+    received: ['What we received', 'Our own count, box by box, with their list beside it. This is the sheet you send a supplier when a shipment is short.'],
+    discrepancies: ['Discrepancies by box', 'Only the boxes that disagree, and by how much. The short sheet you carry back into the warehouse to re-check them.'],
+  };
+  const reportBtn = (mode) => (
+    <div className="mf-report">
+      <button className="btn ghost sm" disabled={!!busy} onClick={() => run(mode)}>
+        <Icon name="download" /> {busy === mode ? 'Building…' : REPORTS[mode][0]}
+      </button>
+      <span className="mf-report-what">{REPORTS[mode][1]}</span>
+    </div>
+  );
+
   const run = async (mode) => {
     setBusy(mode); setError('');
     try {
@@ -125,26 +144,16 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
         <input type="checkbox" checked={prices} disabled={!!busy} onChange={(e) => pickPrices(e.target.checked)} />
         <span>Prices</span>
       </label>
-      <button className="btn ghost sm" disabled={!!busy} onClick={() => run('perbox')}>
-        <Icon name="download" /> {busy === 'perbox' ? 'Building…' : 'Per box'}
-      </button>
-      <button className="btn ghost sm" disabled={!!busy} onClick={() => run('whole')}>
-        <Icon name="download" /> {busy === 'whole' ? 'Building…' : 'Whole order'}
-      </button>
-      {/* Only once something has actually been received — an empty "here's what we got"
-          sheet is worse than no sheet in a dispute. */}
-      {received?.length > 0 && (
-        <button className="btn ghost sm" disabled={!!busy} onClick={() => run('received')}>
-          <Icon name="download" /> {busy === 'received' ? 'Building…' : 'What we received'}
-        </button>
-      )}
-      {/* Only when a box actually differs: a "discrepancies" sheet listing none of them
-          is indistinguishable from one nobody produced. */}
-      {boxDiffs?.some((b) => b.received && b.diffs?.length > 0) && (
-        <button className="btn ghost sm" disabled={!!busy} onClick={() => run('discrepancies')}>
-          <Icon name="download" /> {busy === 'discrepancies' ? 'Building…' : 'Discrepancies by box'}
-        </button>
-      )}
+      <div className="mf-reports">
+        {reportBtn('perbox')}
+        {reportBtn('whole')}
+        {/* Only once something has actually been received — an empty "here's what we got"
+            sheet is worse than no sheet in a dispute. */}
+        {received?.length > 0 && reportBtn('received')}
+        {/* Only when a box actually differs: a "discrepancies" sheet listing none of them
+            is indistinguishable from one nobody produced. */}
+        {boxDiffs?.some((b) => b.received && b.diffs?.length > 0) && reportBtn('discrepancies')}
+      </div>
       {error && <span className="mf-print-err sm">{error}</span>}
     </div>
   );

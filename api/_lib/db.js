@@ -2706,7 +2706,13 @@ export async function listPos({ uid, supplierScope }) {
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
         (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l
            LEFT JOIN po_boxes lb ON lb.id = l.po_box_id
-           WHERE l.po_id = p.id AND coalesce(lb.kind, 'original') <> 'replacement')::int AS unit_count
+           WHERE l.po_id = p.id AND coalesce(lb.kind, 'original') <> 'replacement')::int AS unit_count,
+        -- Every label's tracking number on the order, so the PO lists can be SEARCHED by
+        -- one. A tracking number is what a person has in hand when they go looking (it is
+        -- on the parcel, in the courier email, in the supplier's message) and it was the
+        -- one identifier none of the three lists could find an order by.
+        coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
+                  WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers
       FROM purchase_orders p
       WHERE p.supplier_user_id = ${uid}
       ORDER BY p.created_at DESC
@@ -2728,7 +2734,13 @@ export async function listPos({ uid, supplierScope }) {
       -- read our count off a list before the reconciliation is settled with them.
       -- (No backticks in here: this comment lives inside a JS template literal.)
       (SELECT count(*) FROM items i JOIN batches b ON b.id = i.batch_id
-         WHERE b.po_id = p.id)::int AS received_units
+         WHERE b.po_id = p.id)::int AS received_units,
+      -- Every label's tracking number on the order, so the PO lists can be SEARCHED by
+      -- one. A tracking number is what a person has in hand when they go looking (it is
+      -- on the parcel, in the courier email, in the supplier's message) and it was the
+      -- one identifier none of the three lists could find an order by.
+      coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
+                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers
     FROM purchase_orders p
     ORDER BY p.created_at DESC
   `;
@@ -3398,7 +3410,13 @@ export async function listReconcilePos() {
       p.reconcile_note, p.reconcile_note_by, p.reconcile_note_at,
       p.resolution_state, p.comment_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS box_count,
-      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count,
+      -- Every label's tracking number on the order, so the PO lists can be SEARCHED by
+      -- one. A tracking number is what a person has in hand when they go looking (it is
+      -- on the parcel, in the courier email, in the supplier's message) and it was the
+      -- one identifier none of the three lists could find an order by.
+      coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
+                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers
     FROM purchase_orders p
     WHERE p.status IN ('receiving', 'reconciled')
     ORDER BY (p.status = 'receiving') DESC, p.reconciled_at DESC NULLS LAST, p.created_at DESC`;
@@ -4223,7 +4241,13 @@ export async function listArchivedPos({ limit = 100 } = {}) {
       p.reconciled_at, p.created_at, p.reconciliation->'summary' AS snapshot_summary,
       p.reconcile_note, p.reconcile_note_by, p.reconcile_note_at,
       p.resolution_state, p.comment_count,
-      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count
+      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS unit_count,
+      -- Every label's tracking number on the order, so the PO lists can be SEARCHED by
+      -- one. A tracking number is what a person has in hand when they go looking (it is
+      -- on the parcel, in the courier email, in the supplier's message) and it was the
+      -- one identifier none of the three lists could find an order by.
+      coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
+                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers
     FROM purchase_orders p
     WHERE p.status = 'closed'
     ORDER BY p.reconciled_at DESC NULLS LAST, p.created_at DESC

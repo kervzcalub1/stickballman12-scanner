@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { poMatchesSearch } from '../lib/postatus.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoResolution } from '../components/PoResolution.jsx';
@@ -122,6 +123,9 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   // The archived list only grows and is opened rarely, so it's a separate fetch that
   // never runs unless the tab is actually visited.
   const [tab, setTab] = useQueryParam('tab');           // '' = active, 'archived'
+  // The number off the parcel. Filters whichever tab is open — an order you are hunting
+  // for by tracking number is as likely to be archived as active.
+  const [q, setQ] = useQueryParam('q');
   const archived = tab === 'archived';
   const [archivedPos, setArchivedPos] = useState(null);
 
@@ -259,7 +263,8 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
 
   // ---- List ----
   if (!openId) {
-    const list = archived ? archivedPos : pos;
+    const all = archived ? archivedPos : pos;
+    const list = all == null ? null : all.filter((p) => poMatchesSearch(p, q));
     const card = (p) => {
       const chip = poChip(p.status, p.rc);
       // "3 of 0 units received" is nonsense on a blind receipt — nothing was ever
@@ -317,10 +322,21 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
             <button className={archived ? '' : 'on'} onClick={() => setTab('')}>Active</button>
             <button className={archived ? 'on' : ''} onClick={() => setTab('archived')}>Archived</button>
           </div>
+          <div className="rcn-search">
+            <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
+              placeholder="Paste or scan a tracking number — or a PO code"
+              aria-label="Search by tracking number or PO code" />
+            {q ? <button className="btn sm ghost" onClick={() => setQ('')}>Clear</button> : null}
+            {q && all ? <span className="muted sm">{list.length} of {all.length}</span> : null}
+          </div>
           {list == null ? <p className="muted">Loading…</p>
             : list.length === 0 ? (
               <div className="card empty-state">
-                {archived
+                {q ? (
+                  <>No {archived ? 'archived ' : ''}order carries a tracking number or PO code matching <b>{q}</b>.
+                    {!archived && ' It may be under Archived.'}
+                    {' '}<button className="btn sm ghost" onClick={() => setQ('')}>Clear search</button></>
+                ) : archived
                   ? 'Nothing archived yet. Archiving a reconciled order moves it here — and you can bring it back.'
                   : 'No received purchase orders yet. Reconciliation shows up here once a PO has been received against.'}
               </div>

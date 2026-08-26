@@ -896,6 +896,53 @@ typed out while making the manifest?"*
 - The `prices` choice is remembered per device (`prefs.manifestPrices`), like the
   PDF/CSV format.
 
+## Find an order by the number on the parcel (2026-08-27)
+A tracking number is what a person actually has in hand when they go looking — it is on
+the box, in the courier's email, in the supplier's message — and it was the one
+identifier none of the PO lists could search by.
+
+- `tracking_numbers` (an aggregate of the order's labels) is now returned by **all four**
+  list queries: `listPos` (both the staff and supplier branches), `listReconcilePos` and
+  `listArchivedPos`, so the archived tab is searchable too.
+- `poMatchesSearch` / `trackKey` (`src/lib/postatus.js`) match **loosely on purpose**,
+  because of how the number arrives: **substring** (people quote the last 4–6 digits far
+  more often than the whole string), **punctuation and spaces stripped** (a number pasted
+  from an email is `1Z 999 AA1 01 2345 6784`; a scanner types it clean — one number), and
+  **PO code as well** (same box, same intent; somebody holding a printed manifest has the
+  code, not the tracking number). Case-insensitive throughout.
+- The search rides in the URL as `?q=`, like the other PO filters, so "the order this
+  tracking number belongs to" is a link you can paste to whoever is asking.
+- Reconciliation's empty state says **"It may be under Archived"** when a search finds
+  nothing on Active — an old parcel's order is exactly where that will be.
+
+## The dev server never registers with 17TRACK (2026-08-27)
+Registration is a **write to a live, shared, metered account, and it is permanent**: the
+number sits in the dashboard and stays on auto-tracking long after whatever created it is
+gone. `e2e/po-edit.spec.js` invents numbers like `EDIT<timestamp>A`; PO creation registers
+whatever it is handed; the dev server loads the real `.env`. **50 invented numbers
+accumulated on the account over a week**, none of which existed in any database — test
+teardown deletes the rows, and the registration outlives them.
+
+- `vite.config.js`'s `devApi` sets **`APP_ENV=dev`** (after the `.env` load, so a stray
+  value cannot claim to be production). `registerTracking` refuses to write when it sees
+  it, and logs the withheld numbers loudly rather than failing silently.
+- **The guard is at the chokepoint, not in the test harness** — all eleven call sites
+  (`po/create`, `label-add`, `label-update`, `ship`, `resolution`, `track-refresh`,
+  `tracking-register`, `track.js`) go through that one function. Blocking known test
+  PREFIXES was the other option and it is fragile: the suite alone invents ten of them,
+  and one day a courier issues a number that collides.
+- **Fails safe both ways.** Production runs `server.mjs`, which never sets `APP_ENV`, so
+  nothing changes there and the feature cannot be switched off by a missing variable.
+  `TRACKING_ALLOW_DEV=1` is the deliberate local override.
+- `playwright.config.js` also blanks `TRACKING_API_KEY` for the server it starts — belt
+  and braces, and it documents the `reuseExistingServer` caveat.
+- **Still open by design:** `npm start` locally (the production server, run deliberately,
+  with real credentials) does register; and `fetchTrackInfo` (the Refresh button) still
+  calls out from dev — it burns quota but leaves nothing behind.
+- `scripts/cleanup-test-tracking.mjs` pages the account via `/gettracklist`, and
+  `/stoptrack` + `/deletetrack`s only numbers carrying a test marker. Used once, on
+  2026-08-27: **883 → 833**, 50 removed, 833 real numbers untouched.
+
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`
 form a cycle. Creation order is fine (PO → batch(po_id) → set received_batch_id). Deletion of

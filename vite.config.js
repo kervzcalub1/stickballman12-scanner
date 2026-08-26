@@ -18,6 +18,11 @@ function devApi(env) {
   for (const [k, v] of Object.entries(env)) {
     if (process.env[k] === undefined) process.env[k] = v;
   }
+  // This plugin only ever runs inside `vite dev`, so it is the one honest signal that
+  // we are NOT the production server. `registerTracking` reads it to refuse writes to
+  // the live 17TRACK account (api/_lib/tracking.js explains why). Set after the loop on
+  // purpose: a stray APP_ENV in .env must not be able to claim this is production.
+  process.env.APP_ENV = 'dev';
 
   return {
     name: 'dev-api',

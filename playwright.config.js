@@ -48,5 +48,22 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
+    // The suite must not be able to reach a live third-party account.
+    //
+    // 17TRACK registration happens at PO creation (po/create, label-add, label-update),
+    // and `po-edit.spec.js` builds tracking numbers like `EDIT${Date.now()}` — so every
+    // local run REGISTERED half a dozen invented numbers against the real 17TRACK
+    // account. They burn quota, they sit in the dashboard forever as "Not found · Other
+    // issues", and they outlive the test: teardown deletes the po_boxes rows, but the
+    // registration is account-wide and permanent. 55 of them had accumulated.
+    //
+    // CI never had the key, so this only ever bit runs on a developer machine, where the
+    // dev server loads .env. Blanking it here is enough because vite.config's devApi only
+    // fills a var that is `undefined` — an empty string is already "set", so .env cannot
+    // put the real key back, and `trackingConfigured()` reads false.
+    //
+    // CAVEAT: `reuseExistingServer` means a server YOU started (with real .env) is used
+    // as-is. Don't hand-start one on this port and then run the suite against it.
+    env: { TRACKING_API_KEY: '' },
   },
 });

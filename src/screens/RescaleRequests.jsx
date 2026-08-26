@@ -9,7 +9,6 @@ import { useUnsavedGuard } from '../hooks.js';
 import { rangeOf, fmtPrice, PH_DATETIME } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
 import { SkuCodePicker } from '../components/SkuCodePicker.jsx';
-import { skuCodes } from '../lib/sku.js';
 import { markupSuffix } from '../lib/config.js';
 import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
 
@@ -197,9 +196,32 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   // when the request was raised (`sku_all`), never outside it. Older requests have no
   // `sku_all`, so they fall back to their own sku and simply offer no choice.
   const [editSku, setEditSku] = useState('');
+  // The SKU text itself, and every code that matched it. Kept apart from `editSku`
+  // (the SELECTION) so the picker below always offers the current shoe's codes — a
+  // retarget has to move both, or the picker offers codes the SKU doesn't have.
+  const [editSkuText, setEditSkuText] = useState('');
+  const [editSkuAll, setEditSkuAll] = useState('');
+  const [editLookupBusy, setEditLookupBusy] = useState(false);
+  // Same lookup the create form uses: fills the name and the code set for the SKU that
+  // was typed, so changing the shoe doesn't leave the old shoe's name on the request.
+  async function lookupEditSku() {
+    const s = editSkuText.trim();
+    if (!s) return;
+    setEditLookupBusy(true); setError('');
+    try {
+      const { product } = await api.searchSku(s);
+      if (product?.name) setEditName(product.name);
+      const opts = product?.skuOptions || [];
+      const all = opts.length > 1 ? opts.join('/') : (product?.sku || s);
+      setEditSkuText(all); setEditSkuAll(all); setEditSku(all);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(`Lookup failed: ${err.message}`); }
+    finally { setEditLookupBusy(false); }
+  }
   function startEdit(r) {
     setError(''); setEditId(r.id); setAuditId(null); setCancelId(null);
     setEditSku(r.sku || '');
+    setEditSkuText(r.sku_all || r.sku || '');
+    setEditSkuAll(r.sku_all || r.sku || '');
     setEditRows((r.sizes || []).map((x) => ({ key: cartKey++, size: String(x.size), qty: x.qty })));
     setEditName(r.name || '');
     // A NUMERIC column arrives as '180.00'; a field that opens reading "180.00" looks
@@ -221,13 +243,14 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
     if (!sizes.length) { setError('Keep at least one size and quantity.'); return; }
     const reason = (editReason === 'other' ? editReasonOther.trim() : editReason) || '';
     if (!reason) { setError('Pick a reason.'); return; }
+    if (!editSku.trim()) { setError('Enter the SKU.'); return; }
     setBusyId(r.id); setError('');
     try {
       await api.rescaleRequestUpdate(r.id, {
         name: editName.trim(), sizes, price: editPrice.trim(), reason, note: editNote.trim(),
-        // Only sent when it's a real re-pick; the server re-checks it against the
-        // request's own sku_all either way.
-        sku: skuCodes(r.sku_all || r.sku).length > 1 ? editSku : undefined,
+        // The selection and the set it came from travel together — the server refuses a
+        // selection that isn't a subset of it, which is what keeps the two in step.
+        sku: editSku.trim(), skuAll: editSkuAll.trim() || editSku.trim(),
       });
       setEditId(null); load();
     } catch (err) {
@@ -406,10 +429,16 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                 {canCreate && r.status === 'open' && editId === r.id && (
                   <div className="rc-audit rc-edit">
                     <div className="muted sm">
-                      Correct this request — <b>{r.sku}</b>
-                      <span className="rc-edit-skunote"> · a different shoe means a new request — cancel this one and raise it</span>
+                      Correct this request — raised as <b>{r.sku}</b>
+                      <span className="rc-edit-skunote"> · changing the SKU points this request at a different shoe; the warehouse sees the new one in their queue</span>
                     </div>
-                    <SkuCodePicker all={r.sku_all || r.sku} value={editSku} onChange={setEditSku}
+                    <span className="searchrow">
+                      <input className="rc-auditnote mono" placeholder="SKU / Style" value={editSkuText}
+                        onChange={(e) => { setEditSkuText(e.target.value); setEditSkuAll(e.target.value); setEditSku(e.target.value); }} />
+                      <button type="button" className="btn ghost" disabled={editLookupBusy || !editSkuText.trim()}
+                        onClick={lookupEditSku}>{editLookupBusy ? '…' : 'Search'}</button>
+                    </span>
+                    <SkuCodePicker all={editSkuAll} value={editSku} onChange={setEditSku}
                       label="Style code(s) for the warehouse to count" />
                     <input className="rc-auditnote" placeholder="Shoe name" value={editName} maxLength={200} onChange={(e) => setEditName(e.target.value)} />
                     <div className="muted sm">Sizes and how many you count:</div>

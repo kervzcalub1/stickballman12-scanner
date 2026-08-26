@@ -67,9 +67,18 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
     be holding a printed or stale copy of numbers that have since changed. Only who and
     when, not a per-field diff: while a request is open nobody downstream has acted on
     it, so the old values answer no question the current ones don't.
-  - **The SKU is not a free-text field here.** A request against the wrong shoe is a
-    different request (cancel and re-raise) — rewriting it in place would move the
-    "already open for this SKU" chip onto a shelf nobody asked about.
+  - **The SKU IS editable**, with a **Search** button that re-fills the name and the
+    shoe's code set (user's explicit call, 2026-08-27 — it had shipped read-only that
+    morning). It genuinely **retargets** the request: the warehouse's queue entry
+    changes shoe, and the New Inventory `⟳ Rescale requested` chip moves to whichever
+    row carries the new code. That is the point — a typo caught before anyone has
+    counted is cheaper to fix than to cancel and re-raise.
+    - **`sku_all` is rewritten with it**, always. Leave it behind and the code picker
+      offers the OLD shoe's codes for the new SKU — a request neither team can read.
+    - The selection must still be a **subset of the code set submitted with it** (same
+      check as `create.js`), which is what keeps `sku` and `sku_all` from drifting apart.
+    - Sending no `sku` at all leaves both columns untouched, so an edit that only fixes
+      a quantity can't disturb the shoe.
 
 - Home badges: 🟡 Pending audit (open) + 🟢 Audited (done) — `pendingCounts`
   returns `rescale_requests` (open) and `rescale_requests_audited`. A cancelled

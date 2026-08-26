@@ -1,4 +1,5 @@
-// POST /api/rescale-requests/update { id, name?, sizes:[{size,qty}], price?, reason, note? } -> { ok }
+// POST /api/rescale-requests/update
+//   { id, sku?, skuAll?, name?, sizes:[{size,qty}], price?, reason, note? } -> { ok }
 // PH corrects a request it already submitted — a miscounted size, one it forgot to
 // list, the wrong reason or price.
 //
@@ -11,9 +12,12 @@
 // an audit landing at the same moment wins and we answer 409 rather than rewriting the
 // numbers a shelf count was measured against.
 //
-// The SKU is not editable here on purpose — see the note on `updateRescaleRequest`.
-import { getJsonBody, send, applySecurity, rateLimit, requireAuth, skuCodes } from '../_lib/util.js';
-import { updateRescaleRequest, dbConfigured, listRescaleRequests } from '../_lib/db.js';
+// The SKU IS editable (2026-08-27, by explicit request): a typo caught before anyone
+// has counted is cheaper to fix than to cancel and re-raise. It retargets the request
+// — the warehouse's queue entry changes shoe and the New Inventory chip moves with it.
+// `skuAll` moves with it too, or the code picker would offer the old shoe's codes.
+import { getJsonBody, send, applySecurity, rateLimit, requireAuth, skuCodes, cleanSku } from '../_lib/util.js';
+import { updateRescaleRequest, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -48,23 +52,27 @@ export default async function handler(req, res) {
   const name = String(body.name || '').trim().slice(0, 200) || null;
   const note = String(body.note || '').trim().slice(0, 2000) || null;
 
-  // Re-picking which style code(s) the warehouse should count. Validated against the
-  // request's OWN `sku_all` read from the database, never against anything the client
-  // sent — otherwise "narrow the codes" would be a way to retarget the request at a
-  // different shoe, which is exactly what the no-SKU-editing rule exists to prevent.
+  // The SKU, and which of its style codes the warehouse should count. Same shape and
+  // same validation as create.js: the selection must be a SUBSET of the code set that
+  // was matched for it. That check is what stops `sku` and `sku_all` drifting apart —
+  // a request whose picker offers codes its SKU doesn't have is unreadable to both
+  // teams. Omitted entirely (not sent) leaves the SKU exactly as it was.
   let sku = null;
-  if (body.sku) {
-    const cur = (await listRescaleRequests(null, null, null)).find((x) => x.id === id);
-    if (!cur) return send(res, 404, { ok: false, error: 'That request no longer exists.' });
-    const all = skuCodes(cur.sku_all || cur.sku);
-    const chosen = skuCodes(body.sku);
-    if (!chosen.length || !chosen.every((c) => all.some((x) => x.toUpperCase() === c.toUpperCase())))
+  let skuAll = null;
+  if (body.sku != null && String(body.sku).trim()) {
+    const clean = cleanSku(body.sku);
+    if (!clean) return send(res, 400, { ok: false, error: 'Enter a valid SKU.' });
+    const chosen = skuCodes(clean);
+    const all = skuCodes(body.skuAll || clean);
+    if (!chosen.length) return send(res, 400, { ok: false, error: 'Enter a valid SKU.' });
+    if (!chosen.every((c) => all.some((x) => x.toUpperCase() === c.toUpperCase())))
       return send(res, 400, { ok: false, error: 'Pick one of this shoe’s style codes, or all of them.' });
     sku = chosen.join('/');
+    skuAll = all.join('/') || sku;
   }
 
   try {
-    const r = await updateRescaleRequest(id, { name, sizes, price, reason, note, sku }, user.name || user.username || '');
+    const r = await updateRescaleRequest(id, { name, sizes, price, reason, note, sku, skuAll }, user.name || user.username || '');
     if (!r.ok) {
       if (!r.status) return send(res, 404, { ok: false, error: 'That request no longer exists.' });
       if (r.status === 'cancelled') return send(res, 409, { ok: false, error: 'This request was cancelled — it can no longer be edited.' });

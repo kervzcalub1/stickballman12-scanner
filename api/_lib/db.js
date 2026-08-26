@@ -1453,10 +1453,14 @@ export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
 }
 
 // PH corrects a request it already submitted: a miscounted size, one it forgot, the
-// wrong reason or price. The SKU is deliberately NOT editable — a request against the
-// wrong shoe is a different request, and rewriting the SKU in place would move the
-// "already open for this SKU" chip onto a shelf nobody asked about while leaving the
-// warehouse's queue entry looking untouched. Cancel and raise a new one.
+// wrong reason or price — and the SKU itself.
+//
+// The SKU is editable by the user's explicit call (2026-08-27). It genuinely retargets
+// the request: the warehouse's queue entry changes shoe, and the New Inventory
+// "⟳ Rescale requested" chip moves to whichever row carries the new code. That is the
+// point — a typo caught before anyone has counted is cheaper to fix than to cancel and
+// re-raise. `sku_all` is rewritten alongside it, or the code picker would keep offering
+// the OLD shoe's codes for the new SKU.
 //
 // ONLY while `open`, and the `status = 'open'` in the WHERE is the whole guard — the
 // same rule (and the same reason) as cancelling. Once the warehouse has audited it,
@@ -1465,14 +1469,15 @@ export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
 // their count was the answer to. An audit landing mid-edit therefore wins, and the
 // caller gets a 409 that says so. Returns `{ ok:false, status }` so the caller can
 // name which of "gone" / "audited" / "cancelled" actually happened.
-export async function updateRescaleRequest(id, { name, sizes, price, reason, note, sku }, by) {
+export async function updateRescaleRequest(id, { name, sizes, price, reason, note, sku, skuAll }, by) {
   const rows = await db()`
     UPDATE rescale_requests
     SET name = ${name || null}, sizes = ${JSON.stringify(sizes || [])}::jsonb,
         price = ${price}, reason = ${reason || null}, note = ${note || null},
-        -- Only ever narrowed/widened WITHIN the codes that matched: update.js checks the
-        -- selection against sku_all, so this can't be used to retarget a different shoe.
+        -- Both move together, or the picker offers the old shoe's codes for the new
+        -- SKU. coalesce so an edit that doesn't touch the SKU leaves both alone.
         sku = coalesce(${sku || null}, sku),
+        sku_all = CASE WHEN ${sku || null}::text IS NULL THEN sku_all ELSE ${skuAll || sku || null} END,
         edited_by = ${by || null}, edited_at = now()
     WHERE id = ${id} AND status = 'open' RETURNING id
   `;

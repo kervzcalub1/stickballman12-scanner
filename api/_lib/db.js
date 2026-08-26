@@ -1417,10 +1417,10 @@ export async function pendingCounts() {
 
 /* --------------------- PH-requested rescales --------------------------- */
 
-export async function createRescaleRequest({ sku, name, sizes, price, reason, note, by }) {
+export async function createRescaleRequest({ sku, skuAll, name, sizes, price, reason, note, by }) {
   const rows = await db()`
-    INSERT INTO rescale_requests (sku, name, sizes, price, reason, note, requested_by)
-    VALUES (${sku}, ${name || null}, ${JSON.stringify(sizes || [])}::jsonb, ${price ?? null},
+    INSERT INTO rescale_requests (sku, sku_all, name, sizes, price, reason, note, requested_by)
+    VALUES (${sku}, ${skuAll || sku}, ${name || null}, ${JSON.stringify(sizes || [])}::jsonb, ${price ?? null},
             ${reason || null}, ${note || null}, ${by || null})
     RETURNING id, created_at
   `;
@@ -1429,8 +1429,8 @@ export async function createRescaleRequest({ sku, name, sizes, price, reason, no
 
 export async function listRescaleRequests(status = 'open', from = null, to = null) {
   return await db()`
-    SELECT id, sku, name, sizes, actual_sizes, audit_note, cancel_note, price, reason, note, status,
-           listing, listed_by, listed_at,
+    SELECT id, sku, sku_all, name, sizes, actual_sizes, audit_note, cancel_note, price, reason, note, status,
+           listing, listed_by, listed_at, edited_by, edited_at,
            requested_by, resolved_by, resolved_at, created_at
     FROM rescale_requests
     WHERE (${status}::text IS NULL OR status = ${status})
@@ -1450,6 +1450,35 @@ export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
     WHERE id = ${id} AND status = 'open' RETURNING id
   `;
   return rows.length > 0;
+}
+
+// PH corrects a request it already submitted: a miscounted size, one it forgot, the
+// wrong reason or price. The SKU is deliberately NOT editable — a request against the
+// wrong shoe is a different request, and rewriting the SKU in place would move the
+// "already open for this SKU" chip onto a shelf nobody asked about while leaving the
+// warehouse's queue entry looking untouched. Cancel and raise a new one.
+//
+// ONLY while `open`, and the `status = 'open'` in the WHERE is the whole guard — the
+// same rule (and the same reason) as cancelling. Once the warehouse has audited it,
+// the reported numbers are one half of a reported-vs-actual comparison somebody made
+// standing at a shelf; editing them afterwards would silently rewrite the question
+// their count was the answer to. An audit landing mid-edit therefore wins, and the
+// caller gets a 409 that says so. Returns `{ ok:false, status }` so the caller can
+// name which of "gone" / "audited" / "cancelled" actually happened.
+export async function updateRescaleRequest(id, { name, sizes, price, reason, note, sku }, by) {
+  const rows = await db()`
+    UPDATE rescale_requests
+    SET name = ${name || null}, sizes = ${JSON.stringify(sizes || [])}::jsonb,
+        price = ${price}, reason = ${reason || null}, note = ${note || null},
+        -- Only ever narrowed/widened WITHIN the codes that matched: update.js checks the
+        -- selection against sku_all, so this can't be used to retarget a different shoe.
+        sku = coalesce(${sku || null}, sku),
+        edited_by = ${by || null}, edited_at = now()
+    WHERE id = ${id} AND status = 'open' RETURNING id
+  `;
+  if (rows.length) return { ok: true };
+  const cur = await db()`SELECT status FROM rescale_requests WHERE id = ${id}`;
+  return { ok: false, status: cur[0]?.status || null };
 }
 
 // PH cancels a request it raised in error or no longer needs — it drops off the

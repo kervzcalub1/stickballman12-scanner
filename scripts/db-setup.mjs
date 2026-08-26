@@ -316,6 +316,18 @@ await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS listed_at TIMES
 // WHO cancelled and WHEN reuse resolved_by/resolved_at ("who ended this, and when"),
 // with `status` saying how it ended. The warehouse's audit_note stays theirs alone.
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS cancel_note TEXT`);
+// PH correcting a request it already submitted (wrong qty, forgot a size, wrong
+// reason). Only WHO and WHEN are kept, not a per-field diff: while a request is still
+// `open` nobody downstream has acted on it, so the old values answer no question the
+// current ones don't — but "this changed after I read it" is a real question, and the
+// warehouse needs the stamp to know its screen may be stale.
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS edited_by TEXT`);
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ`);
+// A re-released shoe carries several style codes. `sku` is what PH chose the warehouse
+// should COUNT (one code, or all of them joined); `sku_all` keeps every code that
+// matched, so narrowing to one code stays reversible on the edit form — without it,
+// picking one would throw away the very list needed to pick differently later.
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS sku_all TEXT`);
 
 // Pre-printed VIN/1ID roll stock ("VIN Project"). Blank stickers are minted and
 // printed in bulk BEFORE anyone knows which shoe each will land on, so intake never

@@ -1,7 +1,7 @@
 // POST /api/rescale-requests/create
 //   { sku, name?, sizes:[{size,qty}], price?, reason, note? } -> { ok, id }
 // PH flags a SKU for the warehouse to recount/rescan. PH team (admin allowed).
-import { getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku, skuCodes } from '../_lib/util.js';
 import { createRescaleRequest, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
@@ -33,8 +33,18 @@ export default async function handler(req, res) {
   const name = String(body.name || '').trim().slice(0, 200) || null;
   const note = String(body.note || '').trim().slice(0, 2000) || null;
 
+  // A shoe with several style codes: `sku` is what PH asked the warehouse to COUNT
+  // (one code, or all of them), `skuAll` is every code that matched. The selection is
+  // checked to be a SUBSET of the matched set — otherwise this field would be a way to
+  // file a request against a shoe the lookup never returned.
+  const chosen = skuCodes(sku);
+  const all = skuCodes(body.skuAll || sku);
+  const skuAll = all.length ? all.join('/') : null;
+  if (skuAll && !chosen.every((c) => all.some((x) => x.toUpperCase() === c.toUpperCase())))
+    return send(res, 400, { ok: false, error: 'Pick one of this shoe’s style codes, or all of them.' });
+
   try {
-    const r = await createRescaleRequest({ sku: sku.replace(/\s+/g, '-'), name, sizes, price: priceRaw, reason, note, by: user.name || user.username || '' });
+    const r = await createRescaleRequest({ sku: chosen.join('/') || sku.replace(/\s+/g, '-'), skuAll, name, sizes, price: priceRaw, reason, note, by: user.name || user.username || '' });
     return send(res, 200, { ok: true, id: r.id });
   } catch (e) {
     console.error('[rescale-requests/create]', e.message);

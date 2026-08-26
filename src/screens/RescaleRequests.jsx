@@ -8,6 +8,8 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { rangeOf, fmtPrice, PH_DATETIME } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
+import { SkuCodePicker } from '../components/SkuCodePicker.jsx';
+import { skuCodes } from '../lib/sku.js';
 import { markupSuffix } from '../lib/config.js';
 import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
 
@@ -18,6 +20,8 @@ let cartKey = 1;
 // recount / rescan. Lands in the warehouse Rescale Requests inbox.
 function RescaleRequestForm({ onHome, onSignOut, backLabel = '← Home' }) {
   const [sku, setSku] = useState('');
+  // Every style code the lookup matched. `sku` is the SELECTION out of this set.
+  const [skuAll, setSkuAll] = useState('');
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [reason, setReason] = useState('mismatch');
@@ -40,6 +44,11 @@ function RescaleRequestForm({ onHome, onSignOut, backLabel = '← Home' }) {
       const { product } = await api.searchSku(s);
       if (product?.name) setName(product.name);
       if (product?.sku) setSku(product.sku);
+      // A re-release matches several style codes. Keep the whole set so PH can pick,
+      // and start on ALL of them — the widest net is the safe default for a count.
+      const opts = product?.skuOptions || [];
+      if (opts.length > 1) { setSkuAll(opts.join('/')); setSku(opts.join('/')); }
+      else setSkuAll(product?.sku || s);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(`Lookup failed: ${err.message}`); }
     finally { setLookupBusy(false); }
   }
@@ -57,7 +66,7 @@ function RescaleRequestForm({ onHome, onSignOut, backLabel = '← Home' }) {
     setBusy(true);
     try {
       await api.rescaleRequestCreate({
-        sku: sku.trim(), name: name.trim(), sizes: cleanSizes,
+        sku: sku.trim(), skuAll: skuAll || sku.trim(), name: name.trim(), sizes: cleanSizes,
         price: price === '' ? null : Number(price),
         reason: reason === 'other' ? reasonOther.trim() : reason, note: note.trim(),
       });
@@ -93,6 +102,8 @@ function RescaleRequestForm({ onHome, onSignOut, backLabel = '← Home' }) {
               <button type="button" className="btn ghost" disabled={lookupBusy || !sku.trim()} onClick={lookupSku}>{lookupBusy ? '…' : 'Search'}</button>
             </span>
           </label>
+          <SkuCodePicker all={skuAll} value={sku} onChange={setSku}
+            label="This shoe has more than one style code — which should the warehouse count?" />
           <label><span className="cap">Shoe name <span className="muted">(auto-fills from SKU)</span></span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Search a SKU to fill this" /></label>
           <label><span className="cap">Reason *</span>
             <select value={reason} onChange={(e) => setReason(e.target.value)}>
@@ -170,6 +181,64 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   const setAuditRow = (k, patch) => setAuditRows((a) => a.map((x) => (x.key === k ? { ...x, ...patch } : x)));
   const addAuditRow = () => setAuditRows((a) => [...a, { key: cartKey++, size: '', qty: 0 }]);
   const rmAuditRow = (k) => setAuditRows((a) => a.filter((x) => x.key !== k));
+  // Editing a submitted request: PH only, and only while it is still open — the same
+  // rule as cancelling, for the same reason. Once the warehouse has counted, the
+  // reported numbers are one half of a comparison somebody made at a shelf.
+  // The SKU is shown but not editable: a request against the wrong shoe is a different
+  // request, so that one is a cancel-and-re-raise (see db.js updateRescaleRequest).
+  const [editId, setEditId] = useState(null);
+  const [editRows, setEditRows] = useState([]);
+  const [editName, setEditName] = useState('');
+  const [editPrice, setEditPrice] = useState('');
+  const [editReason, setEditReason] = useState('mismatch');
+  const [editReasonOther, setEditReasonOther] = useState('');
+  const [editNote, setEditNote] = useState('');
+  // Which code(s) the warehouse should count — re-pickable within the set that matched
+  // when the request was raised (`sku_all`), never outside it. Older requests have no
+  // `sku_all`, so they fall back to their own sku and simply offer no choice.
+  const [editSku, setEditSku] = useState('');
+  function startEdit(r) {
+    setError(''); setEditId(r.id); setAuditId(null); setCancelId(null);
+    setEditSku(r.sku || '');
+    setEditRows((r.sizes || []).map((x) => ({ key: cartKey++, size: String(x.size), qty: x.qty })));
+    setEditName(r.name || '');
+    // A NUMERIC column arrives as '180.00'; a field that opens reading "180.00" looks
+    // like something was already typed into it.
+    setEditPrice(r.price == null ? '' : String(Number(r.price)));
+    // A reason the picker doesn't know (an older "other" free-text) keeps its words
+    // instead of being silently reset to the first option.
+    const known = REQUEST_REASONS.some(([v]) => v === r.reason);
+    setEditReason(known ? r.reason : 'other');
+    setEditReasonOther(known ? '' : (r.reason || ''));
+    setEditNote(r.note || '');
+  }
+  const setEditRow = (k, patch) => setEditRows((a) => a.map((x) => (x.key === k ? { ...x, ...patch } : x)));
+  const addEditRow = () => setEditRows((a) => [...a, { key: cartKey++, size: '', qty: 1 }]);
+  const rmEditRow = (k) => setEditRows((a) => a.filter((x) => x.key !== k));
+  async function submitEdit(r) {
+    const sizes = editRows.filter((x) => String(x.size).trim())
+      .map((x) => ({ size: String(x.size).trim(), qty: Math.max(1, Number(x.qty) || 1) }));
+    if (!sizes.length) { setError('Keep at least one size and quantity.'); return; }
+    const reason = (editReason === 'other' ? editReasonOther.trim() : editReason) || '';
+    if (!reason) { setError('Pick a reason.'); return; }
+    setBusyId(r.id); setError('');
+    try {
+      await api.rescaleRequestUpdate(r.id, {
+        name: editName.trim(), sizes, price: editPrice.trim(), reason, note: editNote.trim(),
+        // Only sent when it's a real re-pick; the server re-checks it against the
+        // request's own sku_all either way.
+        sku: skuCodes(r.sku_all || r.sku).length > 1 ? editSku : undefined,
+      });
+      setEditId(null); load();
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      // 409 = the warehouse counted it while this form was open. Reload so PH sees
+      // their number rather than an edit form over a stale "open" row.
+      setError(err.message);
+      if (err.conflict) { setEditId(null); load(); }
+    } finally { setBusyId(null); }
+  }
+
   // Cancelling: PH only, and only while the request is still open. Two steps on
   // purpose — the confirm row names the shoe and takes an optional reason, because
   // the warehouse sees this disappear from their queue and deserves to know why.
@@ -303,6 +372,9 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                   Requested by {r.requested_by || '—'} · {PH_DATETIME.format(new Date(r.created_at))} EST
                   {r.status === 'audited' && r.resolved_by ? ` · audited by ${r.resolved_by}` : ''}
                   {r.status === 'cancelled' && r.resolved_by ? ` · cancelled by ${r.resolved_by}` : ''}
+                  {/* Said out loud to BOTH teams: the warehouse may be looking at a
+                      printed or stale copy of numbers that have since changed. */}
+                  {r.edited_by ? ` · edited by ${r.edited_by}${r.edited_at ? ` on ${PH_DATETIME.format(new Date(r.edited_at))} EST` : ''}` : ''}
                 </div>
                 {canAudit && r.status === 'open' && (auditId === r.id ? (
                   <div className="rc-audit">
@@ -329,6 +401,50 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                   <div className="rc-foot"><button className="btn sm primary" onClick={() => startAudit(r)}>🔍 Audit shelf</button></div>
                 ))}
 
+                {/* Edit — PH only, open only. Same window as Cancel below: after an
+                    audit these numbers are what a shelf count was measured against. */}
+                {canCreate && r.status === 'open' && editId === r.id && (
+                  <div className="rc-audit rc-edit">
+                    <div className="muted sm">
+                      Correct this request — <b>{r.sku}</b>
+                      <span className="rc-edit-skunote"> · a different shoe means a new request — cancel this one and raise it</span>
+                    </div>
+                    <SkuCodePicker all={r.sku_all || r.sku} value={editSku} onChange={setEditSku}
+                      label="Style code(s) for the warehouse to count" />
+                    <input className="rc-auditnote" placeholder="Shoe name" value={editName} maxLength={200} onChange={(e) => setEditName(e.target.value)} />
+                    <div className="muted sm">Sizes and how many you count:</div>
+                    {editRows.map((row) => (
+                      <div className="size-line" key={row.key}>
+                        <input className="sz" placeholder="Size" value={row.size} onChange={(e) => setEditRow(row.key, { size: e.target.value })} />
+                        <div className="qty-stepper">
+                          <button type="button" className="btn icon ghost step" onClick={() => setEditRow(row.key, { qty: Math.max(1, (Number(row.qty) || 1) - 1) })}>−</button>
+                          <input className="qty" type="number" min="1" value={row.qty} onChange={(e) => setEditRow(row.key, { qty: e.target.value })} />
+                          <button type="button" className="btn icon ghost step" onClick={() => setEditRow(row.key, { qty: (Number(row.qty) || 1) + 1 })}>+</button>
+                        </div>
+                        <button type="button" className="btn icon ghost remove" title="Remove size" onClick={() => rmEditRow(row.key)}>×</button>
+                      </div>
+                    ))}
+                    <button type="button" className="btn sm ghost" onClick={addEditRow}>+ Add size</button>
+                    <input className="rc-auditnote" placeholder="Current price (optional)" inputMode="decimal"
+                      value={editPrice} onChange={(e) => setEditPrice(e.target.value)} />
+                    <select className="rc-auditnote" value={editReason} onChange={(e) => setEditReason(e.target.value)}>
+                      {REQUEST_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                    {editReason === 'other' && (
+                      <input className="rc-auditnote" placeholder="Say what the reason is" value={editReasonOther}
+                        maxLength={80} onChange={(e) => setEditReasonOther(e.target.value)} />
+                    )}
+                    <input className="rc-auditnote" placeholder="Note (optional) — the warehouse sees this"
+                      value={editNote} maxLength={2000} onChange={(e) => setEditNote(e.target.value)} />
+                    <div className="ph-edit-actions">
+                      <button className="btn sm primary" disabled={busyId === r.id} onClick={() => submitEdit(r)}>
+                        {busyId === r.id ? '…' : 'Save changes'}
+                      </button>
+                      <button className="btn sm ghost" disabled={busyId === r.id} onClick={() => setEditId(null)}>Discard</button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Cancel — PH only (the server refuses everyone else, admin included) and
                     only while the request is still open: once the warehouse has audited it,
                     that row holds a count someone made at a shelf. */}
@@ -346,6 +462,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                   </div>
                 ) : (
                   <div className="rc-foot">
+                    {editId !== r.id && <button className="btn sm ghost" onClick={() => startEdit(r)}>Edit request…</button>}
                     <button className="btn sm ghost danger" onClick={() => startCancel(r)}>Cancel request…</button>
                   </div>
                 ))}

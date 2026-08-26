@@ -328,6 +328,26 @@ await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS edited_at TIMES
 // matched, so narrowing to one code stays reversible on the edit form — without it,
 // picking one would throw away the very list needed to pick differently later.
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS sku_all TEXT`);
+// Which PAIRS a request was raised for. Written only when the request came off a New
+// Inventory row (that is the only moment anything knows); a request typed on the
+// standalone form names a SKU and no pairs, and stays unlinked.
+//
+// items.id, not vin: the primary key, so no question about sticker formats or roll
+// stock can reach it. ON DELETE CASCADE on both sides — removing a pair (which HARD
+// deletes the row, see inventory.md) must not strand a link pointing at nothing.
+await sql(`
+  CREATE TABLE IF NOT EXISTS rescale_request_items (
+    request_id BIGINT NOT NULL REFERENCES rescale_requests(id) ON DELETE CASCADE,
+    item_id    BIGINT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    PRIMARY KEY (request_id, item_id)
+  )
+`);
+// The grid asks item -> request on every load, so that direction gets its own index.
+await sql(`CREATE INDEX IF NOT EXISTS rescale_request_items_item_idx ON rescale_request_items (item_id)`);
+// The end of the loop: `audited` used to be terminal, so the green "Audited" home badge
+// counted up forever. `closed` is what the linked pairs having been dealt with looks like.
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS closed_by TEXT`);
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ`);
 
 // Pre-printed VIN/1ID roll stock ("VIN Project"). Blank stickers are minted and
 // printed in bulk BEFORE anyone knows which shoe each will land on, so intake never

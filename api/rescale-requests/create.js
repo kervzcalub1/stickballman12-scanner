@@ -2,7 +2,7 @@
 //   { sku, name?, sizes:[{size,qty}], price?, reason, note? } -> { ok, id }
 // PH flags a SKU for the warehouse to recount/rescan. PH team (admin allowed).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku, skuCodes } from '../_lib/util.js';
-import { createRescaleRequest, dbConfigured } from '../_lib/db.js';
+import { createRescaleRequest, linkRescaleRequestItems, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -45,7 +45,13 @@ export default async function handler(req, res) {
 
   try {
     const r = await createRescaleRequest({ sku: chosen.join('/') || sku.replace(/\s+/g, '-'), skuAll, name, sizes, price: priceRaw, reason, note, by: user.name || user.username || '' });
-    return send(res, 200, { ok: true, id: r.id });
+    // Which PAIRS this is about — sent only by the New Inventory row modal, which is
+    // the only place that knows. Best-effort on purpose: a request must file even if
+    // the linking fails, because the ask is the point and the link is an optimisation.
+    let linked = 0;
+    try { linked = await linkRescaleRequestItems(r.id, body.vins); }
+    catch (e) { console.warn('[rescale-requests/create] link failed:', e.message); }
+    return send(res, 200, { ok: true, id: r.id, linked });
   } catch (e) {
     console.error('[rescale-requests/create]', e.message);
     return send(res, 500, { ok: false, error: 'Could not submit the request.' });

@@ -116,6 +116,13 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   per-size drawer is pinned left** (`.ph-drow > td { position: sticky; left: 0 }`) so
   it stays under the frozen columns instead of drifting with the middle scroll.
 
+## Tabs
+Pending / In-Progress / Done, plus **⟳ Rescale** (2026-08-27) — a fourth BUCKET, not a
+fourth listing status. `phListingStatus` stays three-valued and the filter keys on
+`phTabOf`; every tab carries a count, because the page defaults to Pending and rows
+would otherwise vanish silently. Full rules, the all-or-nothing link and the listing
+worksheet: `rescale.md`.
+
 ## Editable fields (one Edit ⇄ Submit per group)
 - **Per size**: Global indicator (number) → **Final price auto-calculates** = GI ×
   markup, **rounded to the nearest whole dollar** (`calcFinalPrice`; server

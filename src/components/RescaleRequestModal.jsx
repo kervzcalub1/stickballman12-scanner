@@ -76,6 +76,9 @@ export function RescaleRequestModal({ group, existing = null, onClose, onDone })
     try {
       const { id } = await api.rescaleRequestCreate({
         sku: askSku || group.sku, skuAll: group.sku, name: group.name || '', sizes: clean,
+        // The pairs this is about. Only the row modal knows them — the standalone form
+        // names a SKU and nothing else, and stays unlinked on purpose.
+        vins: group.vins || [],
         price: price === '' ? null : Number(price),
         reason: reason === 'other' ? reasonOther.trim() : reason,
         note: note.trim(),

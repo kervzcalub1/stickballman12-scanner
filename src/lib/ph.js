@@ -293,6 +293,51 @@ export const PH_LISTING_STATUSES = [
   { key: 'in_progress', label: 'In-Progress' },
   { key: 'done', label: 'Done' },
 ];
+// The New Inventory tabs. Rescale is a FOURTH BUCKET, not a fourth listing status —
+// a row under audit is still pending or part-listed, and `phListingStatus` stays
+// three-valued so the ✓ Listed / ◐ Part-listed / • Not listed split chip keeps telling
+// the truth inside the tab. `phTabOf` is what the filter keys on.
+export const PH_TABS = [
+  ...PH_LISTING_STATUSES,
+  { key: 'rescale', label: '⟳ Rescale' },
+];
+
+// Is this row in the Rescale bucket, and which request put it there?
+//
+// `byVin` maps VIN -> an open/audited request. The rule is deliberately ALL-OR-NOTHING:
+// a row moves only when EVERY pair on it is linked to the same request.
+//   · A partly-linked row would otherwise drag pairs nobody asked about out of Pending.
+//   · The alternative — splitting the row by linked-vs-not — would add a fourth
+//     dimension to a group key that already carries three split rules plus the
+//     edit-lock freeze, which is the most intricate logic in the app.
+// A row raised straight off the grid is all-linked by construction. It can become
+// partial later (rule 2 merges a new delivery of the same SKU into a pending row); when
+// that happens the row stays where it is and keeps the chip, which is honest — it now
+// holds pairs the warehouse isn't counting.
+export function rescaleRequestFor(g, byVin) {
+  const vins = (g && g.vins) || [];
+  if (!byVin || !vins.length) return null;
+  const first = byVin[vins[0]];
+  if (!first) return null;
+  return vins.every((v) => byVin[v] && byVin[v].id === first.id) ? first : null;
+}
+
+// Which TAB a row files under.
+//
+// ONLY AN AUDITED REQUEST MOVES A ROW. An open one — nobody has counted the shelf yet —
+// leaves the row exactly where it was, with its chip. That is the difference between a
+// tab that holds work and a tab that holds stock nobody is looking at: the grid defaults
+// to Pending, so if an un-audited request pulled rows out, a request the warehouse never
+// got to would park those pairs somewhere no one had selected, indefinitely. Nothing can
+// be done about an open request from this screen anyway — the whole point of the tab is
+// the count, and until there is one there is nothing to show.
+//
+// Once it IS audited the row moves, because now the work is specific to that count:
+// what to list is the warehouse's numbers, not ours.
+export function phTabOf(g, byVin) {
+  const r = rescaleRequestFor(g, byVin);
+  return r && r.status === 'audited' ? 'rescale' : phListingStatus(g);
+}
 // The store flags that actually apply to a group. "GOAT only" shoes list to
 // Alias(GOAT) alone — II/StockX/Shopify are N/A, so they don't
 // count toward completion or the badges.

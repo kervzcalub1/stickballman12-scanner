@@ -62,3 +62,25 @@ export function poChipOf(p) {
   if (shipped > 0) return PO_STATUS.shipped;
   return PO_STATUS[p.status] || { label: p.status, cls: 'muted' };
 }
+
+// ── Finding an order by the number on the parcel ──────────────────────────────
+// A tracking number is what a person actually has in hand when they go looking: it is
+// on the box, in the courier's email, in the supplier's message. It was the one
+// identifier none of the PO lists could search by.
+//
+// Matching is deliberately loose in three ways, because of how the number arrives:
+//   · **Substring, not equality** — people quote the last 4-6 digits ("...4821?") far
+//     more often than the whole 20-character string.
+//   · **Punctuation and spaces stripped** — a number pasted out of an email arrives as
+//     "1Z 999 AA1 01 2345 6784", and a scanner types it clean. Those are one number.
+//   · **PO code too** — same box, same intent ("find me this order"), and someone
+//     holding a printed manifest has the code, not the tracking number.
+// Case-insensitive throughout: `1z999…` off a phone keyboard is the same parcel.
+export const trackKey = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+export function poMatchesSearch(p, query) {
+  const q = trackKey(query);
+  if (!q) return true;
+  if (trackKey(p?.po_code).includes(q)) return true;
+  return (p?.tracking_numbers || []).some((t) => trackKey(t).includes(q));
+}

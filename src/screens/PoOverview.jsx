@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { poMatchesSearch } from '../lib/postatus.js';
 import { TopBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
@@ -30,7 +31,11 @@ export function PoOverview({ onHome, onSignOut }) {
   const [supplier, setSupplier] = useQueryParam('supplier');
   const [from, setFrom] = useQueryParam('from');
   const [to, setTo] = useQueryParam('to');
-  const filtering = !!(supplier || from || to);
+  // The number off the parcel. In the URL like the other filters, so a link to "the
+  // order this tracking number belongs to" can be pasted to whoever is asking.
+  const [q, setQ] = useQueryParam('q');
+  const filtering = !!(supplier || from || to || q);
+  const clearAll = () => { setSupplier(''); setFrom(''); setTo(''); setQ(''); };
 
   const loadList = () => {
     api.poList()
@@ -56,13 +61,14 @@ export function PoOverview({ onHome, onSignOut }) {
   }, [pos, supplier]);
 
   const shown = useMemo(() => (pos || []).filter((p) => {
+    if (!poMatchesSearch(p, q)) return false;
     if (supplier && p.supplier_name !== supplier) return false;
     // Both ends inclusive — "from the 1st to the 5th" has to include the 5th.
     const d = poDate(p);
     if (from && (!d || d < from)) return false;
     if (to && (!d || d > to)) return false;
     return true;
-  }), [pos, supplier, from, to]);
+  }), [pos, supplier, from, to, q]);
 
   // One order, full screen. `pos` rides along so "move this label to another order" can
   // offer the list without fetching it twice.
@@ -88,6 +94,10 @@ export function PoOverview({ onHome, onSignOut }) {
         {pos != null && pos.length > 0 && (
           <>
             <div className="po-ov-filters">
+              <label className="po-ov-search"><span className="muted xs">Tracking number</span>
+                <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
+                  placeholder="Paste or scan a tracking number — or a PO code"
+                  aria-label="Search by tracking number or PO code" /></label>
               <label><span className="muted xs">Supplier</span>
                 <select value={supplier} onChange={(e) => setSupplier(e.target.value)}>
                   <option value="">All suppliers</option>
@@ -99,7 +109,7 @@ export function PoOverview({ onHome, onSignOut }) {
               <label><span className="muted xs">to</span>
                 <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
               {filtering && (
-                <button className="btn sm ghost" onClick={() => { setSupplier(''); setFrom(''); setTo(''); }}>Clear</button>
+                <button className="btn sm ghost" onClick={clearAll}>Clear</button>
               )}
             </div>
             {filtering && (
@@ -112,7 +122,14 @@ export function PoOverview({ onHome, onSignOut }) {
 
         {pos == null ? <p className="muted">Loading…</p>
           : pos.length === 0 ? <div className="card empty-state">No purchase orders yet. Open one from <b>New Batch (Purchase Order)</b>.</div>
-          : shown.length === 0 ? <div className="card empty-state">No purchase order matches these filters. <button className="btn sm ghost" onClick={() => { setSupplier(''); setFrom(''); setTo(''); }}>Clear filters</button></div>
+          : shown.length === 0 ? (
+            <div className="card empty-state">
+              {q
+                ? <>No order carries a tracking number or PO code matching <b>{q}</b>. A label the supplier has not created yet has no number to find.</>
+                : 'No purchase order matches these filters.'}
+              {' '}<button className="btn sm ghost" onClick={clearAll}>Clear filters</button>
+            </div>
+          )
           : (
             <div className="po-list">
               {shown.map((p) => (

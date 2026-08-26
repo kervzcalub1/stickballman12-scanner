@@ -11,6 +11,27 @@ const BASE = 'https://api.17track.net/track/v2.2';
 
 export const trackingConfigured = () => !!process.env.TRACKING_API_KEY;
 
+// Registering a number with 17TRACK is a WRITE to a live, shared, metered account, and
+// it is permanent: the number sits in the dashboard and stays on auto-tracking long
+// after whatever created it is gone. That is not a thing a development machine should be
+// able to do by accident — and it did. `e2e/po-edit.spec.js` invents numbers like
+// `EDIT<timestamp>A`; PO creation registers whatever it is handed; the dev server loads
+// the real .env. 50 invented numbers accumulated on the account over a week, none of
+// which existed in any database, because test teardown deletes rows and registration
+// outlives them.
+//
+// So the dev server does not register, full stop. This is the chokepoint — all eleven
+// call sites (po/create, label-add, label-update, ship, resolution, track-refresh,
+// tracking-register, track.js) go through here, which is why the guard lives here and
+// not in the test harness. Blocking known test PREFIXES was the other option and it is
+// fragile: the suite alone invents ten of them, and one day a courier issues a number
+// that collides.
+//
+// Fails safe in both directions: production runs server.mjs, which never sets APP_ENV,
+// so nothing changes there and the feature cannot be silently switched off by a missing
+// variable. To exercise registration locally on purpose, set TRACKING_ALLOW_DEV=1.
+const registerAllowed = () => process.env.APP_ENV !== 'dev' || process.env.TRACKING_ALLOW_DEV === '1';
+
 // A tracked item is either a bare number string or { number, carrier } where carrier is
 // the 17TRACK numeric carrier key (so the aggregator pulls status from the RIGHT carrier
 // instead of guessing). Normalizes to 17TRACK's { number, carrier? } request shape.
@@ -38,6 +59,13 @@ async function call(path, body) {
 export async function registerTracking(items) {
   const list = (items || []).map(toItem).filter(Boolean).slice(0, 40);
   if (!trackingConfigured() || !list.length) return { skipped: true };
+  if (!registerAllowed()) {
+    // Loud, not silent: someone testing the tracking flow locally needs to know why
+    // nothing appeared, and the numbers are named so it is obvious what was withheld.
+    console.warn(`[tracking] register SKIPPED (dev server): ${list.map((i) => i.number).join(', ')}`
+      + ' — set TRACKING_ALLOW_DEV=1 to register against the live 17TRACK account.');
+    return { skipped: true, reason: 'dev' };
+  }
   return call('/register', list);
 }
 

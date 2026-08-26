@@ -507,6 +507,18 @@ body {
 .mf-prices { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .mf-prices input { accent-color: var(--primary); }
 
+/* Find an order by the number on the parcel. Wide on purpose: a tracking number is
+   ~20 characters and a field that truncates it is a field you can't check your paste
+   against. Full width on a phone — it's usually the only control being used. */
+.po-ov-search { flex: 1 1 260px; min-width: 0; }
+.po-ov-search input { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.rcn-search { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.rcn-search input {
+  flex: 1 1 260px; min-width: 0; max-width: 420px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 13px;
+}
+@media (max-width: 600px) { .rcn-search input, .po-ov-search { max-width: none; flex-basis: 100%; } }
+
 /* Correcting an already-submitted rescale request. Same frame as the audit editor it
    sits beside, tinted to the PH/requests hue so the two aren't mistaken for each other
    on a row that offers both. */

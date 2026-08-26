@@ -983,8 +983,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
               {PH_TABS.map((s) => (
                 <button key={s.key} type="button" aria-pressed={statusFilter.has(s.key)}
                   className={`seg-btn${statusFilter.has(s.key) ? ' on' : ''}${s.key === 'rescale' ? ' rescale' : ''}`}
+                  title={`${tabCounts[s.key] || 0} line${(tabCounts[s.key] || 0) === 1 ? '' : 's'} ${s.label.replace('⟳ ', '')}`}
                   onClick={() => toggleStatus(s.key)}>
-                  {s.label} <span className="seg-n">{tabCounts[s.key] || 0}</span>
+                  {s.label} <span className="seg-n" aria-hidden="true">{tabCounts[s.key] || 0}</span>
                 </button>
               ))}
             </div>

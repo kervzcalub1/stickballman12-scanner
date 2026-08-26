@@ -322,11 +322,21 @@ export function rescaleRequestFor(g, byVin) {
   return vins.every((v) => byVin[v] && byVin[v].id === first.id) ? first : null;
 }
 
-// Which TAB a row files under. Rescale outranks the listing state: a pair whose count
-// is in question is not work PH can finish, so it leaves the listing worklist until the
-// count is settled. Everything else falls through to the three listing states.
+// Which TAB a row files under.
+//
+// ONLY AN AUDITED REQUEST MOVES A ROW. An open one — nobody has counted the shelf yet —
+// leaves the row exactly where it was, with its chip. That is the difference between a
+// tab that holds work and a tab that holds stock nobody is looking at: the grid defaults
+// to Pending, so if an un-audited request pulled rows out, a request the warehouse never
+// got to would park those pairs somewhere no one had selected, indefinitely. Nothing can
+// be done about an open request from this screen anyway — the whole point of the tab is
+// the count, and until there is one there is nothing to show.
+//
+// Once it IS audited the row moves, because now the work is specific to that count:
+// what to list is the warehouse's numbers, not ours.
 export function phTabOf(g, byVin) {
-  return rescaleRequestFor(g, byVin) ? 'rescale' : phListingStatus(g);
+  const r = rescaleRequestFor(g, byVin);
+  return r && r.status === 'audited' ? 'rescale' : phListingStatus(g);
 }
 // The store flags that actually apply to a group. "GOAT only" shoes list to
 // Alias(GOAT) alone — II/StockX/Shopify are N/A, so they don't

@@ -251,6 +251,26 @@ export function primarySku(raw) {
   return first || null;
 }
 
+// EVERY style code a product record declares, in order, de-duplicated.
+// StockX writes both codes of a re-released shoe on a single styleId
+// ("315122-111/CW2288-111"), and supplier manifests do the same. The Alias catalog
+// only ever knows ONE code at a time (aliasCatalogBySku searches on `primarySku`
+// above), so any caller that takes Alias's `sku` verbatim silently drops the rest —
+// the box says two codes and the app shows one. Splits on the same separators as
+// `primarySku` so the two can never disagree about what a code boundary is.
+export function skuCodes(raw) {
+  const seen = new Set();
+  return String(raw || '').split(/[/,|]/)
+    .map((c) => c.trim().replace(/\s+/g, '-'))
+    .filter((c) => {
+      if (!c) return false;
+      const k = c.toUpperCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+}
+
 export function cleanSku(raw) {
   // Allow letters, digits, spaces and dashes; trim and cap length.
   const s = String(raw || '').trim().slice(0, 64);

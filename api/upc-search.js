@@ -14,9 +14,10 @@
 
 import {
   getJsonBody, send, applySecurity, rateLimit, requireRole, cleanUpc,
-  fetchWithTimeout, cacheGet, cacheSet, normalizeGender,
+  fetchWithTimeout, cacheGet, cacheSet, normalizeGender, skuCodes,
 } from './_lib/util.js';
 import { aliasProductByUpc, aliasCatalogBySku } from './_lib/alias.js';
+import { knownSkuAmong, dbConfigured } from './_lib/db.js';
 
 const STOCKX_BASE = 'https://bypass-stock-x-host-railway-stock-x.up.railway.app';
 
@@ -70,6 +71,24 @@ function withScannedSize(sizes, scannedSize) {
   return sortSizes([...new Set([...scanned, ...opts])]);
 }
 
+// A multi-code shoe we have received before needs no question asked: resolve it to
+// the code our own stock is already filed under. Deliberately runs OUTSIDE the cache
+// (on the cached object too), because the answer changes the moment the warehouse
+// commits the first pair — a resolution baked into a cached entry would keep asking
+// long after it had been answered.
+async function resolveCodes(product) {
+  const opts = product?.skuOptions || [];
+  if (opts.length < 2 || !dbConfigured()) return product;
+  try {
+    const known = await knownSkuAmong(opts);
+    if (known) return { ...product, sku: known, skuOptions: opts, skuResolvedFrom: 'stock' };
+  } catch (e) {
+    // Best-effort: a DB hiccup must not stop a scan. The warehouse is asked instead.
+    console.warn('[upc-search] known-sku lookup failed:', e.message);
+  }
+  return product;
+}
+
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
@@ -83,7 +102,7 @@ export default async function handler(req, res) {
 
   const cacheKey = `upc:${upc}`;
   const cached = cacheGet(cacheKey);
-  if (cached) return send(res, 200, { ok: true, product: cached, cached: true });
+  if (cached) return send(res, 200, { ok: true, product: await resolveCodes(cached), cached: true });
 
   // 1) Resolve SKU (+ scanned size from StockX) via the proxies.
   let sku = null;
@@ -114,9 +133,19 @@ export default async function handler(req, res) {
   if (!name) return send(res, 404, { ok: false, error: 'Found the SKU but no product details.' });
   const sizes = withScannedSize(cat?.sizes?.length ? cat.sizes : [], scannedSize);
   const gender = cat?.gender || fb?.gender || null;
+  // The proxy's styleId carries every code the shoe was sold under; the Alias
+  // catalog answers with only the one it matched, so taking it verbatim threw the
+  // second code away. Keep what the product record declared whenever it declared
+  // more than one — Alias still wins the single-code case, where it is the
+  // canonical spelling. Downstream already splits on "/" everywhere it matters
+  // (db.js SKU matching, shopify.js, PO reconciliation).
+  const codes = skuCodes(sku);
   const product = {
     name,
-    sku: normSku(cat?.sku) || sku,
+    sku: codes.length > 1 ? codes.join('/') : (normSku(cat?.sku) || sku),
+    // Every code this shoe is sold under. One entry is the ordinary case and the
+    // client ignores it; two or more is the pick the warehouse has to make.
+    skuOptions: codes.length > 1 ? codes : [],
     upc,
     image: cat?.image || fb?.image || null,
     brand: cat?.brand || fb?.brand || null,
@@ -128,5 +157,5 @@ export default async function handler(req, res) {
   };
 
   cacheSet(cacheKey, product);
-  return send(res, 200, { ok: true, product });
+  return send(res, 200, { ok: true, product: await resolveCodes(product) });
 }

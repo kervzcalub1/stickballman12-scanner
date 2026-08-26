@@ -38,6 +38,13 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
   // stop using the export.
   const [fmt, setFmt] = useState(() => (loadPrefs().reportFormat === 'csv' ? 'csv' : 'pdf'));
   const pickFmt = (v) => { setFmt(v); savePrefs({ ...loadPrefs(), reportFormat: v }); };
+  // What the supplier typed per size — cost and tip per pair, plus the line total.
+  // OFF by default, and deliberately not just "always on": the per-box sheet is the
+  // one that gets taped INSIDE the parcel, so money goes on it only when somebody asks
+  // for it. Remembered per device like the format, because whoever pulls these reports
+  // wants the same thing every time.
+  const [prices, setPrices] = useState(() => loadPrefs().manifestPrices === true);
+  const pickPrices = (v) => { setPrices(v); savePrefs({ ...loadPrefs(), manifestPrices: v }); };
 
   if (!poId) return null;
 
@@ -54,7 +61,7 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       const input = {
         po: d.po, boxes: d.boxes, lines: d.lines, businessName: d.businessName, mode, generatedAt,
         boxId: mode === 'perbox' ? boxId : null, shipTo: d.shipTo,
-        receivedBoxes: received, compare, boxDiffs,
+        receivedBoxes: received, compare, boxDiffs, prices,
       };
       let blob;
       if (fmt === 'csv') {
@@ -89,8 +96,16 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
   if (boxId != null) {
     return (
       <div className="mf-print">
-        <button className={`btn sm ${primary ? 'primary' : ''}`} disabled={!!busy} onClick={() => run('perbox')}>
-          <Icon name="download" /> {busy ? 'Building…' : buttonLabel}
+        <button className={`btn sm ${primary ? 'primary' : ''}`} disabled={!!busy}
+          onClick={() => { pickPrices(false); run('perbox'); }}>
+          <Icon name="download" /> {busy && !prices ? 'Building…' : buttonLabel}
+        </button>
+        {/* A SEPARATE button, not a toggle on the one above: the packing sheet gets
+            taped inside the parcel, and a remembered checkbox could quietly put your
+            costs on it. This one is for checking your own numbers. */}
+        <button className="btn ghost sm" disabled={!!busy} title="The same list with the cost and tip you entered for each size"
+          onClick={() => { pickPrices(true); run('perbox'); }}>
+          <Icon name="download" /> {busy && prices ? 'Building…' : 'With my prices'}
         </button>
         {error && <span className="mf-print-err sm">{error}</span>}
       </div>
@@ -106,6 +121,10 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
             aria-pressed={fmt === v} disabled={!!busy} onClick={() => pickFmt(v)}>{l}</button>
         ))}
       </span>
+      <label className="mf-prices" title="Add the cost and tip entered for each size, and a line total">
+        <input type="checkbox" checked={prices} disabled={!!busy} onChange={(e) => pickPrices(e.target.checked)} />
+        <span>Prices</span>
+      </label>
       <button className="btn ghost sm" disabled={!!busy} onClick={() => run('perbox')}>
         <Icon name="download" /> {busy === 'perbox' ? 'Building…' : 'Per box'}
       </button>

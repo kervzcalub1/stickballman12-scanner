@@ -867,6 +867,35 @@ print, and an empty slip reads as "the supplier declared nothing" rather than "n
 entered a manifest". `po/get` is `requireRole(['ph_team','warehouse','supplier'])` (admin
 auto), so no server change was needed to open this to the warehouse.
 
+## Prices on the manifest reports (2026-08-27)
+`po_lines.unit_cost` and `tip` are per pair **per size** and the supplier types them
+while building the manifest — but every way of reading them back showed name / SKU /
+size / qty and no money at all. A supplier could see one rollup per label
+(`Cost $X + tips $Y`) and never the lines that produced it. Asked for by a supplier:
+*"is there anyway I can pull up the individual prices for each of these shoes that I
+typed out while making the manifest?"*
+
+- **On screen** (`SupplierApp.jsx` `lineMoney`): each read-only manifest line — on a
+  closed/shipped label and in the close-box review modal — now carries
+  `$88.50 + $5.00 tip per pair · $187.00`. A line with nothing entered renders
+  **"no cost entered"**, never `$0.00`: blank is not zero here (`costs.md`), and a
+  total that quietly skipped lines reads as complete.
+- **CSV** (`manifestCsv.js`): a **Prices** checkbox adds `Cost per pair` /
+  `Tip per pair` / `Line total`. They go on the **END** of the row so an existing
+  sheet's columns keep their positions — a saved formula or pivot pointing at column D
+  still works. Blank cells stay empty so `SUM()` stays honest.
+- **PDF** (`manifestPdf.js`): the same three columns via `itemCols(prices)`, plus a
+  totals block — Cost, Tips, **TOTAL DECLARED** — and, when any line was skipped,
+  *"N lines with no cost or tip entered — not counted in the total"*.
+- **The taped sheet is protected.** The supplier's one-box manifest is printed and
+  attached inside the parcel, so it does NOT get the remembered checkbox — a toggle
+  left on would silently print their cost stack onto a sheet that ships. It gets a
+  **separate "With my prices" button** that never changes what the packing sheet does.
+- `received` and `discrepancies` stay unpriced whatever the caller asks: they are OUR
+  count of what came out of the box, not what the supplier declared.
+- The `prices` choice is remembered per device (`prefs.manifestPrices`), like the
+  PDF/CSV format.
+
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`
 form a cycle. Creation order is fine (PO → batch(po_id) → set received_batch_id). Deletion of

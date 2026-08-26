@@ -419,6 +419,33 @@ export async function ourListingFlags(sku) {
   return row || null;
 }
 
+// Which of a shoe's several style codes we ALREADY hold stock under.
+//
+// A re-released shoe carries more than one code ("315122-111/CW2288-111"), and the
+// warehouse has to pick the one printed on the box in front of them. Asking is only
+// tolerable if it's asked ONCE — so before asking, look at our own stock: if we have
+// received this shoe before, the code we filed it under is the answer, and the scan
+// resolves silently. Same principle as the Box Labels tool, which queries our own
+// stock before the catalogue.
+//
+// Ordered by unit count so one mis-keyed pair can't outvote a shelf of correctly
+// filed ones. Returns the sku EXACTLY as stored (its own spelling), or null when
+// this shoe is genuinely new to us — which is the only case that asks.
+export async function knownSkuAmong(codes) {
+  const want = (Array.isArray(codes) ? codes : [])
+    .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean);
+  if (want.length < 2) return null;
+  const rows = await db()`
+    SELECT i.sku, count(*)::int AS n
+    FROM items i
+    WHERE upper(i.sku) = ANY(${want}::text[])
+    GROUP BY i.sku
+    ORDER BY n DESC, i.sku
+    LIMIT 1
+  `;
+  return rows[0]?.sku || null;
+}
+
 // Per-SIZE listing breakdown for one style, in the PH grid's own buckets. This is the
 // "how many do we have, listed or not?" answer, and the naive version of it — on_hand
 // minus listed_alias — is wrong three ways, which is why it's a query and not a

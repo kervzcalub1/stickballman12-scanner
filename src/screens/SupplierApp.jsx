@@ -286,6 +286,24 @@ export function SupplierApp({ user, onSignOut }) {
   const po = detail?.po;
   const linesFor = (boxId) => (detail?.lines || []).filter((l) => Number(l.po_box_id) === Number(boxId));
   const money = (n) => `$${Number(n || 0).toFixed(2)}`;
+  // What ONE line cost, spelled out on the line itself. The box total answers "how
+  // much is in this label"; this answers "what did I put against this shoe" — which is
+  // the question you have when you are checking your own typing back. Blank stays
+  // blank: a size with nothing entered has said nothing, and rendering it as $0.00
+  // would be a number nobody typed.
+  const lineMoney = (l) => {
+    const c = l.unit_cost == null || l.unit_cost === '' ? null : Number(l.unit_cost);
+    const t = l.tip == null || l.tip === '' ? null : Number(l.tip);
+    if (c == null && t == null) return null;
+    const q = Math.max(0, Number(l.qty_expected) || 0);
+    const per = (c || 0) + (t || 0);
+    return {
+      per: `${money(c || 0)}${t ? ` + ${money(t)} tip` : ''}`,
+      total: money(per * q),
+      showTotal: q > 1,
+    };
+  };
+
   // What a label cost: cost and tip are both PER PAIR on each size's line, so this is
   // qty × cost and qty × tip summed. Pairs with nothing declared contribute nothing and
   // are counted separately, so a partial total is never passed off as the whole number.
@@ -461,6 +479,12 @@ export function SupplierApp({ user, onSignOut }) {
                           <li key={l.id}>
                             <span className="po-line-name">{l.name || l.sku}</span>
                             <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                            {(() => {
+                              const mm = lineMoney(l);
+                              return mm
+                                ? <span className="po-line-money">{mm.per} per pair{mm.showTotal ? ` · ${mm.total}` : ''}</span>
+                                : <span className="po-line-money none">no cost entered</span>;
+                            })()}
                             {l.entered_on_behalf && <span className="po-line-attribution muted xs">Entered for you by {staffLabel}</span>}
                           </li>
                         ))}
@@ -598,6 +622,12 @@ export function SupplierApp({ user, onSignOut }) {
                     <li key={l.id}>
                       <span className="po-line-name">{l.name || l.sku}</span>
                       <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                      {(() => {
+                        const mm = lineMoney(l);
+                        return mm
+                          ? <span className="po-line-money">{mm.per} per pair{mm.showTotal ? ` · ${mm.total}` : ''}</span>
+                          : <span className="po-line-money none">no cost entered</span>;
+                      })()}
                     </li>
                   ))}
                 </ul>

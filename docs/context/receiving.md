@@ -171,6 +171,43 @@ sticker bar sits above the checklist. Full rules: `docs/context/vin-stock.md`.
 4. **Issues** — shipment-level: no-box pairs auto-listed; manual issues addable.
    Finish commits.
 
+## One shoe, several style codes (2026-08-27)
+A re-released shoe is sold under more than one style code, and StockX writes them all
+on a single `styleId` (`315122-111/CW2288-111`). The Alias catalog only ever knows ONE
+code at a time (`aliasCatalogBySku` searches on `primarySku`), so taking its reply
+verbatim silently threw the rest away — the box declared two codes and the app filed
+the pair under one, picked by nobody.
+
+`skuCodes()` (`api/_lib/util.js`, beside `primarySku`, same `[/,|]` separators) returns
+every code. `upc-search` / `sku-search` now return **`skuOptions`**, and resolve in this
+order:
+1. **One code** → unchanged.
+2. **Several, but we already hold stock under one of them** → `knownSkuAmong(codes)`
+   (`db.js`, ordered by unit count so one mis-keyed pair can't outvote a shelf) resolves
+   it silently. **No question is asked.** Same principle as the Box Labels tool: our own
+   stock before the catalogue. This runs OUTSIDE the response cache deliberately — a
+   resolution baked into a cached entry would keep asking long after it was answered.
+3. **Several, never received before** → the client asks.
+
+**The ask is never a dialog.** Rapid scan's whole trade is that nothing interrupts a
+scan, so a multi-code line rides the exact machinery an unknown size does: it lands in
+the cart, shows an amber *"sold under N style codes — pick the one printed on the box"*
+panel, is answerable in the Items list **or** on Review, and blocks Review + commit
+(`needsSku` → `isUnresolved`) until it is answered.
+
+**Asked once per shoe, not per pair:** `pickSku` writes the answer to every cart line
+sharing that **option set**, and `pickedCodeFor` makes later scans of the same shoe
+inherit it — so no second line is created and `sameSku` folds them together. Across
+sessions, rule 2 takes over the moment the first pair commits.
+
+Why it blocks the commit: filing a pair under the wrong code splits the SKU in the PH
+grid (`groupPhSized` keys on the raw sku string) and hides it from anyone searching the
+other code — the same class of silent wrong data as a missing size.
+
+**Not covered:** `PoScanModal.jsx` (supplier PO scan-out) has its own scan loop and no
+picker yet; a dual code landing on a PO line is low-stakes because reconciliation
+already matches on code groups (`purchase-orders.md`).
+
 ## VINs & commit
 - On commit (`api/batches/commit.js`): `createBatch` → `reserveVins` (atomic
   `nextval('vin_seq')`) → `insertItems` → `insertIntakeEvents`.

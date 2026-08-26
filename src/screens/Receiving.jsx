@@ -898,8 +898,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const p = look.product || {};
     const size = p.scannedSize || '';
     setItems((arr) => {
+      // A re-released shoe comes back with several style codes and no way for the
+      // server to know which is printed on THIS box. If the warehouse has already
+      // picked one for this shoe earlier in the cart, apply it silently — the whole
+      // point is to be asked once per shoe, not once per pair.
+      const opts = p.skuOptions || [];
+      const picked = opts.length > 1 ? pickedCodeFor(arr, opts) : null;
       const resolved = {
-        key: lineKey, name: p.name || '', sku: p.sku || '', image: p.image || '', source: p.source || 'manual',
+        key: lineKey, name: p.name || '', sku: picked || p.sku || '', image: p.image || '', source: p.source || 'manual',
+        skuOptions: opts,
         // Keep the UPC whether it was scanned directly or returned by a SKU lookup —
         // it's needed to print the no-box box-style barcode label.
         upc: (isUpc ? c : '') || p.upc || '', gender: p.gender || null, colorway: p.colorway || '',
@@ -944,6 +951,53 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }));
     setFlash({ type: 'warn', text: 'Last scan removed' });
   }
+
+  // The pick, rendered ON the line instead of in a modal: rapid scan must never stop
+  // for a dialog (that is the whole trade the mode makes), so this behaves exactly
+  // like an unknown size — it sits in the list, is answerable here or on Review, and
+  // blocks the commit until it is answered.
+  const skuChoice = (it) => {
+    if (!needsSku(it)) return null;
+    return (
+      <div className="recv-sku-pick">
+        <span className="recv-sku-pick-lbl">
+          This shoe is sold under <b>{it.skuOptions.length}</b> style codes — pick the one printed on the box
+        </span>
+        <div className="recv-sku-pick-opts" role="group" aria-label="Style code printed on the box">
+          {it.skuOptions.map((c) => (
+            <button key={c} type="button" className="btn sm" onClick={() => pickSku(it.key, c)}>{c}</button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Has this cart already settled which code this shoe goes under? Matches on the
+  // OPTION SET, not the shoe, so every size of the same re-release inherits the one
+  // answer — and a different shoe that happens to share one code does not.
+  function pickedCodeFor(arr, opts) {
+    const key = [...opts].map((c) => c.toUpperCase()).sort().join('|');
+    for (const it of arr) {
+      const o = it.skuOptions || [];
+      if (o.length < 2) continue;
+      if ([...o].map((c) => c.toUpperCase()).sort().join('|') !== key) continue;
+      if (o.some((c) => c === it.sku)) return it.sku;
+    }
+    return null;
+  }
+  // The warehouse picks the code printed on the box. It lands on every line in the
+  // cart sharing that option set, so a shoe scanned across several sizes is answered
+  // once — and `sameSku` then folds those lines together on the next scan.
+  const pickSku = (itemKey, code) => setItems((arr) => {
+    const target = arr.find((x) => x.key === itemKey);
+    const opts = target?.skuOptions || [];
+    const key = [...opts].map((c) => c.toUpperCase()).sort().join('|');
+    return arr.map((it) => {
+      const o = it.skuOptions || [];
+      if (o.length < 2 || [...o].map((c) => c.toUpperCase()).sort().join('|') !== key) return it;
+      return { ...it, sku: code };
+    });
+  });
 
   // ---- Cart-line edits shared by the Items list and Review -----------------
   const setItemField = (itemKey, patch) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, ...patch, failed: false } : it)));
@@ -1043,8 +1097,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const needsSticker = (it) => rawVins && !it.pending && it.sizes.some(
     (sz) => (Number(sz.qty) || 0) > (sz.vins || []).length,
   );
+  // A shoe sold under more than one style code can't commit until somebody says
+  // which code is on the box. Filing it under the wrong one splits the SKU in the
+  // PH grid and hides the pair from anyone searching the other code — the same class
+  // of silent wrong-data as an unknown size, so it rides the same machinery.
+  const needsSku = (it) => Array.isArray(it.skuOptions) && it.skuOptions.length > 1
+    && !it.skuOptions.includes(it.sku);
   const isUnresolved = (it) => it.pending || !String(it.name || '').trim()
-    || it.sizes.some((s) => !String(s.size || '').trim()) || needsSticker(it);
+    || it.sizes.some((s) => !String(s.size || '').trim()) || needsSticker(it) || needsSku(it);
   const unresolvedCount = items.filter(isUnresolved).length;
   const missingStickers = rawVins ? items.filter(needsSticker).length : 0;
   // The exact pair the next sticker scan will land on: { item, size }, or null.
@@ -1071,7 +1131,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     ? (isPoReceive
       ? `${stickersShort} ticked pair${stickersShort === 1 ? '' : 's'} still need${stickersShort === 1 ? 's' : ''} a 1ID sticker — scan one onto each highlighted row.`
       : `Scan a 1ID sticker onto the ${missingStickers} highlighted line${missingStickers === 1 ? '' : 's'} — every pair needs one before it can be saved.`)
-    : `Finish the ${unresolvedCount} highlighted line${unresolvedCount === 1 ? '' : 's'} first — every shoe needs a name and a size.`;
+    : (items.filter(needsSku).length
+      ? `Finish the ${unresolvedCount} highlighted line${unresolvedCount === 1 ? '' : 's'} first — every shoe needs a name, a size, and (where the shoe has more than one style code) the code printed on the box.`
+      : `Finish the ${unresolvedCount} highlighted line${unresolvedCount === 1 ? '' : 's'} first — every shoe needs a name and a size.`);
   // The step's error line sits above the sticky footer, which on a long cart is far
   // below the fold — a blocked "Review →" would look like a dead button. Put the
   // cursor in the first field that's actually missing instead: it scrolls itself
@@ -1744,6 +1806,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             ) : (
                               <div className="recv-item-title">{it.name} <span className="muted">— {it.sku || '—'}</span></div>
                             )}
+                            {skuChoice(it)}
                             {!it.pending && (
                               <div className="recv-item-toggles">
                                 <div className="seg sm" role="group" aria-label="Box status">
@@ -1884,6 +1947,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                               <input className="cart-name" placeholder="Product name" value={it.name} onChange={(e) => setItemField(it.key, { name: e.target.value })} />
                               <input placeholder="SKU" value={it.sku} onChange={(e) => setItemField(it.key, { sku: e.target.value })} />
                             </div>
+                            {skuChoice(it)}
                             <div className="recv-item-toggles">
                               <div className="seg sm" role="group" aria-label="Box status">
                                 <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>

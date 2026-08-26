@@ -1417,6 +1417,23 @@ export async function pendingCounts() {
 
 /* --------------------- PH-requested rescales --------------------------- */
 
+// Link a request to the PAIRS it was raised for, by VIN. Resolving vin -> items.id
+// here rather than trusting an id from the client: the grid already holds VINs, and a
+// VIN is the thing the warehouse can actually read off a sticker. Unknown VINs are
+// dropped silently — a link is evidence, not a gate, and a request must never fail to
+// file because one pair was removed between the grid loading and the button being hit.
+export async function linkRescaleRequestItems(requestId, vins) {
+  const list = (Array.isArray(vins) ? vins : []).map((v) => String(v || '').trim().toUpperCase()).filter(Boolean).slice(0, 2000);
+  if (!requestId || !list.length) return 0;
+  const rows = await db()`
+    INSERT INTO rescale_request_items (request_id, item_id)
+    SELECT ${requestId}, i.id FROM items i WHERE upper(i.vin) = ANY(${list}::text[])
+    ON CONFLICT DO NOTHING
+    RETURNING item_id
+  `;
+  return rows.length;
+}
+
 export async function createRescaleRequest({ sku, skuAll, name, sizes, price, reason, note, by }) {
   const rows = await db()`
     INSERT INTO rescale_requests (sku, sku_all, name, sizes, price, reason, note, requested_by)
@@ -1427,16 +1444,29 @@ export async function createRescaleRequest({ sku, skuAll, name, sizes, price, re
   return rows[0];
 }
 
+// `status` accepts one value, a LIST of them, or null for everything. The PH grid needs
+// open AND audited in a single call (open = awaiting a count, audited = the work), and
+// two round trips for one worklist is a race waiting to happen.
 export async function listRescaleRequests(status = 'open', from = null, to = null) {
+  const want = status == null ? null
+    : (Array.isArray(status) ? status : [status]).map((s) => String(s)).filter(Boolean);
+  const arr = want && want.length ? want : null;
   return await db()`
-    SELECT id, sku, sku_all, name, sizes, actual_sizes, audit_note, cancel_note, price, reason, note, status,
-           listing, listed_by, listed_at, edited_by, edited_at,
-           requested_by, resolved_by, resolved_at, created_at
-    FROM rescale_requests
-    WHERE (${status}::text IS NULL OR status = ${status})
-      AND (${from}::date IS NULL OR (created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
-      AND (${to}::date   IS NULL OR (created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
-    ORDER BY created_at DESC LIMIT 500
+    SELECT r.id, r.sku, r.sku_all, r.name, r.sizes, r.actual_sizes, r.audit_note, r.cancel_note,
+           r.price, r.reason, r.note, r.status,
+           r.listing, r.listed_by, r.listed_at, r.edited_by, r.edited_at,
+           r.requested_by, r.resolved_by, r.resolved_at, r.created_at,
+           -- The pairs this request was raised for, as VINs (the grid keys on VIN).
+           -- Empty for a request typed on the standalone form, which names no pairs.
+           coalesce((
+             SELECT array_agg(i.vin) FROM rescale_request_items l
+             JOIN items i ON i.id = l.item_id WHERE l.request_id = r.id
+           ), '{}') AS vins
+    FROM rescale_requests r
+    WHERE (${arr}::text[] IS NULL OR r.status = ANY(${arr}::text[]))
+      AND (${from}::date IS NULL OR (r.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR (r.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+    ORDER BY r.created_at DESC LIMIT 500
   `;
 }
 
@@ -1480,6 +1510,23 @@ export async function updateRescaleRequest(id, { name, sizes, price, reason, not
         sku_all = CASE WHEN ${sku || null}::text IS NULL THEN sku_all ELSE ${skuAll || sku || null} END,
         edited_by = ${by || null}, edited_at = now()
     WHERE id = ${id} AND status = 'open' RETURNING id
+  `;
+  if (rows.length) return { ok: true };
+  const cur = await db()`SELECT status FROM rescale_requests WHERE id = ${id}`;
+  return { ok: false, status: cur[0]?.status || null };
+}
+
+// The end of the loop. `audited` is where a request used to stop, so the green
+// "Audited" home badge counted up forever and the linked pairs never left the Rescale
+// tab. Closing says the pairs it was raised for have been dealt with — re-listed, or
+// the count settled — and both badges drop it for free, since they key on `status`.
+//
+// Only from `audited`: closing something nobody has counted would throw away the ask.
+export async function closeRescaleRequest(id, by) {
+  const rows = await db()`
+    UPDATE rescale_requests
+    SET status = 'closed', resolved_by = coalesce(resolved_by, ${by || null}), closed_by = ${by || null}, closed_at = now()
+    WHERE id = ${id} AND status = 'audited' RETURNING id
   `;
   if (rows.length) return { ok: true };
   const cur = await db()`SELECT status FROM rescale_requests WHERE id = ${id}`;

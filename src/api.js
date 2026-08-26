@@ -182,6 +182,7 @@ export const api = {
   // PH-only (the server refuses anyone else, admin included).
   rescaleRequestCancel: (id, note) => post('/api/rescale-requests/cancel', { id, note }),
   rescaleRequestUpdate: (id, payload) => post('/api/rescale-requests/update', { id, ...payload }),
+  rescaleRequestClose: (id) => post('/api/rescale-requests/close', { id }),
   // Generic Alias GI lookup (no save) — used by the PH grid + rescale listing editor.
   phGiLookup: (sku, sizes) => post('/api/ph/gi-lookup', { sku, sizes }),
   // Read-only price inquiry (no save) — GI + Final + lowest/highest/last-sold, PH Price Inquiry page.

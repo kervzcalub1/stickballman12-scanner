@@ -141,6 +141,67 @@ PH doesn't have to leave the worklist to raise a request. Every row on **New Inv
 - The pinned Action column widens to 124px on this page only (`rightStyle(which, wide)`) — at 104px
   the button's label broke across two lines inside the button.
 
+## The Rescale tab on New Inventory (2026-08-27)
+A fourth tab beside Pending / In-Progress / Done, in the **`requests` violet** rather
+than the listing blue — it is a different KIND of bucket, not a fourth stage of listing.
+
+- **`phListingStatus` stays three-valued.** A fourth value would silently kill the
+  ✓ Listed / ◐ Part-listed / • Not listed split chip on exactly the rows that need it.
+  The tab keys on **`phTabOf(g, byVin)`** (`src/lib/ph.js`), which returns `'rescale'`
+  when `rescaleRequestFor` matches and otherwise falls through to the listing state.
+  Rescale **outranks** the listing state: a pair whose count is in question is not work
+  PH can finish.
+- **Counts on all four tabs**, off the same function the filter uses. The page defaults
+  to `?st=pending`, so without them these rows would simply vanish with nothing on
+  screen saying where they went.
+- **`rescale_request_items (request_id, item_id)`** — `items.id`, not vin (the primary
+  key, so no question about sticker formats can reach it), and a join table not JSONB
+  (the grid asks item→request on every load). `ON DELETE CASCADE` both ways: removing a
+  pair HARD deletes its row (`inventory.md`), which must not strand a link.
+  Written by `create.js` from the VINs the **row modal** sends; a request typed on the
+  standalone form names no pairs and stays unlinked, so it chips but moves nothing.
+- **ALL-OR-NOTHING.** A row moves only when EVERY pair on it is linked to the same
+  request. A partly-linked row would drag pairs nobody asked about out of Pending, and
+  splitting the row by linked-vs-not would add a fourth dimension to a group key that
+  already carries three split rules plus the edit-lock freeze. A row is all-linked by
+  construction when raised off the grid; rule 2 can make it partial later (a new
+  delivery of the same SKU merges in), and then it stays put and keeps the chip.
+- Two states, one tab: **⟳ Awaiting count · Nd** (nothing to do yet — the day count is
+  the only thing on screen saying a request nobody audits has parked its pairs) and
+  **✓ Counted** (+ `N short` / `N extra`), which IS the work.
+- **`status = 'closed'`** (+ `closed_by`/`closed_at`) is the terminal state the loop
+  never had. `audited` was terminal, so the green home badge counted up forever and the
+  linked pairs never left the tab. `POST /api/rescale-requests/close`, PH-only, from
+  `audited` only.
+
+### The listing worksheet — the count IS the guide
+After an audit, what PH must list is the **warehouse's count, not ours**: the shelf held
+9×4 / 9.5×5 / 10×3 while `items` knew about one pair of 9. So the pricing and the store
+ticks live on the audit table (`Size · On file · Reported · Actual · Δ · Global
+indicator ↻ · Final price · II · AL · SX · SH`), and the per-size table below drops them
+(`guideModeFor`), keeping Qty / Cost / Note / History — the fields that still describe
+the pairs we hold.
+
+**Save writes BOTH**, which is the whole point:
+- every counted size → the request's `listing` blob, documented and visible to both
+  teams on Rescale Requests;
+- the sizes we actually hold → the real `items` rows through the same `phUpdateGroup`
+  every other row uses, so the flags land on stock and PH never ticks a shoe twice.
+
+A size the shelf has and we don't is tagged **not on file** and can only be documented —
+there is no inventory row to write to until the warehouse counts it in.
+
+**↻ consumes `{ configured, results:[{ size, global_indicator, price, basis }] }` — an
+ARRAY**, the same shape `fetchGi` on the Rescale Requests page reads; the two must not
+drift. Use the server's `price` (it rounds through the configured markup) rather than
+recomputing. A size Alias has no price for is simply ABSENT from `results`, so the fill
+reports "2 of 3" instead of leaving blank boxes that look like a dead button.
+
+**Layout:** `.ph-detail` is a flex ROW, so its children size to content — which left the
+panel in a quarter of the drawer with a field of empty space. The count panel and the
+size table are `flex: 1 0 100%`; the worksheet scrolls inside `.ph-audit-scroll` so the
+row never scrolls sideways.
+
 ## Notes
 - **`api/items/rescale.js` rejects an in-store VIN (409)** — rescaling sets
   `restock_pending`, which would leak an in-store pair onto the PH Rescale grid;

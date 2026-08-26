@@ -293,6 +293,41 @@ export const PH_LISTING_STATUSES = [
   { key: 'in_progress', label: 'In-Progress' },
   { key: 'done', label: 'Done' },
 ];
+// The New Inventory tabs. Rescale is a FOURTH BUCKET, not a fourth listing status —
+// a row under audit is still pending or part-listed, and `phListingStatus` stays
+// three-valued so the ✓ Listed / ◐ Part-listed / • Not listed split chip keeps telling
+// the truth inside the tab. `phTabOf` is what the filter keys on.
+export const PH_TABS = [
+  ...PH_LISTING_STATUSES,
+  { key: 'rescale', label: '⟳ Rescale' },
+];
+
+// Is this row in the Rescale bucket, and which request put it there?
+//
+// `byVin` maps VIN -> an open/audited request. The rule is deliberately ALL-OR-NOTHING:
+// a row moves only when EVERY pair on it is linked to the same request.
+//   · A partly-linked row would otherwise drag pairs nobody asked about out of Pending.
+//   · The alternative — splitting the row by linked-vs-not — would add a fourth
+//     dimension to a group key that already carries three split rules plus the
+//     edit-lock freeze, which is the most intricate logic in the app.
+// A row raised straight off the grid is all-linked by construction. It can become
+// partial later (rule 2 merges a new delivery of the same SKU into a pending row); when
+// that happens the row stays where it is and keeps the chip, which is honest — it now
+// holds pairs the warehouse isn't counting.
+export function rescaleRequestFor(g, byVin) {
+  const vins = (g && g.vins) || [];
+  if (!byVin || !vins.length) return null;
+  const first = byVin[vins[0]];
+  if (!first) return null;
+  return vins.every((v) => byVin[v] && byVin[v].id === first.id) ? first : null;
+}
+
+// Which TAB a row files under. Rescale outranks the listing state: a pair whose count
+// is in question is not work PH can finish, so it leaves the listing worklist until the
+// count is settled. Everything else falls through to the three listing states.
+export function phTabOf(g, byVin) {
+  return rescaleRequestFor(g, byVin) ? 'rescale' : phListingStatus(g);
+}
 // The store flags that actually apply to a group. "GOAT only" shoes list to
 // Alias(GOAT) alone — II/StockX/Shopify are N/A, so they don't
 // count toward completion or the badges.

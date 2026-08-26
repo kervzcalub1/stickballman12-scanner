@@ -16,7 +16,7 @@ import { markupSuffix } from '../lib/config.js';
 import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
 import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized, PRICE_BASES,
-  phListingStatus, PH_LISTING_STATUSES, requiredFlags,
+  phListingStatus, PH_TABS, phTabOf, rescaleRequestFor, requiredFlags,
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
   phSearchTokens, phRowMatches,
 } from '../lib/ph.js';
@@ -602,22 +602,33 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // components/RescaleRequestModal.jsx). `openReqs` is a SKU -> open request map, used
   // both for the row chip and to warn before a second request for the same shelf.
   const [rescaleFor, setRescaleFor] = useState(null);   // the group whose modal is open
-  const [openReqs, setOpenReqs] = useState({});         // sku -> { id, requested_by, created_at }
+  const [openReqs, setOpenReqs] = useState({});         // CODE -> request (the chip)
+  const [reqByVin, setReqByVin] = useState({});         // VIN  -> request (the Rescale tab)
   const canRescaleRequest = canEdit && kind === 'receiving';
   async function loadOpenRequests() {
     if (!canRescaleRequest) return;
     try {
       // Every open request, not just this page's date range — a request raised last
       // month is still open work against this SKU, and the chip has to say so.
-      const { requests } = await api.rescaleRequestList('open');
+      // open AND audited: open is "awaiting a count", audited is the work PH has to
+      // finish. Both belong in the Rescale tab, and two round trips for one worklist is
+      // a race waiting to happen.
+      const { requests } = await api.rescaleRequestList('open,audited');
       // Keyed per CODE, not per sku string: a request raised against one code of a
       // dual-code shoe is still an open request against the row that carries both, and
       // an equality match would say they were unrelated (newest first from the server).
       const m = {};
+      const v = {};
       for (const r of requests || []) {
-        for (const c of skuCodes(r.sku)) { const k = c.toUpperCase(); if (!m[k]) m[k] = r; }
+        if (r.status === 'open') {
+          for (const c of skuCodes(r.sku)) { const k = c.toUpperCase(); if (!m[k]) m[k] = r; }
+        }
+        // The pairs it was raised for. Only row-raised requests have these; one typed on
+        // the standalone form names a SKU and no pairs, so it chips but moves nothing.
+        for (const vin of r.vins || []) if (!v[vin]) v[vin] = r;
       }
       setOpenReqs(m);
+      setReqByVin(v);
     } catch { /* the chip is a courtesy — a failed fetch must not break the grid */ }
   }
   useEffect(() => { loadOpenRequests(); }, [canRescaleRequest]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -626,6 +637,191 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     setNotice(`Rescale requested for ${res.sku} — ${res.qty} pair${res.qty === 1 ? '' : 's'} reported. The warehouse will count the shelf and you'll see reported vs actual under Rescale Requests.`);
     loadOpenRequests();
   }
+  // A row in the Rescale bucket: which request, and what it says. Two states, one tab —
+  // "awaiting count" has nothing to do yet, "counted" IS the work.
+  const [closingKey, setClosingKey] = useState(null);
+  const rescaleReq = (g) => rescaleRequestFor(g, reqByVin);
+  // "Guide mode": the row is under an AUDITED request, so the listing controls live on
+  // the count above (the shelf's real sizes) and the per-size table below drops them
+  // rather than showing a second, narrower set of the same fields against stale counts.
+  const guideModeFor = (g) => canRescaleRequest && rescaleReq(g)?.status === 'audited';
+  const daysSince = (d) => Math.max(0, Math.round((Date.now() - new Date(d).getTime()) / 86400000));
+  // Reported / actual by size, against what we hold. Δ has THREE readings and the third
+  // is the one this warehouse actually hits: MORE on the shelf than we track usually
+  // means pre-system stock that was never counted in, not a record that is short.
+  function auditRows(g, r) {
+    const rep = new Map((r.sizes || []).map((s) => [String(s.size), Number(s.qty) || 0]));
+    const act = new Map((r.actual_sizes || []).map((s) => [String(s.size), Number(s.qty) || 0]));
+    const file = new Map((g.sizes || []).map((s) => [String(s.size), Number(s.qty) || 0]));
+    const sizes = [...new Set([...file.keys(), ...rep.keys(), ...act.keys()])]
+      .sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0) || String(a).localeCompare(String(b)));
+    return sizes.map((size) => {
+      const onFile = file.get(size) ?? null;
+      const reported = rep.get(size) ?? null;
+      const actual = act.has(size) ? act.get(size) : null;
+      const delta = actual == null || onFile == null ? null : actual - onFile;
+      return { size, onFile, reported, actual, delta };
+    });
+  }
+  // ── The rescale listing worksheet ────────────────────────────────────────────
+  // After an audit, what PH has to list is the WAREHOUSE'S count, not our own — the
+  // shelf held 9x4 / 9.5x5 / 10x3 while `items` knew about one pair of 9. So the
+  // pricing and the store ticks belong on the audit table, where the real sizes are;
+  // the per-size editor below keeps only what still describes the pairs we hold
+  // (qty, note, history).
+  //
+  // Saving writes BOTH, which is the whole point:
+  //   · the request's `listing` blob  — every size the warehouse counted, documented
+  //     on the request and visible to both teams on Rescale Requests;
+  //   · the real `items` rows         — for the sizes we actually hold, through the
+  //     same phUpdateGroup every other row uses, so the flags land on stock and PH
+  //     never ticks the same shoe twice.
+  // A size the shelf has and we don't (9.5 and 10 above) can only be documented —
+  // there is no items row to write to until the warehouse counts it in.
+  const [sheets, setSheets] = useState({});      // group key -> { [size]: fields }
+  const [sheetBusy, setSheetBusy] = useState(null);
+  const [sheetGi, setSheetGi] = useState(null);
+  function sheetFor(g, r) {
+    const cur = sheets[g.key];
+    if (cur) return cur;
+    const saved = new Map((r.listing || []).map((x) => [String(x.size), x]));
+    const held = new Map((g.sizes || []).map((s) => [String(s.size), s]));
+    const seed = {};
+    for (const row of auditRows(g, r)) {
+      const sv = saved.get(row.size);
+      const h = held.get(row.size);
+      seed[row.size] = {
+        global_indicator: sv?.global_indicator ?? h?.global_indicator ?? '',
+        price: sv?.price ?? h?.price ?? '',
+        gi_basis: sv?.gi_basis ?? h?.gi_basis ?? null,
+        added_to_intel_inv: !!(sv?.added_to_intel_inv ?? h?.added_to_intel_inv),
+        synced_alias: !!(sv?.synced_alias ?? h?.synced_alias),
+        synced_stockx: !!(sv?.synced_stockx ?? h?.synced_stockx),
+        synced_shopify: !!(sv?.synced_shopify ?? h?.synced_shopify),
+      };
+    }
+    return seed;
+  }
+  const setSheetField = (g, r, size, patch) => setSheets((m) => {
+    const cur = m[g.key] || sheetFor(g, r);
+    return { ...m, [g.key]: { ...cur, [size]: { ...cur[size], ...patch } } };
+  });
+  // Same rule as the main grid: II is the master, so ticking it ticks the stores this
+  // shoe actually goes to. Turning it OFF cascades nothing — a delist is exactly where
+  // the stores diverge.
+  const setSheetFlag = (g, r, size, key, on) => {
+    const patch = { [key]: on };
+    if (key === 'added_to_intel_inv' && on) for (const f of requiredFlags(g)) patch[f] = true;
+    setSheetField(g, r, size, patch);
+  };
+  const setSheetGiValue = (g, r, size, v) =>
+    setSheetField(g, r, size, { global_indicator: v, price: calcFinalPrice(v), gi_basis: null });
+  // `/api/ph/gi-lookup` answers { configured, results:[{ size, global_indicator, price,
+  // basis }] } — an ARRAY, and it returns the server-side Final price too, so don't
+  // recompute it here (the server rounds through the configured markup). Same shape the
+  // Rescale Requests page consumes; the two must not drift.
+  async function fillSheetGi(g, r) {
+    setSheetGi(g.key); setError(''); setNotice('');
+    try {
+      const sizes = auditRows(g, r).map((x) => x.size);
+      const { results, configured } = await api.phGiLookup(g.sku, sizes);
+      if (configured === false) { setError('Alias pricing isn’t configured, so GI can’t be fetched.'); return; }
+      const bySize = new Map((results || []).map((x) => [String(x.size), x]));
+      const cur = sheets[g.key] || sheetFor(g, r);
+      const next = { ...cur };
+      let filled = 0;
+      for (const size of sizes) {
+        const p = bySize.get(String(size));
+        if (!p || p.global_indicator == null) continue;
+        next[size] = {
+          ...next[size],
+          global_indicator: p.global_indicator,
+          price: p.price ?? calcFinalPrice(p.global_indicator),
+          gi_basis: p.basis ?? null,
+        };
+        filled += 1;
+      }
+      setSheets((m) => ({ ...m, [g.key]: next }));
+      // Say which sizes Alias had nothing for, rather than leaving blank boxes that
+      // look like the button did nothing.
+      if (!filled) setError(`No Alias prices found for ${g.sku} in ${sizes.join(', ')}.`);
+      else if (filled < sizes.length) setNotice(`Filled ${filled} of ${sizes.length} sizes — Alias had no price for the rest.`);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setSheetGi(null); }
+  }
+  async function saveSheet(g, r) {
+    setSheetBusy(g.key); setError('');
+    const sheet = sheets[g.key] || sheetFor(g, r);
+    const rowsOut = auditRows(g, r).map((x) => ({
+      size: x.size, qty: x.actual ?? x.reported ?? x.onFile ?? 0, ...sheet[x.size],
+    }));
+    try {
+      // 1) Document every counted size on the request itself.
+      await api.rescaleRequestListUpdate(r.id, rowsOut, r.listed_at ?? null);
+      // 2) And write the real thing for the sizes we actually hold.
+      const held = (g.sizes || []).filter((s) => sheet[String(s.size)]);
+      if (held.length) {
+        const payload = held.map((s) => {
+          const f = sheet[String(s.size)];
+          return {
+            vins: s.vins,
+            fields: {
+              global_indicator: f.global_indicator, price: f.price, gi_basis: f.gi_basis ?? null,
+              added_to_intel_inv: f.added_to_intel_inv, synced_alias: f.synced_alias,
+              synced_stockx: f.synced_stockx, synced_shopify: f.synced_shopify,
+              ph_note: s.ph_note ?? null,
+            },
+          };
+        });
+        const result = await api.phUpdateGroup(payload, g.last_edit_at || null);
+        const byVin = new Map((result.rows || []).map((u) => [u.vin, u]));
+        setRows((rs) => rs.map((x) => byVin.get(x.vin) || x));
+      }
+      const extra = rowsOut.length - held.length;
+      setNotice(`Listing saved for ${g.sku}${extra > 0 ? ` — ${extra} size${extra === 1 ? '' : 's'} recorded on the request only (no stock on file yet)` : ''}.`);
+      loadOpenRequests();
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      if (err.conflict) { setError(err.message); load(); return; }
+      setError(err.message);
+    } finally { setSheetBusy(null); }
+  }
+
+  async function closeRescale(g, r) {
+    setClosingKey(g.key); setError('');
+    try {
+      await api.rescaleRequestClose(r.id);
+      setNotice(`Rescale request for ${r.sku} closed — the row goes back to the normal worklist.`);
+      loadOpenRequests();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setClosingKey(null); }
+  }
+  // The chip in the Rescale column. Deliberately says how long it has been waiting: the
+  // page defaults to Pending, so a request nobody ever audits parks its pairs in a tab
+  // nobody has selected, and "asked 9 days ago" is the only thing on screen that says so.
+  const rescaleStateChip = (g) => {
+    const r = rescaleReq(g);
+    if (!r) return null;
+    if (r.status === 'open') {
+      const d = daysSince(r.created_at);
+      return (
+        <span className="ph-rescale-chip wait" title={`${r.requested_by || 'Someone'} asked the warehouse to count this shelf. Nothing to do here until they have.`}>
+          ⟳ Awaiting count{d > 0 ? ` · ${d}d` : ''}
+        </span>
+      );
+    }
+    const rows = auditRows(g, r);
+    const short = rows.reduce((n, x) => n + (x.delta != null && x.delta < 0 ? -x.delta : 0), 0);
+    const over = rows.reduce((n, x) => n + (x.delta != null && x.delta > 0 ? x.delta : 0), 0);
+    return (
+      <>
+        <span className="ph-rescale-chip ready" title={`Counted by ${r.resolved_by || 'the warehouse'}. Finish listing, then mark the rescale done.`}>✓ Counted</span>
+        {short > 0 && <span className="ph-rescale-chip short" title="We hold more on file than the shelf holds">{short} short</span>}
+        {over > 0 && <span className="ph-rescale-chip over" title="The shelf holds more than we track — often stock that predates this system">{over} extra</span>}
+      </>
+    );
+  };
+
   // The row's "already asked" chip. Also the button's own guard-rail: it opens the
   // modal, which repeats the warning with who asked and when.
   const rescaleChip = (g) => {
@@ -745,7 +941,15 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const allGroups = groupPhSized(rows || [], isLockedVin);
   allGroups.sort((a, b) => (sortDir === 'desc' ? (a.created_at < b.created_at ? 1 : -1) : (a.created_at < b.created_at ? -1 : 1)));
   // New Inventory only: narrow to the selected listing-status buckets.
-  const statusGroups = useStatusFilter ? allGroups.filter((g) => statusFilter.has(phListingStatus(g))) : allGroups;
+  // Rescale outranks the listing state (see phTabOf). Counts come off the SAME
+  // function the filter uses, so a tab can never claim rows it wouldn't show — and the
+  // page defaults to Pending, so without the counts these rows would simply vanish
+  // with nothing on screen saying where they went.
+  const tabOf = (g) => phTabOf(g, reqByVin);
+  const statusGroups = useStatusFilter ? allGroups.filter((g) => statusFilter.has(tabOf(g))) : allGroups;
+  const tabCounts = useStatusFilter
+    ? allGroups.reduce((acc, g) => { const k = tabOf(g); acc[k] = (acc[k] || 0) + 1; return acc; }, {})
+    : {};
   // A row being EDITED always stays on screen, whatever is typed — hiding it would
   // strand an unsaved draft behind a filter and leave its server-side edit lock held
   // by a row nobody can see.
@@ -776,10 +980,12 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
           <div className="ph-status-filter">
             <span className="muted sm">Status</span>
             <div className="seg sm">
-              {PH_LISTING_STATUSES.map((s) => (
+              {PH_TABS.map((s) => (
                 <button key={s.key} type="button" aria-pressed={statusFilter.has(s.key)}
-                  className={`seg-btn${statusFilter.has(s.key) ? ' on' : ''}`}
-                  onClick={() => toggleStatus(s.key)}>{s.label}</button>
+                  className={`seg-btn${statusFilter.has(s.key) ? ' on' : ''}${s.key === 'rescale' ? ' rescale' : ''}`}
+                  onClick={() => toggleStatus(s.key)}>
+                  {s.label} <span className="seg-n">{tabCounts[s.key] || 0}</span>
+                </button>
               ))}
             </div>
           </div>
@@ -817,7 +1023,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
                     {splitChip(g)}
-                    {rescaleChip(g)}
+                    {rescaleStateChip(g) || rescaleChip(g)}
                     {g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}
                   </div>
                   <button type="button" className="ph-card-sizes ph-card-sizes-btn" onClick={() => toggleExpand(g.key)} aria-expanded={open}>
@@ -960,7 +1166,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                         <td>{g.gender || '—'}</td>
-                        <td className="ph-status-cell"><StatusPill status={g.status} />{rescaleChip(g)}</td>
+                        <td className="ph-status-cell"><StatusPill status={g.status} />{rescaleStateChip(g) || rescaleChip(g)}</td>
                         <td><div className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}</div></td>
                         <td>{g._mixedBy ? <span className="muted">multiple</span> : (g.created_by || '—')}</td>
                         <td style={rightStyle('action', canRescaleRequest)} className="ph-rfrozen ph-rfrozen-first" onClick={(e) => e.stopPropagation()}>
@@ -1002,11 +1208,143 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                         <tr className="ph-drow">
                           <td colSpan={11}>
                             <div className="ph-detail" ref={drawerAnimRef}>
+                              {(() => {
+                                const r = rescaleReq(g);
+                                if (!r) return null;
+                                if (r.status === 'open') {
+                                  return (
+                                    <div className="ph-audit wait">
+                                      <b>Waiting on the warehouse.</b> {r.requested_by || 'Someone'} asked them to count this shelf
+                                      {r.created_at ? ` on ${PH_DATETIME.format(new Date(r.created_at))} EST` : ''}
+                                      {daysSince(r.created_at) > 2 ? ` — ${daysSince(r.created_at)} days ago` : ''}.
+                                      {r.note ? <span className="muted"> “{r.note}”</span> : null}
+                                    </div>
+                                  );
+                                }
+                                const rows = auditRows(g, r);
+                                const short = rows.reduce((n, x) => n + (x.delta != null && x.delta < 0 ? -x.delta : 0), 0);
+                                const over = rows.reduce((n, x) => n + (x.delta != null && x.delta > 0 ? x.delta : 0), 0);
+                                return (
+                                  <div className="ph-audit">
+                                    <div className="ph-audit-head">
+                                      <b>Counted by {r.resolved_by || 'the warehouse'}</b>
+                                      {r.resolved_at ? <span className="muted sm"> · {PH_DATETIME.format(new Date(r.resolved_at))} EST</span> : null}
+                                      {r.audit_note ? <span className="muted sm"> · “{r.audit_note}”</span> : null}
+                                    </div>
+                                    {(() => {
+                                      const sheet = sheetFor(g, r);
+                                      const held = new Set((g.sizes || []).map((s) => String(s.size)));
+                                      const guide = canRescaleRequest;
+                                      return (
+                                        <div className="ph-audit-scroll">
+                                          <table className="ph-audit-table">
+                                            <thead><tr>
+                                              <th>Size</th><th>On file</th><th>Reported</th><th>Actual</th><th>Δ</th>
+                                              {guide && showPricing && (
+                                                <>
+                                                  <th>
+                                                    <span className="ph-gi-th">Global indicator
+                                                      <button type="button" className="btn icon ph-gi-refresh" title="Fill GI from Alias for every counted size"
+                                                        disabled={sheetGi === g.key} onClick={(e) => { e.stopPropagation(); fillSheetGi(g, r); }}>
+                                                        <Icon name="refresh" size="1em" className={sheetGi === g.key ? 'spin' : ''} />
+                                                      </button>
+                                                    </span>
+                                                  </th>
+                                                  <th>Final price (GI+{markupSuffix()})</th>
+                                                </>
+                                              )}
+                                              {guide && PH_FLAGS.map(([k, label]) => <th key={k}>{label}</th>)}
+                                            </tr></thead>
+                                            <tbody>
+                                              {rows.map((x) => {
+                                                const f = sheet[x.size] || {};
+                                                const onFile = held.has(x.size);
+                                                return (
+                                                  <tr key={x.size} className={onFile ? '' : 'untracked'}>
+                                                    <td>
+                                                      {x.size}
+                                                      {!onFile && <span className="ph-untracked-tag" title="No stock on file for this size yet — what you set here is recorded on the request, not on an inventory row">not on file</span>}
+                                                    </td>
+                                                    <td>{x.onFile ?? '—'}</td>
+                                                    <td>{x.reported ?? '—'}</td>
+                                                    <td className={x.delta ? 'diff' : ''}>{x.actual ?? '—'}</td>
+                                                    <td className={x.delta ? 'diff' : 'match'}>
+                                                      {x.delta == null ? '—' : x.delta === 0 ? 'match' : (x.delta > 0 ? `+${x.delta}` : x.delta)}
+                                                    </td>
+                                                    {guide && showPricing && (
+                                                      <>
+                                                        <td onClick={(e) => e.stopPropagation()}>
+                                                          <PriceInput value={f.global_indicator} onChange={(e) => setSheetGiValue(g, r, x.size, e.target.value)} />
+                                                          <BasisChip basis={f.gi_basis} />
+                                                        </td>
+                                                        <td onClick={(e) => e.stopPropagation()}>
+                                                          <PriceInput value={f.price} onChange={(e) => setSheetField(g, r, x.size, { price: e.target.value })} />
+                                                        </td>
+                                                      </>
+                                                    )}
+                                                    {guide && PH_FLAGS.map(([k]) => (
+                                                      <td key={k}>
+                                                        {flagNA(g, k)
+                                                          ? <span className="ph-flag-na" title="GOAT only — not listed to this store">N/A</span>
+                                                          : <span onClick={(e) => e.stopPropagation()}>
+                                                              <YesNo value={!!f[k]} editing onChange={(v) => setSheetFlag(g, r, x.size, k, v)} />
+                                                            </span>}
+                                                      </td>
+                                                    ))}
+                                                  </tr>
+                                                );
+                                              })}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      );
+                                    })()}
+                                    {/* Nothing is adjusted automatically. Short and OVER are different
+                                        problems with different fixes, and the over case is usually not a
+                                        problem at all — see the note. */}
+                                    {short > 0 && (
+                                      <div className="ph-audit-note short">
+                                        <b>{short} short.</b> We hold more on file than the shelf does. Nothing has been
+                                        adjusted — use <b>Remove…</b> on this row once you have settled which pairs are gone.
+                                      </div>
+                                    )}
+                                    {over > 0 && (
+                                      <div className="ph-audit-note over">
+                                        <b>{over} more on the shelf than we track.</b> Often stock that predates this system
+                                        and was never counted in — it has no record here at all, so nothing is missing.
+                                        The warehouse fixes it with <b>Count Existing Stock</b> at that shelf; those pairs
+                                        list as existing stock and <b>never reach this worklist</b>, so don’t wait for them here.
+                                      </div>
+                                    )}
+                                    {canRescaleRequest && (
+                                      <div className="ph-audit-actions">
+                                        <button className="btn sm primary" disabled={sheetBusy === g.key}
+                                          title="Save this listing — recorded on the request, and written to the pairs we hold"
+                                          onClick={(e) => { e.stopPropagation(); saveSheet(g, r); }}>
+                                          {sheetBusy === g.key ? '…' : 'Save listing'}
+                                        </button>
+                                        <button className="btn sm violet" disabled={closingKey === g.key || editing.size > 0}
+                                          title="The pairs are listed and the count is settled — close the request"
+                                          onClick={(e) => { e.stopPropagation(); closeRescale(g, r); }}>
+                                          {closingKey === g.key ? '…' : '✓ Rescale done'}
+                                        </button>
+                                        <span className="muted sm">Closing puts this row back in the normal worklist.</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+                              {rescaleReq(g)?.status === 'audited' && canRescaleRequest && (
+                                <div className="ph-sizetable-note muted sm">
+                                  Pricing and the store ticks moved into the count above — that is what the shelf
+                                  actually holds. Below is what we have on file: quantity, cost, note and history.
+                                </div>
+                              )}
                               <table className="ph-sizetable">
                                 <thead><tr>
                                   <th>Size</th><th>Qty</th><th>Cost</th>
-                                  {showPricing && <><th><span className="ph-gi-th">Global indicator{ed && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for this shoe’s sizes" disabled={giFillKey === g.key} onClick={(e) => { e.stopPropagation(); fillGroupGi(g); }}><Icon name="refresh" size="1em" className={giFillKey === g.key ? 'spin' : ''} /></button>}</span></th><th>Final Price (GI+{markupSuffix()})</th></>}
-                                  {PH_FLAGS.map(([k, label]) => (
+                                  {showPricing && !guideModeFor(g) && <><th><span className="ph-gi-th">Global indicator{ed && <button type="button" className="btn icon ph-gi-refresh" title="Re-fetch GI from Alias for this shoe’s sizes" disabled={giFillKey === g.key} onClick={(e) => { e.stopPropagation(); fillGroupGi(g); }}><Icon name="refresh" size="1em" className={giFillKey === g.key ? 'spin' : ''} /></button>}</span></th><th>Final Price (GI+{markupSuffix()})</th></>}
+                                  {!guideModeFor(g) && PH_FLAGS.map(([k, label]) => (
                                     <th key={k}>
                                       <span className="ph-flag-th">
                                         <span>{label}</span>
@@ -1024,19 +1362,19 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                         <td>US {s.size}</td>
                                         <td>×{s.qty}</td>
                                         <td>{s.cost != null ? `${s.costMixed ? '~' : ''}$${Number(s.cost).toFixed(2)}` : '—'}</td>
-                                        {showPricing && (
+                                        {showPricing && !guideModeFor(g) && (
                                           <td>{ed
                                             ? <><PriceInput value={sd.global_indicator} onChange={(e) => setSizeGI(g.key, s.size, e.target.value)} /><BasisChip basis={sd.gi_basis} /></>
                                             : <>{s.global_indicator != null ? `${s.globalMixed ? '~' : ''}$${Number(s.global_indicator).toFixed(2)}` : '—'}<BasisChip basis={s.gi_basis} /></>}</td>
                                         )}
-                                        {showPricing && (
+                                        {showPricing && !guideModeFor(g) && (
                                           <td>{ed
                                             ? <PriceInput value={sd.price} onChange={(e) => setSizePrice(g.key, s.size, e.target.value)} />
                                             : (s.price != null
                                               ? <>{s.priceMixed ? '~' : ''}${fmtPrice(s.price)}{s.priceChanged && s.listed_price != null && <span className="ph-drift-was" title="Price it was listed at">was ${fmtPrice(s.listed_price)}</span>}</>
                                               : '—')}</td>
                                         )}
-                                        {PH_FLAGS.map(([k]) => (
+                                        {!guideModeFor(g) && PH_FLAGS.map(([k]) => (
                                           <td key={k}>{flagNA(g, k)
                                             ? <span className="ph-flag-na" title="GOAT only — not listed to this store">N/A</span>
                                             : <YesNo value={ed ? sd[k] : s[k]} count={s.flagCounts?.[k]} total={s.qty} editing={ed} onChange={(v) => setSizeFlag(g, s.size, k, v)} />}</td>

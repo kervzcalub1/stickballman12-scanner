@@ -987,6 +987,66 @@ body {
   padding: 1px 6px; border-radius: 5px; margin-left: 6px;
   color: #8fb3ff; border: 1px solid rgba(143,179,255,0.5); background: rgba(143,179,255,0.12);
 }
+/* The Rescale bucket's own states. Violet = a request is in flight (a different KIND
+   of wait from the listing blue); green = counted, this is the work; amber/rose call
+   out a disagreement with the shelf. */
+.ph-rescale-chip.wait  { color: #a595ff; border-color: rgba(165,149,255,0.5); background: rgba(165,149,255,0.12); }
+.ph-rescale-chip.ready { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
+.ph-rescale-chip.short { color: #e08f8f; border-color: rgba(224,143,143,0.5); background: rgba(224,143,143,0.12); }
+.ph-rescale-chip.over  { color: #e0a878; border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.12); }
+
+/* The Rescale tab. Violet, not the listing blue: it is a different kind of bucket, not
+   a fourth stage of listing. The count on every tab is what stops rows vanishing
+   silently when the page defaults to Pending. */
+.seg-btn .seg-n { font-variant-numeric: tabular-nums; opacity: 0.7; font-size: 11px; margin-left: 4px; }
+.seg-btn.on.rescale { color: #a595ff; border-color: #a595ff; background: rgba(165,149,255,0.14); }
+.seg-btn.on.rescale .seg-n { opacity: 1; }
+
+/* Reported vs actual, inside the row's own drawer — the whole point of the tab is that
+   this sits where the listing gets done, not on another screen. */
+.ph-audit {
+  border: 1px solid rgba(165,149,255,0.4); background: rgba(165,149,255,0.07);
+  border-radius: 10px; padding: 14px; margin-bottom: 14px;
+}
+/* The drawer is pinned left under the frozen columns, so its children have to be told
+   to fill the row's real width — otherwise the panel sat in a quarter of it with a
+   field of empty space to the right (what the screenshot showed). */
+.ph-audit.wait { border-color: rgba(165,149,255,0.3); color: var(--muted); }
+.ph-audit-head { margin-bottom: 8px; }
+/* The worksheet fills the drawer instead of floating in a quarter of it — it is now
+   the row's primary table, not a footnote beside one. Wide content scrolls in its own
+   box so the row never scrolls sideways. */
+.ph-audit-scroll { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
+.ph-audit-table { border-collapse: collapse; font-size: 12.5px; width: 100%; min-width: 640px; }
+.ph-audit-table th, .ph-audit-table td {
+  padding: 7px 10px; text-align: left; font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid rgba(165,149,255,0.16); white-space: nowrap;
+}
+.ph-audit-table tbody tr:last-child td { border-bottom: 0; }
+.ph-audit-table th {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+  border-bottom: 1px solid rgba(165,149,255,0.32);
+}
+/* The four count columns are the comparison — keep them tight and grouped, and let the
+   pricing/flag columns take the space they need to the right. */
+.ph-audit-table th:nth-child(-n+5), .ph-audit-table td:nth-child(-n+5) { width: 1%; }
+.ph-audit-table td.diff { color: #e0a878; font-weight: 700; }
+.ph-audit-table td.match { color: #7bc99a; }
+/* A size the shelf has and we don't: it can be priced and ticked, but only onto the
+   request — there is no inventory row to write to yet. */
+.ph-audit-table tr.untracked td:first-child { color: var(--muted); }
+.ph-untracked-tag {
+  margin-left: 6px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.3px;
+  padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+  color: #e0a878; border: 1px solid rgba(224,168,120,0.45); background: rgba(224,168,120,0.10);
+}
+.ph-sizetable-note { margin: 2px 0 8px; line-height: 1.45; }
+.ph-audit-note { margin-top: 10px; font-size: 12.5px; line-height: 1.5; border-radius: 8px; padding: 8px 10px; }
+.ph-audit-note.short { color: #f0c2c2; background: rgba(224,143,143,0.10); border: 1px solid rgba(224,143,143,0.4); }
+.ph-audit-note.over  { color: #f0cba6; background: rgba(224,168,120,0.10); border: 1px solid rgba(224,168,120,0.4); }
+.ph-audit-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.btn.violet { background: rgba(165,149,255,0.14); border-color: rgba(165,149,255,0.5); color: #a595ff; }
+.btn.violet:hover:not(:disabled) { background: rgba(165,149,255,0.24); }
 
 /* Partly done — some of the group's units carry the flag, not all. Amber sits
    between the dim "not yet" and the green "all done" it must not be mistaken for,
@@ -1161,6 +1221,13 @@ body {
 .ph-drow > td { padding: 0 12px 10px; background: rgba(79, 124, 255, 0.04); white-space: normal; position: sticky; left: 0; z-index: 2; }
 .ph-drow .ph-detail { max-width: calc(100vw - 48px); }
 .ph-detail { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: flex-start; padding: 10px 4px 6px; }
+/* .ph-detail is a flex ROW, so its children size to content — which left the rescale
+   panel sitting in a quarter of the drawer with a field of empty space beside it. The
+   count and the per-size table are each a full-width block; everything else keeps the
+   side-by-side behaviour the row already had. */
+.ph-detail > .ph-audit,
+.ph-detail > .ph-sizetable-note,
+.ph-detail > .ph-sizetable { flex: 1 0 100%; min-width: 0; }
 .ph-sizetable { border-collapse: collapse; font-size: 13px; }
 /* Center every column (prices, qty, flags); Size (first) + Note (last) stay left. */
 .ph-sizetable th { color: var(--muted); font-size: 11px; font-weight: 700; text-align: center; padding: 4px 12px; }

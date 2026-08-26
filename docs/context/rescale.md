@@ -53,6 +53,24 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
     reasons — one message for all three states is wrong two-thirds of the time.
   - A **Cancelled** filter tab (PH only) and a struck-through neutral-grey pill: PH
     withdrawing its own request is a normal outcome, not an error state.
+- **PH edits a request it already submitted** (2026-08-27) → `api/rescale-requests/update.js`
+  (`updateRescaleRequest`). Shoe name, sizes + quantities, price, reason, note.
+  - **PH team only**, via the same explicit `ph_team || superadmin` check as cancel —
+    NOT `requireRole`, which auto-allows admin. It is the requesting team's own request.
+  - **Only while `open`**, and the `status = 'open'` in the UPDATE's WHERE is the whole
+    guard — same rule and same reason as cancelling. After an audit the reported numbers
+    are one half of a comparison somebody made standing at a shelf, and editing them
+    would rewrite the question their count answered. An audit landing mid-edit wins;
+    PH gets a 409 that says so and the client reloads. Missing → 404, cancelled → its
+    own message.
+  - `edited_by` / `edited_at` are stamped and shown to **both** teams — the warehouse may
+    be holding a printed or stale copy of numbers that have since changed. Only who and
+    when, not a per-field diff: while a request is open nobody downstream has acted on
+    it, so the old values answer no question the current ones don't.
+  - **The SKU is not a free-text field here.** A request against the wrong shoe is a
+    different request (cancel and re-raise) — rewriting it in place would move the
+    "already open for this SKU" chip onto a shelf nobody asked about.
+
 - Home badges: 🟡 Pending audit (open) + 🟢 Audited (done) — `pendingCounts`
   returns `rescale_requests` (open) and `rescale_requests_audited`. A cancelled
   request leaves both counts for free, since they key on `status`.
@@ -62,6 +80,29 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
   ZONE 'America/New_York'`). For the PH team (UTC+8) that filed a request under
   "Aug 18" and then stamped it "8/19, 12:18 AM". Fixed here and in the Inventory
   item-history timeline, which had the same `toLocaleString()`.
+
+## Which style code(s) to count (2026-08-27)
+A re-released shoe carries several style codes (`315122-111/CW2288-111` — see
+`receiving.md`). A rescale request sends somebody to a shelf, and that shelf can hold
+pairs filed under either code, so the request has to say which to look for.
+
+- `SkuCodePicker` (`src/components/SkuCodePicker.jsx`) renders **only when there is a
+  choice**: one button per code, plus **All N codes**. Offered in all three places a
+  request is touched — the `⟳ Rescale…` row modal, the standalone form (after Search,
+  from the lookup's `skuOptions`), and the edit form.
+- **All codes is the default.** The widest net is the one that cannot miss pairs filed
+  under the other code; narrowing to one is the deliberate act.
+- **`sku` is the selection; `sku_all` is every code that matched.** Two columns, because
+  storing only the selection would throw away the list needed to pick differently later
+  — with `sku_all` the choice stays reversible on the edit form.
+- **The selection is validated server-side against `sku_all` read from the DATABASE**,
+  never against anything the client sent (`create.js` checks it against the submitted
+  match set; `update.js` re-reads the request's own). Otherwise "narrow the codes" would
+  be a way around the no-retargeting rule above.
+- **The `⟳ Rescale requested` chip matches on code OVERLAP, not string equality**
+  (`skuCodes` in `src/lib/sku.js`, the client twin of the server helper). A request
+  raised against one code of a dual-code shoe is still open against the row carrying
+  both; equality would have gone silent there and let PH raise duplicates.
 
 ## "Send for rescale" from a New Inventory row (2026-08-25)
 PH doesn't have to leave the worklist to raise a request. Every row on **New Inventory**

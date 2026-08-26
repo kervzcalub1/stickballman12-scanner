@@ -10,6 +10,7 @@ import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput
 import { RescaleRequestModal } from '../components/RescaleRequestModal.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
+import { skuCodes } from '../lib/sku.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
 import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
@@ -609,8 +610,13 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       // Every open request, not just this page's date range — a request raised last
       // month is still open work against this SKU, and the chip has to say so.
       const { requests } = await api.rescaleRequestList('open');
+      // Keyed per CODE, not per sku string: a request raised against one code of a
+      // dual-code shoe is still an open request against the row that carries both, and
+      // an equality match would say they were unrelated (newest first from the server).
       const m = {};
-      for (const r of requests || []) if (r.sku && !m[r.sku]) m[r.sku] = r; // newest first from the server
+      for (const r of requests || []) {
+        for (const c of skuCodes(r.sku)) { const k = c.toUpperCase(); if (!m[k]) m[k] = r; }
+      }
       setOpenReqs(m);
     } catch { /* the chip is a courtesy — a failed fetch must not break the grid */ }
   }
@@ -623,7 +629,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // The row's "already asked" chip. Also the button's own guard-rail: it opens the
   // modal, which repeats the warning with who asked and when.
   const rescaleChip = (g) => {
-    const r = g.sku ? openReqs[g.sku] : null;
+    const r = g.sku ? (skuCodes(g.sku).map((c) => openReqs[c.toUpperCase()]).find(Boolean) || null) : null;
     if (!r) return null;
     return (
       <span className="ph-rescale-chip" title={`${r.requested_by || 'Someone'} asked the warehouse to recount this SKU${r.created_at ? ` on ${PH_DATETIME.format(new Date(r.created_at))} EST` : ''}. It's still open.`}>

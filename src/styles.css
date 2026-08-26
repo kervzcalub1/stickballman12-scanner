@@ -507,6 +507,20 @@ body {
 .mf-prices { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .mf-prices input { accent-color: var(--primary); }
 
+/* Correcting an already-submitted rescale request. Same frame as the audit editor it
+   sits beside, tinted to the PH/requests hue so the two aren't mistaken for each other
+   on a row that offers both. */
+.rc-edit { border-left: 2px solid #8b7cf6; padding-left: 10px; }
+.rc-edit-skunote { color: var(--muted); font-weight: 400; }
+
+/* "Which style code should the warehouse count?" — only rendered when there IS a
+   choice. All-codes is the default and reads as selected, because the widest net is
+   the one that can't miss pairs filed under the other code. */
+.sku-pick { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.sku-pick-lbl { line-height: 1.4; }
+.sku-pick-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.sku-pick-opts .btn.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+
 /* Per-shoe listing photos — moved out of the scan flow onto the cart row, so the
    count is what tells you which shoes still need shooting. */
 /* Sized as a thumb target, not a chip — it's tapped with a shoe in the other hand. */

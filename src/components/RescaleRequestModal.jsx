@@ -17,6 +17,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
 import { PH_DATETIME } from '../lib/format.js';
+import { SkuCodePicker } from './SkuCodePicker.jsx';
 
 let rowKey = 1;
 
@@ -39,6 +40,10 @@ export function RescaleRequestModal({ group, existing = null, onClose, onDone })
     const set = new Set((group.sizes || []).filter((s) => s.price != null).map((s) => String(Number(s.price))));
     return set.size === 1 ? [...set][0] : '';
   });
+  // Which style code(s) the warehouse should count. Defaults to ALL of the row's
+  // codes: the shelf can hold pairs filed under either, so counting everything is the
+  // answer that can't miss any — narrowing is the deliberate act.
+  const [askSku, setAskSku] = useState(group.sku || '');
   const [reason, setReason] = useState('mismatch');
   const [reasonOther, setReasonOther] = useState('');
   const [note, setNote] = useState('');
@@ -70,12 +75,12 @@ export function RescaleRequestModal({ group, existing = null, onClose, onDone })
     setBusy(true);
     try {
       const { id } = await api.rescaleRequestCreate({
-        sku: group.sku, name: group.name || '', sizes: clean,
+        sku: askSku || group.sku, skuAll: group.sku, name: group.name || '', sizes: clean,
         price: price === '' ? null : Number(price),
         reason: reason === 'other' ? reasonOther.trim() : reason,
         note: note.trim(),
       });
-      onDone({ id, sku: group.sku, qty: reportedTotal });
+      onDone({ id, sku: askSku || group.sku, qty: reportedTotal });
     } catch (e) {
       if (e.unauthorized) return onClose();
       setError(e.message || 'Could not send this for rescale.');
@@ -99,6 +104,9 @@ export function RescaleRequestModal({ group, existing = null, onClose, onDone })
             Sending another asks the warehouse to count the same shelf again.
           </p>
         )}
+
+        <SkuCodePicker all={group.sku} value={askSku} onChange={setAskSku}
+          label="This shoe has more than one style code — which should the warehouse count?" />
 
         <p className="ra-help muted sm">
           Enter what <b>you</b> have on your side. The warehouse counts the shelf and enters the actual

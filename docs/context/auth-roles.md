@@ -47,7 +47,11 @@
   per SKU — `source='ph_edited'` only; see `ph-report.md`), **Inventory browse**
   (`/ph/inventory` — the warehouse page, read-only over stock: no status edits, no
   shelving, no notes; `items/query` + `items/lookup` accept `ph_team`, the write
-  endpoints don't — `inventory.md`). Logs into a card home
+  endpoints don't — `inventory.md`), **Batches** (`/ph/batches`, 2026-08-27 — the
+  warehouse Batch page `readOnly`, to find a shipment by the tracking number on any of
+  its boxes; `batches/list` + `batches/full` + `batches/open-list` accept `ph_team` and
+  filter `PH_EXCLUDED_KINDS` from the SESSION ROLE, every write endpoint still 403s —
+  `receiving.md`). Logs into a card home
   (`PHTeamApp`); its pages are URL-routed under `/ph/*` (refresh/Back/deep-link work).
   **Cannot touch in-store** — the intake commit, `instore-list`/`instore-listed`, and
   every PH surface exclude `kind='instore'` (`in-store.md`).

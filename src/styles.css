@@ -729,6 +729,12 @@ body {
 .batch-nav-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: none; border-bottom: 1px solid var(--line, #2a2a2a); padding: 12px 4px; cursor: pointer; color: inherit; }
 .batch-nav-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .batch-nav-prog { font-size: 12px; color: var(--muted, #8a8a8a); white-space: nowrap; }
+/* The tracking number that put this row in the results. Monospace because it is read
+   digit by digit against a label, and truncated rather than wrapped so a multi-box
+   shipment can't push the row's counts off a phone. */
+.batch-nav-track { font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-search { display: flex; flex-direction: column; gap: 4px; }
+.batch-search input { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .box-context { background: rgba(79, 124, 255, 0.1); border: 1px solid rgba(79, 124, 255, 0.3); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; }
 
 /* Multi-box builder: per-box tracking + Add items, scanned in any order */

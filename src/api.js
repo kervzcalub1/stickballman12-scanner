@@ -138,7 +138,15 @@ export const api = {
   vinRun: (run) => get(`/api/vins/stock?run=${encodeURIComponent(run)}`),
   checkVin: (vin) => get(`/api/vins/check?vin=${encodeURIComponent(vin)}`),
   voidVins: (vins) => post('/api/vins/void', { vins }),
-  batchList: (kind) => get(`/api/batches/list${kind ? `?kind=${kind}` : ''}`),
+  // `q` (a tracking number or batch code) makes this a SERVER search across every
+  // batch, not a filter over the newest 100 — see api/batches/list.js.
+  batchList: (kind, q) => {
+    const p = new URLSearchParams();
+    if (kind) p.set('kind', kind);
+    if (q) p.set('q', q);
+    const qs = p.toString();
+    return get(`/api/batches/list${qs ? `?${qs}` : ''}`);
+  },
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
   // Exact UPC/SKU match against our own stock (Box Labels asks this before the catalogue).

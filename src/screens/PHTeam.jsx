@@ -33,6 +33,7 @@ import { Reconciliation } from './Reconciliation.jsx';
 import { Sop } from './Sop.jsx';
 import { DeletedItems } from './DeletedItems.jsx';
 import { Inventory } from './Inventory.jsx';
+import { BatchPage } from './BatchPage.jsx';
 
 // PH Team home: pick which report to work — New Inventory (newly received stock)
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
@@ -73,6 +74,12 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   // stock up (and can still correct a miscount), but status changes and shelving are
   // warehouse work — and warehouse-only server-side, so the buttons would 403.
   if (page === 'inventory') return <Inventory canEditStock={false} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  // The warehouse Batches page, same component, `readOnly`. PH prices what the warehouse
+  // receives, so "which batch did this parcel become, and what was in it" is their
+  // question too — but adding boxes, finishing and renumbering are warehouse work (and
+  // warehouse-only server-side). The list and detail are filtered for PH_EXCLUDED_KINDS
+  // on the server, not here.
+  if (page === 'batches') return <BatchPage readOnly onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   return (
     <div className="app">
@@ -112,6 +119,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="inventory" /></span>
             <span className="home-card-title">Inventory</span>
             <span className="home-card-sub">Search every pair we hold — by name keywords, SKU, VIN or shelf — with its detail, history &amp; photos</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('batches')}>
+            <span className="home-card-icon"><NavIcon name="receiving" /></span>
+            <span className="home-card-title">Batches</span>
+            <span className="home-card-sub">Find a shipment by the tracking number on any of its boxes — what arrived in it, box by box</span>
           </button>
         </div>
       </section>

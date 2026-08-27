@@ -84,3 +84,21 @@ export function poMatchesSearch(p, query) {
   if (trackKey(p?.po_code).includes(q)) return true;
   return (p?.tracking_numbers || []).some((t) => trackKey(t).includes(q));
 }
+
+// The same question asked of a receiving BATCH: "which batch is this parcel?"
+//
+// A batch carries tracking in two places and both are the number on a real carton —
+// `tracking_number` on the batch (a single-box shipment, or the one typed at intake) and
+// one per box in `box_tracking_numbers`. Searching only the first finds nothing for the
+// multi-box shipments, which are most of them.
+//
+// This is the CLIENT-side filter over a list already on screen. The server has its own
+// matcher (`searchBatches` in api/_lib/db.js) for looking beyond that window; both
+// normalise through trackKey so they agree on what counts as the same number.
+export function batchMatchesSearch(b, query) {
+  const q = trackKey(query);
+  if (!q) return true;
+  if (trackKey(b?.batch_code).includes(q)) return true;
+  if (b?.tracking_number && trackKey(b.tracking_number).includes(q)) return true;
+  return (b?.box_tracking_numbers || []).some((t) => trackKey(t).includes(q));
+}

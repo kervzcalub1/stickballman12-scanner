@@ -10,6 +10,11 @@
 import pg from 'pg';
 import { TERMINAL_STATUSES } from './statuses.js';
 import { ROLL_VIN_RE } from './vins.js';
+// The LOOSE search normaliser (strips every non-alphanumeric), shared with the PO
+// search so both find one parcel the same way. Deliberately imported under another
+// name: this file already has a `trackKey` further down that only strips whitespace,
+// and that one is for MATCHING a label to a box — a stricter job than searching.
+import { trackKey as searchTrackKey } from '../../src/lib/postatus.js';
 
 const { Pool } = pg;
 
@@ -889,15 +894,68 @@ export async function insertIssues(batchId, issues, createdBy) {
   `));
 }
 
-export async function listBatches(limit = 50, kind = null) {
+// `phSafe` drops the kinds the PH team must never see (instore + existing). It is a
+// bound boolean rather than a second copy of the query — the shim can't nest `sql`
+// fragments, and two near-identical SELECTs drift.
+export async function listBatches(limit = 50, kind = null, { phSafe = false } = {}) {
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
+           b.no_tracking, b.batch_tag, b.status,
            b.origin, b.date_received, b.created_by, b.created_at,
+           (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
+                      FILTER (WHERE bx.tracking_number IS NOT NULL), ARRAY[]::text[])
+              FROM batch_boxes bx WHERE bx.batch_id = b.id) AS box_tracking_numbers,
            (SELECT count(*)::int FROM items i WHERE i.batch_id = b.id) AS item_count,
            (SELECT coalesce(sum(i.cost), 0) FROM items i WHERE i.batch_id = b.id) AS total_cost,
            (SELECT count(*)::int FROM shipment_issues s WHERE s.batch_id = b.id) AS issue_count
     FROM batches b
     WHERE (${kind}::text IS NULL OR b.kind = ${kind})
+      AND (${phSafe} = false OR (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})))
+    ORDER BY b.created_at DESC
+    LIMIT ${limit}
+  `;
+}
+
+// Finding a batch by the number on the parcel.
+//
+// This is a SERVER search, not a filter over the list the page already has, and that
+// is the whole point: the lists are windowed (100 rows, 30 shown) and the parcel in
+// someone's hand is as likely to be from March. Filtering the window would answer
+// "no such batch" for a batch that exists, which is the worst answer available.
+//
+// It matches the same three ways the PO search does (`searchTrackKey`, imported from
+// src/lib/postatus.js —
+// one definition for both): substring, because people quote the last few digits;
+// punctuation and spaces stripped, because a number pasted from an email is
+// "1Z 999 AA1 01 2345 6784" and a scanner types it clean; and the batch code too, since
+// that is the other thing printed on the carton.
+//
+// Stripping to A-Z0-9 also means no `%` or `_` can reach LIKE — the wildcards are ours.
+export async function searchBatches(query, { phSafe = false, limit = 60 } = {}) {
+  const key = searchTrackKey(query);
+  if (!key) return [];              // "----" normalises to nothing: match nothing, not everything
+  const like = `%${key}%`;
+  return await db()`
+    SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
+           b.no_tracking, b.batch_tag, b.status,
+           b.origin, b.date_received, b.created_by, b.created_at,
+           (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
+                      FILTER (WHERE bx.tracking_number IS NOT NULL), ARRAY[]::text[])
+              FROM batch_boxes bx WHERE bx.batch_id = b.id) AS box_tracking_numbers,
+           (SELECT count(*)::int FROM items i WHERE i.batch_id = b.id) AS item_count,
+           (SELECT coalesce(sum(i.cost), 0) FROM items i WHERE i.batch_id = b.id) AS total_cost,
+           (SELECT count(*)::int FROM shipment_issues s WHERE s.batch_id = b.id) AS issue_count
+    FROM batches b
+    WHERE (${phSafe} = false OR (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})))
+      AND (
+        regexp_replace(upper(coalesce(b.batch_code, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+        OR regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+        OR EXISTS (
+          SELECT 1 FROM batch_boxes bx
+           WHERE bx.batch_id = b.id
+             AND regexp_replace(upper(coalesce(bx.tracking_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+        )
+      )
     ORDER BY b.created_at DESC
     LIMIT ${limit}
   `;
@@ -1079,7 +1137,11 @@ export async function getBatchWithBoxes(id) {
 export async function listOpenBatches() {
   return await db()`
     SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes,
+           b.tracking_number, b.no_tracking,
            b.date_received, b.created_by, b.created_at,
+           (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
+                      FILTER (WHERE bx.tracking_number IS NOT NULL), ARRAY[]::text[])
+              FROM batch_boxes bx WHERE bx.batch_id = b.id) AS box_tracking_numbers,
            (SELECT count(*)::int FROM batch_boxes bx WHERE bx.batch_id = b.id AND bx.status = 'received') AS received_boxes,
            (SELECT count(*)::int FROM batch_boxes bx WHERE bx.batch_id = b.id) AS total_boxes,
            (SELECT count(*)::int FROM items i WHERE i.batch_id = b.id) AS item_count

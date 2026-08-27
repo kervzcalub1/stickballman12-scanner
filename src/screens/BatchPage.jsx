@@ -7,10 +7,20 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, StatusPill, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import { batchMatchesSearch } from '../lib/postatus.js';
+import { useQueryParam } from '../lib/urlstate.js';
 
 const shortDate = (s) => String(s || '').slice(0, 10);
 
-export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome, onSignOut }) {
+// Everything a batch carries a tracking number in, as one list — the batch's own number
+// (single-box shipments, or whatever was typed at intake) plus one per box.
+const allTracking = (b) => [b?.tracking_number, ...(b?.box_tracking_numbers || [])].filter(Boolean);
+
+// `readOnly` is the PH team's view of this page (2026-08-27). They look a parcel up to
+// see which batch it became and what was in it; adding boxes, finishing, reopening and
+// renumbering are warehouse work — and warehouse-only server-side, so those buttons
+// would 403 anyway. Hiding them is honesty, not decoration.
+export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome, onSignOut, readOnly = false }) {
   const [open, setOpen] = useState(null);     // open batches
   const [recent, setRecent] = useState(null); // recent (all) batches
   const [selId, setSelId] = useState(initialBatchId);
@@ -21,6 +31,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const [reopenId, setReopenId] = useState(null);
   // The box whose number is being corrected, + the number typed for it.
   const [renumber, setRenumber] = useState(null); // { box, value }
+  // The number on the parcel, kept in ?q= so "the batch this box belongs to" is a link
+  // you can paste to whoever is asking.
+  const [q, setQ] = useQueryParam('q');
+  const [found, setFound] = useState(null);    // server search results (null = not searching)
+  const [searching, setSearching] = useState(false);
 
   async function loadLists() {
     setError('');
@@ -37,6 +52,27 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   }
 
   useEffect(() => { loadLists(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The search runs on the SERVER, not over the two lists above. Those are windowed
+  // (100 newest, 30 shown) and the carton in someone's hand is as likely to be from
+  // March — filtering the window would answer "no such batch" for a batch that exists.
+  useEffect(() => {
+    const query = q.trim();
+    if (!query) { setFound(null); setSearching(false); return undefined; }
+    // Drop the previous answer the moment the query changes — otherwise the last
+    // search's results sit under a different number while the new one is in flight,
+    // which is the one thing this page must never do.
+    setFound(null);
+    setSearching(true);
+    // Typing "1Z999AA10123456784" is 20 renders; wait for the pause before asking.
+    const t = setTimeout(() => {
+      api.batchList('receiving', query)
+        .then((r) => setFound(r.batches || []))
+        .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); setFound([]); })
+        .finally(() => setSearching(false));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else setDetail(null); }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Put the number on the row back in step with the label on the carton. Boxes that
@@ -100,15 +136,15 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
         <div className="card">
           <div className="step-head">
             <h3 className="rows-title">Boxes <span className="muted">({boxes.length})</span></h3>
-            {isOpen && <button className="btn primary sm" onClick={() => onAddBox(b)}>+ Add box</button>}
+            {isOpen && !readOnly && <button className="btn primary sm" onClick={() => onAddBox(b)}>+ Add box</button>}
           </div>
-          {isOpen && boxes.some((x) => x.status !== 'received') && (
+          {isOpen && !readOnly && boxes.some((x) => x.status !== 'received') && (
             <p className="muted sm">“Pending” means the box is recorded but nothing has been scanned into it yet — tap <b>Add items</b> on its row to continue it. <b>+ Add box</b> is for a box that isn’t listed here at all.</p>
           )}
-          {boxes.length > 1 && (
+          {boxes.length > 1 && !readOnly && (
             <p className="muted sm">Boxes that arrive out of order are numbered as they land — use the <Icon name="pencil" /> on a row to put its number back in step with the label on the carton.</p>
           )}
-          {!boxes.length ? <p className="muted">No boxes yet{isOpen ? ' — tap “Add box” to scan the first one.' : '.'}</p> : (
+          {!boxes.length ? <p className="muted">No boxes yet{isOpen && !readOnly ? ' — tap “Add box” to scan the first one.' : '.'}</p> : (
             <div className="box-list">
               {boxes.map((bx) => {
                 const boxItems = itemsByBox.get(String(bx.id)) || [];
@@ -135,11 +171,13 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                           out of order is numbered max+1, and that only becomes obviously
                           wrong once its contents are in and the count doesn't match the
                           label on the carton. */}
-                      <button className="btn ghost sm box-row-renum" title={`Change the number on box ${bx.box_number}`}
-                        onClick={() => { setError(''); setRenumber({ box: bx, value: String(bx.box_number ?? '') }); }}>
-                        <Icon name="pencil" />
-                      </button>
-                      {isOpen && bx.status !== 'received' && (
+                      {!readOnly && (
+                        <button className="btn ghost sm box-row-renum" title={`Change the number on box ${bx.box_number}`}
+                          onClick={() => { setError(''); setRenumber({ box: bx, value: String(bx.box_number ?? '') }); }}>
+                          <Icon name="pencil" />
+                        </button>
+                      )}
+                      {isOpen && !readOnly && bx.status !== 'received' && (
                         <button className="btn primary sm box-row-add" onClick={() => onAddBox(b, bx)}
                           title={`Scan shoes into box ${bx.box_number}`}>Add items</button>
                       )}
@@ -148,7 +186,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                       <div className="box-items">
                         {!boxItems.length ? <div className="muted sm box-items-empty">No shoes in this box yet.</div> : boxItems.map((it) => (
                           <div className="batch-detail-row" key={it.id}>
-                            <button className="vin vin-link" onClick={() => onOpenItem?.(it.vin)} title="View full shoe detail + history">{it.vin}</button>
+                            {onOpenItem
+                              ? <button className="vin vin-link" onClick={() => onOpenItem(it.vin)} title="View full shoe detail + history">{it.vin}</button>
+                              : <span className="vin">{it.vin}</span>}
                             <span className="batch-row-name">{it.name}</span>
                             <span className="muted sm">{it.sku || '—'} · size {it.size || '—'}</span>
                             <StatusPill status={it.status} />
@@ -166,10 +206,10 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
         {error && <div className="error mt">{error}</div>}
         <div className="batch-bar">
           <button className="btn ghost" onClick={() => setSelId(null)}>← Back</button>
-          {isOpen
+          {!readOnly && (isOpen
             ? <button className="btn ghost" disabled={busy} onClick={() => setStatus(b.id, 'done')}>Finish batch</button>
-            : <button className="btn ghost" disabled={busy} onClick={() => setReopenId(b.id)}>Reopen</button>}
-          {isOpen && <button className="btn primary" onClick={() => onAddBox(b)}>+ Add box</button>}
+            : <button className="btn ghost" disabled={busy} onClick={() => setReopenId(b.id)}>Reopen</button>)}
+          {isOpen && !readOnly && <button className="btn primary" onClick={() => onAddBox(b)}>+ Add box</button>}
         </div>
         {renumber && (
           <Modal type="warn" title={`Box ${renumber.box.box_number} — change its number`}
@@ -207,27 +247,73 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   // ---- List view ----
   const openList = open || [];
   const recentList = (recent || []).filter((r) => !openList.some((o) => o.id === r.id));
+  const searchingNow = !!q.trim();
+  // While the server answer is in flight, filter what's already on screen — the batch
+  // someone wants is usually the one they just received, and a list that reacts as you
+  // type beats a spinner. The server result replaces it a moment later, wider.
+  const localHits = searchingNow
+    ? [...openList, ...recentList].filter((b) => batchMatchesSearch(b, q))
+    : [];
+  const hits = found ?? localHits;
+
+  const row = (b, { showKind = false } = {}) => (
+    <button className="batch-nav-row" key={b.id} onClick={() => setSelId(b.id)}>
+      <div className="batch-nav-main">
+        <span className="batch-code">{b.batch_code}
+          {b.item_count === 0 && <span className="badge warn">Empty</span>}
+          {showKind && b.kind && b.kind !== 'receiving' && <span className="badge">{b.kind}</span>}
+        </span>
+        <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.date_received || b.created_at ? ` · ${shortDate(b.date_received || b.created_at)}` : ''}</span>
+        {/* The number that was searched for is the reason this row is here — show it,
+            or the answer is "some batch" rather than "this parcel's batch". A batch that
+            states it has no tracking says so; one that simply never had a number typed
+            in stays blank, because those are different facts. */}
+        <span className="muted xs batch-nav-track">
+          {allTracking(b).length ? allTracking(b).join(' · ') : b.no_tracking ? 'no tracking #' : ''}
+        </span>
+      </div>
+      <span className="batch-nav-prog">
+        {b.received_boxes != null ? <><b>{b.received_boxes}{b.expected_boxes ? `/${b.expected_boxes}` : ''}</b> boxes · </> : null}
+        {b.item_count} item{b.item_count === 1 ? '' : 's'}
+      </span>
+      <span className="batch-caret">▸</span>
+    </button>
+  );
+
   return (
     <div className="app">
       <TopBar title="Batches" onHome={onHome} onSignOut={onSignOut} />
       {error && <div className="error mt">{error}</div>}
 
       <div className="card">
+        <label className="batch-search"><span className="muted xs">Tracking number</span>
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Paste or scan a tracking number — or a batch code"
+            aria-label="Search batches by tracking number or batch code" /></label>
+        <p className="muted sm">Searches every batch, not just the recent ones — the number on any box counts, and the last few digits are enough.</p>
+      </div>
+
+      {searchingNow ? (
+        <div className="card">
+          <h3 className="rows-title">
+            Matches <span className="muted">({hits.length}{searching && found == null ? '…' : ''})</span>
+          </h3>
+          {!hits.length ? (
+            searching ? <p className="muted">Searching…</p>
+              : <p className="muted">No batch carries that number. Check the digits, or try the batch code printed on the carton.</p>
+          ) : (
+            <div className="batch-nav-list">{hits.map((b) => row(b, { showKind: true }))}</div>
+          )}
+          <button className="btn ghost sm" onClick={() => setQ('')}>Clear search</button>
+        </div>
+      ) : (
+      <>
+
+      <div className="card">
         <h3 className="rows-title">Open batches <span className="muted">({openList.length})</span></h3>
         {open == null ? <p className="muted">Loading…</p>
-          : !openList.length ? <p className="muted">No open batches. Start one from <b>Receive New</b>.</p> : (
-            <div className="batch-nav-list">
-              {openList.map((b) => (
-                <button className="batch-nav-row" key={b.id} onClick={() => setSelId(b.id)}>
-                  <div className="batch-nav-main">
-                    <span className="batch-code">{b.batch_code} {b.item_count === 0 && <span className="badge warn">Empty</span>}</span>
-                    <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.date_received ? ` · ${shortDate(b.date_received)}` : ''}</span>
-                  </div>
-                  <span className="batch-nav-prog"><b>{b.received_boxes}{b.expected_boxes ? `/${b.expected_boxes}` : ''}</b> boxes · {b.item_count} items</span>
-                  <span className="batch-caret">▸</span>
-                </button>
-              ))}
-            </div>
+          : !openList.length ? <p className="muted">No open batches{readOnly ? '.' : <>. Start one from <b>Receive New</b>.</>}</p> : (
+            <div className="batch-nav-list">{openList.map((b) => row(b))}</div>
           )}
       </div>
 
@@ -235,20 +321,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
         <h3 className="rows-title">Recent batches</h3>
         {recent == null ? <p className="muted">Loading…</p>
           : !recentList.length ? <p className="muted">No closed batches yet.</p> : (
-            <div className="batch-nav-list">
-              {recentList.slice(0, 30).map((b) => (
-                <button className="batch-nav-row" key={b.id} onClick={() => setSelId(b.id)}>
-                  <div className="batch-nav-main">
-                    <span className="batch-code">{b.batch_code}</span>
-                    <span className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}</span>
-                  </div>
-                  <span className="batch-nav-prog">{b.item_count} item{b.item_count === 1 ? '' : 's'}</span>
-                  <span className="batch-caret">▸</span>
-                </button>
-              ))}
-            </div>
+            <div className="batch-nav-list">{recentList.slice(0, 30).map((b) => row(b))}</div>
           )}
       </div>
+      </>
+      )}
     </div>
   );
 }

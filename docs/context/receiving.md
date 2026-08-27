@@ -208,6 +208,53 @@ other code — the same class of silent wrong data as a missing size.
 picker yet; a dual code landing on a PO line is low-stakes because reconciliation
 already matches on code groups (`purchase-orders.md`).
 
+## Finding a batch by the number on the parcel (2026-08-27)
+`BatchPage.jsx` (warehouse `/batches`, PH `/ph/batches`) has a search box above the two
+lists. What a person actually has in hand when they go looking is a **tracking number** —
+it's on the carton, in the courier's email, in the supplier's message — and it was the one
+identifier this page couldn't find a batch by.
+
+**A batch carries tracking in two places and both are real cartons:** `batches.tracking_number`
+(a single-box shipment, or whatever was typed at intake) and one per box in
+`batch_boxes.tracking_number`. Searching only the first finds nothing for the multi-box
+shipments, which are most of them. Both list queries now return `box_tracking_numbers`
+(a `text[]` aggregate), and the matched number is printed on the row — otherwise the answer
+is "some batch" rather than "this parcel's batch".
+
+**The search runs in SQL, not over the list on screen.** `searchBatches(q, {phSafe})` in
+`api/_lib/db.js`, reached as `GET /api/batches/list?q=…`. This is the point of it: the lists
+are windowed (100 newest, 30 rendered) and the box in someone's hand is as likely to be from
+March. Filtering the window would answer *"no such batch"* for a batch that exists, which is
+the worst answer available. While the server answer is in flight the page filters what it
+already has (`batchMatchesSearch`), so it reacts as you type, then widens.
+
+**Matching is loose in the same three ways as the PO search**, through the same
+`trackKey` (`src/lib/postatus.js`, imported into `db.js` as `searchTrackKey`): substring,
+because people quote the last 4–6 digits; punctuation and spaces stripped, because a
+number pasted from an email is `1Z 999 AA1 01 2345 6784` and a scanner types it clean; and
+the **batch code** too, since that's the other thing printed on the carton. Stripping to
+`A-Z0-9` also means no `%` or `_` can reach `LIKE` — the wildcards are ours. A query that
+normalises to nothing (`"----"`) matches **nothing**, not everything.
+
+⚠️ `db.js` has a *second* `trackKey` further down (whitespace-only) used to match a label to
+a box. Different job, stricter rule — don't merge them.
+
+### The PH team can now see batches (2026-08-27)
+`/ph/batches`, a **Batches** card on the PH home, rendering the same `BatchPage` with
+`readOnly` — the same pattern as `/ph/inventory`. PH prices what the warehouse receives, so
+*"which batch did this parcel become, and what was in it"* is their question too. Adding a
+box, finishing, reopening and renumbering are warehouse work and stay hidden; those
+endpoints are warehouse-only server-side, so the buttons would 403 anyway — hiding them is
+honesty, not decoration.
+
+**`PH_EXCLUDED_KINDS` is enforced server-side, from the session role, never from a query
+parameter.** `list.js` passes `phSafe` into both `listBatches` and `searchBatches`; `full.js`
+404s a PH request for an in-store or existing batch (404 rather than 403 — whether such a
+batch exists is itself not theirs to see). `open-list.js` needs no guard because
+`listOpenBatches` is `kind = 'receiving'` in its WHERE clause; if that ever widens, it needs
+the same treatment. Guarded by `e2e/batch-tracking-search.spec.js`, which seeds an in-store
+batch whose number *would* match and proves PH can't find it.
+
 ## VINs & commit
 - On commit (`api/batches/commit.js`): `createBatch` → `reserveVins` (atomic
   `nextval('vin_seq')`) → `insertItems` → `insertIntakeEvents`.

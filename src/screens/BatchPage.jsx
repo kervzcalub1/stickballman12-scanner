@@ -3,9 +3,9 @@
 // to see its boxes + progress and manage it: add a box (→ scan items into it via
 // the Receiving box-mode), or finish / reopen. The Receiving page remains the
 // main place to START a batch (expected boxes + tag live there).
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, StatusPill, Modal } from '../components/common.jsx';
+import { TopBar, StatusPill, Modal, Pager } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { batchMatchesSearch } from '../lib/postatus.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -20,10 +20,33 @@ const allTracking = (b) => [b?.tracking_number, ...(b?.box_tracking_numbers || [
 // see which batch it became and what was in it; adding boxes, finishing, reopening and
 // renumbering are warehouse work — and warehouse-only server-side, so those buttons
 // would 403 anyway. Hiding them is honesty, not decoration.
+// How many open batches to show at once. The recent list and the search are paged by the
+// SERVER (`pageSize` comes back with them); the open list arrives whole, so it's paged
+// here — same size, so "page 2" means the same number of rows in both cards.
+const OPEN_PAGE = 25;
+// Only used before the first response lands — the server sends the real page size with
+// the rows, and it is the one that decides what a page is.
+const PAGE_FALLBACK = 25;
+
 export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome, onSignOut, readOnly = false }) {
   const [open, setOpen] = useState(null);     // open batches
-  const [recent, setRecent] = useState(null); // recent (all) batches
-  const [selId, setSelId] = useState(initialBatchId);
+  const [recent, setRecent] = useState(null); // { batches, total, page, pageSize }
+  // WHICH BATCH IS OPEN LIVES IN THE URL (?b=), and opening one PUSHES a history entry.
+  // That is what makes the device/browser Back button close the batch and return to the
+  // list — with the search still in it — instead of walking out to the home page. The
+  // same reason the search itself is in ?q=: the page's state is the URL, so Back,
+  // Forward, refresh and a pasted link all agree about what you are looking at.
+  const [selIdRaw, setSelIdRaw] = useQueryParam('b');
+  const selId = selIdRaw ? Number(selIdRaw) : null;
+  // Set when WE pushed the detail entry, so the in-page "← Batches" can undo that push
+  // (history.back()) rather than replacing it — replacing leaves a dead entry behind,
+  // and the next Back press then looks like it did nothing.
+  const pushedDetail = useRef(false);
+  const openBatch = (id) => { pushedDetail.current = true; setSelIdRaw(String(id), { replace: false }); };
+  const closeBatch = () => {
+    if (pushedDetail.current) { pushedDetail.current = false; window.history.back(); return; }
+    setSelIdRaw('');   // deep-linked straight to ?b= — there is no entry of ours to pop
+  };
   const [detail, setDetail] = useState(null); // { batch, boxes, items }
   const [openBox, setOpenBox] = useState(null); // box id whose items are expanded
   const [busy, setBusy] = useState(false);
@@ -33,16 +56,24 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const [renumber, setRenumber] = useState(null); // { box, value }
   // The number on the parcel, kept in ?q= so "the batch this box belongs to" is a link
   // you can paste to whoever is asking.
-  const [q, setQ] = useQueryParam('q');
+  const [q, setQRaw] = useQueryParam('q');
+  // Starting a search PUSHES one entry; refining it replaces. So Back from a set of
+  // results returns to the unsearched list — one entry for "I started searching", not
+  // one per keystroke.
+  const setQ = (v) => { setQRaw(v, { replace: !!q.trim() }); if (page !== 1) setPageRaw(''); };
   const [found, setFound] = useState(null);    // server search results (null = not searching)
   const [searching, setSearching] = useState(false);
+  const [pageRaw, setPageRaw] = useQueryParam('p');
+  const page = Math.max(1, Number(pageRaw) || 1);
+  const [openPageRaw, setOpenPageRaw] = useQueryParam('op');
+  const openPage = Math.max(1, Number(openPageRaw) || 1);
 
   async function loadLists() {
     setError('');
     try {
-      const [o, r] = await Promise.all([api.openBatches(), api.batchList('receiving')]);
+      const [o, r] = await Promise.all([api.openBatches(), api.batchList({ kind: 'receiving', page, excludeOpen: true })]);
       setOpen(o.batches || []);
-      setRecent(r.batches || []);
+      setRecent(r);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   async function loadDetail(id) {
@@ -51,11 +82,15 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
 
-  useEffect(() => { loadLists(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadLists(); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The search runs on the SERVER, not over the two lists above. Those are windowed
-  // (100 newest, 30 shown) and the carton in someone's hand is as likely to be from
-  // March — filtering the window would answer "no such batch" for a batch that exists.
+  // A batch id handed in by the app (returning from "add a box") opens that batch
+  // without adding a history entry — the entry it came from is already behind us.
+  useEffect(() => { if (initialBatchId && !selIdRaw) setSelIdRaw(String(initialBatchId)); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The search runs on the SERVER, not over the two lists above. Those show one page
+  // (25) and the carton in someone's hand is as likely to be from March — filtering the
+  // page on screen would answer "no such batch" for a batch that exists.
   useEffect(() => {
     const query = q.trim();
     if (!query) { setFound(null); setSearching(false); return undefined; }
@@ -66,13 +101,13 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     setSearching(true);
     // Typing "1Z999AA10123456784" is 20 renders; wait for the pause before asking.
     const t = setTimeout(() => {
-      api.batchList('receiving', query)
-        .then((r) => setFound(r.batches || []))
-        .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); setFound([]); })
+      api.batchList({ kind: 'receiving', q: query, page })
+        .then((r) => setFound(r))
+        .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); setFound({ batches: [], total: 0 }); })
         .finally(() => setSearching(false));
     }, 250);
     return () => clearTimeout(t);
-  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, page]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else setDetail(null); }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Put the number on the row back in step with the label on the carton. Boxes that
@@ -115,7 +150,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     return (
       <div className="app">
         <TopBar title="Batch" onHome={onHome} onSignOut={onSignOut}
-          right={<button className="btn ghost sm" onClick={() => setSelId(null)}>← Batches</button>} />
+          right={<button className="btn ghost sm" onClick={closeBatch}>← Batches</button>} />
         <div className="card">
           <div className="batch-page-head">
             <div>
@@ -205,7 +240,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
 
         {error && <div className="error mt">{error}</div>}
         <div className="batch-bar">
-          <button className="btn ghost" onClick={() => setSelId(null)}>← Back</button>
+          <button className="btn ghost" onClick={closeBatch}>← Back</button>
           {!readOnly && (isOpen
             ? <button className="btn ghost" disabled={busy} onClick={() => setStatus(b.id, 'done')}>Finish batch</button>
             : <button className="btn ghost" disabled={busy} onClick={() => setReopenId(b.id)}>Reopen</button>)}
@@ -246,7 +281,14 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
 
   // ---- List view ----
   const openList = open || [];
-  const recentList = (recent || []).filter((r) => !openList.some((o) => o.id === r.id));
+  // The open list arrives whole (it is the active worklist, and the endpoint has no
+  // limit), so its page is sliced here rather than asked for.
+  const openPages = Math.max(1, Math.ceil(openList.length / OPEN_PAGE));
+  const openShown = openList.slice((Math.min(openPage, openPages) - 1) * OPEN_PAGE, Math.min(openPage, openPages) * OPEN_PAGE);
+  // No client-side de-duplication against the open list: the query excludes open batches
+  // (`excludeOpen`), so the two cards are already disjoint. Filtering here as well is what
+  // made a page of 25 render 21 rows under a pager that said "1–25 of 466".
+  const recentList = recent?.batches || [];
   const searchingNow = !!q.trim();
   // While the server answer is in flight, filter what's already on screen — the batch
   // someone wants is usually the one they just received, and a list that reacts as you
@@ -254,10 +296,10 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const localHits = searchingNow
     ? [...openList, ...recentList].filter((b) => batchMatchesSearch(b, q))
     : [];
-  const hits = found ?? localHits;
+  const hits = found?.batches ?? localHits;
 
   const row = (b, { showKind = false } = {}) => (
-    <button className="batch-nav-row" key={b.id} onClick={() => setSelId(b.id)}>
+    <button className="batch-nav-row" key={b.id} onClick={() => openBatch(b.id)}>
       <div className="batch-nav-main">
         <span className="batch-code">{b.batch_code}
           {b.item_count === 0 && <span className="badge warn">Empty</span>}
@@ -296,13 +338,17 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
       {searchingNow ? (
         <div className="card">
           <h3 className="rows-title">
-            Matches <span className="muted">({hits.length}{searching && found == null ? '…' : ''})</span>
+            Matches <span className="muted">({found?.total ?? hits.length}{searching && found == null ? '…' : ''})</span>
           </h3>
           {!hits.length ? (
             searching ? <p className="muted">Searching…</p>
               : <p className="muted">No batch carries that number. Check the digits, or try the batch code printed on the carton.</p>
           ) : (
-            <div className="batch-nav-list">{hits.map((b) => row(b, { showKind: true }))}</div>
+            <>
+              <div className="batch-nav-list">{hits.map((b) => row(b, { showKind: true }))}</div>
+              <Pager page={found?.page || page} pageSize={found?.pageSize || PAGE_FALLBACK} total={found?.total || 0}
+                label="matches" onPage={(n) => setPageRaw(n === 1 ? '' : String(n))} />
+            </>
           )}
           <button className="btn ghost sm" onClick={() => setQ('')}>Clear search</button>
         </div>
@@ -313,15 +359,30 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
         <h3 className="rows-title">Open batches <span className="muted">({openList.length})</span></h3>
         {open == null ? <p className="muted">Loading…</p>
           : !openList.length ? <p className="muted">No open batches{readOnly ? '.' : <>. Start one from <b>Receive New</b>.</>}</p> : (
-            <div className="batch-nav-list">{openList.map((b) => row(b))}</div>
+            <>
+              <div className="batch-nav-list">{openShown.map((b) => row(b))}</div>
+              <Pager page={Math.min(openPage, openPages)} pageSize={OPEN_PAGE} total={openList.length}
+                label="open" onPage={(n) => setOpenPageRaw(n === 1 ? '' : String(n))} />
+            </>
           )}
       </div>
 
       <div className="card">
         <h3 className="rows-title">Recent batches</h3>
         {recent == null ? <p className="muted">Loading…</p>
-          : !recentList.length ? <p className="muted">No closed batches yet.</p> : (
-            <div className="batch-nav-list">{recentList.slice(0, 30).map((b) => row(b))}</div>
+          : !recentList.length ? (
+            // An empty page past the end is NOT an empty list — the window count rides on
+            // the rows, so there is nothing to count when you page off the end. Saying
+            // "no batches" there would be a lie about the whole list.
+            page > 1
+              ? <p className="muted">Nothing on page {page}. <button className="btn ghost sm" onClick={() => setPageRaw('')}>Back to the first page</button></p>
+              : <p className="muted">No closed batches yet.</p>
+          ) : (
+            <>
+              <div className="batch-nav-list">{recentList.map((b) => row(b))}</div>
+              <Pager page={recent?.page || page} pageSize={recent?.pageSize || PAGE_FALLBACK} total={recent?.total || 0}
+                onPage={(n) => setPageRaw(n === 1 ? '' : String(n))} />
+            </>
           )}
       </div>
       </>

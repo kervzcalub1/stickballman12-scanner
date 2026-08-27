@@ -897,11 +897,19 @@ export async function insertIssues(batchId, issues, createdBy) {
 // `phSafe` drops the kinds the PH team must never see (instore + existing). It is a
 // bound boolean rather than a second copy of the query — the shim can't nest `sql`
 // fragments, and two near-identical SELECTs drift.
-export async function listBatches(limit = 50, kind = null, { phSafe = false } = {}) {
+// `count(*) OVER ()` rides along on every row: the total is computed before LIMIT, so
+// one query answers both "this page" and "how many pages" — a separate count query would
+// be a second round trip that can disagree with the page it labels.
+// `excludeOpen` is for a page that lists OPEN batches separately (the Batch page does):
+// without it the same batch appears in both cards, and dropping the duplicate on the
+// client makes a page of 25 render 21 rows under a pager that says "1–25". Two cards,
+// two disjoint sets, two honest counts.
+export async function listBatches(limit = 50, kind = null, { phSafe = false, offset = 0, excludeOpen = false } = {}) {
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
            b.no_tracking, b.batch_tag, b.status,
            b.origin, b.date_received, b.created_by, b.created_at,
+           count(*) OVER ()::int AS total_count,
            (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
                       FILTER (WHERE bx.tracking_number IS NOT NULL), ARRAY[]::text[])
               FROM batch_boxes bx WHERE bx.batch_id = b.id) AS box_tracking_numbers,
@@ -911,15 +919,16 @@ export async function listBatches(limit = 50, kind = null, { phSafe = false } = 
     FROM batches b
     WHERE (${kind}::text IS NULL OR b.kind = ${kind})
       AND (${phSafe} = false OR (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})))
+      AND (${excludeOpen} = false OR b.status IS DISTINCT FROM 'open')
     ORDER BY b.created_at DESC
-    LIMIT ${limit}
+    LIMIT ${limit} OFFSET ${offset}
   `;
 }
 
 // Finding a batch by the number on the parcel.
 //
 // This is a SERVER search, not a filter over the list the page already has, and that
-// is the whole point: the lists are windowed (100 rows, 30 shown) and the parcel in
+// is the whole point: the lists show one page (25 rows) and the parcel in
 // someone's hand is as likely to be from March. Filtering the window would answer
 // "no such batch" for a batch that exists, which is the worst answer available.
 //
@@ -931,7 +940,7 @@ export async function listBatches(limit = 50, kind = null, { phSafe = false } = 
 // that is the other thing printed on the carton.
 //
 // Stripping to A-Z0-9 also means no `%` or `_` can reach LIKE — the wildcards are ours.
-export async function searchBatches(query, { phSafe = false, limit = 60 } = {}) {
+export async function searchBatches(query, { phSafe = false, limit = 25, offset = 0 } = {}) {
   const key = searchTrackKey(query);
   if (!key) return [];              // "----" normalises to nothing: match nothing, not everything
   const like = `%${key}%`;
@@ -939,6 +948,7 @@ export async function searchBatches(query, { phSafe = false, limit = 60 } = {}) 
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
            b.no_tracking, b.batch_tag, b.status,
            b.origin, b.date_received, b.created_by, b.created_at,
+           count(*) OVER ()::int AS total_count,
            (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
                       FILTER (WHERE bx.tracking_number IS NOT NULL), ARRAY[]::text[])
               FROM batch_boxes bx WHERE bx.batch_id = b.id) AS box_tracking_numbers,
@@ -957,7 +967,7 @@ export async function searchBatches(query, { phSafe = false, limit = 60 } = {}) 
         )
       )
     ORDER BY b.created_at DESC
-    LIMIT ${limit}
+    LIMIT ${limit} OFFSET ${offset}
   `;
 }
 

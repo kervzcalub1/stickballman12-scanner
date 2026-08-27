@@ -733,6 +733,9 @@ body {
    digit by digit against a label, and truncated rather than wrapped so a multi-box
    shipment can't push the row's counts off a phone. */
 .batch-nav-track { font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 4px 2px; }
+.batch-pager-at { text-align: center; flex: 1; }
+.batch-pager .btn[disabled] { opacity: 0.4; }
 .batch-search { display: flex; flex-direction: column; gap: 4px; }
 .batch-search input { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .box-context { background: rgba(79, 124, 255, 0.1); border: 1px solid rgba(79, 124, 255, 0.3); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; }

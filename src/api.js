@@ -138,12 +138,15 @@ export const api = {
   vinRun: (run) => get(`/api/vins/stock?run=${encodeURIComponent(run)}`),
   checkVin: (vin) => get(`/api/vins/check?vin=${encodeURIComponent(vin)}`),
   voidVins: (vins) => post('/api/vins/void', { vins }),
-  // `q` (a tracking number or batch code) makes this a SERVER search across every
-  // batch, not a filter over the newest 100 — see api/batches/list.js.
-  batchList: (kind, q) => {
+  // `q` (a tracking number or batch code) makes this a SERVER search across every batch
+  // rather than a filter over one page; `page` is 1-based and pages both — see
+  // api/batches/list.js, which owns the page size and returns it with the rows.
+  batchList: ({ kind, q, page, excludeOpen } = {}) => {
     const p = new URLSearchParams();
     if (kind) p.set('kind', kind);
     if (q) p.set('q', q);
+    if (page && page > 1) p.set('page', String(page));
+    if (excludeOpen) p.set('excludeOpen', '1');
     const qs = p.toString();
     return get(`/api/batches/list${qs ? `?${qs}` : ''}`);
   },

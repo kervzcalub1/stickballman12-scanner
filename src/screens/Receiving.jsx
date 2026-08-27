@@ -5,7 +5,7 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
-import { TopBar, Modal, LabelSheet, PreferencesModal } from '../components/common.jsx';
+import { TopBar, Modal, LabelSheet, PreferencesModal, Pager } from '../components/common.jsx';
 import { ListingPhotos, PhotoCountButton, invalidatePhotoCount } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { Icon } from '../components/NavIcons.jsx';
@@ -2533,12 +2533,19 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
   const [open, setOpen] = useState(null); // batch id -> details
   const [detail, setDetail] = useState(null);
   const [labels, setLabels] = useState(null); // { batchCode, items }
+  // Paged (2026-08-27) because the endpoint pages now. Without a pager this list would
+  // just stop at the first 25 with nothing saying so, which is worse than the old
+  // untruncated-but-capped-at-100 list it replaced. Page state is local, not in the URL:
+  // this list is a panel inside the receiving wizard, not a page you link someone to.
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState({ total: 0, pageSize: 25 });
 
   useEffect(() => {
-    api.batchList(kind)
-      .then(({ batches }) => setBatches(batches))
+    api.batchList({ kind, page })
+      .then((r) => { setBatches(r.batches); setMeta({ total: r.total || 0, pageSize: r.pageSize || 25 }); })
       .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); });
-  }, [kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kind, page]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setPage(1); }, [kind]);   // a different kind is a different list
 
   async function toggle(id) {
     if (open === id) { setOpen(null); setDetail(null); return; }
@@ -2549,7 +2556,13 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
 
   if (error) return <div className="error mt">{error}</div>;
   if (!batches) return <p className="muted">Loading…</p>;
-  if (!batches.length) return <div className="card"><p className="muted">No batches yet.</p></div>;
+  if (!batches.length) return (
+    <div className="card">
+      {page > 1
+        ? <p className="muted">Nothing on page {page}. <button className="btn ghost sm" onClick={() => setPage(1)}>Back to the first page</button></p>
+        : <p className="muted">No batches yet.</p>}
+    </div>
+  );
 
   return (
     <>
@@ -2599,6 +2612,7 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
             );
           })}
         </div>
+        <Pager page={page} pageSize={meta.pageSize} total={meta.total} onPage={setPage} />
       </div>
       {labels && <LabelSheet batchCode={labels.batchCode} items={labels.items} onClose={() => setLabels(null)} />}
     </>

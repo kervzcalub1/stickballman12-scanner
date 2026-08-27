@@ -871,3 +871,27 @@ export function RescaleCompare({ reported, actual }) {
     </table>
   );
 }
+
+// One page's worth of rows, and where you are in the whole list.
+//
+// It says "26–50 of 466", not just "page 2 of 19": the number people check against is
+// how many rows there ARE, and a page number alone never answers that. Rendered only
+// when there is more than one page — a pager under a list of six is furniture.
+//
+// `label` names what is being counted ("batches", "open", "matches"), because a page can
+// hold more than one list and "1–25 of 88" alone doesn't say of what.
+export function Pager({ page, pageSize, total, onPage, label = 'rows' }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pages <= 1) return null;
+  const first = (page - 1) * pageSize + 1;
+  const last = Math.min(total, page * pageSize);
+  return (
+    <div className="batch-pager">
+      <button className="btn ghost sm" disabled={page <= 1} onClick={() => onPage(page - 1)}
+        aria-label={`Previous page of ${label}`}>← Prev</button>
+      <span className="muted sm batch-pager-at">{first}–{last} of {total} {label}</span>
+      <button className="btn ghost sm" disabled={page >= pages} onClick={() => onPage(page + 1)}
+        aria-label={`Next page of ${label}`}>Next →</button>
+    </div>
+  );
+}

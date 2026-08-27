@@ -223,7 +223,7 @@ is "some batch" rather than "this parcel's batch".
 
 **The search runs in SQL, not over the list on screen.** `searchBatches(q, {phSafe})` in
 `api/_lib/db.js`, reached as `GET /api/batches/list?q=…`. This is the point of it: the lists
-are windowed (100 newest, 30 rendered) and the box in someone's hand is as likely to be from
+show one page (25 rows) and the box in someone's hand is as likely to be from
 March. Filtering the window would answer *"no such batch"* for a batch that exists, which is
 the worst answer available. While the server answer is in flight the page filters what it
 already has (`batchMatchesSearch`), so it reacts as you type, then widens.
@@ -238,6 +238,45 @@ normalises to nothing (`"----"`) matches **nothing**, not everything.
 
 ⚠️ `db.js` has a *second* `trackKey` further down (whitespace-only) used to match a label to
 a box. Different job, stricter rule — don't merge them.
+
+### Paging, and what Back does here (2026-08-27)
+**Every batch list is paged, 25 a page, server-side** (`PAGE_SIZE` in `api/batches/list.js`,
+returned with the rows so the client never guesses). `count(*) OVER ()` rides along on each
+row, so one query answers both *this page* and *how many there are* — a separate count query
+is a second round trip that can disagree with the page it labels. The shared `Pager`
+(`components/common.jsx`) says **"26–50 of 466"**, not "page 2 of 19": the number people
+check against is how many batches there ARE.
+
+Three lists, three pagers: **Recent** (server, `?p=`), **Open batches** (client-side — that
+endpoint returns them all, `?op=`), and **search results** (server, shares `?p=`).
+Receiving's own **Recent** tab is paged too, with local page state rather than a URL param —
+it's a panel inside the wizard, not a page you link someone to. That one is not optional
+polish: once the endpoint paged, an unpagered list would have silently stopped at 25.
+
+⚠️ **`excludeOpen=1`, and why the client no longer de-duplicates.** The Batch page lists open
+batches in their own card, so it asks the query to leave them out. It used to filter them out
+on the client instead — which made a page of 25 render **21 rows under a pager that said
+"1–25 of 466"**. Two cards, two disjoint sets, two honest counts. Receiving's per-kind list
+does *not* pass it: it shows every batch of that kind, open included.
+
+⚠️ **An empty page is not an empty list.** The window count rides on the rows, so paging past
+the end returns `total: 0` — there is no row to carry it. Both lists say *"Nothing on page N"*
+with a way back to the first page, because "No batches yet" there would be a lie about the
+whole list.
+
+**Back button.** The complaint that prompted this: searching, or opening a batch, then
+pressing Back walked out to the home page. Both are URL state now — `?q=` and `?b=` — and each
+**pushes exactly one history entry**: opening a batch pushes one, and *starting* a search
+pushes one (refining it replaces, so twenty keystrokes are still one entry). So Back closes the
+batch and returns to the list **with the search still in it**, Back again clears the search,
+and Back a third time leaves the page. The in-page **← Batches** button calls `history.back()`
+when it was the one that pushed (tracked in a `pushedDetail` ref), so it undoes its own entry
+rather than leaving a dead one for the next Back press to land on; a deep link straight to
+`?b=` has no entry of ours to pop, so that clears the param instead.
+
+This is URL state, not a `navBack` handler, which is why it works identically on the PH shell —
+`PHTeamApp` routes on `pathname` and never sees the query. Guarded by
+`e2e/batch-paging-and-back.spec.js`.
 
 ### The PH team can now see batches (2026-08-27)
 `/ph/batches`, a **Batches** card on the PH home, rendering the same `BatchPage` with

@@ -260,6 +260,36 @@ Now: items with no `box_id` are listed in their own card, and the page adapts.
 The rule to keep: **a pair in this batch appears on this page**, whatever the box column
 says. Guarded by `e2e/batch-unboxed-items.spec.js`, which seeds both shapes.
 
+### Filters: date, supplier, purchase order (2026-08-28)
+A bar above the search on the Batch page (warehouse and `/ph/batches` alike), using the
+same markup as the PO list's so the two pages filter the same way. All four live in the
+URL (`?from=&to=&supplier=&po=`) beside `?q=` and `?p=`, so a narrowed list is something
+you can send someone.
+
+- **Dates filter the day the row DISPLAYS** — `date_received` when set, else the creation
+  day — and are read in **EST** (`coalesce(date_received, (created_at AT TIME ZONE
+  'America/New_York')::date)`). A `created_at` is an instant, and the host's clock is not
+  the one this business runs on (`CLAUDE.md`).
+- **`po=none` is its own answer**, not the absence of a choice: *"what did we receive that
+  no purchase order accounts for?"* is worth asking now that a batch says whether it came
+  in against one.
+- **Filters reach the SEARCH too.** Narrowing the list and then searching would otherwise
+  quietly widen it again.
+- **The open-batches card is filtered client-side** with the same criteria — it arrives
+  whole from its own endpoint, and leaving it alone would show a card full of batches the
+  filter excludes directly above one that honours it. It has no PO code, only whether it
+  has an order, which is enough for `none`.
+- **Changing a filter returns to page 1.** Narrowing while on page 4 of a 2-page result
+  shows an empty list that reads as "nothing matches".
+- `GET /api/batches/filter-options` fills the two pickers from what is actually ON a batch
+  (suppliers that appear on one; orders with a batch linked) — a dropdown entry that
+  returns nothing is a dead end. PH-filtered the same way the list is, or the options
+  would leak the existence of in-store stock.
+- ⚠️ A blank filter must be **no filter**: the date inputs send `''` when cleared, and
+  `''::date` is an error rather than a no-op — the endpoint maps blanks to NULL.
+
+Guarded by `e2e/batch-filters.spec.js`.
+
 ### Paging, and what Back does here (2026-08-27)
 **Every batch list is paged, 25 a page, server-side** (`PAGE_SIZE` in `api/batches/list.js`,
 returned with the rows so the client never guesses). `count(*) OVER ()` rides along on each

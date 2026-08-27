@@ -1092,7 +1092,15 @@ export async function insertIssues(batchId, issues, createdBy) {
 // without it the same batch appears in both cards, and dropping the duplicate on the
 // client makes a page of 25 render 21 rows under a pager that says "1–25". Two cards,
 // two disjoint sets, two honest counts.
-export async function listBatches(limit = 50, kind = null, { phSafe = false, offset = 0, excludeOpen = false } = {}) {
+// `from`/`to` filter the date the row DISPLAYS — `date_received` when it is set, else the
+// day the batch was created, read in EST like every other date filter in this app (a
+// created_at is an instant, and the host's clock is not the one this business runs on).
+// `po`: a PO code, or the string 'none' for "not received against an order at all" —
+// which is a question worth asking now that a pair can say which order it came from.
+export async function listBatches(limit = 50, kind = null,
+  { phSafe = false, offset = 0, excludeOpen = false, from = null, to = null, supplier = null, po = null } = {}) {
+  const poCode = po && po !== 'none' ? po : null;
+  const poNone = po === 'none';
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
            b.no_tracking, b.batch_tag, b.status, b.merged_into_batch_id,
@@ -1109,9 +1117,36 @@ export async function listBatches(limit = 50, kind = null, { phSafe = false, off
     WHERE (${kind}::text IS NULL OR b.kind = ${kind})
       AND (${phSafe} = false OR (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})))
       AND (${excludeOpen} = false OR b.status IS DISTINCT FROM 'open')
+      AND (${from}::date IS NULL OR coalesce(b.date_received,
+             (b.created_at AT TIME ZONE 'America/New_York')::date) >= ${from}::date)
+      AND (${to}::date IS NULL OR coalesce(b.date_received,
+             (b.created_at AT TIME ZONE 'America/New_York')::date) <= ${to}::date)
+      AND (${supplier}::text IS NULL OR btrim(b.supplier_name) = ${supplier})
+      AND (${poNone} = false OR b.po_id IS NULL)
+      AND (${poCode}::text IS NULL
+           OR b.po_id = (SELECT p.id FROM purchase_orders p WHERE p.po_code = ${poCode}))
     ORDER BY b.created_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `;
+}
+
+// What the Batch page's filters can actually offer. Only suppliers that appear ON a
+// batch and only orders that have one linked — a dropdown entry that returns an empty
+// list is a dead end, and the supplier list at large is a different thing (it includes
+// names nobody has shipped under yet).
+export async function batchFilterOptions({ phSafe = false } = {}) {
+  const sql = db();
+  const suppliers = await sql`
+    SELECT DISTINCT btrim(b.supplier_name) AS name FROM batches b
+     WHERE coalesce(btrim(b.supplier_name), '') <> ''
+       AND (${phSafe} = false OR (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})))
+     ORDER BY name`;
+  const poCodes = await sql`
+    SELECT DISTINCT p.po_code FROM purchase_orders p
+     JOIN batches b ON b.po_id = p.id
+     WHERE (${phSafe} = false OR (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})))
+     ORDER BY p.po_code DESC`;
+  return { suppliers: suppliers.map((r) => r.name), poCodes: poCodes.map((r) => r.po_code) };
 }
 
 // Finding a batch by the number on the parcel.
@@ -1129,7 +1164,10 @@ export async function listBatches(limit = 50, kind = null, { phSafe = false, off
 // that is the other thing printed on the carton.
 //
 // Stripping to A-Z0-9 also means no `%` or `_` can reach LIKE — the wildcards are ours.
-export async function searchBatches(query, { phSafe = false, limit = 25, offset = 0 } = {}) {
+export async function searchBatches(query,
+  { phSafe = false, limit = 25, offset = 0, from = null, to = null, supplier = null, po = null } = {}) {
+  const poCode = po && po !== 'none' ? po : null;
+  const poNone = po === 'none';
   const key = searchTrackKey(query);
   if (!key) return [];              // "----" normalises to nothing: match nothing, not everything
   const like = `%${key}%`;
@@ -1147,6 +1185,14 @@ export async function searchBatches(query, { phSafe = false, limit = 25, offset 
            (SELECT count(*)::int FROM shipment_issues s WHERE s.batch_id = b.id) AS issue_count
     FROM batches b
     WHERE (${phSafe} = false OR (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})))
+      AND (${from}::date IS NULL OR coalesce(b.date_received,
+             (b.created_at AT TIME ZONE 'America/New_York')::date) >= ${from}::date)
+      AND (${to}::date IS NULL OR coalesce(b.date_received,
+             (b.created_at AT TIME ZONE 'America/New_York')::date) <= ${to}::date)
+      AND (${supplier}::text IS NULL OR btrim(b.supplier_name) = ${supplier})
+      AND (${poNone} = false OR b.po_id IS NULL)
+      AND (${poCode}::text IS NULL
+           OR b.po_id = (SELECT p.id FROM purchase_orders p WHERE p.po_code = ${poCode}))
       AND (
         regexp_replace(upper(coalesce(b.batch_code, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
         OR regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}

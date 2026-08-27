@@ -146,12 +146,17 @@ export const api = {
   mergeSuppliers: (from, to) => post('/api/admin/merge-suppliers', { from, to }),
   previewBatchMerge: (source, target) => get(`/api/admin/merge-batches?source=${source}&target=${target}`),
   mergeBatches: (source, target) => post('/api/admin/merge-batches', { source, target }),
-  batchList: ({ kind, q, page, excludeOpen } = {}) => {
+  batchFilterOptions: () => get('/api/batches/filter-options'),
+  batchList: ({ kind, q, page, excludeOpen, from, to, supplier, po } = {}) => {
     const p = new URLSearchParams();
     if (kind) p.set('kind', kind);
     if (q) p.set('q', q);
     if (page && page > 1) p.set('page', String(page));
     if (excludeOpen) p.set('excludeOpen', '1');
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    if (supplier) p.set('supplier', supplier);
+    if (po) p.set('po', po);
     const qs = p.toString();
     return get(`/api/batches/list${qs ? `?${qs}` : ''}`);
   },

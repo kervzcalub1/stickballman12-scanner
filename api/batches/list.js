@@ -1,4 +1,4 @@
-// GET /api/batches/list?kind=…&q=…&page=N&excludeOpen=1
+// GET /api/batches/list?kind=…&q=…&page=N&excludeOpen=1&from=&to=&supplier=&po=
 //   ->  { ok, batches, total, page, pageSize }
 // Recent receiving batches with item counts/totals.
 //
@@ -35,11 +35,20 @@ export default async function handler(req, res) {
   // The Batch page lists open batches in their own card, so it asks for the rest here.
   // Receiving's per-kind list does not — it shows every batch of that kind, open included.
   const excludeOpen = params.get('excludeOpen') === '1';
+  // Filters. A blank one is "no filter", never an empty match — the date inputs send ''
+  // when cleared, and `''::date` would be an error rather than a no-op.
+  const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : null);
+  const filters = {
+    from: ymd(params.get('from')),
+    to: ymd(params.get('to')),
+    supplier: (params.get('supplier') || '').trim().slice(0, 120) || null,
+    po: (params.get('po') || '').trim().slice(0, 40) || null,
+  };
   const offset = (page - 1) * PAGE_SIZE;
   try {
     const batches = q
-      ? await searchBatches(q, { phSafe, limit: PAGE_SIZE, offset })
-      : await listBatches(PAGE_SIZE, kind, { phSafe, offset, excludeOpen });
+      ? await searchBatches(q, { phSafe, limit: PAGE_SIZE, offset, ...filters })
+      : await listBatches(PAGE_SIZE, kind, { phSafe, offset, excludeOpen, ...filters });
     // The window count rides on every row; an empty page has no row to carry it, which
     // is only true when there is nothing to count (or you paged past the end).
     const total = batches[0]?.total_count ?? 0;

@@ -56,22 +56,39 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const [renumber, setRenumber] = useState(null); // { box, value }
   // The number on the parcel, kept in ?q= so "the batch this box belongs to" is a link
   // you can paste to whoever is asking.
+  const [pageRaw, setPageRaw] = useQueryParam('p');
+  const page = Math.max(1, Number(pageRaw) || 1);
+  // Filters, in the URL like the search — a narrowed list is something you send someone.
+  const [from, setFromRaw] = useQueryParam('from');
+  const [to, setToRaw] = useQueryParam('to');
+  const [supplier, setSupplierRaw] = useQueryParam('supplier');
+  const [po, setPoRaw] = useQueryParam('po');
+  const [suppliers, setSuppliers] = useState([]);
+  const [poCodes, setPoCodes] = useState([]);
   const [q, setQRaw] = useQueryParam('q');
   // Starting a search PUSHES one entry; refining it replaces. So Back from a set of
   // results returns to the unsearched list — one entry for "I started searching", not
   // one per keystroke.
   const setQ = (v) => { setQRaw(v, { replace: !!q.trim() }); if (page !== 1) setPageRaw(''); };
+  // Any filter change goes back to page 1 — narrowing while on page 4 of a 2-page result
+  // shows an empty list that looks like "nothing matches".
+  const onPage1 = (set) => (v) => { set(v); if (page !== 1) setPageRaw(''); };
+  const setFrom = onPage1(setFromRaw); const setTo = onPage1(setToRaw);
+  const setSupplier = onPage1(setSupplierRaw); const setPo = onPage1(setPoRaw);
+  const filtering = !!(from || to || supplier || po);
+  const clearFilters = () => { setFromRaw(''); setToRaw(''); setSupplierRaw(''); setPoRaw(''); setPageRaw(''); };
   const [found, setFound] = useState(null);    // server search results (null = not searching)
   const [searching, setSearching] = useState(false);
-  const [pageRaw, setPageRaw] = useQueryParam('p');
-  const page = Math.max(1, Number(pageRaw) || 1);
   const [openPageRaw, setOpenPageRaw] = useQueryParam('op');
   const openPage = Math.max(1, Number(openPageRaw) || 1);
 
   async function loadLists() {
     setError('');
     try {
-      const [o, r] = await Promise.all([api.openBatches(), api.batchList({ kind: 'receiving', page, excludeOpen: true })]);
+      const [o, r] = await Promise.all([
+        api.openBatches(),
+        api.batchList({ kind: 'receiving', page, excludeOpen: true, from, to, supplier, po }),
+      ]);
       setOpen(o.batches || []);
       setRecent(r);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
@@ -95,7 +112,15 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
 
-  useEffect(() => { loadLists(); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadLists(); }, [page, from, to, supplier, po]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The pickers offer only what is actually on a batch — a supplier with no shipments or
+  // an order with none received is a dead option that returns an empty list.
+  useEffect(() => {
+    api.batchFilterOptions()
+      .then((r) => { setSuppliers(r.suppliers || []); setPoCodes(r.poCodes || []); })
+      .catch(() => { /* the filters still work typed into the URL */ });
+  }, []);
 
   // A batch id handed in by the app (returning from "add a box") opens that batch
   // without adding a history entry — the entry it came from is already behind us.
@@ -114,13 +139,13 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     setSearching(true);
     // Typing "1Z999AA10123456784" is 20 renders; wait for the pause before asking.
     const t = setTimeout(() => {
-      api.batchList({ kind: 'receiving', q: query, page })
+      api.batchList({ kind: 'receiving', q: query, page, from, to, supplier, po })
         .then((r) => setFound(r))
         .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); setFound({ batches: [], total: 0 }); })
         .finally(() => setSearching(false));
     }, 250);
     return () => clearTimeout(t);
-  }, [q, page]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, page, from, to, supplier, po]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else { setDetail(null); setMergedFrom(null); } }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Put the number on the row back in step with the label on the carton. Boxes that
@@ -341,7 +366,21 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   }
 
   // ---- List view ----
-  const openList = open || [];
+  // The open list has its own endpoint and arrives whole, so the same filters are applied
+  // here. Leaving it unfiltered would show a card full of batches the filter excludes,
+  // directly above one that honours it.
+  const inRange = (b) => {
+    const d = String(b.date_received || b.created_at || '').slice(0, 10);
+    if (from && (!d || d < from)) return false;
+    if (to && (!d || d > to)) return false;
+    if (supplier && String(b.supplier_name || '').trim() !== supplier) return false;
+    // The open list carries no PO code, only whether it has an order at all — enough for
+    // "none", and a named order is answered by the Recent list below.
+    if (po === 'none' && b.po_id) return false;
+    if (po && po !== 'none' && !b.po_id) return false;
+    return true;
+  };
+  const openList = (open || []).filter(inRange);
   // The open list arrives whole (it is the active worklist, and the endpoint has no
   // limit), so its page is sliced here rather than asked for.
   const openPages = Math.max(1, Math.ceil(openList.length / OPEN_PAGE));
@@ -391,6 +430,28 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
       {error && <div className="error mt">{error}</div>}
 
       <div className="card">
+        <div className="po-ov-filters batch-filters">
+          <label><span className="muted xs">Received from</span>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Received from" /></label>
+          <label><span className="muted xs">to</span>
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Received to" /></label>
+          <label><span className="muted xs">Supplier</span>
+            <select value={supplier} onChange={(e) => setSupplier(e.target.value)} aria-label="Supplier">
+              <option value="">All suppliers</option>
+              {suppliers.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <label><span className="muted xs">Purchase order</span>
+            <select value={po} onChange={(e) => setPo(e.target.value)} aria-label="Purchase order">
+              <option value="">Any</option>
+              {/* Worth its own option now that a batch says whether it came in against an
+                  order: "what did we receive that no PO accounts for?" */}
+              <option value="none">Not against a PO</option>
+              {poCodes.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          {filtering && <button className="btn sm ghost" onClick={clearFilters}>Clear filters</button>}
+        </div>
         <label className="batch-search"><span className="muted xs">Tracking number</span>
           <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Paste or scan a tracking number — or a batch code"
@@ -419,7 +480,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
       <>
 
       <div className="card">
-        <h3 className="rows-title">Open batches <span className="muted">({openList.length})</span></h3>
+        <h3 className="rows-title">Open batches {open != null && <span className="muted">({openList.length})</span>}</h3>
         {open == null ? <p className="muted">Loading…</p>
           : !openList.length ? <p className="muted">No open batches{readOnly ? '.' : <>. Start one from <b>Receive New</b>.</>}</p> : (
             <>

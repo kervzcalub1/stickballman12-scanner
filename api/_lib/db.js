@@ -554,6 +554,194 @@ export async function listSuppliers() {
   return rows.map((r) => r.name);
 }
 
+/* ------------------------------------------------------------------ */
+/* Merging duplicates (superadmin). Both tools are IRREVERSIBLE, so    */
+/* both come in two halves: a preview that counts exactly what would   */
+/* move, and an apply that does it. Nobody should confirm a merge from */
+/* a name alone — "Erick" carrying 123 units is a different decision   */
+/* from "Erick" carrying none.                                          */
+/* ------------------------------------------------------------------ */
+
+// One person, typed two ways. The dropdown is a UNION of the `suppliers` table and the
+// distinct names on batches (see listSuppliers), so a name can be in either, both, or
+// only on old stock — the preview counts all three places rather than assuming.
+//
+// SCOPE IS NAMES ONLY, deliberately: batches, purchase orders and the dropdown. The
+// supplier's LOGIN account and their payout preset are left alone. An account is a
+// credential, not a label, and presets are scoped by `supplier_user_id` — renaming one
+// by name could point a cost stack at the wrong person's money.
+export async function previewSupplierMerge(fromName, toName) {
+  const sql = db();
+  // Type first, and fail closed. `String()` turns {a:1} into "[object Object]" and — worse
+  // — turns ["Erick"] into "Erick", so a malformed request would perform a REAL merge that
+  // the UI could never have asked for. Caught by the pentest, 2026-08-28.
+  if (typeof fromName !== 'string' || typeof toName !== 'string')
+    return { error: 'Both names must be text.' };
+  // Compare the names EXACTLY as the dropdown holds them. Trimming and lower-casing first
+  // refused the two commonest duplicates this tool exists to fix: "Erick" vs "erick"
+  // (listSuppliers UNIONs case-sensitively, so both really are separate rows) and a name
+  // saved with trailing whitespace (the `suppliers` half of that UNION isn't btrim'd, so
+  // "Trail Ws " is its own entry). Found by QA, 2026-08-28.
+  if (fromName === toName) return { error: 'Those are the same name.' };
+  const from = fromName.trim();
+  const to = toName.trim();
+  if (!from || !to) return { error: 'Both names are required.' };
+  const [{ n: batches }] = await sql`
+    SELECT count(*)::int AS n FROM batches WHERE btrim(supplier_name) = ${from}`;
+  const [{ n: units }] = await sql`
+    SELECT count(*)::int AS n FROM items i JOIN batches b ON b.id = i.batch_id
+     WHERE btrim(b.supplier_name) = ${from}`;
+  const [{ n: pos }] = await sql`
+    SELECT count(*)::int AS n FROM purchase_orders WHERE btrim(supplier_name) = ${from}`;
+  const inList = (await sql`SELECT id FROM suppliers WHERE name = ${fromName} OR name = ${from}`).length > 0;
+  // Named for what it is: an account that happens to share the losing name is NOT part of
+  // the merge, and the UI says so rather than leaving the reader to assume either way.
+  const accounts = await sql`
+    SELECT id, username, name FROM users WHERE role = 'supplier' AND btrim(name) = ${from}`;
+  const presets = await sql`SELECT id, name FROM payout_presets WHERE btrim(name) = ${from}`;
+  // `rawFrom` is the dropdown row to delete; `from` is what matches the (btrim'd) data.
+  return { from, to, rawFrom: fromName, rawTo: toName, batches, units, pos, inList, accounts, presets };
+}
+
+export async function mergeSuppliers(fromName, toName, actor) {
+  const sql = db();
+  const pre = await previewSupplierMerge(fromName, toName);
+  if (pre.error) return pre;
+  const { from, to, rawFrom, rawTo } = pre;
+  // The surviving name must exist in the dropdown afterwards even if it only ever lived
+  // on old batches — otherwise the merge would leave staff unable to pick it again.
+  await sql`INSERT INTO suppliers (name, created_by) VALUES (${rawTo}, ${actor || null})
+            ON CONFLICT (name) DO NOTHING`;
+  const b = await sql`
+    UPDATE batches SET supplier_name = ${to} WHERE btrim(supplier_name) = ${from} RETURNING id`;
+  const p = await sql`
+    UPDATE purchase_orders SET supplier_name = ${to} WHERE btrim(supplier_name) = ${from} RETURNING id`;
+  // Delete the row as it is actually stored — a trailing-space name is not `from`.
+  await sql`DELETE FROM suppliers WHERE name = ${rawFrom}`;
+  if (rawFrom !== from) await sql`DELETE FROM suppliers WHERE name = ${from} AND ${from} <> ${rawTo}`;
+  // Report what MOVED, not what the preview predicted: a second, concurrent apply moves
+  // nothing, and saying "123 pairs" for it would be a lie about this call. (QA, 2026-08-28)
+  return { ok: true, from, to, batches: b.length, pos: p.length, units: b.length ? pre.units : 0 };
+}
+
+// Two batches that are really one inbound — the shape this was built for is a PO whose
+// boxes were received as a multi-box batch while one parcel came in on its own.
+//
+// What moves: every box row, then every item. A source item with NO box row is the loose
+// case (the ordinary receive keeps the tracking on the batch and leaves items.box_id
+// NULL); if the source's tracking number matches a box already in the target, those units
+// join it — otherwise they get a box of their own inside the target, carrying that
+// number. Only a source with no tracking at all stays loose after the move, because
+// inventing a box for it would invent a parcel.
+export async function previewBatchMerge(sourceId, targetId) {
+  const sql = db();
+  // `Number.isInteger` is true for a 20-digit numeral, which then overflows Postgres
+  // bigint inside the query and surfaces as a 500. An id we cannot represent exactly is
+  // not an id — say so up front. (Pentest, 2026-08-28.)
+  const src = Number(sourceId); const tgt = Number(targetId);
+  const usable = (n) => Number.isInteger(n) && n > 0 && n <= Number.MAX_SAFE_INTEGER;
+  if (!usable(src) || !usable(tgt)) return { error: 'Two batch ids are required.' };
+  if (Number(sourceId) === Number(targetId)) return { error: 'That is the same batch.' };
+  const [source] = await sql`SELECT * FROM batches WHERE id = ${sourceId}`;
+  const [target] = await sql`SELECT * FROM batches WHERE id = ${targetId}`;
+  if (!source || !target) return { error: 'Batch not found.' };
+  if (source.merged_into_batch_id) return { error: `${source.batch_code} was already merged away.` };
+  if (target.merged_into_batch_id) return { error: `${target.batch_code} is itself a merged batch — merge into the one that absorbed it.` };
+  // Stock must not cross an order boundary. Two different POs is a data question, not a
+  // tidy-up, and moving units between them would silently rewrite two reconciliations.
+  if (source.po_id && target.po_id && String(source.po_id) !== String(target.po_id))
+    return { error: 'Those batches belong to different purchase orders.' };
+  if (source.kind !== target.kind)
+    return { error: `Different kinds of batch (${source.kind} and ${target.kind}) — merging them would move stock into the wrong workflow.` };
+  const boxes = await sql`
+    SELECT id, box_number, tracking_number, status,
+           (SELECT count(*)::int FROM items i WHERE i.box_id = batch_boxes.id) AS units
+    FROM batch_boxes WHERE batch_id = ${sourceId} ORDER BY box_number`;
+  const [{ n: loose }] = await sql`
+    SELECT count(*)::int AS n FROM items WHERE batch_id = ${sourceId} AND box_id IS NULL`;
+  const [{ n: units }] = await sql`
+    SELECT count(*)::int AS n FROM items WHERE batch_id = ${sourceId}`;
+  // Where the loose units will land, worked out here so the confirmation can say it.
+  const key = trackKey(source.tracking_number);
+  const [match] = key ? await sql`
+    SELECT id, box_number FROM batch_boxes
+     WHERE batch_id = ${targetId}
+       AND upper(replace(coalesce(tracking_number, ''), ' ', '')) = ${key}` : [];
+  return {
+    source, target, boxes, loose, units,
+    looseGoesTo: loose > 0
+      ? (match ? { kind: 'existing-box', box_number: Number(match.box_number) }
+        : key ? { kind: 'new-box', tracking_number: source.tracking_number }
+          : { kind: 'stays-loose' })
+      : null,
+  };
+}
+
+export async function mergeBatches(sourceId, targetId, actor) {
+  const sql = db();
+  const pre = await previewBatchMerge(sourceId, targetId);
+  if (pre.error) return pre;
+  const { source, target } = pre;
+  // Box numbers are per batch and nothing enforces uniqueness, so a straight move would
+  // put two "box 1"s in one batch. Numbering on from the target's highest keeps every row
+  // distinct; the TRACKING NUMBER is what identifies the parcel anyway (see
+  // getPoReceivedBoxes), so a renumbered box is still matched to its label.
+  const [{ n: nextNum }] = await sql`
+    SELECT coalesce(max(box_number), 0) + 1 AS n FROM batch_boxes WHERE batch_id = ${targetId}`;
+  // Number by ROW, not by "how many have a lower number". Nothing enforces uniqueness on
+  // (batch_id, box_number) — the codebase says so itself in renumberBatchBox — so a source
+  // holding two "box 1"s made the old formula give both the same new number, carrying the
+  // collision into the target. row_number() gives each row its own. (QA, 2026-08-28)
+  const moved = await sql`
+    UPDATE batch_boxes SET batch_id = ${targetId}, box_number = r.n
+      FROM (SELECT id, ${Number(nextNum)} - 1 + row_number() OVER (ORDER BY box_number, id) AS n
+              FROM batch_boxes WHERE batch_id = ${sourceId}) r
+     WHERE batch_boxes.id = r.id RETURNING batch_boxes.id`;
+  // The loose units, placed before the items move so the box row is already in the target.
+  const key = trackKey(source.tracking_number);
+  let looseBoxId = null;
+  if (pre.loose > 0 && key) {
+    const [match] = await sql`
+      SELECT id FROM batch_boxes WHERE batch_id = ${targetId}
+        AND upper(replace(coalesce(tracking_number, ''), ' ', '')) = ${key}`;
+    if (match) looseBoxId = match.id;
+    else {
+      const [{ n: freeNum }] = await sql`
+        SELECT coalesce(max(box_number), 0) + 1 AS n FROM batch_boxes WHERE batch_id = ${targetId}`;
+      const [made] = await sql`
+        INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, received_at)
+        VALUES (${targetId}, ${Number(freeNum)}, ${source.tracking_number}, 'received', now())
+        RETURNING id`;
+      looseBoxId = made.id;
+    }
+    await sql`UPDATE items SET box_id = ${looseBoxId}
+               WHERE batch_id = ${sourceId} AND box_id IS NULL`;
+  }
+  const items = await sql`
+    UPDATE items SET batch_id = ${targetId} WHERE batch_id = ${sourceId} RETURNING id`;
+  // Anything else filed against the batch has to follow the stock, or it ends up
+  // describing a batch that no longer holds what it is about.
+  await sql`UPDATE shipment_issues SET batch_id = ${targetId} WHERE batch_id = ${sourceId}`;
+  // A source that was linked to the order carries that link over when the target is not
+  // yet linked — otherwise the units would leave the PO's reach entirely.
+  if (source.po_id && !target.po_id) await sql`UPDATE batches SET po_id = ${source.po_id} WHERE id = ${targetId}`;
+  // Emptied, not deleted: the code stays resolvable for whoever is holding the label.
+  const claimed = await sql`
+    UPDATE batches SET merged_into_batch_id = ${targetId}, merged_at = now(), merged_by = ${actor || null}
+     WHERE id = ${sourceId} AND merged_into_batch_id IS NULL RETURNING id`;
+  if (!claimed.length) {
+    // Someone else merged this source while we were moving its rows. The stock is safe
+    // (their move and ours were the same UPDATEs), but this call must not report the work
+    // as its own — two operators would each be told they moved the pairs. (QA, 2026-08-28)
+    return { error: `${source.batch_code} was merged by someone else just now — reload to see where its pairs went.` };
+  }
+  return {
+    ok: true,
+    source: source.batch_code, target: target.batch_code, targetId: Number(targetId),
+    items: items.length, boxes: moved.length, looseAttached: looseBoxId ? pre.loose : 0,
+  };
+}
+
 // Auto-save a typed supplier name for reuse (no-op if blank or already known).
 export async function addSupplier(name, createdBy) {
   const n = String(name || '').trim();
@@ -907,7 +1095,8 @@ export async function insertIssues(batchId, issues, createdBy) {
 export async function listBatches(limit = 50, kind = null, { phSafe = false, offset = 0, excludeOpen = false } = {}) {
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.no_tracking, b.batch_tag, b.status,
+           b.no_tracking, b.batch_tag, b.status, b.merged_into_batch_id,
+           (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
            count(*) OVER ()::int AS total_count,
            (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
@@ -946,7 +1135,8 @@ export async function searchBatches(query, { phSafe = false, limit = 25, offset 
   const like = `%${key}%`;
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.no_tracking, b.batch_tag, b.status,
+           b.no_tracking, b.batch_tag, b.status, b.merged_into_batch_id,
+           (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
            count(*) OVER ()::int AS total_count,
            (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
@@ -993,11 +1183,12 @@ export async function createOpenBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, no_tracking, date_received, default_cost, notes, special_rules,
-       kind, batch_tag, expected_boxes, po_id, status, created_by)
+       kind, batch_tag, expected_boxes, po_id, po_link_source, po_linked_at, status, created_by)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.noTracking === true}, ${h.dateReceived || null},
        ${h.defaultCost ?? null}, ${h.notes || null}, ${h.specialRules || null},
-       'receiving', ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null}, 'open', ${createdBy || null})
+       'receiving', ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null},
+       ${h.poId ? 'receiving' : null}, ${h.poId ? new Date() : null}, 'open', ${createdBy || null})
     RETURNING id, batch_code
   `;
   return rows[0];
@@ -1136,7 +1327,13 @@ export async function listItemsByBatch(batchId) {
 
 // Full batch view for the Batch Page: batch row + boxes (+counts) + items.
 export async function getBatchWithBoxes(id) {
-  const b = await db()`SELECT * FROM batches WHERE id = ${id}`;
+  // The PO facts ride along so the page can say whether this shipment came in against an
+  // order — and, when we recorded it, whether it was received that way or attached later.
+  const b = await db()`
+    SELECT b.*,
+           (SELECT p.po_code FROM purchase_orders p WHERE p.id = b.po_id) AS po_code,
+           (SELECT p.status  FROM purchase_orders p WHERE p.id = b.po_id) AS po_status
+      FROM batches b WHERE b.id = ${id}`;
   if (!b[0]) return null;
   const boxes = await listBatchBoxes(id);
   const items = await listItemsByBatch(id);
@@ -2581,6 +2778,68 @@ export async function bulkSetStatus(vins, status, createdBy) {
 }
 
 // Look up an item by its VIN (internal barcode) with its batch + full history.
+// WHERE A PAIR CAME FROM — its batch, the parcel it arrived in, and whether that
+// shipment was received against a purchase order (2026-08-28).
+//
+// Three things people ask of a pair and could not answer from its history: which batch,
+// which tracking number, and which PO — or plainly that there ISN'T one. All derived,
+// so it is true for stock received long before this existed.
+//
+// ⚠️ The tracking number is the pair's OWN BOX first, and only then its batch. The
+// ordinary receive keeps tracking on the batch and leaves items.box_id NULL (see
+// docs/context/receiving.md), while a multi-box batch has a different number per box —
+// reading the batch's number for a boxed pair would name the wrong parcel.
+export async function provenanceForVins(vins) {
+  const list = [...new Set((vins || []).map((v) => String(v || '').trim().toUpperCase()).filter(Boolean))];
+  if (!list.length) return [];
+  const rows = await db()`
+    SELECT i.vin,
+           b.batch_code, b.tracking_number AS batch_tracking, b.no_tracking, b.kind AS batch_kind,
+           b.po_id, b.po_link_source, b.po_linked_at, b.po_linked_by,
+           (SELECT bx.tracking_number FROM batch_boxes bx WHERE bx.id = i.box_id) AS box_tracking,
+           (SELECT bx.box_number     FROM batch_boxes bx WHERE bx.id = i.box_id) AS box_number,
+           (SELECT p.po_code FROM purchase_orders p WHERE p.id = b.po_id) AS po_code,
+           (SELECT p.status  FROM purchase_orders p WHERE p.id = b.po_id) AS po_status,
+           -- Which of the order's LABELS this parcel is, matched the way everything else
+           -- matches a parcel to a label: by tracking number, never by a typed number.
+           (SELECT pb.box_number FROM po_boxes pb
+             WHERE pb.po_id = b.po_id
+               AND coalesce(pb.tracking_number, '') <> ''
+               AND upper(replace(pb.tracking_number, ' ', '')) =
+                   upper(replace(coalesce(
+                     (SELECT bx.tracking_number FROM batch_boxes bx WHERE bx.id = i.box_id),
+                     b.tracking_number, ''), ' ', ''))
+             LIMIT 1) AS po_label_number
+    FROM items i
+    LEFT JOIN batches b ON b.id = i.batch_id
+    WHERE i.vin = ANY(${list})`;
+  return rows.map((r) => ({ vin: r.vin, ...provenanceOf(r) }));
+}
+
+// Fold the raw columns into the shape both screens render, so "received against a PO"
+// is decided once rather than by each caller reading po_id and guessing.
+export function provenanceOf(row) {
+  if (!row) return null;
+  const tracking = row.box_tracking || row.batch_tracking || null;
+  return {
+    batch_code: row.batch_code || null,
+    batch_kind: row.batch_kind || null,
+    box_number: row.box_number != null ? Number(row.box_number) : null,
+    tracking,
+    // A stated "no tracking number" is a fact someone recorded; a blank one is just blank.
+    no_tracking: !tracking && row.no_tracking === true,
+    against_po: !!row.po_id,
+    po_code: row.po_code || null,
+    po_status: row.po_status || null,
+    po_label_number: row.po_label_number != null ? Number(row.po_label_number) : null,
+    // 'receiving' = scanned in against the order · 'linked' = attached afterwards ·
+    // null = it happened before we recorded which, and saying either would be a guess.
+    link_source: row.po_id ? (row.po_link_source || null) : null,
+    linked_at: row.po_linked_at || null,
+    linked_by: row.po_linked_by || null,
+  };
+}
+
 export async function getItemByVin(vin) {
   const rows = await db()`
     SELECT i.*, b.batch_code, b.buyer_name, b.supplier_name, b.tracking_number,
@@ -2592,16 +2851,28 @@ export async function getItemByVin(vin) {
     WHERE i.vin = ${vin} LIMIT 1
   `;
   if (!rows[0]) return null;
+  const [provenance] = await provenanceForVins([vin]);
   const events = await db()`
     SELECT id, type, details, created_by, created_at
     FROM item_events WHERE item_id = ${rows[0].id} ORDER BY created_at, id
   `;
-  return { item: rows[0], events };
+  return { item: rows[0], events, provenance: provenance || null };
 }
 
 // Combined event history for a set of VINs (a PH grid size line covers several
 // identical units). Returns events newest-first with the owning VIN attached, so
 // the PH/admin/warehouse History view can show who changed what, when.
+// The PH grid's History covers a whole size line (several identical pairs), so it gets
+// provenance PER VIN beside the events — two pairs on one line can genuinely have arrived
+// in different parcels, and a single line at the top would be a claim about both.
+export async function getEventsWithProvenance(vins, limit = 500) {
+  const [events, provenance] = await Promise.all([
+    getEventsForVins(vins, limit),
+    provenanceForVins(vins),
+  ]);
+  return { events, provenance };
+}
+
 export async function getEventsForVins(vins, limit = 500) {
   const list = [...new Set((vins || []).filter(Boolean))];
   if (!list.length) return [];
@@ -3898,7 +4169,13 @@ export async function linkBatchToPo({ poId, batchId, boxMap = [], shipLabels = f
   const labelById = new Map(labels.map((l) => [Number(l.id), l]));
   const queries = [];
   if (batch.po_id == null) {
-    queries.push(sql`UPDATE batches SET po_id = ${poId} WHERE id = ${batchId} AND po_id IS NULL`);
+    // Record HOW, not just that. "Received straight against the order" and "attached
+    // afterwards once someone noticed" are different facts when tracing a pair, and
+    // po_id alone cannot tell them apart (2026-08-28).
+    queries.push(sql`
+      UPDATE batches SET po_id = ${poId}, po_link_source = 'linked', po_linked_at = now(),
+             po_linked_by = ${actor?.name || actor?.username || null}
+       WHERE id = ${batchId} AND po_id IS NULL`);
   }
   for (const m of boxMap) {
     const label = labelById.get(Number(m.poBoxId));
@@ -3949,7 +4226,11 @@ export async function unlinkBatchFromPo({ poId, batchId, actor = null }) {
   const batch = (await sql`SELECT * FROM batches WHERE id = ${batchId} AND po_id = ${poId}`)[0];
   if (!batch) return { error: 'That batch is not linked to this order.' };
 
-  await sql`UPDATE batches SET po_id = NULL WHERE id = ${batchId}`;
+  // Clear how it was linked along with the link itself — a batch that keeps
+  // `po_link_source` after being unlinked would tell a pair's history it came in against
+  // an order it no longer belongs to.
+  await sql`UPDATE batches SET po_id = NULL, po_link_source = NULL, po_linked_at = NULL,
+                   po_linked_by = NULL WHERE id = ${batchId}`;
   const rest = await sql`SELECT id FROM batches WHERE po_id = ${poId} ORDER BY id LIMIT 1`;
   const shipped = await sql`
     SELECT 1 FROM po_boxes WHERE po_id = ${poId} AND status NOT IN ('pending', 'packed') LIMIT 1`;

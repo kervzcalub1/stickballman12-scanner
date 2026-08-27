@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'payout', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'payout', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -147,6 +147,11 @@ export const HOME_SECTIONS = [
   { title: 'Administration', adminOnly: true, accent: 'orders', cards: [
     { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },
     { key: 'settings', icon: '⚙️', title: 'Settings', sub: 'Price margin % and other app-wide settings' },
+  ] },
+  // Superadmin only: both tools rewrite records other people rely on and neither can be
+  // undone from the screen, so they sit a notch above the rest of Administration.
+  { title: 'Superadmin', superOnly: true, accent: 'orders', cards: [
+    { key: 'merge', icon: '🔗', title: 'Merge duplicates', sub: 'One supplier entered twice, or one inbound received as two batches — fold them together' },
   ] },
 ];
 

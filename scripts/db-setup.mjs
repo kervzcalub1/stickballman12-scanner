@@ -439,6 +439,24 @@ await sql(`
   ON CONFLICT (name) DO NOTHING
 `);
 
+// HOW a batch came to belong to a purchase order (2026-08-28). `batches.po_id` says
+// THAT it does, never how or when — and "received straight against the order" and
+// "linked to it afterwards, once someone noticed" are different facts when you are
+// tracing a pair. Older rows keep NULL here: unknown is reported as unknown rather than
+// guessed from the link's existence.
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_link_source TEXT`);   // 'receiving' | 'linked'
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_linked_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_linked_by TEXT`);
+
+// Merging two batches that are really one inbound (2026-08-28, superadmin tool). The
+// losing batch is NOT deleted: a batch code is printed on labels and quoted in PO
+// history, so a code that stops resolving is a dead end for whoever is holding the paper.
+// It stays as an emptied row pointing at the batch that absorbed it.
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS merged_into_batch_id BIGINT REFERENCES batches(id)`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS merged_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS merged_by TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS batches_merged_into_idx ON batches (merged_into_batch_id)`);
+
 // Feature 7 — a batch can be several boxes arriving over days. It stays 'open'
 // while boxes trickle in, then 'committed'/'done' (auto when received==expected,
 // or a manual mark-done; status is changeable anytime). batch_tag is the

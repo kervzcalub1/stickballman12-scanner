@@ -108,12 +108,27 @@ test('search narrows the lines by non-adjacent keywords', async ({ page }) => {
   const rows = await openGrid(page);
   test.skip(rows === 0, 'no rows in range (empty DB)');
   const trows = page.locator('.ph-trow');
-  // The title cell renders through CopyText, so its innerText carries a trailing
-  // "Copy" affordance that is NOT part of the shoe's name — searching for it would
-  // (correctly) match nothing, since the filter reads the data, not the DOM.
-  const name = (await trows.first().locator('td').nth(1).innerText()).replace(/\bCopy\b/g, '').trim();
-  const words = name.split(/\s+/).filter((w) => w.length > 2);
-  test.skip(words.length < 3, 'first row has too short a name to test non-adjacency');
+  // Read the NAME ELEMENT, not the whole cell. The cell also carries an expand caret and
+  // a listing-status chip ("• Not listed"), and scraping the lot fed the search words that
+  // are not in any shoe's name — so the filter correctly returned nothing and the test
+  // failed. It only ever passed because the first row happened to carry no chip.
+  // `.copytext` is the shoe name itself; its innerText still ends with the "Copy" cue.
+  // Look for a row long enough to test non-adjacency, rather than only the first one.
+  // Judging the first row alone skipped the whole test whenever it happened to be
+  // something like "UI Only Test" — a pass that exercised nothing.
+  const readName = async (i) => {
+    const cell = trows.nth(i).locator('td').nth(1);
+    const el = cell.locator('.copytext').first();
+    const raw = await (await el.count() ? el : cell).innerText();
+    return raw.replace(/\bCopy\b/g, '').replace(/Copied ✓/g, '').trim();
+  };
+  let name = ''; let words = [];
+  for (let i = 0; i < Math.min(rows, 10); i += 1) {
+    const n = await readName(i);
+    const w = n.split(/\s+/).filter((x) => x.length > 2);
+    if (w.length >= 3) { name = n; words = w; break; }
+  }
+  test.skip(words.length < 3, 'no row in range has a long enough name to test non-adjacency');
 
   // First + LAST word — deliberately not adjacent, which a plain substring can't match.
   const query = `${words[0]} ${words[words.length - 1]}`;

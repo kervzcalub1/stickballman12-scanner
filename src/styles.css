@@ -736,6 +736,51 @@ body {
 .batch-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 4px 2px; }
 .batch-pager-at { text-align: center; flex: 1; }
 .batch-pager .btn[disabled] { opacity: 0.4; }
+/* Merge tools (superadmin). Two pickers and an arrow — the direction of a merge is the
+   one thing a reader must not have to guess, so it is drawn, not implied by field order. */
+.merge-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+.merge-row label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 200px; min-width: 0; }
+.merge-arrow { color: var(--muted, #8a8a8a); padding-bottom: 8px; font-size: 18px; }
+.merge-picked { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; font-size: 14px; }
+.merge-hits { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.merge-hit { text-align: left; background: none; border: 1px solid var(--line, #2a2a2a); border-radius: 8px;
+  padding: 8px 10px; color: inherit; cursor: pointer; font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
+.merge-hit.picked { border-color: #4f7cff; background: rgba(79, 124, 255, 0.12); }
+/* The preview is the last thing read before an irreversible click, so it is framed
+   rather than floated in the card — it has to look like a statement, not a hint. */
+.merge-preview { border: 1px solid var(--line, #2a2a2a); border-left: 2px solid #e0a800; border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+.merge-preview h4 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #8a8a8a); }
+.merge-preview ul { margin: 0 0 10px; padding-left: 18px; font-size: 14px; line-height: 1.6; }
+.merge-untouched { margin: 0 0 10px; }
+/* "Where it came from" — a definition list, because these are three named facts about a
+   pair, not a sentence. Labels stay narrow so the values line up and can be read down. */
+.prov { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.prov > div { display: flex; gap: 10px; align-items: baseline; }
+.prov dt { flex: 0 0 108px; color: var(--muted, #8a8a8a); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+.prov dd { margin: 0; font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+.prov-track { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+/* The "no PO" answer is a real answer, so it is stated rather than left as a dash — but
+   it is not an error, so it is not red. */
+.prov-none { color: var(--muted, #8a8a8a); font-style: italic; }
+.prov-compact > div { gap: 8px; }
+.prov-compact dt { flex-basis: 84px; font-size: 11px; }
+.prov-compact dd { font-size: 13px; }
+@media (max-width: 600px) { .prov > div { flex-direction: column; gap: 0; } .prov dt { flex-basis: auto; } }
+/* Provenance above the PH grid's History: where the pairs came from, before what
+   happened to them. Separated by a rule so it reads as context, not as the first event. */
+.batch-po { margin-top: 4px; }
+.hist-prov { border-bottom: 1px solid var(--line, #2a2a2a); padding-bottom: 10px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; }
+.hist-prov-vins { font-family: ui-monospace, Menlo, monospace; margin-bottom: 4px; }
+.merge-note { border-left: 2px solid #4f7cff; font-size: 14px; }
+.merge-done { border-left: 2px solid #3fb950; padding: 8px 12px; margin-top: 12px; font-size: 14px; }
+/* Stacked on a phone the children must STOP growing — `flex: 1 1 200px` in a column
+   makes each label absorb the leftover height, which opened a dead gap under every
+   select. */
+@media (max-width: 600px) {
+  .merge-row { flex-direction: column; align-items: stretch; }
+  .merge-row label { flex: 0 0 auto; }
+  .merge-arrow { display: none; }
+}
 .batch-search { display: flex; flex-direction: column; gap: 4px; }
 .batch-search input { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .box-context { background: rgba(79, 124, 255, 0.1); border: 1px solid rgba(79, 124, 255, 0.3); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; }

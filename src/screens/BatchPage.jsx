@@ -76,10 +76,23 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
       setRecent(r);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
+  // A batch that was merged away keeps its code (it is on printed labels) but holds
+  // nothing. Landing on an empty page after scanning that code is the exact confusion the
+  // "no boxes" bug caused, so follow the pointer and SAY that you did.
+  const [mergedFrom, setMergedFrom] = useState(null);
   async function loadDetail(id) {
     setError('');
-    try { const d = await api.batchFull(id); setDetail(d); }
-    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    try {
+      const d = await api.batchFull(id);
+      const into = d.batch?.merged_into_batch_id;
+      if (into && Number(into) !== Number(id)) {
+        setMergedFrom(d.batch.batch_code);
+        setSelIdRaw(String(into));   // replaces, so Back still returns to the list
+        return;
+      }
+      setMergedFrom((f) => (selId && Number(selId) === Number(id) ? f : null));
+      setDetail(d);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
 
   useEffect(() => { loadLists(); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -108,7 +121,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     }, 250);
     return () => clearTimeout(t);
   }, [q, page]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else setDetail(null); }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else { setDetail(null); setMergedFrom(null); } }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Put the number on the row back in step with the label on the carton. Boxes that
   // arrive out of order get whatever "+ Add box" had left (max+1) — box 6 of 9 landing a
@@ -168,6 +181,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
       <div className="app">
         <TopBar title="Batch" onHome={onHome} onSignOut={onSignOut}
           right={<button className="btn ghost sm" onClick={closeBatch}>← Batches</button>} />
+        {mergedFrom && (
+          <div className="card merge-note">
+            <b>{mergedFrom}</b> was merged into this batch — its pairs are here.
+          </div>
+        )}
         <div className="card">
           <div className="batch-page-head">
             <div>
@@ -175,6 +193,20 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
               {/* A stated "no tracking number" is worth showing — otherwise this batch
                   looks like one whose tracking simply never got typed in. */}
               <div className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.tracking_number ? <> · {b.tracking_number}</> : b.no_tracking ? <> · no tracking #</> : ''}</div>
+            {/* Against an order, or not — stated on the batch as well as on each pair,
+                because "which PO was this?" is asked of the shipment more often than of
+                a single shoe. Inside the left column: `.batch-page-head` is a flex row,
+                so a third child would sit beside the box count and squeeze it. */}
+            <div className="muted sm batch-po">
+              {b.po_id
+                ? <>Received against <b>{b.po_code || `PO #${b.po_id}`}</b>
+                    {b.po_status ? <> · {b.po_status}</> : null}
+                    {b.po_link_source === 'linked'
+                      ? <> · attached to the order afterwards{b.po_linked_by ? ` by ${b.po_linked_by}` : ''}</>
+                      : b.po_link_source === 'receiving' ? <> · received straight against it</> : null}
+                  </>
+                : <span className="prov-none">Not received against a purchase order</span>}
+            </div>
             </div>
             <div className="batch-progress">
               {/* A batch that was never split into boxes gets its item count instead —
@@ -331,7 +363,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     <button className="batch-nav-row" key={b.id} onClick={() => openBatch(b.id)}>
       <div className="batch-nav-main">
         <span className="batch-code">{b.batch_code}
-          {b.item_count === 0 && <span className="badge warn">Empty</span>}
+          {b.merged_into_code
+            ? <span className="badge">merged into {b.merged_into_code}</span>
+            : b.item_count === 0 && <span className="badge warn">Empty</span>}
           {showKind && b.kind && b.kind !== 'receiving' && <span className="badge">{b.kind}</span>}
         </span>
         <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.date_received || b.created_at ? ` · ${shortDate(b.date_received || b.created_at)}` : ''}</span>

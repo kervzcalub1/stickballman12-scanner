@@ -686,6 +686,41 @@ isn't broken out per label, so there's no per-label checklist to tick.
   NULL `box_id` — a single-box or pre-multi-box receive never set one — come back as a
   box-less group rather than vanishing, so the totals still add up. Served on
   `po/reconciliation` as `received_boxes`.
+## Where a pair came from (2026-08-28)
+`provenanceForVins(vins)` + `provenanceOf(row)` in `api/_lib/db.js`; rendered by the shared
+`<Provenance>` (`components/common.jsx`). Served on **`items/lookup`** (the pair detail) and
+**`items/history`** (the PH grid's History), and shown on the **Batch page** for the whole
+shipment. E2E: `e2e/po-provenance.spec.js`.
+
+Three things people chase a pair by, none of which its history could answer: **which batch,
+which parcel, which purchase order** — or plainly that there **isn't** one. All **derived**,
+so it is true for stock received long before this existed; no backfill.
+
+⚠️ **The tracking number is the pair's OWN BOX first, and only then its batch.** The
+ordinary receive keeps tracking on the batch and leaves `items.box_id` NULL, while a
+multi-box batch has a different number per box — reading the batch's number for a boxed
+pair names the **wrong parcel**. The same rule as everywhere else here: a parcel is
+identified by its tracking number, which is also how the pair is matched to the order's
+**label number**.
+
+**"Not received against a purchase order" is said outright**, never left as a blank — a
+blank reads as "not loaded" just as easily as "none", and this is the question the block
+exists to answer.
+
+### How it was linked, recorded from now on
+`batches.po_link_source` (`'receiving'` | `'linked'`), `po_linked_at`, `po_linked_by`
+(**needs `db:setup`**). `po_id` says only *that* a batch belongs to an order; **"received
+straight against it" and "attached afterwards once someone noticed" are different facts**
+when tracing a pair. `createOpenBatch` stamps `'receiving'` when it is given a `poId`;
+`linkBatchToPo` stamps `'linked'` with who and when; `unlinkBatchFromPo` clears all three,
+or the batch would keep telling a pair's history it came in against an order it no longer
+belongs to. **Older links keep NULL and are reported as "not recorded"** — saying either
+answer for them would be inventing the thing someone came to check.
+
+The PH grid's History covers a whole size line, so provenance there is **per VIN, grouped
+by identical story**: two pairs on one line can genuinely have arrived in different parcels
+on different orders, and one line at the top would be a claim about both.
+
 - ⚠️ **A box-less unit still belongs to a label, when its BATCH carries that label's
   tracking number** (2026-08-28). Reported from PO-100010: box 2 read *"0 units · opened,
   nothing in it"* while its thirteen pairs sat below under *"Not recorded against a box"*.

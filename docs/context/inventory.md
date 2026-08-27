@@ -2,6 +2,11 @@
 
 ## Who can open it
 - **Warehouse / admin / superadmin:** `/inventory`, full page.
+- **Where it came from** (2026-08-28): every pair's detail carries a block naming its
+  **purchase order, batch and tracking number** — or stating outright that it was *not*
+  received against a PO. Same component on `/ph/inventory`, since PH reads this page and
+  asks the same question. Full rules (including why the tracking number is the pair's own
+  BOX, not its batch) in `docs/context/purchase-orders.md`.
 - **PH team:** `/ph/inventory` (card in *Pricing & Listing*) — the **same
   `Inventory` component** rendered by `PHTeamApp` with **`canEditStock={false}`**.
   They get search, filters, groups/units, detail + history, listing photos, labels,

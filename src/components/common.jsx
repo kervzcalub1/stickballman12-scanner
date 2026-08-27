@@ -6,7 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import { STATUS_MAP, statusLabel } from '../statuses.js';
-import { EST_FMT, PH_DATETIME, periodLabel, shiftAnchor } from '../lib/format.js';
+import { EST_FMT, PH_DATETIME, estDate, periodLabel, shiftAnchor } from '../lib/format.js';
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
@@ -123,19 +123,42 @@ export function HistoryLine({ event, onViewPhotos }) {
 // Read-only change history for a PH grid line (its VINs) — who changed what, when.
 // Visible to PH team, warehouse, and admin.
 export function HistoryModal({ vins, title, onClose }) {
-  const [state, setState] = useState({ loading: true, events: [], error: '' });
+  const [state, setState] = useState({ loading: true, events: [], provenance: [], error: '' });
   const [lightbox, setLightbox] = useState(null);
   useEffect(() => {
     let cancelled = false;
     api.itemHistory(vins)
-      .then((d) => { if (!cancelled) setState({ loading: false, events: dedupeEvents(d.events || []), error: '' }); })
-      .catch((e) => { if (!cancelled) setState({ loading: false, events: [], error: e.message || 'Failed to load history.' }); });
+      .then((d) => { if (!cancelled) setState({ loading: false, events: dedupeEvents(d.events || []), provenance: d.provenance || [], error: '' }); })
+      .catch((e) => { if (!cancelled) setState({ loading: false, events: [], provenance: [], error: e.message || 'Failed to load history.' }); });
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // A size line can hold several pairs, and they need not have arrived together — two
+  // identical shoes can come from different parcels and different orders. Group the
+  // identical stories into one block each, and name the VINs it covers, rather than
+  // printing one line per pair or (worse) one line for all of them.
+  const provGroups = [];
+  for (const p of state.provenance) {
+    const key = `${p.batch_code}|${p.tracking}|${p.po_code}|${p.box_number}`;
+    const found = provGroups.find((g) => g.key === key);
+    if (found) found.vins.push(p.vin);
+    else provGroups.push({ key, p, vins: [p.vin] });
+  }
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal hist-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">History — {title}</h3>
+        {provGroups.length > 0 && (
+          <div className="hist-prov">
+            {provGroups.map((g) => (
+              <div className="hist-prov-block" key={g.key}>
+                {provGroups.length > 1 && (
+                  <div className="muted xs hist-prov-vins">{g.vins.join(', ')}</div>
+                )}
+                <Provenance p={g.p} compact />
+              </div>
+            ))}
+          </div>
+        )}
         {state.loading ? <p className="muted">Loading…</p>
           : state.error ? <div className="error">{state.error}</div>
             : !state.events.length ? <p className="muted">No history yet.</p>
@@ -893,5 +916,51 @@ export function Pager({ page, pageSize, total, onPage, label = 'rows' }) {
       <button className="btn ghost sm" disabled={page >= pages} onClick={() => onPage(page + 1)}
         aria-label={`Next page of ${label}`}>Next →</button>
     </div>
+  );
+}
+
+// WHERE A PAIR CAME FROM — batch, parcel, and whether that shipment was received
+// against a purchase order (2026-08-28).
+//
+// The three identifiers people chase a pair by, in the order they are asked for, and a
+// PLAIN answer to "was this against a PO or not" rather than leaving a blank to be read
+// as either. Rendered on the pair's detail (warehouse + PH `/ph/inventory`, same
+// component) and beside the PH grid's History.
+export function Provenance({ p, compact = false }) {
+  if (!p) return null;
+  const po = p.against_po ? (
+    <>
+      <b>{p.po_code}</b>
+      {p.po_label_number != null ? <span className="muted"> · label {p.po_label_number}</span> : null}
+      {p.po_status ? <span className="muted"> · {p.po_status}</span> : null}
+    </>
+  ) : (
+    // Said outright. A blank PO field reads as "not loaded" just as easily as "none",
+    // and this is the question the page exists to answer.
+    <span className="prov-none">Not received against a purchase order</span>
+  );
+  return (
+    <dl className={`prov ${compact ? 'prov-compact' : ''}`}>
+      <div><dt>Purchase order</dt><dd>{po}</dd></div>
+      <div><dt>Batch</dt><dd>{p.batch_code || <span className="muted">—</span>}
+        {p.box_number != null ? <span className="muted"> · box {p.box_number}</span> : null}</dd></div>
+      <div><dt>Tracking</dt><dd>
+        {p.tracking
+          ? <span className="prov-track">{p.tracking}</span>
+          : p.no_tracking
+            ? <span className="muted">stated as having none</span>
+            : <span className="muted">—</span>}
+      </dd></div>
+      {/* HOW it came to be on that order, when we know. Older links predate this being
+          recorded, and saying "received against it" for one that was attached later would
+          be inventing the answer someone came here to check. */}
+      {p.against_po && (
+        <div><dt>Linked</dt><dd>
+          {p.link_source === 'receiving' ? 'received straight against this order'
+            : p.link_source === 'linked' ? <>attached to the order afterwards{p.linked_by ? ` by ${p.linked_by}` : ''}{p.linked_at ? ` · ${estDate(p.linked_at)}` : ''}</>
+              : <span className="muted">not recorded — this link predates the app tracking how</span>}
+        </dd></div>
+      )}
+    </dl>
   );
 }

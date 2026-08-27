@@ -182,6 +182,21 @@ export function requireRole(req, res, roles) {
   return user;
 }
 
+// SUPERADMIN ONLY — `requireRole` is no use here: it auto-passes anything privileged
+// (isPrivileged covers admin too), so a list of roles can never exclude an admin. The
+// merge tools are irreversible and rewrite other people's records, so they are held one
+// notch above the rest of the admin surface.
+export function requireSuperadmin(req, res) {
+  const user = requireAuth(req, res);
+  if (!user) return null;
+  if (blockIfMustChange(user, res)) return null;
+  if (user.role !== 'superadmin') {
+    send(res, 403, { ok: false, error: 'This tool is superadmin only.' });
+    return null;
+  }
+  return user;
+}
+
 /* ------------------------------------------------------------------ */
 /* Password hashing (scrypt — built into Node, no extra dependency).   */
 /* Stored format: s2$<saltHex>$<hashHex>                               */

@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
-import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip, CopyText, RemoveUnitsModal } from '../components/common.jsx';
+import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip, CopyText, RemoveUnitsModal, Provenance } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
@@ -518,6 +518,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
                   <div className="send"><button className="btn ghost wide" disabled={photoDl} onClick={() => downloadDetailPhotos(it.sku)}><Icon name="download" /> {photoDl ? 'Preparing…' : (detailPhotos.length === 1 ? 'Download photo' : `Download all (${detailPhotos.length}) as ZIP`)}</button></div>
                 </>
               )}
+            </div>
+
+            {/* Where it came from, before what happened to it. Same component on
+                /ph/inventory — PH reads this page too and asks the same question. */}
+            <div className="card">
+              <h3 className="rows-title">Where it came from</h3>
+              <Provenance p={detail.provenance} />
             </div>
 
             <div className="card">

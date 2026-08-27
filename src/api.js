@@ -141,6 +141,11 @@ export const api = {
   // `q` (a tracking number or batch code) makes this a SERVER search across every batch
   // rather than a filter over one page; `page` is 1-based and pages both — see
   // api/batches/list.js, which owns the page size and returns it with the rows.
+  // Merge tools (superadmin only) — preview first, apply second, deliberately two calls.
+  previewSupplierMerge: (from, to) => get(`/api/admin/merge-suppliers?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  mergeSuppliers: (from, to) => post('/api/admin/merge-suppliers', { from, to }),
+  previewBatchMerge: (source, target) => get(`/api/admin/merge-batches?source=${source}&target=${target}`),
+  mergeBatches: (source, target) => post('/api/admin/merge-batches', { source, target }),
   batchList: ({ kind, q, page, excludeOpen } = {}) => {
     const p = new URLSearchParams();
     if (kind) p.set('kind', kind);

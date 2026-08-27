@@ -13,6 +13,7 @@ import { Auth, ForcedPasswordChange } from './screens/Auth.jsx';
 import { Home } from './screens/Home.jsx';
 import { CheckAccess } from './screens/CheckAccess.jsx';
 import { Settings } from './screens/Settings.jsx';
+import { MergeTools } from './screens/MergeTools.jsx';
 import { Receiving } from './screens/Receiving.jsx';
 import { BatchPage } from './screens/BatchPage.jsx';
 import { Inventory } from './screens/Inventory.jsx';
@@ -175,6 +176,11 @@ export default function App() {
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'access') return withAdvisor(<CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'settings') return withAdvisor(<Settings onHome={() => go('home')} onSignOut={signOut} />);
+  // Superadmin only, and gated HERE as well as on the server: an admin who types /merge
+  // gets the home page, not a tool whose buttons would 403 halfway through.
+  if (view === 'merge') return withAdvisor(user.role === 'superadmin'
+    ? <MergeTools onHome={() => go('home')} onSignOut={signOut} />
+    : <Home user={user} onPick={go} onSignOut={signOut} />);
   if (view === 'nobox') return withAdvisor(<NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Replacement box labels — admin/warehouse (ph_team short-circuits to PHTeamApp above).
   if (view === 'costs') return withAdvisor(<ItemCosts onHome={() => go('home')} onSignOut={signOut} />);

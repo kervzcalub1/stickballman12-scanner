@@ -275,6 +275,24 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           {expected ? (
             <div className="progress-bar"><span style={{ width: `${Math.min(100, Math.round((received / expected) * 100))}%` }} /></div>
           ) : null}
+          {/* The shipment on paper, in the header card like the PO reconciliation page
+              keeps its manifest print — on a batch with eleven boxes, the bottom of the
+              page is a long scroll from the batch it describes. Read-only, so PH has it
+              too: they are the ones asked "when did this land and against which order". */}
+          <div className="batch-report">
+            <div>
+              <b className="batch-report-h">Manifest report</b>
+              <p className="muted sm">Date order, date delivered, batch no. and PO number, with every pair counted into this batch.</p>
+            </div>
+            <div className="batch-report-btns">
+              <button className="btn ghost sm" disabled={!!reportBusy} onClick={() => downloadReport('pdf')}>
+                <Icon name="download" /> {reportBusy === 'pdf' ? 'Building…' : 'PDF'}
+              </button>
+              <button className="btn ghost sm" disabled={!!reportBusy} onClick={() => downloadReport('csv')}>
+                <Icon name="download" /> {reportBusy === 'csv' ? 'Building…' : 'CSV'}
+              </button>
+            </div>
+          </div>
         </div>
 
         {(boxes.length > 0 || expected || (isOpen && !readOnly)) && (
@@ -354,23 +372,6 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
             <div className="box-items">{unboxed.map(itemRow)}</div>
           </div>
         )}
-
-        {/* The shipment on paper. Read-only, so PH has it as well — they are the ones
-            asked "when did this land and against which order". */}
-        <div className="card batch-report">
-          <div>
-            <h3 className="rows-title">Manifest report</h3>
-            <p className="muted sm">Date order, date delivered, batch no. and PO number, with every pair counted into this batch.</p>
-          </div>
-          <div className="batch-report-btns">
-            <button className="btn ghost sm" disabled={!!reportBusy} onClick={() => downloadReport('pdf')}>
-              <Icon name="download" /> {reportBusy === 'pdf' ? 'Building…' : 'PDF'}
-            </button>
-            <button className="btn ghost sm" disabled={!!reportBusy} onClick={() => downloadReport('csv')}>
-              <Icon name="download" /> {reportBusy === 'csv' ? 'Building…' : 'CSV'}
-            </button>
-          </div>
-        </div>
 
         {error && <div className="error mt">{error}</div>}
         <div className="batch-bar">

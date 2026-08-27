@@ -769,8 +769,11 @@ body {
 /* Provenance above the PH grid's History: where the pairs came from, before what
    happened to them. Separated by a rule so it reads as context, not as the first event. */
 .batch-po { margin-top: 4px; }
-.batch-report { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.batch-report .rows-title { margin-bottom: 2px; }
+/* Inside the batch's header card now, so it sits with the batch it describes rather
+   than below eleven box rows. Ruled off above so it reads as its own offer. */
+.batch-report { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line, #2a2a2a); }
+.batch-report-h { display: block; margin-bottom: 2px; }
 .batch-report p { margin: 0; }
 .batch-report-btns { display: flex; gap: 8px; }
 @media (max-width: 600px) { .batch-report-btns { width: 100%; } .batch-report-btns .btn { flex: 1; } }

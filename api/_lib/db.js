@@ -3075,20 +3075,33 @@ export async function getPoReceivedBoxes(poId) {
     WHERE b.po_id = ${poId}
     ORDER BY b.id, bx.box_number
   `;
+  // `batch_id` rides along because a box-less unit's parcel is identified by the tracking
+  // number on its BATCH — see the loose-unit handling at the end.
   const rows = await sql`
-    SELECT i.box_id, i.sku, i.size, max(i.name) AS name, count(*)::int AS qty
+    SELECT i.box_id, i.batch_id, i.sku, i.size, max(i.name) AS name, count(*)::int AS qty
     FROM items i
     JOIN batches b ON b.id = i.batch_id
     WHERE b.po_id = ${poId}
-    GROUP BY i.box_id, i.sku, i.size
+    GROUP BY i.box_id, i.batch_id, i.sku, i.size
     ORDER BY i.sku, i.size
   `;
   const byBox = new Map();
+  const looseByBatch = new Map();   // batch_id -> units received with no box row
   for (const r of rows) {
-    const k = r.box_id == null ? 'none' : String(r.box_id);
-    if (!byBox.has(k)) byBox.set(k, []);
-    byBox.get(k).push({ sku: r.sku, size: r.size, name: r.name, qty: r.qty });
+    const line = { sku: r.sku, size: r.size, name: r.name, qty: r.qty };
+    if (r.box_id == null) {
+      const k = String(r.batch_id);
+      if (!looseByBatch.has(k)) looseByBatch.set(k, []);
+      looseByBatch.get(k).push(line);
+    } else {
+      const k = String(r.box_id);
+      if (!byBox.has(k)) byBox.set(k, []);
+      byBox.get(k).push(line);
+    }
   }
+  const poBatches = await sql`
+    SELECT id, batch_code, tracking_number FROM batches WHERE po_id = ${poId}`;
+  const batchById = new Map(poBatches.map((b) => [String(b.id), b]));
   // Which label each received box actually is, read off its tracking number.
   const labels = await sql`
     SELECT id, box_number, tracking_number, kind FROM po_boxes
@@ -3112,16 +3125,51 @@ export async function getPoReceivedBoxes(poId) {
       units: items.reduce((n, i) => n + i.qty, 0),
     };
   });
+  // BOX-LESS UNITS BELONG TO A LABEL TOO, when their batch carries that label's tracking
+  // number. A parcel received on its own — the ordinary single-box receive — keeps the
+  // tracking on the BATCH and leaves items.box_id NULL, so it has no box row to appear
+  // under. Listing it as "not recorded against a box" while the label it plainly matches
+  // sits above reading "0 units · opened, nothing in it" is two wrong statements about
+  // one parcel: the box looks empty and its thirteen pairs look unattributable. It also
+  // fed `getPoBoxDiffs`, so that label read as short by everything in it.
+  //
+  // Same rule as the box rows above, and the one this function already states: the parcel
+  // is identified by its TRACKING NUMBER. Units whose batch matches a label are folded
+  // into that label's row (merging with an empty placeholder box row if receiving made
+  // one); only units whose batch matches nothing stay unattributed, which is the honest
+  // answer for a batch that was linked without a tracking number at all.
+  const unattributed = [];
+  for (const [batchId, items] of looseByBatch) {
+    const batch = batchById.get(batchId);
+    const key = batch?.tracking_number ? norm(batch.tracking_number) : '';
+    const label = key ? byTracking.get(key) : null;
+    if (!label) { unattributed.push(...items); continue; }
+    const existing = out.find((r) => r.tracking_number && norm(r.tracking_number) === key);
+    if (existing) {
+      existing.items = [...existing.items, ...items];
+      existing.units = existing.items.reduce((n, i) => n + i.qty, 0);
+      // The label's parcel did arrive; a placeholder box row still saying "pending"
+      // would contradict the thirteen pairs now listed under it.
+      existing.status = 'received';
+      continue;
+    }
+    out.push({
+      id: null, box_number: Number(label.box_number), tracking_number: batch.tracking_number,
+      status: 'received', received_at: null, received_by: null,
+      batch_code: batch.batch_code, batch_id: Number(batchId),
+      recorded_box_number: null, label_kind: label.kind || 'original', matched_label: true,
+      items, units: items.reduce((n, i) => n + i.qty, 0),
+    });
+  }
   // Sorted by the number the reader will see, so a late box sits where its label does
   // instead of trailing the list at the number it was typed under.
-  out.sort((a, b) => (a.box_number ?? 1e9) - (b.box_number ?? 1e9) || Number(a.id) - Number(b.id));
-  const loose = byBox.get('none') || [];
-  if (loose.length) {
+  out.sort((a, b) => (a.box_number ?? 1e9) - (b.box_number ?? 1e9) || Number(a.id ?? 0) - Number(b.id ?? 0));
+  if (unattributed.length) {
     out.push({
       id: null, box_number: null, tracking_number: null, status: 'received',
       received_at: null, received_by: null, batch_code: out[0]?.batch_code || null, batch_id: null,
       recorded_box_number: null, label_kind: null, matched_label: false,
-      items: loose, units: loose.reduce((n, i) => n + i.qty, 0),
+      items: unattributed, units: unattributed.reduce((n, i) => n + i.qty, 0),
     });
   }
   return out;

@@ -686,6 +686,26 @@ isn't broken out per label, so there's no per-label checklist to tick.
   NULL `box_id` — a single-box or pre-multi-box receive never set one — come back as a
   box-less group rather than vanishing, so the totals still add up. Served on
   `po/reconciliation` as `received_boxes`.
+- ⚠️ **A box-less unit still belongs to a label, when its BATCH carries that label's
+  tracking number** (2026-08-28). Reported from PO-100010: box 2 read *"0 units · opened,
+  nothing in it"* while its thirteen pairs sat below under *"Not recorded against a box"*.
+  Box 2's parcel had been received on its own — the ordinary single-box receive, which keeps
+  the tracking on the **batch** and leaves `items.box_id` NULL — while the multi-box batch
+  for the rest of the order held an empty `pending` placeholder row for the same number. The
+  function built its rows from `batch_boxes` alone, so it made **two wrong statements about
+  one parcel**: the box looked empty and its pairs looked unattributable. It also fed
+  `getPoBoxDiffs`, which reported that label **short by everything in it** — on a shipment
+  where all 52 pairs had arrived (`expected 13 · received 0 · 3 discrepancies`, now
+  `13 · 13 · none`).
+  Box-less units are now grouped by their batch, and a batch whose tracking number matches
+  a label is folded into that label's row — merging with the placeholder box row if
+  receiving made one, and flipping it to `received`, since a row still saying "pending"
+  would contradict the pairs now listed under it. **Only units whose batch matches no
+  label stay unattributed**, which is the honest answer for a batch linked without a
+  tracking number; nothing is guessed onto a label. Same rule the rest of this function
+  already stated — *a parcel is identified by its tracking number* — finally applied to the
+  loose half. A READ-side correction, so every order already in the database is fixed.
+  Guarded by `e2e/po-received-loose-box.spec.js`.
 - **"What we received" (PDF, `mode: 'received'`).** One page per box we opened, with that
   box's tracking number and what came out of it, then **one** reconciliation page: their
   list vs our count, per SKU+size, with a plain-word verdict ("Match", "Short 1",

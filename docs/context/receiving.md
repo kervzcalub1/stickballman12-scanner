@@ -239,6 +239,27 @@ normalises to nothing (`"----"`) matches **nothing**, not everything.
 ⚠️ `db.js` has a *second* `trackKey` further down (whitespace-only) used to match a label to
 a box. Different job, stricter rule — don't merge them.
 
+### ⚠️ Most batches have NO boxes, and that is normal (2026-08-27)
+`batch_boxes` rows exist only for a **multi-box** batch or one **received against a PO**.
+The ordinary receiving wizard commits its pairs straight to the batch with `box_id` NULL
+and creates no box row at all. On prod that is **165 of 190 batches — 984 pairs**,
+including ones received yesterday. It is not old data.
+
+The Batch detail page grouped every item under its box, so for all of those it rendered
+*"Boxes (0) · No boxes yet"* and **none of the shoes** — over a batch whose list row said
+"13 items" and showed a tracking number. Reported from the floor as *"why no boxes?"*.
+
+Now: items with no `box_id` are listed in their own card, and the page adapts.
+- **No boxes at all** → an **Items (N)** card with every pair, and the header counts
+  *items* instead of showing "0 boxes" (which reads like something went missing).
+- **Boxes and loose pairs** → the box list, plus a **Not in a box (N)** section, so a pair
+  scanned into the batch before its boxes were recorded can't quietly disappear.
+- The Boxes card itself is hidden when there is nothing to say — no boxes, none expected,
+  and no way to add one.
+
+The rule to keep: **a pair in this batch appears on this page**, whatever the box column
+says. Guarded by `e2e/batch-unboxed-items.spec.js`, which seeds both shapes.
+
 ### Paging, and what Back does here (2026-08-27)
 **Every batch list is paged, 25 a page, server-side** (`PAGE_SIZE` in `api/batches/list.js`,
 returned with the rows so the client never guesses). `count(*) OVER ()` rides along on each

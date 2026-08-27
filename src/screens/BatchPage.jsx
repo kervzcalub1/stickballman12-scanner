@@ -147,6 +147,23 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     const received = boxes.filter((x) => x.status === 'received').length;
     const expected = b.expected_boxes;
     const isOpen = b.status === 'open';
+    // MOST BATCHES HAVE NO BOXES AT ALL, and that is normal — not old data.
+    // `batch_boxes` rows exist only for a multi-box batch or one received against a PO;
+    // the ordinary receiving wizard commits its pairs straight to the batch with
+    // `box_id` NULL. Grouping every item under a box therefore hid the contents of 165
+    // of 190 batches on prod (984 pairs), showing "Boxes (0) · No boxes yet" over a
+    // batch that plainly has 13 shoes in it. Anything without a box is listed on its own.
+    const unboxed = itemsByBox.get('') || [];
+    const itemRow = (it) => (
+      <div className="batch-detail-row" key={it.id}>
+        {onOpenItem
+          ? <button className="vin vin-link" onClick={() => onOpenItem(it.vin)} title="View full shoe detail + history">{it.vin}</button>
+          : <span className="vin">{it.vin}</span>}
+        <span className="batch-row-name">{it.name}</span>
+        <span className="muted sm">{it.sku || '—'} · size {it.size || '—'}</span>
+        <StatusPill status={it.status} />
+      </div>
+    );
     return (
       <div className="app">
         <TopBar title="Batch" onHome={onHome} onSignOut={onSignOut}
@@ -160,7 +177,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
               <div className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.tracking_number ? <> · {b.tracking_number}</> : b.no_tracking ? <> · no tracking #</> : ''}</div>
             </div>
             <div className="batch-progress">
-              <b>{received}{expected ? `/${expected}` : ''}</b><span className="muted sm"> boxes</span>
+              {/* A batch that was never split into boxes gets its item count instead —
+                  "0 boxes" over thirteen shoes reads like something went missing. */}
+              {boxes.length || expected
+                ? <><b>{received}{expected ? `/${expected}` : ''}</b><span className="muted sm"> boxes</span></>
+                : <><b>{detail.items?.length ?? 0}</b><span className="muted sm"> item{(detail.items?.length ?? 0) === 1 ? '' : 's'}</span></>}
             </div>
           </div>
           {expected ? (
@@ -168,6 +189,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           ) : null}
         </div>
 
+        {(boxes.length > 0 || expected || (isOpen && !readOnly)) && (
         <div className="card">
           <div className="step-head">
             <h3 className="rows-title">Boxes <span className="muted">({boxes.length})</span></h3>
@@ -219,16 +241,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                     </div>
                     {isBoxOpen && (
                       <div className="box-items">
-                        {!boxItems.length ? <div className="muted sm box-items-empty">No shoes in this box yet.</div> : boxItems.map((it) => (
-                          <div className="batch-detail-row" key={it.id}>
-                            {onOpenItem
-                              ? <button className="vin vin-link" onClick={() => onOpenItem(it.vin)} title="View full shoe detail + history">{it.vin}</button>
-                              : <span className="vin">{it.vin}</span>}
-                            <span className="batch-row-name">{it.name}</span>
-                            <span className="muted sm">{it.sku || '—'} · size {it.size || '—'}</span>
-                            <StatusPill status={it.status} />
-                          </div>
-                        ))}
+                        {!boxItems.length ? <div className="muted sm box-items-empty">No shoes in this box yet.</div> : boxItems.map(itemRow)}
                       </div>
                     )}
                   </div>
@@ -237,6 +250,22 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
             </div>
           )}
         </div>
+        )}
+
+        {/* The shoes themselves. For a boxed batch this is what the box rows didn't
+            claim; for an ordinary one it is the whole batch. Either way, a pair that is
+            in this batch appears on this page. */}
+        {unboxed.length > 0 && (
+          <div className="card">
+            <h3 className="rows-title">
+              {boxes.length ? <>Not in a box <span className="muted">({unboxed.length})</span></> : <>Items <span className="muted">({unboxed.length})</span></>}
+            </h3>
+            {boxes.length ? (
+              <p className="muted sm">Scanned into the batch rather than into one of its boxes — usually pairs added before the boxes were recorded.</p>
+            ) : null}
+            <div className="box-items">{unboxed.map(itemRow)}</div>
+          </div>
+        )}
 
         {error && <div className="error mt">{error}</div>}
         <div className="batch-bar">
@@ -381,7 +410,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
             <>
               <div className="batch-nav-list">{recentList.map((b) => row(b))}</div>
               <Pager page={recent?.page || page} pageSize={recent?.pageSize || PAGE_FALLBACK} total={recent?.total || 0}
-                onPage={(n) => setPageRaw(n === 1 ? '' : String(n))} />
+                label="batches" onPage={(n) => setPageRaw(n === 1 ? '' : String(n))} />
             </>
           )}
       </div>

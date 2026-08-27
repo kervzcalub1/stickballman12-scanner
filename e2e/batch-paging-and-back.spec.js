@@ -16,6 +16,12 @@ const stamp = `${Date.now()}`.slice(-8);
 const TRACK = `E2EPAGE-${stamp}`;
 let code = null;
 
+// A pager only exists when there is more than one page — by design, since a pager under
+// a list of six is furniture. So this spec SEEDS its volume instead of assuming the
+// database has any: the first version leaned on a developer machine with 466 batches and
+// failed in CI, where there are barely two dozen. Enough for two pages of each list.
+const SEED = 30;
+
 test.beforeAll(async () => {
   // One committed batch we can find by name, so the Back tests don't depend on whatever
   // else is in the database.
@@ -24,9 +30,19 @@ test.beforeAll(async () => {
      VALUES ($1,'committed','receiving',$2,$3) RETURNING batch_code`,
     [`B-PAGE-${stamp}`, 'E2E Paging', TRACK]))[0];
   code = b.batch_code;
+  // …and enough of both kinds to force a second page in the Recent card, the Open card
+  // and Receiving's Recent tab. Newest-first ordering puts these at the top, so page 1
+  // is this spec's own data whatever else is in the table.
+  for (let i = 0; i < SEED; i += 1) {
+    await q(`INSERT INTO batches (batch_code, status, kind, supplier_name)
+             VALUES ($1,'committed','receiving',$2)`, [`B-PGC-${stamp}-${i}`, `E2E Closed ${i}`]);
+    await q(`INSERT INTO batches (batch_code, status, kind, supplier_name)
+             VALUES ($1,'open','receiving',$2)`, [`B-PGO-${stamp}-${i}`, `E2E Open ${i}`]);
+  }
 });
 test.afterAll(async () => {
-  await q(`DELETE FROM batches WHERE batch_code = $1`, [code]);
+  await q(`DELETE FROM batches WHERE batch_code = $1 OR batch_code LIKE $2 OR batch_code LIKE $3`,
+    [code, `B-PGC-${stamp}-%`, `B-PGO-${stamp}-%`]);
   await pool.end();
 });
 
@@ -49,12 +65,14 @@ test('the recent list is paged, and the page is in the URL', async ({ page }) =>
   await pager.getByRole('button', { name: /Next/ }).click();
   await expect(page).toHaveURL(/[?&]p=2/);
   await expect(recentRows(page).first()).not.toHaveText(firstOnPage1 || '');
-  await expect(pager.locator('.batch-pager-at')).toContainText('26–50');
+  // Page 2 STARTS at 26. Where it ends depends on how many batches exist, so asserting
+  // "26–50" would only hold on a database that happens to be big enough.
+  await expect(pager.locator('.batch-pager-at')).toContainText(/26–\d+ of \d+ batches/);
 
   // A page survives a refresh, so a link to it is a link to what you were looking at.
   await page.reload();
   await expect(page).toHaveURL(/[?&]p=2/);
-  await expect(recentCard(page).locator('.batch-pager-at')).toContainText('26–50');
+  await expect(recentCard(page).locator('.batch-pager-at')).toContainText(/26–\d+ of/);
 
   await recentCard(page).locator('.batch-pager').getByRole('button', { name: /Prev/ }).click();
   await expect(recentRows(page).first()).toHaveText(firstOnPage1 || '');

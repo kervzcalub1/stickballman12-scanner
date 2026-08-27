@@ -5,6 +5,8 @@
 // server's tool-calling is exercised by hand against live data, not in CI.
 import { test, expect } from '@playwright/test';
 import { loginAs } from './helpers/auth.js';
+import { systemPrompt, supplierPrompt } from '../api/advisor/ask.js';
+import { estToday } from '../src/lib/format.js';
 
 const fab = (page) => page.locator('.advisor-fab');
 const panel = (page) => page.locator('.advisor-panel');
@@ -289,4 +291,25 @@ test('the safe-area contract holds: viewport-fit is set, so env() is not inert',
   // And the page owning the full screen means WE owe the insets back.
   const pad = await page.evaluate(() => getComputedStyle(document.querySelector('.app')).paddingTop);
   expect(pad).not.toBe('0px');
+});
+
+// The two rules that live only in the prompt, and so have nothing else guarding them.
+// Both were added 2026-08-27 — see docs/context/advisor.md.
+test('both prompts are told the EST clock, not left to guess the date', () => {
+  for (const build of [systemPrompt, supplierPrompt]) {
+    const p = build('page: Home', { name: 'E2E', role: 'warehouse' });
+    // Without a "now" the model dates "today" from its training; the host is UTC and
+    // the PH team's clock is a day ahead, so neither of those is the answer either.
+    expect(p).toContain(`EST (today's date is ${estToday()})`);
+    expect(p).toMatch(/only\s+"now" there is/);
+  }
+});
+
+test('the staff prompt is scoped to this business, and declines the whole bundled message', () => {
+  const p = systemPrompt('page: Home', { name: 'E2E', role: 'warehouse' });
+  expect(p).toContain('I only help with Stickballman12');
+  // The failure this fixed: an off-topic ask answered, then a menu of alternatives.
+  expect(p).toMatch(/Don't offer a safer or more factual version/);
+  // And the half-answer, which the model did about one run in three when asked to split.
+  expect(p).toMatch(/decline is the whole reply/i);
 });

@@ -769,6 +769,11 @@ body {
 /* Provenance above the PH grid's History: where the pairs came from, before what
    happened to them. Separated by a rule so it reads as context, not as the first event. */
 .batch-po { margin-top: 4px; }
+.batch-report { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.batch-report .rows-title { margin-bottom: 2px; }
+.batch-report p { margin: 0; }
+.batch-report-btns { display: flex; gap: 8px; }
+@media (max-width: 600px) { .batch-report-btns { width: 100%; } .batch-report-btns .btn { flex: 1; } }
 .hist-prov { border-bottom: 1px solid var(--line, #2a2a2a); padding-bottom: 10px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; }
 .hist-prov-vins { font-family: ui-monospace, Menlo, monospace; margin-bottom: 4px; }
 .merge-note { border-left: 2px solid #4f7cff; font-size: 14px; }

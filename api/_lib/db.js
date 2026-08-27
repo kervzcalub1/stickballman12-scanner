@@ -1378,7 +1378,11 @@ export async function getBatchWithBoxes(id) {
   const b = await db()`
     SELECT b.*,
            (SELECT p.po_code FROM purchase_orders p WHERE p.id = b.po_id) AS po_code,
-           (SELECT p.status  FROM purchase_orders p WHERE p.id = b.po_id) AS po_status
+           (SELECT p.status  FROM purchase_orders p WHERE p.id = b.po_id) AS po_status,
+           -- The day the ORDER was placed, for the batch report's "Date order". It lives
+           -- on the purchase order, not the batch, and is null for stock that arrived
+           -- without one — which the report states rather than leaving blank.
+           (SELECT p.date_of_purchase FROM purchase_orders p WHERE p.id = b.po_id) AS po_date_of_purchase
       FROM batches b WHERE b.id = ${id}`;
   if (!b[0]) return null;
   const boxes = await listBatchBoxes(id);

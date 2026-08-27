@@ -260,6 +260,35 @@ Now: items with no `box_id` are listed in their own card, and the page adapts.
 The rule to keep: **a pair in this batch appears on this page**, whatever the box column
 says. Guarded by `e2e/batch-unboxed-items.spec.js`, which seeds both shapes.
 
+### The batch's own manifest report — PDF or CSV (2026-08-28)
+`src/lib/batchReport.js` (`buildBatchReportPdf`, `buildBatchReportCsv`,
+`batchReportFacts`, `batchReportRows`), offered on the Batch **detail** for any batch, PH
+included — they are the ones asked "when did this land and against which order".
+E2E: `e2e/batch-report.spec.js`.
+
+**The four facts that identify a shipment on paper**, in a labelled grid across the head
+of every page: **DATE ORDER** (`purchase_orders.date_of_purchase`, so it comes from the
+order, not the batch), **DATE DELIVERED** (`date_received` — the day it was received here,
+which is what "delivered" means to the reader), **BATCH NO.** and **PO NUMBER**. Beneath
+them, every pair counted in, folded to **one line per SKU + size** — a manifest is read
+against a carton, not pair by pair.
+
+- **Where a fact is missing it is stated, not left blank**: "no purchase order", "not
+  recorded", and a delivered date falling back to the creation day is marked `(created)`
+  rather than passed off as a stated delivery.
+- **Both formats are built from ONE input**, like the PO manifests, so a CSV can never
+  disagree with the PDF of the same report. The CSV writes `loose` in the Box column for
+  an unboxed pair, matching the PDF — Box is an identifier, not a quantity, so nothing
+  arithmetic is lost and an empty cell reads as "missing data".
+- **The four facts repeat on every CSV row.** A CSV gets sorted, filtered and pasted into
+  someone else's sheet; a header block would be lost the first time that happens.
+- Built client-side, jsPDF lazy-loaded, and **downloaded rather than auto-printed** —
+  navigating a popup to a blob PDF is flaky across browsers (`manifestPdf.js`). A failed
+  lazy import surfaces as an error, never a dead button (`label-print-csp-and-stale-chunks`).
+- ⚠️ Everything DRAWN is plain ASCII: jsPDF's built-in Helvetica silently drops em-dashes
+  and middots, so "—" prints as an empty cell. The page-break path repeats the header on
+  every page, guarded by a 260-line test.
+
 ### Filters: date, supplier, purchase order (2026-08-28)
 A bar above the search on the Batch page (warehouse and `/ph/batches` alike), using the
 same markup as the PO list's so the two pages filter the same way. All four live in the

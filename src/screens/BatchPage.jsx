@@ -8,6 +8,7 @@ import { api } from '../api.js';
 import { TopBar, StatusPill, Modal, Pager } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { batchMatchesSearch } from '../lib/postatus.js';
+import { estTime } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
 
 const shortDate = (s) => String(s || '').slice(0, 10);
@@ -97,6 +98,36 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   // nothing. Landing on an empty page after scanning that code is the exact confusion the
   // "no boxes" bug caused, so follow the pointer and SAY that you did.
   const [mergedFrom, setMergedFrom] = useState(null);
+  const [reportBusy, setReportBusy] = useState('');
+  async function downloadReport(fmt) {
+    if (!detail?.batch) return;
+    setReportBusy(fmt); setError('');
+    try {
+      const generatedAt = `Generated ${estTime(Date.now())} EST`;
+      const input = { batch: detail.batch, items: detail.items || [], boxes: detail.boxes || [], generatedAt };
+      let blob;
+      if (fmt === 'csv') {
+        const { buildBatchReportCsv } = await import('../lib/batchReport.js');
+        const text = buildBatchReportCsv(input);
+        if (!text) { setError('This batch has no pairs to report yet.'); return; }
+        blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+      } else {
+        const { buildBatchReportPdf } = await import('../lib/batchReport.js');
+        blob = (await buildBatchReportPdf(input)).output('blob');
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `batch-manifest-${detail.batch.batch_code}.${fmt}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      // A lazy import that fails must SAY so — a dead button on a chunk 404 is how the
+      // label printer broke silently across a deploy (label-print-csp-and-stale-chunks).
+      setError(e?.message || 'Could not build the report.');
+    } finally { setReportBusy(''); }
+  }
+
   async function loadDetail(id) {
     setError('');
     try {
@@ -323,6 +354,23 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
             <div className="box-items">{unboxed.map(itemRow)}</div>
           </div>
         )}
+
+        {/* The shipment on paper. Read-only, so PH has it as well — they are the ones
+            asked "when did this land and against which order". */}
+        <div className="card batch-report">
+          <div>
+            <h3 className="rows-title">Manifest report</h3>
+            <p className="muted sm">Date order, date delivered, batch no. and PO number, with every pair counted into this batch.</p>
+          </div>
+          <div className="batch-report-btns">
+            <button className="btn ghost sm" disabled={!!reportBusy} onClick={() => downloadReport('pdf')}>
+              <Icon name="download" /> {reportBusy === 'pdf' ? 'Building…' : 'PDF'}
+            </button>
+            <button className="btn ghost sm" disabled={!!reportBusy} onClick={() => downloadReport('csv')}>
+              <Icon name="download" /> {reportBusy === 'csv' ? 'Building…' : 'CSV'}
+            </button>
+          </div>
+        </div>
 
         {error && <div className="error mt">{error}</div>}
         <div className="batch-bar">

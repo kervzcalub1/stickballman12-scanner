@@ -313,3 +313,15 @@ test('the staff prompt is scoped to this business, and declines the whole bundle
   // And the half-answer, which the model did about one run in three when asked to split.
   expect(p).toMatch(/decline is the whole reply/i);
 });
+
+// The scope rule's own failure (2026-08-28): "can you check Shopify for me?" earned the
+// decline line. The systems we sell and price on are the subject, and so is what he can
+// do — a work tool that answers "what can you see?" with a refusal reads as broken.
+test('our own channels, and questions about what he can do, are IN scope', () => {
+  const p = systemPrompt('page: Home', { name: 'E2E', role: 'warehouse' });
+  expect(p).toMatch(/systems this business runs on are part of that subject/i);
+  expect(p).toMatch(/Shopify, GOAT, Alias,\s*\n?\s*StockX, eBay and TikTok are where we sell and price/i);
+  expect(p).toMatch(/So are questions about YOU/);
+  // The wrong-tool half: pending_work's per-store backlog quoted as a Shopify figure.
+  expect(p).toMatch(/never pending_work/i);
+});

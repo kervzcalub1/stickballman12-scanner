@@ -174,6 +174,30 @@ is done in this app) and declines everything else in one line. Four rules do the
 - **Off-topic isn't only the alarming stuff.** A shoe we don't trade isn't in scope
   either; if the answer isn't in our data or our SOPs, say so.
 
+### …but the scope line was catching the tools themselves (2026-08-28)
+Reported from the floor: asked about Shopify he answered *"I only help with
+Stickballman12."* The integration was fine — `top_sellers` returns 1,260 units and the
+full channel split on the same key. **The prompt was the bug**, in two ways:
+
+- Nothing in the scope paragraph said Shopify, Alias or StockX are *ours*, and the rule
+  *"a store this business doesn't trade isn't automatically in scope"* reads straight
+  onto a question that names a store. It now names our systems as part of the subject and
+  says that line is about a shoe we don't deal in, never our own channels.
+- **A question about him is in scope.** *"What can you do?"*, *"what data can you see?"*,
+  *"can you check Shopify for me?"* all earned the decline — a work tool that refuses to
+  say what it can look up reads as broken, and the decline was written to be used when
+  it *isn't what he's for*. He now answers those by naming what he can pull and offering
+  to pull one. This sits beside the date/time carve-out, which had the same shape.
+
+The decline itself is unchanged and still holds: an essay, a poem bundled with a real
+inventory question, and a joke bundled with a VIN lookup all get the scope line and
+nothing else.
+
+Also caught in the same pass: *"what can you tell me from Shopify?"* called
+**`pending_work`** and reported *"324 not on Shopify"* — that figure is the **listing
+backlog**, not sales and not inventory. The prompt now sends anything about Shopify sales
+or Shopify stock to `top_sellers` / `sku_history` / `stock_status` and says so.
+
 **It answers questions; it doesn't compose things.** An in-scope carve-out for work
 writing (a note to PH, a line to a supplier) was drafted and then dropped: the same
 prompt refused *"draft a message to the supplier about the shortage"* and wrote *"Please

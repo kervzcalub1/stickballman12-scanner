@@ -35,6 +35,10 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
   UPC / colorway. **A shelf code** (`MNH-WH-A2-04`, typed or scanned) returns that
   **shelf's contents** (`queryItems` matches `location_code`); rows/detail show a
   **📍 location chip**. See `locations.md`.
+- **A pre-printed 1ID sticker** (`SBM-R-…`) that no pair wears doesn't dead-end in
+  "No item found" — the detail view says whether it's **still on the roll, in use,
+  voided, or not one of ours**, and a pair wearing one carries a `1ID · in use` chip
+  by its VIN. `docs/context/vin-stock.md`.
 - **Keyword search, not phrase search.** The query is split on whitespace
   (`searchTokens` in `db.js`) and **every** token must match somewhere — any of
   vin / sku / name / upc / colorway / location_code — so "Kobe Air Force" (or

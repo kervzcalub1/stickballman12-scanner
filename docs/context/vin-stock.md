@@ -124,5 +124,23 @@ on the flow the stickers are most useful for (PO-100005). Now:
    count honest. Failing a whole commit because the bookkeeping hiccuped would cost the
    warehouse a scanned box for no integrity gain.
 
+## "Is this sticker used yet?" — Inventory
+Scan or type a `SBM-R-…` number into the **Inventory** search box and, when no pair
+wears it, the detail view answers from `vin_stock` instead of `No item found for …`.
+That reply was wrong on the common case: a sticker still on the roll is the normal
+state, not a lookup failure. Four states, each with its own next action —
+**Not used yet** (still on the roll) · **In use** (assigned; the pair opens from the
+card, or, when it opens nothing, it was **removed** and the number is spent anyway —
+`assigned_item_id` is not a FK on purpose) · **Voided** · **Not one of ours** (a real
+1ID shape we never printed). Print run and the printed/used/voided dates ride along.
+
+Two things had to change for it: `submit()` routed on a loose `^s[a-z]*-?\d` pattern
+that **misses every roll sticker** (it wants a digit straight after the letters, and
+`SBM-R-…` has an `R`), so a typed sticker fell through to a text search; and
+`/api/vins/check` was `warehouse`-only, while Inventory is a page **PH also reads**.
+Both series show the marker in reverse too: a pair whose VIN is a roll number carries
+a `1ID · in use` chip next to it, so the sticker's state is legible from either end.
+
 Low-stock warning under 200 unused. Tests: `e2e/raw-vin.spec.js`,
-`e2e/po-raw-vin.spec.js` (the PO manifest).
+`e2e/po-raw-vin.spec.js` (the PO manifest), `e2e/inventory-sticker-status.spec.js`
+(the four states on Inventory).

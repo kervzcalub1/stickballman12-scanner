@@ -2115,6 +2115,29 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .rawvin-beat.awaiting b { color: #e9c46a; }
 .vin.need { color: #e08f8f; border-color: rgba(224,143,143,0.5); font-weight: 700; }
 
+/* Inventory: the answer when a scanned 1ID sticker matches no pair — is it used yet? */
+.sticker-result .sr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
+.sticker-result .sr-head .vin { font-size: 18px; }
+.sticker-result .sr-body { margin: 10px 0 0; max-width: 62ch; line-height: 1.5; }
+.sr-state {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
+  padding: 2px 9px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap;
+}
+.sr-state.sm { font-size: 11px; padding: 0 7px; margin-left: 8px; vertical-align: middle; }
+.sr-state.free { color: #7bc99a; border-color: rgba(123,201,154,0.45); background: rgba(123,201,154,0.12); }
+.sr-state.used { color: #e9c46a; border-color: rgba(233,196,106,0.45); background: rgba(233,196,106,0.12); }
+.sr-state.void { color: #e08f8f; border-color: rgba(224,143,143,0.45); background: rgba(224,143,143,0.12); }
+.sr-state.unknown { color: var(--muted, #9aa4ae); border-color: var(--line, #2a2a2a); }
+.sticker-result .sr-item {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line, #2a2a2a);
+}
+.sticker-result .sr-meta { display: flex; flex-wrap: wrap; gap: 18px; margin: 12px 0 0; }
+.sticker-result .sr-meta > div { display: flex; flex-direction: column; gap: 2px; }
+.sticker-result .sr-meta dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #9aa4ae); }
+.sticker-result .sr-meta dd { margin: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+
 /* Deleted archive page — the record of removed pairs (their items rows are gone). */
 .del-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-top: 14px; }
 .del-filters label { display: flex; flex-direction: column; gap: 4px; }

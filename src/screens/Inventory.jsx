@@ -10,9 +10,9 @@ import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal,
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
-import { isLocationCode } from '../lib/codes.js';
+import { isLocationCode, isRollVin, isVinCode } from '../lib/codes.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
-import { ymd, periodRange, periodLabel, shiftAnchor, estToday, estCivil, estCivilFromYmd, PH_DATETIME } from '../lib/format.js';
+import { ymd, periodRange, periodLabel, shiftAnchor, estToday, estCivil, estCivilFromYmd, estDate, PH_DATETIME } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
@@ -25,6 +25,64 @@ const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 function intakeChip(g) {
   if (g.kind === 'instore' || g.kind === 'existing') return <IntakeChip kind={g.kind} />;
   return <SyncBadges item={g} />;
+}
+
+// The answer to "is this 1ID sticker used yet?" — shown when a scanned SBM-R-… number
+// opens no pair. `vin_stock` still knows every sticker we ever printed, so the four
+// states each have a different next action, and saying which one it is beats the
+// "No item found for SBM-R-000123." that used to be the whole reply.
+function StickerResult({ info, onOpenItem }) {
+  const { vin, loading, error, state, item, runId, printedAt, assignedAt, voidedAt } = info;
+  if (loading) return <div className="card"><p className="muted">Checking sticker {vin}…</p></div>;
+
+  const known = {
+    available: {
+      tone: 'free', label: 'Not used yet',
+      body: 'Still on the roll — no pair has been received against this number. Scan it onto a shoe at receiving.',
+    },
+    assigned: {
+      tone: 'used', label: 'In use',
+      // Assigned but nothing to open = the pair was removed; vin_stock deliberately
+      // keeps the record, because the sticker was still physically used.
+      body: item
+        ? 'This sticker is on a pair already.'
+        : 'It was used on a pair that has since been removed from inventory. The number is spent either way — never put it on another shoe.',
+    },
+    void: {
+      tone: 'void', label: 'Voided',
+      body: 'Torn, lost or misprinted, and voided. A voided number is never reused — grab another sticker.',
+    },
+    unknown: {
+      tone: 'unknown', label: 'Not one of ours',
+      body: 'A valid 1ID shape, but not a number we printed. Nothing has been received against it — check the scan, or use a sticker from the roll.',
+    },
+  }[state];
+
+  return (
+    <div className="card sticker-result">
+      <h3 className="rows-title">1ID sticker</h3>
+      <div className="sr-head">
+        <CopyText text={vin} className="vin">{vin}</CopyText>
+        {known ? <span className={`sr-state ${known.tone}`}>{known.label}</span> : null}
+      </div>
+      {error ? <p className="error mt">{error}</p> : <p className="muted sr-body">{known?.body}</p>}
+      {item && (
+        <div className="sr-item">
+          <div>
+            <b>{item.name || item.sku || item.vin}</b>
+            <div className="muted sm">{[item.sku, item.size ? `size ${item.size}` : ''].filter(Boolean).join(' · ')}</div>
+          </div>
+          <button type="button" className="btn sm ghost" onClick={() => onOpenItem(item.vin)}>Open the pair</button>
+        </div>
+      )}
+      <dl className="sr-meta">
+        {runId != null && <div><dt>Print run</dt><dd>{runId}</dd></div>}
+        {printedAt && <div><dt>Printed</dt><dd>{estDate(printedAt)}</dd></div>}
+        {assignedAt && <div><dt>Used</dt><dd>{estDate(assignedAt)}</dd></div>}
+        {voidedAt && <div><dt>Voided</dt><dd>{estDate(voidedAt)}</dd></div>}
+      </dl>
+    </div>
+  );
 }
 
 // `canEditStock` is the warehouse/PH split. PH team gets the same page — search,
@@ -105,6 +163,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
 
   // detail
   const [detail, setDetail] = useState(null); // { item, events }
+  // A scanned 1ID sticker that matches no pair. `vin_stock` still knows it, so instead
+  // of a bare "No item found" the detail view answers the question the scan was
+  // actually asking: is this sticker already on a shoe, or still on the roll?
+  const [sticker, setSticker] = useState(null); // { vin, loading } | { vin, state, … } | { vin, error }
   const [detailPhotos, setDetailPhotos] = useState(null); // SKU listing photos (view/delete)
   const [photoBusy, setPhotoBusy] = useState('');         // angle currently being deleted
   const [photoDl, setPhotoDl] = useState(false);          // download in flight
@@ -166,7 +228,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
   function submit() {
     const v = q.trim();
     if (!v) return;
-    if (/^s[a-z]*-?\d/i.test(v)) { openDetail(v); setQ(''); return; } // looks like a VIN (SBM-…/SB-…)
+    // Looks like a VIN: our two series (SBM-YYMMDD-… / SBM-R-…) plus the legacy
+    // SB-100001 barcodes. isVinCode has to be asked FIRST — the loose pattern below
+    // wants a digit right after the letters, so it misses every roll sticker.
+    if (isVinCode(v) || /^s[a-z]*-?\d/i.test(v)) { openDetail(v); setQ(''); return; }
     // Text search (incl. a shelf code → shelf contents): clear the date window so
     // it isn't limited to today, but keep the query visible so it can be refined.
     setFrom(''); setTo(''); load({ q: v, from: '', to: '' });
@@ -195,10 +260,25 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
   async function openDetail(vin) {
     const v = String(vin).trim();
     if (!v) return;
-    setMode('detail'); setDetail(null); setDetailPhotos(null); setError(''); setShowCam(false);
+    setMode('detail'); setDetail(null); setDetailPhotos(null); setError(''); setShowCam(false); setSticker(null);
     setDetailStatusDraft(null); setCustomTag(''); setStatusNote(''); // reset staged status for the new item
     try { const d = await api.itemLookup(v); setDetail(d); loadDetailPhotos(d.item?.sku); }
-    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    catch (err) {
+      if (err.unauthorized) return onSignOut();
+      // No pair wears this number. If it's a pre-printed 1ID sticker that is the
+      // expected answer, not an error — say which state it's in instead.
+      if (isRollVin(v)) return lookupSticker(v.toUpperCase());
+      setError(err.message);
+    }
+  }
+  // Sticker stock lookup, only reached when the item lookup found nothing.
+  async function lookupSticker(vin) {
+    setSticker({ vin, loading: true });
+    try { const r = await api.checkVin(vin); setSticker({ vin, ...r }); }
+    catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setSticker({ vin, error: err.message || 'Could not check that sticker.' });
+    }
   }
   // Listing photos for the open item's SKU (view + delete; warehouse/admin).
   async function loadDetailPhotos(sku) {
@@ -224,7 +304,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setPhotoDl(false); }
   }
-  function backToList() { setMode('list'); setDetail(null); setError(''); load(); }
+  function backToList() { setMode('list'); setDetail(null); setSticker(null); setError(''); load(); }
 
   // Report: status edits are staged in statusDrafts and only persisted on Save.
   const setStatusDraft = (vin, status) => setStatusDrafts((d) => ({ ...d, [vin]: status }));
@@ -440,7 +520,8 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
           right={<button className="btn ghost sm" onClick={backToList}>← Back to list</button>} />
         {error && <div className="error mt">{error}</div>}
         {notice && <div className="notice mt">{notice}</div>}
-        {!detail ? <p className="muted">Loading…</p> : (
+        {sticker ? <StickerResult info={sticker} onOpenItem={openDetail} />
+          : !detail ? <p className="muted">Loading…</p> : (
           <>
             <div className="card result">
               <div className="result-grid">
@@ -448,7 +529,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
                 <div className="details">
                   <h2><CopyText text={it.name}>{it.name}</CopyText></h2>
                   <dl>
-                    <div><dt>VIN</dt><dd><CopyText text={it.vin} className="vin">{it.vin}</CopyText></dd></div>
+                    <div><dt>VIN</dt><dd><CopyText text={it.vin} className="vin">{it.vin}</CopyText>
+                      {/* A SBM-R-… number came off a pre-printed roll sticker, so the sticker
+                          itself is answered here too: it's on this pair, i.e. used. */}
+                      {isRollVin(it.vin) ? <span className="sr-state used sm" title="Pre-printed 1ID sticker, in use on this pair">1ID · in use</span> : null}</dd></div>
                     <div><dt>SKU</dt><dd><CopyText text={it.sku}>{it.sku || '—'}</CopyText></dd></div>
                     <div><dt>UPC</dt><dd><CopyText text={it.upc}>{it.upc || '—'}</CopyText></dd></div>
                     <div><dt>Size</dt><dd>{it.size || '—'}</dd></div>

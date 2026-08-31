@@ -2353,14 +2353,24 @@ export async function checkVinStock(vin) {
   const v = String(vin || '').trim().toUpperCase();
   if (!v) return { state: 'unknown' };
   const rows = await db()`
-    SELECT s.vin, s.status, i.vin AS item_vin, i.sku, i.size, i.name
+    SELECT s.vin, s.status, s.run_id, s.printed_at, s.assigned_at, s.voided_at,
+           i.vin AS item_vin, i.sku, i.size, i.name
       FROM vin_stock s
       LEFT JOIN items i ON i.id = s.assigned_item_id
      WHERE s.vin = ${v}
   `;
   if (!rows.length) return { state: 'unknown' };
   const r = rows[0];
-  return { state: r.status, item: r.item_vin ? { vin: r.item_vin, sku: r.sku, size: r.size, name: r.name } : null };
+  // The dates/run are for people READING a sticker's status (Inventory's lookup),
+  // not for intake, which only branches on `state`.
+  return {
+    state: r.status,
+    runId: r.run_id,
+    printedAt: r.printed_at,
+    assignedAt: r.assigned_at,
+    voidedAt: r.voided_at,
+    item: r.item_vin ? { vin: r.item_vin, sku: r.sku, size: r.size, name: r.name } : null,
+  };
 }
 
 // Claim stickers for the units they were just scanned onto. **Compare-and-swap** —

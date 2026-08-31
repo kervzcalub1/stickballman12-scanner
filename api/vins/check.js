@@ -1,5 +1,6 @@
-// GET /api/vins/check?vin=SBM-R-000123  ->  { ok, state, item }
-// Is this pre-printed sticker free? Called as each 1ID is scanned at intake.
+// GET /api/vins/check?vin=SBM-R-000123  ->  { ok, state, item, runId, printedAt, … }
+// Is this pre-printed sticker free? Called as each 1ID is scanned at intake, and by
+// Inventory when a scanned sticker matches no pair ("used yet, or still on the roll?").
 // `state`: available | assigned | void | unknown.
 //
 // Intake treats a FAILED call as "carry on" rather than "stop" — see vin-stock.md.
@@ -12,7 +13,9 @@ import { checkVinStock, dbConfigured } from '../_lib/db.js';
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['warehouse']);
+  // PH team gets it too: Inventory is a shared page, and scanning a sticker there
+  // to ask "is this one used yet?" is a read, the same as item lookup.
+  const user = requireRole(req, res, ['warehouse', 'ph_team']);
   if (!user) return;
   // One call per scan, and scanning is the fast path — this ceiling is deliberately high.
   if (!rateLimit(req, { windowMs: 60_000, max: 600 }))

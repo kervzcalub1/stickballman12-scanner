@@ -128,6 +128,14 @@ const PATHS = {
     <path d="M21 5.5A1.5 1.5 0 0 0 19.5 4H15a3 3 0 0 0-3 3v13a2.5 2.5 0 0 1 2.5-2.5H21z" />
     <path d="M16 4v5l1.8-1.3L19.5 9V4" />
   </>),
+  // Deleted archive — a bin. Without it the card falls back to `inventory` and reads
+  // as a second Search card next to the real one.
+  deleted: (<>
+    <path d="M4 7h16" />
+    <path d="M10 4h4a1 1 0 0 1 1 1v2H9V5a1 1 0 0 1 1-1z" />
+    <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+    <path d="M10 11v6M14 11v6" />
+  </>),
 };
 
 export function NavIcon({ name, ...props }) {

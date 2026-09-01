@@ -1058,9 +1058,13 @@ the adjacent zip / FedEx ASTRA form line and yields bogus numbers; it prefers an
 is a tracking number on its own, then the most-repeated candidate. It appends one editable
 label row per page; blanks are left for manual entry. All client-side.
 
-**PH home (PHTeamApp):** cards are grouped **Pricing & Listing** (New Inventory, Rescale
-Stock, Edited Photos, Price Inquiry) · **Purchase Orders** (New Batch, PO Reconciliation) ·
-**Requests & Tracking** (No Box, Request Rescale).
+**PH home (PHTeamApp):** cards are filed by what the person is *doing* when they reach for
+one, daily work first and reference last — **Pricing & Listing** (New Inventory, Rescale
+Stock, Find Image Listings) · **Purchase Orders** (New Batch, Purchase Orders, PO
+Reconciliation) · **Queues & Requests** (No Box, Costs, Request Rescale) · **Look Up**
+(Price Inquiry, Payout Calculator, Inventory, Batches, Deleted) · **Help** (SOP & Help).
+Only the first three sections badge: a Look Up screen answers a question, it is not a
+queue, so a count there would be noise.
 
 ## Schema (in `scripts/db-setup.mjs`)
 Two entities, deliberately separate so **expected** (supplier) and **actual** (warehouse)

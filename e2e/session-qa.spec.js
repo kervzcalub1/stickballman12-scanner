@@ -421,12 +421,19 @@ test.describe('Session QA · Locate Shoe — collapsible grouped results', () =>
 });
 
 test.describe('Session QA · PH home + status filter empty-state', () => {
-  test('PH home renders the 3 sections: Pricing & Listing / Purchase Orders / Requests & Tracking', async ({ page }) => {
+  test('PH home renders the 5 sections, daily work first and Help last', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await page.goto('/ph');
-    await expect(page.getByRole('heading', { name: 'Pricing & Listing' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Purchase Orders' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Requests & Tracking' })).toBeVisible();
+    for (const name of ['Pricing & Listing', 'Purchase Orders', 'Queues & Requests', 'Look Up', 'Help']) {
+      await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+    }
+    // Order matters as much as membership: the worklists sit above the reference
+    // screens, so a shift starts at the top of the page.
+    await expect(page.locator('.home-section-title')).toHaveText([
+      'Pricing & Listing', 'Purchase Orders', 'Queues & Requests', 'Look Up', 'Help',
+    ]);
+    // A lookup is not a queue — nothing under Look Up or Help may carry a count badge.
+    await expect(page.locator('.home-section:has(> .home-section-title:text-is("Look Up")) .card-badge')).toHaveCount(0);
   });
 
   test('New Inventory: deselecting every status shows the empty-state hint', async ({ page }) => {

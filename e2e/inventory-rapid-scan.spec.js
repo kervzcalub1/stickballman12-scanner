@@ -5,23 +5,45 @@
 // three scans in a row must leave three rows and never navigate, and the session has to
 // survive a trip into a pair's detail and back — the operator opens one pair to check
 // something and would otherwise lose the whole walk.
+//
+// Everything is SEEDED rather than read out of whatever the local DB happens to hold.
+// The first cut of this spec queried for existing items and skipped when it found none,
+// which meant it passed on CI's empty database by testing nothing at all.
 import { test, expect } from '@playwright/test';
-import { loginAs } from './helpers/auth.js';
+import { loginAs } from './helpers/auth.js'; // also loads .env for DATABASE_URL (no-op on CI)
 import pg from 'pg';
-import fs from 'node:fs';
 
-for (const line of fs.readFileSync('.env', 'utf8').split('\n')) {
-  const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-  if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
-}
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-let VINS = []; let STICKER = null;
+const q = (text, values) => pool.query(text, values).then((r) => r.rows);
+
+const stamp = `${Date.now()}`.slice(-6);
+// Must satisfy VIN_RE (/^SBM-(?:\d{6}-\d+|R-\d+)$/) — a code that only looks VIN-ish
+// falls through to a text search and never reaches the scan list at all.
+const VINS = [1, 2, 3].map((n) => `SBM-260902-${stamp.slice(-5)}${n}`);
+const STICKER = `SBM-R-8977${stamp.slice(-2)}`; // minted, still on the roll
+const MISSING = `SBM-260101-999${stamp.slice(-3)}`; // shaped like a VIN, no pair wears it
+const RUN = 9997;
+let batchId = null;
 
 test.beforeAll(async () => {
-  VINS = (await pool.query(`SELECT vin FROM items WHERE vin IS NOT NULL ORDER BY id DESC LIMIT 3`)).rows.map((r) => r.vin);
-  STICKER = (await pool.query(`SELECT vin FROM vin_stock WHERE status = 'available' LIMIT 1`)).rows[0]?.vin || null;
+  batchId = (await q(
+    `INSERT INTO batches (batch_code, status, kind, supplier_name)
+     VALUES ($1,'committed','receiving','E2E Rapid') RETURNING id`, [`B-RAPID-${stamp}`]))[0].id;
+  for (let i = 0; i < VINS.length; i += 1) {
+    await q(`INSERT INTO items (vin, batch_id, box_id, name, sku, size, status)
+             VALUES ($1,$2,NULL,$3,'RS-1234-100',$4,'needs_shelf')`,
+      [VINS[i], batchId, `E2E Rapid Shoe ${i + 1}`, String(9 + i)]);
+  }
+  await q('DELETE FROM vin_stock WHERE run_id = $1', [RUN]);
+  await q(`INSERT INTO vin_stock (vin, run_id, printed_by) VALUES ($1,$2,'e2e')`, [STICKER, RUN]);
 });
-test.afterAll(() => pool.end());
+
+test.afterAll(async () => {
+  await q('DELETE FROM items WHERE batch_id = $1', [batchId]);
+  await q('DELETE FROM batches WHERE id = $1', [batchId]);
+  await q('DELETE FROM vin_stock WHERE run_id = $1', [RUN]);
+  await pool.end();
+});
 
 async function openRapid(page) {
   await loginAs(page, 'warehouse');
@@ -30,15 +52,15 @@ async function openRapid(page) {
   await expect(toggle).toBeVisible();
   if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click();
   await expect(page.locator('.scan-session')).toBeVisible();
-  return page.locator('.searchrow input');
+  return page.locator('.searchrow input').first();
 }
-const gun = async (page, input, code) => { await input.fill(code); await input.press('Enter'); };
+// What a scanner gun does: type the code, press Enter.
+const gun = async (input, code) => { await input.fill(code); await input.press('Enter'); };
 
 test('three scans build three rows and never leave the list', async ({ page }) => {
-  test.skip(VINS.length < 3, 'needs 3 VINs in the local DB');
   const input = await openRapid(page);
   for (const v of VINS) {
-    await gun(page, input, v);
+    await gun(input, v);
     await expect(page.locator('.scan-row', { hasText: v })).toBeVisible({ timeout: 15000 });
   }
   await expect(page.locator('.scan-row')).toHaveCount(3);
@@ -46,51 +68,59 @@ test('three scans build three rows and never leave the list', async ({ page }) =
   // never navigated: still in list mode, no detail view opened
   await expect(page.getByRole('button', { name: 'Back to list' })).toHaveCount(0);
   await expect(page.locator('.scan-session')).toBeVisible();
-  // the box clears itself so the next gun scan doesn't append to the last code
+  // the box clears itself, or the next gun scan appends to the last code
   await expect(input).toHaveValue('');
-  await expect(page.locator('.scan-row').first()).toContainText(VINS[2]); // newest first
-  await page.locator('.scan-session').screenshot({ path: process.env.SP + '/rapid/session.png' });
+  // newest first — the pair just scanned is under the operator's thumb
+  await expect(page.locator('.scan-row').first()).toContainText(VINS[2]);
+  await expect(page.locator('.scan-row').first()).toContainText('E2E Rapid Shoe 3');
 });
 
 test('re-scanning a pair bumps its count instead of stacking a duplicate row', async ({ page }) => {
-  test.skip(!VINS.length, 'needs a VIN');
   const input = await openRapid(page);
-  await gun(page, input, VINS[0]);
+  await gun(input, VINS[0]);
   await expect(page.locator('.scan-row')).toHaveCount(1);
-  await gun(page, input, VINS[0]);
+  await gun(input, VINS[0]);
   await expect(page.locator('.scan-row')).toHaveCount(1);
   await expect(page.locator('.scan-row-seen')).toHaveText('scanned ×2');
 });
 
 test('the session survives opening a pair and coming back', async ({ page }) => {
-  test.skip(VINS.length < 2, 'needs 2 VINs');
   const input = await openRapid(page);
-  await gun(page, input, VINS[0]);
-  await gun(page, input, VINS[1]);
+  await gun(input, VINS[0]);
+  await gun(input, VINS[1]);
   await expect(page.locator('.scan-row')).toHaveCount(2);
   await page.locator('.scan-row-main').first().click();
+  // NOTE: the detail view has its own .searchrow (the custom-tag input), so "did it
+  // navigate" has to key on Back to list — an input count passes for the wrong reason.
   const back = page.getByRole('button', { name: 'Back to list' });
-  await expect(back).toBeVisible({ timeout: 15000 });   // the pair's full detail
+  await expect(back).toBeVisible({ timeout: 15000 });
   await expect(page.locator('.scan-session')).toHaveCount(0);
   await back.click();
   await expect(page.locator('.scan-row')).toHaveCount(2); // the walk is still there
 });
 
 test('an unused 1ID sticker answers in the row, not as an error', async ({ page }) => {
-  test.skip(!STICKER, 'needs an available sticker in vin_stock');
   const input = await openRapid(page);
-  await gun(page, input, STICKER);
+  await gun(input, STICKER);
   const row = page.locator('.scan-row', { hasText: STICKER });
   await expect(row).toBeVisible({ timeout: 15000 });
   await expect(row.locator('.sr-state')).toContainText('not used yet');
   await expect(row).not.toHaveClass(/bad/);
 });
 
-test('undo and clear', async ({ page }) => {
-  test.skip(VINS.length < 2, 'needs 2 VINs');
+test('a VIN no pair wears is a failed row, not a lost scan', async ({ page }) => {
   const input = await openRapid(page);
-  await gun(page, input, VINS[0]);
-  await gun(page, input, VINS[1]);
+  await gun(input, MISSING);
+  const row = page.locator('.scan-row', { hasText: MISSING });
+  await expect(row).toBeVisible({ timeout: 15000 });
+  await expect(row).toHaveClass(/bad/);
+  await expect(page.locator('.scan-session')).toBeVisible(); // still scanning
+});
+
+test('undo and clear', async ({ page }) => {
+  const input = await openRapid(page);
+  await gun(input, VINS[0]);
+  await gun(input, VINS[1]);
   await expect(page.locator('.scan-row')).toHaveCount(2);
   await page.getByRole('button', { name: /Undo last/ }).click();
   await expect(page.locator('.scan-row')).toHaveCount(1);
@@ -100,14 +130,13 @@ test('undo and clear', async ({ page }) => {
 });
 
 test('with rapid scan OFF a scan still opens the pair', async ({ page }) => {
-  test.skip(!VINS.length, 'needs a VIN');
   await loginAs(page, 'warehouse');
   await page.goto('/inventory');
   const toggle = page.getByRole('button', { name: /Rapid scan/ });
   if ((await toggle.getAttribute('aria-pressed')) === 'true') await toggle.click();
   await expect(page.locator('.scan-session')).toHaveCount(0);
-  const input = page.locator('.searchrow input');
-  await input.fill(VINS[0]); await input.press('Enter');
+  const input = page.locator('.searchrow input').first();
+  await gun(input, VINS[0]);
   await expect(page.getByRole('button', { name: 'Back to list' })).toBeVisible({ timeout: 15000 });
   await expect(page.locator('.scan-session')).toHaveCount(0);
 });

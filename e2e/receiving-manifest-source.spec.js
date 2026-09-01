@@ -9,7 +9,6 @@
 // The supplier-scanned case asserts on ABSENCE deliberately: that is the expected answer,
 // and a banner that fires on every order is one nobody reads by the second week.
 import { test, expect } from '@playwright/test';
-import { signToken } from '../api/_lib/util.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
 import pg from 'pg';
 loadEnv();
@@ -28,46 +27,55 @@ test.afterAll(async () => {
   await pool.end();
 });
 
-const phTok = () => signToken({ uid: String(PH.id), username: PH.username, name: PH.name, role: 'ph_team' });
-
-async function makePo(request, baseURL, code) {
-  const r = await (await request.post(`${baseURL}/api/po/create`, {
-    headers: { Authorization: `Bearer ${phTok()}` },
-    data: { supplierName: 'Andrew Reyes', supplierUserId: SUP.id, tagCode: code,
-      dateOfPurchase: '2026-09-02', labels: [{ trackingNumber: `1Z99${code}${stamp}` }] },
-  })).json();
-  made.push(r.po.id);
-  return r;
+// Seeded straight into the DB rather than through /api/po/create + /api/po/scan.
+// Those endpoints are rate-limited (30 POs/min per IP) and a full-suite run spends that
+// budget on the other PO specs before reaching this one, so going through the API made
+// this test fail for a reason that has nothing to do with what it asserts. The UI is
+// what is under test here, not PO creation.
+async function makePo(code, lines) {
+  const po = (await q(
+    `INSERT INTO purchase_orders (supplier_name, supplier_user_id, tag_code, date_of_purchase,
+       expected_boxes, created_by)
+     VALUES ('Andrew Reyes', $1, $2, '2026-09-02', 1, 'e2e') RETURNING id, po_code`,
+    [SUP.id, code]))[0];
+  made.push(po.id);
+  const box = (await q(
+    `INSERT INTO po_boxes (po_id, box_number, tracking_number, status, created_by)
+     VALUES ($1, 1, $2, 'pending', 'e2e') RETURNING id`,
+    [po.id, `1Z99${code}${stamp}`]))[0];
+  for (const l of lines) {
+    // `onBehalf` is the whole subject of this spec: entered_by is a users(id) FK and
+    // po/scan deliberately stores NULL for a non-numeric uid, so the named case needs a
+    // real ph_team row (PH.id) and the flag set together.
+    await q(
+      `INSERT INTO po_lines (po_id, po_box_id, sku, size, name, qty_expected, entered_by, entered_on_behalf)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [po.id, box.id, l.sku, l.size, l.name, l.qty, l.onBehalf ? PH.id : null, !!l.onBehalf]);
+  }
+  return po;
 }
 
-test('banner + sheet name the manifest source', async ({ page, request, baseURL }) => {
+test('banner + sheet name the manifest source', async ({ page }) => {
   SUP.id = Number((await q(
     `INSERT INTO users (name, username, pass_hash, role, status) VALUES ($1,$2,'s2$00$00','supplier','approved') RETURNING id`,
     [SUP.name, SUP.username]))[0].id);
   PH.id = Number((await q(
     `INSERT INTO users (name, username, pass_hash, role, status) VALUES ($1,$2,'s2$00$00','ph_team','approved') RETURNING id`,
     [PH.name, PH.username]))[0].id);
-  const supTok = signToken({ uid: String(SUP.id), username: SUP.username, name: SUP.name, role: 'supplier' });
 
+  const AIR = { sku: 'CQ6639-700', name: "Nike Air Max 90" };
+  const JA = { sku: 'IQ6755-300', name: "Nike Ja 3" };
   // A — the supplier scanned it themselves
-  const A = await makePo(request, baseURL, 'AAA');
-  await request.post(`${baseURL}/api/po/scan`, { headers: { Authorization: `Bearer ${supTok}` },
-    data: { poBoxId: Number(A.boxes[0].id), sku: 'CQ6639-700', name: "Nike Air Max 90", size: '7W', qty: 2 } });
-
+  const A = await makePo('AAA', [{ ...AIR, size: '7W', qty: 2 }]);
   // B — the supplier never scanned; PH entered it on their behalf
-  const B = await makePo(request, baseURL, 'BBB');
-  await request.post(`${baseURL}/api/po/scan`, { headers: { Authorization: `Bearer ${phTok()}` },
-    data: { poBoxId: Number(B.boxes[0].id), sku: 'IQ6755-300', name: "Nike Ja 3", size: '9', qty: 3 } });
-
+  const B = await makePo('BBB', [{ ...JA, size: '9', qty: 3, onBehalf: true }]);
   // C — nothing declared at all
-  const C = await makePo(request, baseURL, 'CCC');
-
+  const C = await makePo('CCC', []);
   // D — mixed
-  const D = await makePo(request, baseURL, 'DDD');
-  await request.post(`${baseURL}/api/po/scan`, { headers: { Authorization: `Bearer ${supTok}` },
-    data: { poBoxId: Number(D.boxes[0].id), sku: 'CQ6639-700', name: "Nike Air Max 90", size: '8W', qty: 4 } });
-  await request.post(`${baseURL}/api/po/scan`, { headers: { Authorization: `Bearer ${phTok()}` },
-    data: { poBoxId: Number(D.boxes[0].id), sku: 'IQ6755-300', name: "Nike Ja 3", size: '10', qty: 1 } });
+  const D = await makePo('DDD', [
+    { ...AIR, size: '8W', qty: 4 },
+    { ...JA, size: '10', qty: 1, onBehalf: true },
+  ]);
 
   await loginAs(page, 'warehouse');
   await page.setViewportSize({ width: 900, height: 1000 });
@@ -81,11 +89,11 @@ test('banner + sheet name the manifest source', async ({ page, request, baseURL 
   };
 
   // A — supplier's own scan: deliberately silent
-  await openPo(A.po.po_code);
+  await openPo(A.po_code);
   await expect(page.locator('.po-manifest-src')).toHaveCount(0);
 
   // B — PH on their behalf
-  await openPo(B.po.po_code);
+  await openPo(B.po_code);
   const b = page.locator('.po-manifest-src');
   await expect(b).toBeVisible();
   await expect(b).toContainText('Entered on the supplier’s behalf');
@@ -94,13 +102,13 @@ test('banner + sheet name the manifest source', async ({ page, request, baseURL 
 
 
   // C — nothing declared
-  await openPo(C.po.po_code);
+  await openPo(C.po_code);
   const c = page.locator('.po-manifest-src');
   await expect(c).toContainText('No manifest');
   await expect(c).toHaveClass(/bad/);
 
   // D — mixed
-  await openPo(D.po.po_code);
+  await openPo(D.po_code);
   const d = page.locator('.po-manifest-src');
   await expect(d).toContainText('Part entered');
 });

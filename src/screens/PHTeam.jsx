@@ -85,6 +85,10 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     <div className="app">
       <TopBar onSignOut={onSignOut} onHome={onExit} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
+      {/* Sections run daily work first, reference last: the two listing worklists,
+          then the PO side, then the queues that block a listing, then the read-only
+          lookups you dip into, then Help. A card is filed by what the person is doing
+          when they reach for it — not by which screen it happens to open. */}
       <section className="home-section" data-accent="listing">
         <h2 className="home-section-title">Pricing &amp; Listing</h2>
         <div className="home-grid">
@@ -105,26 +109,6 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-title">Find Image Listings</span>
             <span className="home-card-sub">Manage a SKU’s listing photos — upload finished images, or build a branded set from the template (cut out, place, resize), then save</span>
           </button>
-          <button className="home-card" onClick={() => goPage('inquiry')}>
-            <span className="home-card-icon"><NavIcon name="inventory" /></span>
-            <span className="home-card-title">Price Inquiry</span>
-            <span className="home-card-sub">Look up live Alias prices for any SKU — lowest ask, highest offer, last sold &amp; Global Indicator</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('payout')}>
-            <span className="home-card-icon"><NavIcon name="payout" /></span>
-            <span className="home-card-title">Payout Calculator</span>
-            <span className="home-card-sub">Cost after discounts vs. what Alias/StockX pay out after fees — is this pair a buy?</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('inventory')}>
-            <span className="home-card-icon"><NavIcon name="inventory" /></span>
-            <span className="home-card-title">Inventory</span>
-            <span className="home-card-sub">Search every pair we hold — by name keywords, SKU, VIN or shelf — with its detail, history &amp; photos</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('batches')}>
-            <span className="home-card-icon"><NavIcon name="receiving" /></span>
-            <span className="home-card-title">Batches</span>
-            <span className="home-card-sub">Find a shipment by the tracking number on any of its boxes — what arrived in it, box by box</span>
-          </button>
         </div>
       </section>
       <section className="home-section" data-accent="orders">
@@ -136,7 +120,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-sub">Open a supplier batch — labels + tracking numbers — for a supplier to scan out</span>
           </button>
           <button className="home-card" onClick={() => goPage('postatus')}>
-            <span className="home-card-icon"><NavIcon name="tag" /></span>
+            <span className="home-card-icon"><NavIcon name="shipped" /></span>
             <span className="home-card-title">Purchase Orders</span>
             <span className="home-card-sub">Every PO you opened — status &amp; live shipment tracking for each label</span>
           </button>
@@ -148,8 +132,10 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           </button>
         </div>
       </section>
+      {/* The three queues that stand between a pair and a finished listing. All three
+          carry a count, so they read as work waiting rather than as tools. */}
       <section className="home-section" data-accent="requests">
-        <h2 className="home-section-title">Requests &amp; Tracking</h2>
+        <h2 className="home-section-title">Queues &amp; Requests</h2>
         <div className="home-grid">
           <button className="home-card" onClick={() => goPage('nobox')}>
             <span className="home-card-icon"><NavIcon name="nobox" /></span>
@@ -171,18 +157,47 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           </button>
         </div>
       </section>
-      <section className="home-section" data-accent="listing">
+      {/* Answer-a-question screens: you arrive with a SKU, a VIN or a tracking number
+          and leave with a number. Nothing here is a queue, so nothing here badges. */}
+      <section className="home-section" data-accent="inventory">
+        <h2 className="home-section-title">Look Up</h2>
+        <div className="home-grid">
+          <button className="home-card" onClick={() => goPage('inquiry')}>
+            <span className="home-card-icon"><NavIcon name="report" /></span>
+            <span className="home-card-title">Price Inquiry</span>
+            <span className="home-card-sub">Look up live Alias prices for any SKU — lowest ask, highest offer, last sold &amp; Global Indicator</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('payout')}>
+            <span className="home-card-icon"><NavIcon name="payout" /></span>
+            <span className="home-card-title">Payout Calculator</span>
+            <span className="home-card-sub">Cost after discounts vs. what Alias/StockX pay out after fees — is this pair a buy?</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('inventory')}>
+            <span className="home-card-icon"><NavIcon name="inventory" /></span>
+            <span className="home-card-title">Inventory</span>
+            <span className="home-card-sub">Search every pair we hold — by name keywords, SKU, VIN or shelf — with its detail, history &amp; photos</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('batches')}>
+            <span className="home-card-icon"><NavIcon name="batches" /></span>
+            <span className="home-card-title">Batches</span>
+            <span className="home-card-sub">Find a shipment by the tracking number on any of its boxes — what arrived in it, box by box</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('deleted')}>
+            <span className="home-card-icon"><NavIcon name="deleted" /></span>
+            <span className="home-card-title">Deleted</span>
+            <span className="home-card-sub">Pairs removed from inventory — search by SKU, with the history kept</span>
+          </button>
+        </div>
+      </section>
+      {/* Last, and grey: the procedures are a reference you go to deliberately, not a
+          queue — so they sit below the work rather than competing with it. */}
+      <section className="home-section" data-accent="help">
         <h2 className="home-section-title">Help</h2>
         <div className="home-grid">
           <button className="home-card" onClick={() => goPage('sop')}>
             <span className="home-card-icon"><NavIcon name="sop" /></span>
             <span className="home-card-title">SOP &amp; Help</span>
             <span className="home-card-sub">Step-by-step procedures for every screen, searchable, plus FAQ</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('deleted')}>
-            <span className="home-card-icon"><NavIcon name="inventory" /></span>
-            <span className="home-card-title">Deleted</span>
-            <span className="home-card-sub">Pairs removed from inventory — search by SKU, with the history kept</span>
           </button>
         </div>
       </section>

@@ -19,6 +19,7 @@
 // Every string that gets DRAWN is plain ASCII: jsPDF's built-in Helvetica silently
 // drops em-dashes and middots, so "Tag / Code —" printed as a blank cell.
 import { carrierName } from './carriers.js';
+import { manifestSource, manifestSourceStamp } from './manifestSource.js';
 
 // US Letter in mm (portrait). UPS/US-carrier shop, so Letter over A4.
 const PAGE_W = 215.9;
@@ -85,7 +86,7 @@ function drawShipTo(doc, x, y, w, shipTo) {
 
 // Shared page header: accent bar + title + the key fields + ship-to + optional tracking
 // list. Returns the y-coordinate where body content can start.
-function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle, shipTo }) {
+function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle, shipTo, sourceNote = '' }) {
   // Accent bar
   doc.setFillColor(...ACCENT);
   doc.rect(0, 0, PAGE_W, 4, 'F');
@@ -110,6 +111,21 @@ function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle, s
   metaCell(doc, x0, y, colW, 'Date of Purchase', fmtDate(po.date_of_purchase));
   if (subtitle) metaCell(doc, x1, y, colW * 2 + 6, subtitle.label, subtitle.value);
   y += 16;
+
+  // WHOSE list this is, when the answer isn't "the supplier's own scan". The sheet gets
+  // carried to the pallet and ticked off by hand, so the caveat has to be ON THE PAPER —
+  // saying it only on the screen the sheet was printed from is saying it to nobody.
+  // Empty for a supplier-scanned manifest: no ink for the expected case.
+  if (sourceNote) {
+    const boxW = PAGE_W - MARGIN * 2;
+    const text = doc.splitTextToSize(sourceNote, boxW - 8);
+    const boxH = 6 + text.length * 4.2;
+    doc.setFillColor(253, 246, 236); doc.setDrawColor(217, 131, 36); doc.setLineWidth(0.4);
+    doc.roundedRect(MARGIN, y - 4, boxW, boxH, 1.5, 1.5, 'FD');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(150, 92, 20);
+    text.forEach((ln, i) => doc.text(ln, MARGIN + 4, y + 1.5 + i * 4.2));
+    y += boxH + 4;
+  }
 
   // Where it's going, boxed, above the tracking numbers.
   const shipEnd = drawShipTo(doc, MARGIN, y, colW * 1.6, shipTo);
@@ -428,11 +444,14 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
       const subtitle = box.kind === 'replacement'
         ? { label: 'Shipment', value: 'Replacement shipment' }
         : { label: 'Box', value: `Box ${box.box_number} of ${supplierBoxes.length}` };
+      const items = sortLines(linesForBox(lines, box.id));
+      // Per LABEL, not per order: on a mixed order box 1 can be the supplier's own scan
+      // while box 2 was typed for them, and each sheet travels with its own box.
+      const sourceNote = items.length ? manifestSourceStamp(manifestSource(items)) : '';
       const header = () => drawHeader(doc, {
-        businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: tn, subtitle, shipTo,
+        businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: tn, subtitle, shipTo, sourceNote,
       });
       const startY = header();
-      const items = sortLines(linesForBox(lines, box.id));
       if (items.length) drawItemTable(doc, startY, items, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po }), prices);
       else if (orderLines.length) drawNote(doc, startY, 'This order was manifested as one whole-order list, not box by box - the full item list is on the last page.');
       else drawNote(doc, startY, 'No items recorded for this box.');
@@ -445,6 +464,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
         businessName, title: 'Inbound Shipment Manifest - Whole Order', po, shipTo,
         trackingNumbers: trackingList(boxes),
         subtitle: { label: 'Scope', value: 'Whole order - not broken out by box' },
+        sourceNote: manifestSourceStamp(manifestSource(orderLines)),
       });
       drawItemTable(doc, header(), orderLines, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest - Whole Order', po }), prices);
     }
@@ -538,6 +558,7 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
     const header = () => drawHeader(doc, {
       businessName, title: 'Inbound Shipment Manifest - Whole Order', po, trackingNumbers: tns, shipTo,
       subtitle: { label: 'Labels', value: plural((boxes || []).filter((b) => b.kind !== 'replacement').length, 'box') },
+      sourceNote: manifestSourceStamp(manifestSource(lines)),
     });
     const startY = header();
     const allItems = sortLines(lines);

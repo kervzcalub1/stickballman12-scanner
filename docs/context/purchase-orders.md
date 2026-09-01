@@ -864,6 +864,25 @@ order-level line "match" a null/0-id box), and **replacement labels** are exclud
 the supplier's packing job). Everything the PDF draws is **plain ASCII** — jsPDF's built-in
 Helvetica silently drops em-dashes, which is why "Tag / Code —" printed as a blank cell.
 
+**WHOSE list it is — `src/lib/manifestSource.js`.** The order counts `po_lines` the same
+whoever wrote them, so a manifest PH entered on the supplier's behalf is used exactly like
+one the supplier scanned. What changes is what the warehouse is *told*, because the two are
+not equally trustworthy: a supplier's scan is their own declaration and a shortage against
+it is theirs to answer for, while a list PH typed from a photo or a chat message is **our
+transcription of their claim** — a mismatch there is as likely to be our typo as a missing
+pair. `manifestSource(lines)` answers it in one place, keyed on `entered_on_behalf`:
+`none` (nothing declared — receiving blind) · `supplier` · `staff` · `mixed`. Kind is
+decided on **line counts, not units**, or an all-zero manifest reads as no manifest.
+Two renderings, and both matter: `manifestSourceNote()` for the **Receiving PO banner**
+(`.po-manifest-src`, amber for staff-entered, red for none) and `manifestSourceStamp()`
+for a boxed line in the **printed sheet's header** — the sheet is what gets carried to the
+pallet, so a caveat that lives only on the screen it was printed from is a caveat nobody
+reads. Both are **silent for a supplier-scanned manifest**: that's the expected answer, and
+a banner that fires on every order stops being read. The stamp is computed **per label** on
+`perbox` (a mixed order can have box 1 scanned and box 2 typed) and order-level on `whole`,
+and it **never prints the staff name** — the paper outlives the question, and a supplier's
+own copy has that name stripped by `api/po/get.js` anyway.
+
 **SHIP TO block.** Every page carries the address the boxes are sent to, boxed under the
 meta grid — a page separated from the stack still has to be routable. It comes from
 `app_settings` (`ship_to_name` / `_street` / `_city` / `_state` / `_zip` / `_phone` /

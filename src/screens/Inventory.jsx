@@ -2,6 +2,7 @@
 // CSV (the daily report), select rows → print VIN labels, and click a row (or
 // scan a VIN) to open an item's detail + history + status/notes.
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
@@ -10,10 +11,11 @@ import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal,
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
-import { isLocationCode, isRollVin, isVinCode } from '../lib/codes.js';
+import { isCameraReread, isLocationCode, isRollVin, isVinCode } from '../lib/codes.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
 import { ymd, periodRange, periodLabel, shiftAnchor, estToday, estCivil, estCivilFromYmd, estDate, PH_DATETIME } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
+import { beepOk, beepErr } from '../lib/beep.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -25,6 +27,71 @@ const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 function intakeChip(g) {
   if (g.kind === 'instore' || g.kind === 'existing') return <IntakeChip kind={g.kind} />;
   return <SyncBadges item={g} />;
+}
+
+// The running list a rapid-scan session builds. One row per pair, newest first, so the
+// pair just scanned is always the one under the operator's thumb.
+//
+// Every row is a link into the full detail — rapid scan answers "what is this and where
+// is it", and the moment the answer is "something is wrong with this pair" you want the
+// whole record. The session survives that trip: openDetail only changes `mode`, so Back
+// returns to the list with every scan still on it.
+const SCAN_STICKER = {
+  available: ['free', 'Sticker not used yet'],
+  assigned: ['used', 'Sticker in use — pair since removed'],
+  void: ['void', 'Sticker voided'],
+  unknown: ['unknown', 'Not one of our stickers'],
+};
+
+function ScanSession({ rows, onOpen, onUndo, onClear }) {
+  const [listRef] = useAutoAnimate(); // rows slide in as each scan lands
+  return (
+    <div className="scan-session">
+      <div className="scan-session-head">
+        <b>{rows.length} scanned</b>
+        <span className="muted sm">Scanning adds to this list — tap a row to open the pair.</span>
+        <span className="scan-session-acts">
+          <button type="button" className="btn ghost sm" disabled={!rows.length} onClick={onUndo}
+            title="Remove the most recent scan">↶ Undo last</button>
+          <button type="button" className="btn ghost sm" disabled={!rows.length} onClick={onClear}>Clear</button>
+        </span>
+      </div>
+      {!rows.length
+        ? <p className="muted sm scan-session-empty">Scan a VIN or 1ID sticker to begin.</p>
+        : (
+          <ul className="scan-session-list" ref={listRef}>
+            {rows.map((r) => {
+              const st = r.sticker && SCAN_STICKER[r.sticker.state];
+              return (
+                <li key={r.vin} className={`scan-row${r.error ? ' bad' : ''}${r.sticker ? ' warn' : ''}`}>
+                  <button type="button" className="scan-row-main" onClick={() => onOpen(r.vin)}>
+                    <span className="scan-row-top">
+                      <CopyText text={r.vin} className="vin">{r.vin}</CopyText>
+                      {/* A pair crossed twice on one walk is worth saying out loud — it is
+                          either a double-scan or genuinely two passes over the same shelf. */}
+                      {r.seen > 1 && <span className="scan-row-seen">scanned ×{r.seen}</span>}
+                      {r.item?.status && <StatusPill status={r.item.status} />}
+                    </span>
+                    {r.loading && <span className="muted sm">Looking up…</span>}
+                    {r.item && (
+                      <>
+                        <span className="scan-row-name">{r.item.name || r.item.sku || '—'}</span>
+                        <span className="muted sm">
+                          {[r.item.sku, r.item.size ? `size ${r.item.size}` : '', r.item.location_label || 'no shelf']
+                            .filter(Boolean).join(' · ')}
+                        </span>
+                      </>
+                    )}
+                    {st && <span className={`sr-state ${st[0]}`}>{st[1]}</span>}
+                    {r.error && <span className="scan-row-err">{r.error}</span>}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+    </div>
+  );
 }
 
 // The answer to "is this 1ID sticker used yet?" — shown when a scanned SBM-R-… number
@@ -146,6 +213,73 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
   const setCameraZoom = (z) => setPrefs((p) => { const n = { ...p, cameraZoom: z }; savePrefs(n); return n; });
   const setRawVins = (on) => setPrefs((p) => { const n = { ...p, rawVins: !!on }; savePrefs(n); return n; });
 
+  // ---- Rapid scan -------------------------------------------------------------
+  // Scanning a VIN normally opens that pair's detail, which is right for looking ONE
+  // pair up and wrong for the job this was asked for: walking a shelf with a gun,
+  // where every scan meant scan → read → Back → scan. In rapid mode a scan appends to
+  // a running list instead of navigating, so the gun never leaves the operator's hand
+  // and the camera keeps decoding.
+  //
+  // Deliberately a LOOKUP and nothing more — no staged edit, no bulk commit. Marking a
+  // batch of pairs sold or shelved already has its own screens (StatusScanPage,
+  // Move to shelf), and quietly growing a second one behind a scanner is how two
+  // screens end up disagreeing about what a scan means.
+  const [rapid, setRapid] = useState(() => !!loadPrefs().rapidScan);
+  const [scans, setScans] = useState([]); // newest first: { vin, at, loading?, item?, sticker?, error?, seen }
+  const scanSeen = useRef({});            // vin -> last accepted ms, for the camera re-read guard
+  const toggleRapid = (on) => {
+    setRapid(on);
+    setPrefs((p) => { const n = { ...p, rapidScan: !!on }; savePrefs(n); return n; });
+    if (!on) setShowCam(false);
+  };
+  const clearScans = () => { setScans([]); scanSeen.current = {}; };
+  const undoLastScan = () => setScans((rows) => {
+    const [last, ...rest] = rows;
+    if (last) delete scanSeen.current[last.vin]; // let it be re-scanned straight away
+    return rest;
+  });
+
+  // One scanned code → one row. Re-scanning a pair already in the list bumps its count
+  // and floats it back to the top rather than stacking a duplicate: on a shelf walk the
+  // same pair genuinely gets crossed twice, and two identical rows read as two pairs.
+  async function addScan(code, { fromCamera = false } = {}) {
+    const vin = String(code || '').trim().toUpperCase();
+    if (!vin) return;
+    // Camera-only: the same barcode sits in frame for many decodes. A gun fires once per
+    // trigger pull, so a deliberate second scan must always count.
+    if (fromCamera && isCameraReread(scanSeen.current, vin, Date.now())) return;
+    scanSeen.current[vin] = Date.now();
+    setQ('');
+    let bumped = false;
+    setScans((rows) => {
+      const i = rows.findIndex((r) => r.vin === vin);
+      if (i < 0) return [{ vin, at: Date.now(), loading: true, seen: 1 }, ...rows];
+      bumped = true;
+      const hit = { ...rows[i], seen: rows[i].seen + 1, at: Date.now() };
+      return [hit, ...rows.slice(0, i), ...rows.slice(i + 1)];
+    });
+    if (bumped) { if (prefs.scanSound) beepOk(); return; } // already looked up
+    try {
+      const d = await api.itemLookup(vin);
+      if (prefs.scanSound) beepOk();
+      setScans((rows) => rows.map((r) => (r.vin === vin ? { ...r, loading: false, item: d.item } : r)));
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      // A pre-printed 1ID that no pair wears isn't an error — it's the sticker question,
+      // and the same four states the detail view answers with (StickerResult).
+      if (isRollVin(vin)) {
+        try {
+          const r = await api.checkVin(vin);
+          if (prefs.scanSound) beepOk();
+          setScans((rows) => rows.map((x) => (x.vin === vin ? { ...x, loading: false, sticker: r } : x)));
+          return;
+        } catch { /* fall through to the plain error below */ }
+      }
+      if (prefs.scanSound) beepErr();
+      setScans((rows) => rows.map((r) => (r.vin === vin ? { ...r, loading: false, error: err.message || 'Not found.' } : r)));
+    }
+  }
+
   // "Move to shelf" (put-away) — place selected units on a scanned shelf, which
   // is the only way a unit becomes In Stock (invariant: in_stock ⟺ shelved).
   const [shelveFor, setShelveFor] = useState(null); // { title, units:[{vin,size,noBox}] } | null
@@ -231,7 +365,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
     // Looks like a VIN: our two series (SBM-YYMMDD-… / SBM-R-…) plus the legacy
     // SB-100001 barcodes. isVinCode has to be asked FIRST — the loose pattern below
     // wants a digit right after the letters, so it misses every roll sticker.
-    if (isVinCode(v) || /^s[a-z]*-?\d/i.test(v)) { openDetail(v); setQ(''); return; }
+    if (isVinCode(v) || /^s[a-z]*-?\d/i.test(v)) {
+      if (rapid) { addScan(v); return; }
+      openDetail(v); setQ(''); return;
+    }
     // Text search (incl. a shelf code → shelf contents): clear the date window so
     // it isn't limited to today, but keep the query visible so it can be refined.
     setFrom(''); setTo(''); load({ q: v, from: '', to: '' });
@@ -240,7 +377,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
   // shelf's contents; anything else falls back to a text search.
   function routeScan(code) {
     const c = String(code).trim();
+    // A shelf barcode is a search either way — it isn't a pair, so it has nothing to add
+    // to a scan list. It closes the camera because the answer is the table below.
     if (isLocationCode(c)) { setShowCam(false); setQ(c); setFrom(''); setTo(''); load({ q: c, from: '', to: '' }); return; }
+    if (rapid) { addScan(c, { fromCamera: true }); return; }
     openDetail(c);
   }
   function viewToday() {
@@ -749,12 +889,25 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
             onChange={(e) => setQ(e.target.value)} autoCapitalize="characters" />
           <button className="btn primary" disabled={loading}>Go</button>
           <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera"><Icon name="camera" /> {showCam ? 'Close camera' : 'Scan with camera'}</button>
+          {/* The mode toggle sits ON the scan row because that is the thing it changes:
+              what the next scan does. `aria-pressed` rather than a checkbox — it is a
+              two-state button, and it has to read as one to a screen reader. */}
+          <button type="button" className={`btn ${rapid ? 'primary' : 'ghost'}`} aria-pressed={rapid}
+            onClick={() => toggleRapid(!rapid)}
+            title={rapid ? 'Scans open each pair again' : 'Keep scanning — build a list instead of opening each pair'}>
+            <Icon name="refresh" /> Rapid scan{rapid ? ' · on' : ''}
+          </button>
         </form>
         {showCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>
-            <CameraScanner mode="vin" onDetected={routeScan} onClose={() => setShowCam(false)}
+            {/* `continuous` only in rapid mode: otherwise the first scan navigates away
+                and a scanner still decoding behind the detail view is just battery. */}
+            <CameraScanner mode="vin" continuous={rapid} onDetected={routeScan} onClose={() => setShowCam(false)}
               zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
           </Suspense>
+        )}
+        {rapid && (
+          <ScanSession rows={scans} onOpen={openDetail} onUndo={undoLastScan} onClear={clearScans} />
         )}
 
         <div className="cal-bar mt">

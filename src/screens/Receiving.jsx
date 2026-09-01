@@ -13,6 +13,7 @@ import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
+import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { estToday } from '../lib/format.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
@@ -1497,9 +1498,26 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             <span className="muted sm"> · {receivingPo.po.supplier_name} · {receivingPo.boxes.length} label{receivingPo.boxes.length === 1 ? '' : 's'} · {(receivingPo.lines || []).reduce((n, l) => n + (l.qty_expected || 0), 0)} expected units</span>
                           </div>
                           <button type="button" className="btn sm ghost" onClick={clearPo}>Unlink</button>
-                          {/* Print what the supplier says is in the boxes BEFORE unpacking, so
-                              pairs can be ticked off on paper as they come out. Per box = a page
-                              per label, which is the one you carry to the pallet. */}
+                          {/* WHOSE list this is. The order counts these lines either way, so this
+                              changes nothing about the checklist below — but a list PH typed from
+                              a photo is our transcription of a claim, not the supplier's own scan,
+                              and a mismatch against it is as likely to be our typo as a missing
+                              pair. The person unpacking has to know which one they're holding
+                              before they raise a shortage. Quiet when the supplier scanned it
+                              themselves; that's the expected case and needs no announcement. */}
+                          {(() => {
+                            const note = manifestSourceNote(manifestSource(receivingPo.lines));
+                            if (note.tone === 'ok') return null;
+                            return (
+                              <div className={`po-manifest-src ${note.tone}`}>
+                                <b>{note.label}</b> {note.text}
+                              </div>
+                            );
+                          })()}
+                          {/* Print what the boxes are SUPPOSED to hold before unpacking, so pairs
+                              can be ticked off on paper as they come out — the sheet the supplier
+                              was meant to tape inside and often doesn't. Per box = a page per
+                              label, which is the one you carry to the pallet. */}
                           <ManifestPrint poId={receivingPo.po.id} poCode={receivingPo.po.po_code}
                             label="Print manifest:" onSignOut={onSignOut} />
                         </div>

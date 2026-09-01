@@ -53,7 +53,10 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
   // the SUPPLIER's declaration in two shapes, the last two are OUR count. Reach for a
   // supplier-side sheet to plan or unpack, an our-side sheet to settle an argument.
   const REPORTS = {
-    perbox: ['Per box', 'What the supplier declared, one page per label — the only one with tracking numbers. Print it and tick pairs off as you unpack.'],
+    // "declared", not "the supplier declared": on an order PH entered on their behalf the
+    // second phrasing contradicts the banner right above it, which is busy saying the
+    // supplier never scanned it. The sheet itself carries who declared it (`sourceNote`).
+    perbox: ['Per box', 'What was declared for this order, one page per label — the only one with tracking numbers. Print it and tick pairs off as you unpack.'],
     whole: ['Whole order', 'Everything declared as one merged list, no boxes. The total — for checking an invoice, or a manifest they just submitted.'],
     received: ['What we received', 'Our own count, box by box, with their list beside it. This is the sheet you send a supplier when a shipment is short.'],
     discrepancies: ['Discrepancies by box', 'Only the boxes that disagree, and by how much. The short sheet you carry back into the warehouse to re-check them.'],

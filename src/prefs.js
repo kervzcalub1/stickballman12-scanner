@@ -12,6 +12,10 @@ export const DEFAULTS = {
   // printer and someone across the warehouse with a roll of stickers are doing the
   // same job two different ways, and neither should flip the other's screen.
   rawVins: false,
+  // Inventory rapid scan: keep scanning instead of opening each pair's detail. Per
+  // device, because it's a mode you're IN for a job — walking a shelf with a gun — not a
+  // preference about the app. Someone at a desk looking one pair up wants the detail.
+  rapidScan: false,
   // PDF or CSV for the PO reports (ManifestPrint). Per device: the person who files
   // signed paper and the person who works in a spreadsheet are doing the same job two
   // different ways, and neither should flip the other's default.

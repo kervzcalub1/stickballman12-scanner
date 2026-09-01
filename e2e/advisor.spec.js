@@ -317,6 +317,34 @@ test('the staff prompt is scoped to this business, and declines the whole bundle
 // The scope rule's own failure (2026-08-28): "can you check Shopify for me?" earned the
 // decline line. The systems we sell and price on are the subject, and so is what he can
 // do — a work tool that answers "what can you see?" with a refusal reads as broken.
+// Purchase orders (2026-09-01). The rules that keep a PO from being MISREAD live only
+// in the prompt and the tool payload, so this is the only thing guarding them.
+test('the prompt knows the PO tools, and how not to misread an order', () => {
+  const p = systemPrompt('page: Home', { name: 'E2E', role: 'warehouse' });
+  expect(p).toMatch(/nine read-only tools/);
+  expect(p).toContain('po_status');
+  expect(p).toContain('po_list');
+  // The three things that look exactly like a shortage in the raw numbers.
+  expect(p).toMatch(/where_it_stands` first/);
+  expect(p).toMatch(/unshipped label can never read as short/i);
+  expect(p).toMatch(/received blind/i);
+  // A notation difference is not a missing pair — this once faked 154 short pairs.
+  expect(p).toMatch(/spelling difference is not a missing pair/i);
+  // "One Dunk is missing" sends nobody anywhere.
+  expect(p).toMatch(/Say which BOX, not only which shoe/);
+  // And it still can't act — reconciling is a screen, not a chat message.
+  expect(p).toMatch(/cannot fix an order/i);
+});
+
+// The gap the 2026-08-27 date rule left open, now closed: an order IS raised on a day.
+test('orders are the one count allowed to carry a date, and never come from pending_work', () => {
+  const p = systemPrompt('page: Home', { name: 'E2E', role: 'warehouse' });
+  expect(p).toMatch(/ONE\s*\n?\s*exception, purchase orders/);
+  expect(p).toMatch(/po_list` takes `days`/);
+  // "Orders" reached for the shipping backlog once; pending_work is a queue length.
+  expect(p).toMatch(/never `pending_work`/);
+});
+
 test('our own channels, and questions about what he can do, are IN scope', () => {
   const p = systemPrompt('page: Home', { name: 'E2E', role: 'warehouse' });
   expect(p).toMatch(/systems this business runs on are part of that subject/i);

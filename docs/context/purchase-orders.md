@@ -998,6 +998,21 @@ teardown deletes the rows, and the registration outlives them.
   `/stoptrack` + `/deletetrack`s only numbers carrying a test marker. Used once, on
   2026-08-27: **883 → 833**, 50 removed, 833 real numbers untouched.
 
+## Asking the advisor about an order (2026-09-01)
+Alex Head can analyse an order without anyone opening the Reconciliation screen:
+`po_status` (by PO code **or** any tracking number on it) and `po_list` (what's open,
+what needs reconciling, what we raised today, in EST). It runs **this file's own
+arithmetic** — `getPoReconcileState`, `getPoBoxDiffs`, `getPoResolution` — and computes
+nothing of its own, so it can't disagree with the screen.
+
+What it adds is a `where_it_stands` line, because three innocent situations look exactly
+like a shortage in the raw numbers and a model handed only rows will call all three
+"short": **an unshipped label** (counted on neither side), **an intake still in
+progress** (provisional), and **`no_manifest`** ("received blind", not an overage). The
+notation rule above is enforced there too — `7.5` vs `7.5W` is one shoe, never a missing
+pair. Suppliers get neither tool. Full detail in `docs/context/advisor.md`; tests in
+`e2e/advisor-po.spec.js`.
+
 ## Note — circular FK
 `batches.po_id → purchase_orders(id)` and `purchase_orders.received_batch_id → batches(id)`
 form a cycle. Creation order is fine (PO → batch(po_id) → set received_batch_id). Deletion of

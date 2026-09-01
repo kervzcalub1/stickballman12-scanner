@@ -44,14 +44,15 @@
 //    one.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { advisorSkuHistory, findStockByCode, pendingCounts,
-  ourListingFlags, phListingBySizeForSku, dbConfigured } from '../_lib/db.js';
+  ourListingFlags, phListingBySizeForSku, lookupPoByCodeOrTracking, getPoReconcileState,
+  getPoBoxDiffs, getPoResolution, resolutionView, listPos, dbConfigured } from '../_lib/db.js';
 import { priceInquiryForSkuSizes } from '../_lib/intake.js';
 import { stockxConfigured, stockxPriceForSkuSize } from '../_lib/stockx.js';
 import { shopifyConfigured, shopifyTopSellers, shopifyVelocity,
   shopifyInventoryForSku } from '../_lib/shopify.js';
 import { DEFAULT_FEE_PCT, BUY_MIN_PROFIT, BUY_MIN_ROI } from '../../src/lib/payout.js';
 import { searchSop, articleById, sopRoleForAccount } from '../../src/lib/sop/index.js';
-import { estToday } from '../../src/lib/format.js';
+import { estToday, estDate, estCivilFromYmd, ymd } from '../../src/lib/format.js';
 import { ADVISOR_NAME } from '../../src/lib/advisorContext.js';
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
@@ -140,6 +141,39 @@ const TOOLS = [
         type: 'object',
         properties: { sku: { type: 'string', description: 'Style ID, e.g. DD1391-100' } },
         required: ['sku'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'po_status',
+      description: "Analyse ONE purchase order: what the supplier declared vs what the warehouse actually counted, per shoe AND per box. Use for \"is PO-100005 short\", \"what's wrong with this order\", \"how many did we get\", \"which box is the missing pair in\", \"where is this order up to\". Takes the PO code or ANY tracking number on it. Read `where_it_stands` FIRST and repeat what it says: a label still sitting at the supplier is NOT a shortage, an order still being scanned in is a PROVISIONAL count, and `no_manifest` means nothing was ever declared (\"received blind\") rather than a pile of extras. Never call an order short without it.",
+      parameters: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: 'The PO code (e.g. PO-100005) or a tracking number on one of its labels' },
+        },
+        required: ['ref'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'po_list',
+      description: "The purchase orders themselves — every inbound supplier order with its status, how many labels have shipped, how many units were declared and how many we have counted in. Use for \"what orders are open\", \"what's still to arrive\", \"which POs need reconciling\", \"what did we order from this supplier\", \"how many orders did we raise today\". THIS IS THE ONE PLACE A COUNT CAN CARRY A DATE: `days` windows on the day the order was RAISED, in EST. It does not know what is wrong with any single order — use po_status for that.",
+      parameters: {
+        type: 'object',
+        properties: {
+          state: {
+            type: 'string',
+            enum: ['open', 'to_reconcile', 'problem', 'all'],
+            description: 'open = raised or in transit or being received (not yet settled); to_reconcile = received and waiting on a human; problem = an unsettled discrepancy; all = every order. Default open.',
+          },
+          supplier: { type: 'string', description: 'Optional supplier name, matched loosely' },
+          days: { type: 'integer', description: 'Optional window on the day the order was RAISED, in EST days counting back from today. 1 = today only, 7 = this week.' },
+        },
       },
     },
   },
@@ -327,6 +361,18 @@ async function dispatchTool(name, args, user) {
         by_size: bySize ? sizeBreakdown(bySize, shop) : { note: 'database unavailable' },
       };
     }
+    case 'po_status': {
+      if (!dbConfigured()) return { error: 'database unavailable' };
+      const ref = String(args?.ref || '').trim();
+      if (!ref) return { error: 'no PO code or tracking number given' };
+      const found = await lookupPoByCodeOrTracking(ref);
+      if (!found) return { note: `no purchase order matches "${ref}" — say so; do not guess at an order` };
+      return await poStatus(found);
+    }
+    case 'po_list': {
+      if (!dbConfigured()) return { error: 'database unavailable' };
+      return await poList(args || {});
+    }
     case 'market_price': {
       if (!sku || !size) return { error: 'sku and size are both required' };
       const consigned = args?.consigned === true;
@@ -425,6 +471,232 @@ function sizeBreakdown(rows, shop) {
       + 'Report them separately — do not merge them into a size above.';
   }
   return out;
+}
+
+/* ---- Purchase orders ----------------------------------------------------- */
+
+// Every tool result is stringified and CUT AT 8,000 characters before it enters the
+// prompt, and a cut lands mid-JSON. A real order — 233 pairs across 18 labels — blows
+// past that, so it is trimmed deliberately HERE rather than left to be truncated into
+// nonsense the model then reads as fact. These caps keep the worst case around 4 KB,
+// and anything dropped says so in the payload instead of vanishing.
+const PO_MAX_ROWS = 16;
+const PO_MAX_BOXES = 10;
+const PO_MAX_LABELS = 14;
+
+const poName = (n) => (n ? String(n).slice(0, 60) : null);
+const poDiff = (d) => `${d.sku} ${d.size} x${d.qty}`;
+
+/**
+ * One order, analysed: the supplier's manifest against what the warehouse counted,
+ * per shoe AND per label, plus where the order actually stands.
+ *
+ * The arithmetic is `getPoReconciliation`'s, untouched — this is a projection of the
+ * Reconciliation screen, not a second opinion about it. What it adds is
+ * `where_it_stands`, because the three ways this comparison can be MISREAD all look
+ * like a shortage in the raw numbers:
+ *   · a label still sitting at the supplier (nothing declared, nothing received),
+ *   · an intake still in progress (a batch open, pairs still coming out of the box),
+ *   · a missing manifest, where every pair we counted reads as "not on their list".
+ * A model handed only rows and a summary will call all three "short", so the reading
+ * is stated in the data rather than left to the prompt — the same lesson pending_work
+ * taught about dates.
+ */
+async function poStatus(found) {
+  const id = Number(found.po.id);
+  const state = await getPoReconcileState(id);
+  if (!state) return { note: 'that order could not be read' };
+  const [boxDiffs, resolution] = await Promise.all([
+    getPoBoxDiffs(id).catch(() => []),
+    getPoResolution(id).catch(() => null),
+  ]);
+  const { po, rows, summary, intakeDone, awaitingBoxes } = state;
+  const perLabel = po.manifest_scope !== 'po';
+
+  // The reading, in sentences, worst-first. Order matters: "nothing counted in yet"
+  // has to land before anything that sounds like a count.
+  const standing = [`Status: ${po.status}.`];
+  if (!intakeDone) {
+    standing.push(summary.received_units === 0
+      ? 'NOTHING has been counted in against this order yet, so there is nothing to compare. This is not a shortage.'
+      : 'Receiving is still in progress — a batch against this order is still open, so this count is PROVISIONAL. Do not report it as a settled shortage.');
+  }
+  if (awaitingBoxes) {
+    standing.push('At least one label is still sitting with the supplier. Those pairs are still to come and are counted on NEITHER side — an unshipped label can never read as short.');
+  }
+  if (summary.no_manifest) {
+    standing.push('RECEIVED BLIND: nothing was ever declared for the labels that shipped, so every pair we counted shows as not-on-their-list. That is a missing manifest, not a pile of extras — say which it is.');
+  } else if (summary.clean) {
+    standing.push('Everything declared arrived and every line matched.');
+  }
+  if (po.status === 'reconciled' || po.status === 'closed') {
+    standing.push(`Already settled${po.reconciled_at ? ` on ${estDate(po.reconciled_at)}` : ''} — this was agreed with the supplier and is frozen.`);
+  }
+
+  const disc = rows.filter((r) => r.flag !== 'match')
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || String(a.sku).localeCompare(String(b.sku)));
+
+  // Declared units per label, so a box can be read as "20 declared, 18 counted".
+  const declaredByBox = new Map();
+  for (const l of found.lines || []) {
+    if (l.po_box_id == null) continue;
+    const k = Number(l.po_box_id);
+    declaredByBox.set(k, (declaredByBox.get(k) || 0) + (l.qty_expected || 0));
+  }
+
+  const boxes = Array.isArray(boxDiffs) ? boxDiffs : [];
+  const differ = boxes.filter((b) => b.received && b.diffs.length);
+  const clean = boxes.filter((b) => b.received && !b.diffs.length).map((b) => b.box_number);
+  const waiting = boxes.filter((b) => !b.received).map((b) => b.box_number);
+
+  return {
+    po: {
+      code: po.po_code,
+      supplier: po.supplier_name,
+      status: po.status,
+      ...(po.tag_code ? { tag: po.tag_code } : {}),
+      manifest: perLabel ? 'one list per label' : 'one list for the whole order',
+      raised: estDate(po.created_at),
+      ...(po.date_of_purchase ? { purchased: String(po.date_of_purchase).slice(0, 10) } : {}),
+      ...(po.reconciled_at ? { settled: estDate(po.reconciled_at) } : {}),
+    },
+    where_it_stands: standing.join(' '),
+    counts: {
+      declared_units: summary.expected_units,
+      counted_units: summary.received_units,
+      delta: summary.received_units - summary.expected_units,
+    },
+    lines: {
+      matched: summary.match,
+      short: summary.shortage,
+      over: summary.overage,
+      wrong_size: summary.wrong_size,
+      not_on_their_list: summary.wrong_sku,
+    },
+    discrepancies: disc.slice(0, PO_MAX_ROWS).map((r) => ({
+      sku: r.sku, size: r.size, name: poName(r.name),
+      declared: r.expected, counted: r.received, delta: r.delta, flag: r.flag,
+      // Only present when the two sides SPELLED it differently — already matched as one
+      // shoe, so this explains a row, it never makes one.
+      ...(r.sku_ours ? { we_wrote_sku: r.sku_ours } : {}),
+      ...(r.size_ours ? { we_wrote_size: r.size_ours } : {}),
+    })),
+    ...(disc.length > PO_MAX_ROWS ? { more_discrepant_lines: disc.length - PO_MAX_ROWS } : {}),
+    by_box: perLabel
+      ? {
+        differ: differ.slice(0, PO_MAX_BOXES).map((b) => ({
+          box: b.box_number,
+          ...(b.kind === 'replacement' ? { kind: 'replacement' } : {}),
+          declared: b.expected_units,
+          counted: b.received_units,
+          missing: b.diffs.filter((d) => d.kind === 'missing').slice(0, 8).map(poDiff),
+          extra: b.diffs.filter((d) => d.kind === 'extra').slice(0, 8).map(poDiff),
+        })),
+        // Not decoration: a box list naming only problems cannot be told apart from one
+        // nobody produced. Same reason the printed discrepancy sheet prints this line.
+        checked_and_correct: clean,
+        not_received_yet: waiting,
+        ...(differ.length > PO_MAX_BOXES ? { more_boxes_differ: differ.length - PO_MAX_BOXES } : {}),
+      }
+      : { note: 'This order carries ONE list for the whole order, not a list per label, so there is no per-box expectation to compare against. Do not invent one — a per-box claim the supplier never made is not evidence.' },
+    labels: (found.boxes || []).slice(0, PO_MAX_LABELS).map((b) => ({
+      box: b.box_number,
+      tracking: b.tracking_number || null,
+      state: b.status,
+      ...(b.kind === 'replacement' ? { kind: 'replacement' } : {}),
+      // Only on a per-label manifest. A whole-order list declares nothing PER label, so
+      // printing "declared: 0" beside a box with twelve pairs counted out of it reads as
+      // "this box was empty" — the opposite of the truth, and the same trap the PO list
+      // and the label cards already had to fix.
+      ...(perLabel ? { declared: declaredByBox.get(Number(b.id)) || 0 } : {}),
+      counted: b.received_units,
+      ...(b.last_checkpoint ? { last_checkpoint: String(b.last_checkpoint).slice(0, 90) } : {}),
+    })),
+    ...((found.boxes || []).length > PO_MAX_LABELS ? { more_labels: found.boxes.length - PO_MAX_LABELS } : {}),
+    ...(resolution && resolutionView(resolution).state !== 'none'
+      ? { resolution: (() => {
+        const v = resolutionView(resolution);
+        return {
+          state: v.state,
+          outcome: v.outcome || null,
+          steps_done: `${v.done_count} of ${v.step_count}`,
+          ...(v.shortfall ? { refund_shortfall: v.shortfall } : {}),
+        };
+      })() }
+      : {}),
+    ...(po.reconcile_note ? { outcome_note: String(po.reconcile_note).slice(0, 300) } : {}),
+    how_to_read:
+      'declared = what the supplier put on the manifest for labels that have actually SHIPPED; a label still with them '
+      + 'is counted on neither side, so it can never read as short. Replacement labels are left out of declared on '
+      + 'purpose — a reship re-declares pairs the original manifest already expected, and counting them twice would '
+      + 'leave the order short by exactly the shortage forever. counted = every pair the warehouse scanned in under '
+      + 'this order, across every batch linked to it. Shoes are matched on any style code in common plus the numeric '
+      + 'part of the size, so "7.5" vs "7.5W" and a dual style code are the SAME shoe — never report a spelling '
+      + 'difference as a missing pair.',
+  };
+}
+
+/**
+ * The orders themselves. This is the one tool whose counts may carry a date: an order
+ * is RAISED on a day, so "how many did we raise today" is a real question with a real
+ * answer — unlike pending_work, which is an undated backlog.
+ *
+ * Filtered in JS over `listPos`, which the PO screens already use, rather than a new
+ * query: the roll-ups (labels shipped, declared units, what we counted) are the ones
+ * those screens show, so the advisor and the screen cannot disagree.
+ */
+async function poList({ state = 'open', supplier = '', days = null }) {
+  const all = await listPos({});
+  const OPEN = new Set(['draft', 'shipped', 'receiving']);
+  let rows = all;
+
+  if (state === 'open') rows = rows.filter((p) => OPEN.has(p.status));
+  else if (state === 'to_reconcile') rows = rows.filter((p) => p.status === 'receiving');
+  else if (state === 'problem') rows = rows.filter((p) => p.resolution_state === 'open');
+
+  const name = String(supplier || '').trim().toLowerCase();
+  if (name) rows = rows.filter((p) => String(p.supplier_name || '').toLowerCase().includes(name));
+
+  // EST, like every other date in this business: the window is worked out from the EST
+  // civil day, not from the host's UTC clock and not from the asker's (PH is a day ahead).
+  let window = null;
+  const n = Number(days);
+  if (Number.isFinite(n) && n >= 1) {
+    const from = ymd(new Date(estCivilFromYmd(estToday()).getTime() - (Math.floor(n) - 1) * 86400000));
+    rows = rows.filter((p) => estDate(p.created_at) >= from);
+    window = n === 1 ? `raised today (${estToday()} EST)` : `raised in the last ${Math.floor(n)} days, from ${from} to ${estToday()} EST`;
+  }
+
+  const byStatus = {};
+  for (const p of rows) byStatus[p.status] = (byStatus[p.status] || 0) + 1;
+
+  return {
+    scope: {
+      state,
+      ...(name ? { supplier } : {}),
+      window: window || 'every date — this is not a date-filtered count unless `days` was given',
+    },
+    total: rows.length,
+    by_status: byStatus,
+    orders: rows.slice(0, 25).map((p) => ({
+      code: p.po_code,
+      supplier: p.supplier_name,
+      status: p.status,
+      raised: estDate(p.created_at),
+      ...(p.date_of_purchase ? { purchased: String(p.date_of_purchase).slice(0, 10) } : {}),
+      labels: `${p.shipped_count} of ${p.box_count} shipped`,
+      declared_units: p.unit_count,
+      counted_units: p.received_units,
+      ...(p.resolution_state && p.resolution_state !== 'none' ? { discrepancy: p.resolution_state } : {}),
+    })),
+    ...(rows.length > 25 ? { note: `showing the 25 most recent of ${rows.length}` } : {}),
+    what_the_statuses_mean:
+      'draft = raised here, not every label shipped yet; shipped = every label has left the supplier; '
+      + 'receiving = stock is being counted in against it; reconciled = settled with the supplier and frozen; '
+      + 'closed = archived. declared_units is what the SUPPLIER declared, counted_units is what WE scanned in — '
+      + 'on an order received with no manifest declared is legitimately 0, which is not the same as an empty box. '
+      + 'Use po_status before saying anything is wrong with a particular order.',
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -586,8 +858,9 @@ WHAT'S ON THEIR SCREEN RIGHT NOW:
 ${screen}
 
 LOOKING THINGS UP:
-- You have seven read-only tools: sku_history, find_stock, pending_work, top_sellers,
-  stock_status, market_price, and search_sop — the written procedures and FAQs.
+- You have nine read-only tools: sku_history, find_stock, pending_work, top_sellers,
+  stock_status, market_price, po_status and po_list (purchase orders), and search_sop —
+  the written procedures and FAQs.
 - "What's selling / what's our best seller / what's moving" is top_sellers, not a SKU
   lookup. You do not need them to name a style first.
 - **Sales come from Shopify, which carries EVERY channel** — GOAT, StockX, eBay, TikTok,
@@ -621,6 +894,34 @@ LOOKING THINGS UP:
 - **\`no_box\` and \`in_store_or_existing\` are pairs we hold that the PH grid never shows.**
   Mention them when they're non-zero, so the numbers add up to what's on the shelf — but
   never inside the pending count, because nobody is going to list them from that page.
+
+PURCHASE ORDERS — and the four ways to misread one:
+- **One order** — "is PO-100005 short", "what's wrong with this order", "how many did we
+  actually get", "which box is the missing pair in" — is \`po_status\`. It takes the PO
+  code OR any tracking number on the order. **The spread of orders** — what's open,
+  what's still to arrive, what needs reconciling, what we raised today — is \`po_list\`.
+- **Read \`where_it_stands\` first and repeat what it says.** It separates a real
+  shortage from the three things that look identical in the raw numbers:
+  - a label still sitting with the supplier — those pairs are counted on NEITHER side, so
+    an unshipped label can never read as short;
+  - an intake still in progress — the count is PROVISIONAL. Say that rather than
+    reporting a shortage that is still being scanned out of the box;
+  - \`no_manifest\`, "received blind" — nothing was ever declared for the labels that
+    shipped, so every pair we counted shows as not-on-their-list. That is a missing
+    manifest, not a pile of extras, and saying "overage" here is wrong twice over.
+- **A spelling difference is not a missing pair.** The two sides are matched on any style
+  code in common plus the numeric part of the size, so \`7.5\` vs \`7.5W\` and a dual
+  style code are the same shoe. \`we_wrote_sku\` / \`we_wrote_size\` explain a row; they
+  never make one. Comparing the raw text once reported a perfect 233-pair shipment as 154
+  pairs wrong.
+- **Say which BOX, not only which shoe**, whenever \`by_box\` has it — "a Dunk is
+  missing" sends nobody anywhere; "box 11 is short a Dunk 9.5" sends someone to a shelf.
+  Name the boxes that checked out correct as well, because a list of only problems can't
+  be told from one nobody ran. An order with one whole-order manifest has no per-box
+  expectation — never invent one.
+- You cannot fix an order. Reconciling it, chasing the supplier and recording the outcome
+  all happen on the **Reconciliation** screen — name it and stop there.
+
 - If a tool reports a \`permission\` problem, say the figure is unavailable. Never
   substitute a zero — "none left" and "we can't see it" are opposite answers.
 - **Never put a date on a figure that isn't date-scoped.** \`pending_work\` is what is
@@ -628,13 +929,16 @@ LOOKING THINGS UP:
   awaiting shipment today" invents a day's work out of a backlog, and someone chasing
   "today's 11" will find eleven pairs from a month ago. Only \`sku_history\` and
   \`top_sellers\` cover a period, and they say which one (30 or 90 days).
-- **So "how many … today / yesterday / this week" usually has no tool.** Say plainly that
-  you can't see it by day, give the right un-dated figure if there is one, labelled for
-  what it actually is, and name the screen that does answer it — **Purchase Orders** for
-  orders, **New Inventory** for a day's intake (it filters by date, you don't).
+- **So "how many … today / yesterday / this week" usually has no tool — with ONE
+  exception, purchase orders.** An order is RAISED on a day, so \`po_list\` takes \`days\`
+  and that count really can carry a date. Everywhere else: say plainly you can't see it
+  by day, give the right un-dated figure labelled for what it actually is, and name the
+  screen that does answer it — **New Inventory** for a day's intake (it filters by date,
+  you don't).
 - "Orders" here means **purchase orders** — supplier shipments in — unless they say
-  sales. Sales come from Shopify, and \`top_sellers\` counts units over a window, never
-  orders on a day.
+  sales. Those are \`po_list\` and \`po_status\`, never \`pending_work\`, whose
+  \`po_to_reconcile\` is a queue length and not an order. Sales come from Shopify, and
+  \`top_sellers\` counts units over a window, never orders on a day.
 - Be precise about WHOSE truth you are quoting. Sales and inventory come from Shopify;
   our sync flags are what PH ticked here. Where the two disagree, that gap is the
   interesting part — say it rather than picking one.

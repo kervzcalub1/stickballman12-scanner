@@ -70,7 +70,7 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 - Today only the Payout Calculator publishes. Every other screen still gets a working
   advisor, because the server can look things up itself.
 
-## The seven tools — all reads
+## The nine tools — all reads
 | Tool | Answers | Source |
 |---|---|---|
 | `sku_history` | "have we sold this before, what did we pay, **how fast does it move?**" | `advisorSkuHistory` (db.js) + `shopifyVelocity` |
@@ -80,9 +80,11 @@ it describes is rendered *inside* it, so a provider would mean wrapping every sc
 | `top_sellers` | "what's selling this week?" | `shopifyTopSellers` — every channel |
 | `stock_status` | "how many do we have — listed or not, per size?" | Shopify inventory + our per-size Pending/In-Progress/Listed |
 | `market_price` | "what's it worth right now?" | Alias + StockX |
+| `po_status` | "is this order short, and which box is it in?" | `getPoReconcileState` + `getPoBoxDiffs` + `getPoResolution` |
+| `po_list` | "what's open, what's still to arrive, what did we raise today?" | `listPos` |
 
-- **Suppliers get three of the seven** — see above. The table here is the staff set.
-- **Read-only is structural, not a promise.** All five are existing queries; nothing here
+- **Suppliers get three of the nine** — see above. The table here is the staff set.
+- **Read-only is structural, not a promise.** All nine are existing queries; nothing here
   can write. The prompt tells it to name the screen that does the job instead.
 - **`search_sop` is role-scoped** through `sopRoleForAccount` — the same rule the `/sop`
   screen applies. That helper was moved *into* `src/lib/sop/index.js` precisely so the
@@ -120,6 +122,65 @@ on their screen — the prompt makes the advisor say which it's quoting.
 **Sizes are matched to Shopify's variant titles on an exact label and nothing cleverer.**
 "7.5" and "7.5W" are different shoes on different feet; anything we can't match comes
 back under `shopify_sizes_we_could_not_match` rather than being folded in.
+
+### Purchase orders — the analysis, and the four ways to misread one (2026-09-01)
+`po_status` takes the **PO code or any tracking number on it** (the number a person
+actually has in hand is the one on the parcel) and returns the Reconciliation screen's
+own arithmetic — `getPoReconcileState` for the table, `getPoBoxDiffs` for the per-label
+half, `getPoResolution` for what's being done about it. **It computes nothing new.** A
+second opinion about a shortage is the last thing this needed; where the advisor earns
+its place is in saying **how to read** the numbers.
+
+Because the raw figures make three innocent situations look identical to a shortage, the
+reading is stated **in the payload** as `where_it_stands`, not left to the prompt — the
+same lesson `pending_work` taught about dates, where a rule in the prompt alone got
+skipped:
+
+- **A label still sitting with the supplier.** `expected` only counts lines on labels that
+  have actually shipped, so those pairs are on *neither* side. Reading an undelivered box
+  as a loss is how a half-delivered order gets chased as one.
+- **An intake still in progress.** `intakeDone` is false while any linked batch is open —
+  the count is **provisional**, and pairs are still coming out of the carton.
+- **`no_manifest` — "received blind."** Nothing was ever declared, so every pair we counted
+  reads as not-on-their-list. That is a **missing manifest**, and calling it an overage is
+  wrong twice over.
+- And the fourth, which is about the *lines* rather than the order: **a spelling difference
+  is not a missing pair.** `7.5` vs `7.5W`, and a dual style code, are matched as one shoe
+  (`rcCodes` + `rcSizeNum`); `we_wrote_sku`/`we_wrote_size` explain a row and never make one.
+
+Two smaller rules the payload enforces rather than hopes for:
+- **`checked_and_correct` is not decoration.** A box list naming only problems can't be told
+  apart from one nobody ran — the same reason the printed discrepancy sheet names the clean
+  boxes.
+- **A whole-order manifest gets a refusal, not an empty table.** There is no per-box
+  expectation to compare against, and the per-label `declared` is omitted entirely: printing
+  "declared: 0" beside a box we counted four pairs out of reads as "this box was empty",
+  which is the trap the PO list and the label cards already had to fix.
+
+`po_list` is the spread — open / to_reconcile / problem / all, optional supplier, optional
+`days`. **It is the one advisor count allowed to carry a date**: an order is *raised* on a
+day, so "how many did we raise today" is a real question, windowed on the **EST** civil day
+via `estDate`/`estToday`. That closes the gap the 2026-08-27 date rule left open, where
+*"how many orders do we have for today?"* had no tool and the honest answer was to name the
+screen. Everything else stays undated — `pending_work` is still a backlog, and its
+`po_to_reconcile` is a queue length, never an order.
+
+**Trimmed on purpose, because the cut is not survivable.** Every tool result is
+`JSON.stringify(…).slice(0, 8000)` before it enters the prompt, and a cut lands mid-JSON —
+the model then reads the wreckage as fact. A real order (233 pairs across 18 labels) blows
+straight past that, so `PO_MAX_ROWS`/`PO_MAX_BOXES`/`PO_MAX_LABELS` keep the worst case near
+4 KB and anything dropped says so (`more_discrepant_lines`, `more_boxes_differ`,
+`more_labels`) instead of vanishing. A test asserts the payload stays under the cut.
+
+**Suppliers never see either tool** — `SUPPLIER_TOOLS` is an allowlist, so they are not
+offered and are refused if the model invents the name. An outside partner reading another
+supplier's order, or our own count before it is settled with them, is exactly what the
+three-place narrowing exists to prevent.
+
+He still **can't fix an order**: reconciling, chasing the supplier and recording an outcome
+are the Reconciliation screen, and the prompt says to name it and stop. Tests:
+`e2e/advisor-po.spec.js` (the payload and the traps) plus two prompt assertions in
+`e2e/advisor.spec.js`.
 
 ### Sales velocity — measured, not estimated
 Sales come from **Shopify, which carries every channel** (GOAT, StockX, eBay, TikTok…),

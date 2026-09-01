@@ -42,7 +42,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Pre-printed 1ID stickers (`SBM-R-…` roll stock, printer-free intake) | `docs/context/vin-stock.md` |
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
 | Payout Calculator: store cost stack → Alias/StockX payout, profit, ROI, buy call, **supplier presets** | `docs/context/payout-calculator.md` |
-| The app-wide advisor: floating button, screen context, its seven read-only tools | `docs/context/advisor.md` |
+| The app-wide advisor: floating button, screen context, its nine read-only tools | `docs/context/advisor.md` |
 | Shopify: the all-channel sales + inventory feed (`api/_lib/shopify.js`) | `docs/context/shopify.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
 | Inventory browse, SKU-merge, bulk status, labels, **removing pairs + Deleted archive** | `docs/context/inventory.md` |

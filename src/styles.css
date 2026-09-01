@@ -2119,6 +2119,39 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .sticker-result .sr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
 .sticker-result .sr-head .vin { font-size: 18px; }
 .sticker-result .sr-body { margin: 10px 0 0; max-width: 62ch; line-height: 1.5; }
+/* ---- Inventory rapid scan: the running session list ---- */
+/* Sits directly under the scan row, because it is the answer to what was just scanned.
+   Capped and scrollable: a shelf walk is 40+ pairs and the filter/table below must stay
+   reachable without paging past the whole session. */
+.scan-session { margin-top: 12px; border: 1px solid var(--border); border-radius: 12px;
+  background: rgba(79,124,255,0.05); padding: 10px 12px; }
+.scan-session-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.scan-session-head b { font-size: 15px; }
+.scan-session-acts { margin-left: auto; display: flex; gap: 6px; }
+.scan-session-empty { margin: 8px 0 2px; }
+.scan-session-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column;
+  gap: 6px; max-height: 46vh; overflow-y: auto; }
+.scan-row { border: 1px solid var(--border); border-radius: 10px; background: var(--card, #16181d); }
+.scan-row.warn { border-color: rgba(233,196,106,0.45); }
+.scan-row.bad { border-color: rgba(255,107,107,0.45); background: rgba(255,107,107,0.06); }
+/* The whole row is the target — a gun-in-one-hand operator taps with a thumb, so a small
+   "open" link on the right would be the wrong shape entirely. */
+.scan-row-main { display: flex; flex-direction: column; gap: 2px; width: 100%; min-height: 44px;
+  padding: 8px 10px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.scan-row-main:hover { background: rgba(255,255,255,0.03); }
+.scan-row-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scan-row-name { font-weight: 600; }
+.scan-row-seen { font-size: 11px; font-weight: 700; color: #e9c46a;
+  border: 1px solid rgba(233,196,106,0.45); background: rgba(233,196,106,0.12);
+  border-radius: 999px; padding: 0 7px; }
+.scan-row-err { font-size: 13px; color: #ff8f8f; }
+/* The row is a flex COLUMN, so a pill child stretches to full width without this. */
+.scan-row-main .sr-state { align-self: flex-start; margin-top: 2px; }
+@media (max-width: 600px) {
+  .scan-session-acts { margin-left: 0; width: 100%; }
+  .scan-session-list { max-height: 52vh; }
+}
+
 .sr-state {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
@@ -2687,6 +2720,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-receive-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
   background: rgba(61,124,255,0.10); border: 1px solid rgba(61,124,255,0.35); border-radius: 10px; padding: 10px 12px; }
 .po-receive-banner b { font-size: 14px; }
+/* Whose manifest this is. Full-width inside the banner (like .mf-print below it) so it
+   reads as a statement about the order rather than a chip competing with Unlink. Only
+   ever rendered for the two answers that need saying — staff-entered, or nothing at all. */
+.po-manifest-src { flex-basis: 100%; margin: 8px 0 0; padding: 8px 10px; border-radius: 8px;
+  font-size: 13px; line-height: 1.45; border: 1px solid transparent; }
+.po-manifest-src b { font-size: 13px; display: block; margin-bottom: 1px; }
+.po-manifest-src.warn { background: rgba(198,135,26,0.10); border-color: rgba(198,135,26,0.42); color: var(--text); }
+.po-manifest-src.warn b { color: #e0a878; }
+.po-manifest-src.bad { background: rgba(255,107,107,0.10); border-color: rgba(255,107,107,0.42); color: var(--text); }
+.po-manifest-src.bad b { color: #ff8f8f; }
 .po-picker { max-width: 520px; width: 100%; max-height: 90vh; overflow-y: auto; text-align: left; }
 .po-picker-label { margin: 12px 0 8px; }
 

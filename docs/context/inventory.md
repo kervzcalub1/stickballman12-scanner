@@ -80,6 +80,37 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
   three" for the dispatch order.
 - CSV export.
 
+## Rapid scan (2026-09-02)
+A **Rapid scan** toggle on the search row (persisted per device as `prefs.rapidScan`).
+Off — the default — a scanned VIN opens that pair's detail, which is right when you are
+looking one pair up. On, a scan **appends to a running list instead of navigating**, so
+walking a shelf with a gun stops being scan → read → Back → scan. The camera runs
+`continuous` only in this mode; outside it the first scan navigates away and a decoder
+running behind the detail view is just battery.
+
+`ScanSession` (in `Inventory.jsx`) renders the list newest-first — the pair just scanned
+sits under the operator's thumb. Each row is a button into the full detail, and **the
+session survives that trip**: `openDetail` only changes `mode`, so Back comes back to a
+list with every scan still on it. Rows carry the same four answers the detail view gives:
+a found pair (name · SKU · size · shelf + status pill), a **1ID sticker** with its
+`vin_stock` state (reusing `.sr-state`, so an unused sticker is an answer and not an
+error), and a plain not-found. Re-scanning a pair already listed **bumps a `scanned ×N`
+count and floats it back to the top** rather than stacking a duplicate — on a shelf walk
+the same pair genuinely gets crossed twice, and two identical rows read as two pairs.
+`isCameraReread` guards the camera only: a gun fires once per trigger pull, so a
+deliberate second scan must always count.
+
+It is a **lookup and nothing more** — no staged edit, no bulk commit. Marking a batch of
+pairs sold or shelved already has its own screens (`StatusScanPage`, Move to shelf), and
+growing a second one behind a scanner is how two screens end up disagreeing about what a
+scan means. A shelf barcode still searches that shelf's contents in either mode; it isn't
+a pair, so it has nothing to add to a scan list.
+
+Guarded by `e2e/inventory-rapid-scan.spec.js` (six cases, including that the toggle OFF
+still opens the pair). Note for anyone writing tests here: **the detail view has its own
+`.searchrow`** (the custom-tag row), so "did it navigate" must assert on the
+*Back to list* button, not on input counts.
+
 ## Listing photos (thumbnails + detail view/delete)
 - Every list row shows a `ShoeThumb` — the SKU's listing photo (side view preferred,
   from `queryItems.photo_url`), falling back to `logo.png` when there are none.

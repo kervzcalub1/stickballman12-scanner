@@ -171,6 +171,23 @@ sticker bar sits above the checklist. Full rules: `docs/context/vin-stock.md`.
 4. **Issues** — shipment-level: no-box pairs auto-listed; manual issues addable.
    Finish commits.
 
+## The PO banner says whose manifest it is (2026-09-02)
+Once a PO is linked at step 1, the banner has always carried **Print manifest** (Per box /
+Whole order, PDF or CSV) — the sheet the warehouse prints and ticks pairs off as they
+unpack, for the very common case where the supplier never taped one inside the parcel.
+
+What it now also says is **where that list came from**. `manifestSource()` /
+`manifestSourceNote()` (`src/lib/manifestSource.js`) render `.po-manifest-src` under the
+banner in the two cases that need saying: **entered on the supplier's behalf** (amber —
+"the supplier did not scan this order", named to the PH member who typed it) and **no
+manifest at all** (red — receiving blind). A supplier-scanned manifest shows nothing,
+on purpose. The same judgement is stamped on the printed sheet, so the caveat survives
+the walk to the pallet — full rules in `docs/context/purchase-orders.md`.
+
+Nothing about *which* list is used changed: PH's on-behalf lines were always the order's
+expected count and still are. Guarded by `e2e/receiving-manifest-source.spec.js`, which
+covers all four kinds and asserts the supplier case stays silent.
+
 ## One shoe, several style codes (2026-08-27)
 A re-released shoe is sold under more than one style code, and StockX writes them all
 on a single `styleId` (`315122-111/CW2288-111`). The Alias catalog only ever knows ONE

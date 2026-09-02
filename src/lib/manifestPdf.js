@@ -18,6 +18,7 @@
 //
 // Every string that gets DRAWN is plain ASCII: jsPDF's built-in Helvetica silently
 // drops em-dashes and middots, so "Tag / Code —" printed as a blank cell.
+import { lazyImport } from './chunkLoad.js';
 import { carrierName } from './carriers.js';
 import { manifestSource, manifestSourceStamp } from './manifestSource.js';
 
@@ -36,8 +37,13 @@ const SHORT_RED = [180, 45, 45];   // declared and not found
 const EXTRA_AMBER = [166, 106, 20]; // turned up undeclared
 
 async function loadJsPDF() {
-  const mod = await import('jspdf');
-  return mod.jsPDF || mod.default;
+  // A stale chunk here is what turned "Per box" into a raw
+  // "Failed to fetch dynamically imported module: …/jspdf.es.min-<hash>.js" on the PO
+  // page. `lazyImport` makes it say what to do instead.
+  return lazyImport(async () => {
+    const mod = await import('jspdf');
+    return mod.jsPDF || mod.default;
+  });
 }
 
 const fmtDate = (d) => {

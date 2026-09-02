@@ -12,6 +12,11 @@
 // the screen was a dead end.
 //
 // Same for a per-box order where one label was never declared.
+//
+// It was reported as two things — "can't scan the 1ID" and "it prompts to select a size
+// but there are no size options to tick" — and they are one bug: the sticker bar's prompt
+// ("Tick a size as you pull it from the box") sat directly above a checklist that a
+// whole-order manifest leaves empty.
 import { test, expect } from '@playwright/test';
 import { signToken } from '../api/_lib/util.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
@@ -75,6 +80,13 @@ test('a whole-order PO still lets the shoe be scanned, then its 1ID', async ({ p
 
   // The screen says why there is nothing to tick, rather than looking broken.
   await expect(page.getByText(/one whole-order list/i)).toBeVisible();
+
+  // The OTHER half of the same bug, reported separately as "it prompts to select a size
+  // but there are no sizes to tick": the checklist bar told you to tick a size while the
+  // checklist under it was empty, because a whole-order manifest declares nothing per
+  // label. No list, so no such prompt.
+  await expect(page.getByText(/Tick a size/i)).toHaveCount(0);
+  await expect(page.getByText(/had no expected items/i)).toHaveCount(0);
 
   // The two-beat bar is present — this is the part that was missing.
   const bar = page.locator('.searchrow input').first();

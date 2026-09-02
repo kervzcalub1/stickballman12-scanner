@@ -47,7 +47,7 @@ function perBoxRows({ boxes, lines, boxId }) {
       const b = byId.get(String(l.po_box_id));
       return {
         box: boxLabel(b), tracking: b?.tracking_number || '',
-        name: l.name || '', sku: l.sku || '', size: l.size || '', qty: l.qty_expected ?? '',
+        name: l.name || '', sku: l.sku || '', size: l.size || '', dims: l.dimensions || '', qty: l.qty_expected ?? '',
         ...moneyCells(l),
       };
     });
@@ -57,7 +57,9 @@ function perBoxRows({ boxes, lines, boxId }) {
 function wholeRows({ lines }) {
   const m = new Map();
   for (const l of lines || []) {
-    const k = `${l.sku}|${l.size}`;
+    // A shoe line is identified by its size; an empty-box line by its size AND the
+    // carton it ships in — the same size can arrive in two different boxes.
+    const k = `${l.sku}|${l.size || ''}|${l.dimensions || ''}`;
     const cur = m.get(k);
     // Same SKU+size declared on two labels merges into one row, so its money merges
     // too: the per-pair cost is carried from the first line that named one (they are
@@ -69,13 +71,13 @@ function wholeRows({ lines }) {
       cur._tip = cur._tip ?? declared(l.tip);
     } else {
       m.set(k, {
-        name: l.name || '', sku: l.sku || '', size: l.size || '', qty: Number(l.qty_expected) || 0,
+        name: l.name || '', sku: l.sku || '', size: l.size || '', dims: l.dimensions || '', qty: Number(l.qty_expected) || 0,
         _cost: declared(l.unit_cost), _tip: declared(l.tip),
       });
     }
   }
   return [...m.values()].map((r) => ({
-    name: r.name, sku: r.sku, size: r.size, qty: r.qty,
+    name: r.name, sku: r.sku, size: r.size, dims: r.dims, qty: r.qty,
     cost: money(r._cost), tip: money(r._tip),
     line: money(r._cost == null && r._tip == null ? null : ((r._cost || 0) + (r._tip || 0)) * r.qty),
   }));
@@ -117,6 +119,21 @@ function discrepancyRows({ boxDiffs }) {
 // Money columns ride on the END of the row so an existing sheet's columns keep their
 // positions — anyone with a saved formula or a pivot pointing at column D still works.
 const MONEY_COLS = [['cost', 'Cost per pair'], ['tip', 'Tip per pair'], ['line', 'Line total']];
+const BOX_MONEY_COLS = [['cost', 'Cost per box'], ['tip', 'Tip per box'], ['line', 'Line total']];
+
+// An EMPTY-BOX order counts boxes, not pairs, and carries one column a shoes order
+// doesn't: the carton, which goes in right after the size it was made for.
+function retitle(cols, boxesOrder) {
+  if (!boxesOrder) return cols;
+  const out = [];
+  for (const [k, label] of cols) {
+    out.push([k, label === 'Pairs declared' ? 'Boxes declared'
+      : label === 'Pairs counted' ? 'Boxes counted'
+      : label === 'Pairs' ? 'Boxes' : label]);
+    if (k === 'size') out.push(['dims', 'Box size']);
+  }
+  return out;
+}
 
 const SHAPES = {
   perbox: {
@@ -150,6 +167,8 @@ export function buildManifestCsv(mode, data) {
   // `received` and `discrepancies` are OUR count of what came out of the box, not what
   // the supplier declared — there is no per-line money on them, so they stay unpriced
   // whatever the caller asks for.
-  const cols = data?.prices && shape.money ? [...shape.cols, ...MONEY_COLS] : shape.cols;
+  const boxesOrder = String(data?.po?.order_kind || 'shoes') === 'boxes';
+  const money = boxesOrder ? BOX_MONEY_COLS : MONEY_COLS;
+  const cols = retitle(data?.prices && shape.money ? [...shape.cols, ...money] : shape.cols, boxesOrder);
   return toCsv(cols, rows);
 }

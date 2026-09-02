@@ -40,19 +40,26 @@ test.afterAll(async () => {
 });
 
 // A part-received order: label 1 delivered, label 2 still pending at the supplier.
+//
+// Seeded straight into the DB rather than through `po/create`. Every test here needs its
+// own order (a spec that shares mutable state isn't a guard), and `po/create` is rate
+// limited to 30/min per IP — so a full-suite run, where several PO specs each raise their
+// own orders, tips over it and fails the tail of this file for a reason that has nothing
+// to do with what it tests. `po/create` itself is covered by po-edit.spec.js.
 async function partReceivedOrder(request) {
-  const r = await request.post('/api/po/create', {
-    headers: auth('ph_team'),
-    data: {
-      supplierName: SUPPLIER, tagCode: `WIN${Date.now() % 100000}`,
-      labels: [{ trackingNumber: `E2E-WIN-A-${Date.now()}` }, { trackingNumber: `E2E-WIN-B-${Date.now()}` }],
-    },
-  });
-  expect(r.ok(), await r.text()).toBeTruthy();
-  const po = (await r.json()).po;
-  await q('UPDATE purchase_orders SET status = $1, supplier_user_id = $2 WHERE id = $3', ['receiving', SUPPLIER_UID, po.id]);
-  const boxes = await q('SELECT id, box_number FROM po_boxes WHERE po_id = $1 ORDER BY box_number', [po.id]);
-  await q("UPDATE po_boxes SET status = 'delivered' WHERE id = $1", [boxes[0].id]);
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const po = (await q(
+    `INSERT INTO purchase_orders (supplier_name, supplier_user_id, tag_code, expected_boxes, status)
+     VALUES ($1, $2, $3, 2, 'receiving') RETURNING *`,
+    [SUPPLIER, SUPPLIER_UID, `WIN${Date.now() % 100000}`],
+  ))[0];
+  const boxes = await q(
+    `INSERT INTO po_boxes (po_id, box_number, tracking_number, status)
+     VALUES ($1, 1, $2, 'delivered'), ($1, 2, $3, 'pending')
+     RETURNING id, box_number, status`,
+    [po.id, `E2E-WIN-A-${stamp}`, `E2E-WIN-B-${stamp}`],
+  );
+  boxes.sort((a, b) => a.box_number - b.box_number);
   return { po, delivered: boxes[0], pending: boxes[1] };
 }
 

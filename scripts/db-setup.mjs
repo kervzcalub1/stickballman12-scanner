@@ -774,6 +774,53 @@ await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFA
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id)`);
 await sql(`CREATE INDEX IF NOT EXISTS batches_po_idx ON batches (po_id)`);
 
+// We don't only buy shoes. A shoe arrives with a crushed box, or with no box at all, so
+// the same suppliers ship us EMPTY SHOE BOXES to swap in — ordered, manifested, tracked
+// and reconciled exactly like a shipment of pairs. `order_kind` says which an order is;
+// everything downstream of it (the manifest form, the chips, the printed sheets) reads
+// this one column. Defaults to 'shoes' so every order raised before this stays what it was.
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS order_kind TEXT NOT NULL DEFAULT 'shoes'`);
+await sql(`ALTER TABLE purchase_orders DROP CONSTRAINT IF EXISTS purchase_orders_order_kind_check`);
+await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_order_kind_check CHECK (order_kind IN ('shoes','boxes'))`);
+
+// An empty box is identified by THREE things: the shoe it belongs to (SKU + name), the
+// SIZE it was made for, and how big the carton is. A real empty shoe box is size-specific
+// — the label on it carries the SKU, the size and the UPC — so a size 9 Panda box and a
+// size 10 Panda box are two different things to order even where the carton measures the
+// same. `dimensions` is the extra fact a box carries that a pair doesn't; it is not a
+// replacement for the size.
+await sql(`ALTER TABLE po_lines ADD COLUMN IF NOT EXISTS dimensions TEXT`);
+// Which line is "the same line" now depends on the kind of order, so the two kinds get a
+// partial index each and stop overlapping. `dimensions IS NULL` is the shoe half — every
+// row that existed before empty-box orders is in it, so adding the predicate changes
+// nothing about what was already enforced.
+await sql(`DROP INDEX IF EXISTS po_lines_box_sku_size_idx`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_box_sku_size_idx
+           ON po_lines (po_box_id, sku, size)
+           WHERE dimensions IS NULL`);
+await sql(`DROP INDEX IF EXISTS po_lines_po_sku_size_idx`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_size_idx
+           ON po_lines (po_id, sku, size)
+           WHERE po_box_id IS NULL AND dimensions IS NULL`);
+// The box half. Re-declaring the same shoe, size AND carton under one label increments
+// its qty; a different size, or the same size in a different carton, is its own row.
+//
+// DROP first, deliberately. An earlier cut of this keyed box lines on (sku, dimensions)
+// with no size, and `CREATE UNIQUE INDEX IF NOT EXISTS` will happily leave a same-named
+// index with the WRONG columns in place — which then fails at run time as
+// "no unique or exclusion constraint matching the ON CONFLICT specification", because
+// ON CONFLICT infers a partial index by its exact columns AND predicate. Any environment
+// that ran that earlier version has to be corrected, and a no-op DROP costs nothing on
+// one that didn't.
+await sql(`DROP INDEX IF EXISTS po_lines_box_sku_dim_idx`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_box_sku_dim_idx
+           ON po_lines (po_box_id, sku, size, dimensions)
+           WHERE po_box_id IS NOT NULL AND dimensions IS NOT NULL`);
+await sql(`DROP INDEX IF EXISTS po_lines_po_sku_dim_idx`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_dim_idx
+           ON po_lines (po_id, sku, size, dimensions)
+           WHERE po_box_id IS NULL AND dimensions IS NOT NULL`);
+
 
 /* ---- Payout Calculator: supplier presets ---- */
 // A "supplier" here is the person who buys the pair at retail for us — Andrew,

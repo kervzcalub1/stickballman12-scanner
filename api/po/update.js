@@ -1,5 +1,5 @@
 // POST /api/po/update  (ph_team / admin)
-//   { poId, supplierName?, tagCode?, dateOfPurchase?, notes?, expectedBoxes? }
+//   { poId, supplierName?, tagCode?, dateOfPurchase?, notes?, expectedBoxes?, orderKind? }
 // Corrects the order's own details after it's been raised — the supplier it was placed
 // with, its tag/code, the purchase date, the notes, and how many boxes it expects.
 // Only the fields actually sent are written, so two people editing different parts of
@@ -9,6 +9,7 @@
 // the record has to keep saying what was settled. See docs/context/purchase-orders.md.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getPoFull, updatePo, addPoComment, syncExpectedBoxes, PO_FROZEN, dbConfigured } from '../_lib/db.js';
+import { ORDER_KINDS } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -51,6 +52,22 @@ export default async function handler(req, res) {
     if (body.notes !== undefined) {
       const v = String(body.notes ?? '').trim().slice(0, 2000) || null;
       if (v !== (data.po.notes || null)) { patch.notes = v; changed.push('notes edited'); }
+    }
+    // Shoes or empty shoe boxes. Changeable after the fact on purpose: an order for
+    // boxes is routinely raised on the shoes form before anyone says which it is, and the
+    // supplier can't declare a thing until the order says what it's for. The lines are
+    // NOT rewritten — a shoe line's size and a box line's dimensions are different facts,
+    // so anything already declared under the old kind shows blank in the new one and has
+    // to be re-stated. That's why the change is announced on the thread.
+    if (body.orderKind !== undefined) {
+      const v = String(body.orderKind ?? '').trim();
+      if (!ORDER_KINDS.includes(v))
+        return send(res, 400, { ok: false, error: 'An order is either for shoes or for empty shoe boxes.' });
+      if (v !== (data.po.order_kind || 'shoes')) {
+        patch.orderKind = v;
+        changed.push(`order kind → ${v === 'boxes' ? 'empty shoe boxes' : 'shoes'}`
+          + ((data.lines || []).length ? ` (${data.lines.length} declared line(s) kept — re-state them for the new kind)` : ''));
+      }
     }
     if (body.expectedBoxes !== undefined) {
       const raw = body.expectedBoxes;

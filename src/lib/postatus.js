@@ -11,6 +11,27 @@ export const PO_STATUS = {
   closed:     { label: 'Closed',     cls: 'muted' },
 };
 
+// ── What the order is FOR ─────────────────────────────────────────────────────
+// We don't only buy shoes. A pair turns up with a crushed box or no box at all, so the
+// same suppliers ship us EMPTY SHOE BOXES to swap in — same paperwork, same labels, same
+// reconciliation, an entirely different manifest. Every role needs to be able to tell the
+// two apart at a glance, because almost nothing else on the screen says which it is: the
+// PH team raising it, the supplier packing it, the warehouse unpacking it.
+//
+// A box line's DIMENSIONS are what a shoe line's size is — the thing that makes two
+// otherwise identical lines two different things to order, count and pay for — so the
+// manifest column swaps rather than gaining one.
+export const isBoxesOrder = (po) => String(po?.order_kind || 'shoes') === 'boxes';
+export const orderKindChip = (po) => (isBoxesOrder(po)
+  ? { label: 'Empty boxes', cls: 'boxes', title: 'This order is for empty shoe boxes — replacements for crushed and missing ones. Its manifest is declared by box dimensions, not shoe size.' }
+  : { label: 'Shoes', cls: 'shoes', title: 'This order is for shoes. Its manifest is declared per size.' });
+// What one manifest line is called, and what the column that identifies it is called.
+export const lineNoun = (po) => (isBoxesOrder(po) ? 'box' : 'pair');
+export const lineNounPlural = (po) => (isBoxesOrder(po) ? 'boxes' : 'pairs');
+export const lineKeyLabel = (po) => (isBoxesOrder(po) ? 'Dimensions' : 'Size');
+// The value that identifies a line, whichever kind of order it is on.
+export const lineKeyValue = (line) => (line?.dimensions || line?.size || '');
+
 export const boxStatusLabel = (s) => (s === 'delivered' ? 'Delivered ✓'
   : s === 'in_transit' ? 'In transit'
   : s === 'pre_transit' ? 'With supplier · label made'

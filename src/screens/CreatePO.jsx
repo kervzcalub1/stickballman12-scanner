@@ -19,6 +19,11 @@ export function CreatePO({ onHome, onSignOut }) {
   const [tagCode, setTagCode] = useState('');
   const [dateOfPurchase, setDateOfPurchase] = useState(today());
   const [notes, setNotes] = useState('');
+  // Shoes, or the empty shoe boxes we buy to replace the crushed and missing ones. It
+  // decides what the supplier is asked to declare (sizes vs carton dimensions), so it is
+  // the first thing on the form rather than a detail further down. Changeable afterwards
+  // from the order itself — an order for boxes is routinely raised before anyone says so.
+  const [orderKind, setOrderKind] = useState('shoes');
   const [labels, setLabels] = useState([{ trackingNumber: '', carrierKey: null }]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -77,6 +82,7 @@ export function CreatePO({ onHome, onSignOut }) {
   const reset = () => {
     setSupplierUserId(''); setTagCode(''); setDateOfPurchase(today()); setNotes('');
     setLabels([{ trackingNumber: '', carrierKey: null }]); setCreated(null); setError('');
+    setOrderKind('shoes');
   };
 
   const submit = async () => {
@@ -90,7 +96,7 @@ export function CreatePO({ onHome, onSignOut }) {
       const r = await api.poCreate({
         supplierName: supplier.name,
         supplierUserId: supplier.id,
-        tagCode, dateOfPurchase, notes,
+        tagCode, dateOfPurchase, notes, orderKind,
         labels: cleaned,
       });
       // Store the sheet against the order it just became. Best-effort: the order is
@@ -129,7 +135,8 @@ export function CreatePO({ onHome, onSignOut }) {
             <h3 className="rows-title">{created.po.po_code} created</h3>
             <p className="muted sm">
               For {created.po.supplier_name}{created.po.tag_code ? ` · ${created.po.tag_code}` : ''} ·
-              {' '}{created.boxes.length} label{created.boxes.length === 1 ? '' : 's'}.
+              {' '}{created.boxes.length} label{created.boxes.length === 1 ? '' : 's'} ·
+              {' '}{created.po.order_kind === 'boxes' ? 'empty shoe boxes' : 'shoes'}.
             </p>
             <ul className="po-lines">
               {created.boxes.map((b) => (
@@ -165,6 +172,19 @@ export function CreatePO({ onHome, onSignOut }) {
                 <option value="">Select supplier…</option>
                 {(suppliers || []).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.username})</option>)}
               </select>
+            </label>
+            {/* First, because it changes what the supplier is asked for: a shoes order is
+                declared per size, a boxes order per carton size. */}
+            <label className="batch-form-wide">What is this order for? *
+              <span className="seg po-kind-seg" role="group" aria-label="What this order is for">
+                <button type="button" className={`seg-btn ${orderKind === 'shoes' ? 'on' : ''}`}
+                  aria-pressed={orderKind === 'shoes'} onClick={() => setOrderKind('shoes')}>Shoes</button>
+                <button type="button" className={`seg-btn ${orderKind === 'boxes' ? 'on' : ''}`}
+                  aria-pressed={orderKind === 'boxes'} onClick={() => setOrderKind('boxes')}>Empty shoe boxes</button>
+              </span>
+              <span className="muted sm">{orderKind === 'boxes'
+                ? 'Replacement boxes for pairs that arrived crushed or with no box. The supplier declares each one by SKU, shoe name, box dimensions and cost.'
+                : 'A shipment of pairs. The supplier declares each one by SKU and size.'}</span>
             </label>
             <label>Tag / code name
               <input value={tagCode} maxLength={120} placeholder="e.g. Joey JP23 AJ40" onChange={(e) => setTagCode(e.target.value)} />

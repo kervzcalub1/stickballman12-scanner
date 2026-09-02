@@ -9,6 +9,98 @@ the courier carries it, and the **warehouse** receives it back **against the sam
 reconciling what was promised vs. what actually arrived. A batch spans **multiple shipping
 labels** (one tracking number each); it closes only when every label is shipped.
 
+## Two kinds of order: shoes, and EMPTY SHOE BOXES (2026-09-02)
+
+We don't only buy shoes. A pair turns up with a crushed box, or with no box at all, so
+the same suppliers ship us **empty shoe boxes** to swap in. It's the same paperwork —
+the same PO, the same labels, the same tracking, the same reconciliation — with a
+different **manifest**.
+
+`purchase_orders.order_kind` is `'shoes'` (the default; every order raised before this
+stays what it was) or `'boxes'`. Nothing else about the order changes.
+
+**A box line carries a size AND a carton; a shoe line carries only a size.** A real
+empty shoe box is size-specific — the label on it prints the SKU, the size and the UPC —
+so a size 9 Panda box and a size 10 Panda box are two different things to order even
+where the carton measures the same. The dimensions are the extra fact a box has, not a
+replacement for its size. Both are **required** on a boxes order.
+
+| | Shoes order | Boxes order |
+|---|---|---|
+| Line identified by | `po_lines.size` | `size` **and** `dimensions` together |
+| Extra column | — | `dimensions` (required) |
+| Dedupe index | `po_lines_box_sku_size_idx` / `po_lines_po_sku_size_idx`, now partial `WHERE dimensions IS NULL` | `po_lines_box_sku_dim_idx` / `po_lines_po_sku_dim_idx` on `(…, sku, size, dimensions) WHERE dimensions IS NOT NULL` |
+| One unit is called | a pair | a box |
+| Manifest fields | SKU, shoe name, size, qty, cost, tip | SKU, shoe name, size, **dimensions**, qty, cost, tip |
+
+The two kinds get **a partial index each so they stop overlapping**. `dimensions IS NULL`
+is the shoe half, and every row that existed before empty-box orders is in it — so adding
+that predicate changed nothing about what was already enforced on live data.
+
+**Where the size comes from.** A scanned UPC resolves to one specific size and fills it in,
+exactly as it does for shoes. A typed SKU comes back with the shoe's whole size list, which
+renders as the same tap-to-add size chips the shoes flow uses (plus "+ Custom"), so the
+typed path captures the size in one tap rather than automatically. Each size row carries
+its own carton, pre-filled from the last one typed — a run of sizes in one size of box is
+measured once.
+
+**Dimensions are normalised server-side, once** (`normalizeDimensions` in
+`api/_lib/po-manifest.js`) into `L x W x H unit` — e.g. `13 x 9 x 5 in`. Two people typing
+`13x9x5` and `13 X 9 X 5 in` must not declare the same carton twice, which is exactly what
+would happen if the string were stored as typed. Unit is `in` or `cm`, defaulting to `in`.
+The portal posts the structured `{ l, w, h, unit }`; a per-line correction posts loose
+text; both land on the same canonical string.
+
+**What is required is checked against the ORDER, not against what the client sent**
+(`po/scan`, `po/scan-order`, `po/line`). A boxes order demands both size and dimensions; a
+shoes order refuses dimensions outright — otherwise one order quietly collects both shapes
+and no manifest can be read back. The client mirrors it: the Add button stays disabled,
+with a line saying which half is missing, until **every** row is complete (a half-filled
+row would otherwise be silently dropped on submit).
+
+**Choosing and changing the kind.** PH picks it on the New Batch form (`CreatePO`), and it
+is **editable afterwards** from the order's "Edit details" (`po/update`, `orderKind`) —
+which is the case it shipped for: an order for boxes gets raised on the shoes form before
+anyone says which it is, and the supplier can't declare a thing until the order says what
+it's for. Declared lines are **kept, not rewritten** — a shoe line's size and a box line's
+dimensions are different facts — so anything already on the order shows blank in the new
+kind and has to be re-stated. The change posts a `system` comment; a **reconciled/closed
+order refuses it** like every other detail.
+
+**Bulk declaring the dimensions** (`POST /api/po/lines-dimensions`, `PoBulkDimensions`).
+A boxes order is normally thirty SKUs in one size of carton; typing that thirty times on a
+phone is how a wrong number gets in. One carton size goes across a selection in a single
+call, offered as **"Apply to all N"** or **"only the N still blank"** (that second scope is
+the whole point — a bulk apply must not silently overwrite a value somebody considered).
+It runs every line through the *same* `updatePoLine` a single edit does, so the merge rule
+is identical: two lines landing on the same SKU **+ size +** dimensions become one line
+with their quantities summed. **Sizes are untouched**, so applying one carton across sizes
+8, 9 and 10 leaves three lines — which is the point. Nothing is written until every line has passed its own
+`manifestEditBlock` — a partial apply across a manifest is worse than a refusal, because
+nobody can tell which half landed. Per-line editing stays on each row.
+
+**Everything else that reads a manifest** follows `order_kind`: the `PoKindChip`
+(`Shoes` / `Empty boxes`) on **every** role's screens — PH list + order, supplier list +
+order, Receiving's PO picker and banner, Reconciliation's list + order; the manifest PDF
+and CSV swap the SIZE column for DIMENSIONS and PAIRS for BOXES; and a **supplier SKU the
+catalogue can't resolve still opens the draft** on a boxes order (the catalogue only fills
+in the shoe's name there — the SKU and the carton size are both in the person's hand).
+
+Two deliberate refusals:
+- **`po/manifest-import` is closed on a boxes order.** It parses a supplier sheet of
+  SKU + shoe SIZE, which no box sheet carries; importing one would fill the order with
+  sizeless lines nobody can count against.
+- **Warehouse intake for boxes is NOT built yet.** There is no way to receive a carton of
+  empty boxes into stock, so a boxes PO that gets linked to a batch reconciles against
+  nothing and reads every declared box as short. Reconciliation shows a banner saying
+  exactly that, so nobody settles a false shortage with a supplier. (Because a box line
+  now carries a real size, `getPoReconciliation`'s existing `(sku, numeric size)` match
+  works as-is once intake exists — the dimensions are a refinement, not a blocker. That is
+  the main thing requiring size bought us.) Plan:
+  `docs/empty-boxes-warehouse-plan.md`.
+
+Tests: `e2e/po-empty-boxes.spec.js`.
+
 ## Editing an order after it exists (2026-08-21)
 
 An order isn't settled the moment it's raised: the supplier buys more and gets another
@@ -18,7 +110,7 @@ different order entirely. All of it is staff-side (`ph_team`/admin) on
 
 | What | Where | Endpoint |
 |---|---|---|
-| Supplier account, tag/code, purchase date, notes, **boxes expected** | "Edit details" | `po/update` |
+| Supplier account, tag/code, purchase date, notes, **boxes expected**, **shoes vs empty boxes** | "Edit details" | `po/update` |
 | Add labels (tracking # + courier, typed **or read off the courier's PDF**) | "+ Add label" above the label list | `po/label-add` |
 | Fix a label's tracking # / courier | per label: "Tracking #" | `po/label-update` |
 | Delete a label | per label: "Remove" | `po/label-remove` |

@@ -19,7 +19,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 import { TopBar, Modal, LabelSheet } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard } from '../hooks.js';
-import { isUpcCode, isLocationCode, isRollVin, compareSizes } from '../lib/codes.js';
+import { isUpcCode, isLocationCode, isRollVin, isVinCode, compareSizes } from '../lib/codes.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { ShelfPicker } from '../components/ShelfPicker.jsx';
 
@@ -46,6 +46,17 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
   const rawVins = !!prefs.rawVins;
   const inputRef = useRef(null);
   const recentRef = useRef({});
+  // Bumped after EVERY scan, whatever it did. The re-focus effect used to key on
+  // `rows.length`, which is not the same thing: re-scanning a shoe already on the shelf
+  // bumps a qty, and binding a 1ID sticker fills in a `vins` array — neither changes the
+  // count, so the field went cold in exactly the two moves this screen is made of.
+  const [scanSeq, setScanSeq] = useState(0);
+  // Gun by default, keyboard on request. On iOS a programmatic focus() gives DOM focus
+  // but no software keyboard, so a field we keep hot for a HID gun is a field that looks
+  // typable and isn't. `inputMode="none"` makes that honest — no keyboard is promised —
+  // and "Type" is the way in when a barcode won't read. Same pattern as the 1ID bar in
+  // Receiving. See the iOS keyboard-trap note in hooks.js.
+  const [typing, setTyping] = useState(false);
   const [flash, setFlash] = useState(null);
   const flashTimer = useRef(null);
   const [listRef] = useAutoAnimate();
@@ -68,7 +79,7 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
     if (showCam) return undefined;
     const t = setTimeout(() => inputRef.current?.focus(), 50);
     return () => clearTimeout(t);
-  }, [showCam, rows.length, location]);
+  }, [showCam, scanSeq, location]);
 
   useEffect(() => {
     if (!navBack) return undefined;
@@ -138,11 +149,26 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
     if (recentRef.current[c] && now - recentRef.current[c] < 1200) return;
     recentRef.current[c] = now;
     setInput('');
-    if (isLocationCode(c)) return setShelf(c);
+    setScanSeq((n) => n + 1);   // whatever this scan turns out to be, the field goes hot again
     // Raw 1ID mode, second beat: this scan is a STICKER for the pair just counted.
-    // Checked before isLocationCode would ever see it — a VIN isn't a shelf code, but
-    // routing it explicitly keeps the intent obvious.
     if (rawVins && isRollVin(c)) return bindSticker(c);
+    // ANYTHING ELSE that looks like one of our own numbers is not a product code, and
+    // must never reach the catalogue. This is where "No product found for that SKU" on a
+    // perfectly good sticker came from: a half-read 1ID matches neither the roll pattern
+    // nor a shelf code, so it fell through to a SKU lookup and came back as a catalogue
+    // problem that doesn't exist. Checked BEFORE isLocationCode, which also happily
+    // swallows a stump like "SBM-R" (three letters, a dash, and something).
+    if (/^SBM-/i.test(c)) {
+      const whole = isVinCode(c);
+      setError(!whole
+        ? `That 1ID came through as “${c}” — only part of it read. Scan the sticker again.`
+        : !rawVins
+          ? `${c} is a 1ID sticker, and this count isn’t in 1ID mode. Turn on raw 1ID stickers in Receiving → Preferences, or scan the shoe’s box instead.`
+          : `${c} is a printed VIN, not a pre-printed 1ID sticker. Scan the SBM-R- sticker on the shoe.`);
+      pulse('err', whole ? 'Not a 1ID sticker.' : 'Half-read 1ID — scan it again.');
+      return undefined;
+    }
+    if (isLocationCode(c)) return setShelf(c);
     return addProduct(c);
   }
 
@@ -255,12 +281,29 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
           </div>
         )}
         <form className="searchrow" onSubmit={(e) => { e.preventDefault(); routeScan(input); }}>
-          <input ref={inputRef} autoCapitalize="characters" autoCorrect="off"
+          {/* NEVER disabled. A disabled input is blurred by the browser, and a HID gun
+              fires 20 characters in a few hundred milliseconds — so disabling this while
+              a lookup was in flight dropped the middle of the next barcode on the floor
+              and submitted the stump, which is where "No product found for that SKU" on a
+              perfectly good 1ID came from. The 1.2s per-code cooldown in routeScan is
+              what stops a double-read; the field's job is just to catch every keystroke. */}
+          <input ref={inputRef} autoCapitalize="characters" autoCorrect="off" autoComplete="off"
+            inputMode={typing ? 'text' : 'none'}
             placeholder={!location ? 'Scan a shelf barcode (e.g. MNH-WH-A2-04)'
               : rawVins ? (awaitingSticker ? 'Now scan the 1ID sticker' : 'Scan a box UPC — or type a SKU')
               : 'Scan a box UPC — or type a SKU'}
-            value={input} onChange={(e) => setInput(e.target.value)} disabled={busy} />
+            value={input} onChange={(e) => setInput(e.target.value)} />
           <button className="btn primary" disabled={busy}>Add</button>
+          {/* Focus from INSIDE the tap: on iOS a focus() outside a real gesture sets
+              focus and suppresses the keyboard, which is the "keyboard won't come up"
+              everyone hits. */}
+          <button type="button" className={`btn ${typing ? 'primary' : 'ghost'}`} title="Type instead of scanning"
+            onClick={() => {
+              const on = !typing;
+              setTyping(on);
+              if (on) setTimeout(() => inputRef.current?.focus(), 0);
+              else inputRef.current?.blur();
+            }}>Type</button>
           <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">
             <Icon name="camera" /> {showCam ? 'Close camera' : 'Scan with camera'}
           </button>

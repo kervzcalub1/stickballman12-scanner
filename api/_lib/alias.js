@@ -104,12 +104,19 @@ const DEFAULT_PACKAGING_CONDITION = 'PACKAGING_CONDITION_GOOD_CONDITION';
 // "No product found for that SKU", which is a different and wrong claim.
 const ALIAS_API_TIMEOUT_MS = 20_000;
 
-export async function aliasApiGet(path, { token, query } = {}) {
+// The catalogue specifically gets longer again. Measured 2026-09-03, from a machine
+// answering GitHub in 0.22s: TTFB 43.6s / 20.8s / 20.1s, with the odd connection that
+// fails outright. DNS, connect and TLS were all under 70ms, so none of that is ours.
+// A bench scan waiting 30s is bad; being told a real shoe doesn't exist is worse, and
+// the line resolves on its own while staff carry on scanning the rest of the box.
+const ALIAS_CATALOG_TIMEOUT_MS = 45_000;
+
+export async function aliasApiGet(path, { token, query, timeoutMs = ALIAS_API_TIMEOUT_MS } = {}) {
   const qs = query ? `?${new URLSearchParams(query).toString()}` : '';
   const resp = await fetchWithTimeout(`${ALIAS_API_BASE}${path}${qs}`, {
     method: 'GET',
     headers: { accept: 'application/json', Authorization: `Bearer ${token}` },
-  }, ALIAS_API_TIMEOUT_MS);
+  }, timeoutMs);
   let data = null;
   try { data = await resp.json(); } catch { /* may not be JSON */ }
   return { status: resp.status, ok: resp.ok, data };
@@ -161,7 +168,17 @@ export async function aliasCatalogBySku(query) {
   // rather than in each caller.
   const q = primarySku(query);
   if (!apiKey || !q) return null;
-  const r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query: q, limit: '1' } });
+  // Retry a connection-level failure once — those come back near-instantly (one of the
+  // three samples on 2026-09-03 died before it sent a byte), so a second attempt is
+  // nearly free. A TIMEOUT is deliberately never retried: it already spent 45s, and
+  // doubling that to 90s would hang the scan far longer than an honest "try again".
+  let r;
+  try {
+    r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query: q, limit: '1' }, timeoutMs: ALIAS_CATALOG_TIMEOUT_MS });
+  } catch (e) {
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError') throw e;
+    r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query: q, limit: '1' }, timeoutMs: ALIAS_CATALOG_TIMEOUT_MS });
+  }
   if (!r.ok) return null;
   const c = r.data?.catalog_items?.[0];
   if (!c?.catalog_id) return null;

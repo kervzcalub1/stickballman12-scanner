@@ -82,8 +82,18 @@ export function shippedProgress(boxes) {
     delivered: own.filter((b) => b.status === 'delivered').length };
 }
 
+// Who raised it, and whether it is waiting on us. Both are facts about the ORDER rather
+// than where it is, so they read as their own chips beside the status one.
+export const isSupplierRaised = (po) => String(po?.raised_by || 'ph') === 'supplier';
+export const awaitingLabels = (po) => !!po?.labels_requested_at;
+
 export function poChipOf(p) {
   if (p.status === 'reconciled' || p.status === 'closed') return PO_STATUS[p.status];
+  // The supplier has packed and is waiting on us to buy labels. It outranks "Filling",
+  // which is what the raw status still says and which reads as if the ball were theirs.
+  if (awaitingLabels(p) && p.status === 'draft') {
+    return { label: 'Labels requested', cls: 'warn' };
+  }
   const boxes = Number(p.box_count) || 0;
   const delivered = Number(p.delivered_count) || 0;
   const shipped = Number(p.shipped_count) || 0;

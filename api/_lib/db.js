@@ -1753,7 +1753,12 @@ export async function pendingCounts() {
       -- Home still shows that something is happening, without crying wolf.
       (SELECT count(*) FROM purchase_orders p
          LEFT JOIN batches b ON b.id = p.received_batch_id
-        WHERE p.status = 'receiving' AND b.status IS DISTINCT FROM 'committed')::int AS po_receiving
+        WHERE p.status = 'receiving' AND b.status IS DISTINCT FROM 'committed')::int AS po_receiving,
+      -- Manifest-first: a supplier has packed, declared what is in the boxes, and is
+      -- waiting on us to buy the labels. Nothing moves until somebody does.
+      (SELECT count(*) FROM purchase_orders p
+        WHERE p.labels_requested_at IS NOT NULL
+          AND p.status NOT IN ('reconciled', 'closed'))::int AS po_labels_requested
     FROM (
       -- ph_managed gates the PH store-sync badges only: in-store buys and existing
       -- (old) stock bypass PH, so they must NOT inflate not_ii/alias/stockx/shopify.
@@ -3143,7 +3148,7 @@ export async function listSupplierUsers() {
 }
 
 // Create a PO shell + one po_boxes row per label, atomically (CTE + unnest).
-export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, createdBy, orderKind = 'shoes' }) {
+export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, createdBy, orderKind = 'shoes', raisedBy = 'ph' }) {
   const sql = db();
   const boxNumbers = labels.map((_, i) => i + 1);
   const trackings = labels.map((l) => (String(l.trackingNumber || '').trim() || null));
@@ -3151,9 +3156,10 @@ export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPu
   const rows = await sql`
     WITH po AS (
       INSERT INTO purchase_orders
-        (supplier_name, supplier_user_id, tag_code, date_of_purchase, expected_boxes, notes, created_by, order_kind)
+        (supplier_name, supplier_user_id, tag_code, date_of_purchase, expected_boxes, notes, created_by, order_kind, raised_by)
       VALUES (${supplierName}, ${supplierUserId || null}, ${tagCode || null}, ${dateOfPurchase || null},
-              ${labels.length}, ${notes || null}, ${createdBy || null}, ${orderKind === 'boxes' ? 'boxes' : 'shoes'})
+              ${labels.length}, ${notes || null}, ${createdBy || null}, ${orderKind === 'boxes' ? 'boxes' : 'shoes'},
+              ${raisedBy === 'supplier' ? 'supplier' : 'ph'})
       RETURNING id
     )
     INSERT INTO po_boxes (po_id, box_number, tracking_number, carrier_key, status, created_by)
@@ -3388,6 +3394,51 @@ export async function poHasBoxLines(poId) {
   const sql = db();
   const r = await sql`SELECT 1 FROM po_lines WHERE po_id = ${poId} AND po_box_id IS NOT NULL LIMIT 1`;
   return r.length > 0;
+}
+
+// "I have packed these boxes — send me labels." Set by the supplier, cleared the moment
+// tracking numbers land on the boxes, so an order that grows another box afterwards can
+// ask again rather than being stuck looking answered.
+export async function setLabelsRequested(poId, by) {
+  const sql = db();
+  return (await sql`
+    UPDATE purchase_orders
+    SET labels_requested_at = ${by ? new Date() : null}, labels_requested_by = ${by || null}
+    WHERE id = ${poId} RETURNING *`)[0] || null;
+}
+
+// Assign courier tracking numbers onto boxes the supplier already declared. This is the
+// inverse of the original flow, where the box was created FROM the tracking number — so
+// there is nothing to match on but the mapping PH confirmed on screen.
+//
+// A tracking number can only ever be on one label, checked across every order (two labels
+// carrying it would both claim the same received box), so each one is verified before any
+// of them is written: a half-assigned sheet is worse than a refused one.
+export async function assignPoTracking(poId, assignments) {
+  const sql = db();
+  const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  const boxes = await sql`SELECT id, box_number, tracking_number, status FROM po_boxes WHERE po_id = ${poId}`;
+  const byId = new Map(boxes.map((b) => [Number(b.id), b]));
+  const seen = new Set();
+  for (const a of assignments) {
+    const box = byId.get(Number(a.boxId));
+    if (!box) return { error: 'One of those boxes is no longer on this order — reload and try again.' };
+    if (box.status !== 'pending' && box.status !== 'packed')
+      return { error: `Box ${box.box_number} has already left — its label can't be changed.` };
+    const key = norm(a.trackingNumber);
+    if (!key) return { error: `Box ${box.box_number} has no tracking number.` };
+    if (seen.has(key)) return { error: `${a.trackingNumber} is assigned to more than one box.` };
+    seen.add(key);
+    const clash = (await sql`
+      SELECT b.id, b.box_number, p.po_code FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
+      WHERE upper(replace(coalesce(b.tracking_number, ''), ' ', '')) = ${key} AND b.id <> ${Number(a.boxId)} LIMIT 1`)[0];
+    if (clash) return { error: `${a.trackingNumber} is already on box ${clash.box_number} of ${clash.po_code}.` };
+  }
+  await sql.transaction(assignments.map((a) => sql`
+    UPDATE po_boxes SET tracking_number = ${String(a.trackingNumber).trim()},
+      carrier_key = ${Number.isInteger(Number(a.carrierKey)) && Number(a.carrierKey) > 0 ? Number(a.carrierKey) : null}
+    WHERE id = ${Number(a.boxId)}`));
+  return { ok: true, count: assignments.length };
 }
 
 export async function setPoManifestScope(poId, scope) {

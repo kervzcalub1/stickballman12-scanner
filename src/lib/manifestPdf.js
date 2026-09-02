@@ -92,7 +92,7 @@ function drawShipTo(doc, x, y, w, shipTo) {
 
 // Shared page header: accent bar + title + the key fields + ship-to + optional tracking
 // list. Returns the y-coordinate where body content can start.
-function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle, shipTo, sourceNote = '' }) {
+function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle, shipTo, sourceNote = '', bigBox = null }) {
   // Accent bar
   doc.setFillColor(...ACCENT);
   doc.rect(0, 0, PAGE_W, 4, 'F');
@@ -130,6 +130,38 @@ function drawHeader(doc, { businessName, title, po, trackingNumbers, subtitle, s
     doc.roundedRect(MARGIN, y - 4, boxW, boxH, 1.5, 1.5, 'FD');
     doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(150, 92, 20);
     text.forEach((ln, i) => doc.text(ln, MARGIN + 4, y + 1.5 + i * 4.2));
+    y += boxH + 4;
+  }
+
+  // WHICH BOX THIS IS, in the size it needs to be read at.
+  //
+  // The manifest-first flow prints this sheet and tapes it inside the carton BEFORE the
+  // courier labels exist — so for a while the box number is the only thing identifying
+  // the parcel, and a line of 9pt subtitle text is not enough to sort six sealed boxes by.
+  // When the label has since been assigned the number goes here too, so the sheet reads
+  // the same whichever order the two arrived in.
+  if (bigBox) {
+    const boxW = PAGE_W - MARGIN * 2;
+    const labelled = !!bigBox.tracking;
+    const boxH = labelled ? 20 : 24;
+    doc.setFillColor(...(labelled ? [242, 245, 251] : [253, 246, 236]));
+    doc.setDrawColor(...(labelled ? ACCENT : [217, 131, 36]));
+    doc.setLineWidth(0.5);
+    doc.roundedRect(MARGIN, y - 4, boxW, boxH, 2, 2, 'FD');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(19); doc.setTextColor(...INK);
+    doc.text(bigBox.label, MARGIN + 6, y + 8);
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(...MUTED);
+    if (labelled) {
+      doc.text('TRACKING', PAGE_W - MARGIN - 6, y + 2, { align: 'right' });
+      doc.setFont('courier', 'bold'); doc.setFontSize(11); doc.setTextColor(...INK);
+      doc.text(String(bigBox.tracking), PAGE_W - MARGIN - 6, y + 9, { align: 'right' });
+    } else {
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(150, 92, 20);
+      doc.text('NO SHIPPING LABEL YET', PAGE_W - MARGIN - 6, y + 3, { align: 'right' });
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+      doc.text('Identify this box by its NUMBER until the label arrives.', PAGE_W - MARGIN - 6, y + 9, { align: 'right' });
+      doc.text('Reprint this sheet once labels are assigned to get the tracking number.', PAGE_W - MARGIN - 6, y + 14.5, { align: 'right' });
+    }
     y += boxH + 4;
   }
 
@@ -497,6 +529,10 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
       const sourceNote = items.length ? manifestSourceStamp(manifestSource(items)) : '';
       const header = () => drawHeader(doc, {
         businessName, title: 'Inbound Shipment Manifest', po, trackingNumbers: tn, subtitle, shipTo, sourceNote,
+        bigBox: {
+          label: box.kind === 'replacement' ? 'REPLACEMENT' : `BOX ${box.box_number} OF ${supplierBoxes.length}`,
+          tracking: box.tracking_number || '',
+        },
       });
       const startY = header();
       if (items.length) drawItemTable(doc, startY, items, () => drawContinuedHeader(doc, { businessName, title: 'Inbound Shipment Manifest', po }), prices, boxesOrder);

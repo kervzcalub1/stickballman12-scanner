@@ -90,6 +90,9 @@ export function homeCardBadges(key, c) {
   // decide something; 'Receiving' (neutral info) = arrived, still being scanned in. Both
   // hide at 0, so the card still tells you a PO is in flight without dressing it as a chore.
   if (key === 'reconcile') return [['To reconcile', c.po_to_reconcile], ['Receiving', c.po_receiving, 'info']];
+  // A supplier is packed and waiting on us to buy labels — nothing on their side moves
+  // until somebody here acts, so it belongs on the order list's own card.
+  if (key === 'po') return [['Labels requested', c.po_labels_requested]];
   // Empty shoe boxes. "On hand" is stock, not a chore, so it reads as neutral info; only
   // the ones still to put away are amber. Both hide at 0, which is most days.
   if (key === 'box-stock') return [['On hand', c.boxes_on_hand, 'info'], ['To shelve', c.boxes_needs_shelf]];

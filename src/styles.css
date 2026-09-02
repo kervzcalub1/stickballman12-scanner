@@ -2588,8 +2588,28 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .app-updated-bar b { color: #f0d79a; }
 .app-updated-actions { display: flex; gap: 8px; flex: none; }
 .mf-reload { margin-left: 8px; vertical-align: middle; }
+
+/* Assigning courier numbers onto boxes the supplier already declared. One row per box,
+   the box number leading, because that is what the person is matching against. */
+.po-assign-rows { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.po-assign-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.po-assign-box { flex: none; min-width: 62px; font-weight: 700; font-size: 13px; }
+.po-assign-row input { flex: 1 1 180px; min-width: 0; }
+.po-assign-from { flex: none; }
+.po-assign-store { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 6px 0; }
+.po-assign-btn { margin-top: 8px; }
+.po-labels-wanted {
+  margin: 10px 0 4px; padding: 9px 12px; border-radius: 8px; font-size: 13px; line-height: 1.45;
+  background: rgba(198,135,26,0.13); color: #e9c46a; border: 1px solid rgba(198,135,26,0.38);
+}
+.po-labels-wanted b { color: #f0d79a; }
+.sup-new-btn { width: 100%; margin-bottom: 12px; }
+.sup-new { margin-bottom: 12px; }
+.sup-box-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 2px; }
+.sup-box-remove { margin-left: auto; }
 .po-chip.kind.shoes { background: transparent; color: var(--muted); border-color: var(--border); }
 .po-chip.kind.boxes { background: rgba(155,120,230,0.14); color: #8a63e0; border-color: rgba(155,120,230,0.45); }
+.po-chip.kind.supplier { background: rgba(61,107,255,0.10); color: #7f9dff; border-color: rgba(61,107,255,0.38); }
 .po-chip.warn { background: rgba(198,135,26,0.14); color: #c6871a; border-color: rgba(198,135,26,0.35); }
 
 .po-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }

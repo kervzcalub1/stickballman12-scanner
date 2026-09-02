@@ -6,23 +6,33 @@
 // Creates the PO shell (the "batch" form the PH team fills) plus one label
 // (po_box) per entry, each with its pre-assigned courier tracking number. The
 // supplier later fills the contents by scanning. See docs/context/purchase-orders.md.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { createPo, dbConfigured } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['ph_team']);
+  // Both directions. A SUPPLIER may raise their own order — the manifest now comes
+  // before the labels, so they pack, declare, and then ask for labels.
+  const user = requireRole(req, res, ['ph_team', 'supplier']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
   const body = await getJsonBody(req);
-  const supplierName = String(body.supplierName ?? '').trim().slice(0, 120);
-  const supplierUserId = Number.isInteger(Number(body.supplierUserId)) && Number(body.supplierUserId) > 0
-    ? Number(body.supplierUserId) : null;
+  // A supplier can only ever raise an order for THEMSELVES. Taking the account off the
+  // token rather than the body is what makes that true — a posted supplierUserId would
+  // otherwise let one supplier open an order against another.
+  const bySupplier = user.role === 'supplier' && !isPrivileged(user.role);
+  const supplierName = bySupplier
+    ? String(user.name || user.username || '').trim().slice(0, 120)
+    : String(body.supplierName ?? '').trim().slice(0, 120);
+  const supplierUserId = bySupplier
+    ? (Number.isInteger(Number(user.uid)) ? Number(user.uid) : null)
+    : (Number.isInteger(Number(body.supplierUserId)) && Number(body.supplierUserId) > 0
+      ? Number(body.supplierUserId) : null);
   const tagCode = String(body.tagCode ?? '').trim().slice(0, 120) || null;
   const rawDate = String(body.dateOfPurchase ?? '').trim();
   const dateOfPurchase = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
@@ -34,13 +44,22 @@ export default async function handler(req, res) {
       trackingNumber: String(l?.trackingNumber ?? '').trim().slice(0, 120),
       carrierKey: Number.isInteger(Number(l?.carrierKey)) && Number(l?.carrierKey) > 0 ? Number(l.carrierKey) : null,
     }));
+  // Manifest-first: the supplier declares BOXES, and the tracking numbers are assigned
+  // onto them later. So an order can legitimately start with boxes that carry no number
+  // at all — `boxes` is how many of those to open it with.
+  const rawBoxes = Number(body.boxes);
+  const boxCount = Number.isInteger(rawBoxes) && rawBoxes > 0 ? Math.min(rawBoxes, 100) : 0;
 
-  if (!supplierName) return send(res, 400, { ok: false, error: 'Supplier name is required.' });
-  if (labels.length < 1) return send(res, 400, { ok: false, error: 'Add at least one shipping label.' });
+  if (!supplierName) return send(res, 400, { ok: false, error: bySupplier ? 'Your account has no business name — ask us to set one.' : 'Supplier name is required.' });
+  if (!labels.length && boxCount < 1)
+    return send(res, 400, { ok: false, error: 'Say how many boxes this shipment has, or add at least one shipping label.' });
 
   try {
     const created = await createPo({
-      supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, orderKind,
+      // Numberless boxes when the manifest comes first; real labels when it doesn't.
+      supplierName, supplierUserId, tagCode, dateOfPurchase, notes, orderKind,
+      labels: labels.length ? labels : Array.from({ length: boxCount }, () => ({ trackingNumber: '', carrierKey: null })),
+      raisedBy: bySupplier ? 'supplier' : 'ph',
       createdBy: user.name || user.username || '',
     });
     // Register each label's tracking number with 17TRACK now — not only when a supplier

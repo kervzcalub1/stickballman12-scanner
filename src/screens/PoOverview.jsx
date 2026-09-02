@@ -20,6 +20,7 @@ import { TopBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
+import { PoOriginChip } from '../components/PoOriginChip.jsx';
 import { PoDetail } from './PoDetail.jsx';
 
 export function PoOverview({ onHome, onSignOut }) {
@@ -140,6 +141,7 @@ export function PoOverview({ onHome, onSignOut }) {
                       <span className="po-code">{p.po_code}</span>
                       <PoStatusChip po={p} />
                       <PoKindChip po={p} />
+                      <PoOriginChip po={p} />
                     </div>
                     <div className="po-ov-meta muted sm">
                       {/* Supplier and date are what the filters above sort on — a row has to

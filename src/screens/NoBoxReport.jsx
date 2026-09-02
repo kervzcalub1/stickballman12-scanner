@@ -45,6 +45,18 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setSavingVin(null); }
   }
+  // Identical cartons on the same shelf are one choice. `findAvailableBoxes` already
+  // returns them oldest-first, so the head of each group is the one to spend.
+  const groupedBoxes = (boxes) => {
+    const m = new Map();
+    for (const b of boxes) {
+      const key = `${b.dimensions || ''}|${b.location_code || ''}`;
+      if (!m.has(key)) m.set(key, { key, dimensions: b.dimensions, location_code: b.location_code, boxes: [] });
+      m.get(key).boxes.push(b);
+    }
+    return [...m.values()];
+  };
+
   // "Use a box from stock" — the loop the empty-box purchase orders exist to close.
   // Opening the picker asks the server which boxes actually fit THIS pair (same SKU and
   // size), so the answer is stock we hold rather than a list to hunt through.
@@ -220,16 +232,21 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
                 </div>
               ) : (
                 <ul className="po-lines nobox-boxpick">
-                  {boxPick.boxes.map((b) => (
-                    <li key={b.id}>
+                  {/* Grouped by carton and shelf. Six identical boxes on one shelf are ONE
+                      choice, not six — listing them individually made the person pick a
+                      VIN when nothing about the decision depends on which. The oldest of
+                      the group is taken, so stock rotates without anyone thinking about
+                      it, and the VIN of the one actually spent is on its history. */}
+                  {groupedBoxes(boxPick.boxes).map((g) => (
+                    <li key={g.key}>
                       <span className="po-line-name">
-                        {b.dimensions || 'no dimensions'}
-                        {b.location_code ? <span className="muted"> · {b.location_code}</span>
+                        {g.dimensions || 'no dimensions'}
+                        {g.location_code ? <span className="muted"> · {g.location_code}</span>
                           : <span className="muted"> · not shelved yet</span>}
                       </span>
-                      <span className="po-line-meta vin">{b.vin}</span>
-                      <button className="btn sm primary" disabled={savingVin != null} onClick={() => useBox(b)}>
-                        {savingVin != null ? '…' : 'Use this one'}
+                      <span className="po-line-meta">{g.boxes.length} available</span>
+                      <button className="btn sm primary" disabled={savingVin != null} onClick={() => useBox(g.boxes[0])}>
+                        {savingVin != null ? '…' : 'Use one'}
                       </button>
                     </li>
                   ))}

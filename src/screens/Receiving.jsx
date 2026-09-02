@@ -2430,7 +2430,7 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
         <h3 className="rows-title">
           {title} · {wholeOrder ? 'contents' : 'manifest'}{' '}
           <span className={`po-manifest-progress ${done ? 'done' : ''}`}>
-            {wholeOrder ? `${unit(totalItems)} counted` : `${totalItems} of ${expectedUnits} ${boxesOrder ? 'boxes' : ''}checked`}
+            {wholeOrder ? `${unit(totalItems)} counted` : `${totalItems} of ${expectedUnits} ${boxesOrder ? 'boxes ' : ''}checked`}
           </span>
         </h3>
         <button className="btn sm" onClick={onAddUnexpected}>+ Add {wholeOrder ? 'item' : 'unexpected'}</button>
@@ -2516,7 +2516,12 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
           ))}
         </div>
       )}
-      <p className="muted sm">Check each size off as you pull it from the box. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for pairs that aren’t on the PO. Flag defects per shoe on the next screen.
+      {/* An empty-box shipment counts cartons, and nothing in it is a pair or gets a
+          defect flag — the shoe-shaped version of this line read as if it belonged to a
+          different screen. */}
+      <p className="muted sm">{boxesOrder
+        ? 'Check each row off as you count it out of the carton. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for boxes that aren’t on the PO.'
+        : 'Check each size off as you pull it from the box. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for pairs that aren’t on the PO. Flag defects per shoe on the next screen.'}
         {rawVins ? ' Every ticked pair also needs a 1ID sticker scanned onto it — that sticker is the pair’s number, so no label gets printed for it.' : ''}</p>
     </div>
   );

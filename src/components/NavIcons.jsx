@@ -47,6 +47,13 @@ const PATHS = {
     <path d="M3.3 7 12 12l8.7-5M12 12v9" />
     <path d="M5 4.5l14 15" />
   </>),
+  // Pre-sell — a bookmark/tag: this shipment is already spoken for, set aside rather
+  // than up for sale. Deliberately not the dollar (that's Mark Sold, a different act:
+  // these pairs have not shipped and may still be handed back).
+  presell: (<>
+    <path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4-6.5 4v-16a1 1 0 0 1 1-1z" />
+    <path d="M9.5 8.5h5" />
+  </>),
   // Mark Sold — dollar in a circle
   sold: (<>
     <circle cx="12" cy="12" r="9" />

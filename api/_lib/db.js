@@ -1143,7 +1143,7 @@ export async function listBatches(limit = 50, kind = null,
   const poNone = po === 'none';
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.no_tracking, b.batch_tag, b.status, b.merged_into_batch_id,
+           b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.merged_into_batch_id,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
            count(*) OVER ()::int AS total_count,
@@ -1213,7 +1213,7 @@ export async function searchBatches(query,
   const like = `%${key}%`;
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.no_tracking, b.batch_tag, b.status, b.merged_into_batch_id,
+           b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.merged_into_batch_id,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
            count(*) OVER ()::int AS total_count,
@@ -1437,7 +1437,7 @@ export async function getBatchWithBoxes(id) {
 // Open (resumable) multi-box batches, newest first, with progress counts.
 export async function listOpenBatches() {
   return await db()`
-    SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes,
+    SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes, b.pre_sell,
            b.tracking_number, b.no_tracking,
            b.date_received, b.created_by, b.created_at,
            (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
@@ -1553,7 +1553,7 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
   const toks = searchTokens(q);
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.cost, i.status, i.created_by, i.created_at,
-           i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv,
+           i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv, i.pre_sell,
            i.synced_alias, i.synced_stockx, i.synced_shopify, i.location_code,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
            (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')

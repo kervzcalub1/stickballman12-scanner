@@ -4041,3 +4041,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   .advisor-head .ah-sub { display: none; }
   .advisor-title { white-space: nowrap; }
 }
+
+/* Pre-sell: the shipment was sold before it landed, so its stock is not ours to list.
+   Amber, and its own class rather than .badge/.batch-pill/.po-chip — it sits beside all
+   three, and its whole job is to catch the eye on a row that otherwise looks routine.
+   `.sold` is the settled per-unit half and reads calmer on purpose. */
+.presell-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+  border-radius: 999px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em;
+  white-space: nowrap; vertical-align: middle;
+  background: rgba(230,160,60,0.14); color: #e0a33f; border: 1px solid rgba(230,160,60,0.45); }
+.presell-chip.mixed { background: rgba(230,160,60,0.10); color: #cf9740; border-style: dashed; }
+.presell-chip.sold { background: rgba(230,160,60,0.08); color: #b8873a; border-color: rgba(230,160,60,0.30); font-weight: 600; }

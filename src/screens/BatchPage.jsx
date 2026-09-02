@@ -7,6 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, StatusPill, Modal, Pager } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
+import { PreSellChip } from '../components/PreSellChip.jsx';
 import { batchMatchesSearch } from '../lib/postatus.js';
 import { estTime } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -245,7 +246,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
         <div className="card">
           <div className="batch-page-head">
             <div>
-              <div className="batch-page-code">{b.batch_code} {isOpen ? <span className="badge open">Open</span> : <span className="badge done">Done</span>}</div>
+              <div className="batch-page-code">{b.batch_code} {isOpen ? <span className="badge open">Open</span> : <span className="badge done">Done</span>} <PreSellChip on={b.pre_sell} /></div>
               {/* A stated "no tracking number" is worth showing — otherwise this batch
                   looks like one whose tracking simply never got typed in. */}
               <div className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.tracking_number ? <> · {b.tracking_number}</> : b.no_tracking ? <> · no tracking #</> : ''}</div>
@@ -322,6 +323,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                         <span className="box-track muted sm">{bx.tracking_number || 'no tracking'}</span>
                         <span className="box-count" style={empty ? { color: '#e08f8f', fontWeight: 600 } : undefined}>{bx.item_count} item{bx.item_count === 1 ? '' : 's'}</span>
                         <span className={`box-status ${bx.status}`}>{bx.status === 'received' ? '✓ received' : 'pending'}</span>
+                        {/* On every box, not only the batch header. Pre-sell is declared
+                            for the whole shipment, and a box is what somebody actually
+                            has open in front of them — the header is scrolled away by
+                            the time the carton is on the bench. */}
+                        <PreSellChip on={b.pre_sell} />
                       </button>
                       {/* How you CONTINUE a box. A pending row is a box that was recorded
                           (its tracking scanned, or its slot created up front) but never
@@ -455,6 +461,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
             ? <span className="badge">merged into {b.merged_into_code}</span>
             : b.item_count === 0 && <span className="badge warn">Empty</span>}
           {showKind && b.kind && b.kind !== 'receiving' && <span className="badge">{b.kind}</span>}
+          {/* Shown on every list, not just Search: a pre-sell shipment's stock is not
+              ours to list, and that has to be readable without opening the batch. */}
+          <PreSellChip on={b.pre_sell} />
         </span>
         <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.date_received || b.created_at ? ` · ${shortDate(b.date_received || b.created_at)}` : ''}</span>
         {/* The number that was searched for is the reason this row is here — show it,

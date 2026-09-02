@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal, Pager } from '../components/common.jsx';
+import { PreSellChip } from '../components/PreSellChip.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { ListingPhotos, PhotoCountButton, invalidatePhotoCount } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
@@ -1663,9 +1664,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       </span>
                       {header.preSell && (
                         <span className="presell-note sm">
-                          Nothing in this shipment goes to II or the stores. It lands on the PH
-                          team’s <b>Pre-sell</b> page, where they say how many are already sold and send
-                          the rest for rescale so they can be listed.
+                          Nothing in this shipment goes to II or the stores. It lands on the
+                          <b> Pre-sell</b> page, where you say how many of each size an order covers
+                          and send the rest for rescale — that is what puts them in front of the
+                          PH team to list.
                         </span>
                       )}
                     </label>
@@ -2724,6 +2726,9 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
                       <span className="batch-pill">{b.item_count} item{b.item_count === 1 ? '' : 's'}</span>
                       <span className="batch-pill">${Number(b.total_cost).toFixed(2)}</span>
                       {b.issue_count > 0 && <span className="batch-pill warn">{b.issue_count} ⚠</span>}
+                      {/* Right where the shipment was just committed — the fastest place
+                          to catch a shipment ticked pre-sell that shouldn't have been. */}
+                      <PreSellChip on={b.pre_sell} />
                     </div>
                   </div>
                 </button>

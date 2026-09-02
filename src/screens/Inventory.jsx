@@ -8,6 +8,7 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
 import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip, CopyText, RemoveUnitsModal, Provenance } from '../components/common.jsx';
+import { PreSellChip } from '../components/PreSellChip.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
@@ -26,6 +27,10 @@ const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 // where the pair came from instead of four badges that would always read the same.
 function intakeChip(g) {
   if (g.kind === 'instore' || g.kind === 'existing') return <IntakeChip kind={g.kind} />;
+  // A pre-sell pair has no sync state worth showing — it is deliberately not listed
+  // anywhere — so the chip REPLACES the badges rather than sitting beside four greyed
+  // ones, the same call IntakeChip makes for in-store and existing stock.
+  if (g.pre_sell || g.preSellMixed) return <PreSellChip on={g.pre_sell} mixed={g.preSellMixed} count={g.preSellCount} />;
   return <SyncBadges item={g} />;
 }
 

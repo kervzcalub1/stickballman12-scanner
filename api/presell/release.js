@@ -1,4 +1,4 @@
-// POST /api/presell/release  (ph_team / admin)  { batchId }
+// POST /api/presell/release  (warehouse / admin)  { batchId }
 //
 // "Submit a rescale" — send what is left over for listing.
 //
@@ -14,7 +14,7 @@ import { releasePreSell, dbConfigured } from '../_lib/db.js';
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['ph_team']);
+  const user = requireRole(req, res, ['warehouse']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 60 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

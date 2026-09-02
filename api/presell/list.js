@@ -1,4 +1,4 @@
-// GET /api/presell/list?batchId=  (ph_team / warehouse / admin)
+// GET /api/presell/list?batchId=  (warehouse / admin)
 //   -> { ok, rows: [{ batch_id, batch_code, supplier_name, sku, name, size, arrived, sold, remains }] }
 // The Pre-sell worklist: what arrived on pre-sell shipments, grouped by shipment → shoe →
 // size. Those units are NOT listed to II or the stores — they were sold before they
@@ -9,8 +9,7 @@ import { listPreSellGroups, dbConfigured } from '../_lib/db.js';
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  // The warehouse can look — they hold the boxes — but only PH acts on it.
-  const user = requireRole(req, res, ['ph_team', 'warehouse']);
+  const user = requireRole(req, res, ['warehouse']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

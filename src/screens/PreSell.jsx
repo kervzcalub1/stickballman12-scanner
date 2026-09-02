@@ -11,6 +11,10 @@
 // the place stock already gets priced and pushed to the stores. Nothing new had to be
 // invented for "subject for upload"; that worklist is it.
 //
+// The WAREHOUSE answers it, not PH: the team holding the shipment is the one that knows
+// which pairs an order covers. PH's part starts after release, when the leftovers appear
+// on Rescale Stock to be priced and listed to II and the platforms.
+//
 // Two ways to answer the question, because the warehouse works both ways: type the count
 // for a row of identical pairs, or scan the 1ID of a specific one. Both end at the same
 // place — `status = 'pre_sold'`, which keeps the pair in inventory as a real thing on a
@@ -101,8 +105,8 @@ export function PreSell({ onHome, onSignOut }) {
       <div className="wrap-narrow">
         <p className="muted sm">
           Shipments sold <b>before</b> they arrived. Nothing here is listed to II or the stores — it is
-          already spoken for. Say how many of each size an order covers, then send the rest for rescale
-          so they can be priced and listed.
+          already spoken for. Say how many of each size an order covers, then send the rest for rescale:
+          that hands them to the PH team to price and list.
         </p>
         {error && <div className="po-err">{error}</div>}
         <div className="scan-flash-live" role="status" aria-live="polite">
@@ -111,8 +115,8 @@ export function PreSell({ onHome, onSignOut }) {
 
         {/* Scan a 1ID to mark that exact pair, when you'd rather name it than count it. */}
         <form className="searchrow presell-scan" onSubmit={(e) => { e.preventDefault(); scanSold(scan); }}>
-          {/* No `inputMode="none"` here, unlike the warehouse scan fields: this page is
-              worked from a desk, and a PH user with no scanner has to be able to type. */}
+          {/* No `inputMode="none"` here, unlike the bench scan fields: this page is worked
+              from a desk as often as a scanner, so typing a VIN has to stay possible. */}
           <input ref={scanRef} value={scan} autoCapitalize="characters" autoCorrect="off"
             placeholder="Scan a 1ID / VIN to mark that pair sold" onChange={(e) => setScan(e.target.value)} />
           <button className="btn primary" disabled={busy}>Mark sold</button>

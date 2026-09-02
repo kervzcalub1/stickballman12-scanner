@@ -23,6 +23,8 @@ const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const q = (t, v) => pool.query(t, v).then((r) => r.rows);
 const wh = () => ({ Authorization: `Bearer ${signToken({ uid: 'e2e-wh', username: 'e2e_wh', name: 'E2E WH', role: 'warehouse' })}` });
 const ph = () => ({ Authorization: `Bearer ${signToken({ uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' })}` });
+// The WAREHOUSE declares which pairs an order covers — they hold the shipment. PH's part
+// starts after release, on Rescale Stock. Marking sold from a PH account must be refused.
 const SUPPLIER = 'E2E PreSell Supplier';
 let skuN = 0;
 const nextSku = () => `E2E-PS-${Date.now().toString(36)}-${++skuN}`;
@@ -96,6 +98,26 @@ test('the flag is declared for the shipment and lands on every unit', async ({ r
   expect((await q('SELECT pre_sell FROM items WHERE batch_id = $1', [plain.id])).every((r) => r.pre_sell)).toBe(false);
 });
 
+// Who OWNS the answer. The warehouse holds the shipment and knows which pairs an order
+// covers; PH's part starts after release. PH reading the pre-sell list is not the point —
+// PH being able to declare a pair sold, or release a shipment, is what must not happen.
+test('PH cannot declare pre-sell units sold or release them', async ({ request }) => {
+  const sku = nextSku();
+  const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 3 }] });
+
+  const marked = await request.post('/api/presell/mark-sold', {
+    headers: ph(), data: { batchId: Number(b.id), sku, size: '9', qty: 2 },
+  });
+  expect(marked.status()).toBe(403);
+
+  const released = await request.post('/api/presell/release', { headers: ph(), data: { batchId: Number(b.id) } });
+  expect(released.status()).toBe(403);
+
+  // …and nothing moved.
+  const rows = await q('SELECT status, pre_sell FROM items WHERE batch_id = $1', [b.id]);
+  expect(rows.every((r) => r.pre_sell && r.status !== 'pre_sold')).toBe(true);
+});
+
 test('pre-sell is invisible to PH — the grid AND the badge counts', async ({ request }) => {
   const sku = nextSku();
   const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 6 }] });
@@ -118,12 +140,12 @@ test('a count and a scan both mark units pre_sold, never sold', async ({ request
   const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 6 }, { size: '10', n: 4 }] });
 
   const byCount = await request.post('/api/presell/mark-sold', {
-    headers: ph(), data: { batchId: Number(b.id), sku, size: '9', qty: 4 },
+    headers: wh(), data: { batchId: Number(b.id), sku, size: '9', qty: 4 },
   });
   expect(byCount.ok(), await byCount.text()).toBeTruthy();
 
   const [one] = await q(`SELECT vin FROM items WHERE batch_id = $1 AND size = '10' LIMIT 1`, [b.id]);
-  const byScan = await request.post('/api/presell/mark-sold', { headers: ph(), data: { vin: one.vin } });
+  const byScan = await request.post('/api/presell/mark-sold', { headers: wh(), data: { vin: one.vin } });
   expect(byScan.ok(), await byScan.text()).toBeTruthy();
 
   // `pre_sold`, not `sold` — the pair is still on the floor.
@@ -133,7 +155,7 @@ test('a count and a scan both mark units pre_sold, never sold', async ({ request
   expect(map.sold).toBeUndefined();
 
   // Scanning the same one again is refused rather than silently double-counting.
-  const again = await request.post('/api/presell/mark-sold', { headers: ph(), data: { vin: one.vin } });
+  const again = await request.post('/api/presell/mark-sold', { headers: wh(), data: { vin: one.vin } });
   expect(again.status()).toBe(409);
   expect(await again.text()).toContain('already marked');
 });
@@ -141,8 +163,8 @@ test('a count and a scan both mark units pre_sold, never sold', async ({ request
 test('lowering the count hands units back — a pre-sale can fall through', async ({ request }) => {
   const sku = nextSku();
   const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 6 }] });
-  await request.post('/api/presell/mark-sold', { headers: ph(), data: { batchId: Number(b.id), sku, size: '9', qty: 4 } });
-  await request.post('/api/presell/mark-sold', { headers: ph(), data: { batchId: Number(b.id), sku, size: '9', qty: 2 } });
+  await request.post('/api/presell/mark-sold', { headers: wh(), data: { batchId: Number(b.id), sku, size: '9', qty: 4 } });
+  await request.post('/api/presell/mark-sold', { headers: wh(), data: { batchId: Number(b.id), sku, size: '9', qty: 2 } });
   const [row] = await q(`SELECT count(*) FILTER (WHERE status='pre_sold')::int AS sold FROM items WHERE batch_id = $1`, [b.id]);
   expect(row.sold).toBe(2);
 });
@@ -150,9 +172,9 @@ test('lowering the count hands units back — a pre-sale can fall through', asyn
 test('release sends the remainder to Rescale Stock and leaves the spoken-for alone', async ({ request }) => {
   const sku = nextSku();
   const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 6 }, { size: '10', n: 4 }] });
-  await request.post('/api/presell/mark-sold', { headers: ph(), data: { batchId: Number(b.id), sku, size: '9', qty: 3 } });
+  await request.post('/api/presell/mark-sold', { headers: wh(), data: { batchId: Number(b.id), sku, size: '9', qty: 3 } });
 
-  const rel = await request.post('/api/presell/release', { headers: ph(), data: { batchId: Number(b.id) } });
+  const rel = await request.post('/api/presell/release', { headers: wh(), data: { batchId: Number(b.id) } });
   expect(rel.ok(), await rel.text()).toBeTruthy();
   expect((await rel.json()).released).toBe(7);
 
@@ -171,6 +193,6 @@ test('release sends the remainder to Rescale Stock and leaves the spoken-for alo
   expect((resc.rows || []).filter((r) => r.sku === sku).length).toBeGreaterThan(0);
 
   // Releasing again has nothing left to do.
-  const twice = await request.post('/api/presell/release', { headers: ph(), data: { batchId: Number(b.id) } });
+  const twice = await request.post('/api/presell/release', { headers: wh(), data: { batchId: Number(b.id) } });
   expect(twice.status()).toBe(409);
 });

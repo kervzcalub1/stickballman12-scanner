@@ -1,4 +1,4 @@
-// POST /api/presell/mark-sold  (ph_team / admin)
+// POST /api/presell/mark-sold  (warehouse / admin)
 //   { batchId, sku, size, qty }   — how many of that row are covered by an order
 //   { vin }                       — or name one unit, scanned
 //
@@ -15,7 +15,7 @@ import { setPreSellSold, markPreSoldByVin, dbConfigured } from '../_lib/db.js';
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['ph_team']);
+  const user = requireRole(req, res, ['warehouse']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

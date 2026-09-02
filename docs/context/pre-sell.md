@@ -6,9 +6,14 @@ somebody else's order. But not every unit on such a shipment is covered: the
 overage is ordinary stock and does need pricing and listing.
 
 So a pre-sell shipment is received exactly like any other, then held out of the PH
-listing worklist until PH says, size by size, how many are actually sold. What is
-left over is released — and lands on the existing **Rescale Stock** worklist,
-which already means "priced and pushed to the stores".
+listing worklist until **the warehouse** says, size by size, how many are actually
+sold. What is left over is released — and lands on the existing **Rescale Stock**
+worklist, which already means "priced and pushed to the stores".
+
+**Who does what.** The warehouse owns the whole pre-sell page: they hold the
+shipment, so they are the ones who know which pairs an order covers. PH's job
+starts *after* release — the freed pairs appear on Rescale Stock and PH lists them
+to II and the platforms. PH has no Pre-sell page and cannot mark a pair sold.
 
 ## The flag
 
@@ -44,9 +49,11 @@ ordinary everywhere else (Inventory, shelving, labels, locations, costs, the PO)
 The pending-counts query also returns **`presell_pending`** — pre-sell units not yet
 `sold`/`shipped` — which badges the PH home card.
 
-## The Pre-sell page (`/ph/presell`, `src/screens/PreSell.jsx`)
+## The Pre-sell page (`/presell`, `src/screens/PreSell.jsx`)
 
-PH-team + superadmin. Rows are grouped shipment → shoe → size
+Warehouse (admin auto-allowed), in the warehouse app — a card in **Receiving
+Shipment Orders**, plus a Needs-attention tile keyed on `presell_pending`. Rows are
+grouped shipment → shoe → size
 (`listPreSellGroups`), each showing **arrived / sold / remains**.
 
 Two ways to say a pair is spoken for, both ending in status **`pre_sold`**:
@@ -84,23 +91,49 @@ frees part of a batch while the rest stays held.
 
 | Route | Who | Does |
 |---|---|---|
-| `GET /api/presell/list` | ph_team + **warehouse** (admin auto) | `listPreSellGroups` |
-| `POST /api/presell/mark-sold` | ph_team (admin auto) | count path or VIN path |
-| `POST /api/presell/release` | ph_team (admin auto) | `releasePreSell` |
+| `GET /api/presell/list` | warehouse (admin auto) | `listPreSellGroups` |
+| `POST /api/presell/mark-sold` | warehouse (admin auto) | count path or VIN path |
+| `POST /api/presell/release` | warehouse (admin auto) | `releasePreSell` |
 
-All three use `requireRole`, which auto-allows admin — unlike the rescale-request
-cancel/edit, which needed an explicit `ph_team || superadmin` check because
-withdrawing a request is the requesting team's own call. Nothing here is
-withdrawal-shaped, so the ordinary guard is right.
+All three use `requireRole`, which auto-allows admin. **PH gets 403 on all three** —
+guarded by `e2e/presell.spec.js`, because "PH can still see the rows" and "PH can
+declare a pair sold" are different failures and only the second one matters.
 
-**The warehouse can read the list but not act on it.** They hold the boxes and get
-asked "is this one spoken for?", but which pairs an order covers is PH's to say.
+## Where you can see the flag
+
+A shipment-wide state that only appeared on its own page would be invisible to
+anyone actually handling the stock, so `PreSellChip` (`src/components/PreSellChip.jsx`)
+is rendered in four places:
+
+| Where | What it reads | Query that carries it |
+|---|---|---|
+| Batches list rows (Open, Recent, Search) | `b.pre_sell` | `listBatches`, `searchBatches`, `listOpenBatches` |
+| Batch detail header | `b.pre_sell` | `getBatchWithBoxes` (`b.*`) |
+| **Each box card** inside a batch | `b.pre_sell` | same — a box is what somebody has open in front of them, and the header is scrolled away by then |
+| Receiving → Recent | `b.pre_sell` | `listBatches` |
+| Inventory rows | `g.pre_sell` / `g.preSellMixed` | `queryItems` (`i.pre_sell`) |
+
+Only the unusual state gets a chip — unlike `PoKindChip`, where every order is
+either shoes or boxes so a missing chip would be ambiguous. Here nearly every
+shipment is ordinary, and chipping all of them is noise.
+
+**Inventory needs a rollup, not the raw column.** `groupPhRows` builds a group with
+`{...r}` from the *first* row and keys on `sku|status`, so one pre-sell batch's
+unreleased pairs can share a group with ordinary stock of the same SKU — the chip
+would then depend on row order. It is counted instead: `pre_sell` is all-units-true,
+`preSellMixed`/`preSellCount` carry the partial case, and the chip has a dashed
+"N pre-sell" variant. In Inventory the chip *replaces* `SyncBadges` (a pre-sell pair
+is deliberately listed nowhere, so four greyed badges say nothing), the same call
+`IntakeChip` makes for in-store and existing stock.
 
 ## Tests
 
-`e2e/presell.spec.js` — a pre-sell batch stays off PH New Inventory; the badge
-counts it; the count path and the scan path both reach `pre_sold`; lowering a count
-hands units back; release moves only the remainder onto Rescale Stock.
+`e2e/presell.spec.js` — 7 tests: the flag lands on every unit; **the multi-box path
+inherits it** (that path reads `pre_sell` off the batch row, not its own request
+body, so the single-shot test does not cover it); **PH is refused** on mark-sold and
+release; a pre-sell batch stays off PH New Inventory and out of its badges; the count
+path and the scan path both reach `pre_sold`; lowering a count hands units back;
+release moves only the remainder onto Rescale Stock.
 
 ## Gotchas
 
@@ -110,4 +143,10 @@ hands units back; release moves only the remainder onto Rescale Stock.
 - Adding a new PH-facing query means adding `NOT pre_sell` to it, exactly as it
   means adding the `PH_EXCLUDED_KINDS` check (`docs/context/ph-excluded-kinds` /
   `in-store.md`).
+- A new `NavIcon` name that isn't in `PATHS` **silently falls back to the magnifier** —
+  `presell` has its own bookmark glyph in `src/components/NavIcons.jsx`.
+- The chip borrowed `.no-track-check`'s look at first, which is the class
+  `e2e/receiving-no-tracking.spec.js` selects the no-tracking checkbox by; two
+  elements then matched and the spec failed in strict mode. Share styling by adding
+  to a CSS selector list, never by reusing a class e2e keys on.
 - Needs `db:setup` (`batches.pre_sell`, `items.pre_sell`, the partial index).

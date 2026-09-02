@@ -90,3 +90,43 @@ export function money(v) {
   const m = parseMoney(v);
   return m === undefined || Number.isNaN(m) ? null : m;
 }
+
+// ---- Empty shoe boxes ----
+// We order empty boxes from the same suppliers, on the same paperwork: a pair turns up
+// with a crushed box, or with no box at all, and the swap has to come from somewhere.
+// An order is one kind or the other, never both — the manifest form, the printed sheets
+// and the chips all read this.
+export const isBoxesOrder = (po) => String(po?.order_kind || 'shoes') === 'boxes';
+export const ORDER_KINDS = ['shoes', 'boxes'];
+
+// A box line's DIMENSIONS are what its size is to a shoe line: the discriminator. Two
+// suppliers writing "13x9x5" and "13 X 9 X 5 in" for the same carton would otherwise
+// declare it twice and reconcile as two different things, so the shape is normalised
+// here — on the server, once — into `L x W x H unit`.
+//
+// Accepts either the structured form the portal posts ({ l, w, h, unit }) or a raw
+// string typed anywhere else. Returns the canonical string, or null when there aren't
+// three usable numbers in it.
+const DIM_UNITS = ['in', 'cm'];
+const trimNum = (n) => {
+  const r = Math.round(Number(n) * 100) / 100;
+  return Number.isFinite(r) && r > 0 && r <= 500 ? String(r) : null;
+};
+export function normalizeDimensions(v) {
+  if (v == null || v === '') return null;
+  let l, w, h, unit;
+  if (typeof v === 'object') {
+    ({ l, w, h } = v);
+    unit = String(v.unit || '').trim().toLowerCase();
+  } else {
+    const s = String(v).trim().toLowerCase();
+    // "13 x 9 x 5 in", "13×9×5", "13 by 9 by 5 cm" — anything with three numbers in it.
+    const nums = s.match(/\d+(?:\.\d+)?/g) || [];
+    [l, w, h] = nums;
+    unit = /\bcm\b|centimet/.test(s) ? 'cm' : /\bin\b|inch|"/.test(s) ? 'in' : '';
+  }
+  const parts = [trimNum(l), trimNum(w), trimNum(h)];
+  if (parts.some((p) => p == null)) return null;
+  if (!DIM_UNITS.includes(unit)) unit = 'in';
+  return `${parts.join(' x ')} ${unit}`;
+}

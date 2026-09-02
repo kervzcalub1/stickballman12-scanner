@@ -3014,7 +3014,7 @@ export async function listSupplierUsers() {
 }
 
 // Create a PO shell + one po_boxes row per label, atomically (CTE + unnest).
-export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, createdBy }) {
+export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, createdBy, orderKind = 'shoes' }) {
   const sql = db();
   const boxNumbers = labels.map((_, i) => i + 1);
   const trackings = labels.map((l) => (String(l.trackingNumber || '').trim() || null));
@@ -3022,9 +3022,9 @@ export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPu
   const rows = await sql`
     WITH po AS (
       INSERT INTO purchase_orders
-        (supplier_name, supplier_user_id, tag_code, date_of_purchase, expected_boxes, notes, created_by)
+        (supplier_name, supplier_user_id, tag_code, date_of_purchase, expected_boxes, notes, created_by, order_kind)
       VALUES (${supplierName}, ${supplierUserId || null}, ${tagCode || null}, ${dateOfPurchase || null},
-              ${labels.length}, ${notes || null}, ${createdBy || null})
+              ${labels.length}, ${notes || null}, ${createdBy || null}, ${orderKind === 'boxes' ? 'boxes' : 'shoes'})
       RETURNING id
     )
     INSERT INTO po_boxes (po_id, box_number, tracking_number, carrier_key, status, created_by)
@@ -3154,24 +3154,47 @@ export async function listPos({ uid, supplierScope }) {
 // enteredBy/enteredOnBehalf record who typed it — NULL/false for a supplier scanning
 // their own manifest, the staff uid + true when PH/admin enters it on their behalf.
 // Both insert and the re-scan UPDATE stamp the latest actor (last-editor semantics).
-export async function addPoScan({ poId, poBoxId, sku, size, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false }) {
+// An EMPTY-BOX line carries the size the box was MADE for plus the carton's
+// `dimensions`, and dedupes on all three (partial unique index
+// `po_lines_box_sku_dim_idx`). The shim can't nest sql fragments, so the two conflict
+// targets are two whole queries.
+export async function addPoScan({ poId, poBoxId, sku, size, dimensions = null, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false }) {
   const sql = db();
-  const rows = await sql`
-    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
-    VALUES (${poId}, ${poBoxId}, ${sku}, ${size}, ${name || null}, ${upc || null},
-            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
-            ${enteredBy ?? null}, ${!!enteredOnBehalf})
-    ON CONFLICT (po_box_id, sku, size) DO UPDATE
-      SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
-          -- A re-scan that carries no money must never wipe money already declared.
-          unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
-          tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
-          name              = COALESCE(EXCLUDED.name, po_lines.name),
-          entered_by        = EXCLUDED.entered_by,
-          entered_on_behalf = EXCLUDED.entered_on_behalf,
-          updated_at        = now()
-    RETURNING *
-  `;
+  const rows = dimensions
+    ? await sql`
+      INSERT INTO po_lines (po_id, po_box_id, sku, size, dimensions, name, upc, colorway, gender, qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
+      VALUES (${poId}, ${poBoxId}, ${sku}, ${size}, ${dimensions}, ${name || null}, ${upc || null},
+              ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
+              ${enteredBy ?? null}, ${!!enteredOnBehalf})
+      ON CONFLICT (po_box_id, sku, size, dimensions) WHERE po_box_id IS NOT NULL AND dimensions IS NOT NULL DO UPDATE
+        SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
+            unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+            tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
+            name              = COALESCE(EXCLUDED.name, po_lines.name),
+            entered_by        = EXCLUDED.entered_by,
+            entered_on_behalf = EXCLUDED.entered_on_behalf,
+            updated_at        = now()
+      RETURNING *
+    `
+    : await sql`
+      INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
+      VALUES (${poId}, ${poBoxId}, ${sku}, ${size}, ${name || null}, ${upc || null},
+              ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
+              ${enteredBy ?? null}, ${!!enteredOnBehalf})
+      -- The shoe-side index is PARTIAL now (WHERE dimensions IS NULL) so it can't
+      -- collide with a box line, and ON CONFLICT infers a partial index only when the
+      -- predicate is repeated here. Leave it off and every shoe scan 500s.
+      ON CONFLICT (po_box_id, sku, size) WHERE dimensions IS NULL DO UPDATE
+        SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
+            -- A re-scan that carries no money must never wipe money already declared.
+            unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+            tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
+            name              = COALESCE(EXCLUDED.name, po_lines.name),
+            entered_by        = EXCLUDED.entered_by,
+            entered_on_behalf = EXCLUDED.entered_on_behalf,
+            updated_at        = now()
+      RETURNING *
+    `;
   return rows[0];
 }
 
@@ -3189,23 +3212,39 @@ export async function poBoxLineCounts(poId) {
 
 // Whole-order manifest (Path C): add/increment a line against the PO itself (no label).
 // Conflict target is the partial unique index on (po_id, sku, size) WHERE po_box_id IS NULL.
-export async function addPoOrderScan({ poId, sku, size, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false }) {
+export async function addPoOrderScan({ poId, sku, size, dimensions = null, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false }) {
   const sql = db();
-  const rows = await sql`
-    INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
-    VALUES (${poId}, NULL, ${sku}, ${size}, ${name || null}, ${upc || null},
-            ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
-            ${enteredBy ?? null}, ${!!enteredOnBehalf})
-    ON CONFLICT (po_id, sku, size) WHERE po_box_id IS NULL DO UPDATE
-      SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
-          unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
-          tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
-          name              = COALESCE(EXCLUDED.name, po_lines.name),
-          entered_by        = EXCLUDED.entered_by,
-          entered_on_behalf = EXCLUDED.entered_on_behalf,
-          updated_at        = now()
-    RETURNING *
-  `;
+  const rows = dimensions
+    ? await sql`
+      INSERT INTO po_lines (po_id, po_box_id, sku, size, dimensions, name, upc, colorway, gender, qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
+      VALUES (${poId}, NULL, ${sku}, ${size}, ${dimensions}, ${name || null}, ${upc || null},
+              ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
+              ${enteredBy ?? null}, ${!!enteredOnBehalf})
+      ON CONFLICT (po_id, sku, size, dimensions) WHERE po_box_id IS NULL AND dimensions IS NOT NULL DO UPDATE
+        SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
+            unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+            tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
+            name              = COALESCE(EXCLUDED.name, po_lines.name),
+            entered_by        = EXCLUDED.entered_by,
+            entered_on_behalf = EXCLUDED.entered_on_behalf,
+            updated_at        = now()
+      RETURNING *
+    `
+    : await sql`
+      INSERT INTO po_lines (po_id, po_box_id, sku, size, name, upc, colorway, gender, qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
+      VALUES (${poId}, NULL, ${sku}, ${size}, ${name || null}, ${upc || null},
+              ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
+              ${enteredBy ?? null}, ${!!enteredOnBehalf})
+      ON CONFLICT (po_id, sku, size) WHERE po_box_id IS NULL AND dimensions IS NULL DO UPDATE
+        SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
+            unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+            tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
+            name              = COALESCE(EXCLUDED.name, po_lines.name),
+            entered_by        = EXCLUDED.entered_by,
+            entered_on_behalf = EXCLUDED.entered_on_behalf,
+            updated_at        = now()
+      RETURNING *
+    `;
   return rows[0];
 }
 
@@ -3231,35 +3270,58 @@ export async function setPoLineQty(lineId, qtyExpected) {
   `)[0] || null;
 }
 
-// Edit an expected line's size and/or qty (supplier fixing a scan). `size`/`qty`
-// are each optional (undefined = leave as-is). qty <= 0 removes the line. Changing
-// the size can collide with an existing line of the same SKU+size on the label
-// (unique po_box_id,sku,size) — in that case the two are MERGED (qtys summed) and
-// this line is deleted. Returns { line, removed, merged }.
-export async function updatePoLine(lineId, { size, qty, unitCost, tip, enteredBy = null, enteredOnBehalf = false } = {}) {
+// Edit an expected line and/or its qty (supplier fixing a scan). Every field is
+// optional (undefined = leave as-is). qty <= 0 removes the line.
+//
+// WHAT MAKES TWO LINES DIFFERENT depends on the kind of order, and that is what the
+// merge below turns on. A shoes line is identified by its SIZE. An empty-box line is
+// identified by its size AND the carton's DIMENSIONS together — a real box is
+// size-specific (its label carries the SKU, the size and the UPC), and the same size can
+// still arrive in two different cartons. Changing either half can collide with an
+// existing line of the same SKU on the same label (the partial unique indexes on
+// (po_box_id, sku, size) and (po_box_id, sku, size, dimensions)) — in that case the two
+// are MERGED (qtys summed) and this line is deleted. Returns { line, removed, merged }.
+export async function updatePoLine(lineId, { size, dimensions, qty, unitCost, tip, enteredBy = null, enteredOnBehalf = false } = {}) {
   const sql = db();
   const line = (await sql`SELECT * FROM po_lines WHERE id = ${lineId}`)[0];
   if (!line) return { line: null, removed: false, merged: false };
   const newQty = qty === undefined ? line.qty_expected : qty;
   if (newQty <= 0) { await sql`DELETE FROM po_lines WHERE id = ${lineId}`; return { line: null, removed: true, merged: false }; }
   const newSize = size === undefined ? line.size : String(size).trim();
+  const isBoxLine = !!line.dimensions || (dimensions !== undefined && !!dimensions);
+  const newDims = dimensions === undefined ? line.dimensions : (dimensions || null);
   // `undefined` = not editing that field; an explicit null CLEARS it (an emptied field
   // means "I don't know what this cost", which is not the same as $0).
   const newCost = unitCost === undefined ? line.unit_cost : (unitCost ?? null);
   const newTip = tip === undefined ? line.tip : (tip ?? null);
-  if (newSize && newSize !== line.size) {
-    // Find a sibling line that a size change would collide with. Order-scoped lines have
+  const keyChanged = isBoxLine
+    ? (newSize !== line.size || newDims !== line.dimensions)
+    : (newSize && newSize !== line.size);
+  if (keyChanged && newSize) {
+    // Find a sibling line that the change would collide with. Order-scoped lines have
     // no box, so match them within the PO (po_box_id IS NULL); box lines match within the
     // label. (The shim can't nest sql fragments, so branch the whole query.)
-    const sib = (line.po_box_id == null
-      ? (await sql`
-          SELECT * FROM po_lines
-          WHERE po_id = ${line.po_id} AND po_box_id IS NULL AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
-        `)
-      : (await sql`
-          SELECT * FROM po_lines
-          WHERE po_box_id = ${line.po_box_id} AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
-        `))[0];
+    const sib = (isBoxLine
+      ? (line.po_box_id == null
+        ? (await sql`
+            SELECT * FROM po_lines
+            WHERE po_id = ${line.po_id} AND po_box_id IS NULL AND sku = ${line.sku}
+              AND size = ${newSize} AND dimensions = ${newDims} AND id <> ${lineId}
+          `)
+        : (await sql`
+            SELECT * FROM po_lines
+            WHERE po_box_id = ${line.po_box_id} AND sku = ${line.sku}
+              AND size = ${newSize} AND dimensions = ${newDims} AND id <> ${lineId}
+          `))
+      : (line.po_box_id == null
+        ? (await sql`
+            SELECT * FROM po_lines
+            WHERE po_id = ${line.po_id} AND po_box_id IS NULL AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
+          `)
+        : (await sql`
+            SELECT * FROM po_lines
+            WHERE po_box_id = ${line.po_box_id} AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
+          `)))[0];
     if (sib) {
       const mergedQty = Math.min(999, sib.qty_expected + newQty); // same 999 cap as a direct edit
       // The surviving row keeps money either way: the edited line's if it has any,
@@ -3277,7 +3339,8 @@ export async function updatePoLine(lineId, { size, qty, unitCost, tip, enteredBy
     }
   }
   const updated = (await sql`
-    UPDATE po_lines SET size = ${newSize}, qty_expected = ${newQty}, unit_cost = ${newCost}, tip = ${newTip},
+    UPDATE po_lines SET size = ${newSize}, dimensions = ${isBoxLine ? newDims : null},
+      qty_expected = ${newQty}, unit_cost = ${newCost}, tip = ${newTip},
       entered_by = ${enteredBy ?? null},
       entered_on_behalf = ${!!enteredOnBehalf}, updated_at = now()
     WHERE id = ${lineId} RETURNING *
@@ -4361,7 +4424,8 @@ export async function updatePo(poId, patch = {}) {
       tag_code         = CASE WHEN ${has('tagCode')} THEN ${patch.tagCode ?? null}::text ELSE tag_code END,
       date_of_purchase = CASE WHEN ${has('dateOfPurchase')} THEN ${patch.dateOfPurchase ?? null}::date ELSE date_of_purchase END,
       notes            = CASE WHEN ${has('notes')} THEN ${patch.notes ?? null}::text ELSE notes END,
-      expected_boxes   = CASE WHEN ${has('expectedBoxes')} THEN ${patch.expectedBoxes ?? null}::int ELSE expected_boxes END
+      expected_boxes   = CASE WHEN ${has('expectedBoxes')} THEN ${patch.expectedBoxes ?? null}::int ELSE expected_boxes END,
+      order_kind       = CASE WHEN ${has('orderKind')} THEN ${patch.orderKind ?? 'shoes'}::text ELSE order_kind END
     WHERE id = ${poId}
     RETURNING *`;
   return rows[0] || null;

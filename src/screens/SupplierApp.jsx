@@ -22,6 +22,9 @@ import { Icon } from '../components/NavIcons.jsx';
 import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
+import { PoKindChip } from '../components/PoKindChip.jsx';
+import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
+import { isBoxesOrder } from '../lib/postatus.js';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',     cls: 'draft' },
@@ -266,6 +269,7 @@ export function SupplierApp({ user, onSignOut }) {
                     <div className="po-card-top">
                       <span className="po-code">{p.po_code}</span>
                       <PoStatusChip po={p} />
+                      <PoKindChip po={p} />
                     </div>
                     <div className="po-card-meta">
                       {p.tag_code && <span><Icon name="tag" /> {p.tag_code}</span>}
@@ -284,6 +288,13 @@ export function SupplierApp({ user, onSignOut }) {
 
   // ---- Detail view --------------------------------------------------------
   const po = detail?.po;
+  // Shoes, or the empty shoe boxes Stickballman12 buys to replace crushed and missing
+  // ones. It changes what this supplier is asked to declare — a carton's dimensions
+  // rather than a shoe size — so it runs through every list below.
+  const boxesOrder = isBoxesOrder(po);
+  // What one declared unit is called. A shipment of empty boxes counts boxes; "12 units"
+  // on a page whose every line is a carton reads like a different number entirely.
+  const unitsLabel = (n) => `${n} ${boxesOrder ? (n === 1 ? 'box' : 'boxes') : `unit${n === 1 ? '' : 's'}`}`;
   const linesFor = (boxId) => (detail?.lines || []).filter((l) => Number(l.po_box_id) === Number(boxId));
   const money = (n) => `$${Number(n || 0).toFixed(2)}`;
   // What ONE line cost, spelled out on the line itself. The box total answers "how
@@ -330,13 +341,17 @@ export function SupplierApp({ user, onSignOut }) {
               <div className="po-card-top">
                 <h3 className="rows-title">{po.po_code}{po.tag_code ? ` · ${po.tag_code}` : ''}</h3>
                 <PoStatusChip po={po} boxes={detail.boxes} />
+                <PoKindChip po={po} />
               </div>
               <p className="muted sm">
                 From {po.supplier_name}{po.date_of_purchase ? ` · purchased ${String(po.date_of_purchase).slice(0, 10)}` : ''}
               </p>
               {po.status !== 'draft'
                 ? <p className="po-shipped-note">✓ All labels shipped — this batch is on its way to the warehouse.</p>
-                : <p className="muted sm">Match each label to the tracking numbers we sent in the group chat, scan its items, then ship it. The batch closes when every label is shipped.</p>}
+                : <p className="muted sm">Match each label to the tracking numbers we sent in the group chat, {boxesOrder ? 'add the empty boxes going in it' : 'scan its items'}, then ship it. The batch closes when every label is shipped.</p>}
+              {boxesOrder && po.status === 'draft' && (
+                <p className="po-kind-note sm">This order is for <b>empty shoe boxes</b>. For each one, give the SKU and shoe name it belongs to, the box’s dimensions, and what it cost — the dimensions are how we tell two boxes of the same shoe apart.</p>
+              )}
               {po.status !== 'draft' && (
                 <button className="btn ghost sm po-track-refresh" disabled={trackBusy || trackBoxBusy != null} onClick={() => refreshTracking()}
                   title="Check every label at once">
@@ -412,7 +427,7 @@ export function SupplierApp({ user, onSignOut }) {
                         exactly what gets asked when the warehouse comes back short. */}
                     <span className="po-box-head-side">
                       {!isFilling && <span className={`po-chip ${box.status === 'delivered' ? 'ok' : box.status === 'in_transit' ? 'receiving' : box.status === 'pre_transit' ? 'pretransit' : box.status === 'packed' ? 'packed' : 'shipped'}`}>{boxStatusLabel(box)}</span>}
-                      <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>
+                      <span className="muted sm">{unitsLabel(units)}</span>
                     </span>
                   </div>
 
@@ -465,24 +480,32 @@ export function SupplierApp({ user, onSignOut }) {
 
                   {lines.length > 0 && (
                     canDeclare ? (
-                      <ul className="po-lines po-lines-edit">
-                        <PoLineHeader />
-                        {lines.map((l) => (
-                          <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)}
-                            onSave={(patch) => patchLine(l, patch)}
-                            attribution={l.entered_on_behalf ? `Entered for you by ${staffLabel}` : null} />
-                        ))}
-                      </ul>
+                      <>
+                        <ul className="po-lines po-lines-edit">
+                          <PoLineHeader boxesOrder={boxesOrder} />
+                          {lines.map((l) => (
+                            <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)} boxesOrder={boxesOrder}
+                              onSave={(patch) => patchLine(l, patch)}
+                              attribution={l.entered_on_behalf ? `Entered for you by ${staffLabel}` : null} />
+                          ))}
+                        </ul>
+                        {/* Thirty SKUs in one size of carton is the normal shape of a box
+                            order — declare it once here, and correct the odd one on its
+                            own row. */}
+                        {boxesOrder && lines.length > 1 && (
+                          <PoBulkDimensions lines={lines} disabled={busy} onApplied={refreshDetail} onSignOut={onSignOut} />
+                        )}
+                      </>
                     ) : (
                       <ul className="po-lines">
                         {lines.map((l) => (
                           <li key={l.id}>
                             <span className="po-line-name">{l.name || l.sku}</span>
-                            <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                            <span className="po-line-meta">{l.sku} · {`size ${l.size}${boxesOrder ? ` · ${l.dimensions || 'no dimensions'}` : ''}`} · ×{l.qty_expected}</span>
                             {(() => {
                               const mm = lineMoney(l);
                               return mm
-                                ? <span className="po-line-money">{mm.per} per pair{mm.showTotal ? ` · ${mm.total}` : ''}</span>
+                                ? <span className="po-line-money">{mm.per} per {boxesOrder ? 'box' : 'pair'}{mm.showTotal ? ` · ${mm.total}` : ''}</span>
                                 : <span className="po-line-money none">no cost entered</span>;
                             })()}
                             {l.entered_on_behalf && <span className="po-line-attribution muted xs">Entered for you by {staffLabel}</span>}
@@ -498,7 +521,7 @@ export function SupplierApp({ user, onSignOut }) {
                     <div className="po-box-total">
                       <span className="muted xs">
                         {m.any ? `Cost ${money(m.items)}${m.tips > 0 ? ` + tips ${money(m.tips)}` : ''}` : ''}
-                        {m.blank > 0 ? `${m.any ? ' · ' : ''}${m.blank} pair${m.blank === 1 ? '' : 's'} with nothing entered` : ''}
+                        {m.blank > 0 ? `${m.any ? ' · ' : ''}${m.blank} ${boxesOrder ? (m.blank === 1 ? 'box' : 'boxes') : `pair${m.blank === 1 ? '' : 's'}`} with nothing entered` : ''}
                       </span>
                       {m.any && <span className="po-box-total-n">{money(m.total)}</span>}
                     </div>
@@ -507,7 +530,7 @@ export function SupplierApp({ user, onSignOut }) {
                   {isFilling && (
                     <div className="po-box-actions">
                       <PoLabelDownload poId={Number(po.id)} box={box} onSignOut={onSignOut} />
-                      <button className="btn sm" onClick={() => setScanBox(box)}><Icon name="camera" /> Add items</button>
+                      <button className="btn sm" onClick={() => setScanBox(box)}><Icon name="camera" /> Add {boxesOrder ? 'boxes' : 'items'}</button>
                       <button className="btn sm primary" disabled={units < 1 || busy} onClick={() => setCloseReview(box)}>Review &amp; close box</button>
                     </div>
                   )}
@@ -516,9 +539,9 @@ export function SupplierApp({ user, onSignOut }) {
                   {isReplacement && canDeclare && (
                     <div className="po-box-actions">
                       <button className="btn sm" onClick={() => setScanBox(box)}>
-                        <Icon name="camera" /> {lines.length ? 'Add more items' : 'List what you’re sending'}
+                        <Icon name="camera" /> {lines.length ? `Add more ${boxesOrder ? 'boxes' : 'items'}` : 'List what you’re sending'}
                       </button>
-                      {units > 0 && <span className="muted sm">{units} unit{units === 1 ? '' : 's'} declared</span>}
+                      {units > 0 && <span className="muted sm">{unitsLabel(units)} declared</span>}
                     </div>
                   )}
                   {isPacked && (
@@ -552,13 +575,13 @@ export function SupplierApp({ user, onSignOut }) {
                 <div className="card po-box">
                   <div className="po-card-top">
                     <div><b>Order manifest</b><div className="po-track muted sm">Entered for the whole purchase</div></div>
-                    <span className="muted sm">{units} unit{units === 1 ? '' : 's'}</span>
+                    <span className="muted sm">{unitsLabel(units)}</span>
                   </div>
                   <ul className="po-lines">
                     {orderLines.map((l) => (
                       <li key={l.id}>
                         <span className="po-line-name">{l.name || l.sku}</span>
-                        <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                        <span className="po-line-meta">{l.sku} · {`size ${l.size}${boxesOrder ? ` · ${l.dimensions || 'no dimensions'}` : ''}`} · ×{l.qty_expected}</span>
                         {l.entered_on_behalf && <span className="po-line-attribution muted xs">Entered for you by {staffLabel}</span>}
                       </li>
                     ))}
@@ -571,7 +594,7 @@ export function SupplierApp({ user, onSignOut }) {
       </div>
 
       {scanBox && (
-        <PoScanModal box={scanBox} onClose={() => setScanBox(null)}
+        <PoScanModal box={scanBox} boxesOrder={boxesOrder} onClose={() => setScanBox(null)}
           onAdded={refreshDetail} onSignOut={onSignOut} />
       )}
 
@@ -586,7 +609,7 @@ export function SupplierApp({ user, onSignOut }) {
             <div className="modal confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <h3 className="modal-title">Label {packedBox.box_number} is closed</h3>
               <p className="modal-msg">
-                <b>{units}</b> unit{units === 1 ? '' : 's'} on this label. Finish the box:
+                <b>{unitsLabel(units)}</b> on this label. Finish the box:
               </p>
               <ol className="po-pack-steps">
                 <li>Print the manifest below (plain <b>Letter</b> paper).</li>
@@ -621,18 +644,18 @@ export function SupplierApp({ user, onSignOut }) {
                   {lines.map((l) => (
                     <li key={l.id}>
                       <span className="po-line-name">{l.name || l.sku}</span>
-                      <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                      <span className="po-line-meta">{l.sku} · {`size ${l.size}${boxesOrder ? ` · ${l.dimensions || 'no dimensions'}` : ''}`} · ×{l.qty_expected}</span>
                       {(() => {
                         const mm = lineMoney(l);
                         return mm
-                          ? <span className="po-line-money">{mm.per} per pair{mm.showTotal ? ` · ${mm.total}` : ''}</span>
+                          ? <span className="po-line-money">{mm.per} per {boxesOrder ? 'box' : 'pair'}{mm.showTotal ? ` · ${mm.total}` : ''}</span>
                           : <span className="po-line-money none">no cost entered</span>;
                       })()}
                     </li>
                   ))}
                 </ul>
               )}
-              <p className="po-review-total"><b>{units}</b> unit{units === 1 ? '' : 's'} · <b>{lines.length}</b> line{lines.length === 1 ? '' : 's'}</p>
+              <p className="po-review-total"><b>{unitsLabel(units)}</b> · <b>{lines.length}</b> line{lines.length === 1 ? '' : 's'}</p>
               {/* The money as it stands. Anything missing is still fixable — "Keep
                   editing" goes back to the lines, and a closed label can be reopened. */}
               {(m.any || m.blank > 0) && (

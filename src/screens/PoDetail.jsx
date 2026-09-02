@@ -28,6 +28,9 @@ import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoDetailsEdit, PoAddLabels, PoLabelTools } from '../components/PoEdit.jsx';
 import { boxStatusLabel, boxChipCls, checkpointAdds, trackWords } from '../lib/postatus.js';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
+import { PoKindChip } from '../components/PoKindChip.jsx';
+import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
+import { isBoxesOrder } from '../lib/postatus.js';
 
 const FROZEN = ['reconciled', 'closed'];
 
@@ -66,6 +69,9 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   const po = detail?.po || null;
   const boxes = detail?.boxes || [];
   const lines = detail?.lines || [];
+  // Shoes, or the empty shoe boxes we buy to replace the crushed and missing ones. It
+  // swaps the manifest's identifying column (size → dimensions) everywhere below.
+  const boxesOrder = isBoxesOrder(detail?.po);
   const batches = detail?.batches || [];
 
   // Units declared per label (and for a whole-order list), summed once. A ten-row label
@@ -192,6 +198,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                 <div className="po-detail-id">
                   <span className="po-code">{po.po_code}</span>
                   <PoStatusChip po={chipPo} />
+                  <PoKindChip po={po} />
                 </div>
                 <div className="po-detail-meta muted sm">
                   <span>From <b>{po.supplier_name}</b></span>
@@ -226,7 +233,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
 
               {/* The order's own details — supplier, tag, date, boxes expected, notes.
                   Collapsed behind its button: this page is read far more often than edited. */}
-              <PoDetailsEdit po={po} boxes={boxes} onChanged={load} onSignOut={onSignOut} />
+              <PoDetailsEdit po={po} boxes={boxes} lineCount={lines.length} onChanged={load} onSignOut={onSignOut} />
 
               {/* The courier's own labels, so the supplier can print the one for the box
                   they're packing instead of digging through email. */}
@@ -277,20 +284,26 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                   </div>
                   {orderLines.length > 0 && (
                     <ul className={`po-lines po-ov-lines${canEditLines(po) ? ' editable' : ''}`}>
-                      {canEditLines(po) && <PoLineHeader />}
+                      {canEditLines(po) && <PoLineHeader boxesOrder={boxesOrder} />}
                       {canEditLines(po)
                         ? orderLines.map((l) => (
-                          <PoLineRow key={l.id} line={l} disabled={lineBusy === Number(l.id)}
+                          <PoLineRow key={l.id} line={l} disabled={lineBusy === Number(l.id)} boxesOrder={boxesOrder}
                             attribution={lineAttribution(l)} onSave={(patch) => patchLine(l, patch)} />
                         ))
                         : orderLines.map((l) => (
                           <li key={l.id}>
                             <span className="po-line-name">{l.name || l.sku}</span>
-                            <span className="po-line-meta">{l.sku} · size {l.size} · ×{l.qty_expected}</span>
+                            <span className="po-line-meta">{l.sku} · {`size ${l.size}${boxesOrder ? ` · ${l.dimensions || 'no dimensions'}` : ''}`} · ×{l.qty_expected}</span>
                             {lineAttribution(l) && <span className="po-line-attribution muted xs">{lineAttribution(l)}</span>}
                           </li>
                         ))}
                     </ul>
+                  )}
+                  {/* One carton size across the whole list, because a boxes order is
+                      normally a run of SKUs in the same box. Per-line editing stays on
+                      each row. */}
+                  {boxesOrder && canEditLines(po) && orderLines.length > 1 && (
+                    <PoBulkDimensions lines={orderLines} onApplied={load} onSignOut={onSignOut} />
                   )}
                   {canEnter && (
                     <>
@@ -428,17 +441,17 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                        ADD a line but never fix or drop one meant the only correction was to
                        delete the whole order and start again. */
                     <ul className={`po-lines po-ov-lines${canEditLines(po, box) ? ' editable' : ''}`}>
-                      {canEditLines(po, box) && <PoLineHeader />}
+                      {canEditLines(po, box) && <PoLineHeader boxesOrder={boxesOrder} />}
                       {canEditLines(po, box)
                         ? boxLines.map((l) => (
-                          <PoLineRow key={l.id} line={l} disabled={lineBusy === Number(l.id)}
+                          <PoLineRow key={l.id} line={l} disabled={lineBusy === Number(l.id)} boxesOrder={boxesOrder}
                             attribution={lineAttribution(l)} onSave={(patch) => patchLine(l, patch)} />
                         ))
                         : boxLines.map((l) => (
                           <li key={l.id}>
                             <span className="po-line-name">{l.name || l.sku}</span>
                             <span className="po-line-meta">
-                              {l.sku} · size {l.size} · ×{l.qty_expected}
+                              {l.sku} · {`size ${l.size}${boxesOrder ? ` · ${l.dimensions || 'no dimensions'}` : ''}`} · ×{l.qty_expected}
                               {l.unit_cost != null && l.unit_cost !== '' && ` · $${Number(l.unit_cost).toFixed(2)} ea`}
                               {l.tip != null && l.tip !== '' && ` · tip $${Number(l.tip).toFixed(2)} ea`}
                             </span>
@@ -446,6 +459,11 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                           </li>
                         ))}
                     </ul>
+                  )}
+                  {/* One carton size across this label's whole list. Per-line editing
+                      stays on each row — this is the "they all ship in the same box" case. */}
+                  {boxesOrder && canEditLines(po, box) && boxLines.length > 1 && (
+                    <PoBulkDimensions lines={boxLines} onApplied={load} onSignOut={onSignOut} />
                   )}
 
                   {/* What the supplier says this box cost them — cost and tip are both per
@@ -466,7 +484,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                       <div className="po-box-total">
                         <span className="muted xs">
                           Cost {usd(items)}{tips > 0 ? ` + tips ${usd(tips)}` : ''}
-                          {blank > 0 ? ` · ${blank} pair${blank === 1 ? '' : 's'} with nothing entered` : ''}
+                          {blank > 0 ? ` · ${blank} ${boxesOrder ? (blank === 1 ? 'box' : 'boxes') : `pair${blank === 1 ? '' : 's'}`} with nothing entered` : ''}
                         </span>
                         <span className="po-box-total-n">{usd(items + tips)}</span>
                       </div>
@@ -484,7 +502,9 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                     <PoLabelDownload poId={po.id} box={box} onSignOut={onSignOut} />
                     {canFill && (
                       <button className="btn sm po-ov-fill-btn" onClick={() => setScanBox(box)}>
-                        <Icon name="camera" /> {boxLines.length ? 'Add more items on their behalf' : 'Add items on their behalf'}
+                        <Icon name="camera" /> {boxLines.length
+                          ? `Add more ${boxesOrder ? 'boxes' : 'items'} on their behalf`
+                          : `Add ${boxesOrder ? 'boxes' : 'items'} on their behalf`}
                         {boxIsOut && <span className="po-ov-fill-late"> · label already sent</span>}
                       </button>
                     )}
@@ -577,8 +597,8 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
         </div>
       )}
 
-      {scanBox && <PoScanModal box={scanBox} onClose={() => setScanBox(null)} onAdded={load} onSignOut={onSignOut} />}
-      {scanOrderPo && <PoScanModal po={scanOrderPo} onClose={() => setScanOrderPo(null)} onAdded={load} onSignOut={onSignOut} />}
+      {scanBox && <PoScanModal box={scanBox} boxesOrder={boxesOrder} onClose={() => setScanBox(null)} onAdded={load} onSignOut={onSignOut} />}
+      {scanOrderPo && <PoScanModal po={scanOrderPo} boxesOrder={boxesOrder} onClose={() => setScanOrderPo(null)} onAdded={load} onSignOut={onSignOut} />}
     </div>
   );
 }

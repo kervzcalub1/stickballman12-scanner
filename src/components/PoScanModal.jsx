@@ -7,6 +7,7 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { isUpcCode, usSizeChart, compareSizes } from '../lib/codes.js';
+import { DimensionsFields, dimsComplete, dimsToText, emptyDims } from './PoDimensions.jsx';
 
 const CameraScanner = lazy(() => import('./CameraScanner.jsx'));
 
@@ -14,13 +15,25 @@ const CameraScanner = lazy(() => import('./CameraScanner.jsx'));
 // corrected and the qty nudged (or the line removed at ×0). Size commits on blur/Enter;
 // qty posts on each ± tap. The parent reloads the PO after each save. `attribution` is an
 // optional trailing note (e.g. "entered by …") shown under the product name.
-export function PoLineRow({ line, disabled, onSave, attribution }) {
+export function PoLineRow({ line, disabled, onSave, attribution, boxesOrder = false }) {
   const [size, setSize] = useState(String(line.size ?? ''));
   useEffect(() => { setSize(String(line.size ?? '')); }, [line.size]);
   const commitSize = () => {
     const v = size.trim();
     if (!v || v === String(line.size)) { setSize(String(line.size ?? '')); return; }
     onSave({ size: v });
+  };
+  // On an empty-box order the DIMENSIONS take the size's place — same cell, same commit
+  // on blur, same merge if two lines of one SKU land on the same value. One text box
+  // rather than three number fields: this is the correcting-one-row case, and three
+  // inputs in a table cell is unreadable. Anything with three numbers in it parses
+  // (`normalizeDimensions`), and the server writes back the canonical `L x W x H unit`.
+  const [dims, setDims] = useState(String(line.dimensions ?? ''));
+  useEffect(() => { setDims(String(line.dimensions ?? '')); }, [line.dimensions]);
+  const commitDims = () => {
+    const v = dims.trim();
+    if (!v || v === String(line.dimensions ?? '')) { setDims(String(line.dimensions ?? '')); return; }
+    onSave({ dimensions: v });
   };
   // Cost and tip per pair, corrected after the fact. Blank is a real value here — it
   // clears the field back to "not declared", which is not the same as $0.
@@ -39,7 +52,7 @@ export function PoLineRow({ line, disabled, onSave, attribution }) {
     onSave({ [field]: n });
   };
   return (
-    <li className="po-line-edit">
+    <li className={`po-line-edit${boxesOrder ? ' boxes' : ''}`}>
       <div className="po-line-head">
         <span className="po-line-name">{line.name || line.sku}</span>
         <span className="po-line-meta">{line.sku}</span>
@@ -52,6 +65,15 @@ export function PoLineRow({ line, disabled, onSave, attribution }) {
             onChange={(e) => setSize(e.target.value)} onBlur={commitSize}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} />
         </label>
+        {/* A box carries BOTH: the size it was made for, and how big the carton is. */}
+        {boxesOrder && (
+          <label className="po-line-size po-line-dims">
+            <span className="muted xs">Dimensions</span>
+            <input className={`sz dims ${line.dimensions ? '' : 'need'}`} value={dims} disabled={disabled}
+              placeholder="13 x 9 x 5 in" onChange={(e) => setDims(e.target.value)} onBlur={commitDims}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} />
+          </label>
+        )}
         {/* Every control is a labelled cell of the same shape, so the rows line up as
             columns on a wide screen (where the labels give way to one header row) and
             stack legibly on a phone. */}
@@ -96,10 +118,11 @@ export function PoLineRow({ line, disabled, onSave, attribution }) {
 // Column headings for a list of `PoLineRow`s. Only shown on a wide screen — that's where
 // the per-cell labels are hidden and the rows read as a table; on a phone each cell keeps
 // its own label and this collapses away.
-export function PoLineHeader() {
+export function PoLineHeader({ boxesOrder = false }) {
   return (
-    <li className="po-line-headings" aria-hidden="true">
-      <span>Item</span><span>Size</span><span>Qty</span><span>Cost ea</span><span>Tip ea</span><span />
+    <li className={`po-line-headings${boxesOrder ? ' boxes' : ''}`} aria-hidden="true">
+      <span>Item</span><span>Size</span>{boxesOrder && <span>Dimensions</span>}
+      <span>Qty</span><span>Cost ea</span><span>Tip ea</span><span />
     </li>
   );
 }
@@ -113,7 +136,7 @@ const sameSku = (a, b) => String(a || '').toUpperCase().replace(/[\s-]/g, '') ==
 // `box` = add to a specific shipping label (per-box manifest). `po` (with no box) = add to
 // the whole order (Path C — one list for the whole purchase, no per-box breakdown). Exactly
 // one of the two is passed; everything else is identical.
-export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
+export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onSignOut }) {
   const orderMode = !box;
   // Name the target the way the rest of the app does — a reship is "the replacement
   // shipment" everywhere else, so "Label 3" here would read as a fourth original box.
@@ -131,6 +154,16 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
   const [camZoom, setCamZoom] = useState(1);          // 1× / 2× camera zoom (like warehouse)
   const [recent, setRecent] = useState([]);           // running "added to this label" tally (session)
   const [pendingSwitch, setPendingSwitch] = useState(null); // a different shoe scanned mid-draft
+  // EMPTY-BOX ORDERS. The carton size is what identifies a line here, the way a shoe's
+  // size does on a normal order — so it takes the size chips' place rather than sitting
+  // beside them. It's also the one field a supplier types the SAME value into thirty
+  // times in a row, so the last one declared carries into the next shoe automatically
+  // (and the manifest list has a bulk apply for fixing a run of them afterwards).
+  const [defaultDims, setDefaultDimsState] = useState(emptyDims);
+  // Read through a ref too: "add & switch" seeds the NEXT shoe's row in the same tick it
+  // records the carton just declared, and a state read there would still be the old one.
+  const defaultDimsRef = useRef(emptyDims());
+  const setDefaultDims = (d) => { defaultDimsRef.current = d; setDefaultDimsState(d); };
   const draftRef = useRef(null); draftRef.current = draft; // so the camera callback sees the live draft
   const recentRef = useRef({});                       // code -> last-seen ms (dedup gun/camera re-reads)
   const inputRef = useRef(null);
@@ -138,8 +171,10 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
   // Merge a server-returned po_line into the running tally (its live incremented qty).
   const recordScan = (line, fallbackName) => setRecent((rs) => {
     if (!line) return rs;
-    const key = `${line.sku}|#|${line.size}`;
-    return [{ key, name: line.name || fallbackName || line.sku, size: line.size, qty: line.qty_expected ?? 1 },
+    // A box line is identified by its dimensions, a shoe line by its size.
+    const what = [line.size ? `size ${line.size}` : '', line.dimensions || ''].filter(Boolean).join(' · ');
+    const key = `${line.sku}|#|${what}`;
+    return [{ key, name: line.name || fallbackName || line.sku, what, qty: line.qty_expected ?? 1 },
       ...rs.filter((r) => r.key !== key)];
   });
 
@@ -165,11 +200,8 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
       };
       const d = draftRef.current;
       if (!d) {
-        const rows = incoming.scannedSize ? [{ key: rowKey++, size: incoming.scannedSize, qty: 1, cost: '', tip: '' }] : [];
-        setDraft({ ...incoming, rows });
-        setFlash(incoming.scannedSize
-          ? { type: 'added', text: `✓ ${incoming.name || c} · size ${incoming.scannedSize}` }
-          : { type: 'warn', text: `Scanned ${incoming.name || c} — no size from the catalog. Tap the size below.` });
+        setDraft({ ...incoming, rows: firstRows(incoming) });
+        setFlash(startFlash(incoming, c));
       } else if (!sameSku(d.sku, incoming.sku)) {
         setPendingSwitch(incoming); // different shoe → confirm switch (finish current first)
       } else if (incoming.scannedSize) {
@@ -180,9 +212,32 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
       }
     } catch (e) {
       if (e.unauthorized) return onSignOut();
-      setError(e.message || 'Could not find that code.'); setFlash({ type: 'dup', text: 'Not found' });
+      // On a BOXES order the catalogue is a convenience, not the source of truth: what
+      // identifies the line is the SKU printed on the carton and the carton's size, both
+      // of which the person is holding. A SKU the catalogue doesn't carry — or a lookup
+      // that times out — must not stop them declaring it, so the draft opens anyway with
+      // the code they typed and an empty name to fill in. (A shoes order still needs the
+      // lookup: that's where the size list comes from.)
+      if (boxesOrder && !draftRef.current && !isUpcCode(c)) {
+        setDraft({ name: '', sku: c, image: '', upc: '', colorway: '', gender: null, scannedSize: null, sizeOptions: [], rows: [] });
+        setFlash({ type: 'warn', text: `Couldn’t look up ${c} — declaring it anyway. Type the shoe’s name, then tap the size.` });
+        setError('');
+      } else {
+        setError(e.message || 'Could not find that code.'); setFlash({ type: 'dup', text: 'Not found' });
+      }
     } finally { setBusy(false); }
   };
+
+  // What a freshly-resolved shoe starts with. Identical on both kinds — a box is bought
+  // FOR a size, so the size row is the row either way. The difference is that a boxes row
+  // also carries the carton, pre-filled with the last one declared: a run of sizes in one
+  // size of box is the normal shape of these orders, so it's typed once.
+  const firstRows = (incoming) => (incoming.scannedSize
+    ? [{ key: rowKey++, size: incoming.scannedSize, qty: 1, cost: '', tip: '', dims: { ...defaultDimsRef.current } }]
+    : []);
+  const startFlash = (incoming, c) => (incoming.scannedSize
+    ? { type: 'added', text: `✓ ${incoming.name || c} · size ${incoming.scannedSize}` }
+    : { type: 'warn', text: `Scanned ${incoming.name || c} — no size from the catalog. Tap the size below.` });
 
   // Size helpers — mirror the warehouse Add-Item behavior.
   const sizePool = () => {
@@ -202,7 +257,13 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
     }
     return { cost: '', tip: '' };
   };
-  const newRow = (rows, size) => ({ key: rowKey++, size: String(size), qty: 1, ...lastMoney(rows) });
+  // A new size row inherits the last money typed AND, on a boxes order, the last carton
+  // declared — the two things that are usually the same down a run of sizes.
+  const lastDims = (rows) => {
+    for (let i = rows.length - 1; i >= 0; i--) if (dimsComplete(rows[i].dims)) return rows[i].dims;
+    return defaultDimsRef.current;
+  };
+  const newRow = (rows, size) => ({ key: rowKey++, size: String(size), qty: 1, ...lastMoney(rows), dims: { ...lastDims(rows) } });
   const addSize = (s) => setDraft((d) => {
     const i = d.rows.findIndex((r) => String(r.size) === String(s));
     if (i >= 0) { const rows = d.rows.slice(); rows[i] = { ...rows[i], qty: rows[i].qty + 1 }; return { ...d, rows }; }
@@ -224,15 +285,28 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
   // Commit the whole draft (every size) to the label. Returns true on success.
   const addToLabel = async () => {
     const rows = (draft?.rows || [])
-      .map((r) => ({ size: String(r.size).trim(), qty: Math.max(1, parseInt(r.qty, 10) || 1),
-        unitCost: moneyOf(r.cost), tip: moneyOf(r.tip) }))
-      .filter((r) => r.size);
+      .map((r) => ({
+        size: String(r.size).trim(),
+        dimensions: boxesOrder ? dimsToText(r.dims) : null,
+        dims: r.dims,
+        qty: Math.max(1, parseInt(r.qty, 10) || 1),
+        unitCost: moneyOf(r.cost), tip: moneyOf(r.tip),
+      }))
+      // A box has to say BOTH which size it's for and how big it is; half a declaration
+      // is a line the warehouse can't match to anything.
+      .filter((r) => r.size && (!boxesOrder || r.dimensions));
     if (!draft?.sku) { setError('A SKU is required.'); return false; }
-    if (rows.length === 0) { setError('Tap at least one size.'); return false; }
+    if (rows.length === 0) {
+      setError(boxesOrder
+        ? 'Every box needs a size AND its length, width and height.'
+        : 'Tap at least one size.');
+      return false;
+    }
     setBusy(true); setError('');
     try {
       for (const r of rows) {
         const common = { sku: draft.sku, size: r.size, qty: r.qty,
+          ...(boxesOrder ? { dimensions: r.dimensions } : {}),
           name: draft.name, upc: draft.upc, colorway: draft.colorway, gender: draft.gender,
           unitCost: r.unitCost, tip: r.tip };
         const { line } = orderMode
@@ -240,8 +314,12 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
           : await api.poScan({ poBoxId: Number(box.id), ...common });
         recordScan(line, draft.name);
       }
+      // Carry the last carton declared into the next shoe — a boxes order is normally a
+      // run of SKUs in one box, so this is the difference between typing it once and
+      // typing it thirty times.
+      if (boxesOrder) setDefaultDims({ ...rows[rows.length - 1].dims });
       const total = rows.reduce((n, r) => n + r.qty, 0);
-      setFlash({ type: 'added', text: `Added ${draft.name || draft.sku} · ${total} unit${total === 1 ? '' : 's'} to ${targetLabel}` });
+      setFlash({ type: 'added', text: `Added ${draft.name || draft.sku} · ${total} ${boxesOrder ? (total === 1 ? 'box' : 'boxes') : `unit${total === 1 ? '' : 's'}`} to ${targetLabel}` });
       setDraft(null); onAdded();
       return true;
     } catch (e) {
@@ -256,15 +334,21 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
     const ok = await addToLabel();
     setPendingSwitch(null);
     if (ok && next) {
-      const rows = next.scannedSize ? [{ key: rowKey++, size: next.scannedSize, qty: 1, cost: '', tip: '' }] : [];
-      setDraft({ ...next, rows });
-      setFlash(next.scannedSize
-        ? { type: 'added', text: `✓ ${next.name || next.sku} · size ${next.scannedSize}` }
-        : { type: 'warn', text: `Scanned ${next.name || next.sku} — tap the size below.` });
+      setDraft({ ...next, rows: firstRows(next) });
+      setFlash(startFlash(next, next.sku));
     }
   };
 
   const totalUnits = (draft?.rows || []).reduce((n, r) => n + (parseInt(r.qty, 10) || 0), 0);
+  // A box that doesn't say which size it's for, or how big it is, isn't a declaration —
+  // it's a line nobody can match to a shoe. Every row has to be complete, not just one:
+  // a half-filled row would be silently dropped on submit.
+  const draftRows = draft?.rows || [];
+  const draftReady = draftRows.length > 0 && draftRows.every((r) => String(r.size).trim())
+    && (!boxesOrder || draftRows.every((r) => dimsComplete(r.dims)));
+  const draftMissing = !draftReady && draftRows.length > 0
+    ? (draftRows.some((r) => !String(r.size).trim()) ? 'Every row needs a size.' : 'Every box needs its length, width and height.')
+    : '';
   // What this draft adds up to, per size: qty × cost and qty × tip.
   const draftTotal = (draft?.rows || []).reduce((t, r) => {
     const q = parseInt(r.qty, 10) || 0;
@@ -285,7 +369,7 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
           inputRef.current?.focus({ preventScroll: true });
         }}>
         <div className="modal-head">
-          <h3 className="modal-title">Add items · {targetTitle}</h3>
+          <h3 className="modal-title">Add {boxesOrder ? 'boxes' : 'items'} · {targetTitle}</h3>
           <button type="button" className="btn icon ghost" onClick={onClose}>×</button>
         </div>
 
@@ -307,7 +391,9 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
         </div>
         {error && <div className="error sm mt">{error}</div>}
         {!draft && !busy && (
-          <p className="muted sm mt">Scan a shoe’s UPC to begin — its size auto-fills. Add other sizes with the chips, or “+ Custom” if a size isn’t listed. Re-scanning the same shoe bumps its size by 1.</p>
+          <p className="muted sm mt">{boxesOrder
+            ? 'Scan or type the SKU printed on the empty box — the shoe’s name fills in, and a scanned UPC fills the size too. Then tap the size each box is for and give its dimensions; a new row starts at the last carton you typed, so a run of sizes is measured once.'
+            : 'Scan a shoe’s UPC to begin — its size auto-fills. Add other sizes with the chips, or “+ Custom” if a size isn’t listed. Re-scanning the same shoe bumps its size by 1.'}</p>
         )}
 
         {recent.length > 0 && (
@@ -317,7 +403,7 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
               {recent.map((r) => (
                 <li key={r.key}>
                   <span className="po-line-name">{r.name}</span>
-                  <span className="po-line-meta">size {r.size} · ×{r.qty}</span>
+                  <span className="po-line-meta">{r.what} · ×{r.qty}</span>
                 </li>
               ))}
             </ul>
@@ -336,7 +422,9 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
               </div>
             </div>
             <div className="size-rows">
-              <div className="muted sm">The scanned size is filled in below. Tap a chip to add another size (tap again for +1), or “+ Custom” if a size isn’t listed.</div>
+              <div className="muted sm">{boxesOrder
+                ? 'Tap the size each box is for (tap again for +1), or “+ Custom” if a size isn’t listed. Give the carton’s dimensions on each row — a new row starts at the last one you typed.'
+                : 'The scanned size is filled in below. Tap a chip to add another size (tap again for +1), or “+ Custom” if a size isn’t listed.'}</div>
               <div className="size-chips">
                 {sizePool().map((s) => (
                   <button type="button" key={s} className="size-chip" onClick={() => addSize(s)}>{s}</button>
@@ -354,6 +442,13 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
                     </div>
                     <button type="button" className="btn icon ghost remove" title="Remove size" onClick={() => removeRow(r.key)}>×</button>
                   </div>
+                  {/* How big the box for THAT size is. Per row, not per shoe: the whole
+                      reason a box is bought is that it fits one size, and a 13 and a 9
+                      don't share a carton. */}
+                  {boxesOrder && (
+                    <DimensionsFields value={r.dims} hint={false} label="Box dimensions"
+                      onChange={(d) => setRow(r.key, { dims: d })} />
+                  )}
                   {/* Money is per size, so it belongs on the size's own row. */}
                   <div className="po-size-line-money">
                     <label className="po-size-money">
@@ -385,10 +480,11 @@ export function PoScanModal({ box, po, onClose, onAdded, onSignOut }) {
                 {' = '}<b>${(draftTotal.cost + draftTotal.tip).toFixed(2)}</b>
               </p>
             )}
+            {draftMissing && <p className="po-draft-missing sm">{draftMissing}</p>}
             <div className="modal-actions">
               <button type="button" className="btn ghost" onClick={() => setDraft(null)}>Cancel</button>
-              <button type="button" className="btn primary wide" disabled={busy || totalUnits < 1} onClick={addToLabel}>
-                Add {totalUnits > 0 ? `${totalUnits} unit${totalUnits === 1 ? '' : 's'} ` : ''}to {orderMode ? 'order' : 'label'}
+              <button type="button" className="btn primary wide" disabled={busy || totalUnits < 1 || !draftReady} onClick={addToLabel}>
+                Add {totalUnits > 0 ? `${totalUnits} ${boxesOrder ? (totalUnits === 1 ? 'box' : 'boxes') : `unit${totalUnits === 1 ? '' : 's'}`} ` : ''}to {orderMode ? 'order' : 'label'}
               </button>
             </div>
           </div>

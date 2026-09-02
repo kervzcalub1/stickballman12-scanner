@@ -1,12 +1,12 @@
-// POST /api/po/line  (supplier / ph_team / admin)  { lineId, qty?, size?, unitCost?, tip? }
-// Edits an expected line's quantity, size, cost and/or tip per pair; qty <= 0 removes the line. Only on a
+// POST /api/po/line  (supplier / ph_team / admin)  { lineId, qty?, size?, dimensions?, unitCost?, tip? }
+// Edits an expected line's quantity, size, box dimensions, cost and/or tip; qty <= 0 removes the line. Only on a
 // DRAFT PO while its label is still pending — or, for a REPLACEMENT label, any time before
 // the order is archived (`manifestEditBlock`). Changing the size into an existing
 // SKU+size line on the same label merges the two. The supplier edits their own manifest;
 // PH/admin edit ON THEIR BEHALF (re-stamps entered_by + entered_on_behalf on the surviving row).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoLine, getPoBox, getPo, updatePoLine, dbConfigured } from '../_lib/db.js';
-import { manifestEditBlock, parseMoney } from '../_lib/po-manifest.js';
+import { manifestEditBlock, parseMoney, isBoxesOrder, normalizeDimensions } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -22,6 +22,10 @@ export default async function handler(req, res) {
   if (!Number.isInteger(lineId)) return send(res, 400, { ok: false, error: 'A valid line is required.' });
   const hasQty = body.qty !== undefined;
   const hasSize = body.size !== undefined;
+  // On an empty-box order the DIMENSIONS are the line's discriminator, so this is the
+  // same kind of edit as changing a size — including the merge when two lines land on
+  // the same value.
+  const hasDims = body.dimensions !== undefined;
   // An emptied money field CLEARS it (null) rather than storing $0 — "I don't know what
   // this pair cost" and "this pair was free" are different claims. A junk value is
   // rejected here (unlike at scan time) because this edit is the whole request.
@@ -29,11 +33,14 @@ export default async function handler(req, res) {
   const tip = parseMoney(body.tip);
   if (Number.isNaN(unitCost)) return send(res, 400, { ok: false, error: 'Enter a cost between 0 and 10,000,000.' });
   if (Number.isNaN(tip)) return send(res, 400, { ok: false, error: 'Enter a tip between 0 and 10,000,000.' });
-  if (!hasQty && !hasSize && unitCost === undefined && tip === undefined)
+  if (!hasQty && !hasSize && !hasDims && unitCost === undefined && tip === undefined)
     return send(res, 400, { ok: false, error: 'Nothing to update.' });
   const qty = hasQty ? Math.min(999, Math.max(0, parseInt(body.qty, 10) || 0)) : undefined;
   const size = hasSize ? String(body.size ?? '').trim().slice(0, 20) : undefined;
   if (hasSize && !size) return send(res, 400, { ok: false, error: 'Size can’t be blank.' });
+  const dimensions = hasDims ? normalizeDimensions(body.dimensions) : undefined;
+  if (hasDims && !dimensions)
+    return send(res, 400, { ok: false, error: 'Give the box’s length, width and height — e.g. 13 x 9 x 5 in.' });
 
   try {
     const line = await getPoLine(lineId);
@@ -51,16 +58,20 @@ export default async function handler(req, res) {
     const enteredBy = onBehalf && Number.isInteger(uidNum) ? uidNum : null;
     const blocked = manifestEditBlock({ po, box, onBehalf });
     if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
+    // A shoe line has no carton to describe, so dimensions are refused there. A box line
+    // carries BOTH — the size it was made for and how big it is — so both are editable.
+    if (hasDims && !isBoxesOrder(po))
+      return send(res, 400, { ok: false, error: 'This order is for shoes — edit the size, not the dimensions.' });
 
     const { line: updated, removed, merged } = await updatePoLine(lineId, {
-      size, qty, unitCost, tip, enteredBy, enteredOnBehalf: onBehalf,
+      size, dimensions, qty, unitCost, tip, enteredBy, enteredOnBehalf: onBehalf,
     });
     return send(res, 200, { ok: true, line: updated, removed, merged });
   } catch (e) {
     console.error('[po/line]', e.message);
     // A concurrent edit converging on the same (po_box_id, sku, size) can trip the unique
     // index between the merge check and the write — surface as a conflict, not a 500.
-    if (e.code === '23505') return send(res, 409, { ok: false, error: 'That size was just changed — reopen the label and try again.' });
+    if (e.code === '23505') return send(res, 409, { ok: false, error: 'That line was just changed — reopen the label and try again.' });
     return send(res, 500, { ok: false, error: 'Could not update the item.' });
   }
 }

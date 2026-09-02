@@ -1,6 +1,8 @@
 // POST /api/po/create  (ph_team / admin)
-//   { supplierName, supplierUserId?, tagCode?, dateOfPurchase?, notes?,
+//   { supplierName, supplierUserId?, tagCode?, dateOfPurchase?, notes?, orderKind?,
 //     labels: [{ trackingNumber }] }
+// `orderKind` is 'shoes' (default) or 'boxes' — an order of EMPTY shoe boxes, bought to
+// replace the crushed and missing ones. Same paperwork, different manifest.
 // Creates the PO shell (the "batch" form the PH team fills) plus one label
 // (po_box) per entry, each with its pre-assigned courier tracking number. The
 // supplier later fills the contents by scanning. See docs/context/purchase-orders.md.
@@ -25,6 +27,7 @@ export default async function handler(req, res) {
   const rawDate = String(body.dateOfPurchase ?? '').trim();
   const dateOfPurchase = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
   const notes = String(body.notes ?? '').trim().slice(0, 2000) || null;
+  const orderKind = String(body.orderKind ?? 'shoes') === 'boxes' ? 'boxes' : 'shoes';
   const labels = (Array.isArray(body.labels) ? body.labels : [])
     .slice(0, 100)
     .map((l) => ({
@@ -37,7 +40,7 @@ export default async function handler(req, res) {
 
   try {
     const created = await createPo({
-      supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels,
+      supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, orderKind,
       createdBy: user.name || user.username || '',
     });
     // Register each label's tracking number with 17TRACK now — not only when a supplier

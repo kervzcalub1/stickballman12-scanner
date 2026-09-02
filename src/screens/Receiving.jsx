@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal, Pager } from '../components/common.jsx';
+import { PoKindChip } from '../components/PoKindChip.jsx';
 import { ListingPhotos, PhotoCountButton, invalidatePhotoCount } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { Icon } from '../components/NavIcons.jsx';
@@ -1494,7 +1495,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       {receivingPo ? (
                         <div className="po-receive-banner">
                           <div>
-                            <b>Receiving against {receivingPo.po.po_code}</b>
+                            <b>Receiving against {receivingPo.po.po_code}</b> <PoKindChip po={receivingPo.po} />
                             <span className="muted sm"> · {receivingPo.po.supplier_name} · {receivingPo.boxes.length} label{receivingPo.boxes.length === 1 ? '' : 's'} · {(receivingPo.lines || []).reduce((n, l) => n + (l.qty_expected || 0), 0)} expected units</span>
                           </div>
                           <button type="button" className="btn sm ghost" onClick={clearPo}>Unlink</button>
@@ -2526,6 +2527,7 @@ function PoPickerModal({ onPick, onClose, onSignOut }) {
                   <div className="po-card-top">
                     <span className="po-code">{p.po_code}</span>
                     <span className={`po-chip ${p.status === 'receiving' ? 'receiving' : 'shipped'}`}>{p.status === 'receiving' ? 'Receiving' : 'Shipped'}</span>
+                    <PoKindChip po={p} />
                   </div>
                   <div className="po-card-meta">
                     <span>{p.supplier_name}</span>

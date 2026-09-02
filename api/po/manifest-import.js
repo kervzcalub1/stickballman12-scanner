@@ -20,7 +20,7 @@
 // twice.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getPo, getPoBox, addPoScan, poBoxLineCounts, dbConfigured } from '../_lib/db.js';
-import { manifestEditBlock, isReplacementBox } from '../_lib/po-manifest.js';
+import { manifestEditBlock, isReplacementBox, isBoxesOrder } from '../_lib/po-manifest.js';
 
 const MAX_BOXES = 200;
 const MAX_LINES = 2000;
@@ -69,6 +69,11 @@ export default async function handler(req, res) {
     // declared as a single whole-order list would double-count it at reconciliation.
     if (po.manifest_scope === 'po')
       return send(res, 409, { ok: false, error: 'This PO uses a whole-order manifest — import per-label lines only on an order that declares them per label.' });
+    // The importer reads a supplier sheet of SKU + shoe SIZE. An empty-box order is
+    // declared by carton dimensions instead, which no such sheet carries — importing one
+    // would fill the order with sizeless lines nobody can count against.
+    if (isBoxesOrder(po))
+      return send(res, 409, { ok: false, error: 'This order is for empty shoe boxes — its lines carry box dimensions, not shoe sizes, so a size manifest can’t be imported. Enter the boxes on the order instead.' });
 
     const counts = await poBoxLineCounts(poId);
     const uidNum = Number(user.uid);

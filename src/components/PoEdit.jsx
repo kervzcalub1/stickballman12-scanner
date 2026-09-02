@@ -19,7 +19,7 @@ export const poEditable = (po) => !!po && !FROZEN.includes(po.status);
 
 /* The order's own details. Collapsed behind a button: the overview is read first and
    edited rarely, and an always-open form of six fields buries the labels under it. */
-export function PoDetailsEdit({ po, boxes = [], onChanged, onSignOut }) {
+export function PoDetailsEdit({ po, boxes = [], lineCount = 0, onChanged, onSignOut }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -36,6 +36,7 @@ export function PoDetailsEdit({ po, boxes = [], onChanged, onSignOut }) {
       tagCode: po.tag_code || '',
       dateOfPurchase: po.date_of_purchase ? String(po.date_of_purchase).slice(0, 10) : '',
       expectedBoxes: po.expected_boxes == null ? '' : String(po.expected_boxes),
+      orderKind: po.order_kind || 'shoes',
       notes: po.notes || '',
     });
     if (suppliers == null) api.poSuppliers().then((r) => setSuppliers(r.suppliers || [])).catch(() => setSuppliers([]));
@@ -55,6 +56,7 @@ export function PoDetailsEdit({ po, boxes = [], onChanged, onSignOut }) {
         tagCode: form.tagCode,
         dateOfPurchase: form.dateOfPurchase,
         expectedBoxes: form.expectedBoxes,
+        orderKind: form.orderKind,
         notes: form.notes,
       });
       setOpen(false);
@@ -81,6 +83,28 @@ export function PoDetailsEdit({ po, boxes = [], onChanged, onSignOut }) {
             <option value="">{po.supplier_name} (unchanged)</option>
             {(suppliers || []).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.username})</option>)}
           </select>
+        </label>
+        {/* An order for empty boxes is routinely raised on the shoes form before anyone
+            says which it is, and the supplier can't declare a thing until the order says
+            what it's for — so this is editable, not fixed at creation. Anything already
+            declared under the old kind is KEPT but has to be re-stated: a shoe line's
+            size and a box line's dimensions are different facts, not two names for one. */}
+        <label className="batch-form-wide">What is this order for?
+          <span className="seg po-kind-seg" role="group" aria-label="What this order is for">
+            <button type="button" className={`seg-btn ${form?.orderKind !== 'boxes' ? 'on' : ''}`}
+              aria-pressed={form?.orderKind !== 'boxes'} onClick={() => set({ orderKind: 'shoes' })}>Shoes</button>
+            <button type="button" className={`seg-btn ${form?.orderKind === 'boxes' ? 'on' : ''}`}
+              aria-pressed={form?.orderKind === 'boxes'} onClick={() => set({ orderKind: 'boxes' })}>Empty shoe boxes</button>
+          </span>
+          <span className="muted sm">{form?.orderKind === 'boxes'
+            ? 'The supplier declares each box by SKU, shoe name, dimensions and cost.'
+            : 'The supplier declares each pair by SKU and size.'}</span>
+          {form && (form.orderKind || 'shoes') !== (po.order_kind || 'shoes') && lineCount > 0 && (
+            <span className="po-kind-warn sm">
+              {lineCount} line{lineCount === 1 ? '' : 's'} already declared on this order will be kept, but
+              {' '}{(form.orderKind === 'boxes') ? 'their sizes will not show — each one needs its box dimensions.' : 'their dimensions will not show — each one needs a size.'}
+            </span>
+          )}
         </label>
         <label>Tag / code name
           <input value={form?.tagCode ?? ''} maxLength={120} onChange={(e) => set({ tagCode: e.target.value })} />

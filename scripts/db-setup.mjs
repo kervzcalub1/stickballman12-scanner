@@ -822,6 +822,28 @@ await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_dim_idx
            WHERE po_box_id IS NULL AND dimensions IS NOT NULL`);
 
 
+/* ---- Supplier-raised orders: the manifest comes BEFORE the labels ----
+   The original flow was labels-first: PH bought courier labels, raised the order around
+   their tracking numbers, and the supplier filled each one. That inverted — we now want
+   the supplier's manifest BEFORE we pay for labels, so the supplier raises the order,
+   declares the boxes and what is in them, and then ASKS for labels. PH uploads the sheet
+   afterwards and the tracking numbers are assigned onto boxes that already exist.
+   Both directions stay supported. See docs/context/purchase-orders.md. */
+
+// Who raised it. 'ph' is the original flow and the default, so every order that existed
+// before this stays what it was.
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS raised_by TEXT NOT NULL DEFAULT 'ph'`);
+await sql(`ALTER TABLE purchase_orders DROP CONSTRAINT IF EXISTS purchase_orders_raised_by_check`);
+await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_raised_by_check CHECK (raised_by IN ('ph','supplier'))`);
+
+// "I have packed these boxes — send me labels." The handoff back to PH, and the thing
+// their queue is keyed on. Cleared when labels are assigned, so an order can go round
+// again if the supplier adds another box afterwards.
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_requested_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS labels_requested_by TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS purchase_orders_labels_requested_idx
+           ON purchase_orders (labels_requested_at) WHERE labels_requested_at IS NOT NULL`);
+
 /* ---- Empty shoe boxes: the warehouse side ----
    A carton of empty boxes is received, shelved, found and used exactly like a pair —
    same `items` rows, same VINs, same history — because that is what makes the whole

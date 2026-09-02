@@ -29,6 +29,8 @@ import { PoDetailsEdit, PoAddLabels, PoLabelTools } from '../components/PoEdit.j
 import { boxStatusLabel, boxChipCls, checkpointAdds, trackWords, isBoxesOrder, shippedProgress } from '../lib/postatus.js';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
+import { PoOriginChip } from '../components/PoOriginChip.jsx';
+import { PoAssignLabels } from '../components/PoAssignLabels.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
 
 const FROZEN = ['reconciled', 'closed'];
@@ -195,12 +197,22 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                   <span className="po-code">{po.po_code}</span>
                   <PoStatusChip po={chipPo} />
                   <PoKindChip po={po} />
+                  <PoOriginChip po={po} />
                 </div>
                 <div className="po-detail-meta muted sm">
                   <span>From <b>{po.supplier_name}</b></span>
                   {po.tag_code && <span><Icon name="tag" /> {po.tag_code}</span>}
                   {po.date_of_purchase && <span>{String(po.date_of_purchase).slice(0, 10)}</span>}
-                  <span>{originals.length} label{originals.length === 1 ? '' : 's'}</span>
+                  {/* "Boxes" until they have labels. On a manifest-first order the
+                      supplier has declared boxes and there is no label on any of them
+                      yet — calling them labels invites somebody to go looking for
+                      tracking numbers that were never bought. */}
+                  {(() => {
+                    const labelled = originals.filter((b) => b.tracking_number).length;
+                    const noun = labelled === 0 ? 'box' : 'label';
+                    return <span>{originals.length} {noun}{originals.length === 1 ? '' : (noun === 'box' ? 'es' : 's')}
+                      {labelled > 0 && labelled < originals.length ? ` · ${originals.length - labelled} without a label` : ''}</span>;
+                  })()}
                   {/* Two different facts, never one number: `declared` is what the SUPPLIER
                       said, `received` is what we counted. An order received with no manifest
                       is legitimately "0 declared", which read as "nothing here" beside a
@@ -229,6 +241,17 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
 
               {/* The order's own details — supplier, tag, date, boxes expected, notes.
                   Collapsed behind its button: this page is read far more often than edited. */}
+              {/* The supplier has packed and is waiting on us to buy labels. Said here,
+                  at the top of the order, because it is the only thing anyone needs to
+                  do with it. */}
+              {po.labels_requested_at && (
+                <div className="po-labels-wanted">
+                  <b>Labels requested{po.labels_requested_by ? ` by ${po.labels_requested_by}` : ''}.</b>{' '}
+                  {boxes.filter((b) => b.kind !== 'replacement' && !b.tracking_number).length} box(es) are packed and
+                  waiting for a tracking number. Buy the labels, then assign them below.
+                </div>
+              )}
+              <PoAssignLabels po={po} boxes={boxes} onDone={load} onSignOut={onSignOut} />
               <PoDetailsEdit po={po} boxes={boxes} lineCount={lines.length} onChanged={load} onSignOut={onSignOut} />
 
               {/* The courier's own labels, so the supplier can print the one for the box

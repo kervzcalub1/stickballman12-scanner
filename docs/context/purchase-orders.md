@@ -9,6 +9,67 @@ the courier carries it, and the **warehouse** receives it back **against the sam
 reconciling what was promised vs. what actually arrived. A batch spans **multiple shipping
 labels** (one tracking number each); it closes only when every label is shipped.
 
+## Manifest first: the supplier can raise the order (2026-09-03)
+
+The workflow inverted. It **was** labels-first: PH buys courier labels, raises the order
+around their tracking numbers, and the supplier fills each one. We now want the
+supplier's manifest **before** we pay for labels — so the supplier raises the order,
+declares the boxes they packed and what is in them, asks for labels, and PH assigns the
+tracking numbers onto boxes that already exist.
+
+**Both directions stay supported.** `purchase_orders.raised_by` is `'ph'` (the default,
+so every order raised before this stays what it was) or `'supplier'`.
+
+### What the supplier can do
+
+| | |
+|---|---|
+| Raise an order | `po/create` now accepts the `supplier` role. **The account comes off the token, never the body** — a posted `supplierUserId` would let one supplier open orders against another. `boxes: N` opens N *numberless* boxes; the old `labels: [...]` form is unchanged. |
+| Add a box | `po/label-add` with `boxes: N`. A supplier sending `labels` is refused — courier numbers are ours to buy. |
+| Remove a box | `po/label-remove`, on their own order, while the box is `pending`/`packed`/`pre_transit`. Once it has actually gone it is a record of something physical, and the existing "stock counted into it can only be moved" rule still applies on top. |
+| Ask for labels | `po/request-labels` sets `labels_requested_at`. **Refused with nothing declared** — that is the entire point of the change. |
+
+### What PH does
+
+`po/assign-labels` puts the courier's numbers onto the declared boxes. **The mapping is a
+decision, not a derivation:** a numberless box has nothing to match a page against, so the
+client reads the sheet, lays the labels on **in page order** (page 1 → box 1) and shows
+the whole mapping for a person to confirm, every row changeable. That is the *opposite* of
+`attachPoLabels`, which maps a stored PDF's pages onto labels that already carry numbers
+and must never use page order.
+
+Every number is checked for a global clash **before any of them is written** — a
+half-assigned sheet is worse than a refused one. Assigning registers each number with
+17TRACK exactly as creating a label does, and clears the request **only once every box has
+one**: clearing on the first would drop the order out of the queue with boxes still
+waiting.
+
+PH's "override how many boxes the supplier declared" is the same `po/label-add` /
+`po/label-remove` they already had, and `expected_boxes` on "Edit details".
+
+### The manifest, printed before the label exists
+
+The sheet is taped inside the carton while the supplier waits, so **the box number is the
+only thing identifying the parcel** for a while. The per-box manifest now leads with a
+large `BOX 3 OF 6` panel — amber and reading **"NO SHIPPING LABEL YET · Identify this box
+by its NUMBER until the label arrives"** when there is no tracking number, and carrying
+the number itself once there is.
+
+**Nothing regenerates**: the manifest has always been built live from `po/get` on each
+click, so the same download link produces the tracking-number version the moment labels
+are assigned.
+
+### Where the log is
+
+`po_comments` with `kind='system'` — the order's existing audit trail, no new table.
+It now records box added / box removed / labels requested / labels withdrawn / tracking
+assigned (naming each box → number) / "every box now has a label".
+
+Chips: `Labels requested` (amber, outranks "Filling" — the ball is ours) and `From
+supplier`. Home badge: `po_labels_requested` on the Purchase Orders card.
+
+Tests: `e2e/po-supplier-raised.spec.js`.
+
 ## Two kinds of order: shoes, and EMPTY SHOE BOXES (2026-09-02)
 
 We don't only buy shoes. A pair turns up with a crushed box, or with no box at all, so

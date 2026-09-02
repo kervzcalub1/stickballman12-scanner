@@ -24,7 +24,7 @@ import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
-import { isBoxesOrder, hasLeftSupplier } from '../lib/postatus.js';
+import { isBoxesOrder, hasLeftSupplier, isSupplierRaised } from '../lib/postatus.js';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',     cls: 'draft' },
@@ -40,6 +40,9 @@ const PO_STATUS = {
 // (`shipped_count`/`box_count`) or, on the detail, from the labels themselves.
 function poChipOf(po, boxes) {
   if (po.status === 'reconciled' || po.status === 'closed') return PO_STATUS[po.status];
+  // They've asked us for labels. Their own screen has to say so too — "Filling" reads as
+  // if the ball were still theirs, which is the opposite of the truth.
+  if (po.labels_requested_at && po.status === 'draft') return { label: 'Labels requested', cls: 'warn' };
   const own = (boxes || []).filter((b) => b.kind !== 'replacement');
   const total = own.length || Number(po.box_count) || 0;
   // `hasLeftSupplier` is the shared definition (src/lib/postatus.js) — this screen had it
@@ -118,6 +121,10 @@ function SupplierHome({ user, onPick, onSignOut, onHelp }) {
 }
 
 export function SupplierApp({ user, onSignOut }) {
+  const [newOpen, setNewOpen] = useState(false);
+  const [newTag, setNewTag] = useState('');
+  const [newBoxes, setNewBoxes] = useState('1');
+  const [newKind, setNewKind] = useState('shoes');
   const [page, setPage] = useState(() => supPageForPath(window.location.pathname));
   const goPage = (p) => {
     setPage(p);
@@ -252,6 +259,46 @@ export function SupplierApp({ user, onSignOut }) {
     return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   }
 
+  // Raise your own shipment. The workflow inverted: we want the manifest BEFORE we buy
+  // labels, so the supplier opens the order, declares the boxes they packed and what is
+  // in them, and asks for labels afterwards.
+  // Add a box to an order you already opened, and take one off if you packed fewer than
+  // you thought. Both only while the box hasn't gone — the server enforces that too.
+  const addBox = async () => {
+    setBusy(true); setError('');
+    try { await api.poBoxAdd(Number(openId), 1); await refreshDetail(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  };
+  const removeBox = async (box) => {
+    if (!window.confirm(`Remove box ${box.box_number}? Anything listed on it is removed with it.`)) return;
+    setBusy(true); setError('');
+    try { await api.poLabelRemove(Number(box.id), String(box.box_number)); await refreshDetail(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  };
+  // "I've packed these — send me labels." The handoff back to Stickballman12.
+  const askForLabels = async (on = true) => {
+    setBusy(true); setError('');
+    try { await api.poRequestLabels(Number(openId), on); await refreshDetail(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const createShipment = async () => {
+    setBusy(true); setError('');
+    try {
+      const n = Math.max(1, Math.min(100, parseInt(newBoxes, 10) || 1));
+      const { po } = await api.poCreate({ tagCode: newTag.trim(), notes: '', boxes: n, orderKind: newKind });
+      setNewOpen(false); setNewTag(''); setNewBoxes('1'); setNewKind('shoes');
+      await loadList();
+      openPo(po.id);
+    } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      setError(e.message);
+    } finally { setBusy(false); }
+  };
+
   // ---- List view ----------------------------------------------------------
   if (!openId) {
     return (
@@ -261,8 +308,49 @@ export function SupplierApp({ user, onSignOut }) {
         <div className="wrap-narrow">
           <p className="muted sm">Signed in as <b>{user.name || user.username}</b> · your batches from Stickballman12.</p>
           {error && <div className="po-err">{error}</div>}
+
+          {/* Start one yourself: pack the boxes, list what is in them, then ask for
+              labels. Stickballman12 can still open one for you the old way — both kinds
+              land in this same list. */}
+          {!newOpen ? (
+            <button className="btn primary sup-new-btn" onClick={() => setNewOpen(true)}>+ New shipment</button>
+          ) : (
+            <div className="card sup-new">
+              <h3 className="rows-title">New shipment</h3>
+              <p className="muted sm">Open it now, list what you packed, then ask us for labels — we’ll put the tracking numbers on afterwards.</p>
+              {/* What is in the boxes decides what you are asked for on every item: a
+                  size for a pair, a size AND the carton's dimensions for an empty box.
+                  So it is the first question, not a detail further down. */}
+              <label className="sup-new-field"><span className="sup-new-label">What are you sending?</span>
+                <span className="seg po-kind-seg" role="group" aria-label="What this shipment holds">
+                  <button type="button" className={`seg-btn ${newKind === 'shoes' ? 'on' : ''}`}
+                    aria-pressed={newKind === 'shoes'} onClick={() => setNewKind('shoes')}>Shoes</button>
+                  <button type="button" className={`seg-btn ${newKind === 'boxes' ? 'on' : ''}`}
+                    aria-pressed={newKind === 'boxes'} onClick={() => setNewKind('boxes')}>Empty shoe boxes</button>
+                </span>
+                <span className="muted sm">{newKind === 'boxes'
+                  ? 'Replacement boxes for pairs that came crushed or with none. You’ll give each one a SKU, size, dimensions and cost.'
+                  : 'A shipment of pairs. You’ll give each one a SKU and size.'}</span>
+              </label>
+              <div className="sup-new-grid">
+                <label className="sup-new-field"><span className="sup-new-label">How many boxes?</span>
+                  <input type="number" min="1" max="100" inputMode="numeric" value={newBoxes}
+                    onChange={(e) => setNewBoxes(e.target.value)} />
+                </label>
+                <label className="sup-new-field"><span className="sup-new-label">Tag / name <span className="muted">(optional)</span></span>
+                  <input value={newTag} maxLength={120} placeholder="e.g. Joey JP23 AJ40" onChange={(e) => setNewTag(e.target.value)} />
+                </label>
+              </div>
+              <p className="muted sm sup-new-hint">You can add or remove boxes later, right up until one ships.</p>
+              <div className="sup-new-actions">
+                <button className="btn ghost" disabled={busy} onClick={() => setNewOpen(false)}>Cancel</button>
+                <button className="btn primary" disabled={busy} onClick={createShipment}>{busy ? 'Opening…' : 'Open shipment'}</button>
+              </div>
+            </div>
+          )}
+
           {pos == null ? <p className="muted">Loading…</p>
-            : pos.length === 0 ? <div className="card empty-state">No shipments assigned yet. When the Stickballman12 team opens a batch for you, it shows up here.</div>
+            : pos.length === 0 ? <div className="card empty-state">Nothing here yet. Tap <b>New shipment</b> when you have boxes packed — or wait for Stickballman12 to open one for you.</div>
             : (
               <div className="po-list">
                 {pos.map((p) => (
@@ -293,6 +381,8 @@ export function SupplierApp({ user, onSignOut }) {
   // ones. It changes what this supplier is asked to declare — a carton's dimensions
   // rather than a shoe size — so it runs through every list below.
   const boxesOrder = isBoxesOrder(po);
+  const selfRaised = isSupplierRaised(po);
+  const awaitingLabels = !!po?.labels_requested_at;
   // What one declared unit is called. A shipment of empty boxes counts boxes; "12 units"
   // on a page whose every line is a carton reads like a different number entirely.
   const unitsLabel = (n) => `${n} ${boxesOrder ? (n === 1 ? 'box' : 'boxes') : `unit${n === 1 ? '' : 's'}`}`;
@@ -349,7 +439,29 @@ export function SupplierApp({ user, onSignOut }) {
               </p>
               {po.status !== 'draft'
                 ? <p className="po-shipped-note">✓ All labels shipped — this batch is on its way to the warehouse.</p>
-                : <p className="muted sm">Match each label to the tracking numbers we sent in the group chat, {boxesOrder ? 'add the empty boxes going in it' : 'scan its items'}, then ship it. The batch closes when every label is shipped.</p>}
+                : awaitingLabels ? (
+                  <p className="muted sm">You’ve asked for labels — we’ll buy them and the tracking numbers will appear on your boxes here. You can keep adding to the boxes until then.</p>
+                ) : selfRaised ? (
+                  <p className="muted sm">List what you packed in each box, then <b>ask for labels</b>. We put the tracking numbers on afterwards, so you can print each box’s manifest and seal it while you wait.</p>
+                ) : <p className="muted sm">Match each label to the tracking numbers we sent in the group chat, {boxesOrder ? 'add the empty boxes going in it' : 'scan its items'}, then ship it. The batch closes when every label is shipped.</p>}
+
+              {/* Add or drop a box while nothing has gone. The count is theirs to correct
+                  until a carrier has one — after that a box is a record of something that
+                  physically left. */}
+              {po.status === 'draft' && (
+                <div className="sup-box-tools">
+                  <button className="btn sm" disabled={busy} onClick={addBox}>+ Add a box</button>
+                  {!awaitingLabels ? (
+                    <button className="btn sm primary" disabled={busy} onClick={() => askForLabels(true)}>
+                      <Icon name="tag" /> Ask for labels
+                    </button>
+                  ) : (
+                    <button className="btn sm ghost" disabled={busy} onClick={() => askForLabels(false)}>
+                      Cancel the label request
+                    </button>
+                  )}
+                </div>
+              )}
               {boxesOrder && po.status === 'draft' && (
                 <p className="po-kind-note sm">This order is for <b>empty shoe boxes</b>. For each one, give the SKU and shoe name it belongs to, the box’s dimensions, and what it cost — the dimensions are how we tell two boxes of the same shoe apart.</p>
               )}
@@ -416,13 +528,23 @@ export function SupplierApp({ user, onSignOut }) {
                 <div key={box.id} className={`card po-box ${isShipped ? 'shipped' : ''} ${isPacked ? 'packed' : ''} ${isReplacement ? 'replacement' : ''}`}>
                   <div className="po-card-top">
                     <div>
-                      <b>{isReplacement ? 'Replacement shipment' : `Label ${box.box_number}`}</b>
+                      {/* "Box" until it has a label, "Label" once it does — because for
+                          a while the number IS how the box is identified, and calling it
+                          a label while it hasn't got one is the confusion this flow
+                          exists to avoid. */}
+                      <b>{isReplacement ? 'Replacement shipment' : `${box.tracking_number ? 'Label' : 'Box'} ${box.box_number}`}</b>
                       <div className="po-track muted sm">
                         {carrierName(box.carrier || box.carrier_key) ? <span className="po-carrier">{carrierName(box.carrier || box.carrier_key)}</span> : null}
                         {carrierName(box.carrier || box.carrier_key) && box.tracking_number ? ' · ' : ''}
-                        {box.tracking_number || (carrierName(box.carrier || box.carrier_key) ? '' : '— no tracking #')}
+                        {box.tracking_number || (carrierName(box.carrier || box.carrier_key) ? '' : 'No label yet — print the manifest and seal it; we’ll send the tracking number')}
                       </div>
                     </div>
+                    {/* Drop a box you didn't end up packing. Only while it hasn't gone —
+                        after that it is a record of something that physically left. */}
+                    {!isReplacement && !isShipped && po.status === 'draft' && (
+                      <button type="button" className="btn sm ghost sup-box-remove" disabled={busy}
+                        title={`Remove box ${box.box_number}`} onClick={() => removeBox(box)}>Remove</button>
+                    )}
                     {/* The count belongs on every label, not only the one being filled: once
                         it's closed or gone, "how many pairs did I put in this box?" is
                         exactly what gets asked when the warehouse comes back short. */}

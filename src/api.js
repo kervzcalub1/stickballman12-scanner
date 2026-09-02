@@ -261,6 +261,11 @@ export const api = {
   // passed is written — see api/po/update.js.
   poUpdate: (poId, patch) => post('/api/po/update', { poId, ...patch }),
   poLabelAdd: (poId, labels) => post('/api/po/label-add', { poId, labels }),
+  // Manifest-first: the supplier declares BOXES (no tracking yet), asks for labels, and
+  // PH assigns the courier's numbers onto those boxes afterwards.
+  poBoxAdd: (poId, boxes) => post('/api/po/label-add', { poId, boxes }),
+  poRequestLabels: (poId, requested = true) => post('/api/po/request-labels', { poId, requested }),
+  poAssignLabels: (poId, assignments) => post('/api/po/assign-labels', { poId, assignments }),
   poLabelUpdate: (boxId, patch) => post('/api/po/label-update', { boxId, ...patch }),
   poLabelRemove: (boxId, confirm) => post('/api/po/label-remove', { boxId, confirm }),
   // A label the warehouse already counted stock into can only be MOVED, never deleted:

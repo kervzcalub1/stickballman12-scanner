@@ -24,7 +24,7 @@ import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
-import { isBoxesOrder } from '../lib/postatus.js';
+import { isBoxesOrder, hasLeftSupplier } from '../lib/postatus.js';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',     cls: 'draft' },
@@ -42,9 +42,10 @@ function poChipOf(po, boxes) {
   if (po.status === 'reconciled' || po.status === 'closed') return PO_STATUS[po.status];
   const own = (boxes || []).filter((b) => b.kind !== 'replacement');
   const total = own.length || Number(po.box_count) || 0;
-  const gone = own.length
-    ? own.filter((b) => !['pending', 'pre_transit', 'packed'].includes(b.status)).length
-    : Number(po.shipped_count) || 0;
+  // `hasLeftSupplier` is the shared definition (src/lib/postatus.js) — this screen had it
+  // right by hand while the staff list counted `pre_transit` as shipped, so the supplier
+  // and the team were reading different answers off the same order.
+  const gone = own.length ? own.filter(hasLeftSupplier).length : Number(po.shipped_count) || 0;
   if (total > 0 && gone === total && po.status !== 'draft') return { label: 'On its way to us', cls: 'shipped' };
   if (total > 0 && gone === total) return PO_STATUS.shipped;
   if (gone > 0) return { label: `${gone} of ${total} shipped`, cls: 'shipped' };

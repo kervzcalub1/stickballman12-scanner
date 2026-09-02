@@ -97,6 +97,45 @@ all, because a box line carries a real size and both sides already group on
 
 Tests: `e2e/po-empty-boxes.spec.js`.
 
+## The status chip, and what "shipped" means (2026-09-03)
+
+The chip on the PO lists said **Shipped** on orders where not one label had left the
+supplier. `shipped_count` was `status <> 'pending'`, which swept in:
+
+- **`packed`** — the supplier closed the box; it is still on their floor.
+- **`pre_transit`** — and this is the one that made it near-universal. Tracking is
+  registered when the PO is **created**, so the carrier acknowledges the label within
+  minutes and 17TRACK reports `InfoReceived`. Every order flipped out of `pending`
+  before anything was packed, and so read "Shipped" from the moment it was raised.
+
+**One definition now, in two twinned constants:** `LEFT_SUPPLIER_STATUSES` in
+`api/_lib/db.js` and `LEFT_SUPPLIER` / `hasLeftSupplier` in `src/lib/postatus.js` —
+`['shipped', 'in_transit', 'delivered']`. That is exactly what `getPoReconciliation`
+already counted as `expected`, and the exact complement of `STILL_WITH_SUPPLIER` in
+`po-manifest.js`. There were **three** hand-written copies of this test before
+(`listPos` ×2, `PoDetail`'s `chipPo`, `SupplierApp`'s `poChipOf`) and the supplier's was
+the only correct one — so the supplier and the team were reading different answers off
+the same order.
+
+**The chip now carries the fraction**, because "how many of the 22 are actually moving"
+was only answerable by opening the order and counting labels by eye:
+
+| State | Chip |
+|---|---|
+| No label has left | `Filling` (or the raw status) |
+| Some have | `5/22 shipped` |
+| All have | `22/22 shipped` |
+| All gone, some landed | `9/22 delivered` |
+| All landed | `All delivered` / `Delivered · to reconcile` |
+| Being scanned in | `Receiving` |
+| Settled | `Reconciled` / `Closed` |
+
+A single-label order says `Shipped`/`Delivered` rather than `1/1`. `delivered_count` also
+gained the `kind <> 'replacement'` filter its denominator always had — without it a
+delivered reship could push `delivered` past `box_count` and fire "all delivered" early.
+
+Tests: `e2e/po-received-box-identity.spec.js`.
+
 ## Editing an order after it exists (2026-08-21)
 
 An order isn't settled the moment it's raised: the supplier buys more and gets another

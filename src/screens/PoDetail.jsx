@@ -26,11 +26,10 @@ import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLinkBatchModal } from '../components/PoLinkBatch.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoDetailsEdit, PoAddLabels, PoLabelTools } from '../components/PoEdit.jsx';
-import { boxStatusLabel, boxChipCls, checkpointAdds, trackWords } from '../lib/postatus.js';
+import { boxStatusLabel, boxChipCls, checkpointAdds, trackWords, isBoxesOrder, shippedProgress } from '../lib/postatus.js';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
-import { isBoxesOrder } from '../lib/postatus.js';
 
 const FROZEN = ['reconciled', 'closed'];
 
@@ -104,13 +103,10 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   // the raw order row), so they're rebuilt here from the labels themselves — the same
   // numbers, from the same facts. Without this the page would say "Filling" under a set of
   // delivered labels, which is the exact contradiction poChipOf exists to end.
-  const chipPo = po && {
-    ...po,
-    box_count: originals.length,
-    shipped_count: originals.filter((b) => b.status !== 'pending').length,
-    delivered_count: boxes.filter((b) => b.status === 'delivered').length,
-    received_units: receivedTotal,
-  };
+  const chipPo = po && (() => {
+    const { gone, total, delivered } = shippedProgress(boxes);
+    return { ...po, box_count: total, shipped_count: gone, delivered_count: delivered, received_units: receivedTotal };
+  })();
 
   // The manifest is editable until the order's count is FROZEN — the same test the server
   // applies for staff writing on a supplier's behalf (`manifestEditBlock`, onBehalf). Where

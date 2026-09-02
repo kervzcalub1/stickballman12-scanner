@@ -66,21 +66,45 @@ export function checkpointAdds(checkpoint, status) {
 // So: once every label has landed, say so; the reconciliation queue owns what happens next.
 // Falls back to the raw status whenever the counts can't say better (a supplier's own
 // response carries no `received_units`, and older callers pass no counts at all).
+// A label that has ACTUALLY LEFT THE SUPPLIER — the client-side twin of
+// LEFT_SUPPLIER_STATUSES in api/_lib/db.js. `pre_transit` is deliberately NOT here:
+// tracking registers when the PO is created, so the carrier acknowledges the label within
+// minutes while the box is still on the supplier's floor. `packed` isn't either — the box
+// is closed, but nobody has collected it.
+export const LEFT_SUPPLIER = ['shipped', 'in_transit', 'delivered'];
+export const hasLeftSupplier = (box) => LEFT_SUPPLIER.includes(box?.status);
+// How many of an order's own labels are on their way, out of how many there are.
+// Replacements are excluded: a reship is not one of the boxes the order was raised for,
+// so counting it would make the denominator disagree with the order.
+export function shippedProgress(boxes) {
+  const own = (boxes || []).filter((b) => b.kind !== 'replacement');
+  return { gone: own.filter(hasLeftSupplier).length, total: own.length,
+    delivered: own.filter((b) => b.status === 'delivered').length };
+}
+
 export function poChipOf(p) {
   if (p.status === 'reconciled' || p.status === 'closed') return PO_STATUS[p.status];
   const boxes = Number(p.box_count) || 0;
   const delivered = Number(p.delivered_count) || 0;
   const shipped = Number(p.shipped_count) || 0;
   const received = Number(p.received_units) || 0;
+  // "How many of the 22 are actually moving" is the question this chip is asked most, and
+  // it used to be answerable only by opening the order and counting labels by eye.
+  const frac = (n, noun) => (boxes === 1
+    ? { label: noun === 'shipped' ? 'Shipped' : 'Delivered', cls: noun === 'shipped' ? 'shipped' : 'ok' }
+    : { label: `${n}/${boxes} ${noun}`, cls: noun === 'shipped' ? 'shipped' : 'ok' });
   if (boxes > 0 && delivered === boxes) {
     return received > 0
       ? { label: 'Delivered · to reconcile', cls: 'ok' }
       : { label: 'All delivered', cls: 'ok' };
   }
   if (p.status === 'receiving') return PO_STATUS.receiving;
+  // Everything has left, and some has landed — the useful number has moved on from "how
+  // many shipped" to "how many are here".
+  if (boxes > 0 && shipped === boxes && delivered > 0) return frac(delivered, 'delivered');
   // A label out with the carrier means the supplier has stopped filling, whatever the
   // order row still says.
-  if (shipped > 0) return PO_STATUS.shipped;
+  if (shipped > 0) return frac(shipped, 'shipped');
   return PO_STATUS[p.status] || { label: p.status, cls: 'muted' };
 }
 

@@ -116,6 +116,19 @@ export const PH_EXCLUDED_KINDS = ['instore', 'existing', 'boxes'];
 // with "Batch not found".
 export const SHIPMENT_KINDS = ['receiving', 'boxes'];
 
+// A label that has ACTUALLY LEFT THE SUPPLIER. The same three states
+// `getPoReconciliation` counts as `expected`, and the exact complement of
+// `STILL_WITH_SUPPLIER` in po-manifest.js — one definition, so the reconciliation, the
+// manifest-edit window and the status chip can never disagree about where a parcel is.
+//
+// `pre_transit` is the one that has to stay OUT and is the easiest to get wrong: tracking
+// is registered when the PO is CREATED, so the carrier acknowledges the label within
+// minutes and 17TRACK reports InfoReceived — the label exists, the box is still on the
+// supplier's floor. Counting it as shipped made almost every order read "Shipped" from
+// the moment it was raised. `packed` is out for the plainer reason that the supplier has
+// closed the box but nobody has collected it.
+export const LEFT_SUPPLIER_STATUSES = ['shipped', 'in_transit', 'delivered'];
+
 // Batch kinds the COSTS page ignores. 'existing' has no cost to capture by design and
 // runs to thousands of pairs; 'boxes' is not a pair at all — a box's cost is settled with
 // the supplier on the purchase order, not chased pair-by-pair on a PH worklist. In-store
@@ -3221,7 +3234,8 @@ export async function listPos({ uid, supplierScope }) {
     return sql`
       SELECT p.*,
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
-        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement' AND b.status <> 'pending')::int AS shipped_count,
+        (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'
+           AND b.status = ANY(${LEFT_SUPPLIER_STATUSES}))::int AS shipped_count,
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
         (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l
            LEFT JOIN po_boxes lb ON lb.id = l.po_box_id
@@ -3240,8 +3254,12 @@ export async function listPos({ uid, supplierScope }) {
   return sql`
     SELECT p.*,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
-      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement' AND b.status <> 'pending')::int AS shipped_count,
-      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status = 'delivered')::int AS delivered_count,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'
+         AND b.status = ANY(${LEFT_SUPPLIER_STATUSES}))::int AS shipped_count,
+      -- Replacements excluded here too, or the delivered count could exceed its own
+      -- denominator (box_count counts originals) and "all delivered" would fire early.
+      (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'
+         AND b.status = 'delivered')::int AS delivered_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
       (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l
          LEFT JOIN po_boxes lb ON lb.id = l.po_box_id

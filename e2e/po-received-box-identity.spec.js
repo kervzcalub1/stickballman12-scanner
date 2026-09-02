@@ -155,5 +155,37 @@ test('a draft order whose labels have all gone is not still "Filling"', async ({
   await q(`UPDATE purchase_orders SET status = 'draft' WHERE id = $1`, [Number(f.po.id)]);
   await loginAs(page, 'ph_team');
   await page.goto(`/ph/po-status?po=${f.po.id}`);
-  await expect(page.locator('.po-detail-id .po-chip:not(.kind)')).toHaveText('Shipped', { timeout: 15_000 });
+  // A multi-label order says how many of its labels are moving, not just that some are.
+  await expect(page.locator('.po-detail-id .po-chip:not(.kind)')).toHaveText(/^\d+\/\d+ shipped$/, { timeout: 15_000 });
+});
+
+// The reported bug. Tracking is registered when the PO is CREATED, so 17TRACK acknowledges
+// every label within minutes and moves it to `pre_transit` — the label exists, the box is
+// still on the supplier's floor. `shipped_count` counted anything that wasn't `pending`,
+// so an order read "Shipped" from the moment it was raised, before a thing was packed.
+test('a label the carrier has not collected is NOT counted as shipped', async ({ page, request }) => {
+  const f = await getFixture(request);
+  await q(`UPDATE purchase_orders SET status = 'draft' WHERE id = $1`, [Number(f.po.id)]);
+  for (const st of ['pre_transit', 'packed']) {
+    await q(`UPDATE po_boxes SET status = $2 WHERE po_id = $1`, [Number(f.po.id), st]);
+    const list = await (await request.get('/api/po/list', { headers: auth('ph_team') })).json();
+    const row = list.pos.find((x) => Number(x.id) === Number(f.po.id));
+    expect(row.shipped_count, `${st} must not read as shipped`).toBe(0);
+  }
+  await loginAs(page, 'ph_team');
+  await page.goto(`/ph/po-status?po=${f.po.id}`);
+  await expect(page.locator('.po-detail-id .po-chip:not(.kind)')).toHaveText('Filling', { timeout: 15_000 });
+});
+
+test('the chip counts how many of the order’s labels are actually moving', async ({ request }) => {
+  const f = await getFixture(request);
+  const boxes = await q(`SELECT id FROM po_boxes WHERE po_id = $1 ORDER BY box_number`, [Number(f.po.id)]);
+  await q(`UPDATE po_boxes SET status = 'pre_transit' WHERE po_id = $1`, [Number(f.po.id)]);
+  await q(`UPDATE po_boxes SET status = 'in_transit' WHERE id = $1`, [boxes[0].id]);
+  const list = await (await request.get('/api/po/list', { headers: auth('ph_team') })).json();
+  const row = list.pos.find((x) => Number(x.id) === Number(f.po.id));
+  // One moving out of however many the fixture has — the denominator is the order's own
+  // labels, and a reship would not be one of them.
+  expect(row.shipped_count).toBe(1);
+  expect(row.box_count).toBe(boxes.length);
 });

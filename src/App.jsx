@@ -21,6 +21,7 @@ import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { NoBoxReport } from './screens/NoBoxReport.jsx';
 import { ItemCosts } from './screens/ItemCosts.jsx';
 import { BoxLabels } from './screens/BoxLabels.jsx';
+import { BoxStock } from './screens/BoxStock.jsx';
 import { StatusScanPage } from './screens/StatusScanPage.jsx';
 import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
 import { ShelvePage } from './screens/ShelvePage.jsx';
@@ -185,6 +186,7 @@ export default function App() {
   // Replacement box labels — admin/warehouse (ph_team short-circuits to PHTeamApp above).
   if (view === 'costs') return withAdvisor(<ItemCosts onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'box-labels') return withAdvisor(<BoxLabels navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'box-stock') return withAdvisor(<BoxStock onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'sold') return withAdvisor(<StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'shipped') return withAdvisor(<StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'rescalereq') return withAdvisor(<RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />);

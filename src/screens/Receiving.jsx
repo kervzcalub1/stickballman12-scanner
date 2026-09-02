@@ -217,7 +217,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         source: 'manual', upc: l.upc || '', gender: l.gender || null, colorway: l.colorway || null,
         withBox: true, expected: true, sizes: [],
       });
-      bySku.get(key).sizes.push({ key: cartKey++, size: String(l.size), qty: 0, expectedQty: l.qty_expected, vins: [] });
+      // On an EMPTY-BOX order a line is a size AND a carton, so both ride on the row —
+      // the same shoe in a 13x9x5 and a 15x10x6 is two things to count, not one.
+      bySku.get(key).sizes.push({
+        key: cartKey++, size: String(l.size), dimensions: l.dimensions || null,
+        qty: 0, expectedQty: l.qty_expected, vins: [],
+      });
     }
     return [...bySku.values()];
   }
@@ -316,6 +321,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // Receiving against a PO always uses the per-box (box-list) flow — even a
   // single-label PO — so every label goes through its manifest checklist.
   const isPoReceive = !!receivingPo && !isBoxMode && !noShipment;
+  // Receiving a shipment of EMPTY shoe boxes. It is the same wizard, the same labels and
+  // the same per-box commit — what changes is that nobody scans two hundred identical
+  // cartons, so step 2 is the manifest as a counting checklist and nothing here mints a
+  // sticker, asks for a photo, or offers a "with box" toggle.
+  const isBoxesPo = isPoReceive && receivingPo?.po?.order_kind === 'boxes';
   const isMultiBoxNew = !noShipment && !isBoxMode && (expectedBoxesNum > 1 || isPoReceive);
   const receivedSlots = boxSlots.filter((s) => s.status === 'received').length;
 
@@ -395,6 +405,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       })));
     }
   }
+  // "Everything arrived as declared" — every row's counted quantity set to what the
+  // manifest expected, in one tap. Only offered on an empty-box shipment, and only while
+  // NOTHING has been counted yet: once somebody has started counting, filling the rest in
+  // for them would overwrite a count they were partway through taking.
+  const countAsDeclared = () => setItems((arr) => arr.map((it) => ({
+    ...it,
+    sizes: it.sizes.map((s) => (s.expectedQty > 0 ? { ...s, qty: s.expectedQty } : s)),
+  })));
+
   const removeSizeRow = (itemKey, sizeKey) => setItems((arr) => arr.flatMap((it) => {
     if (it.key !== itemKey) return [it];
     const sizes = it.sizes.filter((s) => s.key !== sizeKey);
@@ -1294,7 +1313,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, goatOnly: it.goatOnly, vin: r.vins?.[n] || null });
+            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, goatOnly: it.goatOnly, vin: r.vins?.[n] || null });
           }
         }
       }
@@ -1340,7 +1359,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         // as Existing Stock, which skips its post-commit print dialog. Decided at
         // commit, not read live in the modal: what got stuck on the shoes is what
         // matters, not the toggle's state while the modal happens to be open.
-        const printItems = rawVins ? [] : (res.vins || []).map((vin, i) => ({
+        // An EMPTY BOX gets no VIN sticker. Its label is the SHOE box label the Box
+        // Labels tool prints when the box is finally put on a pair — a second barcode on
+        // a carton somebody is about to fill is a sticker they have to peel off again.
+        const printItems = (rawVins || isBoxesPo) ? [] : (res.vins || []).map((vin, i) => ({
           vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
           upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
         }));
@@ -1393,7 +1415,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
       setShowConfirm(false);
       // Raw 1ID mode prints nothing — see the box-commit path above.
-      const printItems = rawVins ? [] : (batchRes?.vins || []).map((vin, i) => ({
+      const printItems = (rawVins || isBoxesPo) ? [] : (batchRes?.vins || []).map((vin, i) => ({
         vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
         upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
       }));
@@ -1755,7 +1777,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     kind={boxSlots[activeSlot]?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
                     items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
                     onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem}
-                    rawVins={rawVins} awaiting={awaitingSticker} />
+                    rawVins={rawVins && !isBoxesPo} awaiting={awaitingSticker}
+                    boxesOrder={isBoxesPo} onCountAsDeclared={countAsDeclared} />
                 </>
               ) : (
               <div className="card">
@@ -2391,8 +2414,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
    list is the picking guide and whatever stays unticked is the shortage. Adjust the
    "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
    issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem, wholeOrder = false, orderSkus, rawVins = false, awaiting = null }) {
+function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared }) {
   const done = expectedUnits > 0 && totalItems >= expectedUnits;
+  // An empty-box shipment counts BOXES, and a row is a size plus the carton it ships in.
+  const unit = (n) => (boxesOrder ? `${n} ${n === 1 ? 'box' : 'boxes'}` : `${n}`);
   // On a whole-order PO there is no per-label expectation to count against, so "0 of 0
   // checked" is noise; what matters is the running count of what came out of this box.
   const onOrder = (sku) => !!orderSkus?.has(String(sku || '').toUpperCase().replace(/[\s-]/g, ''));
@@ -2405,11 +2430,19 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
         <h3 className="rows-title">
           {title} · {wholeOrder ? 'contents' : 'manifest'}{' '}
           <span className={`po-manifest-progress ${done ? 'done' : ''}`}>
-            {wholeOrder ? `${totalItems} counted` : `${totalItems} of ${expectedUnits} checked`}
+            {wholeOrder ? `${unit(totalItems)} counted` : `${totalItems} of ${expectedUnits} ${boxesOrder ? 'boxes' : ''}checked`}
           </span>
         </h3>
         <button className="btn sm" onClick={onAddUnexpected}>+ Add {wholeOrder ? 'item' : 'unexpected'}</button>
       </div>
+      {/* Nobody opens a carton of two hundred identical boxes and ticks them one at a
+          time. The counted column still starts BLANK — a prefilled count is a count
+          nobody took — but a clean shipment is one tap away. */}
+      {boxesOrder && !wholeOrder && items.length > 0 && totalItems === 0 && (
+        <button type="button" className="btn sm po-manifest-alldeclared" onClick={onCountAsDeclared}>
+          Everything arrived as declared
+        </button>
+      )}
       {tracking ? <div className="muted sm po-manifest-track"><Icon name="tag" /> {tracking}</div> : null}
       {wholeOrder && (
         <p className="muted sm po-manifest-whole">
@@ -2455,7 +2488,13 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                     <label className="po-check">
                       <input type="checkbox" checked={got > 0}
                         onChange={(e) => onSetQty(it.key, s.key, e.target.checked ? (exp ?? 1) : 0)} />
-                      <span className="po-size-lbl">size {s.size}{exp != null ? <span className="muted"> · exp {exp}</span> : null}</span>
+                      <span className="po-size-lbl">
+                        size {s.size}
+                        {/* The carton is what tells two rows of one size apart, so it is
+                            part of the row's identity, not a footnote. */}
+                        {s.dimensions ? <span className="po-size-dims"> · {s.dimensions}</span> : null}
+                        {exp != null ? <span className="muted"> · exp {exp}</span> : null}
+                      </span>
                     </label>
                     <div className="qty-stepper">
                       <button type="button" className="btn icon ghost step" onClick={() => onSetQty(it.key, s.key, got - 1)}>−</button>

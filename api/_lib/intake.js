@@ -47,6 +47,9 @@ export function normalizeItems(rawItems, { defaultCost = null, noBoxVins = new S
       source: ['stockx', 'alias', 'kicksdb', 'manual'].includes(it.source) ? it.source : 'manual',
       gender: ['Men', 'Women', 'Youth', 'Toddler', 'Unisex'].includes(it.gender) ? it.gender : null,
       colorway: String(it.colorway ?? '').trim().slice(0, 120) || null,
+      // An EMPTY BOX carries the carton's size as well as the shoe size it was made for.
+      // Null on every pair, which is also what tells the two apart downstream.
+      dimensions: String(it.dimensions ?? '').trim().slice(0, 60) || null,
       notes: String(it.notes ?? '').trim().slice(0, 500) || null,
       withBox,
       goatOnly: it.goatOnly === true, // list to Alias(GOAT)+II only; StockX/Shopify N/A

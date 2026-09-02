@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'costs', 'payout', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge'];
+export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -90,6 +90,9 @@ export function homeCardBadges(key, c) {
   // decide something; 'Receiving' (neutral info) = arrived, still being scanned in. Both
   // hide at 0, so the card still tells you a PO is in flight without dressing it as a chore.
   if (key === 'reconcile') return [['To reconcile', c.po_to_reconcile], ['Receiving', c.po_receiving, 'info']];
+  // Empty shoe boxes. "On hand" is stock, not a chore, so it reads as neutral info; only
+  // the ones still to put away are amber. Both hide at 0, which is most days.
+  if (key === 'box-stock') return [['On hand', c.boxes_on_hand, 'info'], ['To shelve', c.boxes_needs_shelf]];
   return [];
 }
 
@@ -120,6 +123,9 @@ export const HOME_SECTIONS = [
     { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },
     { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Resolve units bought without a box' },
     { key: 'box-labels', icon: '🏷️', title: 'Box Labels', sub: 'Replacement box label for a pair with no box — by VIN, UPC or SKU' },
+    // Sits beside No Box on purpose: "is there a box for this?" is the question you ask
+    // while standing over a pair that hasn't got one.
+    { key: 'box-stock', icon: '🗃️', title: 'Empty Box Stock', sub: 'Spare shoe boxes on hand — find one that fits a pair' },
   ] },
   { title: 'Rescale', accent: 'requests', cards: [
     { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },

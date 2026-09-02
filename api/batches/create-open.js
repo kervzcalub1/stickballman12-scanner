@@ -27,6 +27,7 @@ export default async function handler(req, res) {
 
   // Optional: this open batch is being received against a purchase order.
   const poId = Number.isInteger(Number(h.poId)) && Number(h.poId) > 0 ? Number(h.poId) : null;
+  let poKind = 'receiving';
   if (poId) {
     const po = await getPo(poId);
     if (!po) return send(res, 404, { ok: false, error: 'That purchase order was not found.' });
@@ -38,6 +39,7 @@ export default async function handler(req, res) {
     // Idempotent: reuse the open batch already receiving this PO (no duplicate).
     const existing = await getOpenBatchForPo(poId);
     if (existing) return send(res, 200, { ok: true, batchCode: existing.batch_code, id: existing.id, reused: true });
+    poKind = po.order_kind === 'boxes' ? 'boxes' : 'receiving';
   }
 
   const header = {
@@ -54,6 +56,9 @@ export default async function handler(req, res) {
     batchTag: String(h.batchTag ?? '').trim().slice(0, 120) || null,
     expectedBoxes: Number.isInteger(expected) && expected > 0 ? Math.min(expected, 999) : null,
     poId,
+    // A shipment of EMPTY shoe boxes. Taken from the PO rather than the client, so a
+    // batch can never disagree with the order it is being received against.
+    kind: poKind,
   };
 
   try {

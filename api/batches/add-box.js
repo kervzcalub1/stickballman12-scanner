@@ -2,7 +2,7 @@
 // Adds a physical box (its own tracking #) to an open multi-box batch. The box
 // starts 'pending'; box-commit marks it received. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { addBatchBox, getBatchWithBoxes, dbConfigured } from '../_lib/db.js';
+import { addBatchBox, getBatchWithBoxes, dbConfigured, SHIPMENT_KINDS } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -21,7 +21,7 @@ export default async function handler(req, res) {
 
   try {
     const found = await getBatchWithBoxes(batchId);
-    if (!found || found.batch.kind !== 'receiving') return send(res, 404, { ok: false, error: 'Batch not found.' });
+    if (!found || !SHIPMENT_KINDS.includes(found.batch.kind)) return send(res, 404, { ok: false, error: 'Batch not found.' });
     if (found.batch.status !== 'open') return send(res, 409, { ok: false, error: 'This batch is already finished — reopen it to add a box.' });
     const box = await addBatchBox(batchId, { trackingNumber, boxNumber }, user.name || user.username || '');
     return send(res, 200, { ok: true, box });

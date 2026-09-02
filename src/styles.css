@@ -2559,6 +2559,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-bulk-dims-note { color: var(--ok); }
 /* Why the Add button is greyed out, said once above it rather than as five red fields. */
 .po-draft-missing { margin: 6px 0 0; color: #c6871a; }
+/* Receiving a shipment of empty boxes: the carton is part of the row's identity, so it
+   reads at the same weight as the size rather than as a muted afterthought. */
+.po-size-dims { color: #8a63e0; font-weight: 600; }
+.po-manifest-alldeclared { margin: 2px 0 10px; }
+/* Picking which empty box goes on a pair: the carton and where it's sitting read first,
+   because that is what the person walks to. */
+.nobox-boxpick { max-height: 46vh; overflow-y: auto; }
+.nobox-boxpick li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nobox-boxpick .po-line-name { flex: 1 1 auto; min-width: 0; }
+.nobox-boxpick .vin { font-size: 12px; }
+/* Empty box stock: the quantity is the answer, so it sits at the end at full weight. */
+.boxstock-shoe .po-lines li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.boxstock-shoe .po-line-name { flex: 1 1 auto; min-width: 0; }
+.boxstock-qty { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
 .po-chip.kind.shoes { background: transparent; color: var(--muted); border-color: var(--border); }
 .po-chip.kind.boxes { background: rgba(155,120,230,0.14); color: #8a63e0; border-color: rgba(155,120,230,0.45); }
 .po-chip.warn { background: rgba(198,135,26,0.14); color: #c6871a; border-color: rgba(198,135,26,0.35); }

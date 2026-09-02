@@ -9,6 +9,7 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { poMatchesSearch } from '../lib/postatus.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
+import { isBoxesOrder } from '../lib/postatus.js';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoResolution } from '../components/PoResolution.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
@@ -414,20 +415,8 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                 <span className={`po-chip ${headChip.cls}`}>{headChip.label}</span>
                 <PoKindChip po={po} />
               </div>
-              <p className="muted sm">{po.supplier_name} · received <b>{s.received_units}</b> of <b>{s.expected_units}</b> expected units</p>
-              {/* There is no way to receive a carton of empty boxes into stock yet, so
-                  nothing can ever be counted against this manifest and it reads short by
-                  its whole contents. Say so, rather than let someone settle a false
-                  shortage with a supplier. (The match itself is fine — a box line carries
-                  a real shoe size — so this banner comes down as soon as intake exists:
-                  docs/empty-boxes-warehouse-plan.md.) */}
-              {String(po.order_kind || 'shoes') === 'boxes' && (
-                <p className="rcn-no-manifest sm">
-                  This order is for <b>empty shoe boxes</b>, and warehouse intake for boxes isn’t built yet —
-                  nothing can be counted against it, so the comparison below reads short by the whole order.
-                  Settle this one with the supplier from the manifest itself, not from these numbers.
-                </p>
-              )}
+              <p className="muted sm">{po.supplier_name} · received <b>{s.received_units}</b> of <b>{s.expected_units}</b> expected {isBoxesOrder(po) ? 'boxes' : 'units'}</p>
+
               {blind ? (
                 <p className="rcn-no-manifest sm">
                   <b>No manifest provided.</b> The supplier didn’t scan out and no one entered a manifest on their behalf, so every received unit is logged but nothing is flagged as a discrepancy. The items below are what the warehouse actually received.

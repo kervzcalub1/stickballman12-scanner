@@ -2,7 +2,7 @@
 // Manually finish ('done' → committed) or reopen ('open') a multi-box batch —
 // staff override of the auto-complete. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { setBatchStatus, getBatchWithBoxes, reconcileOutcomeForIntake, dbConfigured } from '../_lib/db.js';
+import { setBatchStatus, getBatchWithBoxes, reconcileOutcomeForIntake, dbConfigured, SHIPMENT_KINDS } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -18,7 +18,7 @@ export default async function handler(req, res) {
   if (!Number.isInteger(id)) return send(res, 400, { ok: false, error: 'A valid id is required.' });
   try {
     const found = await getBatchWithBoxes(id);
-    if (!found || found.batch.kind !== 'receiving') return send(res, 404, { ok: false, error: 'Batch not found.' });
+    if (!found || !SHIPMENT_KINDS.includes(found.batch.kind)) return send(res, 404, { ok: false, error: 'Batch not found.' });
     await setBatchStatus(id, status);
     // Finishing a batch by hand is the same signal as auto-complete: a clean PO closes
     // itself, and a short/over/blind one is reported back so the person who just tapped

@@ -130,3 +130,34 @@ per pair — and **the post-commit label dialog is skipped**: the sticker is alr
 shoe, and printing those labels would put a second number on the same pair. Counting old
 stock happens deep in the racks, the furthest anyone gets from a working printer, so this
 is the flow that benefits most. See `docs/context/vin-stock.md`.
+
+## Keeping the scan field hot (2026-09-03)
+
+Reported from the floor with a screen recording: after scanning a shoe, the field for its
+1ID sticker was not focused, so the sticker could not be scanned without tapping the field
+first — and when it was scanned anyway, the count answered **"No product found for that
+SKU"** on a perfectly good sticker. Three separate causes, all on this screen:
+
+1. **`disabled={busy}` on the scan input.** A disabled field is blurred by the browser,
+   and a HID gun fires ~20 characters in a few hundred milliseconds — so while a lookup
+   was in flight the middle of the next barcode landed nowhere and the *stump* was
+   submitted. The input is now **never disabled** (only the Add button is); the 1.2s
+   per-code cooldown in `routeScan` is what stops a double-read.
+2. **The re-focus effect keyed on `rows.length`.** Re-scanning a shoe already on the shelf
+   bumps a qty, and binding a 1ID fills a `vins` array — neither changes the count, so the
+   field went cold in exactly the two moves this screen is made of. It now keys on
+   `scanSeq`, bumped by every scan whatever it turns out to be.
+3. **Our own numbers reached the catalogue.** A half-read 1ID matches neither the roll
+   pattern nor a shelf code, so it fell through to a SKU lookup — hence the phantom
+   catalogue error. `routeScan` now catches anything starting with `SBM-` **before**
+   `isLocationCode` (which happily swallows a stump like `SBM-R`) and says which of the
+   three things it is: half-read, a printed VIN rather than a roll sticker, or a sticker
+   scanned while 1ID mode is off.
+
+**The keyboard half.** The field is held focused for the gun, and on iOS a programmatic
+`focus()` gives DOM focus but no software keyboard — so it looked typable and wasn't
+(`ios-keyboard-focus-trap`). It now carries `inputMode="none"` by default, which promises
+no keyboard, plus a **Type** button that focuses from *inside* the tap so iOS actually
+raises one. Same pattern as the 1ID bar in Receiving.
+
+Tests: `e2e/existing-stock-scan-focus.spec.js`.

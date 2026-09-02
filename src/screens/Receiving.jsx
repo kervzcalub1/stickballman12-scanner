@@ -950,7 +950,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       setItems((arr) => arr.map((it) => (it.key !== lineKey ? it : {
         ...it, pending: false, failed: true, sizes: [{ key: cartKey++, size: '', qty: 1, needsSize: true, vins: vin ? [vin] : [] }],
       })));
-      setFlash({ type: 'dup', text: `Not found · ${c} — fill it in below` }); scanFeedback('dup');
+      setFlash({ type: 'dup', text: look.err?.timeout
+        ? `Catalogue timed out · ${c} — scan it again, or fill it in below`
+        : `Not found · ${c} — fill it in below` });
+      scanFeedback('dup');
       return;
     }
 

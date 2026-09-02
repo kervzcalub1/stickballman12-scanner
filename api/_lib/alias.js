@@ -97,12 +97,19 @@ const DEFAULT_PRODUCT_CONDITION = 'PRODUCT_CONDITION_NEW';
 const DEFAULT_PACKAGING_CONDITION = 'PACKAGING_CONDITION_GOOD_CONDITION';
 
 // Authenticated GET against the official Alias API. Returns { status, ok, data }.
+// The official catalogue answers in ~3s on a good day and spikes well past that. It is
+// also the ONLY source for a SKU lookup — unlike UPC search, which rotates to a fallback
+// and therefore wants `fetchWithTimeout`'s short 9s default so it can move on quickly.
+// Here there is nothing to move on to: giving up at 9s turns a slow answer into
+// "No product found for that SKU", which is a different and wrong claim.
+const ALIAS_API_TIMEOUT_MS = 20_000;
+
 export async function aliasApiGet(path, { token, query } = {}) {
   const qs = query ? `?${new URLSearchParams(query).toString()}` : '';
   const resp = await fetchWithTimeout(`${ALIAS_API_BASE}${path}${qs}`, {
     method: 'GET',
     headers: { accept: 'application/json', Authorization: `Bearer ${token}` },
-  });
+  }, ALIAS_API_TIMEOUT_MS);
   let data = null;
   try { data = await resp.json(); } catch { /* may not be JSON */ }
   return { status: resp.status, ok: resp.ok, data };

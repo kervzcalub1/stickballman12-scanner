@@ -223,7 +223,9 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
         setFlash({ type: 'warn', text: `Couldn’t look up ${c} — declaring it anyway. Type the shoe’s name, then tap the size.` });
         setError('');
       } else {
-        setError(e.message || 'Could not find that code.'); setFlash({ type: 'dup', text: 'Not found' });
+        setError(e.message || 'Could not find that code.');
+        // "Not found" on a timeout is a lie that costs somebody a search.
+        setFlash({ type: 'dup', text: e.timeout ? 'Catalogue timed out — scan again' : 'Not found' });
       }
     } finally { setBusy(false); }
   };

@@ -105,6 +105,42 @@ test('a whole-order PO still lets the shoe be scanned, then its 1ID', async ({ p
   await expect(page.getByText(new RegExp(`✓ ${sticker}`))).toBeVisible({ timeout: 15_000 });
 });
 
+test('a checklist opened before its lines arrived catches up', async ({ page }) => {
+  // The warehouse's report: box 1 of 15 had nothing to tick and no way to scan; boxes 2
+  // onwards were normal. That is what a checklist built before the PO's lines were on
+  // hand looks like — it is built once, on open, and nothing rebuilt it afterwards.
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const po = (await q(
+    `INSERT INTO purchase_orders (supplier_name, tag_code, expected_boxes, status)
+     VALUES ($1, 'E2E-LATE', 2, 'shipped') RETURNING *`, [SUPPLIER]))[0];
+  const boxes = await q(
+    `INSERT INTO po_boxes (po_id, box_number, tracking_number, status)
+     SELECT $1, g, 'E2E-LATE-' || g || '-' || $2, 'shipped' FROM generate_series(1,2) g RETURNING *`,
+    [po.id, stamp]);
+  boxes.sort((a, b) => a.box_number - b.box_number);
+  await q(`INSERT INTO po_lines (po_id, po_box_id, sku, name, size, qty_expected)
+           VALUES ($1, $2, $3, 'E2E Late Runner', '9', 4)`, [po.id, boxes[0].id, SKU]);
+
+  // Hold the PO fetch open so the box is opened while the lines are still in flight —
+  // the race the report describes, made deterministic.
+  await loginAs(page, 'warehouse');
+  await page.addInitScript(() => localStorage.setItem('sb_prefs', JSON.stringify({ rawVins: true })));
+  await stubCatalog(page);
+  let release;
+  const held = new Promise((r) => { release = r; });
+  await page.route('**/api/po/get*', async (route) => { await held; route.continue(); });
+  await page.goto('/receiving');
+  await page.getByRole('button', { name: /Receive against a purchase order/i }).click();
+  await page.getByText(po.po_code, { exact: false }).first().click();
+  release();
+  await expect(page.getByText(/Receiving against/)).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: /^Add items$/ }).first().click();
+
+  // Box 1 DOES have a declared line, so its checklist must show it however the timing fell.
+  await expect(page.getByText('E2E Late Runner').first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/exp 4/i).first()).toBeVisible();
+});
+
 test('a label the supplier never declared behaves the same way', async ({ page }) => {
   // Same dead end, different cause: a per-box order where one label carries no lines.
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;

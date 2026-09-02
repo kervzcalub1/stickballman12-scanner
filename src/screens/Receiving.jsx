@@ -566,6 +566,23 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       return next;
     });
   }, [expectedBoxesNum, isMultiBoxNew, activeBatch]);
+  // The checklist is built ONCE, when the box is opened (`openBoxSlot`). If the PO's
+  // lines are not on hand at that moment — the order was picked a beat earlier, the
+  // lookup was still in flight, the resume fetch had not landed — that box gets an empty
+  // checklist and NOTHING rebuilds it afterwards. Every box opened later is fine, because
+  // by then the data has settled.
+  //
+  // That is exactly the shape the warehouse reported: box 1 of 15 had nothing to tick and
+  // no way to scan, boxes 2 onwards were normal.
+  //
+  // Only ever fills an EMPTY cart. Once a size has been ticked or a pair added, the cart
+  // is the person's work and a late-arriving manifest must not touch it.
+  useEffect(() => {
+    if (!isPoReceive || activeSlot == null || items.length) return;
+    const rebuilt = buildManifestItems(boxSlots[activeSlot]?.poBoxId);
+    if (rebuilt.length) setItems(rebuilt);
+  }, [receivingPo, activeSlot]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 1800); return () => clearTimeout(t); }, [flash]);
 
   // Device Back button: close any open modal, else step back, else fall through

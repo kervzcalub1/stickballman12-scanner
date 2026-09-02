@@ -76,6 +76,29 @@ test('a supplier raises their own order, and its boxes start with no tracking nu
   expect(boxes.map((b) => b.box_number)).toEqual([1, 2, 3]);
 });
 
+test('a supplier says whether the shipment is shoes or empty boxes', async ({ request }) => {
+  // The two features compose: a supplier-raised order can be an empty-box order, and then
+  // it demands a carton size on every line exactly as a PH-raised one does.
+  const r = await request.post('/api/po/create', {
+    headers: asSupplier(SUP), data: { boxes: 1, orderKind: 'boxes' },
+  });
+  expect(r.ok(), await r.text()).toBeTruthy();
+  const { po, boxes } = await r.json();
+  expect(po.order_kind).toBe('boxes');
+  expect(po.raised_by).toBe('supplier');
+
+  const sizeOnly = await request.post('/api/po/scan', {
+    headers: asSupplier(SUP), data: { poBoxId: boxes[0].id, sku: SKU, size: '9', qty: 1 },
+  });
+  expect(sizeOnly.status()).toBe(400);
+  const ok = await request.post('/api/po/scan', {
+    headers: asSupplier(SUP),
+    data: { poBoxId: boxes[0].id, sku: SKU, name: 'E2E', size: '9', qty: 6, dimensions: { l: 330, w: 230, h: 130, unit: 'mm' } },
+  });
+  expect(ok.ok(), await ok.text()).toBeTruthy();
+  expect((await ok.json()).line.dimensions).toBe('330 x 230 x 130 mm');
+});
+
 test('a supplier cannot raise an order against somebody else', async ({ request }) => {
   // The account comes off the token, never the body — otherwise one supplier could open
   // orders against another.

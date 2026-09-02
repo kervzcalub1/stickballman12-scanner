@@ -2604,7 +2604,26 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 }
 .po-labels-wanted b { color: #f0d79a; }
 .sup-new-btn { width: 100%; margin-bottom: 12px; }
-.sup-new { margin-bottom: 12px; }
+/* The "start a shipment yourself" form. Built as its own stack rather than reusing
+   `batch-form` + `modal-actions`: those are sized for a wide staff screen, and on a
+   supplier's phone the two-column grid wrapped the labels onto a second line and pushed
+   the buttons hard against the fields. */
+.sup-new { margin-bottom: 12px; display: flex; flex-direction: column; gap: 14px; }
+.sup-new .rows-title { margin-bottom: 0; }
+.sup-new > p.muted { margin: 0; }
+.sup-new-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.sup-new-field input { width: 100%; }
+/* The label and its "(optional)" are ONE row: as bare children of a column flex label
+   they'd each become their own flex item and stack. */
+.sup-new-label { display: block; }
+.sup-new-grid { display: grid; grid-template-columns: minmax(0, 110px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.sup-new-hint { margin: -4px 0 0; }
+.sup-new-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.sup-new-actions .btn { min-width: 120px; }
+@media (max-width: 460px) {
+  .sup-new-grid { grid-template-columns: 1fr; }
+  .sup-new-actions .btn { flex: 1; }
+}
 .sup-box-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 2px; }
 .sup-box-remove { margin-left: auto; }
 .po-chip.kind.shoes { background: transparent; color: var(--muted); border-color: var(--border); }

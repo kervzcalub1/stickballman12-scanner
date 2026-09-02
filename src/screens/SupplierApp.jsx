@@ -124,6 +124,7 @@ export function SupplierApp({ user, onSignOut }) {
   const [newOpen, setNewOpen] = useState(false);
   const [newTag, setNewTag] = useState('');
   const [newBoxes, setNewBoxes] = useState('1');
+  const [newKind, setNewKind] = useState('shoes');
   const [page, setPage] = useState(() => supPageForPath(window.location.pathname));
   const goPage = (p) => {
     setPage(p);
@@ -288,8 +289,8 @@ export function SupplierApp({ user, onSignOut }) {
     setBusy(true); setError('');
     try {
       const n = Math.max(1, Math.min(100, parseInt(newBoxes, 10) || 1));
-      const { po } = await api.poCreate({ tagCode: newTag.trim(), notes: '', boxes: n });
-      setNewOpen(false); setNewTag(''); setNewBoxes('1');
+      const { po } = await api.poCreate({ tagCode: newTag.trim(), notes: '', boxes: n, orderKind: newKind });
+      setNewOpen(false); setNewTag(''); setNewBoxes('1'); setNewKind('shoes');
       await loadList();
       openPo(po.id);
     } catch (e) {
@@ -317,17 +318,31 @@ export function SupplierApp({ user, onSignOut }) {
             <div className="card sup-new">
               <h3 className="rows-title">New shipment</h3>
               <p className="muted sm">Open it now, list what you packed, then ask us for labels — we’ll put the tracking numbers on afterwards.</p>
-              <div className="batch-form">
-                <label>How many boxes?
+              {/* What is in the boxes decides what you are asked for on every item: a
+                  size for a pair, a size AND the carton's dimensions for an empty box.
+                  So it is the first question, not a detail further down. */}
+              <label className="sup-new-field"><span className="sup-new-label">What are you sending?</span>
+                <span className="seg po-kind-seg" role="group" aria-label="What this shipment holds">
+                  <button type="button" className={`seg-btn ${newKind === 'shoes' ? 'on' : ''}`}
+                    aria-pressed={newKind === 'shoes'} onClick={() => setNewKind('shoes')}>Shoes</button>
+                  <button type="button" className={`seg-btn ${newKind === 'boxes' ? 'on' : ''}`}
+                    aria-pressed={newKind === 'boxes'} onClick={() => setNewKind('boxes')}>Empty shoe boxes</button>
+                </span>
+                <span className="muted sm">{newKind === 'boxes'
+                  ? 'Replacement boxes for pairs that came crushed or with none. You’ll give each one a SKU, size, dimensions and cost.'
+                  : 'A shipment of pairs. You’ll give each one a SKU and size.'}</span>
+              </label>
+              <div className="sup-new-grid">
+                <label className="sup-new-field"><span className="sup-new-label">How many boxes?</span>
                   <input type="number" min="1" max="100" inputMode="numeric" value={newBoxes}
                     onChange={(e) => setNewBoxes(e.target.value)} />
-                  <span className="muted sm">You can add or remove boxes later, until one ships.</span>
                 </label>
-                <label>Tag / name <span className="muted">(optional)</span>
+                <label className="sup-new-field"><span className="sup-new-label">Tag / name <span className="muted">(optional)</span></span>
                   <input value={newTag} maxLength={120} placeholder="e.g. Joey JP23 AJ40" onChange={(e) => setNewTag(e.target.value)} />
                 </label>
               </div>
-              <div className="modal-actions">
+              <p className="muted sm sup-new-hint">You can add or remove boxes later, right up until one ships.</p>
+              <div className="sup-new-actions">
                 <button className="btn ghost" disabled={busy} onClick={() => setNewOpen(false)}>Cancel</button>
                 <button className="btn primary" disabled={busy} onClick={createShipment}>{busy ? 'Opening…' : 'Open shipment'}</button>
               </div>

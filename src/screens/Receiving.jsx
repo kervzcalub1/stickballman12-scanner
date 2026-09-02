@@ -326,6 +326,25 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // cartons, so step 2 is the manifest as a counting checklist and nothing here mints a
   // sticker, asks for a photo, or offers a "with box" toggle.
   const isBoxesPo = isPoReceive && receivingPo?.po?.order_kind === 'boxes';
+  // Does the box being scanned have a list to TICK OFF?
+  //
+  // Raw-1ID mode on a PO shows a sticker-only bar, because the pair is already on the
+  // supplier's per-label list: you tick the size as it comes out of the box, then scan
+  // its 1ID. That is two beats, not three, and it is faster.
+  //
+  // It assumes the label HAS a list. Two real orders don't:
+  //   · a WHOLE-ORDER manifest (Path C) — one list for the whole purchase, so every
+  //     label legitimately has an empty checklist;
+  //   · a per-box order where this particular label was never declared (received blind).
+  // On those there is nothing to tick, so the sticker bar has no row to bind to and the
+  // shoe cannot be scanned at all — the warehouse is locked out of the flow they use
+  // every day. Fall back to the normal two-beat bar: scan the shoe, then its 1ID.
+  const activeBoxLines = activeSlot != null && isPoReceive
+    ? manifestLinesFor(boxSlots[activeSlot]?.poBoxId).length : 0;
+  const poBoxHasChecklist = isPoReceive && activeBoxLines > 0;
+  // Read inside async scan handlers, which close over the render they were created in.
+  const poBoxHasChecklistRef = useRef(poBoxHasChecklist);
+  poBoxHasChecklistRef.current = poBoxHasChecklist;
   const isMultiBoxNew = !noShipment && !isBoxMode && (expectedBoxesNum > 1 || isPoReceive);
   const receivedSlots = boxSlots.filter((s) => s.status === 'received').length;
 
@@ -776,7 +795,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const vin = String(code).trim().toUpperCase();
     const slot = pickStickerSlot(itemsRef.current);
     if (!slot) {
-      setFlash({ type: 'dup', text: isPoReceive
+      // Keyed on whether there IS a list, not on whether this is a PO: telling somebody
+      // to tick a size off a checklist that doesn't exist is how they end up stuck.
+      setFlash({ type: 'dup', text: poBoxHasChecklistRef.current
         ? `Tick the size off first, then scan its 1ID — ${vin} has nothing to go on`
         : `Scan the shoe first, then its 1ID — ${vin} has nothing to go on` });
       scanFeedback('dup');
@@ -1149,7 +1170,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }
   const awaitingSticker = rawVins ? pickStickerSlot(items) : null;
   const unresolvedMsg = missingStickers
-    ? (isPoReceive
+    ? (poBoxHasChecklist
       ? `${stickersShort} ticked pair${stickersShort === 1 ? '' : 's'} still need${stickersShort === 1 ? 's' : ''} a 1ID sticker — scan one onto each highlighted row.`
       : `Scan a 1ID sticker onto the ${missingStickers} highlighted line${missingStickers === 1 ? '' : 's'} — every pair needs one before it can be saved.`)
     : (items.filter(needsSku).length
@@ -1719,7 +1740,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {boxSlots[activeSlot]?.tracking ? <> · <Icon name="tag" /> {boxSlots[activeSlot].tracking}</> : ''}
                 </div>
               )}
-              {isPoReceive && activeSlot != null ? (
+              {/* The PO checklist screen, but ONLY when this label actually has a list.
+                  A whole-order manifest, or a label the supplier never declared, has
+                  nothing to tick — so it falls through to the normal scan flow below,
+                  which can add a shoe AND take its 1ID. */}
+              {isPoReceive && activeSlot != null && poBoxHasChecklist ? (
                 <>
                   {/* Raw 1ID mode: one beat, not two. The shoe is already on the
                       manifest, so ticking a size IS the first beat and this bar is
@@ -1786,6 +1811,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   <h3 className="rows-title">{isRescale ? 'New / unlabeled stock' : 'Items'} <span className="muted">({totalItems} unit{totalItems === 1 ? '' : 's'})</span></h3>
                   <button className="btn ghost sm" onClick={openAddItem}>+ Add manually</button>
                 </div>
+                {/* Why this label has no checklist. Without it the screen looks like the
+                    PO link was lost, and somebody goes hunting for a manifest that was
+                    never per-box in the first place. */}
+                {isPoReceive && !poBoxHasChecklist && (
+                  <p className="muted sm po-manifest-whole">
+                    {isWholeOrderPo
+                      ? <>This order was manifested as <b>one whole-order list</b>, not box by box — so there is nothing to tick off per label. Scan everything you pull out of this box; it&rsquo;s checked against the supplier&rsquo;s list for the order as a whole once every box is in.</>
+                      : <>The supplier declared nothing for this label, so there is nothing to tick off. Scan everything you pull out of the box — it all counts, and reads as an overage against a label that promised nothing.</>}
+                  </p>
+                )}
 
                 {/* Rapid scan bar — the gun/camera fires straight into the cart.
                     No dialog between scans; corrections happen in the list below

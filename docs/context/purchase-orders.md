@@ -378,6 +378,35 @@ for the rest of the shipment.
 
 Covered by `e2e/po-manifest-window.spec.js`.
 
+## Raw 1ID on a PO with nothing to tick off (2026-09-03)
+
+Receiving against a PO in raw-1ID mode shows a **sticker-only** scan bar: the pair is
+already on that label's list, so you tick the size as it comes out of the box and scan its
+1ID — two beats instead of three, which is why the warehouse runs 1ID daily.
+
+**It assumed the label has a list.** Two real orders don't:
+
+- a **whole-order manifest** (Path C) — one list for the whole purchase, so *every* label
+  legitimately has an empty checklist;
+- a per-box order where **this** label was never declared (received blind).
+
+On either, there was nothing to tick, so the sticker bar had no row to bind to *and the
+shoe could not be scanned at all* — a dead end on the flow they use every day. Reported
+live after a shipment was scanned in, linked to its PO, and turned out to carry a
+whole-order manifest.
+
+The checklist screen is now gated on `poBoxHasChecklist` (does this label have
+`po_lines`?) rather than on `isPoReceive`. Without one it falls through to the normal
+two-beat bar, which `rapidScan` has always handled — `isRollVin(c) → bindSticker(c)`,
+anything else is a shoe. The screen says **which** of the two cases it is, because
+otherwise it just looks as though the PO link was lost.
+
+`bindSticker`'s "nothing to go on" message and the footer's unresolved line are keyed on
+the same flag: telling somebody to tick a size off a checklist that doesn't exist is how
+they end up stuck.
+
+Tests: `e2e/po-wholeorder-1id.spec.js` — verified to fail without the fix.
+
 ## Status
 - **Phase 0 (done, merged):** schema + `supplier` role.
 - **Phase 1 (built, on branch `feat/po-phase1-scanout` — not deployed):** PH create-batch

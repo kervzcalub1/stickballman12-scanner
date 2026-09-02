@@ -116,6 +116,31 @@ test('a boxes order demands BOTH the shoe size and the carton', async ({ request
   expect(await lines(po.id)).toHaveLength(1);
 });
 
+test('a carton can be declared in inches, centimetres or millimetres', async ({ request }) => {
+  // Suppliers measure with whatever tape they have. The unit is stored, not converted —
+  // "330 x 230 x 130 mm" and "33 x 23 x 13 cm" are the same box but two different
+  // declarations, and silently converting one into the other would rewrite what somebody
+  // actually wrote down.
+  const { po, box } = await order(request);
+  const mm = await scan(request, { poBoxId: box.id, sku: SKU_A, size: '9', qty: 1,
+    dimensions: { l: 330, w: 230, h: 130, unit: 'mm' } });
+  expect(mm.ok(), await mm.text()).toBeTruthy();
+  expect((await mm.json()).line.dimensions).toBe('330 x 230 x 130 mm');
+
+  // Typed loosely, in words, still lands on the canonical form.
+  const typed = await scan(request, { poBoxId: box.id, sku: SKU_B, size: '9', qty: 1,
+    dimensions: '330 x 230 x 130 millimetres' });
+  expect((await typed.json()).line.dimensions).toBe('330 x 230 x 130 mm');
+
+  // The plausible range is per unit: 600 mm is a real carton, 600 in is not.
+  const okMm = await scan(request, { poBoxId: box.id, sku: SKU_A, size: '13', qty: 1, dimensions: '600 x 400 x 200 mm' });
+  expect(okMm.ok()).toBeTruthy();
+  const badIn = await scan(request, { poBoxId: box.id, sku: SKU_A, size: '14', qty: 1, dimensions: '600 x 400 x 200 in' });
+  expect(badIn.status()).toBe(400);
+
+  await q('DELETE FROM po_lines WHERE po_id = $1', [po.id]);
+});
+
 test('two sizes of one shoe are two lines, whatever the carton measures', async ({ request }) => {
   // The reason size had to be on the line at all: these are two different things to
   // order, and a size-blind key would have merged them into one.

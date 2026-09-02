@@ -107,10 +107,13 @@ export const ORDER_KINDS = ['shoes', 'boxes'];
 // Accepts either the structured form the portal posts ({ l, w, h, unit }) or a raw
 // string typed anywhere else. Returns the canonical string, or null when there aren't
 // three usable numbers in it.
-const DIM_UNITS = ['in', 'cm'];
-const trimNum = (n) => {
+export const DIM_UNITS = ['in', 'cm', 'mm'];
+// The sane range for one side of a shoe carton, PER UNIT — so a plausible 330 mm isn't
+// rejected while an implausible 330 in sails through. One flat cap can't do both.
+const DIM_MAX = { in: 200, cm: 500, mm: 5000 };
+const trimNum = (n, unit) => {
   const r = Math.round(Number(n) * 100) / 100;
-  return Number.isFinite(r) && r > 0 && r <= 500 ? String(r) : null;
+  return Number.isFinite(r) && r > 0 && r <= (DIM_MAX[unit] ?? 500) ? String(r) : null;
 };
 export function normalizeDimensions(v) {
   if (v == null || v === '') return null;
@@ -120,13 +123,18 @@ export function normalizeDimensions(v) {
     unit = String(v.unit || '').trim().toLowerCase();
   } else {
     const s = String(v).trim().toLowerCase();
-    // "13 x 9 x 5 in", "13×9×5", "13 by 9 by 5 cm" — anything with three numbers in it.
+    // "13 x 9 x 5 in", "13×9×5", "13 by 9 by 5 cm", "330 x 230 x 130 mm" — anything with
+    // three numbers in it. mm is tested before cm so "mm" can't be read as the tail of a
+    // centimetre spelling.
     const nums = s.match(/\d+(?:\.\d+)?/g) || [];
     [l, w, h] = nums;
-    unit = /\bcm\b|centimet/.test(s) ? 'cm' : /\bin\b|inch|"/.test(s) ? 'in' : '';
+    unit = /\bmm\b|millimet/.test(s) ? 'mm'
+      : /\bcm\b|centimet/.test(s) ? 'cm'
+      : /\bin\b|inch|"/.test(s) ? 'in' : '';
   }
-  const parts = [trimNum(l), trimNum(w), trimNum(h)];
-  if (parts.some((p) => p == null)) return null;
+  // Resolve the unit BEFORE validating the numbers — the cap depends on it.
   if (!DIM_UNITS.includes(unit)) unit = 'in';
+  const parts = [trimNum(l, unit), trimNum(w, unit), trimNum(h, unit)];
+  if (parts.some((p) => p == null)) return null;
   return `${parts.join(' x ')} ${unit}`;
 }

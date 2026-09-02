@@ -12,7 +12,7 @@
 // "13x9x5" and "13 X 9 X 5 in" never declare the same carton twice.
 import React from 'react';
 
-export const DIM_UNITS = ['in', 'cm'];
+export const DIM_UNITS = ['in', 'cm', 'mm'];
 export const emptyDims = () => ({ l: '', w: '', h: '', unit: 'in' });
 export const dimsComplete = (d) => ['l', 'w', 'h'].every((k) => {
   const n = Number(String(d?.[k] ?? '').trim());
@@ -35,7 +35,9 @@ export function textToDims(s) {
   const nums = str.match(/\d+(?:\.\d+)?/g) || [];
   return {
     l: nums[0] ?? '', w: nums[1] ?? '', h: nums[2] ?? '',
-    unit: /\bcm\b/.test(str) ? 'cm' : 'in',
+    // mm before cm: "mm" must not be read as the tail of a centimetre spelling. Mirrors
+    // `normalizeDimensions` on the server, which is what actually stores the value.
+    unit: /\bmm\b|millimet/.test(str) ? 'mm' : /\bcm\b|centimet/.test(str) ? 'cm' : 'in',
   };
 }
 

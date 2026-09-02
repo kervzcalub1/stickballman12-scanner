@@ -2541,12 +2541,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    that the row still fits a phone. */
 .po-dims { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .po-dims-row { display: flex; align-items: center; gap: 4px; }
-.po-dims-row .dim-n { width: 100%; min-width: 44px; max-width: 74px; text-align: center; }
+.po-dims-row .dim-n { width: 100%; min-width: 48px; max-width: 74px; text-align: center; }
 .po-dims-row .dim-u { width: auto; min-width: 58px; }
 .po-dims-x { color: var(--muted); font-size: 12px; }
 /* Inside a draft size row, the carton block sits under the size/qty line. */
 .po-size-line .po-dims { margin-top: 6px; }
-.po-line-dims .sz.dims { width: 100%; min-width: 100px; text-align: left; font-size: 13px; padding-left: 8px; padding-right: 8px; }
+/* Sized to hold "355 x 240 x 135 mm" whole — 18 characters, the longest a real carton
+   produces. A clipped carton size is the one field on the row you can't infer. */
+.po-line-dims .sz.dims { width: 100%; min-width: 128px; text-align: left; font-size: 12px; padding-left: 6px; padding-right: 6px; }
 .po-line-dims .sz.dims.need { border-color: rgba(198,135,26,0.55); }
 
 /* Bulk carton size over a whole manifest. */
@@ -2642,49 +2644,71 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-line-edit .remove:hover { color: var(--danger, #e06060); border-color: var(--danger, #e06060); }
 .po-lines li.po-line-headings { display: none; }
 @media (min-width: 720px) {
-  .po-lines-edit li.po-line-edit,
-  .po-lines.editable li.po-line-edit {
+  .po-lines-edit li.po-line-edit:not(.boxes),
+  .po-lines.editable li.po-line-edit:not(.boxes) {
     /* Same 8px column gap as the header row below, so the two grids line up: the
        header's five fixed columns sit exactly over the row's nested control grid. */
     display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
     column-gap: 8px; row-gap: 2px; padding: 8px 0;
   }
-  .po-line-edit .po-line-head { grid-column: 1; display: block; padding-right: 0; }
+  .po-line-edit:not(.boxes) .po-line-head { grid-column: 1; display: block; padding-right: 0; }
   /* The SKU under the name, not trailing it: in a column this narrow an inline SKU
      dragged every long product name onto a third line. */
-  .po-line-edit .po-line-meta { display: block; white-space: normal; font-size: 12px; }
-  .po-line-edit .po-line-attribution { grid-column: 1; width: auto; }
-  .po-line-edit .po-line-controls,
-  .po-lines li.po-line-headings {
+  .po-line-edit:not(.boxes) .po-line-meta { display: block; white-space: normal; font-size: 12px; }
+  .po-line-edit:not(.boxes) .po-line-attribution { grid-column: 1; width: auto; }
+  .po-line-edit:not(.boxes) .po-line-controls,
+  .po-lines li.po-line-headings:not(.boxes) {
     grid-column: 2; grid-row: 1 / span 2; display: grid; align-items: center;
     grid-template-columns: 66px 118px 78px 78px 38px; gap: 8px;
   }
-  /* An EMPTY-BOX line carries one more fact than a pair does — the carton it ships in —
-     so it gets a sixth column. The size column narrows and the money columns give up a
-     few pixels rather than the item name losing its width: the name is what a person
-     reads down the list to find their place. */
-  .po-line-edit.boxes .po-line-controls,
-  .po-lines li.po-line-headings.boxes {
-    grid-template-columns: 52px 100px 116px 70px 70px 34px;
-  }
+  .po-lines li.po-line-headings.boxes { display: none; }
   /* The header carries the item column too, so it spans the whole row. */
-  .po-lines li.po-line-headings {
+  .po-lines li.po-line-headings:not(.boxes) {
     grid-column: 1 / -1; grid-row: auto;
     grid-template-columns: minmax(0, 1fr) 66px 118px 78px 78px 38px;
     border-top: 0; padding: 0 0 2px; color: var(--muted); font-size: 11.5px;
     text-transform: uppercase; letter-spacing: 0.04em;
   }
-  .po-lines li.po-line-headings.boxes {
-    grid-template-columns: minmax(0, 1fr) 52px 100px 116px 70px 70px 34px;
-  }
-  .po-line-edit .po-line-size .sz { width: 100%; }
-  .po-line-edit .po-line-cost .po-money-input { width: 100%; }
-  .po-line-edit .po-line-cost .po-money-input input { width: 100%; }
-  .po-line-edit .remove { position: static; }
+  .po-line-edit:not(.boxes) .po-line-size .sz { width: 100%; }
+  .po-line-edit:not(.boxes) .po-line-cost .po-money-input { width: 100%; }
+  .po-line-edit:not(.boxes) .po-line-cost .po-money-input input { width: 100%; }
+  .po-line-edit:not(.boxes) .remove { position: static; }
   /* One header instead of the same three words on every row. */
-  .po-line-edit .po-line-controls .muted.xs { display: none; }
-  .po-line-edit .remove { margin-left: 0; justify-self: center; }
+  .po-line-edit:not(.boxes) .po-line-controls .muted.xs { display: none; }
+  .po-line-edit:not(.boxes) .remove { margin-left: 0; justify-self: center; }
 }
+/* An EMPTY-BOX row carries one more fact than a pair does — the carton it ships in — and
+   "355 x 240 x 135 mm" is half as wide again as "13 x 9 x 5 in". Seven columns don't fit
+   where six did, so the boxes row becomes a table LATER than a shoes row rather than
+   being squeezed into the same width: at 720px it stayed a stacked, per-field form, which
+   is legible; crammed into 720px it clipped the carton and buried the qty stepper under
+   the cost field. Below this, the labelled-cell layout the phone uses is simply kept. */
+@media (min-width: 900px) {
+  .po-lines-edit li.po-line-edit.boxes,
+  .po-lines.editable li.po-line-edit.boxes {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+    column-gap: 8px; row-gap: 2px; padding: 8px 0;
+  }
+  .po-line-edit.boxes .po-line-head { grid-column: 1; display: block; padding-right: 0; }
+  .po-line-edit.boxes .po-line-meta { display: block; white-space: normal; font-size: 12px; }
+  .po-line-edit.boxes .po-line-attribution { grid-column: 1; width: auto; }
+  .po-line-edit.boxes .po-line-controls {
+    grid-column: 2; grid-row: 1 / span 2; display: grid; align-items: center;
+    grid-template-columns: 56px 136px 118px 72px 72px 34px; gap: 8px;
+  }
+  .po-lines li.po-line-headings.boxes {
+    display: grid; grid-column: 1 / -1; grid-row: auto;
+    grid-template-columns: minmax(0, 1fr) 56px 136px 118px 72px 72px 34px; gap: 8px;
+    border-top: 0; padding: 0 0 2px; color: var(--muted); font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .po-line-edit.boxes .po-line-size .sz { width: 100%; }
+  .po-line-edit.boxes .po-line-cost .po-money-input,
+  .po-line-edit.boxes .po-line-cost .po-money-input input { width: 100%; }
+  .po-line-edit.boxes .remove { position: static; margin-left: 0; justify-self: center; }
+  .po-line-edit.boxes .po-line-controls .muted.xs { display: none; }
+}
+
 .po-box-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .po-box-actions .btn { flex: 1; }
 /* ManifestPrint drops a <div class="mf-print"> wrapper into these button rows — it needs

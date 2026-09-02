@@ -144,7 +144,10 @@ export default async function handler(req, res) {
   // while working everywhere else: an unrecognised VIN is nulled, and insertItems then
   // mints a dated one, so the shoe left the bench wearing a number that wasn't on it.
   // One implementation, shared with box-commit (intake.js).
-  const items = normalizeItems(rawItems, { defaultCost, noBoxVins });
+  // Pre-sell is a property of the SHIPMENT, declared once at intake, and it only makes
+  // sense on a real inbound — rescale and in-store are stock we already had.
+  const preSell = isShipment && header.preSell === true;
+  const items = normalizeItems(rawItems, { defaultCost, noBoxVins, preSell });
 
   // Only a real shipment (receiving) carries buyer/supplier/tracking. Rescale and
   // in-store drop those; in-store keeps `origin` (the store name) like rescale.
@@ -164,6 +167,7 @@ export default async function handler(req, res) {
     // Set by the client when staff proceed past the duplicate-tracking warning.
     duplicateOf: !isShipment ? null : (Number.isInteger(header.duplicateOf) ? header.duplicateOf : null),
     poId,
+    preSell,
   };
 
   try {

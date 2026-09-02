@@ -22,6 +22,7 @@ import {
 } from '../lib/ph.js';
 import { clearQuery, useQueryParam } from '../lib/urlstate.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
+import { PreSell } from './PreSell.jsx';
 import { ItemCosts } from './ItemCosts.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { ImageFinder } from './ImageFinder.jsx';
@@ -57,6 +58,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
+  if (page === 'presell') return <PreSell onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'costs') return <ItemCosts onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
@@ -137,6 +139,14 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
       <section className="home-section" data-accent="requests">
         <h2 className="home-section-title">Queues &amp; Requests</h2>
         <div className="home-grid">
+          {/* Pre-sell sits with the queues because that is what it is: units that cannot
+              be listed until somebody answers a question about them. */}
+          <button className="home-card" onClick={() => goPage('presell')}>
+            <span className="home-card-icon"><NavIcon name="sold" /></span>
+            <span className="home-card-title">Pre-sell</span>
+            <span className="home-card-sub">Sold before they landed — say how many each order covers, then send the rest for rescale</span>
+            <CardBadges badges={counts ? [['To work', counts.presell_pending]] : []} />
+          </button>
           <button className="home-card" onClick={() => goPage('nobox')}>
             <span className="home-card-icon"><NavIcon name="nobox" /></span>
             <span className="home-card-title">No Box / Not Ready</span>

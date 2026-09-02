@@ -48,7 +48,8 @@ export default async function handler(req, res) {
     if (box.status === 'received') return send(res, 409, { ok: false, error: 'This box was already submitted.' });
 
     const defaultCost = toCost(found.batch.default_cost);
-    const items = normalizeItems(rawItems, { defaultCost, noBoxVins });
+    // The batch decides, not the box: pre-sell is declared once for the whole shipment.
+    const items = normalizeItems(rawItems, { defaultCost, noBoxVins, preSell: found.batch.pre_sell === true });
     const { created, vins, autoCompleted } = await commitBoxItems({
       batchId, boxId, items, createdBy, dateReceived: found.batch.date_received,
     });

@@ -1646,6 +1646,30 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       </span>
                     </label>
                   )}
+                  {/* Pre-sell: this whole shipment was sold before it landed. Its units
+                      are NOT listed to II or the stores — they are already spoken for —
+                      until somebody has said which orders the arrivals cover and released
+                      the rest for listing on the PH Pre-sell page.
+                      Declared once, for the shipment, because that is how it is bought. */}
+                  {!noShipment && !isRescale && !isBoxesPo && (
+                    <label className="batch-form-wide presell-field">
+                      {/* Its own classes, not the no-tracking ones it looks like: those are
+                          what e2e selects the no-tracking checkbox by. */}
+                      <span className="presell-check">
+                        <input type="checkbox" checked={header.preSell === true}
+                          onChange={(e) => setHeader((h) => ({ ...h, preSell: e.target.checked }))} />
+                        <b>Pre-sell shipment</b>
+                        <span className="muted sm">— these were sold before they arrived; don’t list them</span>
+                      </span>
+                      {header.preSell && (
+                        <span className="presell-note sm">
+                          Nothing in this shipment goes to II or the stores. It lands on the PH
+                          team’s <b>Pre-sell</b> page, where they say how many are already sold and send
+                          the rest for rescale so they can be listed.
+                        </span>
+                      )}
+                    </label>
+                  )}
                   {!noShipment && !isMultiBoxNew && dupBatch && (
                     <div className="batch-form-wide dup-warn">
                       ⚠ This tracking number was already received in <b>{dupBatch.code}</b>. You can still proceed — this batch will be flagged as a duplicate.

@@ -342,10 +342,10 @@ body {
 /* "No tracking number" — a stated fact about the shipment, so it sits directly
    under the field it replaces and reads as a sentence, not a settings toggle.
    A whole-row hit area: warehouse staff tick this with gloves on, on a phone. */
-.no-track-field { cursor: pointer; margin-top: -2px; }
-.no-track-check { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 10px;
+.no-track-field, .presell-field { cursor: pointer; margin-top: -2px; }
+.no-track-check, .presell-check { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 10px;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 13px; }
-.no-track-check input { width: 18px; height: 18px; flex: none; accent-color: var(--primary); }
+.no-track-check input, .presell-check input { width: 18px; height: 18px; flex: none; accent-color: var(--primary); }
 
 .cart { display: flex; flex-direction: column; gap: 10px; }
 .cart-line { padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
@@ -2626,6 +2626,28 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 }
 .sup-box-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 2px; }
 .sup-box-remove { margin-left: auto; }
+
+/* Pre-sell: one row per size, and the only editable cell is the one question the page
+   asks — how many of these are already spoken for. */
+.presell-scan { margin-bottom: 14px; }
+.presell-ship { margin-bottom: 14px; }
+.presell-totals { margin: 2px 0 10px; }
+.presell-shoe { margin: 12px 0; }
+.presell-shoe-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 6px; }
+.presell-rows { display: flex; flex-direction: column; gap: 4px; }
+.presell-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 68px 92px 72px; gap: 8px;
+  align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.presell-row.head { border-bottom: 0; padding-bottom: 2px; color: var(--muted);
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+.presell-row.done { opacity: 0.55; }
+.presell-size { font-weight: 700; }
+.presell-n { text-align: right; font-variant-numeric: tabular-nums; }
+.presell-sold input { width: 100%; text-align: center; padding: 6px 8px; }
+.presell-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+/* The receiving toggle's explanation, once it's on. */
+.presell-field .presell-note { display: block; margin-top: 6px; color: #b9a3e8; }
 .po-chip.kind.shoes { background: transparent; color: var(--muted); border-color: var(--border); }
 .po-chip.kind.boxes { background: rgba(155,120,230,0.14); color: #8a63e0; border-color: rgba(155,120,230,0.45); }
 .po-chip.kind.supplier { background: rgba(61,107,255,0.10); color: #7f9dff; border-color: rgba(61,107,255,0.38); }

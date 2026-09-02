@@ -45,6 +45,31 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setSavingVin(null); }
   }
+  // "Use a box from stock" — the loop the empty-box purchase orders exist to close.
+  // Opening the picker asks the server which boxes actually fit THIS pair (same SKU and
+  // size), so the answer is stock we hold rather than a list to hunt through.
+  const [boxPick, setBoxPick] = useState(null);   // { row, boxes, loading, error }
+  async function openBoxPicker(r) {
+    setBoxPick({ row: r, boxes: [], loading: true, error: '' });
+    try {
+      const { boxes } = await api.boxesFitting({ sku: r.sku, size: r.size });
+      setBoxPick({ row: r, boxes: boxes || [], loading: false, error: '' });
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setBoxPick({ row: r, boxes: [], loading: false, error: err.message });
+    }
+  }
+  async function useBox(box) {
+    const r = boxPick.row;
+    setSavingVin(r.vin); setError('');
+    try {
+      await api.useBoxOnPair(r.vin, box.id);
+      setBoxPick(null);
+      setRows((rs) => rs.filter((x) => x.vin !== r.vin)); // With Box now → leaves the queue
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setSavingVin(null); }
+  }
+
   // A box was sourced → mark With Box (now sellable; we never sell without a box).
   async function boxFound(vin) {
     setSavingVin(vin); setError('');
@@ -95,6 +120,11 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
     <div className="nobox-cell-actions">
       <button className="btn sm primary nobox-boxfound" disabled={savingVin === r.vin} onClick={() => boxFound(r.vin)}>
         {savingVin === r.vin ? '…' : <><Icon name="box" /> Box found → With Box</>}
+      </button>
+      {/* The same end state for the pair, but it also SPENDS a box we bought — so the
+          carton stops being on hand and both rows record what happened to it. */}
+      <button className="btn sm nobox-usebox" disabled={savingVin === r.vin} onClick={() => openBoxPicker(r)}>
+        <Icon name="box" /> Use a box from stock
       </button>
       {boxBtn(r)}
       <select className="nobox-other-sel" value="" disabled={savingVin === r.vin}
@@ -166,6 +196,51 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
         )}
       </div>
       {labels && <LabelSheet items={labels} mode="upc" onClose={() => setLabels(null)} />}
+
+      {/* Which empty box goes on this pair. Scoped to boxes that FIT — same SKU, same
+          size — because "here is every box we own" is not an answer to the question
+          somebody is holding a shoe while asking. */}
+      {boxPick && (
+        <div className="modal-overlay" onClick={() => savingVin == null && setBoxPick(null)}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Use a box from stock</h3>
+            <p className="modal-msg">
+              For <b>{boxPick.row.name || boxPick.row.sku || boxPick.row.vin}</b>
+              {boxPick.row.size ? ` · US ${sizeLabel(boxPick.row.size, boxPick.row.gender, boxPick.row.name)}` : ''}.
+              The box is spent when you pick it — it leaves the shelf and both records say where it went.
+            </p>
+            {boxPick.loading ? <p className="muted">Looking on the shelf…</p>
+              : boxPick.error ? <div className="error sm">{boxPick.error}</div>
+              : boxPick.boxes.length === 0 ? (
+                <div className="empty-state sm">
+                  No empty box in stock for <b>{boxPick.row.sku || 'this shoe'}</b>
+                  {boxPick.row.size ? <> in size <b>{boxPick.row.size}</b></> : null}.
+                  {' '}Order one on a purchase order marked <b>Empty boxes</b>, or use
+                  <b> Box found</b> if you sourced one another way.
+                </div>
+              ) : (
+                <ul className="po-lines nobox-boxpick">
+                  {boxPick.boxes.map((b) => (
+                    <li key={b.id}>
+                      <span className="po-line-name">
+                        {b.dimensions || 'no dimensions'}
+                        {b.location_code ? <span className="muted"> · {b.location_code}</span>
+                          : <span className="muted"> · not shelved yet</span>}
+                      </span>
+                      <span className="po-line-meta vin">{b.vin}</span>
+                      <button className="btn sm primary" disabled={savingVin != null} onClick={() => useBox(b)}>
+                        {savingVin != null ? '…' : 'Use this one'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            <div className="modal-actions">
+              <button className="btn ghost" disabled={savingVin != null} onClick={() => setBoxPick(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {upcPrompt && (
         <div className="modal-overlay" onClick={() => !upcBusy && setUpcPrompt(null)}>

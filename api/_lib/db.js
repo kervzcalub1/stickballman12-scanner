@@ -92,10 +92,12 @@ export function dbConfigured() {
   return Boolean(process.env.DATABASE_URL);
 }
 
-// Batch kinds the PH team must NEVER see. Both bypass PH entirely but for
+// Batch kinds the PH team must NEVER see. All three bypass PH entirely but for
 // different reasons: 'instore' is listed to the stores by hand off the In-Store
-// Listing page, and 'existing' is old stock that was already synced to II and the
-// stores long before this system existed. Kept as ONE list because the exclusion
+// Listing page, 'existing' is old stock that was already synced to II and the
+// stores long before this system existed, and 'boxes' is not stock at all — it is
+// the empty shoe boxes we buy to replace crushed and missing ones, which have no
+// price, no listing and no store. Kept as ONE list because the exclusion
 // has to hold at every PH read/write path — phListItems (both branches),
 // pendingCounts, phUpdateGroup, getItemsForGiRefresh, recomputeUnlistedPrices and
 // rescaleItem. Guarding only the obvious one is how in-store leaked onto the PH
@@ -104,7 +106,23 @@ export function dbConfigured() {
 // Use as: (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
 // The IS NULL half is required — these are LEFT JOINs, and `NULL <> ALL(...)` is
 // NULL, which would silently drop every batchless row.
-export const PH_EXCLUDED_KINDS = ['instore', 'existing'];
+export const PH_EXCLUDED_KINDS = ['instore', 'existing', 'boxes'];
+
+// Batch kinds that are a real inbound SHIPMENT — a courier label, a supplier, a tracking
+// number, boxes that arrive one at a time and get committed one at a time. A shipment of
+// empty shoe boxes is one of these in every mechanical sense; only its contents differ.
+// Used by the multi-box endpoints (add-box, sync-boxes, renumber-box, set-status,
+// box-commit), which were each keyed on 'receiving' alone and so refused a boxes batch
+// with "Batch not found".
+export const SHIPMENT_KINDS = ['receiving', 'boxes'];
+
+// Batch kinds the COSTS page ignores. 'existing' has no cost to capture by design and
+// runs to thousands of pairs; 'boxes' is not a pair at all — a box's cost is settled with
+// the supplier on the purchase order, not chased pair-by-pair on a PH worklist. In-store
+// buys are deliberately NOT here: they have real costs somebody has to enter.
+// `pendingCounts.costable` and `listItemsMissingCost` must agree, or the badge counts
+// rows the page won't show — hence one list, read by both.
+export const COST_EXCLUDED_KINDS = ['existing', 'boxes'];
 
 /* ------------------------------- Users -------------------------------- */
 
@@ -834,12 +852,13 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   const sql = db();
   const queries = items.map((it) => sql`
     INSERT INTO items
-      (vin, batch_id, box_id, name, sku, size, upc, image_url, cost, source, status, with_box, goat_only, gender, colorway, notes, created_by)
+      (vin, batch_id, box_id, name, sku, size, dimensions, upc, image_url, cost, source, status, with_box, goat_only, gender, colorway, notes, created_by)
     VALUES
       (coalesce(${it.vin || null},
         'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
               || '-' || lpad(nextval('vin_seq')::text, 6, '0')),
        ${batchId}, ${it.boxId ?? null}, ${it.name || null}, ${it.sku || null}, ${it.size || null},
+       ${it.dimensions || null},
        ${it.upc || null}, ${it.image || null}, ${it.cost ?? null},
        ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false}, ${it.goatOnly === true},
        ${it.gender || null}, ${it.colorway || null}, ${it.notes || null}, ${createdBy || null})
@@ -1225,6 +1244,9 @@ export async function getBatch(id) {
 
 // Create an OPEN multi-box receiving batch (no items yet). status='open' until
 // all boxes are received (auto) or staff finish it manually.
+// `kind` is 'receiving' for a shipment of shoes and 'boxes' for a shipment of EMPTY shoe
+// boxes. Everything else about the batch is identical — same labels, same per-box commit,
+// same PO link — so the kind is the only thing that has to be carried through.
 export async function createOpenBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
@@ -1233,7 +1255,7 @@ export async function createOpenBatch(h, createdBy) {
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.noTracking === true}, ${h.dateReceived || null},
        ${h.defaultCost ?? null}, ${h.notes || null}, ${h.specialRules || null},
-       'receiving', ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null},
+       ${h.kind === 'boxes' ? 'boxes' : 'receiving'}, ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null},
        ${h.poId ? 'receiving' : null}, ${h.poId ? new Date() : null}, 'open', ${createdBy || null})
     RETURNING id, batch_code
   `;
@@ -1683,8 +1705,15 @@ export async function pendingCounts() {
       -- a $0 is a claim on file, not a known gap — it's a review list, not a chore.
       count(*) FILTER (WHERE cost = 0 AND costable
         AND status NOT IN ('missing','issue'))::int                    AS zero_cost,
-      count(*) FILTER (WHERE status = 'needs_shelf')::int              AS needs_shelf,
-      count(*) FILTER (WHERE status = 'no_box')::int                   AS no_box,
+      -- SHOES waiting on a shelf. Empty boxes are shelved too, but they are counted
+      -- separately below: a single carton of replacement boxes is a couple of hundred
+      -- rows, and folding them in here would triple the warehouse's headline chore
+      -- overnight with work that isn't the same work.
+      count(*) FILTER (WHERE status = 'needs_shelf' AND NOT is_box)::int AS needs_shelf,
+      count(*) FILTER (WHERE status = 'needs_shelf' AND is_box)::int     AS boxes_needs_shelf,
+      -- Empty boxes on the shelf, ready to go onto a pair that arrived without one.
+      count(*) FILTER (WHERE is_box AND status = 'in_stock')::int        AS boxes_on_hand,
+      count(*) FILTER (WHERE status = 'no_box' AND NOT is_box)::int    AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
       -- Sold but not yet handed to the carrier — the scan-out backlog. This is the
       -- only real "still to ship" queue we have: sold and shipped are both terminal,
@@ -1722,11 +1751,13 @@ export async function pendingCounts() {
              (it.with_box AND it.status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable,
              (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})) AS ph_managed,
              (b.kind = 'instore') AS is_instore,
+             -- An empty shoe box: real stock, but never a pair and never sellable.
+             (b.kind = 'boxes') AS is_box,
              -- Costable = the Costs page's backlog, and it must match
              -- listItemsMissingCost exactly or the badge counts rows the page
-             -- won't show. Existing (old) stock has no cost to capture by design
-             -- and runs to thousands of pairs; missing/issue are dead paperwork.
-             (b.kind IS NULL OR b.kind <> 'existing') AS costable
+             -- won't show (COST_EXCLUDED_KINDS is the shared list). missing/issue
+             -- are dead paperwork.
+             (b.kind IS NULL OR b.kind <> ALL(${COST_EXCLUDED_KINDS})) AS costable
       FROM items it
       LEFT JOIN batches b ON b.id = it.batch_id
     ) i
@@ -2236,7 +2267,7 @@ export async function listItemsMissingCost(from = null, to = null, zero = false)
     FROM items i LEFT JOIN batches b ON b.id = i.batch_id
     WHERE (CASE WHEN ${zero}::boolean THEN i.cost = 0 ELSE i.cost IS NULL END)
       AND i.status NOT IN ('missing', 'issue')
-      AND (b.kind IS NULL OR b.kind <> 'existing')
+      AND (b.kind IS NULL OR b.kind <> ALL(${COST_EXCLUDED_KINDS}))
       AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
       AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
     ORDER BY i.created_at DESC, i.sku, i.id
@@ -2520,6 +2551,91 @@ export async function markBoxFound(itemId, createdBy) {
     sql`INSERT INTO item_events (item_id, type, details, created_by)
         VALUES (${itemId}, 'status_change', ${JSON.stringify({ status: 'needs_shelf', note: 'Box found — now With Box' })}::jsonb, ${createdBy || null})`,
   ]);
+}
+
+// Empty boxes ON THE SHELF that fit a given shoe, newest last so the oldest carton gets
+// used first. `size` is what the person actually asks by ("I need a box for a 10.5"), and
+// the SKU narrows it to the right model when we have one for it.
+//
+// `used` boxes are excluded by status, not by `used_on_item_id IS NULL`: a box that was
+// put on a pair and then the pair was un-boxed again would have kept its link, and a
+// second use of one physical carton is the exact bug this table exists to prevent.
+export async function findAvailableBoxes({ sku = null, size = null, limit = 50 } = {}) {
+  const sql = db();
+  return await sql`
+    SELECT i.id, i.vin, i.name, i.sku, i.size, i.dimensions, i.status, i.cost,
+           i.location_code, i.location_id, b.batch_code
+    FROM items i
+    JOIN batches b ON b.id = i.batch_id
+    WHERE b.kind = 'boxes'
+      AND i.status IN ('needs_shelf', 'in_stock')
+      AND i.used_on_item_id IS NULL
+      AND (${sku}::text  IS NULL OR upper(replace(i.sku, '-', '')) = upper(replace(${sku}::text, '-', '')))
+      AND (${size}::text IS NULL OR i.size = ${size}::text)
+    ORDER BY i.created_at, i.id
+    LIMIT ${Math.min(200, Math.max(1, limit))}
+  `;
+}
+
+// How many empty boxes we hold, grouped the way somebody asks for one: by shoe and size,
+// with the cartons they come in. Drives the "find a box" screen.
+export async function boxStockOnHand({ sku = null, size = null } = {}) {
+  const sql = db();
+  return await sql`
+    SELECT i.sku, max(i.name) AS name, i.size, i.dimensions,
+           count(*)::int AS qty,
+           count(*) FILTER (WHERE i.status = 'in_stock')::int AS shelved,
+           (array_agg(DISTINCT i.location_code) FILTER (WHERE i.location_code IS NOT NULL)) AS locations
+    FROM items i
+    JOIN batches b ON b.id = i.batch_id
+    WHERE b.kind = 'boxes'
+      AND i.status IN ('needs_shelf', 'in_stock')
+      AND i.used_on_item_id IS NULL
+      AND (${sku}::text  IS NULL OR upper(replace(i.sku, '-', '')) = upper(replace(${sku}::text, '-', '')))
+      AND (${size}::text IS NULL OR i.size = ${size}::text)
+    GROUP BY i.sku, i.size, i.dimensions
+    ORDER BY max(i.name), i.size, i.dimensions
+  `;
+}
+
+// Put an empty box ON a pair that arrived without one: the pair becomes sellable exactly
+// as "Box found" already made it, and the box row is spent.
+//
+// BOTH rows carry the link, and the box's status becomes terminal — otherwise one carton
+// could be handed to two different shoes, which is the same class of bug as selling one
+// pair twice. Done in a single transaction for that reason: a pair marked boxed with the
+// carton still on the shelf is worse than neither.
+export async function useBoxOnItem({ boxId, itemId, createdBy }) {
+  const sql = db();
+  const box = (await sql`
+    SELECT i.*, b.kind FROM items i JOIN batches b ON b.id = i.batch_id WHERE i.id = ${boxId}
+  `)[0];
+  if (!box) return { error: 'That box was not found.' };
+  if (box.kind !== 'boxes') return { error: `${box.vin} is a pair, not an empty box.` };
+  if (box.used_on_item_id) return { error: `${box.vin} has already been used on another pair.` };
+  if (!['needs_shelf', 'in_stock'].includes(box.status))
+    return { error: `${box.vin} is ${box.status} — only a box on the shelf can be used.` };
+
+  const pair = (await sql`SELECT * FROM items WHERE id = ${itemId}`)[0];
+  if (!pair) return { error: 'That pair was not found.' };
+
+  await sql.transaction([
+    sql`UPDATE items SET with_box = true, status = 'needs_shelf', updated_at = now() WHERE id = ${itemId}`,
+    sql`INSERT INTO item_events (item_id, type, details, created_by)
+        VALUES (${itemId}, 'status_change',
+                ${JSON.stringify({ status: 'needs_shelf', note: `Boxed from stock — empty box ${box.vin}${box.dimensions ? ` (${box.dimensions})` : ''}` })}::jsonb,
+                ${createdBy || null})`,
+    // The box is spent. 'used' is terminal (api/_lib/statuses.js), so it can never be
+    // shelved or handed out again.
+    sql`UPDATE items SET status = 'used', used_on_item_id = ${itemId}, used_at = now(),
+          location_id = NULL, location_code = NULL, updated_at = now()
+        WHERE id = ${boxId}`,
+    sql`INSERT INTO item_events (item_id, type, details, created_by)
+        VALUES (${boxId}, 'status_change',
+                ${JSON.stringify({ status: 'used', note: `Used on ${pair.vin}${pair.name ? ` — ${pair.name}` : ''}${pair.size ? ` size ${pair.size}` : ''}` })}::jsonb,
+                ${createdBy || null})`,
+  ]);
+  return { ok: true, boxVin: box.vin, pairVin: pair.vin };
 }
 
 // Mark units restocked — clears restock_pending so they drop off the Rescale

@@ -6,7 +6,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import {
   getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues,
-  reconcileOutcomeForIntake, dbConfigured,
+  reconcileOutcomeForIntake, dbConfigured, SHIPMENT_KINDS,
 } from '../_lib/db.js';
 import { normalizeItems, parseUnitIssues, enrichGlobalIndicators, toCost } from '../_lib/intake.js';
 import { duplicateVin } from '../_lib/vins.js';
@@ -37,7 +37,10 @@ export default async function handler(req, res) {
 
   try {
     const found = await getBatchWithBoxes(batchId);
-    if (!found || found.batch.kind !== 'receiving') return send(res, 404, { ok: false, error: 'Batch not found.' });
+    // A shipment of EMPTY shoe boxes ('boxes') arrives box by box on courier labels
+    // exactly like a shipment of shoes does, so it uses this same per-box commit.
+    if (!found || !SHIPMENT_KINDS.includes(found.batch.kind))
+      return send(res, 404, { ok: false, error: 'Batch not found.' });
     // Postgres returns BIGINT ids as strings, so coerce before comparing to the
     // numeric boxId (strict === on "6" vs 6 would never match → "Box not found").
     const box = found.boxes.find((b) => Number(b.id) === boxId);

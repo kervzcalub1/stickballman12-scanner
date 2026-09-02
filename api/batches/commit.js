@@ -47,8 +47,11 @@ export default async function handler(req, res) {
   // 'existing' = old stock that predates this system: no shipment, already sitting
   // on a shelf, and already listed to II + the stores. Counted in via the Existing
   // Stock screen, which sends a `locationCode` so each pair is shelved on commit.
-  const KINDS = ['rescale', 'instore', 'existing'];
-  const kind = KINDS.includes(body.kind) ? body.kind : 'receiving';
+  // 'boxes' = a shipment of EMPTY shoe boxes, received against a boxes purchase order.
+  // Real stock rows with real VINs (so history, shelves and search all work on them),
+  // but never PH's and never listed — `PH_EXCLUDED_KINDS` carries that.
+  const KINDS = ['rescale', 'instore', 'existing', 'boxes'];
+  let kind = KINDS.includes(body.kind) ? body.kind : 'receiving';
   // Rescale and existing carry no issues; receiving and in-store both can (in-store
   // reuses the full Review + Issues flow — no-box auto-issues, per-unit defect flags).
   const issues = (kind === 'rescale' || kind === 'existing') ? [] : (Array.isArray(body.issues) ? body.issues : []);
@@ -77,7 +80,11 @@ export default async function handler(req, res) {
   // It has to be STATED — the flag is stored on the batch, so "there was no
   // tracking number" reads differently from "someone left the field empty".
   const noTracking = header.noTracking === true;
-  if (kind === 'receiving') {
+  // A carton of empty boxes arrives on a courier label from a supplier exactly like a
+  // carton of shoes does, so it keeps the whole shipment header — supplier, tracking, the
+  // PO link. Only what's INSIDE differs. (Rescale and in-store carry no shipment at all.)
+  const isShipment = kind === 'receiving' || kind === 'boxes';
+  if (isShipment) {
     if (!cleanName(header.supplier)) return send(res, 400, { ok: false, error: 'Supplier is required.' });
     if (!noTracking && !String(header.tracking ?? '').trim())
       return send(res, 400, { ok: false, error: 'Tracking # is required — or tick “No tracking number”.' });
@@ -110,7 +117,7 @@ export default async function handler(req, res) {
 
   // V6 PO Phase 2: a receiving batch may be received against a purchase order —
   // link it and move the PO into 'receiving'. Validate the PO is open first.
-  const poId = kind === 'receiving' && Number.isInteger(Number(body.poId)) && Number(body.poId) > 0
+  const poId = isShipment && Number.isInteger(Number(body.poId)) && Number(body.poId) > 0
     ? Number(body.poId) : null;
   if (poId) {
     const po = await getPo(poId);
@@ -120,6 +127,10 @@ export default async function handler(req, res) {
     // draft/shipped/receiving PO — block only already-finished ones.
     if (['reconciled', 'closed'].includes(po.status))
       return send(res, 409, { ok: false, error: `PO ${po.po_code} is already ${po.status} — it can't be received against again.` });
+    // What arrived is whatever the ORDER says it is, not whatever the client claimed.
+    // A boxes order received as a 'receiving' batch would put empty cartons in front of
+    // the PH team as sellable stock, which is the one thing this kind exists to prevent.
+    kind = po.order_kind === 'boxes' ? 'boxes' : (kind === 'boxes' ? 'receiving' : kind);
   }
 
   // A unit flagged with a 'no_box' defect follows the no-box rules too (status
@@ -138,20 +149,20 @@ export default async function handler(req, res) {
   // Only a real shipment (receiving) carries buyer/supplier/tracking. Rescale and
   // in-store drop those; in-store keeps `origin` (the store name) like rescale.
   const bh = {
-    buyer: kind !== 'receiving' ? null : cleanName(header.buyer),
-    supplier: kind !== 'receiving' ? null : cleanName(header.supplier),
+    buyer: !isShipment ? null : cleanName(header.buyer),
+    supplier: !isShipment ? null : cleanName(header.supplier),
     // A stated "no tracking number" wins over anything left in the field, so the
     // flag and the column can never disagree about what this shipment had.
-    tracking: kind !== 'receiving' || noTracking ? null : (String(header.tracking ?? '').trim().slice(0, 120) || null),
-    noTracking: kind === 'receiving' && noTracking,
+    tracking: !isShipment || noTracking ? null : (String(header.tracking ?? '').trim().slice(0, 120) || null),
+    noTracking: isShipment && noTracking,
     dateReceived: header.dateReceived || null,
     defaultCost,
     notes: String(header.notes ?? '').trim().slice(0, 2000) || null,
     specialRules: String(header.specialRules ?? '').trim().slice(0, 2000) || null,
     kind,
-    origin: kind !== 'receiving' ? (String(header.origin ?? '').trim().slice(0, 80) || null) : null,
+    origin: !isShipment ? (String(header.origin ?? '').trim().slice(0, 80) || null) : null,
     // Set by the client when staff proceed past the duplicate-tracking warning.
-    duplicateOf: kind !== 'receiving' ? null : (Number.isInteger(header.duplicateOf) ? header.duplicateOf : null),
+    duplicateOf: !isShipment ? null : (Number.isInteger(header.duplicateOf) ? header.duplicateOf : null),
     poId,
   };
 
@@ -165,7 +176,7 @@ export default async function handler(req, res) {
       : null;
     // Auto-save the supplier name so custom vendors (e.g. "JD Sports") show up in
     // the dropdown next time. Best-effort — never fail the commit over this.
-    if (kind === 'receiving' && bh.supplier) addSupplier(bh.supplier, createdBy).catch(() => {});
+    if (isShipment && bh.supplier) addSupplier(bh.supplier, createdBy).catch(() => {});
     const created = await insertItems(batch.id, items, createdBy, bh.dateReceived);
     // First history per item: "Scanned by <user>" then received / rescaled.
     await insertIntakeEvents(created.map((r) => r.id), createdBy, kind);

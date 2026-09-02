@@ -251,6 +251,12 @@ export const api = {
   // Empty-box orders: one carton size across many lines at once. The per-line edit is
   // still `poLine({ dimensions })` — this is the "they all ship in the same box" case.
   poLinesDimensions: (lineIds, dimensions) => post('/api/po/lines-dimensions', { lineIds, dimensions }),
+  // Empty shoe boxes in stock: what we hold, and putting one onto a pair that needs it.
+  boxStock: (q = {}) => get(`/api/items/box-stock?${new URLSearchParams(
+    Object.entries(q).filter(([, v]) => v != null && v !== '')).toString()}`),
+  boxesFitting: (q = {}) => get(`/api/items/use-box?${new URLSearchParams(
+    Object.entries(q).filter(([, v]) => v != null && v !== '')).toString()}`),
+  useBoxOnPair: (vin, boxId) => post('/api/items/use-box', { vin, boxId }),
   // Editing an order after it exists: its own details, and its labels. Only what's
   // passed is written — see api/po/update.js.
   poUpdate: (poId, patch) => post('/api/po/update', { poId, ...patch }),

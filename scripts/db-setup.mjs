@@ -822,6 +822,31 @@ await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_dim_idx
            WHERE po_box_id IS NULL AND dimensions IS NOT NULL`);
 
 
+/* ---- Empty shoe boxes: the warehouse side ----
+   A carton of empty boxes is received, shelved, found and used exactly like a pair —
+   same `items` rows, same VINs, same history — because that is what makes the whole
+   existing app work on them for free. What it is NOT is stock to sell: `kind='boxes'`
+   joins PH_EXCLUDED_KINDS, so an empty box never reaches the PH team, a price, or a
+   store. See docs/empty-boxes-warehouse-plan.md. */
+await sql(`ALTER TABLE batches DROP CONSTRAINT IF EXISTS batches_kind_check`);
+await sql(`ALTER TABLE batches ADD CONSTRAINT batches_kind_check
+           CHECK (kind IN ('receiving','rescale','instore','existing','boxes'))`);
+
+// How big the carton is. `items.size` already holds the SHOE SIZE the box was made for —
+// that is what reconciliation groups on and what the warehouse searches by — so this is
+// the extra fact, in the same canonical shape as po_lines.dimensions so the two compare
+// as one string.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS dimensions TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS items_dimensions_idx ON items (sku, size, dimensions)
+           WHERE dimensions IS NOT NULL`);
+
+// Which shoe a box was eventually put on. NULL = still on the shelf. Both rows carry the
+// link, so "what happened to the 40 boxes we bought" has an answer that isn't a guess.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS used_on_item_id BIGINT REFERENCES items(id)`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS used_at TIMESTAMPTZ`);
+await sql(`CREATE INDEX IF NOT EXISTS items_used_on_idx ON items (used_on_item_id)
+           WHERE used_on_item_id IS NOT NULL`);
+
 /* ---- Payout Calculator: supplier presets ---- */
 // A "supplier" here is the person who buys the pair at retail for us — Andrew,
 // Esteban, Chris — and each one comes with a fixed cost stack: what they charge as a

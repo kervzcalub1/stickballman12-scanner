@@ -86,18 +86,14 @@ and CSV swap the SIZE column for DIMENSIONS and PAIRS for BOXES; and a **supplie
 catalogue can't resolve still opens the draft** on a boxes order (the catalogue only fills
 in the shoe's name there — the SKU and the carton size are both in the person's hand).
 
-Two deliberate refusals:
+One deliberate refusal:
 - **`po/manifest-import` is closed on a boxes order.** It parses a supplier sheet of
   SKU + shoe SIZE, which no box sheet carries; importing one would fill the order with
   sizeless lines nobody can count against.
-- **Warehouse intake for boxes is NOT built yet.** There is no way to receive a carton of
-  empty boxes into stock, so a boxes PO that gets linked to a batch reconciles against
-  nothing and reads every declared box as short. Reconciliation shows a banner saying
-  exactly that, so nobody settles a false shortage with a supplier. (Because a box line
-  now carries a real size, `getPoReconciliation`'s existing `(sku, numeric size)` match
-  works as-is once intake exists — the dimensions are a refinement, not a blocker. That is
-  the main thing requiring size bought us.) Plan:
-  `docs/empty-boxes-warehouse-plan.md`.
+The **warehouse half shipped 2026-09-03** — receiving a boxes PO, reconciling it,
+finding a box and putting one on a pair. It needed no change to `getPoReconciliation` at
+all, because a box line carries a real size and both sides already group on
+`(sku, numeric size)`. Full write-up: `docs/context/empty-boxes.md`.
 
 Tests: `e2e/po-empty-boxes.spec.js`.
 

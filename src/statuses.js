@@ -11,6 +11,9 @@ export const STATUSES = [
   { key: 'returned',    label: 'Returned',                   fg: '#e9c46a', bg: 'rgba(233,196,106,0.14)' },
   { key: 'missing',     label: 'Missing',                    fg: '#e08f8f', bg: 'rgba(224,143,143,0.14)' },
   { key: 'issue',       label: 'Issue',                      fg: '#e08f8f', bg: 'rgba(224,143,143,0.14)' },
+  // Empty shoe boxes only: the carton went onto a pair and is spent. Terminal, so it
+  // can never be shelved or handed out again (api/_lib/statuses.js).
+  { key: 'used',        label: 'Used on a pair',             fg: '#8a63e0', bg: 'rgba(155,120,230,0.16)' },
 ];
 
 export const STATUS_MAP = Object.fromEntries(STATUSES.map((s) => [s.key, s]));

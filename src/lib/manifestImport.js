@@ -1,3 +1,4 @@
+import { lazyImport } from './chunkLoad.js';
 // Read an inbound-shipment manifest PDF INTO structured lines — the inverse of
 // `manifestPdf.js`, which writes one. PH imports what a supplier sent instead of
 // typing it in box by box. Same idea as the shipping-labels import in
@@ -122,8 +123,8 @@ export function parseManifestPage(rows) {
 // Parse the whole file. `onProgress(page, total)` fires per page.
 // Returns [{ page, boxNumber, boxTotal, tracking, lines, declaredTotal, unitCount }].
 export async function parseManifestPdf(file, onProgress) {
-  const pdfjs = await import('pdfjs-dist');
-  const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
+  const pdfjs = await lazyImport(() => import('pdfjs-dist'));
+  const workerUrl = (await lazyImport(() => import('pdfjs-dist/build/pdf.worker.min.mjs?url'))).default;
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
   const data = await file.arrayBuffer();

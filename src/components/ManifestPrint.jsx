@@ -16,6 +16,7 @@ import React, { useState } from 'react';
 import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { buildManifestPdf } from '../lib/manifestPdf.js';
+import { isChunkLoadError } from '../lib/chunkLoad.js';
 import { buildManifestCsv } from '../lib/manifestCsv.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 
@@ -32,6 +33,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Download:', buttonLabel = 'Print box manifest', primary = false, received = null, compare = null, boxDiffs = null, onSignOut }) {
   const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole' | 'received' | 'discrepancies'
   const [error, setError] = useState('');
+  const [stale, setStale] = useState(false);   // the failure was a stale chunk, not a bad report
   // PDF or CSV, remembered per device: whoever prints these does the same thing every
   // time — one person signs and files paper, another lives in a spreadsheet — and
   // re-picking the format on every download is the kind of small tax that makes people
@@ -111,6 +113,10 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
       if (e?.unauthorized && onSignOut) return onSignOut();
+      // A stale chunk after a deploy used to surface here as the raw browser message,
+      // naming a URL — which tells the person nothing they can act on. Now it says what
+      // happened, and the button below does the one thing that fixes it.
+      setStale(isChunkLoadError(e));
       setError(e?.message || 'Could not build the manifest.');
     } finally { setBusy(''); }
   };
@@ -129,7 +135,12 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
           onClick={() => { pickPrices(true); run('perbox'); }}>
           <Icon name="download" /> {busy && prices ? 'Building…' : 'With my prices'}
         </button>
-        {error && <span className="mf-print-err sm">{error}</span>}
+        {error && (
+          <span className="mf-print-err sm">
+            {error}
+            {stale && <button type="button" className="btn sm primary mf-reload" onClick={() => window.location.reload()}>Reload</button>}
+          </span>
+        )}
       </div>
     );
   }
@@ -157,7 +168,12 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
             is indistinguishable from one nobody produced. */}
         {boxDiffs?.some((b) => b.received && b.diffs?.length > 0) && reportBtn('discrepancies')}
       </div>
-      {error && <span className="mf-print-err sm">{error}</span>}
+      {error && (
+          <span className="mf-print-err sm">
+            {error}
+            {stale && <button type="button" className="btn sm primary mf-reload" onClick={() => window.location.reload()}>Reload</button>}
+          </span>
+        )}
     </div>
   );
 }

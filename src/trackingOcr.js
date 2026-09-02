@@ -1,3 +1,4 @@
+import { lazyImport } from './lib/chunkLoad.js';
 import { detectCarrierKey } from './lib/carriers.js';
 
 // Decode a carrier tracking number from an uploaded/snapped label photo — the
@@ -38,8 +39,8 @@ export async function decodeTrackingImage(file) {
     // too), and only trust it if it actually looks like a tracking number.
     let barcodeText = '';
     try {
-      const { BrowserMultiFormatReader } = await import('@zxing/browser');
-      const { DecodeHintType, BarcodeFormat } = await import('@zxing/library');
+      const { BrowserMultiFormatReader } = await lazyImport(() => import('@zxing/browser'));
+      const { DecodeHintType, BarcodeFormat } = await lazyImport(() => import('@zxing/library'));
       // TRY_HARDER + restrict to the formats couriers actually print the tracking number
       // in — Code128 (UPS 1Z / USPS), Code39, ITF (FedEx 96-barcode) — plus MaxiCode /
       // Data Matrix whose payload embeds the 1Z. Restricting off the busy 2D graphics on a
@@ -60,7 +61,7 @@ export async function decodeTrackingImage(file) {
 
     // 2) OCR the human-readable number printed on the label (catches the 1Z when the
     // barcode read gave routing noise).
-    const { default: Tesseract } = await import('tesseract.js');
+    const { default: Tesseract } = await lazyImport(() => import('tesseract.js'));
     const { data } = await Tesseract.recognize(url, 'eng');
     const fromOcr = pickFromText(data?.text);
     if (isTrackingLike(fromOcr)) return { value: fromOcr, via: 'ocr' };
@@ -135,8 +136,8 @@ async function renderPageToBlob(page) {
 // to rendering the page and reading its barcode / OCR'ing it. `onProgress(page,total)`
 // fires per page. Returns [{ page, value, via }] — value '' when nothing was found.
 export async function decodeTrackingPdf(file, onProgress) {
-  const pdfjs = await import('pdfjs-dist');
-  const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
+  const pdfjs = await lazyImport(() => import('pdfjs-dist'));
+  const workerUrl = (await lazyImport(() => import('pdfjs-dist/build/pdf.worker.min.mjs?url'))).default;
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
   const data = await file.arrayBuffer();

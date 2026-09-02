@@ -2575,6 +2575,19 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .boxstock-shoe .po-lines li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .boxstock-shoe .po-line-name { flex: 1 1 auto; min-width: 0; }
 .boxstock-qty { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
+
+/* "A new version was released" — sits above everything because the thing it explains
+   (a camera that won't open, a download that won't build) happens somewhere else. */
+.app-updated-bar {
+  position: sticky; top: 0; z-index: 90; display: flex; align-items: center; gap: 12px;
+  justify-content: space-between; flex-wrap: wrap;
+  padding: 10px 14px; font-size: 13px; line-height: 1.4;
+  background: rgba(198,135,26,0.16); color: #e9c46a;
+  border-bottom: 1px solid rgba(198,135,26,0.4);
+}
+.app-updated-bar b { color: #f0d79a; }
+.app-updated-actions { display: flex; gap: 8px; flex: none; }
+.mf-reload { margin-left: 8px; vertical-align: middle; }
 .po-chip.kind.shoes { background: transparent; color: var(--muted); border-color: var(--border); }
 .po-chip.kind.boxes { background: rgba(155,120,230,0.14); color: #8a63e0; border-color: rgba(155,120,230,0.45); }
 .po-chip.warn { background: rgba(198,135,26,0.14); color: #c6871a; border-color: rgba(198,135,26,0.35); }

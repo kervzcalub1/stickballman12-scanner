@@ -9,6 +9,8 @@ import { isUnsavedDirty } from './hooks.js';
 import { pathForView, viewForPath } from './lib/constants.js';
 import { clearQuery, writeParam } from './lib/urlstate.js';
 import { setMarkupPct } from './lib/config.js';
+import { onAppUpdated } from './lib/chunkLoad.js';
+import { AppUpdatedBar } from './components/AppUpdatedBar.jsx';
 import { Auth, ForcedPasswordChange } from './screens/Auth.jsx';
 import { Home } from './screens/Home.jsx';
 import { CheckAccess } from './screens/CheckAccess.jsx';
@@ -44,6 +46,7 @@ const isPrivilegedRole = (r) => r === 'admin' || r === 'superadmin';
 
 export default function App() {
   const [user, setUserState] = useState(getUser);
+  const [appUpdated, setAppUpdated] = useState(false);
   // Initial page comes from the URL (so refreshing /inventory stays on Inventory).
   const [view, setView] = useState(() => viewForPath(window.location.pathname));
   // Superadmin only: when true we render the PH-team workspace (PHTeamApp, which
@@ -113,6 +116,16 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, [user]);
 
+  // A React.lazy component (the camera) that 404s after a deploy fails inside Suspense,
+  // where there is no catch site to put a message in — so the app itself has to say it.
+  // Deliberately not an auto-reload: Receiving and the counting screens hold work that
+  // hasn't been saved, and throwing it away to fix a camera is a bad trade.
+  //
+  // MUST live up here with the other hooks: `if (!user) return <Auth/>` is below, so a
+  // hook after it is skipped on the login screen and runs once signed in — React counts
+  // that as a different component and throws.
+  useEffect(() => onAppUpdated(() => setAppUpdated(true)), []);
+
   if (!user) return <Auth onAuthed={onAuthed} />;
   // Signed in with an admin-issued temp password → force a change before anything else
   // (the server also rejects role-gated calls with 428 until this is done).
@@ -123,7 +136,7 @@ export default function App() {
   // where it is a much narrower thing: three tools, its own prompt, and results
   // projected down to counts (see api/advisor/ask.js). Still absent from the two
   // returns above it — Auth and the forced password change are pre-auth.
-  const withAdvisor = (screen) => (<>{screen}<Advisor user={user} /></>);
+  const withAdvisor = (screen) => (<>{appUpdated && <AppUpdatedBar />}{screen}<Advisor user={user} /></>);
 
   const enterPh = () => { setPhMode(true); if (window.location.pathname !== '/ph') window.history.pushState(null, '', '/ph'); };
   const exitPh = () => { setPhMode(false); window.history.pushState(null, '', pathForView('home')); setView('home'); };

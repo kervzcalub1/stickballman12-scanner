@@ -12,6 +12,7 @@
 //
 // ⚠️ Every string DRAWN into the PDF must be plain ASCII: jsPDF's built-in Helvetica
 // silently drops em-dashes and middots, so "—" prints as an empty cell.
+import { lazyImport } from './chunkLoad.js';
 import { toCsv } from './manifestCsv.js';
 import { estDate } from './format.js';
 
@@ -98,7 +99,7 @@ export function buildBatchReportCsv({ batch, items = [], boxes = [] }) {
 }
 
 async function loadJsPDF() {
-  const mod = await import('jspdf');
+  const mod = await lazyImport(() => import('jspdf'));
   return mod.jsPDF || mod.default;
 }
 

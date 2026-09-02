@@ -9,6 +9,7 @@
 // browser chrome, batches naturally as a multi-page document, and behaves the
 // same on iOS and desktop. jsPDF + jsbarcode are both lazy-loaded on print.
 
+import { lazyImport } from './chunkLoad.js';
 import { sizeParts } from './codes.js';
 
 const PT_PER_MM = 72 / 25.4; // 2.8346 — jsPDF font sizes are in points
@@ -39,19 +40,10 @@ const NAME_MIN_SHORT_MM = 62;
 // exists. The warehouse keeps the app open all shift, so this is routine. Tag the
 // failure so the UI can say "reload" — swallowing it is what made a box label
 // render with a blank barcode column and a Print button that did nothing.
-export class ChunkLoadError extends Error {
-  constructor(cause) {
-    super('The app was updated while this tab was open. Reload the page, then print again.');
-    this.name = 'ChunkLoadError';
-    this.cause = cause;
-  }
-}
-export const isChunkLoadError = (e) => e?.name === 'ChunkLoadError';
-
-async function lazy(load) {
-  try { return await load(); }
-  catch (e) { throw new ChunkLoadError(e); }
-}
+// Shared with every other lazy import in the app — see src/lib/chunkLoad.js. Re-exported
+// here because callers of the label printer already import them from this module.
+export { ChunkLoadError, isChunkLoadError } from './chunkLoad.js';
+const lazy = lazyImport;
 async function loadJsPDF() {
   return lazy(async () => {
     const mod = await import('jspdf');

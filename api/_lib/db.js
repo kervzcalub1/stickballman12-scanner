@@ -378,6 +378,7 @@ export async function recomputeUnlistedPrices(oldMult, newMult) {
       AND status NOT IN ('sold', 'shipped')
       AND (price IS NULL OR abs(price - round(global_indicator * ${om})) < 0.51)
       AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.id = items.batch_id AND b.kind = ANY(${PH_EXCLUDED_KINDS}))
+      AND NOT items.pre_sell   -- sold before it landed; not PH's to price
     RETURNING id
   `;
   return rows.length;
@@ -833,12 +834,17 @@ export async function createBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, tracking_number, no_tracking, date_received,
-       default_cost, notes, special_rules, kind, origin, duplicate_of, po_id, status, created_by, committed_at)
+       default_cost, notes, special_rules, kind, origin, duplicate_of, po_id, pre_sell, status, created_by, committed_at)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null}, ${h.noTracking === true},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
-       ${h.specialRules || null}, ${['receiving', 'rescale', 'instore', 'existing'].includes(h.kind) ? h.kind : 'receiving'},
-       ${h.origin || null}, ${h.duplicateOf ?? null}, ${h.poId ?? null}, 'committed', ${createdBy || null}, now())
+       -- 'boxes' belongs in this list: without it a single-batch commit of empty shoe
+       -- boxes silently became a 'receiving' batch, which would put empty cartons in
+       -- front of the PH team as sellable stock. The multi-box path (createOpenBatch)
+       -- always had it, which is the only reason this hadn't bitten.
+       ${h.specialRules || null}, ${['receiving', 'rescale', 'instore', 'existing', 'boxes'].includes(h.kind) ? h.kind : 'receiving'},
+       ${h.origin || null}, ${h.duplicateOf ?? null}, ${h.poId ?? null}, ${h.preSell === true},
+       'committed', ${createdBy || null}, now())
     RETURNING id, batch_code
   `;
   return rows[0];
@@ -865,7 +871,7 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   const sql = db();
   const queries = items.map((it) => sql`
     INSERT INTO items
-      (vin, batch_id, box_id, name, sku, size, dimensions, upc, image_url, cost, source, status, with_box, goat_only, gender, colorway, notes, created_by)
+      (vin, batch_id, box_id, name, sku, size, dimensions, upc, image_url, cost, source, status, with_box, goat_only, pre_sell, gender, colorway, notes, created_by)
     VALUES
       (coalesce(${it.vin || null},
         'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
@@ -874,6 +880,7 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
        ${it.dimensions || null},
        ${it.upc || null}, ${it.image || null}, ${it.cost ?? null},
        ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false}, ${it.goatOnly === true},
+       ${it.preSell === true},
        ${it.gender || null}, ${it.colorway || null}, ${it.notes || null}, ${createdBy || null})
     RETURNING id, vin
   `);
@@ -984,6 +991,7 @@ export async function getItemsForGiRefresh(vins) {
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE i.vin = ANY(${list}) AND i.status NOT IN ('sold', 'shipped')
       AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH/GI pricing
+      AND NOT i.pre_sell                                           -- pre-sell is not listed, so not priced
   `;
 }
 
@@ -1135,7 +1143,7 @@ export async function listBatches(limit = 50, kind = null,
   const poNone = po === 'none';
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.no_tracking, b.batch_tag, b.status, b.merged_into_batch_id,
+           b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.merged_into_batch_id,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
            count(*) OVER ()::int AS total_count,
@@ -1205,7 +1213,7 @@ export async function searchBatches(query,
   const like = `%${key}%`;
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.no_tracking, b.batch_tag, b.status, b.merged_into_batch_id,
+           b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.merged_into_batch_id,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
            count(*) OVER ()::int AS total_count,
@@ -1264,12 +1272,13 @@ export async function createOpenBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, no_tracking, date_received, default_cost, notes, special_rules,
-       kind, batch_tag, expected_boxes, po_id, po_link_source, po_linked_at, status, created_by)
+       kind, batch_tag, expected_boxes, po_id, po_link_source, po_linked_at, pre_sell, status, created_by)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.noTracking === true}, ${h.dateReceived || null},
        ${h.defaultCost ?? null}, ${h.notes || null}, ${h.specialRules || null},
        ${h.kind === 'boxes' ? 'boxes' : 'receiving'}, ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null},
-       ${h.poId ? 'receiving' : null}, ${h.poId ? new Date() : null}, 'open', ${createdBy || null})
+       ${h.poId ? 'receiving' : null}, ${h.poId ? new Date() : null}, ${h.preSell === true},
+       'open', ${createdBy || null})
     RETURNING id, batch_code
   `;
   return rows[0];
@@ -1428,7 +1437,7 @@ export async function getBatchWithBoxes(id) {
 // Open (resumable) multi-box batches, newest first, with progress counts.
 export async function listOpenBatches() {
   return await db()`
-    SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes,
+    SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes, b.pre_sell,
            b.tracking_number, b.no_tracking,
            b.date_received, b.created_by, b.created_at,
            (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
@@ -1544,7 +1553,7 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
   const toks = searchTokens(q);
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.cost, i.status, i.created_by, i.created_at,
-           i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv,
+           i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv, i.pre_sell,
            i.synced_alias, i.synced_stockx, i.synced_shopify, i.location_code,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
            (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
@@ -1599,6 +1608,7 @@ export async function phListItems(from, to, kind = null) {
       WHERE i.restock_pending = true  -- pending worklist; cleared on "Mark restocked"
         AND i.status <> 'no_box'      -- no-box units aren't postable; PH never lists them
         AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH entirely
+        AND NOT i.pre_sell            -- released units clear the flag; unreleased ones stay out
         AND (${from}::date IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
         AND (${to}::date   IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
       ORDER BY created_at DESC, i.id
@@ -1622,6 +1632,10 @@ export async function phListItems(from, to, kind = null) {
       -- off the In-Store Listing page, and existing stock was already synced to II
       -- and the stores before this system existed.
       AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
+      -- Pre-sell: sold before it landed, so it is NOT listed to II or the stores. It
+      -- leaves this world only when somebody has said which orders the arrivals cover
+      -- and released the rest for rescale, which clears the flag.
+      AND NOT i.pre_sell
       AND (${kind}::text IS NULL OR b.kind = 'receiving' OR b.kind IS NULL)
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
       -- Report (kind IS NULL) for oversight.
@@ -1726,6 +1740,9 @@ export async function pendingCounts() {
       count(*) FILTER (WHERE status = 'needs_shelf' AND is_box)::int     AS boxes_needs_shelf,
       -- Empty boxes on the shelf, ready to go onto a pair that arrived without one.
       count(*) FILTER (WHERE is_box AND status = 'in_stock')::int        AS boxes_on_hand,
+      -- Pre-sell units still waiting for somebody to say which orders they cover. They
+      -- are not in ANY listing backlog, so without their own count the work is invisible.
+      count(*) FILTER (WHERE is_presell AND status NOT IN ('sold','shipped'))::int AS presell_pending,
       count(*) FILTER (WHERE status = 'no_box' AND NOT is_box)::int    AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
       -- Sold but not yet handed to the carrier — the scan-out backlog. This is the
@@ -1767,8 +1784,11 @@ export async function pendingCounts() {
       -- means specifically in-store, not "everything PH ignores".
       SELECT it.*,
              (it.with_box AND it.status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable,
-             (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})) AS ph_managed,
+             -- NOT pre_sell for the same reason as the kinds: a unit sold before
+             -- it landed is not PH's to list, so it must not inflate the listing backlog.
+             ((b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})) AND NOT it.pre_sell) AS ph_managed,
              (b.kind = 'instore') AS is_instore,
+             it.pre_sell AS is_presell,
              -- An empty shoe box: real stock, but never a pair and never sellable.
              (b.kind = 'boxes') AS is_box,
              -- Costable = the Costs page's backlog, and it must match
@@ -2654,6 +2674,112 @@ export async function useBoxOnItem({ boxId, itemId, createdBy }) {
                 ${createdBy || null})`,
   ]);
   return { ok: true, boxVin: box.vin, pairVin: pair.vin };
+}
+
+/* ---------------------- Pre-sell (sold before it landed) ---------------- */
+
+// The Pre-sell worklist: what arrived on pre-sell shipments, grouped the way the question
+// is asked — by shipment, then shoe, then size. `sold` is how many of that row have been
+// identified as covered by an order (status pre_sold); `remains` is what will be released
+// for listing.
+export async function listPreSellGroups({ batchId = null } = {}) {
+  const sql = db();
+  return await sql`
+    SELECT b.id AS batch_id, b.batch_code, b.supplier_name, b.date_received,
+           i.sku, max(i.name) AS name, i.size,
+           count(*)::int AS arrived,
+           count(*) FILTER (WHERE i.status = 'pre_sold')::int AS sold,
+           count(*) FILTER (WHERE i.status <> 'pre_sold')::int AS remains
+    FROM items i
+    JOIN batches b ON b.id = i.batch_id
+    WHERE i.pre_sell
+      AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue')
+      AND (${batchId}::bigint IS NULL OR b.id = ${batchId}::bigint)
+    GROUP BY b.id, b.batch_code, b.supplier_name, b.date_received, i.sku, i.size
+    ORDER BY b.date_received DESC NULLS LAST, b.id DESC, max(i.name), i.size
+  `;
+}
+
+// Set how many of one (batch, sku, size) row are spoken for.
+//
+// The units are interchangeable — same shoe, same size, none of them shelved yet — so
+// which VIN carries which order is not a decision anybody needs to make. Taking the
+// OLDEST first keeps it deterministic rather than arbitrary. Lowering the number hands
+// units back, which is what happens when a pre-sale falls through.
+//
+// `pre_sold` and not `sold`: the pair is still on our floor and has not shipped. It
+// reaches `sold`/`shipped` through the normal scan when it actually leaves — and `sold`
+// is terminal here, so claiming it early would strand a unit if the order collapsed.
+export async function setPreSellSold({ batchId, sku, size, qty, createdBy }) {
+  const sql = db();
+  const rows = await sql`
+    SELECT id, status FROM items
+    WHERE batch_id = ${batchId} AND sku = ${sku} AND coalesce(size, '') = coalesce(${size}, '')
+      AND pre_sell AND status NOT IN ('sold', 'shipped', 'missing', 'issue')
+    ORDER BY id
+  `;
+  const want = Math.max(0, Math.min(rows.length, Number(qty) || 0));
+  const marked = rows.filter((r) => r.status === 'pre_sold');
+  const free = rows.filter((r) => r.status !== 'pre_sold');
+  const toMark = free.slice(0, Math.max(0, want - marked.length)).map((r) => r.id);
+  const toClear = marked.slice(want).map((r) => r.id);   // only when the number came DOWN
+  const q = [];
+  if (toMark.length) {
+    q.push(sql`UPDATE items SET status = 'pre_sold', updated_at = now() WHERE id = ANY(${toMark})`);
+    q.push(sql`INSERT INTO item_events (item_id, type, details, created_by)
+               SELECT unnest(${toMark}::bigint[]), 'status_change',
+                      ${JSON.stringify({ status: 'pre_sold', note: 'Covered by a pre-sale' })}::jsonb, ${createdBy || null}`);
+  }
+  if (toClear.length) {
+    q.push(sql`UPDATE items SET status = 'needs_shelf', updated_at = now() WHERE id = ANY(${toClear})`);
+    q.push(sql`INSERT INTO item_events (item_id, type, details, created_by)
+               SELECT unnest(${toClear}::bigint[]), 'status_change',
+                      ${JSON.stringify({ status: 'needs_shelf', note: 'Pre-sale released — no longer spoken for' })}::jsonb, ${createdBy || null}`);
+  }
+  if (q.length) await sql.transaction(q);
+  return { marked: toMark.length, cleared: toClear.length, total: rows.length };
+}
+
+// Mark ONE named unit as covered by a pre-sale. The scan path: same end state as the
+// count, but it names the pair rather than letting the system choose.
+export async function markPreSoldByVin(vin, createdBy) {
+  const sql = db();
+  const it = (await sql`SELECT id, vin, sku, size, name, status, pre_sell FROM items WHERE vin = ${String(vin).trim().toUpperCase()}`)[0];
+  if (!it) return { error: `No unit found for ${vin}.` };
+  if (!it.pre_sell) return { error: `${it.vin} is not on a pre-sell shipment.` };
+  if (it.status === 'pre_sold') return { error: `${it.vin} is already marked as sold.` };
+  if (['sold', 'shipped'].includes(it.status)) return { error: `${it.vin} is already ${it.status}.` };
+  await sql.transaction([
+    sql`UPDATE items SET status = 'pre_sold', updated_at = now() WHERE id = ${it.id}`,
+    sql`INSERT INTO item_events (item_id, type, details, created_by)
+        VALUES (${it.id}, 'status_change', ${JSON.stringify({ status: 'pre_sold', note: 'Covered by a pre-sale (scanned)' })}::jsonb, ${createdBy || null})`,
+  ]);
+  return { ok: true, item: it };
+}
+
+// Release what is left over for listing.
+//
+// Clearing `pre_sell` and setting `restock_pending` puts the units on PH's Rescale Stock
+// worklist — the existing place where stock gets priced and pushed to II and the stores.
+// Nothing new had to be invented for "subject for upload"; that worklist already is it.
+//
+// Units already marked pre_sold are LEFT ALONE: they are spoken for, and listing them
+// would offer somebody else's pair for sale.
+export async function releasePreSell({ batchId, createdBy }) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE items SET pre_sell = false, restock_pending = true, updated_at = now()
+    WHERE batch_id = ${batchId} AND pre_sell
+      AND status NOT IN ('pre_sold', 'sold', 'shipped', 'missing', 'issue')
+    RETURNING id
+  `;
+  const ids = rows.map((r) => r.id);
+  if (ids.length) {
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+              SELECT unnest(${ids}::bigint[]), 'rescaled',
+                     ${JSON.stringify({ note: 'Released from pre-sell — sent for rescale and listing' })}::jsonb, ${createdBy || null}`;
+  }
+  return { released: ids.length };
 }
 
 // Mark units restocked — clears restock_pending so they drop off the Rescale

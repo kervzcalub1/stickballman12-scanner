@@ -822,6 +822,23 @@ await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_dim_idx
            WHERE po_box_id IS NULL AND dimensions IS NOT NULL`);
 
 
+/* ---- Pre-sell shipments ----
+   Some inbounds are sold before they land. Those units must NOT be listed to II or the
+   stores — they are already spoken for — so they sit out of the PH listing world until
+   somebody has said which of them the orders actually cover. What is left over is then
+   released for listing through the normal rescale worklist.
+
+   A boolean, not a `batches.kind`: kind is identity and never changes, whereas this
+   state is meant to END. A pre-sell unit becomes ordinary stock the moment it is
+   released, and it has to flow into PH exactly like anything else afterwards.
+   See docs/context/pre-sell.md. */
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS pre_sell BOOLEAN NOT NULL DEFAULT false`);
+// Inherited from the batch at intake, then cleared per unit on release. Per ITEM rather
+// than read off the batch every time, because release is per unit: half a shipment can be
+// spoken for and the other half listed, and the batch is one row.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS pre_sell BOOLEAN NOT NULL DEFAULT false`);
+await sql(`CREATE INDEX IF NOT EXISTS items_pre_sell_idx ON items (batch_id, sku, size) WHERE pre_sell`);
+
 /* ---- Supplier-raised orders: the manifest comes BEFORE the labels ----
    The original flow was labels-first: PH bought courier labels, raised the order around
    their tracking numbers, and the supplier filled each one. That inverted — we now want

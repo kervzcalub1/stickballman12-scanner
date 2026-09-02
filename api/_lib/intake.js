@@ -33,7 +33,7 @@ const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-'
 
 // Normalize raw client items. A unit whose VIN is in `noBoxVins` (flagged with a
 // 'no_box' defect) follows the no-box rules too — status no_box / with_box=false.
-export function normalizeItems(rawItems, { defaultCost = null, noBoxVins = new Set() } = {}) {
+export function normalizeItems(rawItems, { defaultCost = null, noBoxVins = new Set(), preSell = false } = {}) {
   return rawItems.map((it) => {
     const vin = VIN_RE.test(String(it.vin || '')) ? it.vin : null;
     const withBox = (it.withBox !== false) && !(vin && noBoxVins.has(vin.toUpperCase()));
@@ -52,6 +52,9 @@ export function normalizeItems(rawItems, { defaultCost = null, noBoxVins = new S
       dimensions: String(it.dimensions ?? '').trim().slice(0, 60) || null,
       notes: String(it.notes ?? '').trim().slice(0, 500) || null,
       withBox,
+      // Declared once for the whole shipment at intake, then carried per unit — release
+      // is per unit, so the batch's own flag can't be the source of truth afterwards.
+      preSell: preSell === true,
       goatOnly: it.goatOnly === true, // list to Alias(GOAT)+II only; StockX/Shopify N/A
       status: withBox ? 'needs_shelf' : 'no_box',
       vin,

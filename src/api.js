@@ -269,6 +269,10 @@ export const api = {
   // PH assigns the courier's numbers onto those boxes afterwards.
   poBoxAdd: (poId, boxes) => post('/api/po/label-add', { poId, boxes }),
   poRequestLabels: (poId, requested = true) => post('/api/po/request-labels', { poId, requested }),
+  // Pre-sell: shipments sold before they landed. Not listed until released.
+  presellList: (batchId) => get(`/api/presell/list${batchId ? `?batchId=${batchId}` : ''}`),
+  presellMarkSold: (payload) => post('/api/presell/mark-sold', payload),
+  presellRelease: (batchId) => post('/api/presell/release', { batchId }),
   poAssignLabels: (poId, assignments) => post('/api/po/assign-labels', { poId, assignments }),
   poLabelUpdate: (boxId, patch) => post('/api/po/label-update', { boxId, ...patch }),
   poLabelRemove: (boxId, confirm) => post('/api/po/label-remove', { boxId, confirm }),

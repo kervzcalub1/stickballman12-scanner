@@ -101,6 +101,10 @@ export function groupPhRows(list) {
         ...r, key, vins: [], qty: 0, _mixedBy: false, _sizeMap: {}, _prices: new Set(), _globals: new Set(), _costs: new Set(),
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
         _counts: zeroCounts(),
+        // Counted, not inherited from the first row the way `...r` leaves it: a group
+        // keys on sku|status, so one pre-sell batch's unreleased pairs can share a group
+        // with ordinary stock of the same SKU — the chip would then depend on row order.
+        _presell: 0,
       };
       map.set(key, g);
     }
@@ -112,6 +116,7 @@ export function groupPhRows(list) {
     g._globals.add(r.global_indicator == null ? '' : String(r.global_indicator));
     g._costs.add(r.cost == null ? '' : String(r.cost));
     for (const f of FLAG_KEYS) { g._flags[f] = g._flags[f] && !!r[f]; if (r[f]) g._counts[f] += 1; }
+    if (r.pre_sell) g._presell += 1;
     if (r.created_by !== g.created_by) g._mixedBy = true;
     if (r.created_at < g.created_at) g.created_at = r.created_at; // earliest scan
     if (r.last_edit_at && (!g.last_edit_at || r.last_edit_at > g.last_edit_at)) {
@@ -122,6 +127,11 @@ export function groupPhRows(list) {
     ...g,
     ...g._flags, // representative flags = all-units-true
     flagCounts: g._counts, // …with how many of the g.qty units each flag actually covers
+    // Same all-units-true rule as the flags, plus a partial state — "some of these are
+    // spoken for" is a different and more dangerous fact than "all of them are".
+    pre_sell: g._presell > 0 && g._presell === g.qty,
+    preSellMixed: g._presell > 0 && g._presell < g.qty,
+    preSellCount: g._presell,
     priceMixed: g._prices.size > 1,
     globalMixed: g._globals.size > 1,
     costMixed: g._costs.size > 1,

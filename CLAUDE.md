@@ -49,6 +49,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Costs page: backfilling a cost the supplier skipped, blank-vs-$0 | `docs/context/costs.md` |
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
+| Pre-sell: shipments sold before they landed (held out of listing, then released) | `docs/context/pre-sell.md` |
 | No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
 | Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
@@ -89,6 +90,9 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
   enough on its own: check anything keyed on the *inverse* of the flag too (the
   In-Store Listing badge is keyed on `is_instore`, deliberately)
   (`docs/context/in-store.md`, `docs/context/existing-stock.md`).
+  **`items.pre_sell` is a second, parallel exclusion on the same paths** — a *unit*
+  state rather than a batch kind, so it must be guarded alongside the kind check,
+  not instead of it (`docs/context/pre-sell.md`).
 - After a rebuild, hard-refresh the browser (stale cached bundle).
 
 ## Working agreements

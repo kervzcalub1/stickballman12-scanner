@@ -18,6 +18,7 @@ import { Settings } from './screens/Settings.jsx';
 import { MergeTools } from './screens/MergeTools.jsx';
 import { Receiving } from './screens/Receiving.jsx';
 import { BatchPage } from './screens/BatchPage.jsx';
+import { PreSell } from './screens/PreSell.jsx';
 import { Inventory } from './screens/Inventory.jsx';
 import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { NoBoxReport } from './screens/NoBoxReport.jsx';
@@ -173,6 +174,9 @@ export default function App() {
   // go() lands on /reconcile and clears the query, so the ?po= is written after.
   const openReconcile = (poId) => { setBatchContext(null); go('reconcile'); writeParam('po', poId); };
   if (view === 'receiving') return withAdvisor(<Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onOpenReconcile={openReconcile} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />);
+  // Pre-sell lives with the warehouse, not PH: the team holding the shipment is the one
+  // that knows which pairs an order covers. PH's part comes after release, on Rescale Stock.
+  if (view === 'presell') return withAdvisor(<PreSell onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'rescale') return withAdvisor(<Receiving mode="rescale" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
   // In-store buying: admin/warehouse only. ph_team never reaches here (they short-
   // circuit to PHTeamApp above), so the normal Home/router already gates it.

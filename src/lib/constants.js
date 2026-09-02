@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge'];
+export const ROUTES = ['receiving', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -84,6 +84,9 @@ export function homeCardBadges(key, c) {
   if (key === 'nobox') return [['No box', c.no_box]];
   if (key === 'costs') return [['No cost', c.missing_cost]];
   if (key === 'rescale') return [['Restock', c.restock_pending]];
+  // Pre-sell units still waiting for somebody to say which orders they cover. Amber:
+  // nothing on that shipment can be listed until the question is answered.
+  if (key === 'presell') return [['To work', c.presell_pending]];
   if (key === 'instore-listing') return [['Not listed', c.instore_unlisted]];
   if (key === 'rescalereq') return [['Pending', c.rescale_requests], ['Done', c.rescale_requests_audited, 'ok']];
   // Two states, two tones: 'To reconcile' (amber) = intake finished and a human has to
@@ -109,6 +112,7 @@ export const HOME_SECTIONS = [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
     { key: 'vin-stock', icon: '🏷️', title: '1ID Stickers', sub: 'Print blank 1ID stickers in bulk so intake never waits on a printer' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
+    { key: 'presell', icon: '🔖', title: 'Pre-sell', sub: 'Shipments sold before they landed — say how many each order covers, then send the rest for rescale' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
     { key: 'costs', icon: '💵', title: 'Costs', sub: 'Fill in what a pair cost when the supplier left it off the manifest' },
   ] },
@@ -172,6 +176,7 @@ export const HOME_ATTENTION = [
   { key: 'shelve', label: 'Needs shelf', count: 'needs_shelf' },
   { key: 'rescalereq', label: 'Rescale requests', count: 'rescale_requests' },
   { key: 'rescale', label: 'Restock', count: 'restock_pending' },
+  { key: 'presell', label: 'Pre-sell to work', count: 'presell_pending' },
   { key: 'reconcile', label: 'PO reconcile', count: 'po_to_reconcile' },
 ];
 

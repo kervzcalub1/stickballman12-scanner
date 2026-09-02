@@ -59,6 +59,7 @@ export default async function handler(req, res) {
     // A shipment of EMPTY shoe boxes. Taken from the PO rather than the client, so a
     // batch can never disagree with the order it is being received against.
     kind: poKind,
+    preSell: h.preSell === true,
   };
 
   try {

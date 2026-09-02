@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal, Pager } from '../components/common.jsx';
+import { PreSellChip } from '../components/PreSellChip.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { ListingPhotos, PhotoCountButton, invalidatePhotoCount } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
@@ -1649,6 +1650,31 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       </span>
                     </label>
                   )}
+                  {/* Pre-sell: this whole shipment was sold before it landed. Its units
+                      are NOT listed to II or the stores — they are already spoken for —
+                      until somebody has said which orders the arrivals cover and released
+                      the rest for listing on the PH Pre-sell page.
+                      Declared once, for the shipment, because that is how it is bought. */}
+                  {!noShipment && !isRescale && !isBoxesPo && (
+                    <label className="batch-form-wide presell-field">
+                      {/* Its own classes, not the no-tracking ones it looks like: those are
+                          what e2e selects the no-tracking checkbox by. */}
+                      <span className="presell-check">
+                        <input type="checkbox" checked={header.preSell === true}
+                          onChange={(e) => setHeader((h) => ({ ...h, preSell: e.target.checked }))} />
+                        <b>Pre-sell shipment</b>
+                        <span className="muted sm">— these were sold before they arrived; don’t list them</span>
+                      </span>
+                      {header.preSell && (
+                        <span className="presell-note sm">
+                          Nothing in this shipment goes to II or the stores. It lands on the
+                          <b> Pre-sell</b> page, where you say how many of each size an order covers
+                          and send the rest for rescale — that is what puts them in front of the
+                          PH team to list.
+                        </span>
+                      )}
+                    </label>
+                  )}
                   {!noShipment && !isMultiBoxNew && dupBatch && (
                     <div className="batch-form-wide dup-warn">
                       ⚠ This tracking number was already received in <b>{dupBatch.code}</b>. You can still proceed — this batch will be flagged as a duplicate.
@@ -2703,6 +2729,9 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
                       <span className="batch-pill">{b.item_count} item{b.item_count === 1 ? '' : 's'}</span>
                       <span className="batch-pill">${Number(b.total_cost).toFixed(2)}</span>
                       {b.issue_count > 0 && <span className="batch-pill warn">{b.issue_count} ⚠</span>}
+                      {/* Right where the shipment was just committed — the fastest place
+                          to catch a shipment ticked pre-sell that shouldn't have been. */}
+                      <PreSellChip on={b.pre_sell} />
                     </div>
                   </div>
                 </button>

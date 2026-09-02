@@ -50,6 +50,10 @@ async function request(method, path, body, { auth = true } = {}) {
     err.status = res.status;
     err.data = data;
     if (res.status === 409) err.conflict = true;
+    // A slow upstream is not a missing product. Flagged so a caller can say "try that
+    // scan again" instead of "not found", which sends people hunting for a catalogue
+    // problem that isn't there.
+    if (data.timeout === true || res.status === 504) err.timeout = true;
     throw err;
   }
   return data;

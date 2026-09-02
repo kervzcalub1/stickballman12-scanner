@@ -74,6 +74,13 @@ export default async function handler(req, res) {
     cacheSet(cacheKey, normalized);
     return send(res, 200, { ok: true, product: normalized });
   } catch (e) {
+    // A timeout is NOT "no such SKU", and saying so sends somebody hunting for a
+    // catalogue problem that doesn't exist. The raw abort text ("This operation was
+    // aborted") is worse still — it names nothing the person can act on.
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError') {
+      return send(res, 504, { ok: false, timeout: true,
+        error: 'The product catalogue didn’t answer in time. Try that scan again.' });
+    }
     return send(res, 502, { ok: false, error: e.message || 'Upstream error.' });
   }
 }

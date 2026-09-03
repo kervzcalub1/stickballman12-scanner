@@ -4069,6 +4069,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 /* Released: the hold is over, so it reads as history rather than a warning — neutral
    ground, no amber. It sits BESIDE the sync badges (an ordinary pair again), where the
    live chip replaces them, so it must not compete with them for attention. */
+/* A tracking number with no courier feed behind it. Deliberately the quietest thing
+   on the row — it is the absence of news, not bad news. */
+/* The status sits ABOVE the row it describes on both warehouse pages: the rows are
+   flex lines with their own columns, and threading a variable-height status into them
+   collapsed the tracking field on a phone. Full width, quiet, out of the way. */
+.box-build-row .po-track-status,
+.box-row-wrap > .po-track-status { flex-basis: 100%; width: 100%; margin: 0 0 4px; order: -1; }
+.po-track-state.untracked { color: var(--muted); font-style: italic; font-weight: 400; }
 .presell-chip.was { background: transparent; color: var(--muted);
   border-color: var(--border); font-weight: 600; }
 .presell-chip.mixed { background: rgba(230,160,60,0.10); color: #cf9740; border-style: dashed; }

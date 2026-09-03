@@ -7,6 +7,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal, Pager } from '../components/common.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
+import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { ListingPhotos, PhotoCountButton, invalidatePhotoCount } from '../components/ListingPhotos.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
@@ -164,7 +165,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // the box the supplier's label 4 is stuck to, or nothing downstream lines up.
     setBoxSlots(boxes.map((b, i) => ({
       tracking: b.tracking_number || '', status: 'pending', boxNumber: Number(b.box_number) || i + 1, itemCount: 0, poBoxId: Number(b.id), boxId: null,
-      kind: b.kind || 'original',
+      kind: b.kind || 'original', ...courierOf(b),
     })));
     setShowPoPicker(false);
     // Resume: if this PO already has a linked receiving batch (returned/refreshed
@@ -183,12 +184,30 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             kind: b.kind || 'original', boxId: bb ? Number(bb.id) : null,
             status: bb?.status === 'received' ? 'received' : 'pending',
             itemCount: bb?.item_count ?? 0,
+            // The PO's own row is the fresher source here: the batch box only carries
+            // what listBatchBoxes matched by number, and on a PO receive both describe
+            // the same parcel.
+            ...courierOf(b, bb),
           };
         }));
       }).catch(() => { /* treat as a fresh receive */ });
     }
   }
   const clearPo = () => setReceivingPo(null); // unlink; keep whatever's typed
+
+  // Courier status for a box slot. The warehouse is the team physically waiting for
+  // the carton, and until now "where is box 3" meant opening the purchase order. Read
+  // only — the 17TRACK webhook writes it; nothing is fetched or registered from here.
+  const courierOf = (...srcs) => {
+    const src = srcs.find((x) => x && (x.tracking_status || x.last_checkpoint || x.tracking_sub_status)) || {};
+    return {
+      carrier: src.carrier || null,
+      tracking_status: src.tracking_status || null,
+      tracking_sub_status: src.tracking_sub_status || null,
+      tracking_sub_status_descr: src.tracking_sub_status_descr || null,
+      last_checkpoint: src.last_checkpoint || null,
+    };
+  };
 
   // Receive-against-PO = a per-box manifest checklist built from the PO's expected
   // lines for that label (grouped one item per SKU, one row per size).
@@ -1758,6 +1777,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   <div className="box-build-list">
                     {boxSlots.map((s, i) => (
                       <div className={`box-build-row ${s.status}`} key={i}>
+                        {/* Where the parcel is. This is the screen somebody is standing on
+                            while the boxes come off the truck, so "has box 3 landed yet"
+                            has to be answerable here — it used to mean opening the PO. */}
+                        <DeliveryStatusLine box={{ ...s, tracking_number: s.tracking }} />
                         <span className="box-num">Box {Number(s.boxNumber) || i + 1}</span>
                         {s.status === 'received' ? (
                           <>

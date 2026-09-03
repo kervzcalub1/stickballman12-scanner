@@ -1285,11 +1285,38 @@ export async function createOpenBatch(h, createdBy) {
 }
 
 // Boxes of a batch with their received item counts (ordered by box number).
+// Courier status rides along with every box the warehouse sees. batch_boxes has no
+// tracking columns of its own -- 17TRACK is registered against po_boxes, at PO
+// creation -- so the status is matched by TRACKING NUMBER, which is the only thing
+// the two sides genuinely share (a box IS its tracking number; see the renumbering
+// note on addBatchBox). Nothing is registered or fetched here: this reads what the
+// webhook has already written, so it costs one join and no quota.
+//
+// A box whose number was never on a PO simply has no status, and the UI says so
+// rather than implying the parcel is untracked by the courier. Roughly a third of
+// historical warehouse boxes match today, rising as more inbound goes through POs.
+// Registering warehouse-typed numbers too would close the rest -- that is a 17TRACK
+// quota decision, deliberately not taken here.
 export async function listBatchBoxes(batchId) {
   return await db()`
     SELECT bx.id, bx.box_number, bx.tracking_number, bx.status, bx.received_by, bx.received_at, bx.created_at,
-           (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count
-    FROM batch_boxes bx WHERE bx.batch_id = ${batchId}
+           (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count,
+           tr.carrier, tr.carrier_key, tr.tracking_status, tr.tracking_sub_status,
+           tr.tracking_sub_status_descr, tr.last_checkpoint, tr.checked_at
+    FROM batch_boxes bx
+    LEFT JOIN LATERAL (
+      SELECT pb.carrier, pb.carrier_key, pb.tracking_status, pb.tracking_sub_status,
+             pb.tracking_sub_status_descr, pb.last_checkpoint, pb.checked_at
+        FROM po_boxes pb
+       WHERE coalesce(bx.tracking_number, '') <> ''
+         AND regexp_replace(upper(pb.tracking_number), '[^A-Z0-9]', '', 'g')
+           = regexp_replace(upper(bx.tracking_number), '[^A-Z0-9]', '', 'g')
+       -- Freshest first: the same number can legitimately appear on a replacement
+       -- label, and the newest checkpoint is the one describing the parcel now.
+       ORDER BY pb.checked_at DESC NULLS LAST, pb.id DESC
+       LIMIT 1
+    ) tr ON true
+    WHERE bx.batch_id = ${batchId}
     ORDER BY bx.box_number NULLS LAST, bx.id
   `;
 }

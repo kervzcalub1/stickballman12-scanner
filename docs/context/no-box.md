@@ -62,6 +62,13 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
   UPCs aren't in the SKU lookup) → the page **prompts** for one before printing, typed off
   the tongue label inside the shoe, and saves it to the unit
   (`api/items/set-upc.js`). No reverse-lookup endpoint — deliberate.
+- **A missing UPC is safer than a borrowed one.** Receiving used to stamp one
+  scanned UPC on every size in a box (`receiving.md`), so a size-8.5 pair printed
+  size 10's barcode — and a replacement box then scanned as size 10 for good.
+  Fixed at intake 2026-09-03, and 1,029 existing units had their wrong code
+  cleared (`scripts/repair-unit-upcs.mjs`, old code kept in `items.notes`). Those
+  pairs now hit the prompt where they used to print silently: that is the fix
+  working, not a regression.
 - **Sizes carry a men's/women's marker** — "9 W", "11.5 M", drawn as ONE string
   at the size's own font size (warehouse feedback: a bare "9" doesn't say which
   it is, and the marker should read as big as the number).

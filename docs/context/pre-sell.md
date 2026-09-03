@@ -79,6 +79,17 @@ order collapsed.
 that batch that is **not** `pre_sold`/`sold`/`shipped`/`missing`/`issue`, and logs a
 `rescaled` event.
 
+**Rescale Stock, and only Rescale Stock.** Releasing clears `pre_sell`, which is
+what used to let those units back onto **New Inventory** as well — they were
+received days ago, so they sit inside its date window, and the moment the warehouse
+released a shipment its remainder appeared on *both* PH tabs. `phListItems`'
+receiving branch therefore carries `AND (${kind} IS NULL OR NOT i.restock_pending)`:
+a unit on the rescale worklist is rescale work. Two lists claiming the same pair is
+how it gets listed twice — or left, because each side assumed the other had it. The
+admin **Report** (`kind IS NULL`) still sees the released pairs, the same carve-out
+no-box has; the ones still spoken for stay hidden there too, because pre-sell hides
+a pair from every PH surface until it is released. Pinned by `e2e/presell.spec.js`.
+
 `restock_pending` is the PH **Rescale Stock** worklist (`docs/context/rescale.md`)
 — the existing home for "stock that needs pricing and pushing to the stores".
 Nothing new was invented for "subject for upload"; that worklist already is it.

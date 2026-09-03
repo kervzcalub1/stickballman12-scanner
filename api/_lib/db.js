@@ -1640,6 +1640,15 @@ export async function phListItems(from, to, kind = null) {
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
       -- Report (kind IS NULL) for oversight.
       AND (${kind}::text IS NULL OR i.status <> 'no_box')
+      -- A unit on the RESCALE worklist is rescale work, not new-inventory work, and
+      -- must appear in one worklist only — two lists claiming the same pair is how a
+      -- pair gets listed twice or, worse, left because each side assumed the other
+      -- had it. It bites hardest on released pre-sell: those units were received days
+      -- ago, so they fall inside New Inventory's date window and showed up on BOTH
+      -- tabs the moment the warehouse released them (pre-sell.md -- release sets
+      -- restock_pending). Same shape as the no-box rule above: the admin Report
+      -- (kind IS NULL) still sees everything.
+      AND (${kind}::text IS NULL OR NOT i.restock_pending)
     ORDER BY i.created_at, i.id
     LIMIT 5000
   `;

@@ -190,7 +190,22 @@ test('release sends the remainder to Rescale Stock and leaves the spoken-for alo
   // And they are now on the worklist where PH prices and lists — which is what
   // "subject for upload" means here; no new mechanism was needed.
   const resc = await (await request.get('/api/ph/list?kind=rescale&from=2020-01-01&to=2035-01-01', { headers: ph() })).json();
-  expect((resc.rows || []).filter((r) => r.sku === sku).length).toBeGreaterThan(0);
+  expect((resc.rows || []).filter((r) => r.sku === sku).length).toBe(7);
+
+  // ONE worklist, not two. Releasing clears `pre_sell`, which is what used to let
+  // these units back onto New Inventory — and they were received days ago, so they
+  // sit inside its date window and appeared on both tabs at once. Two lists claiming
+  // the same pair is how it gets listed twice, or left because each side assumed the
+  // other had it.
+  const fresh = await (await request.get('/api/ph/list?kind=receiving&from=2020-01-01&to=2035-01-01', { headers: ph() })).json();
+  expect((fresh.rows || []).filter((r) => r.sku === sku)).toHaveLength(0);
+
+  // The admin Report is oversight, not a worklist, so being on Rescale doesn't hide a
+  // unit from it — same carve-out no-box already has. All 7 released pairs are there.
+  // The 3 still spoken for are NOT: pre-sell hides a pair from every PH surface until
+  // it is released, the Report included, and that rule is older than this one.
+  const report = await (await request.get('/api/ph/list?from=2020-01-01&to=2035-01-01', { headers: ph() })).json();
+  expect((report.rows || []).filter((r) => r.sku === sku).length).toBe(7);
 
   // Releasing again has nothing left to do.
   const twice = await request.post('/api/presell/release', { headers: wh(), data: { batchId: Number(b.id) } });

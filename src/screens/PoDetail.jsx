@@ -20,13 +20,13 @@ import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoManifestImport } from '../components/PoManifestImport.jsx';
 import { carrierName } from '../lib/carriers.js';
-import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
+import { DeliveryStatus } from '../components/DeliveryStatus.jsx';
 import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLinkBatchModal } from '../components/PoLinkBatch.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoDetailsEdit, PoAddLabels, PoLabelTools } from '../components/PoEdit.jsx';
-import { boxStatusLabel, boxChipCls, checkpointAdds, trackWords, isBoxesOrder, shippedProgress } from '../lib/postatus.js';
+import { boxStatusLabel, boxChipCls, isBoxesOrder, shippedProgress } from '../lib/postatus.js';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoOriginChip } from '../components/PoOriginChip.jsx';
@@ -408,28 +408,9 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                     </div>
                   </div>
 
-                  {(box.tracking_status || box.last_checkpoint || box.tracking_sub_status) && (
-                    <div className="po-track-status muted sm">
-                      {/* The carrier is already on the line above — repeat it only when
-                          tracking came back with a different one than the label claims. */}
-                      {box.carrier && trackWords(box.carrier) !== trackWords(carrierName(box.carrier_key))
-                        ? <span className="po-track-carrier">{box.carrier}{box.tracking_status ? ' · ' : ''}</span> : null}
-                      {box.tracking_status ? <span className="po-track-state">{box.tracking_status}</span> : null}
-                      {/* Why it's stuck, not just that it is. */}
-                      {box.tracking_sub_status && (
-                        <div className="po-substatus">
-                          <span className={`po-flag ${subStatusTone(box.tracking_sub_status)}`}>
-                            {subStatusLabel(box.tracking_sub_status)}
-                          </span>
-                          {box.tracking_sub_status_descr && (
-                            <span className="po-substatus-detail">{box.tracking_sub_status_descr}</span>
-                          )}
-                        </div>
-                      )}
-                      {checkpointAdds(box.last_checkpoint, box.tracking_status)
-                        ? <div className="po-track-checkpoint">{box.last_checkpoint}</div> : null}
-                    </div>
-                  )}
+                  {/* The carrier is already on the line above, so it is repeated only
+                      when tracking came back with a different one than the label claims. */}
+                  <DeliveryStatus box={box} carrierOf={(b) => carrierName(b.carrier_key)} />
 
                   <div className="po-track-actions">
                     {box.tracking_number && ['pre_transit', 'shipped', 'in_transit', 'delivered'].includes(box.status) && (

@@ -8,6 +8,7 @@ import { api } from '../api.js';
 import { TopBar, StatusPill, Modal, Pager } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
+import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { batchMatchesSearch } from '../lib/postatus.js';
 import { estTime } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -316,6 +317,12 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                 const empty = bx.item_count === 0;
                 return (
                   <div className={`box-row-wrap ${isBoxOpen ? 'open' : ''}`} key={bx.id}>
+                    {/* Where the parcel is, per box. It used to live only on the purchase
+                        order, so the team physically waiting for the carton had to open a
+                        PO to find out whether it had landed. Matched by tracking number
+                        (listBatchBoxes); a number that never came in on a PO says so
+                        rather than showing a blank that reads as bad news. */}
+                    <DeliveryStatusLine box={bx} />
                     <div className="box-row-line">
                       <button className="box-row" onClick={() => setOpenBox(isBoxOpen ? null : bx.id)} title={boxItems.length ? 'Show shoes in this box' : 'No shoes in this box yet'}>
                         <span className="box-caret">{boxItems.length ? (isBoxOpen ? '▾' : '▸') : '·'}</span>

@@ -1356,3 +1356,29 @@ VINs + inserts `items` = phantom stock).
   (same trap that caused the multi-box "Box not found" bug).
 - Supplier scan-out must write **only** `purchase_orders` / `po_boxes` / `po_lines` — never
   the receiving `commit` path.
+
+## Delivery status on the warehouse side (2026-09-03)
+
+Per-box courier status was PO-only, so the team physically waiting for the carton —
+the warehouse — had to open a purchase order to find out whether box 3 had landed.
+It now shows on **Receiving's box slots** and on the **Batch page's box rows** as
+well, through one renderer: `src/components/DeliveryStatus.jsx` (`DeliveryStatus`
+for the PO page, which suppresses a carrier already named on the line above, and
+`DeliveryStatusLine` for the warehouse pages, which also answers when there is no
+status). `PoDetail` was switched onto it rather than keeping a second copy.
+
+**Matched by tracking number, not by a foreign key.** `batch_boxes` has no tracking
+columns: 17TRACK is registered against `po_boxes` at PO creation, and the webhook
+writes there. `listBatchBoxes` therefore LEFT JOINs LATERAL onto `po_boxes` on the
+punctuation-stripped, upper-cased number — the one thing the two sides genuinely
+share (a box *is* its tracking number, `batch-box-renumbering`). Freshest checkpoint
+wins, since a number can reappear on a replacement label. **Nothing is registered or
+fetched here**: it reads what the webhook already wrote, so it costs one join and no
+17TRACK quota.
+
+**A box with no PO behind it says "No courier updates"**, not nothing — a blank on a
+row that has a tracking number reads as bad news about the parcel, when the truth is
+that we never asked the feed about it. Coverage on prod at time of writing: 93 of 256
+historical warehouse boxes match (61% of September's, 33% of August's), rising as
+more inbound comes through POs. Closing the rest means registering warehouse-typed
+numbers with 17TRACK too — a **quota decision, deliberately not taken here**.

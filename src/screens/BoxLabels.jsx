@@ -89,6 +89,13 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       }
 
       const upc = isUpcCode(code);
+      // Write the code back to the stock it belongs to BEFORE asking what we hold,
+      // so the answer below already includes the pairs it just named. Plenty of our
+      // stock has no UPC on file (old stock, in-store buys, and everything whose
+      // borrowed code was cleared in the 2026-09-03 repair) and this tool is where
+      // the codes get read off real boxes. Costs one lookup on a UPC scan; it only
+      // ever fills blanks, on the one size the code actually belongs to.
+      const filled = upc ? await api.backfillUpc(code).catch(() => null) : null;
       const local = await api.itemsFind(code).catch(() => null);
       if (local?.product) {
         const p = local.product;
@@ -100,7 +107,9 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
           sizeOptions: (p.sizes || []).slice().sort(compareSizes),
           units: local.units || [],
         });
-        pulse('vin', `${p.name || p.sku} — ${local.units.length} in your inventory.`);
+        pulse('vin', filled?.updated
+          ? `${p.name || p.sku} — UPC saved to ${filled.updated} pair${filled.updated === 1 ? '' : 's'}, ${local.units.length} in your inventory.`
+          : `${p.name || p.sku} — ${local.units.length} in your inventory.`);
         return;
       }
 

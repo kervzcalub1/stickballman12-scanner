@@ -125,13 +125,15 @@ if (!APPLY) { console.log(`\nDRY RUN — nothing written. Re-run with --apply to
 await c.query('begin');
 try {
   const ids = clear.map((r) => r.id);
+  // EST, like every other date this app writes (CLAUDE.md) — the host's clock is a bug.
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
   for (let i = 0; i < ids.length; i += 500) {
     const chunk = ids.slice(i, i + 500);
     await c.query(
       `update items set upc = null,
-              notes = trim(coalesce(notes,'') || ' [upc ' || upc || ' cleared 2026-09-03: belonged to another size]'),
+              notes = trim(coalesce(notes,'') || ' [upc ' || upc || ' cleared ' || $2 || ': belonged to another size]'),
               updated_at = now()
-        where id = any($1::bigint[])`, [chunk],
+        where id = any($1::bigint[])`, [chunk, today],
     );
   }
   await c.query('commit');

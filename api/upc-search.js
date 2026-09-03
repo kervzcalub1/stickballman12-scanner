@@ -38,7 +38,9 @@ function sortSizes(list) {
 // PROXY 1 — StockX: resolve a UPC to its SKU + the exact scanned size. Also keeps
 // the StockX title/colorway as a fallback if the Alias catalog later misses.
 // Returns null on no match; throws on a hard upstream error (so we rotate).
-async function stockxUpcLookup(upc) {
+// EXPORTED because it is the only source that resolves a UPC to its exact size,
+// which is what makes `items/backfill-upc` safe to run off a plain search.
+export async function stockxUpcLookup(upc) {
   const r = await fetchWithTimeout(`${STOCKX_BASE}/stockx-upc-search`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc }),
   });

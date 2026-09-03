@@ -2270,6 +2270,62 @@ export async function setItemUpc(itemId, upc) {
   await sql`UPDATE items SET upc = ${upc}, updated_at = now() WHERE id = ${itemId}`;
 }
 
+// Strict on purpose, unlike the reconciliation's `rcSizeNum` — that one strips a
+// trailing W/Y so a supplier writing "7.5W" still matches "7.5". A UPC can't be
+// that generous: a men's 10 and a women's 10 are different boxes with different
+// codes, so the suffix stays part of the key. "M" is the bare men's run.
+const upcSizeKey = (s) => {
+  const t = String(s || '').trim().toUpperCase().replace(/\s+/g, '').replace(/^US/, '');
+  const m = t.match(/^(\d+(?:\.\d+)?)([WYMC]?)$/);
+  return m ? `${parseFloat(m[1])}${m[2] === 'M' ? '' : m[2]}` : t;
+};
+
+// Fill a MISSING UPC in across the stock, from a code somebody scanned on the
+// Inventory or Box Labels page. The gap is real: receiving used to stamp one
+// scanned code on every size in a box, and repairing that (2026-09-03) cleared
+// 1,029 units' UPCs — after which nothing in the app could put one back except the
+// No-Box prompt, one pair at a time.
+//
+// Three rules make it safe to run off a plain search:
+//   • it only ever fills a BLANK. An existing UPC is never overwritten, so a scan
+//     can't undo a correction somebody made by hand.
+//   • the size comes from the UPC LOOKUP, never from the caller, and the match is
+//     on sku + that exact size. A UPC identifies one size's box; lending it to the
+//     rest of the run is the bug this whole area just came out of (`receiving.md`).
+//   • sold/shipped pairs are included deliberately — the label on a box that's
+//     already gone is still the record of what it was.
+export async function backfillUpcBySkuSize({ upc, sku, size, by = null }) {
+  const code = String(upc || '').replace(/\D/g, '');
+  const want = rcCodes(sku);
+  const target = upcSizeKey(size);
+  if (!code || !want.length || !target) return [];
+  const sql = db();
+  // Narrow in SQL on the style code, then confirm in JS: a re-released shoe is
+  // filed under BOTH its codes ("305381-007/CW2290-111"), which no equality test
+  // matches, and a bare LIKE would also match a longer code that contains it.
+  const like = `%${want[0].replace(/[^A-Z0-9]/g, '')}%`;
+  const rows = await sql`
+    SELECT id, vin, sku, size FROM items
+     WHERE (upc IS NULL OR upc = '')
+       AND upper(replace(replace(coalesce(sku, ''), ' ', ''), '-', '')) LIKE ${like}`;
+  const ids = rows
+    .filter((r) => rcCodes(r.sku).some((c) => want.includes(c)) && upcSizeKey(r.size) === target)
+    .map((r) => r.id);
+  if (!ids.length) return [];
+  // Re-checked in the UPDATE too: the SELECT and the write are not one statement,
+  // and two people scanning the same box at once must not fight over the row.
+  const updated = await sql`
+    UPDATE items SET upc = ${code}, updated_at = now()
+    WHERE id = ANY(${ids}) AND (upc IS NULL OR upc = '')
+    RETURNING id, vin, sku, size`;
+  const text = `UPC ${code} filled in from a scan (size ${size})`;
+  for (const r of updated) {
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${r.id}, 'note', ${JSON.stringify({ text })}::jsonb, ${by || null})`;
+  }
+  return updated;
+}
+
 /* ---------------------------- Cost backfill ---------------------------- */
 // `items.cost` is written ONCE, at intake (insertItems ← intake.js: the item's own
 // cost or the batch default). Suppliers routinely leave cost off a PO manifest, so

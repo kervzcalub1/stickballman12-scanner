@@ -99,6 +99,9 @@ export const api = {
   // Product search + sheet
   searchUpc: (upc) => post('/api/upc-search', { upc }),
   setItemUpc: (vin, upc) => post('/api/items/set-upc', { vin, upc }),
+  // Code only — the server resolves the style AND the size itself, because a UPC
+  // belongs to ONE size's box and a client-supplied size is a guess.
+  backfillUpc: (upc) => post('/api/items/backfill-upc', { upc }),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // v4 — receiving / batches
   suppliers: () => get('/api/suppliers'),

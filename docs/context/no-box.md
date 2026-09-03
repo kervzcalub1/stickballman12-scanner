@@ -62,6 +62,17 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
   UPCs aren't in the SKU lookup) → the page **prompts** for one before printing, typed off
   the tongue label inside the shoe, and saves it to the unit
   (`api/items/set-upc.js`). No reverse-lookup endpoint — deliberate.
+- **A scanned UPC fills the gap by itself.** `POST /api/items/backfill-upc`
+  (`{ upc }`, warehouse + ph_team) writes a scanned code onto **every** pair of that
+  style and that exact size that has none on file. Both the Box Labels tool and the
+  Inventory search bar call it on any UPC, so the codes staff read off real boxes
+  accumulate instead of being answered once and thrown away. Three rules make it
+  safe to run off a plain search: it only ever fills a **blank** (a hand-corrected
+  UPC is never overwritten), the **size comes from the StockX lookup server-side**,
+  never from the caller (a client-supplied size is a guess — `receiving.md`), and a
+  code the catalogue can't place writes nothing and says nothing. Each fill is
+  logged to the unit's history as a note. On Box Labels it runs *before*
+  `api/items/find`, so the pairs it just named show up in the same answer.
 - **A missing UPC is safer than a borrowed one.** Receiving used to stamp one
   scanned UPC on every size in a box (`receiving.md`), so a size-8.5 pair printed
   size 10's barcode — and a replacement box then scanned as size 10 for good.

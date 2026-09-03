@@ -12,7 +12,7 @@ import { PreSellChip } from '../components/PreSellChip.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
-import { isCameraReread, isLocationCode, isRollVin, isVinCode } from '../lib/codes.js';
+import { isCameraReread, isLocationCode, isRollVin, isUpcCode, isVinCode } from '../lib/codes.js';
 import { toCSV, downloadCSV } from '../lib/csv.js';
 import { ymd, periodRange, periodLabel, shiftAnchor, estToday, estCivil, estCivilFromYmd, estDate, PH_DATETIME } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
@@ -326,9 +326,30 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
     if (f.supplier) params.supplier = f.supplier;
     if (f.status) params.status = f.status;
     if (f.intake) params.kind = f.intake;
-    try { setData(await api.itemsQuery(params)); }
-    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    try {
+      const res = await api.itemsQuery(params);
+      setData(res);
+      // Every UPC searched here is written back to the stock it belongs to. Plenty
+      // of our pairs have no UPC at all — old stock, in-store buys, and everything
+      // whose borrowed code was cleared in the 2026-09-03 repair — so the pairs
+      // this code names are often sitting right there, unsearchable by it. Runs on
+      // a hit too, not just an empty result: the same size received in two boxes
+      // can have the code on one and nothing on the other.
+      if (isUpcCode(String(f.q || '').trim())) await fillUpcGap(String(f.q).trim(), params);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setLoading(false); }
+  }
+  // Best-effort, and deliberately quiet when it finds nothing: this runs off an
+  // ordinary search, so a code the catalogue can't place must not look like a
+  // failure. The server resolves the style and size itself and only ever fills a
+  // BLANK UPC on that exact size — see api/items/backfill-upc.js.
+  async function fillUpcGap(upc, params) {
+    try {
+      const r = await api.backfillUpc(upc);
+      if (!r?.updated) return;
+      setData(await api.itemsQuery(params));
+      setNotice(`UPC ${upc} saved to ${r.updated} pair${r.updated === 1 ? '' : 's'} · ${r.sku} US ${r.size}`);
+    } catch { /* the search still stands on its own */ }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {

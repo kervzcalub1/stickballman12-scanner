@@ -199,13 +199,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // the carton, and until now "where is box 3" meant opening the purchase order. Read
   // only — the 17TRACK webhook writes it; nothing is fetched or registered from here.
   const courierOf = (...srcs) => {
-    const src = srcs.find((x) => x && (x.tracking_status || x.last_checkpoint || x.tracking_sub_status)) || {};
+    const src = srcs.find((x) => x && (x.tracking_status || x.last_checkpoint
+      || x.tracking_sub_status || x.tracking_events?.length)) || {};
     return {
       carrier: src.carrier || null,
       tracking_status: src.tracking_status || null,
       tracking_sub_status: src.tracking_sub_status || null,
       tracking_sub_status_descr: src.tracking_sub_status_descr || null,
       last_checkpoint: src.last_checkpoint || null,
+      tracking_events: Array.isArray(src.tracking_events) ? src.tracking_events : null,
     };
   };
 

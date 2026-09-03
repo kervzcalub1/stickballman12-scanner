@@ -4075,7 +4075,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    flex lines with their own columns, and threading a variable-height status into them
    collapsed the tracking field on a phone. Full width, quiet, out of the way. */
 .box-build-row .po-track-status,
-.box-row-wrap > .po-track-status { flex-basis: 100%; width: 100%; margin: 0 0 4px; order: -1; }
+.box-row-wrap > .po-track-status,
+.box-build-row .box-track-block,
+.box-row-wrap > .box-track-block { flex-basis: 100%; width: 100%; margin: 0 0 4px; order: -1; }
+.box-track-block { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.box-track-block .po-track-status { margin: 0; }
+/* Secondary to the row's real actions (Add items, renumber) — this is a thing you
+   open when something has gone wrong, not part of the normal pass. */
+.box-track-history { align-self: flex-start; font-size: 12px; padding: 2px 8px; }
 .po-track-state.untracked { color: var(--muted); font-style: italic; font-weight: 400; }
 .presell-chip.was { background: transparent; color: var(--muted);
   border-color: var(--border); font-weight: 600; }

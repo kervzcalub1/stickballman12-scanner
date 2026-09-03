@@ -1302,11 +1302,11 @@ export async function listBatchBoxes(batchId) {
     SELECT bx.id, bx.box_number, bx.tracking_number, bx.status, bx.received_by, bx.received_at, bx.created_at,
            (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count,
            tr.carrier, tr.carrier_key, tr.tracking_status, tr.tracking_sub_status,
-           tr.tracking_sub_status_descr, tr.last_checkpoint, tr.checked_at
+           tr.tracking_sub_status_descr, tr.last_checkpoint, tr.checked_at, tr.tracking_events
     FROM batch_boxes bx
     LEFT JOIN LATERAL (
       SELECT pb.carrier, pb.carrier_key, pb.tracking_status, pb.tracking_sub_status,
-             pb.tracking_sub_status_descr, pb.last_checkpoint, pb.checked_at
+             pb.tracking_sub_status_descr, pb.last_checkpoint, pb.checked_at, pb.tracking_events
         FROM po_boxes pb
        WHERE coalesce(bx.tracking_number, '') <> ''
          AND regexp_replace(upper(pb.tracking_number), '[^A-Z0-9]', '', 'g')

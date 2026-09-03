@@ -8,9 +8,11 @@
 // Nothing here fetches. The status is written by the 17TRACK webhook onto po_boxes
 // and reaches the warehouse pages matched by tracking number (`listBatchBoxes`), so
 // this component only ever renders what is already known.
-import React from 'react';
+import React, { useState } from 'react';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { checkpointAdds, trackWords } from '../lib/postatus.js';
+import { TrackingTimeline } from './common.jsx';
+import { Icon } from './NavIcons.jsx';
 
 // `carrierOf` lets the PO page keep its rule — don't repeat a carrier the line above
 // already names — while the warehouse pages, which have no such line, always show it.
@@ -40,16 +42,36 @@ export function DeliveryStatus({ box, carrierOf = null, className = '' }) {
 // tracking number and no status is NOT "not moving", it is a number the courier feed
 // has never been asked about (it was never on a PO). Saying that plainly beats a
 // blank space somebody reads as bad news.
+// Its own open state, one box at a time. The PO page keeps a set of open box ids
+// because it also drives a per-label Refresh from the same row; the warehouse rows
+// have no such coupling, so holding it here keeps both call sites to one prop.
 export function DeliveryStatusLine({ box }) {
+  const [open, setOpen] = useState(false);
   if (!box) return null;
+  const events = Array.isArray(box.tracking_events) ? box.tracking_events : [];
   const has = box.tracking_status || box.last_checkpoint || box.tracking_sub_status;
-  if (has) return <DeliveryStatus box={box} />;
-  if (!String(box.tracking_number || '').trim()) return null;
+  if (!has) {
+    if (!String(box.tracking_number || '').trim()) return null;
+    return (
+      <div className="po-track-status muted sm">
+        <span className="po-track-state untracked" title="This number was never registered with the courier feed — it did not come in on a purchase order. Nothing is wrong with the parcel; we just have no status for it.">
+          No courier updates
+        </span>
+      </div>
+    );
+  }
   return (
-    <div className="po-track-status muted sm">
-      <span className="po-track-state untracked" title="This number was never registered with the courier feed — it did not come in on a purchase order. Nothing is wrong with the parcel; we just have no status for it.">
-        No courier updates
-      </span>
+    <div className="box-track-block">
+      <DeliveryStatus box={box} />
+      {/* The latest checkpoint answers "where is it"; the history answers "what
+          happened to it" — which is the question being asked when a box is late, is
+          the wrong weight, or turned up somewhere it should not have. */}
+      {events.length > 0 && (
+        <button type="button" className="btn ghost sm box-track-history" onClick={() => setOpen((v) => !v)}>
+          <Icon name="tag" /> {open ? 'Hide history' : `Tracking history (${events.length})`}
+        </button>
+      )}
+      {open && events.length > 0 && <TrackingTimeline events={events} status={box.tracking_status} />}
     </div>
   );
 }

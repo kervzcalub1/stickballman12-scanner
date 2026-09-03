@@ -1376,6 +1376,14 @@ wins, since a number can reappear on a replacement label. **Nothing is registere
 fetched here**: it reads what the webhook already wrote, so it costs one join and no
 17TRACK quota.
 
+**Full checkpoint history too.** `tracking_events` rides the same join, and
+`DeliveryStatusLine` carries its own **Tracking history (N)** toggle rendering the
+shared `TrackingTimeline` — the latest checkpoint answers *where is it*, the history
+answers *what happened to it*, which is the question actually being asked when a box
+is late or turns up somewhere it should not have. The toggle holds its open state
+locally, one box at a time; the PO page keeps its own set of open ids because the
+same row also drives a per-label Refresh.
+
 **A box with no PO behind it says "No courier updates"**, not nothing — a blank on a
 row that has a tracking number reads as bad news about the parcel, when the truth is
 that we never asked the feed about it. Coverage on prod at time of writing: 93 of 256

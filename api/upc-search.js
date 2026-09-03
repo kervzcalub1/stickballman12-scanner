@@ -48,12 +48,19 @@ export async function stockxUpcLookup(upc) {
   let data = null;
   try { data = await r.json(); } catch { return null; }
   if (data?.ok === false) return null;
-  const variant = data?.result?.data?.variants?.[0];
+  const variants = data?.result?.data?.variants || [];
+  const variant = variants[0];
   const product = variant?.product;
   const sku = normSku(product?.styleId || product?.sku);
   if (!sku) return null;
   const size = variant?.traits?.size || variant?.sizeChart?.baseSize || variant?.sizeChart?.displayOptions?.[0]?.size || null;
+  // One barcode can come back with variants belonging to SEVERAL products (it has
+  // been seen returning three). Taking `variants[0]` then makes both the style and
+  // the size a coin toss — so say when that happened, and let the caller decide
+  // whether a human should look at it before anything is written.
+  const ambiguous = new Set(variants.map((v) => normSku(v?.product?.styleId || v?.product?.sku)).filter(Boolean)).size > 1;
   return {
+    ambiguous,
     sku,
     scannedSize: size ? String(size).trim() : null,
     name: product?.title || product?.primaryTitle || null,

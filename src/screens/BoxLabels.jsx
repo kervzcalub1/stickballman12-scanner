@@ -18,6 +18,7 @@ import { TopBar, Modal, LabelSheet, StatusPill, CopyText } from '../components/c
 import { Icon } from '../components/NavIcons.jsx';
 import { useMediaQuery } from '../hooks.js';
 import { isUpcCode, isVinCode, upcDigits, compareSizes, sizeLabel } from '../lib/codes.js';
+import UpcCheck from '../components/UpcCheck.jsx';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -30,6 +31,10 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [labels, setLabels] = useState(null); // { items, mode } for the LabelSheet
   const [upcPrompt, setUpcPrompt] = useState(null); // { target } awaiting a UPC
+  // A scanned UPC that would fill in blanks on our stock, waiting on a person to
+  // confirm the catalogue named the right shoe. Nothing is written until they do.
+  const [upcCheck, setUpcCheck] = useState(null);
+  const [upcCheckBusy, setUpcCheckBusy] = useState(false);
   const [upcInput, setUpcInput] = useState('');
   const [noUpcFound, setNoUpcFound] = useState(false);
   const [flash, setFlash] = useState(null);
@@ -89,13 +94,6 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       }
 
       const upc = isUpcCode(code);
-      // Write the code back to the stock it belongs to BEFORE asking what we hold,
-      // so the answer below already includes the pairs it just named. Plenty of our
-      // stock has no UPC on file (old stock, in-store buys, and everything whose
-      // borrowed code was cleared in the 2026-09-03 repair) and this tool is where
-      // the codes get read off real boxes. Costs one lookup on a UPC scan; it only
-      // ever fills blanks, on the one size the code actually belongs to.
-      const filled = upc ? await api.backfillUpc(code).catch(() => null) : null;
       const local = await api.itemsFind(code).catch(() => null);
       if (local?.product) {
         const p = local.product;
@@ -107,9 +105,8 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
           sizeOptions: (p.sizes || []).slice().sort(compareSizes),
           units: local.units || [],
         });
-        pulse('vin', filled?.updated
-          ? `${p.name || p.sku} — UPC saved to ${filled.updated} pair${filled.updated === 1 ? '' : 's'}, ${local.units.length} in your inventory.`
-          : `${p.name || p.sku} — ${local.units.length} in your inventory.`);
+        pulse('vin', `${p.name || p.sku} — ${local.units.length} in your inventory.`);
+        askUpcCheck(code, upc);
         return;
       }
 
@@ -125,6 +122,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       pulse(p.scannedSize ? 'vin' : 'dup', p.scannedSize
         ? `${p.name || p.sku} · US ${sizeLabel(p.scannedSize, p.gender, p.name)}`
         : `${p.name || p.sku} — pick the size below.`);
+      askUpcCheck(code, upc);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       // The catalogue's own 404 reads as a dead end; say what to try instead.
@@ -133,6 +131,47 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
         : err.message;
       setError(msg); pulse('err', 'Not found.');
     } finally { setBusy(false); }
+  }
+
+  // This tool is where UPCs get read off real boxes, so a scan here is the chance to
+  // fill the code in on the pairs that have none (old stock, in-store buys, and
+  // everything whose borrowed code was cleared in the 2026-09-03 repair). It runs
+  // AFTER the answer is on screen and never blocks it: the scan's job is the label,
+  // and a question about the catalogue must not stand between a hand and a printer.
+  // Nothing is written until the person says the shoe matches — see
+  // api/items/backfill-upc.js for why a catalogue hit isn't trusted on its own.
+  function askUpcCheck(code, isUpc) {
+    if (!isUpc) return;
+    api.backfillUpc(code)
+      .then((r) => { if (r?.confirm) setUpcCheck(r.confirm); })
+      .catch(() => { /* the scan's own answer stands */ });
+  }
+  async function confirmUpcCheck() {
+    const c = upcCheck;
+    if (!c) return;
+    setUpcCheckBusy(true);
+    try {
+      const r = await api.backfillUpc(c.upc, { sku: c.sku, size: c.size });
+      setUpcCheck(null);
+      if (!r?.updated) return;
+      pulse('vin', `UPC saved to ${r.updated} pair${r.updated === 1 ? '' : 's'} · ${r.sku} US ${r.size}`);
+      // Those pairs answer to this code now, so re-ask: the tool can offer their
+      // VINs instead of the catalogue's anonymous "print a label only".
+      const local = await api.itemsFind(c.upc).catch(() => null);
+      if (local?.product) {
+        const p = local.product;
+        setFound({
+          kind: 'product', from: 'inventory', name: p.name || c.upc, sku: p.sku || '',
+          upc: p.upc || c.upc, colorway: p.colorway || '', gender: p.gender || '', image: '',
+          size: p.sizes?.length === 1 ? p.sizes[0] : '',
+          sizeOptions: (p.sizes || []).slice().sort(compareSizes),
+          units: local.units || [],
+        });
+      }
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setUpcCheck(null); setError(err.message);
+    } finally { setUpcCheckBusy(false); }
   }
 
   // Jump from a matching unit into the VIN flow (workflow 2) without re-scanning.
@@ -380,6 +419,8 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
           </div>
         </div>
       )}
+
+      <UpcCheck candidate={upcCheck} busy={upcCheckBusy} onYes={confirmUpcCheck} onNo={() => setUpcCheck(null)} />
 
       {labels && <LabelSheet items={labels.items} mode={labels.mode} onClose={() => setLabels(null)} />}
     </div>

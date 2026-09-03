@@ -32,6 +32,10 @@ function intakeChip(g) {
   // anywhere — so the chip REPLACES the badges rather than sitting beside four greyed
   // ones, the same call IntakeChip makes for in-store and existing stock.
   if (g.pre_sell || g.preSellMixed) return <PreSellChip on={g.pre_sell} mixed={g.preSellMixed} count={g.preSellCount} />;
+  // A RELEASED pair is the opposite case: it is ordinary stock now and its sync state
+  // means something again, so the chip sits beside the badges instead of replacing
+  // them. It answers "why is this shipment half here" long after the flag is gone.
+  if (g.wasPreSell) return <><SyncBadges item={g} /><PreSellChip was count={g.wasPreSellCount} /></>;
   return <SyncBadges item={g} />;
 }
 

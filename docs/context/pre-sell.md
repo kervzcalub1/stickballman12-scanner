@@ -49,6 +49,36 @@ ordinary everywhere else (Inventory, shelving, labels, locations, costs, the PO)
 The pending-counts query also returns **`presell_pending`** — pre-sell units not yet
 `sold`/`shipped` — which badges the PH home card.
 
+## The chip (`src/components/PreSellChip.jsx`)
+
+One component, four states, shown anywhere a batch, box or unit is on screen —
+because the flag changes what may be done with the stock, and someone standing over
+a shelf has no other way to tell. **Only the unusual state is chipped**; chipping
+every ordinary shipment teaches people to stop reading chips.
+
+| State | Reads | Keyed on |
+|---|---|---|
+| held | **Pre-sell** | `items.pre_sell` |
+| part held | **N pre-sell** | some units of a group held |
+| spoken for | **Pre-sold** | `status = 'pre_sold'` |
+| released | **Was pre-sell** | `batches.pre_sell` with no unit still held |
+
+**Why the fourth exists.** `items.pre_sell` is the unit's *current* state and release
+clears it, so a freed pair is indistinguishable from ordinary restock the moment it
+lands on Rescale Stock — and "why does half this shipment never appear?" becomes
+unanswerable. `batches.pre_sell` is what the shipment **was** and never changes, so
+it is carried as **`from_pre_sell`** on `queryItems` and both branches of
+`phListItems`, and grouped as `wasPreSell` / `wasPreSellCount` in `src/lib/ph.js`.
+
+Where the live chip **replaces** the sync badges (a held pair has no sync state worth
+showing), the released chip sits **beside** them and is styled quiet, not amber: the
+pair is ordinary stock again and its badges mean something. On the PH grid it only
+ever appears on released pairs — a held one is invisible to every PH surface by
+design, so there is no row to chip.
+
+⚠️ These queries are JS template literals. **No backticks in their SQL comments** —
+one closes the string and the whole module fails to parse.
+
 ## The Pre-sell page (`/presell`, `src/screens/PreSell.jsx`)
 
 Warehouse (admin auto-allowed), in the warehouse app — a card in **Receiving

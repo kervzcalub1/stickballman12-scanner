@@ -207,6 +207,12 @@ test('release sends the remainder to Rescale Stock and leaves the spoken-for alo
   const report = await (await request.get('/api/ph/list?from=2020-01-01&to=2035-01-01', { headers: ph() })).json();
   expect((report.rows || []).filter((r) => r.sku === sku).length).toBe(7);
 
+  // The released pairs still SAY where they came from. items.pre_sell is cleared by
+  // release, so without the shipment's own flag riding along a freed pair is
+  // indistinguishable from ordinary restock — and the reason half the shipment never
+  // shows up is unfindable. The held ones keep the live flag.
+  expect((resc.rows || []).filter((r) => r.sku === sku).every((r) => r.from_pre_sell && !r.pre_sell)).toBe(true);
+
   // Releasing again has nothing left to do.
   const twice = await request.post('/api/presell/release', { headers: wh(), data: { batchId: Number(b.id) } });
   expect(twice.status()).toBe(409);

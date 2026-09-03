@@ -105,6 +105,7 @@ export function groupPhRows(list) {
         // keys on sku|status, so one pre-sell batch's unreleased pairs can share a group
         // with ordinary stock of the same SKU — the chip would then depend on row order.
         _presell: 0,
+        _wasPresell: 0,
       };
       map.set(key, g);
     }
@@ -117,6 +118,8 @@ export function groupPhRows(list) {
     g._costs.add(r.cost == null ? '' : String(r.cost));
     for (const f of FLAG_KEYS) { g._flags[f] = g._flags[f] && !!r[f]; if (r[f]) g._counts[f] += 1; }
     if (r.pre_sell) g._presell += 1;
+    // The shipment's own flag, which outlives release — see batches.pre_sell in db.js.
+    if (r.from_pre_sell) g._wasPresell += 1;
     if (r.created_by !== g.created_by) g._mixedBy = true;
     if (r.created_at < g.created_at) g.created_at = r.created_at; // earliest scan
     if (r.last_edit_at && (!g.last_edit_at || r.last_edit_at > g.last_edit_at)) {
@@ -132,6 +135,10 @@ export function groupPhRows(list) {
     pre_sell: g._presell > 0 && g._presell === g.qty,
     preSellMixed: g._presell > 0 && g._presell < g.qty,
     preSellCount: g._presell,
+    // Released pairs only: came off a pre-sell shipment, no longer held. A group still
+    // holding some is described by the flags above — that is the more urgent fact.
+    wasPreSell: g._wasPresell > 0 && g._presell === 0,
+    wasPreSellCount: g._wasPresell,
     priceMixed: g._prices.size > 1,
     globalMixed: g._globals.size > 1,
     costMixed: g._costs.size > 1,

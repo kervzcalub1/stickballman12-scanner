@@ -62,17 +62,35 @@ Component: `NoBoxReport` in `src/App.jsx`. Endpoint: `api/items/no-box.js`
   UPCs aren't in the SKU lookup) → the page **prompts** for one before printing, typed off
   the tongue label inside the shoe, and saves it to the unit
   (`api/items/set-upc.js`). No reverse-lookup endpoint — deliberate.
-- **A scanned UPC fills the gap by itself.** `POST /api/items/backfill-upc`
-  (`{ upc }`, warehouse + ph_team) writes a scanned code onto **every** pair of that
-  style and that exact size that has none on file. Both the Box Labels tool and the
-  Inventory search bar call it on any UPC, so the codes staff read off real boxes
-  accumulate instead of being answered once and thrown away. Three rules make it
-  safe to run off a plain search: it only ever fills a **blank** (a hand-corrected
-  UPC is never overwritten), the **size comes from the StockX lookup server-side**,
-  never from the caller (a client-supplied size is a guess — `receiving.md`), and a
-  code the catalogue can't place writes nothing and says nothing. Each fill is
-  logged to the unit's history as a note. On Box Labels it runs *before*
-  `api/items/find`, so the pairs it just named show up in the same answer.
+- **A scanned UPC fills the gap — once a person confirms the shoe.**
+  `POST /api/items/backfill-upc` (warehouse + ph_team) writes a scanned code onto
+  **every** pair of that style and that exact size that has none on file. Both the
+  Box Labels tool and the Inventory search bar call it on any UPC, so the codes
+  staff read off real boxes accumulate instead of being answered once and thrown
+  away.
+  - **Two phases, because the catalogue is sometimes wrong.** One UPC can come back
+    carrying variants from several different products and the lookup takes the
+    first (`sku-multi-code`), so `{ upc }` only *asks*: it returns the shoe it
+    thinks the code names and writes nothing. `{ upc, confirm: { sku, size } }`
+    writes. The client can **veto or approve, never dictate** — phase two re-runs
+    the lookup and refuses (`reason: 'changed'`) if the style or size the person was
+    shown is no longer what comes back, so a hand-edited request can't put an
+    arbitrary code on arbitrary stock.
+  - **The prompt asks about the shoe, not about saving** (`src/components/UpcCheck.jsx`).
+    Photo, name, style, size, Yes/No. Asked "shall I save this?" somebody answers
+    from whether they want the chore; asked "is this the shoe in your hand?" they
+    answer from the box, which is the only thing they can actually verify. When the
+    barcode pointed at more than one product the prompt says so.
+  - **Nobody is asked a question whose answer changes nothing** — if no pair of that
+    style+size is missing a UPC, phase one returns `nothing-to-fill` silently
+    (`countUnitsMissingUpc`). A code the catalogue can't place is also a quiet
+    no-op, never an error on a search bar.
+  - It only ever fills a **blank** (a hand-corrected UPC is never overwritten), the
+    **size comes from the lookup server-side** (a client-supplied size is a guess —
+    `receiving.md`), and each fill is logged to the unit's history as a note.
+  - On Box Labels the ask runs **after** the scan's own answer is on screen and
+    never blocks it; saying Yes re-asks `api/items/find` so the newly-matching pairs
+    replace the anonymous catalogue hit with their real VINs.
 - **A missing UPC is safer than a borrowed one.** Receiving used to stamp one
   scanned UPC on every size in a box (`receiving.md`), so a size-8.5 pair printed
   size 10's barcode — and a replacement box then scanned as size 10 for good.

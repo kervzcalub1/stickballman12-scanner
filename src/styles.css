@@ -922,6 +922,22 @@ body {
 .nobox-upc-input { width: 100%; margin-top: 8px; text-align: left; }
 .nobox-noupc-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; cursor: pointer; text-align: left; }
 .nobox-noupc-check input { width: 18px; height: 18px; flex: none; }
+/* "Is this the shoe you scanned?" — the check before a scanned UPC is written onto
+   stock. Laid out to be READ, not skimmed: the photo carries the recognition, and
+   style and size sit on their own labelled lines because the size is the field the
+   catalogue gets wrong and the one nobody re-reads inside a sentence. */
+.upccheck-card { display: flex; gap: 14px; align-items: center; text-align: left; margin-top: 6px; }
+.upccheck-img { width: 92px; height: 92px; flex: none; object-fit: contain; border-radius: 10px; background: var(--panel-2); }
+.upccheck-facts { min-width: 0; }
+.upccheck-name { font-weight: 700; line-height: 1.25; }
+.upccheck-line { margin-top: 6px; display: flex; gap: 8px; align-items: baseline; }
+.upccheck-line b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.warn-text { color: #e0a458; }
+@media (max-width: 480px) {
+  .upccheck-card { flex-direction: column; align-items: flex-start; }
+  .upccheck-img { width: 100%; height: 140px; }
+}
+
 /* Bulk scan-out (Mark Sold / Mark Shipped): the run's numbers, sized to be read
    at arm's length while holding a box, plus the persistent failed-scan log. */
 .scanout-stats { display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }

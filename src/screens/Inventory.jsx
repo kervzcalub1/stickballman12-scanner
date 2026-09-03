@@ -13,6 +13,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
 import { isCameraReread, isLocationCode, isRollVin, isUpcCode, isVinCode } from '../lib/codes.js';
+import UpcCheck from '../components/UpcCheck.jsx';
 import { toCSV, downloadCSV } from '../lib/csv.js';
 import { ymd, periodRange, periodLabel, shiftAnchor, estToday, estCivil, estCivilFromYmd, estDate, PH_DATETIME } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
@@ -188,6 +189,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(''); // transient confirmation (e.g. pairs removed)
+  // A scanned UPC we hold no record of: the shoe the catalogue named, waiting on a
+  // person to say it matches the box. Nothing is written until they do.
+  const [upcCheck, setUpcCheck] = useState(null);
+  const [upcBusy, setUpcBusy] = useState(false);
   const [sel, setSel] = useState(() => new Set());
   const [labels, setLabels] = useState(null);
   // Supplier filter options: the live list (seeded + names staff typed while
@@ -341,15 +346,31 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
   }
   // Best-effort, and deliberately quiet when it finds nothing: this runs off an
   // ordinary search, so a code the catalogue can't place must not look like a
-  // failure. The server resolves the style and size itself and only ever fills a
-  // BLANK UPC on that exact size — see api/items/backfill-upc.js.
+  // failure. Nothing is written here — the server answers with the shoe it thinks
+  // the code names and a person confirms it (`UpcCheck`), because the catalogue is
+  // sometimes wrong about which product a barcode belongs to. See
+  // api/items/backfill-upc.js.
   async function fillUpcGap(upc, params) {
     try {
       const r = await api.backfillUpc(upc);
-      if (!r?.updated) return;
-      setData(await api.itemsQuery(params));
-      setNotice(`UPC ${upc} saved to ${r.updated} pair${r.updated === 1 ? '' : 's'} · ${r.sku} US ${r.size}`);
+      if (r?.confirm) setUpcCheck({ ...r.confirm, params });
     } catch { /* the search still stands on its own */ }
+  }
+  async function confirmUpcCheck() {
+    const c = upcCheck;
+    if (!c) return;
+    setUpcBusy(true);
+    try {
+      const r = await api.backfillUpc(c.upc, { sku: c.sku, size: c.size });
+      setUpcCheck(null);
+      if (!r?.updated) return;
+      // Re-run the search so the pairs the code names actually answer to it now.
+      setData(await api.itemsQuery(c.params));
+      setNotice(`UPC ${c.upc} saved to ${r.updated} pair${r.updated === 1 ? '' : 's'} · ${r.sku} US ${r.size}`);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setUpcCheck(null); setError(err.message);
+    } finally { setUpcBusy(false); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -983,6 +1004,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
 
       {error && <div className="error mt">{error}</div>}
       {notice && <div className="notice mt">{notice}</div>}
+      <UpcCheck candidate={upcCheck} busy={upcBusy} onYes={confirmUpcCheck} onNo={() => setUpcCheck(null)} />
 
       {data && (
         <>

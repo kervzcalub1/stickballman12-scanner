@@ -2294,6 +2294,21 @@ const upcSizeKey = (s) => {
 //     rest of the run is the bug this whole area just came out of (`receiving.md`).
 //   • sold/shipped pairs are included deliberately — the label on a box that's
 //     already gone is still the record of what it was.
+// How many pairs a scanned code WOULD fill in. Used to decide whether asking a
+// person to check the shoe is worth their attention at all — a question whose
+// answer changes nothing is a question that trains people to click through.
+export async function countUnitsMissingUpc({ sku, size }) {
+  const want = rcCodes(sku);
+  const target = upcSizeKey(size);
+  if (!want.length || !target) return 0;
+  const rows = await db()`
+    SELECT sku, size FROM items
+     WHERE (upc IS NULL OR upc = '')
+       AND upper(replace(replace(coalesce(sku, ''), ' ', ''), '-', '')) LIKE ${`%${want[0].replace(/[^A-Z0-9]/g, '')}%`}`;
+  return rows.filter((r) => rcCodes(r.sku).some((c) => want.includes(c))
+    && upcSizeKey(r.size) === target).length;
+}
+
 export async function backfillUpcBySkuSize({ upc, sku, size, by = null }) {
   const code = String(upc || '').replace(/\D/g, '');
   const want = rcCodes(sku);

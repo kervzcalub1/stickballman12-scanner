@@ -220,9 +220,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       });
       // On an EMPTY-BOX order a line is a size AND a carton, so both ride on the row —
       // the same shoe in a 13x9x5 and a 15x10x6 is two things to count, not one.
+      // The UPC rides on the SIZE row, never on the shoe: one UPC identifies one
+      // size's box, and a manifest line is exactly that. Grouping the lines by SKU
+      // and keeping the first line's code would stamp size 8.5's barcode on all of
+      // them (see the size-row `upc` in bumpSize/rapidScan for the same rule).
       bySku.get(key).sizes.push({
         key: cartKey++, size: String(l.size), dimensions: l.dimensions || null,
-        qty: 0, expectedQty: l.qty_expected, vins: [],
+        upc: l.upc || '', qty: 0, expectedQty: l.qty_expected, vins: [],
       });
     }
     return [...bySku.values()];
@@ -629,9 +633,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // ---- Add Item modal: scan one shoe model, auto-incrementing sizes ----
   const sameSku = (a, b) => Boolean(a) && Boolean(b)
     && String(a).trim().toUpperCase().replace(/\s+/g, '-') === String(b).trim().toUpperCase().replace(/\s+/g, '-');
-  const bumpSize = (rows, size) => {
+  // `upc` is the code THIS size was scanned from, and it stays on the size row —
+  // a shoe line has no single UPC (every size has its own), so a line-level code
+  // scanned once would be stamped on every other size committed with it.
+  const bumpSize = (rows, size, upc = '') => {
     const i = rows.findIndex((r) => r.size === size);
-    return i === -1 ? [...rows, { key: cartKey++, size, qty: 1 }] : rows.map((r, j) => (j === i ? { ...r, qty: r.qty + 1 } : r));
+    return i === -1
+      ? [...rows, { key: cartKey++, size, qty: 1, upc }]
+      : rows.map((r, j) => (j === i ? { ...r, qty: r.qty + 1, upc: r.upc || upc } : r));
   };
   // Size options for the modal dropdown: API run when it has >1, else the
   // standard US chart (W/Y suffix detected), minus sizes already added.
@@ -695,9 +704,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const { product: p } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
       const incoming = {
         name: p.name || '', sku: p.sku || '', image: p.image || '', source: p.source || 'manual',
-        // Keep the UPC whether it was scanned directly or returned by a SKU
-        // lookup — it's needed to print the no-box box-style barcode label.
-        upc: (isUpc ? c : '') || p.upc || '', scannedSize: p.scannedSize || null, sizeOptions: p.sizes || [],
+        // Two different things: `upc` describes the shoe (either code, for display),
+        // `scannedUpc` is the code scanned off THIS size's box — only the latter is
+        // ever stamped on a unit. A SKU lookup's UPC belongs to whichever size the
+        // catalogue happened to return, so it never counts as scanned.
+        upc: (isUpc ? c : '') || p.upc || '', scannedUpc: isUpc ? c : '',
+        scannedSize: p.scannedSize || null, sizeOptions: p.sizes || [],
         gender: p.gender || null, colorway: p.colorway || '',
       };
       const d = draftRef.current;
@@ -706,7 +718,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       // "already loaded". Happens on first scan or a later size of a loaded shoe.
       const noSize = !incoming.scannedSize;
       if (!d) {
-        const rows = incoming.scannedSize ? [{ key: cartKey++, size: incoming.scannedSize, qty: 1 }] : [];
+        const rows = incoming.scannedSize ? [{ key: cartKey++, size: incoming.scannedSize, qty: 1, upc: incoming.scannedUpc }] : [];
         setDraft({ ...incoming, withBox: true, rows });
         if (noSize) setFlash({ type: 'warn', text: `Scanned ${incoming.name || c} — no size from the catalog. Pick the size manually below.` });
         else setFlash({ type: 'added', text: `✓ ${incoming.name || c}` });
@@ -714,7 +726,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       } else if (!sameSku(d.sku, incoming.sku)) {
         setPendingSwitch(incoming); scanFeedback('dup'); // different shoe → confirm switch
       } else if (incoming.scannedSize) {
-        setDraft({ ...d, rows: bumpSize(d.rows, incoming.scannedSize) });
+        setDraft({ ...d, rows: bumpSize(d.rows, incoming.scannedSize, incoming.scannedUpc) });
         setFlash({ type: 'added', text: `+1 · size ${incoming.scannedSize}` }); scanFeedback('added');
       } else {
         setFlash({ type: 'warn', text: 'Scanned, but no size from the catalog for this code. Pick the size manually below.' }); scanFeedback('dup');
@@ -743,7 +755,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const sizes = rows.map((r) => {
       const qty = Math.max(1, Number(r.qty) || 1);
       const vs = vins.slice(idx, idx + qty); idx += qty;
-      return { key: r.key, size: r.size, qty, vins: vs };
+      return { key: r.key, size: r.size, qty, upc: r.upc || '', vins: vs };
     });
     return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, colorway: d.colorway || null, withBox: d.withBox !== false, goatOnly: d.goatOnly === true, sizes };
   }
@@ -759,8 +771,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
       for (const s of item.sizes) {
         const j = sizes.findIndex((z) => z.size === s.size);
-        if (j === -1) sizes.push({ key: cartKey++, size: s.size, qty: s.qty, vins: s.vins || [] });
-        else { sizes[j].qty += s.qty; sizes[j].vins = [...sizes[j].vins, ...(s.vins || [])]; }
+        if (j === -1) sizes.push({ key: cartKey++, size: s.size, qty: s.qty, upc: s.upc || '', vins: s.vins || [] });
+        else {
+          sizes[j].qty += s.qty; sizes[j].vins = [...sizes[j].vins, ...(s.vins || [])];
+          sizes[j].upc = sizes[j].upc || s.upc || '';
+        }
       }
       // Float the just-touched shoe to the top too (most recently scanned).
       const updated = { ...arr[i], sizes };
@@ -783,7 +798,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (!item) return; // current invalid — keep editing it (prompt stays)
       addOrMergeItem(item);
       const next = pendingSwitch; setPendingSwitch(null);
-      const rows = next.scannedSize ? [{ key: cartKey++, size: next.scannedSize, qty: 1 }] : [];
+      const rows = next.scannedSize ? [{ key: cartKey++, size: next.scannedSize, qty: 1, upc: next.scannedUpc }] : [];
       setDraft({ ...next, withBox: true, rows });
       setFlash({ type: 'added', text: `✓ ${next.name || ''}` });
     } finally { setMBusy(false); }
@@ -949,7 +964,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (!look.ok) {
       if (look.err?.unauthorized) return onSignOut();
       setItems((arr) => arr.map((it) => (it.key !== lineKey ? it : {
-        ...it, pending: false, failed: true, sizes: [{ key: cartKey++, size: '', qty: 1, needsSize: true, vins: vin ? [vin] : [] }],
+        ...it, pending: false, failed: true, sizes: [{ key: cartKey++, size: '', qty: 1, needsSize: true, upc: isUpc ? c : '', vins: vin ? [vin] : [] }],
       })));
       setFlash({ type: 'dup', text: look.err?.timeout
         ? `Catalogue timed out · ${c} — scan it again, or fill it in below`
@@ -970,11 +985,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const resolved = {
         key: lineKey, name: p.name || '', sku: picked || p.sku || '', image: p.image || '', source: p.source || 'manual',
         skuOptions: opts,
-        // Keep the UPC whether it was scanned directly or returned by a SKU lookup —
-        // it's needed to print the no-box box-style barcode label.
+        // The line's `upc` is for display only. The code that gets STAMPED on the
+        // pair rides on its size row, and only when it was really scanned off that
+        // box — a SKU lookup's UPC is some other size's and merging this line into
+        // one already in the cart must not lend it around.
         upc: (isUpc ? c : '') || p.upc || '', gender: p.gender || null, colorway: p.colorway || '',
         sizeOptions: p.sizes || [], withBox, goatOnly: false,
-        sizes: [{ key: cartKey++, size, qty: 1, needsSize: !size, vins: vin ? [vin] : [] }],
+        sizes: [{ key: cartKey++, size, qty: 1, needsSize: !size, upc: isUpc ? c : '', vins: vin ? [vin] : [] }],
       };
       // Fold into the same shoe already in the cart (same product AND same box /
       // GOAT status — boxed and no-box pairs are tracked apart).
@@ -985,8 +1002,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       // A blank size always starts its OWN row — two unknown sizes are not one
       // size scanned twice.
       const j = size ? sizes.findIndex((z) => z.size === size) : -1;
-      if (j === -1) sizes.push({ key: cartKey++, size, qty: 1, needsSize: !size, vins: vin ? [vin] : [] });
-      else { sizes[j].qty += 1; if (vin) sizes[j].vins.push(vin); }
+      if (j === -1) sizes.push({ key: cartKey++, size, qty: 1, needsSize: !size, upc: isUpc ? c : '', vins: vin ? [vin] : [] });
+      else {
+        sizes[j].qty += 1; if (vin) sizes[j].vins.push(vin);
+        if (isUpc && !sizes[j].upc) sizes[j].upc = c;
+      }
       const merged = { ...arr[i], sizes, image: arr[i].image || resolved.image };
       // Float the just-scanned shoe to the top and drop the pending placeholder.
       return [merged, ...arr.filter((x, idx) => idx !== i && x.key !== lineKey)];
@@ -1064,8 +1084,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
   // ---- Cart-line edits shared by the Items list and Review -----------------
   const setItemField = (itemKey, patch) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, ...patch, failed: false } : it)));
+  // Retyping the size DROPS the row's UPC: the code was scanned off a different
+  // size's box, so keeping it would put that box's barcode on this pair. Blank is
+  // the honest answer — the No-Box / Box Labels prompt then asks for the real one.
   const setSizeValue = (itemKey, sizeKey, size) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
-    ...it, sizes: it.sizes.map((s) => (s.key === sizeKey ? { ...s, size } : s)),
+    ...it,
+    sizes: it.sizes.map((s) => (s.key !== sizeKey ? s
+      : { ...s, size, upc: String(s.size || '').trim() === String(size || '').trim() ? s.upc : '' })),
   })));
   // Two scans of one shoe that both came back sizeless land as two separate rows
   // (two unknown sizes are not one size scanned twice). Once they're typed in and
@@ -1089,6 +1114,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         return [{
           ...s,
           needsSize: false,
+          upc: s.upc || row.upc || '',
           qty: (Number(s.qty) || 0) + (Number(row.qty) || 0),
           vins: [...(s.vins || []), ...(row.vins || [])],
         }];
@@ -1355,7 +1381,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: it.upc, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, goatOnly: it.goatOnly, vin: r.vins?.[n] || null });
+            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, goatOnly: it.goatOnly, vin: r.vins?.[n] || null });
           }
         }
       }

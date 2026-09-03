@@ -121,6 +121,18 @@ sticker bar sits above the checklist. Full rules: `docs/context/vin-stock.md`.
      catalogue lookup + `reserveVins(1)` resolve behind it, so the next scan never
      waits. On resolve it either replaces the placeholder or **merges** into the
      same shoe already in the cart (same SKU + same box/GOAT status).
+   - **The UPC is a per-SIZE fact and rides on the size row, never on the shoe
+     line.** One UPC identifies one size's box, so the code scanned off *this*
+     box is the only one that may be stamped on *this* pair. Until 2026-09-03 the
+     cart held a single `upc` per shoe line, set by the first scan, and the commit
+     stamped it on every size committed with it — a whole receiving box came out
+     wearing one UPC across five sizes (1,029 prod units repaired; see
+     `scripts/repair-unit-upcs.mjs`). Three rules keep it honest: a **SKU** lookup's
+     UPC is never treated as scanned (it belongs to whichever size the catalogue
+     returned), **merging** a scan into a shoe already in the cart doesn't lend that
+     shoe's code to the new size, and **retyping a size clears** its row's UPC. A
+     row with no scanned code commits `upc = NULL` — blank is the honest answer,
+     and the box-label prompt then asks for the real one (`no-box.md`).
    - **Nothing a scan produced is ever dropped.** A failed lookup becomes a red
      line carrying the raw code with typeable name/SKU; a product with no size from
      the catalogue gets a red **`size?`** row. Both are `isUnresolved` → they block

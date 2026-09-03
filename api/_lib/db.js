@@ -1554,6 +1554,12 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.cost, i.status, i.created_by, i.created_at,
            i.with_box, i.upc, i.colorway, i.gender, i.price, i.added_to_intel_inv, i.pre_sell,
+           -- items.pre_sell is the unit's CURRENT state and release clears it, so a pair
+           -- that came off a pre-sell shipment becomes indistinguishable from ordinary
+           -- stock the moment it is freed. batches.pre_sell is what the shipment WAS and
+           -- never changes -- the only way to answer "where did this pair come from"
+           -- afterwards. (No backticks in these comments: this is a JS template literal.)
+           b.pre_sell AS from_pre_sell,
            i.synced_alias, i.synced_stockx, i.synced_shopify, i.location_code,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
            (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
@@ -1595,6 +1601,7 @@ export async function phListItems(from, to, kind = null) {
              i.status, i.cost, i.price, i.global_indicator, i.gi_basis,
              i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.goat_only, i.listed_price,
              i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
+             i.pre_sell, b.pre_sell AS from_pre_sell,
              (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
              (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
                 ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
@@ -1620,6 +1627,7 @@ export async function phListItems(from, to, kind = null) {
            i.status, i.cost, i.price, i.global_indicator, i.gi_basis,
            i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.goat_only, i.listed_price,
            i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
+           i.pre_sell, b.pre_sell AS from_pre_sell,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
            (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
               ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
@@ -1640,6 +1648,15 @@ export async function phListItems(from, to, kind = null) {
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
       -- Report (kind IS NULL) for oversight.
       AND (${kind}::text IS NULL OR i.status <> 'no_box')
+      -- A unit on the RESCALE worklist is rescale work, not new-inventory work, and
+      -- must appear in one worklist only — two lists claiming the same pair is how a
+      -- pair gets listed twice or, worse, left because each side assumed the other
+      -- had it. It bites hardest on released pre-sell: those units were received days
+      -- ago, so they fall inside New Inventory's date window and showed up on BOTH
+      -- tabs the moment the warehouse released them (pre-sell.md -- release sets
+      -- restock_pending). Same shape as the no-box rule above: the admin Report
+      -- (kind IS NULL) still sees everything.
+      AND (${kind}::text IS NULL OR NOT i.restock_pending)
     ORDER BY i.created_at, i.id
     LIMIT 5000
   `;

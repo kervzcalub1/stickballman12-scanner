@@ -34,6 +34,7 @@ import { Sop } from './Sop.jsx';
 import { DeletedItems } from './DeletedItems.jsx';
 import { Inventory } from './Inventory.jsx';
 import { BatchPage } from './BatchPage.jsx';
+import { PreSellChip } from '../components/PreSellChip.jsx';
 
 // PH Team home: pick which report to work — New Inventory (newly received stock)
 // or Rescale Stock (units re-scanned for re-listing). Both do the same job: price
@@ -889,6 +890,11 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       </button>
     );
   };
+  // Pre-sell provenance on a PH row. It only ever shows on RELEASED pairs: a pair still
+  // held is invisible to every PH surface by design, so there is no row to chip.
+  // Without this, the remainder of a pre-sell shipment arrives on Rescale Stock looking
+  // like any other restock, and the reason half the shipment never appears is unfindable.
+  const preSellChip = (g) => (g.wasPreSell ? <PreSellChip was count={g.wasPreSellCount} /> : null);
   const goatConfirmModal = goatConfirm ? (
     <Modal
       type="warn"
@@ -1117,7 +1123,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   {/* Saved-state badges — while editing, the live draft checkboxes below are
                       the source of truth, so this is captioned "Last saved" instead of
                       "Listed / synced" to avoid reading as contradicting the open draft. */}
-                  <div className="ph-card-synced"><span className="muted sm">{ed ? 'Last saved (all sizes)' : 'Listed / synced (all sizes)'}</span> <span className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}</span></div>
+                  <div className="ph-card-synced"><span className="muted sm">{ed ? 'Last saved (all sizes)' : 'Listed / synced (all sizes)'}</span> <span className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}{preSellChip(g)}</span></div>
                   <div className="ph-card-foot">
                     <span className="muted sm ph-card-credit">
                       {g.first_edit_by ? (
@@ -1195,7 +1201,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                         <td>{g.gender || '—'}</td>
                         <td className="ph-status-cell"><StatusPill status={g.status} />{rescaleStateChip(g) || rescaleChip(g)}</td>
-                        <td><div className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}</div></td>
+                        <td><div className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}{preSellChip(g)}</div></td>
                         <td>{g._mixedBy ? <span className="muted">multiple</span> : (g.created_by || '—')}</td>
                         <td style={rightStyle('action', canRescaleRequest)} className="ph-rfrozen ph-rfrozen-first" onClick={(e) => e.stopPropagation()}>
                           {!canEdit ? <span className="muted">—</span>

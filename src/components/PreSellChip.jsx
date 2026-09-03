@@ -12,8 +12,21 @@
 // point of it is to be the thing your eye catches on a row that otherwise looks routine.
 import React from 'react';
 
-export function PreSellChip({ on, sold = false, mixed = false, count = 0, className = '' }) {
-  if (!on && !sold && !mixed) return null;
+export function PreSellChip({ on, sold = false, mixed = false, was = false, count = 0, className = '' }) {
+  if (!on && !sold && !mixed && !was) return null;
+  // Released: the unit flag is gone, but the shipment it came off is a fact that never
+  // changes (batches.pre_sell). Worth saying, because a released pair is ordinary stock
+  // with an unusual history — somebody pricing it wants to know the rest of that
+  // shipment is spoken for, and if a pre-sale falls through this is where the pair goes
+  // back to. Deliberately quieter than the live chip: nothing is being held any more.
+  if (was && !on && !sold && !mixed) {
+    return (
+      <span className={`presell-chip was ${className}`.trim()}
+        title="Came off a pre-sell shipment and has been released for listing. Ordinary stock now — the pairs its orders cover are held separately.">
+        {count ? `${count} was pre-sell` : 'Was pre-sell'}
+      </span>
+    );
+  }
   // "Some of these are spoken for" is a different, more dangerous fact than "all of
   // them are" — a grouped row that hid the split would offer a pair that isn't ours.
   if (mixed) {

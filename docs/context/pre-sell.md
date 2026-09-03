@@ -49,6 +49,36 @@ ordinary everywhere else (Inventory, shelving, labels, locations, costs, the PO)
 The pending-counts query also returns **`presell_pending`** — pre-sell units not yet
 `sold`/`shipped` — which badges the PH home card.
 
+## The chip (`src/components/PreSellChip.jsx`)
+
+One component, four states, shown anywhere a batch, box or unit is on screen —
+because the flag changes what may be done with the stock, and someone standing over
+a shelf has no other way to tell. **Only the unusual state is chipped**; chipping
+every ordinary shipment teaches people to stop reading chips.
+
+| State | Reads | Keyed on |
+|---|---|---|
+| held | **Pre-sell** | `items.pre_sell` |
+| part held | **N pre-sell** | some units of a group held |
+| spoken for | **Pre-sold** | `status = 'pre_sold'` |
+| released | **Was pre-sell** | `batches.pre_sell` with no unit still held |
+
+**Why the fourth exists.** `items.pre_sell` is the unit's *current* state and release
+clears it, so a freed pair is indistinguishable from ordinary restock the moment it
+lands on Rescale Stock — and "why does half this shipment never appear?" becomes
+unanswerable. `batches.pre_sell` is what the shipment **was** and never changes, so
+it is carried as **`from_pre_sell`** on `queryItems` and both branches of
+`phListItems`, and grouped as `wasPreSell` / `wasPreSellCount` in `src/lib/ph.js`.
+
+Where the live chip **replaces** the sync badges (a held pair has no sync state worth
+showing), the released chip sits **beside** them and is styled quiet, not amber: the
+pair is ordinary stock again and its badges mean something. On the PH grid it only
+ever appears on released pairs — a held one is invisible to every PH surface by
+design, so there is no row to chip.
+
+⚠️ These queries are JS template literals. **No backticks in their SQL comments** —
+one closes the string and the whole module fails to parse.
+
 ## The Pre-sell page (`/presell`, `src/screens/PreSell.jsx`)
 
 Warehouse (admin auto-allowed), in the warehouse app — a card in **Receiving
@@ -78,6 +108,17 @@ order collapsed.
 `releasePreSell` sets `pre_sell = false, restock_pending = true` on every unit of
 that batch that is **not** `pre_sold`/`sold`/`shipped`/`missing`/`issue`, and logs a
 `rescaled` event.
+
+**Rescale Stock, and only Rescale Stock.** Releasing clears `pre_sell`, which is
+what used to let those units back onto **New Inventory** as well — they were
+received days ago, so they sit inside its date window, and the moment the warehouse
+released a shipment its remainder appeared on *both* PH tabs. `phListItems`'
+receiving branch therefore carries `AND (${kind} IS NULL OR NOT i.restock_pending)`:
+a unit on the rescale worklist is rescale work. Two lists claiming the same pair is
+how it gets listed twice — or left, because each side assumed the other had it. The
+admin **Report** (`kind IS NULL`) still sees the released pairs, the same carve-out
+no-box has; the ones still spoken for stay hidden there too, because pre-sell hides
+a pair from every PH surface until it is released. Pinned by `e2e/presell.spec.js`.
 
 `restock_pending` is the PH **Rescale Stock** worklist (`docs/context/rescale.md`)
 — the existing home for "stock that needs pricing and pushing to the stores".

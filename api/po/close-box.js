@@ -4,7 +4,7 @@
 // the supplier can reopen it to keep editing. Returns the refreshed full PO.
 import { STILL_WITH_SUPPLIER } from '../_lib/po-manifest.js';
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
-import { getPoBox, getPo, countPoBoxLines, closePoBox, getPoFull, dbConfigured } from '../_lib/db.js';
+import { getPoBox, getPo, countPoBoxLines, countPoOrderLines, closePoBox, getPoFull, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -30,8 +30,19 @@ export default async function handler(req, res) {
     // the parcel — so the box can still be closed for shipment. See STILL_WITH_SUPPLIER.
     if (!STILL_WITH_SUPPLIER.includes(box.status))
       return send(res, 409, { ok: false, error: 'This label is already closed.' });
-    if ((await countPoBoxLines(poBoxId)) < 1)
-      return send(res, 400, { ok: false, error: 'Scan at least one item into this label before closing it.' });
+    // Same rule as po/ship: on a WHOLE-ORDER manifest (Path C) a box carries no lines of
+    // its own by design, so the order-level list is what must be non-empty. Testing the
+    // box here left those orders impossible to close OR ship, by anybody.
+    const declared = po.manifest_scope === 'po'
+      ? await countPoOrderLines(po.id)
+      : await countPoBoxLines(poBoxId);
+    if (declared < 1)
+      return send(res, 400, {
+        ok: false,
+        error: po.manifest_scope === 'po'
+          ? 'Nothing has been declared on this order yet.'
+          : 'Scan at least one item into this label before closing it.',
+      });
 
     await closePoBox(poBoxId);
     const data = await getPoFull(box.po_id);

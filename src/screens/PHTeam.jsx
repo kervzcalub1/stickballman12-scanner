@@ -11,7 +11,7 @@ import { RescaleRequestModal } from '../components/RescaleRequestModal.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { skuCodes } from '../lib/sku.js';
-import { roleLabel, SYNC_BADGES, homeCardBadges } from '../lib/constants.js';
+import { roleLabel, SYNC_BADGES, homeCardBadges, hasAnyPriv } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
 import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
 import {
@@ -27,6 +27,7 @@ import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { ImageFinder } from './ImageFinder.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
 import { PayoutCalculator } from './PayoutCalculator.jsx';
+import { BuyCarts } from './BuyCarts.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
@@ -64,6 +65,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and
+  // never touches the staff router, so without a route here a PH team member who was
+  // ticked for gift cards had nowhere to go — which is the exact case the privilege model
+  // exists to support.
+  if (page === 'buycarts') return <BuyCarts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'postatus') return <PoOverview onHome={() => goPage(null)} onSignOut={onSignOut} />;
   // PH closes out the stragglers too — they're the ones chasing the supplier over a
@@ -173,6 +179,14 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-title">Payout Calculator</span>
             <span className="home-card-sub">Cost after discounts vs. what Alias/StockX pay out after fees — is this pair a buy?</span>
           </button>
+          {/* Only for an account actually ticked for one of the buying duties. */}
+          {hasAnyPriv(user) && (
+            <button className="home-card" onClick={() => goPage('buycarts')}>
+              <span className="home-card-icon"><NavIcon name="buy-carts" /></span>
+              <span className="home-card-title">Gift Card Buying</span>
+              <span className="home-card-sub">Buying requests to approve, gift cards to release, and spending to account for</span>
+            </button>
+          )}
           <button className="home-card" onClick={() => goPage('inventory')}>
             <span className="home-card-icon"><NavIcon name="inventory" /></span>
             <span className="home-card-title">Inventory</span>

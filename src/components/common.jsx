@@ -333,6 +333,10 @@ export function SizesQty({ sizes }) {
 // exact background of the panel they sat in (--panel-2 on --panel-2), so a
 // blank "fill me in" field for brand-new inventory read as invisible. A
 // contrasting background + leading "$" + placeholder make it unmistakable.
+// `onChange` is passed STRAIGHT to the <input>, so it receives the EVENT, not the value:
+// callers write `onChange={(e) => setX(e.target.value)}`. Passing a bare setter stores the
+// event object instead of a number, and the failure is silent — the box looks like it
+// took the input while everything computed from it quietly becomes NaN.
 export function PriceInput({ value, onChange, className = '', ...rest }) {
   return (
     <span className="ph-price-wrap">

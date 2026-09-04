@@ -9,6 +9,18 @@ the courier carries it, and the **warehouse** receives it back **against the sam
 reconciling what was promised vs. what actually arrived. A batch spans **multiple shipping
 labels** (one tracking number each); it closes only when every label is shipped.
 
+## A purchase order can now be raised from a RECEIPT (2026-09-05)
+The gift-card buying process (`docs/context/buy-cart.md`) ends by raising a PO from the
+buyer's parsed receipt — `raised_by='supplier'`, `manifest_scope='po'`, tagged with the
+buying request's code. That order is then an ordinary shipment and follows every rule
+below; the buying request stays open until it reconciles.
+
+**Two bugs that surfaced the first time one ran.** `po/ship` and `po/close-box` both
+required per-box lines before a box could move — but `po/scan` refuses per-box lines on
+a whole-order-manifest order, so a Path-C order **could never be closed or shipped, by
+anybody**. Both now count the order-level list when `manifest_scope='po'`
+(`countPoOrderLines`).
+
 ## Manifest first: the supplier can raise the order (2026-09-03)
 
 The workflow inverted. It **was** labels-first: PH buys courier labels, raises the order

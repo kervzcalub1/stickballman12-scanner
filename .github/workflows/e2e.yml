@@ -28,6 +28,12 @@ jobs:
       # tokens with this same SESSION_SECRET, so they verify against the server.
       SESSION_SECRET: ci-e2e-session-secret-0123456789
       ADMIN_PASSWORD: ci-e2e-admin-pass
+      # Gift card codes are encrypted at rest, and the endpoint that stores one FAILS
+      # CLOSED without a key — which is correct, and is exactly why CI needs one: without
+      # it the buy-cart specs test a 503 instead of the controls they exist to guard.
+      # Test-only, and deliberately not a secret: the CI database is ephemeral and holds
+      # no real card. (Production sets its own; see docs/context/buy-cart.md.)
+      BUY_GC_KEY: 0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff
       CI: 'true'
 
     steps:

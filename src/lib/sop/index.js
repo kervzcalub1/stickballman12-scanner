@@ -23,6 +23,7 @@ import { SUPPLIER_ARTICLES } from './articles.supplier.js';
 import { ADMIN_ARTICLES } from './articles.admin.js';
 import { REFERENCE_ARTICLES } from './articles.reference.js';
 import { PAYOUT_ARTICLES } from './articles.payout.js';
+import { BUYCART_ARTICLES } from './articles.buycart.js';
 import { FAQ } from './faq.js';
 
 // Roles, in the order the filter bar shows them. `key` matches users.role except
@@ -46,6 +47,7 @@ export const SOP_AREAS = [
   { key: 'putaway', label: 'Put-away & locations', accent: 'orders' },
   { key: 'rescale', label: 'Rescale', accent: 'requests' },
   { key: 'listing', label: 'Pricing & listing', accent: 'listing' },
+  { key: 'buying', label: 'Gift card buying', accent: 'inventory' },
   { key: 'fulfil', label: 'Sell & ship', accent: 'shipping' },
   { key: 'browse', label: 'Browse, search & labels', accent: 'listing' },
   { key: 'admin', label: 'Administration', accent: 'orders' },
@@ -58,6 +60,9 @@ export const SOP_ARTICLES = [
   // Its own file because it belongs to no single desk — warehouse, PH and admin all
   // buy off it. See the note at the top of articles.payout.js.
   ...PAYOUT_ARTICLES,
+  // Also its own file, and for the same reason: four different desks touch every
+  // transaction and each needs its own procedure. See the note at the top of the file.
+  ...BUYCART_ARTICLES,
   ...SUPPLIER_ARTICLES,
   ...ADMIN_ARTICLES,
   ...REFERENCE_ARTICLES,

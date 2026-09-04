@@ -89,6 +89,10 @@ export const api = {
   adminListUsers: () => get('/api/admin/users'),
   adminReview: (userId, decision) => post('/api/admin/review', { userId, decision }),
   adminSetRole: (userId, role) => post('/api/admin/review', { userId, decision: 'role', role }),
+  // Privileges are set as a WHOLE SET, so unticking is as ordinary as ticking — a
+  // per-key add/remove pair would need its own "which direction" argument and could
+  // drift from what the checkboxes show.
+  adminSetPrivileges: (userId, privileges) => post('/api/admin/review', { userId, decision: 'privileges', privileges }),
   adminDeleteUser: (userId) => post('/api/admin/review', { userId, decision: 'delete' }),
   adminResetPassword: (userId) => post('/api/admin/reset-password', { userId }),
   // App settings (price margin, …). GET is any authed user; POST is admin/superadmin.
@@ -231,6 +235,45 @@ export const api = {
   payoutPresets: () => get('/api/payout/presets'),
   payoutPresetSave: (preset) => post('/api/payout/presets', { preset }),
   payoutPresetDelete: (deleteId) => post('/api/payout/presets', { deleteId }),
+
+  /* ---- Gift-card buying requests (docs/context/buy-cart.md) ------------------
+     Money out, then inventory in. A buyer asks, staff approve, the gift card desk
+     releases the cards, the receipt comes back and raises a purchase order, and an
+     auditor closes it once all ten conditions are true.
+
+     Note what is NOT here: there is no method that fetches a gift card code in bulk.
+     Reading one is `cartGcReveal`, one card at a time, and the server writes an audit
+     row before it answers. */
+  cartList: (status) => get(`/api/cart/list${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  cartGet: (id) => get(`/api/cart/get?id=${encodeURIComponent(id)}`),
+  cartCreate: (payload) => post('/api/cart/create', payload),
+  cartAddLine: (cartId, line) => post('/api/cart/line', { cartId, line }),
+  cartEditLine: (cartId, lineId, patch) => post('/api/cart/line', { cartId, lineId, patch }),
+  cartRemoveLine: (cartId, lineId) => post('/api/cart/line', { cartId, lineId, remove: true }),
+  cartSubmit: (cartId) => post('/api/cart/submit', { cartId }),
+  cartWithdraw: (cartId) => post('/api/cart/submit', { cartId, withdraw: true }),
+  cartDecide: (cartId, payload) => post('/api/cart/decide', { cartId, ...payload }),
+  cartAddGiftCard: (cartId, card) => post('/api/cart/gift-card', { cartId, card }),
+  cartVoidGiftCard: (cartId, voidId, reason) => post('/api/cart/gift-card', { cartId, voidId, reason }),
+  cartFund: (cartId) => post('/api/cart/gift-card', { cartId, fund: true }),
+  cartGcReveal: (cartId, gcId) => post('/api/cart/gc-reveal', { cartId, gcId }),
+  cartFileSign: (cartId, kind, contentType) => post('/api/cart/file-sign', { cartId, kind, contentType }),
+  cartFileAttach: (payload) => post('/api/cart/file-attach', payload),
+  // The bytes are PROXIED — the bucket never serves a card photo or a receipt by URL,
+  // so there is no `src` an <img> could point at. Both of these fetch WITH the session
+  // token and hand back a blob; the viewer turns it into an object URL and revokes it
+  // on close, which also means a card photo never lingers in the browser's HTTP cache
+  // (the endpoint sends `no-store`, and an object URL isn't cached at all).
+  cartFileBlob: (cartId, fileId, kind) =>
+    downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}${kind ? `&kind=${kind}` : ''}`),
+  cartFileDownload: (cartId, fileId, kind) =>
+    downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}&download=1${kind ? `&kind=${kind}` : ''}`),
+  cartSaveReceipt: (cartId, lines, receiptTotal) => post('/api/cart/receipt', { cartId, lines, receiptTotal }),
+  cartRaisePo: (cartId, boxes) => post('/api/cart/raise-po', { cartId, boxes }),
+  cartAudit: (cartId, cards) => post('/api/cart/audit', { cartId, cards }),
+  cartClose: (cartId) => post('/api/cart/close', { cartId }),
+  cartCancel: (cartId, reason) => post('/api/cart/close', { cartId, cancel: true, reason }),
+  cartComment: (cartId, body) => post('/api/cart/comment', { cartId, body }),
   // The app-wide advisor (components/Advisor.jsx). `context` is whatever screen the
   // asker is on; the server can also look things up for itself. 503 when no model key
   // is set — the panel retires itself rather than pretending it's there.

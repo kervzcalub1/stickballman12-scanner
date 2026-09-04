@@ -15,6 +15,7 @@ import { api } from '../api.js';
 import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
 import { PayoutCalculator } from './PayoutCalculator.jsx';
+import { BuyCarts } from './BuyCarts.jsx';
 import { Sop } from './Sop.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
@@ -87,7 +88,7 @@ function ShipToCard({ shipTo }) {
 // Which of the supplier's two screens a path means. Their own tiny router, the same
 // shape as the PH one: the page lives in the path so a refresh (or a link) comes back
 // to it, and anything unrecognised falls to the home chooser rather than a blank app.
-const SUP_PATHS = { orders: '/orders', payout: '/payout' };
+const SUP_PATHS = { orders: '/orders', payout: '/payout', buying: '/buying' };
 const supPathForPage = (p) => SUP_PATHS[p] || '/';
 const supPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -113,6 +114,14 @@ function SupplierHome({ user, onPick, onSignOut, onHelp }) {
             <span className="home-card-icon"><NavIcon name="payout" /></span>
             <span className="home-card-title">Payout Calculator</span>
             <span className="home-card-sub">Standing in the store: what a pair pays out, and whether to buy it.</span>
+          </button>
+          {/* The buyer's side of the gift-card process. Named "Buying Requests" rather
+              than "cart", because what they are doing is asking to be funded — the list
+              is the ask, and it goes to somebody for a yes. */}
+          <button className="home-card" onClick={() => onPick('buying')}>
+            <span className="home-card-icon"><NavIcon name="buy-carts" /></span>
+            <span className="home-card-title">Buying Requests</span>
+            <span className="home-card-sub">Ask for gift cards: list what you want to buy, get it approved, then send the receipt back.</span>
           </button>
         </div>
       </section>
@@ -257,6 +266,14 @@ export function SupplierApp({ user, onSignOut }) {
   // theirs alone and read-only. The server scopes and refuses independently.
   if (page === 'payout') {
     return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  }
+
+  // The SAME screen the desks use, scoped by the server to this buyer's own requests
+  // (api/cart/list.js keys on the account off the token). One screen means the buyer and
+  // the approver are demonstrably looking at the same transaction rather than at two
+  // renderings of it that can drift apart.
+  if (page === 'buying') {
+    return <BuyCarts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   }
 
   // Raise your own shipment. The workflow inverted: we want the manifest BEFORE we buy

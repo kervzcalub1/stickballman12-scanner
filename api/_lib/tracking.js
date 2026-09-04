@@ -35,9 +35,26 @@ const registerAllowed = () => process.env.APP_ENV !== 'dev' || process.env.TRACK
 // A tracked item is either a bare number string or { number, carrier } where carrier is
 // the 17TRACK numeric carrier key (so the aggregator pulls status from the RIGHT carrier
 // instead of guessing). Normalizes to 17TRACK's { number, carrier? } request shape.
+// Couriers reject a number typed the way a person reads it. 17TRACK refused
+// "1Z 3YY 408 13 2795 1235" outright for format, and could not route
+// "420175451Z3YY4080312658064" — a UPS Mail Innovations label carries a 420+ZIP
+// routing prefix in front of the real 1Z. Both are good parcels behind a
+// presentation problem, and the number is typed by hand in half a dozen places.
+// Normalising HERE covers every call site at once.
+export function normalizeTrackingNumber(raw) {
+  const n = String(raw || '').trim();
+  const bare = n.replace(/[\s-]/g, '');
+  const mi = bare.match(/^420\d{4,9}(1Z[A-Z0-9]{16})$/i);
+  if (mi) return mi[1].toUpperCase();
+  // Only collapse spacing on formats where it is decorative. Left alone otherwise:
+  // some couriers use dashes meaningfully, and inventing a number is worse than
+  // failing to register one.
+  return /^1Z[A-Z0-9\s-]{16,}$/i.test(n) ? bare.toUpperCase() : n;
+}
+
 function toItem(x) {
   const raw = x && typeof x === 'object' ? x : { number: x };
-  const number = String(raw.number || '').trim();
+  const number = normalizeTrackingNumber(raw.number);
   if (!number) return null;
   const carrier = Number.isInteger(Number(raw.carrier)) && Number(raw.carrier) > 0 ? Number(raw.carrier) : null;
   return carrier ? { number, carrier } : { number };

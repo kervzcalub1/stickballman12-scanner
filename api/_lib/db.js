@@ -15,6 +15,9 @@ import { ROLL_VIN_RE } from './vins.js';
 // name: this file already has a `trackKey` further down that only strips whitespace,
 // and that one is for MATCHING a label to a box — a stricter job than searching.
 import { trackKey as searchTrackKey } from '../../src/lib/postatus.js';
+// Registration now sends the canonical form of a number, so anything that MATCHES a
+// number has to canonicalise too — see normalizeTrackingNumber for why.
+import { normalizeTrackingNumber } from './tracking.js';
 
 const { Pool } = pg;
 
@@ -3501,7 +3504,9 @@ export async function getPoFull(id) {
 export async function upsertShipmentTracking(trackingNumber, {
   carrier, carrierKey, trackingStatus, subStatus, subStatusDescr, lastCheckpoint, events,
 } = {}) {
-  const num = String(trackingNumber || '').trim();
+  // Canonical key: the same parcel typed with spaces in one field and without in
+  // another must be ONE row, or the page reads the empty one.
+  const num = normalizeTrackingNumber(trackingNumber);
   if (!num) return null;
   const rows = await db()`
     INSERT INTO shipment_tracking (tracking_number, carrier, carrier_key, tracking_status,
@@ -4503,7 +4508,8 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
               WHEN 'pending' THEN 0 WHEN 'packed' THEN 1 WHEN 'pre_transit' THEN 2
               WHEN 'shipped' THEN 3 WHEN 'in_transit' THEN 4 WHEN 'delivered' THEN 5 ELSE 0 END) < ${newRank}
             THEN ${boxStatus} ELSE status END
-      WHERE upper(tracking_number) = upper(${trackingNumber})
+      WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g')
+          = regexp_replace(upper(${trackingNumber}), '[^A-Z0-9]', '', 'g')
       RETURNING id, po_id`;
   }
   return sql`
@@ -4515,7 +4521,8 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
         last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
         tracking_events = COALESCE(${eventsJson}::jsonb, tracking_events),
         checked_at = now()
-    WHERE upper(tracking_number) = upper(${trackingNumber})
+    WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g')
+        = regexp_replace(upper(${trackingNumber}), '[^A-Z0-9]', '', 'g')
     RETURNING id, po_id`;
 }
 

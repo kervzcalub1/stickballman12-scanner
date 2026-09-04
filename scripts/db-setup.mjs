@@ -26,11 +26,19 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
+// Railway's TCP proxy (…rlwy.net) presents a self-signed chain, so it needs TLS with
+// verification off — the same thing every other script here does. Without it this
+// script could not target production at all, which is the one job the documented
+// migrate-before-deploy flow needs it for: `railway ssh -> db:setup` runs the
+// DEPLOYED (old) script and no-ops on an unmerged change, so a new migration has to
+// be pushed from the local checkout against the public URL.
+// Note `sslmode=require` in the connection string is NOT enough on its own — pg then
+// builds its own strict config and rejects the self-signed chain.
+const DB_URL = process.env.DATABASE_URL;
+const needsLooseTls = /\bsslmode=require\b|\.neon\.tech|\brlwy\.net\b|\.railway\.app\b/.test(DB_URL || '');
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: /\bsslmode=require\b|\.neon\.tech/.test(process.env.DATABASE_URL)
-    ? { rejectUnauthorized: false }
-    : undefined,
+  connectionString: DB_URL,
+  ssl: needsLooseTls ? { rejectUnauthorized: false } : undefined,
 });
 const sql = (text) => pool.query(text);
 

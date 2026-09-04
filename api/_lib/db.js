@@ -5519,6 +5519,29 @@ const actorKeyOf = (a) => {
   return u ? `env:${u}` : null;
 };
 
+// One row per scan that did not land. Best-effort by contract — the caller is mid-scan.
+export async function recordScanFailure({ code, reason, detail, screen, userName }) {
+  await db()`
+    INSERT INTO scan_failures (code, reason, detail, screen, user_name)
+    VALUES (${code}, ${reason}, ${detail || null}, ${screen || null}, ${userName || null})`;
+}
+
+// What has been failing, and how much of it. The report behind "scan-out keeps failing".
+export async function scanFailureSummary({ days = 7 } = {}) {
+  const sql = db();
+  const [byReason, recent, topCodes] = await Promise.all([
+    sql`SELECT reason, count(*)::int n, max(created_at) AS last_at
+          FROM scan_failures WHERE created_at > now() - (${days} || ' days')::interval
+         GROUP BY reason ORDER BY n DESC`,
+    sql`SELECT code, reason, detail, user_name, created_at
+          FROM scan_failures ORDER BY id DESC LIMIT 50`,
+    sql`SELECT code, count(*)::int n FROM scan_failures
+         WHERE created_at > now() - (${days} || ' days')::interval
+         GROUP BY code HAVING count(*) > 1 ORDER BY n DESC LIMIT 20`,
+  ]);
+  return { byReason, recent, topCodes };
+}
+
 // Does this account hold a privilege right now? Read fresh on every privileged call —
 // a permission over company money must stop the moment it is untinked, not at the
 // account's next sign-in (api/_lib/buycart.js explains the trade).

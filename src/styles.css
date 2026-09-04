@@ -4352,3 +4352,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .priv-note { margin-top: 3px; font-size: 11.5px; color: #c6871a; white-space: normal; max-width: 260px; }
 .priv-line { display: flex; align-items: flex-start; gap: 10px; }
 @media (max-width: 600px) { .priv-group { min-width: 0; } .priv { white-space: normal; } }
+
+/* A minted-but-never-printed sticker run. Amber, and above the Mint button: the whole
+   point is to be read BEFORE minting again, which is what put ~2,700 dead numbers into
+   the roll stock. */
+.vs-stranded { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5;
+  background: rgba(198,135,26,0.12); border: 1px solid rgba(198,135,26,0.38); color: #d9a24a; }
+.vs-stranded b { display: block; color: var(--text); margin-bottom: 2px; }
+.vs-stranded .btn { margin-top: 8px; }

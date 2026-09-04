@@ -69,6 +69,27 @@ export async function registerTracking(items) {
   return call('/register', list);
 }
 
+// Register tracking numbers the WAREHOUSE typed in, rather than ones that arrived on a
+// purchase order. Claim-then-register: `claimForTracking` stamps `registered_at` in the
+// same statement that inserts the row, so the same parcel scanned into two boxes, or a
+// batch re-synced twice, cannot both spend quota on it. Numbers already known are
+// silently skipped and nothing is called.
+//
+// Fire-and-forget by design — receiving must never wait on, or fail because of, a
+// third-party account. The dev guard inside registerTracking still applies.
+export async function registerWarehouseTracking(numbers, { claim, label = 'tracking' } = {}) {
+  const list = (numbers || []).map((n) => String(n || '').trim()).filter(Boolean);
+  if (!trackingConfigured() || !list.length || typeof claim !== 'function') return { skipped: true };
+  let fresh = [];
+  try { fresh = await claim(list); } catch (e) { console.warn(`[${label}] claim:`, e.message); return { skipped: true }; }
+  if (!fresh.length) return { skipped: true, reason: 'already-registered' };
+  for (let i = 0; i < fresh.length; i += 40) {
+    await registerTracking(fresh.slice(i, i + 40))
+      .catch((e) => console.warn(`[${label}] registerTracking:`, e.message));
+  }
+  return { registered: fresh.length };
+}
+
 // Tell 17TRACK to STOP auto-tracking these numbers — call once a parcel is delivered.
 // A delivered parcel never changes again, so leaving it on auto-tracking just burns the
 // account's tracking quota (see the "Tracking stopped" state in the 17TRACK dashboard).

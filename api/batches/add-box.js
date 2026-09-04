@@ -2,7 +2,8 @@
 // Adds a physical box (its own tracking #) to an open multi-box batch. The box
 // starts 'pending'; box-commit marks it received. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { addBatchBox, getBatchWithBoxes, dbConfigured, SHIPMENT_KINDS } from '../_lib/db.js';
+import { addBatchBox, getBatchWithBoxes, claimForTracking, dbConfigured, SHIPMENT_KINDS } from '../_lib/db.js';
+import { registerWarehouseTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -24,6 +25,13 @@ export default async function handler(req, res) {
     if (!found || !SHIPMENT_KINDS.includes(found.batch.kind)) return send(res, 404, { ok: false, error: 'Batch not found.' });
     if (found.batch.status !== 'open') return send(res, 409, { ok: false, error: 'This batch is already finished — reopen it to add a box.' });
     const box = await addBatchBox(batchId, { trackingNumber, boxNumber }, user.name || user.username || '');
+    // A number typed here used to have no courier feed behind it at all — the box
+    // showed "No courier updates" forever. Fire-and-forget: receiving must never wait
+    // on a third-party account, and the claim makes it safe to call on every add.
+    if (box?.tracking_number) {
+      registerWarehouseTracking([box.tracking_number], { claim: claimForTracking, label: 'batches/add-box' })
+        .catch((e) => console.warn('[batches/add-box] register:', e.message));
+    }
     return send(res, 200, { ok: true, box });
   } catch (e) {
     console.error('[batches/add-box]', e.message);

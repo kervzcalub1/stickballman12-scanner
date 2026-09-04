@@ -26,11 +26,19 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
+// Railway's TCP proxy (…rlwy.net) presents a self-signed chain, so it needs TLS with
+// verification off — the same thing every other script here does. Without it this
+// script could not target production at all, which is the one job the documented
+// migrate-before-deploy flow needs it for: `railway ssh -> db:setup` runs the
+// DEPLOYED (old) script and no-ops on an unmerged change, so a new migration has to
+// be pushed from the local checkout against the public URL.
+// Note `sslmode=require` in the connection string is NOT enough on its own — pg then
+// builds its own strict config and rejects the self-signed chain.
+const DB_URL = process.env.DATABASE_URL;
+const needsLooseTls = /\bsslmode=require\b|\.neon\.tech|\brlwy\.net\b|\.railway\.app\b/.test(DB_URL || '');
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: /\bsslmode=require\b|\.neon\.tech/.test(process.env.DATABASE_URL)
-    ? { rejectUnauthorized: false }
-    : undefined,
+  connectionString: DB_URL,
+  ssl: needsLooseTls ? { rejectUnauthorized: false } : undefined,
 });
 const sql = (text) => pool.query(text);
 
@@ -949,6 +957,66 @@ await sql(`CREATE INDEX IF NOT EXISTS payout_presets_supplier_idx ON payout_pres
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Courier state, keyed by TRACKING NUMBER rather than by whatever we happen to
+// have attached it to.
+//
+// 17TRACK was only ever registered against po_boxes, so a number typed in at
+// receiving had no courier feed behind it and no column to hold one — which is why
+// the warehouse pages had to reach across and match against po_boxes to show any
+// status at all. Registering those numbers without this table would push status
+// into a void: the webhook writes by number, and there was nowhere for a
+// non-PO number to land.
+//
+// One row per parcel. po_boxes keeps its own copy (nothing existing changes), and
+// this is what the warehouse side reads. `registered_at` is what stops us spending
+// 17TRACK quota registering the same number twice.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shipment_tracking (
+    tracking_number      TEXT PRIMARY KEY,
+    carrier              TEXT,
+    carrier_key          INTEGER,
+    tracking_status      TEXT,
+    tracking_sub_status  TEXT,
+    tracking_sub_status_descr TEXT,
+    last_checkpoint      TEXT,
+    tracking_events      JSONB,
+    registered_at        TIMESTAMPTZ,
+    checked_at           TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+// The lookup key everywhere is the number with punctuation stripped and upper-cased:
+// couriers and humans both write the same number with and without spaces.
+await sql(`CREATE INDEX IF NOT EXISTS shipment_tracking_norm_idx
+             ON shipment_tracking (upper(regexp_replace(tracking_number, '[^A-Za-z0-9]', '', 'g')))`);
+await sql(`CREATE INDEX IF NOT EXISTS shipment_tracking_unregistered_idx
+             ON shipment_tracking (registered_at) WHERE registered_at IS NULL`);
+
+// Seed from what the webhook has already written to po_boxes, so the warehouse pages
+// keep every status they can show today rather than going blank until the next push.
+// ON CONFLICT DO NOTHING: po_boxes is the older record, never the authority once a
+// row exists here.
+{
+  const { rows: [{ n }] } = await sql(`SELECT count(*)::int AS n FROM shipment_tracking`);
+  if (n === 0) {
+    const { rowCount } = await sql(`
+      INSERT INTO shipment_tracking (tracking_number, carrier, carrier_key, tracking_status,
+        tracking_sub_status, tracking_sub_status_descr, last_checkpoint, tracking_events,
+        registered_at, checked_at)
+      SELECT DISTINCT ON (b.tracking_number)
+             b.tracking_number, b.carrier, b.carrier_key, b.tracking_status,
+             b.tracking_sub_status, b.tracking_sub_status_descr, b.last_checkpoint,
+             b.tracking_events, coalesce(b.checked_at, b.created_at), b.checked_at
+        FROM po_boxes b
+       WHERE coalesce(b.tracking_number, '') <> ''
+       ORDER BY b.tracking_number, b.checked_at DESC NULLS LAST, b.id DESC
+      ON CONFLICT (tracking_number) DO NOTHING
+    `);
+    console.log(`  seeded shipment_tracking from po_boxes: ${rowCount} numbers`);
+  }
+}
 
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);

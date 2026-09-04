@@ -57,6 +57,18 @@ const { rows } = await c.query(`
 // sitting in the column. Registration is permanent and metered, so those are worth
 // refusing — and they are listed in full rather than silently dropped.
 const looksLikeTracking = (n) => /^[A-Z0-9]{8,35}$/i.test(String(n).replace(/[\s-]/g, ''));
+
+// Send the number the way a courier expects it, not the way somebody typed it.
+// 17TRACK rejected "1Z 3YY 408 13 2795 1235" outright for format, and a UPS Mail
+// Innovations label carries a 420+ZIP routing prefix in front of the real 1Z — both
+// are perfectly good parcels behind a presentation problem.
+function normalizeNumber(raw) {
+  let n = String(raw || '').trim();
+  const m = n.replace(/[\s-]/g, '').match(/^420\d{4,9}(1Z[A-Z0-9]{16})$/i);
+  if (m) return m[1].toUpperCase();
+  if (/^1Z[\s-]/i.test(n) || /^1Z[A-Z0-9\s-]{16,}$/i.test(n)) n = n.replace(/[\s-]/g, '');
+  return n;
+}
 const all = rows.map((r) => r.n);
 const numbers = process.argv.includes('--all') ? all : all.filter(looksLikeTracking);
 const skipped = all.filter((n) => !looksLikeTracking(n));
@@ -74,9 +86,15 @@ if (!APPLY) {
   process.exit(0);
 }
 
-// Claim first, in the database, before spending anything: if this script dies
-// mid-run the numbers it already sent are marked and won't be paid for twice.
-let sent = 0;
+// Claim first so a crash mid-run cannot double-charge us — then RELEASE anything
+// 17TRACK refused. The first version of this script only claimed, which meant a
+// number rejected for a fixable reason (a UPS number typed with spaces) was marked
+// registered forever and could never be retried once the fix landed.
+//
+// "Already registered" is NOT a rejection for our purposes: the number is on the
+// account, which is the whole point, so it stays claimed.
+const isAlreadyRegistered = (msg) => /has been registered/i.test(String(msg || ''));
+let sent = 0; let kept = 0; const released = [];
 for (let i = 0; i < numbers.length; i += 40) {
   const chunk = numbers.slice(i, i + 40);
   const { rows: claimed } = await c.query(`
@@ -85,8 +103,10 @@ for (let i = 0; i < numbers.length; i += 40) {
     ON CONFLICT (tracking_number) DO UPDATE SET registered_at = now()
       WHERE shipment_tracking.registered_at IS NULL
     RETURNING tracking_number`, [chunk]);
-  const list = claimed.map((r) => ({ number: r.tracking_number }));
-  if (!list.length) continue;
+  if (!claimed.length) continue;
+  // Map what we SEND back to what we claimed, since normalisation can change it.
+  const bySent = new Map(claimed.map((r) => [normalizeNumber(r.tracking_number), r.tracking_number]));
+  const list = [...bySent.keys()].map((number) => ({ number }));
   const res = await fetch('https://api.17track.net/track/v2.2/register', {
     method: 'POST',
     headers: { '17token': key, 'Content-Type': 'application/json' },
@@ -96,8 +116,19 @@ for (let i = 0; i < numbers.length; i += 40) {
   const ok = json?.data?.accepted?.length ?? 0;
   const rejected = json?.data?.rejected || [];
   sent += ok;
+  for (const r of rejected) {
+    const original = bySent.get(String(r.number)) ?? String(r.number);
+    if (isAlreadyRegistered(r.error?.message)) { kept += 1; continue; }
+    released.push({ number: original, why: r.error?.message || JSON.stringify(r.error) });
+  }
   console.log(`  chunk ${i / 40 + 1}: sent ${list.length}, accepted ${ok}, rejected ${rejected.length}`);
-  for (const r of rejected.slice(0, 5)) console.log(`     ! ${r.number}: ${r.error?.message || JSON.stringify(r.error)}`);
+  for (const r of rejected.slice(0, 4)) console.log(`     ! ${r.number}: ${r.error?.message || JSON.stringify(r.error)}`);
 }
-console.log(`\nRegistered ${sent} number(s). Status arrives by webhook as the carriers report it.`);
+if (released.length) {
+  await c.query(`UPDATE shipment_tracking SET registered_at = NULL WHERE tracking_number = ANY($1::text[])`,
+    [released.map((r) => r.number)]);
+}
+console.log(`\nRegistered ${sent}. Already on the account: ${kept}. Released for retry: ${released.length}.`);
+for (const r of released.slice(0, 15)) console.log(`  ↩ ${String(r.number).slice(0, 48)} — ${r.why}`);
+console.log('\nStatus arrives by webhook as the carriers report it.');
 await c.end();

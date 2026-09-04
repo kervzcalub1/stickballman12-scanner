@@ -5,7 +5,7 @@
 // fewer tracking-API calls/credits. A manual fallback to the webhook push. No-ops if
 // tracking isn't configured (TRACKING_API_KEY unset).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
-import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured } from '../_lib/db.js';
+import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured, upsertShipmentTracking } from '../_lib/db.js';
 import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet, registerTracking, stopTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
@@ -61,7 +61,16 @@ export default async function handler(req, res) {
     for (let i = 0; i < items.length; i += 40) {
       updates.push(...await fetchTrackInfo(items.slice(i, i + 40)));
     }
-    for (const u of updates) await setPoBoxTracking(u.trackingNumber, u);
+    for (const u of updates) {
+      // Same pair of writes as the webhook: by number for the warehouse side, then
+      // onto the PO's own box. Keeping them together is what stops the two answers
+      // drifting apart when only one path runs.
+      await upsertShipmentTracking(u.trackingNumber, {
+        carrier: u.carrier, trackingStatus: u.trackingStatus, subStatus: u.subStatus,
+        subStatusDescr: u.subStatusDescr, lastCheckpoint: u.lastCheckpoint, events: u.events,
+      }).catch((e) => console.warn('[po/track-refresh] shipment_tracking:', e.message));
+      await setPoBoxTracking(u.trackingNumber, u);
+    }
     // Now that box statuses are current, roll the PO off "Filling" if every label has left
     // the supplier (delivered/in-transit/shipped) — the supplier may never have tapped "ship".
     await rollupPoShippedFromTracking(poId);

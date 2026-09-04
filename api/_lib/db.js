@@ -1305,15 +1305,17 @@ export async function listBatchBoxes(batchId) {
            tr.tracking_sub_status_descr, tr.last_checkpoint, tr.checked_at, tr.tracking_events
     FROM batch_boxes bx
     LEFT JOIN LATERAL (
-      SELECT pb.carrier, pb.carrier_key, pb.tracking_status, pb.tracking_sub_status,
-             pb.tracking_sub_status_descr, pb.last_checkpoint, pb.checked_at, pb.tracking_events
-        FROM po_boxes pb
+      -- shipment_tracking is keyed by the NUMBER, so this now covers a box whose
+      -- tracking was typed in at receiving as well as one that came in on a PO. It
+      -- used to reach across to po_boxes, which could only ever answer for the ~third
+      -- of warehouse boxes that arrived on an order.
+      SELECT st.carrier, st.carrier_key, st.tracking_status, st.tracking_sub_status,
+             st.tracking_sub_status_descr, st.last_checkpoint, st.checked_at, st.tracking_events
+        FROM shipment_tracking st
        WHERE coalesce(bx.tracking_number, '') <> ''
-         AND regexp_replace(upper(pb.tracking_number), '[^A-Z0-9]', '', 'g')
+         AND regexp_replace(upper(st.tracking_number), '[^A-Z0-9]', '', 'g')
            = regexp_replace(upper(bx.tracking_number), '[^A-Z0-9]', '', 'g')
-       -- Freshest first: the same number can legitimately appear on a replacement
-       -- label, and the newest checkpoint is the one describing the parcel now.
-       ORDER BY pb.checked_at DESC NULLS LAST, pb.id DESC
+       ORDER BY st.checked_at DESC NULLS LAST
        LIMIT 1
     ) tr ON true
     WHERE bx.batch_id = ${batchId}
@@ -3489,6 +3491,68 @@ export async function getPoFull(id) {
 // Classification of these rows lives in src/lib/inbound.js so the screen, the counts and
 // any later alert all read the same rules.
 // (No backticks in here: this comment lives inside a JS template literal.)
+// Courier state for a tracking number, wherever that number came from. The webhook
+// keeps writing po_boxes as it always did; this is the copy the WAREHOUSE side reads,
+// and the only one a number typed at receiving can have.
+//
+// Written on every push, so `checked_at` moves whenever the carrier says anything.
+// COALESCE on each field: a later push that omits a field must not blank what an
+// earlier one told us.
+export async function upsertShipmentTracking(trackingNumber, {
+  carrier, carrierKey, trackingStatus, subStatus, subStatusDescr, lastCheckpoint, events,
+} = {}) {
+  const num = String(trackingNumber || '').trim();
+  if (!num) return null;
+  const rows = await db()`
+    INSERT INTO shipment_tracking (tracking_number, carrier, carrier_key, tracking_status,
+      tracking_sub_status, tracking_sub_status_descr, last_checkpoint, tracking_events, checked_at)
+    VALUES (${num}, ${carrier ?? null}, ${carrierKey ?? null}, ${trackingStatus ?? null},
+      ${subStatus ?? null}, ${subStatusDescr ?? null}, ${lastCheckpoint ?? null},
+      ${events ? JSON.stringify(events) : null}::jsonb, now())
+    ON CONFLICT (tracking_number) DO UPDATE SET
+      carrier             = COALESCE(EXCLUDED.carrier, shipment_tracking.carrier),
+      carrier_key         = COALESCE(EXCLUDED.carrier_key, shipment_tracking.carrier_key),
+      tracking_status     = COALESCE(EXCLUDED.tracking_status, shipment_tracking.tracking_status),
+      tracking_sub_status = COALESCE(EXCLUDED.tracking_sub_status, shipment_tracking.tracking_sub_status),
+      tracking_sub_status_descr = COALESCE(EXCLUDED.tracking_sub_status_descr, shipment_tracking.tracking_sub_status_descr),
+      last_checkpoint     = COALESCE(EXCLUDED.last_checkpoint, shipment_tracking.last_checkpoint),
+      tracking_events     = COALESCE(EXCLUDED.tracking_events, shipment_tracking.tracking_events),
+      checked_at          = now()
+    RETURNING tracking_number`;
+  return rows[0] || null;
+}
+
+// Claim numbers for registration. Inserting the row IS the claim: `registered_at` is
+// stamped in the same statement, so two receives of the same parcel cannot both spend
+// quota on it, and a number already known is silently skipped. Returns only the
+// numbers this call is responsible for registering.
+export async function claimForTracking(numbers) {
+  const list = [...new Set((numbers || []).map((n) => String(n || '').trim()).filter(Boolean))];
+  if (!list.length) return [];
+  const rows = await db()`
+    INSERT INTO shipment_tracking (tracking_number, registered_at)
+    SELECT n, now() FROM unnest(${list}::text[]) AS n
+    ON CONFLICT (tracking_number) DO UPDATE
+      SET registered_at = now()
+      WHERE shipment_tracking.registered_at IS NULL
+    RETURNING tracking_number`;
+  return rows.map((r) => r.tracking_number);
+}
+
+// Numbers we hold that were never registered with the courier feed — the backlog the
+// one-off backfill works through. Warehouse-typed numbers only ever reached
+// batch_boxes, so that is where the gap is.
+export async function listUnregisteredTracking(limit = 500) {
+  const rows = await db()`
+    SELECT DISTINCT bx.tracking_number
+      FROM batch_boxes bx
+      LEFT JOIN shipment_tracking t ON t.tracking_number = bx.tracking_number
+     WHERE coalesce(bx.tracking_number, '') <> ''
+       AND (t.tracking_number IS NULL OR t.registered_at IS NULL)
+     LIMIT ${Math.min(2000, Math.max(1, Number(limit) || 500))}`;
+  return rows.map((r) => r.tracking_number);
+}
+
 export async function listInboundBoxes() {
   return await db()`
     SELECT b.id AS box_id, b.box_number, b.tracking_number, b.carrier, b.status AS box_status,

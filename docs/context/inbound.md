@@ -73,15 +73,37 @@ Home is a chore list — things somebody must go and do. This is a feed of thing
 happening to us, most needing watching rather than doing. Folding it in is how it
 stops being read.
 
-## Known limit — coverage
-Only boxes that arrive **on a PO** are registered with the courier feed. Tracking
-numbers typed in at receiving were never registered, so those boxes read **No
-tracking**. Closing that gap means registering warehouse-typed numbers with 17TRACK,
-which spends quota per number and needs the `APP_ENV=dev` guard at the registration
-chokepoint (`tracking-dev-register-leak`). **That is an open business decision, not an
-oversight** — a feed that is largely "unknown" launders "we don't know" into "nothing
-is wrong", so it is worth settling before the team leans on this screen.
+## Courier state is keyed by NUMBER (`shipment_tracking`)
+Registration used to happen only for boxes on a purchase order, and the webhook wrote
+only to `po_boxes` — so a number typed in at receiving had no feed behind it *and*
+nowhere for an answer to land. Registering those numbers without somewhere to put the
+result would have pushed status into a void.
 
-Carrier ETAs are not captured either; "arriving today" is `OutForDelivery`, which is
+**`shipment_tracking` is one row per parcel, keyed on the tracking number.** The
+webhook and `track-refresh` write it on every push (`upsertShipmentTracking`,
+COALESCE per field so a later push that omits a field cannot blank an earlier one),
+`po_boxes` keeps its own copy so nothing on the PO side changed, and `listBatchBoxes`
+reads from it — which is what lets a warehouse box show status at all.
+
+**Registration now happens wherever the warehouse first writes a number**:
+`batches/commit` (the shipment header), `batches/add-box`, `batches/sync-boxes`. All
+go through `registerWarehouseTracking`, which **claims in the database before
+spending**: `claimForTracking` stamps `registered_at` in the same statement that
+inserts the row, so the same parcel scanned twice, or a slot list re-synced on every
+blur, cannot pay for it twice. Fire-and-forget — receiving must never wait on, or
+fail because of, a third-party account — and the `APP_ENV=dev` guard inside
+`registerTracking` still applies, so a dev server cannot touch the live account
+(`tracking-dev-register-leak`).
+
+**Backfill:** `scripts/register-inbound-tracking.mjs`, dry-run by default. It refuses
+values that do not look like tracking numbers — a **shape** check, not a prefix
+blocklist (the runtime guard is `APP_ENV`, and blocklisting prefixes *there* would be
+fragile). On prod that caught exactly two of 419: `NA`, and a 60-character run of
+concatenated UPCs from a mis-scan. Both are listed rather than silently dropped.
+
+⚠️ **`shipment_tracking` is a new table — run `db:setup` on prod BEFORE this code
+deploys**, or `listBatchBoxes` throws on every batch page.
+
+Carrier ETAs are still not captured; "arriving today" is `OutForDelivery`, which is
 the honest version of it. Storing 17TRACK's estimated delivery date would need a
 column and would be empty until new pushes arrive.

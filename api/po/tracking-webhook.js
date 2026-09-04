@@ -10,7 +10,7 @@
 // after the response loses nothing. (We run on a persistent Express process, so async work
 // continues after the response is flushed.)
 import { getJsonBody, send, applySecurity } from '../_lib/util.js';
-import { setPoBoxTracking, rollupPoShippedFromTracking, dbConfigured } from '../_lib/db.js';
+import { setPoBoxTracking, upsertShipmentTracking, rollupPoShippedFromTracking, dbConfigured } from '../_lib/db.js';
 import { trackingWebhookSecret, parseWebhook, forwardTrackingToSheet, stopTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
@@ -50,6 +50,14 @@ export default async function handler(req, res) {
 
     const affectedPoIds = new Set();
     for (const u of updates) {
+      // By NUMBER first, and unconditionally. This is the only place a push about a
+      // parcel that never came in on a purchase order has to land — registering
+      // warehouse-typed numbers without this would push status into a void. po_boxes
+      // keeps its own copy so nothing on the PO side changes.
+      await upsertShipmentTracking(u.trackingNumber, {
+        carrier: u.carrier, trackingStatus: u.trackingStatus, subStatus: u.subStatus,
+        subStatusDescr: u.subStatusDescr, lastCheckpoint: u.lastCheckpoint, events: u.events,
+      }).catch((e) => console.warn('[po/tracking-webhook] shipment_tracking:', e.message));
       const rows = await setPoBoxTracking(u.trackingNumber, u);
       for (const r of (rows || [])) if (r?.po_id != null) affectedPoIds.add(Number(r.po_id));
     }

@@ -5,7 +5,8 @@
 // only a tracking number scanned — shows on the Batch page. Received boxes are
 // left untouched. Warehouse/admin, open receiving batches only. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { getBatchWithBoxes, syncBatchBoxes, dbConfigured, SHIPMENT_KINDS } from '../_lib/db.js';
+import { getBatchWithBoxes, syncBatchBoxes, dbConfigured, SHIPMENT_KINDS, claimForTracking } from '../_lib/db.js';
+import { registerWarehouseTracking } from '../_lib/tracking.js';
 
 const MAX_BOXES = 500;
 
@@ -31,6 +32,14 @@ export default async function handler(req, res) {
     if (!found || !SHIPMENT_KINDS.includes(found.batch.kind)) return send(res, 404, { ok: false, error: 'Batch not found.' });
     if (found.batch.status !== 'open') return send(res, 409, { ok: false, error: 'This batch is already finished — reopen it to change boxes.' });
     const synced = await syncBatchBoxes(batchId, boxes, user.name || user.username || '');
+    // Every number on the slot list, claimed once. This runs on each blur of a
+    // tracking field, so it is called constantly — the claim is what makes that free
+    // after the first time.
+    const nums = (synced || []).map((b) => b.tracking_number).filter(Boolean);
+    if (nums.length) {
+      registerWarehouseTracking(nums, { claim: claimForTracking, label: 'batches/sync-boxes' })
+        .catch((e) => console.warn('[batches/sync-boxes] register:', e.message));
+    }
     return send(res, 200, { ok: true, boxes: synced });
   } catch (e) {
     console.error('[batches/sync-boxes]', e.message);

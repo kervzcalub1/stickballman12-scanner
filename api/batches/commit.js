@@ -15,8 +15,9 @@ import {
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
-  getLocationByCode, shelveItems, PH_EXCLUDED_KINDS,
+  getLocationByCode, shelveItems, PH_EXCLUDED_KINDS, claimForTracking,
 } from '../_lib/db.js';
+import { registerWarehouseTracking } from '../_lib/tracking.js';
 import { enrichGlobalIndicators, normalizeItems, toCost } from '../_lib/intake.js';
 import { normalizeLocationCode } from '../_lib/locations.js';
 import { VIN_RE, duplicateVin } from '../_lib/vins.js';
@@ -181,6 +182,13 @@ export default async function handler(req, res) {
     // Auto-save the supplier name so custom vendors (e.g. "JD Sports") show up in
     // the dropdown next time. Best-effort — never fail the commit over this.
     if (isShipment && bh.supplier) addSupplier(bh.supplier, createdBy).catch(() => {});
+    // Register the shipment's own tracking number with the courier feed. A batch
+    // committed with a number typed straight into the header (no PO, no box slots)
+    // was the last path that left one unregistered. Fire-and-forget, claimed once.
+    if (isShipment && bh.tracking) {
+      registerWarehouseTracking([bh.tracking], { claim: claimForTracking, label: 'batches/commit' })
+        .catch((e) => console.warn('[commit] register:', e.message));
+    }
     const created = await insertItems(batch.id, items, createdBy, bh.dateReceived);
     // First history per item: "Scanned by <user>" then received / rescaled.
     await insertIntakeEvents(created.map((r) => r.id), createdBy, kind);

@@ -124,7 +124,10 @@ test.describe('SOP & Help', () => {
   test('admin keeps the role switcher and can browse another desk', async ({ page }) => {
     await loginAs(page, 'admin');
     await page.goto('/sop');
-    await expect(page.locator('.sop-role')).toHaveCount(6);
+    // All roles + warehouse + PH + supplier + gift cards + auditor + admin + superadmin.
+    // The last two arrived with the gift-card process, which splits releasing the money
+    // from verifying it — see docs/context/buy-cart.md.
+    await expect(page.locator('.sop-role')).toHaveCount(8);
     await page.getByRole('tab', { name: 'Supplier' }).click();
     await expect(page.locator('.sop-item-title', { hasText: 'Scan out what you are shipping' })).toBeVisible();
     await expect(page.locator('.sop-item-title', { hasText: 'Resolve the No Box queue' })).toHaveCount(0);

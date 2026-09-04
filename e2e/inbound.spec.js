@@ -107,3 +107,21 @@ test('counts follow the filtered set, not the whole warehouse', () => {
   expect(countStates(eric, NOW).delivered).toBe(0);
   expect(groupShipments(eric, NOW)).toHaveLength(1);
 });
+
+// --- tracking-number normalisation ----------------------------------------
+// Registration sends the canonical form; anything that MATCHES a number has to
+// canonicalise too, or a push lands nowhere. Both halves are pinned here because
+// fixing one without the other is a silent failure, not a loud one.
+test('a number typed the way a person reads it still registers', async () => {
+  const { normalizeTrackingNumber } = await import('../api/_lib/tracking.js');
+  // 17TRACK refused this outright for format.
+  expect(normalizeTrackingNumber('1Z 3YY 408 13 2795 1235')).toBe('1Z3YY4081327951235');
+  // UPS Mail Innovations: a 420+ZIP routing prefix in front of the real 1Z.
+  expect(normalizeTrackingNumber('420175451Z3YY4080312658064')).toBe('1Z3YY4080312658064');
+  // Left alone: some couriers use dashes meaningfully, and inventing a number is
+  // worse than failing to register one.
+  expect(normalizeTrackingNumber('9261290339735032822752')).toBe('9261290339735032822752');
+  expect(normalizeTrackingNumber('D10017614315926')).toBe('D10017614315926');
+  expect(normalizeTrackingNumber('  1Z3YY4080325234836 ')).toBe('1Z3YY4080325234836');
+  expect(normalizeTrackingNumber('')).toBe('');
+});

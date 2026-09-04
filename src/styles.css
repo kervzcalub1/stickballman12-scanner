@@ -4088,6 +4088,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .inbound-stat.ok,
 .inbound-stat.muted { color: var(--text); }
 .inbound-stat.bad .inbound-lbl, .inbound-stat.warn .inbound-lbl, .inbound-stat.due .inbound-lbl { color: inherit; opacity: .8; }
+.inbound-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 12px; }
+.inbound-field { display: flex; flex-direction: column; gap: 3px; }
+.inbound-field select, .inbound-field input { min-width: 150px; }
+.inbound-scope { margin: 10px 0 0; }
 .inbound-lede { margin: 12px 0 0; font-size: 14px; }
 .inbound-toggle { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); cursor: pointer; }
 

@@ -20,6 +20,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { INBOUND_STATES, STATE_ORDER, groupShipments, countStates, needsAttention } from '../lib/inbound.js';
 import { estDate } from '../lib/format.js';
+import { useQueryParam } from '../lib/urlstate.js';
 
 // "box" pluralises to "boxes", not "boxs" — the one irregular this screen needs.
 const plural = (n, s) => `${n} ${n === 1 ? s : (/(?:s|x|z|ch|sh)$/.test(s) ? `${s}es` : `${s}s`)}`;
@@ -29,6 +30,12 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('');      // '' = everything still open
   const [showDone, setShowDone] = useState(false);
+  // Supplier and the date window live in the URL, like the other filtered pages: a
+  // narrowed feed is something you send to somebody ("look at Eric's week"), and it
+  // has to survive the refresh you do after chasing a carrier.
+  const [supplier, setSupplier] = useQueryParam('supplier');
+  const [from, setFrom] = useQueryParam('from');
+  const [to, setTo] = useQueryParam('to');
   const [open, setOpen] = useState(() => new Set());
   const [openDone, setOpenDone] = useState(() => new Set());
 
@@ -39,8 +46,21 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const counts = countStates(rows || []);
-  const shipments = groupShipments(rows || []);
+  // Filters apply to SHIPMENTS, and the counts are computed from the same filtered
+  // set — a strip that kept counting the whole warehouse while the list below showed
+  // one supplier is a strip that lies.
+  const inWindow = (r) => {
+    // The order's raised date, read in EST like every other date in this app.
+    const d = r.po_created_at ? estDate(r.po_created_at) : '';
+    return (!from || (d && d >= from)) && (!to || (d && d <= to));
+  };
+  const matches = (r) => (!supplier || (r.supplier_name || '') === supplier) && inWindow(r);
+  const scoped = (rows || []).filter(matches);
+  const suppliers = [...new Set((rows || []).map((r) => r.supplier_name).filter(Boolean))].sort();
+  const narrowed = Boolean(supplier || from || to);
+
+  const counts = countStates(scoped);
+  const shipments = groupShipments(scoped);
   // A shipment whose every box has landed is done watching, and there are far more of
   // those than of the ones that matter. Hidden by default rather than dropped: "where
   // did the order I received this morning go" is a fair question.
@@ -77,6 +97,28 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
           {' '}Nothing is fetched from the courier here — this is what the tracking feed has already told us.
         </p>
 
+        <div className="inbound-filters">
+          <label className="inbound-field">
+            <span className="muted sm">Supplier</span>
+            <select value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+              <option value="">All suppliers</option>
+              {suppliers.map((sup) => <option key={sup} value={sup}>{sup}</option>)}
+            </select>
+          </label>
+          <label className="inbound-field">
+            <span className="muted sm">Raised from</span>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </label>
+          <label className="inbound-field">
+            <span className="muted sm">to</span>
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          </label>
+          {narrowed && (
+            <button type="button" className="btn ghost sm"
+              onClick={() => { setSupplier(''); setFrom(''); setTo(''); }}>Clear filters</button>
+          )}
+        </div>
+
         {/* Worst first, and each count is a filter: the number you are alarmed by is
             the one you want to click. */}
         <div className="inbound-strip">
@@ -90,8 +132,18 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
             </button>
           ))}
           {rows && !rows.length && <span className="muted">Nothing inbound — every order is reconciled or closed.</span>}
+          {rows && rows.length > 0 && !scoped.length && (
+            <span className="muted">No shipments match those filters.</span>
+          )}
         </div>
 
+        {narrowed && rows && (
+          <p className="muted sm inbound-scope">
+            Showing <b>{shipments.length}</b> of {groupShipments(rows).length} shipments
+            {supplier ? <> from <b>{supplier}</b></> : null}
+            {from || to ? <> raised {from || 'any time'} → {to || 'now'}</> : null}.
+          </p>
+        )}
         {attention > 0 && !filter && (
           <p className="inbound-lede">
             <b>{plural(attention, 'shipment')}</b> {attention === 1 ? 'needs' : 'need'} somebody to look at {attention === 1 ? 'it' : 'them'}.

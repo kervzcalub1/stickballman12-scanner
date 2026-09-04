@@ -5342,6 +5342,29 @@ const presetOut = (r) => (r ? {
  * account. The filter is applied HERE rather than in the endpoint so there's one place
  * a supplier's scope can be got wrong, and it keys on the id, never the name.
  */
+// One row per scan that did not land. Best-effort by contract — the caller is mid-scan.
+export async function recordScanFailure({ code, reason, detail, screen, userName }) {
+  await db()`
+    INSERT INTO scan_failures (code, reason, detail, screen, user_name)
+    VALUES (${code}, ${reason}, ${detail || null}, ${screen || null}, ${userName || null})`;
+}
+
+// What has been failing, and how much of it. The report behind "scan-out keeps failing".
+export async function scanFailureSummary({ days = 7 } = {}) {
+  const sql = db();
+  const [byReason, recent, topCodes] = await Promise.all([
+    sql`SELECT reason, count(*)::int n, max(created_at) AS last_at
+          FROM scan_failures WHERE created_at > now() - (${days} || ' days')::interval
+         GROUP BY reason ORDER BY n DESC`,
+    sql`SELECT code, reason, detail, user_name, created_at
+          FROM scan_failures ORDER BY id DESC LIMIT 50`,
+    sql`SELECT code, count(*)::int n FROM scan_failures
+         WHERE created_at > now() - (${days} || ' days')::interval
+         GROUP BY code HAVING count(*) > 1 ORDER BY n DESC LIMIT 20`,
+  ]);
+  return { byReason, recent, topCodes };
+}
+
 export async function listPayoutPresets({ supplierUserId = null } = {}) {
   const sql = db();
   // The shim can't nest sql fragments — branch with if/else.

@@ -236,6 +236,9 @@ export const api = {
   // is set — the panel retires itself rather than pretending it's there.
   advisorAsk: (messages, context) => post('/api/advisor/ask', { messages, context }),
   bulkStatus: (vins, status) => post('/api/items/bulk-status', { vins, status }),
+  // Fire-and-forget: a scan that didn't land, and why. NEVER awaited by a scan path —
+  // the audit trail must not be able to slow down the thing it is auditing.
+  scanFailure: (payload) => post('/api/items/scan-failure', payload).catch(() => {}),
   // Remove pairs outright (miscount fix). Archived to deleted_items first; the
   // server refuses sold/shipped and returns them as `blocked`.
   deleteItems: (vins, reason) => post('/api/items/delete', { vins, reason }),

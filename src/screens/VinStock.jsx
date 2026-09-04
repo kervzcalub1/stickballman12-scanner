@@ -38,9 +38,28 @@ export function VinStock({ onHome, onSignOut }) {
   // Mint, then open the print dialog straight away with what was just minted. The two
   // are one action in the warehouse's head — a minted sticker that never got printed
   // is a gap in the stack nobody can explain later.
+  // The newest run, if it is entirely unused and was minted just now. That is the
+  // signature of a print that didn't come out: production has fifteen such runs, minted
+  // 3 to 23 seconds before the run that actually got used, burning ~2,700 numbers.
+  // Somebody hits Mint, no labels appear, so they hit Mint again — and the second run
+  // prints while the first becomes a permanent hole in the numbering that nothing can
+  // explain later.
+  const lastRun = summary?.runs?.[0] || null;
+  const strandedRun = lastRun && lastRun.available === lastRun.total
+    && Date.now() - new Date(lastRun.printed_at).getTime() < 30 * 60 * 1000
+    ? lastRun : null;
+
   async function mint() {
     const n = Number(count) || 0;
     if (n < 1 || n > 2000) { setError('Choose between 1 and 2000 stickers.'); return; }
+    // Minting burns the numbers permanently, so ask before doing it a second time when
+    // the last lot is still sitting unused. Reprinting is almost always what was meant.
+    if (strandedRun && !window.confirm(
+      `Run ${strandedRun.run_id} (${strandedRun.total} stickers, ${strandedRun.first_vin}–${strandedRun.last_vin}) was minted `
+      + `${Math.max(1, Math.round((Date.now() - new Date(strandedRun.printed_at).getTime()) / 60000))} min ago and not one has been used.\n\n`
+      + `If those labels never came out of the printer, press Cancel and use “Print again” on run ${strandedRun.run_id} — `
+      + `minting fresh numbers leaves run ${strandedRun.run_id} as a permanent gap.\n\nMint ${n} NEW numbers anyway?`,
+    )) return;
     setBusy(true); setError(''); setNotice('');
     try {
       const { runId, vins } = await api.mintVins(n);
@@ -113,6 +132,17 @@ export function VinStock({ onHome, onSignOut }) {
         {notice && <div className="notice mt">{notice}</div>}
 
         <h3 className="rows-title mt">Print more</h3>
+        {/* Visible, not just a dialog on the way past: a whole run sitting unused minutes
+            after it was minted almost always means the labels never came out. */}
+        {strandedRun && (
+          <div className="vs-stranded">
+            <b>Run {strandedRun.run_id} hasn’t been used at all.</b>{' '}
+            {strandedRun.total} stickers ({strandedRun.first_vin}–{strandedRun.last_vin}), minted{' '}
+            {Math.max(1, Math.round((Date.now() - new Date(strandedRun.printed_at).getTime()) / 60000))} min ago.
+            If the labels never printed, print that run again rather than minting new numbers.
+            <button className="btn sm" onClick={() => reprint(strandedRun.run_id)}>Print run {strandedRun.run_id} again</button>
+          </div>
+        )}
         <div className="vs-mint">
           {MINT_SIZES.map((n) => (
             <button key={n} type="button" className={`btn sm ${Number(count) === n ? 'primary' : 'ghost'}`}

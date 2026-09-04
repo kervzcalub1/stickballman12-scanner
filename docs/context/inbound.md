@@ -57,6 +57,17 @@ everyone's time, and it is a different conversation to a delay.
 - Classification lives in **one pure module** so the screen, its summary strip and any
   later Home tile or alert cannot disagree about whether a shipment is in trouble.
 
+## Filters
+**Supplier** and a **raised-date window** (`from`/`to`), both held in the URL like the
+other filtered pages — a narrowed feed is something you send to somebody ("look at
+Eric's week") and it has to survive the refresh you do after chasing a carrier.
+
+⚠️ **The summary strip counts the FILTERED set.** A strip that kept counting the whole
+warehouse while the list below showed one supplier is a strip that lies. When a filter
+is on, the screen also says how many of the total it is showing, so a narrowed view
+can never be mistaken for the whole picture. Dates are read in **EST** (`estDate` on
+the order's `created_at`), like every other date in this app.
+
 ## Not on Home, deliberately
 Home is a chore list — things somebody must go and do. This is a feed of things
 happening to us, most needing watching rather than doing. Folding it in is how it

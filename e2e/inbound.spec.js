@@ -90,3 +90,20 @@ test('counts and needsAttention agree with the states', () => {
 test('the feed is auth-gated', async ({ request }) => {
   expect((await request.get('/api/inbound')).status()).toBe(401);
 });
+
+// --- filtering -------------------------------------------------------------
+// The filters run over the same rows the summary strip counts, so these pin the
+// shape the screen relies on rather than the JSX: a strip that kept counting the
+// whole warehouse while the list showed one supplier would be a strip that lies.
+test('counts follow the filtered set, not the whole warehouse', () => {
+  const rows = [
+    { po_id: 1, supplier_name: 'Eric',  po_created_at: '2026-09-01T12:00:00Z',
+      box_id: 1, tracking_number: 'A', tracking_status: 'InTransit', last_move_at: daysAgo(30) },
+    { po_id: 2, supplier_name: 'Kathleen', po_created_at: '2026-09-02T12:00:00Z',
+      box_id: 2, tracking_number: 'B', tracking_status: 'Delivered', last_move_at: daysAgo(1) },
+  ];
+  const eric = rows.filter((r) => r.supplier_name === 'Eric');
+  expect(countStates(eric, NOW).investigate).toBe(1);
+  expect(countStates(eric, NOW).delivered).toBe(0);
+  expect(groupShipments(eric, NOW)).toHaveLength(1);
+});

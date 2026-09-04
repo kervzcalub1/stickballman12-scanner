@@ -105,6 +105,9 @@ export const api = {
   // style + size the person was actually shown, and the server refuses it if its
   // own lookup no longer agrees.
   backfillUpc: (upc, confirm) => post('/api/items/backfill-upc', confirm ? { upc, confirm } : { upc }),
+  // The day's inbound feed. Read-only and courier-free: the tracking webhook has
+  // already written every field this returns.
+  inbound: () => get('/api/inbound'),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // v4 — receiving / batches
   suppliers: () => get('/api/suppliers'),

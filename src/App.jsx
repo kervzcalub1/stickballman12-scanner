@@ -24,6 +24,7 @@ import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { NoBoxReport } from './screens/NoBoxReport.jsx';
 import { ItemCosts } from './screens/ItemCosts.jsx';
 import { BoxLabels } from './screens/BoxLabels.jsx';
+import { Inbound } from './screens/Inbound.jsx';
 import { BoxStock } from './screens/BoxStock.jsx';
 import { StatusScanPage } from './screens/StatusScanPage.jsx';
 import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
@@ -176,6 +177,8 @@ export default function App() {
   if (view === 'receiving') return withAdvisor(<Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onOpenReconcile={openReconcile} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />);
   // Pre-sell lives with the warehouse, not PH: the team holding the shipment is the one
   // that knows which pairs an order covers. PH's part comes after release, on Rescale Stock.
+  if (view === 'inbound') return withAdvisor(<Inbound onHome={() => go('home')} onSignOut={signOut}
+    onOpenPo={openReconcile} />);
   if (view === 'presell') return withAdvisor(<PreSell onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'rescale') return withAdvisor(<Receiving mode="rescale" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
   // In-store buying: admin/warehouse only. ph_team never reaches here (they short-

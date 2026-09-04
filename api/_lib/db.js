@@ -3475,6 +3475,42 @@ export async function getPoFull(id) {
 // "x of y labels shipped" describes the SUPPLIER'S packing job, so a replacement label —
 // which the warehouse created, not them — must not land in these counts. Otherwise a
 // supplier who shipped everything they were asked to suddenly reads "2 of 3".
+// Every box still inbound, one row per box, for the Inbound feed. Answers the question
+// the warehouse actually opens the day with -- what is coming, from whom, and which of
+// it has stopped moving -- which until now meant opening orders one at a time.
+//
+// Order-level expected/received reuse the SAME expressions as listPos (replacements
+// excluded from expected, or a delivered count can exceed its own denominator). Two
+// answers to "how many were we promised" is worse than none.
+//
+// `last_move_at` is the newest CARRIER checkpoint, not checked_at: checked_at moves when
+// anyone hits Refresh, so a stalled parcel would look freshly alive every time somebody
+// looked at it. Falls back to checked_at only when a box has no event history at all.
+// Classification of these rows lives in src/lib/inbound.js so the screen, the counts and
+// any later alert all read the same rules.
+// (No backticks in here: this comment lives inside a JS template literal.)
+export async function listInboundBoxes() {
+  return await db()`
+    SELECT b.id AS box_id, b.box_number, b.tracking_number, b.carrier, b.status AS box_status,
+           b.tracking_status, b.tracking_sub_status, b.tracking_sub_status_descr,
+           b.last_checkpoint, b.checked_at, b.kind AS box_kind, b.shipped_at,
+           coalesce((b.tracking_events -> 0 ->> 'time')::timestamptz, b.checked_at) AS last_move_at,
+           (b.tracking_events -> 0 ->> 'location') AS last_location,
+           p.id AS po_id, p.po_code, p.supplier_name, p.status AS po_status,
+           p.created_at AS po_created_at, p.order_kind,
+           (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l
+              LEFT JOIN po_boxes lb ON lb.id = l.po_box_id
+              WHERE l.po_id = p.id AND coalesce(lb.kind, 'original') <> 'replacement')::int AS expected_units,
+           (SELECT count(*) FROM items i JOIN batches ba ON ba.id = i.batch_id
+              WHERE ba.po_id = p.id)::int AS received_units,
+           (SELECT count(*) FROM po_boxes x WHERE x.po_id = p.id AND x.kind <> 'replacement')::int AS box_count
+      FROM po_boxes b
+      JOIN purchase_orders p ON p.id = b.po_id
+     WHERE p.status NOT IN ('reconciled', 'closed')
+     ORDER BY p.created_at DESC, b.box_number NULLS LAST, b.id
+  `;
+}
+
 export async function listPos({ uid, supplierScope }) {
   const sql = db();
   if (supplierScope) {

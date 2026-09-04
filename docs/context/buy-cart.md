@@ -4,8 +4,8 @@ Screens: `src/screens/BuyCarts.jsx` (queue) → `src/screens/BuyCart.jsx` (one r
 with `src/components/BuyCartAdd.jsx`, `BuyCartGiftCards.jsx`, `BuyCartReceipt.jsx`.
 Endpoints: `api/cart/*` (16). Shared rules: `api/_lib/buycart.js`. Crypto:
 `api/_lib/secrets.js`. Receipt parser: `src/lib/receiptParse.js`. Queries: the
-`buy_carts` section at the end of `api/_lib/db.js`. Routes: **`/buy-carts`** (staff)
-and **`/buying`** on the supplier portal. E2E: `e2e/buy-cart.spec.js`.
+`buy_carts` section at the end of `api/_lib/db.js`. Routes: **`/buy-carts`** (warehouse/admin),
+**`/ph/gift-card-buying`** (PH) and **`/buying`** on the supplier portal. E2E: `e2e/buy-cart.spec.js`.
 SOP: `src/lib/sop/articles.buycart.js`.
 
 ## What it is
@@ -37,40 +37,74 @@ BUY CART (new)                          PURCHASE ORDER (existing)
 
 ## The naming trap, first
 Our `supplier` role is the process's **BUYER** — the person who goes to the shop (and
-who also ships us the boxes, which is why they hold that role). The process's "gift
-card suppliers" are a **different set of people**, and they are the new `gc_issuer`
-role. Nothing user-facing here says "supplier": it says **Buyer** and **Gift card
-issuer**. Two roles read as one is how a separation-of-duties control quietly stops
+who also ships us the boxes, which is why they hold that role). The process's "gift card
+suppliers" are a **different set of people**: whoever holds `issue_gift_cards`. Nothing
+user-facing here says "supplier" for either — it says **Buyer** and **Gift card desk**.
+Two different people read as one is how a separation-of-duties control quietly stops
 being one.
 
-## Roles — the control, not a convention
-| Role | Does | Cannot |
-|---|---|---|
-| `supplier` (Buyer) | opens the request, spends the cards, sends the receipt | approve anything, issue a card, audit |
-| `warehouse` / `ph_team` / admin | approve or turn down lines | — |
-| `gc_issuer` (new) | records cards, releases them | approve |
-| `auditor` (new) | signs the financial audit, closes the transaction | approve, issue |
+## Privileges — the control, not a convention
 
-Approval is open to warehouse **and** PH **and** admin on purpose: the people who know
-whether a pair is worth buying are the floor and the pricing desk, and a buyer standing
-in a shop at 11pm waiting on one named account is how a process gets worked around
-instead of followed.
+The three staff-side duties are **privileges, not roles**, and that distinction is the
+design. They shipped briefly as roles and it was wrong: `users.role` is a single column,
+so making them roles forced them to be *alternatives* to being warehouse or PH. In
+reality the card desk is a PH team member who also does that, and the auditor is an
+admin who also does that. A job title and a permission are different things.
 
-**The audit guard cannot be `requireRole`.** That helper auto-admits anything
-privileged, which would let the admin who approved a request also sign off the audit of
-it — the one control the process says matters most. `requireAuditor` therefore does its
-own check (the same shape as `requireSuperadmin`, which had to step outside the helper
-for the same reason) and then refuses when the account is the approver.
+`users.privileges TEXT[]`, set from **Check Access** as checkboxes beside the role
+dropdown (`api/admin/review.js`, `decision:'privileges'` — the whole set at once, so
+unticking is as ordinary as ticking).
 
-- **It compares `approved_by_key`, never the id and never the name.** The id alone was
-  the first version and it was **broken for the accounts it mattered most for**: the env
-  `admin`/`superadmin` have no `users` row, so their id saved as NULL and the check
-  silently never fired. `actorKey()` is the row id for a real account and
-  `env:<username>` otherwise. A control that is off for its most privileged user is not
-  a control.
-- `gc_issuer` and `auditor` get their **own Home** (`GC_SECTIONS` in `constants.js`) —
-  their job plus Help. The full warehouse home would be a page of cards that answer 403
-  when tapped, which reads as a broken app rather than as a role boundary.
+| Privilege | Lets you |
+|---|---|
+| `approve_buying` | decide what company funds may be spent on; raise the PO; cancel |
+| `issue_gift_cards` | record cards, release them, upload card images, read a code |
+| `audit_buying` | record the spend and close a transaction out |
+
+- **admin/superadmin hold all three implicitly** (`isPrivileged`), and are never looked up.
+- **A `supplier` can hold none.** `setUserPrivileges` and `db:setup` both strip them. A
+  buyer with `approve_buying` would sign off their own request, which is the single
+  thing this process exists to prevent — so it is enforced in two places, not asked
+  politely of the UI.
+- **Any staff account can READ a request.** What they may *do* is the gated part.
+  Hiding the ledger from the floor would make the process opaque without making it safer.
+
+### Read fresh, every time
+`hasPrivilege` queries the database on every privileged call. That is a deliberate
+divergence from the rest of the app, which trusts the signed token and never looks a
+user up.
+
+A role rides in the token because a job title does not change mid-shift. **A permission
+over company money does**, and revocation that waits for the next sign-in is not
+revocation — an account you untick this morning would keep spending until it happened to
+sign out, which could be days. The cost is one small indexed read on a handful of
+low-traffic endpoints. Guarded by an e2e test that revokes a privilege underneath a live
+token and asserts the next call is refused.
+
+`login.js` still puts `privileges` in the **client** payload, for drawing cards and
+buttons only. Nothing trusts it. A stale list costs a button that answers 403 — which is
+also what an already-signed-in user sees until they sign in again after this ships.
+
+### The audit sign-off still needs its own guard
+`requireAuditPrivilege` = `audit_buying` **plus** "not the account that approved this
+request". Under the privilege model that second half matters *more* than it did under
+roles: one person can now legitimately hold both approve and audit, so "a different
+role" is no longer any guarantee at all. Check Access says so out loud when someone
+holds both.
+
+- **It compares `actorKey`, never the raw id.** The id alone was the first version and it
+  was **broken for the accounts it mattered most for**: the env `admin`/`superadmin` have
+  no `users` row, so their id saved as NULL and the check silently never fired.
+  `actorKey()` is the row id for a real account and `env:<username>` otherwise. A control
+  that is off for its most privileged user is not a control.
+
+### Where each holder finds it
+- **warehouse / admin** — Home → *Gift Card Buying* (`/buy-carts`), drawn only for a
+  holder.
+- **PH team** — PH home → *Gift Card Buying* (`/ph/gift-card-buying`). PH has its own app
+  and never touches the staff router, so it needs its own route; without one a PH member
+  ticked for gift cards had nowhere to go, which is the exact case the model exists for.
+- **buyer** — supplier portal → *Buying Requests* (`/buying`).
 
 ## The money
 **Funding target = Σ (shelf_price × qty) over APPROVED lines.** The sticker, no
@@ -223,7 +257,9 @@ one of the process — has somewhere to happen that can be audited later.
 
 ## Gotchas
 - **`BUY_GC_KEY` must be set on every environment**, or the desk can only upload photos.
-- **New tables + two new roles → `db:setup`** on local and prod (`docs/context/deploy.md`).
+- **New tables + a `users.privileges` column → `db:setup`** on local and prod
+  (`docs/context/deploy.md`). The migration also folds anyone who held the short-lived
+  `gc_issuer` / `auditor` roles back onto a real job title with the matching privilege.
 - `PriceInput` hands its `onChange` the **event**, not the value. Every price box on
   these screens was silently storing an event object at first, and the failure is
   invisible — the field looks like it took the input while everything downstream becomes

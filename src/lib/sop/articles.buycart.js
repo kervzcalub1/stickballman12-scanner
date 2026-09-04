@@ -7,13 +7,18 @@
 // the point of the process itself — the jobs are separate on purpose, and a document
 // that merged them would be teaching the opposite of what the system enforces.
 //
-// A naming trap worth repeating here because staff will read these: the person who goes
-// to the shop is the BUYER (a `supplier` account, because they also ship us the boxes).
-// The people who release the cards are the GIFT CARD DESK (`gc_issuer`). The written
-// process calls those people "gift card suppliers", which is a different thing entirely.
-// Nothing in this copy says "supplier" for either.
+// The three staff-side duties are PRIVILEGES, not roles — a permission ticked on top of
+// whatever job someone does. So these articles go to every staff account: knowing how
+// company money moves is useful to the whole floor, and gating a written procedure on a
+// checkbox would hide the process from the people who have to work alongside it. What
+// somebody may actually DO is enforced by the server, not by which article they can read.
+//
+// A naming trap worth repeating because staff will read these: the person who goes to
+// the shop is the BUYER (a `supplier` account, because they also ship us the boxes). The
+// written process calls the people who release the cards "gift card suppliers" — that is
+// a different thing entirely, and nothing in this copy says "supplier" for either.
 const STAFF = ['warehouse', 'ph_team', 'admin', 'superadmin'];
-const EVERYONE = ['warehouse', 'ph_team', 'supplier', 'gc_issuer', 'auditor', 'admin', 'superadmin'];
+const EVERYONE = ['warehouse', 'ph_team', 'supplier', 'admin', 'superadmin'];
 
 export const BUYCART_ARTICLES = [
   {
@@ -106,7 +111,7 @@ export const BUYCART_ARTICLES = [
     id: 'buycart-issue',
     title: 'Releasing gift cards against an approved request',
     area: 'buying',
-    roles: ['gc_issuer', 'ph_team', 'admin', 'superadmin'],
+    roles: STAFF,
     summary: 'Record each card and its balance, check the total covers what was approved, then release it to the buyer.',
     when: 'A request shows in the "Needs gift cards" queue.',
     steps: [
@@ -131,7 +136,7 @@ export const BUYCART_ARTICLES = [
     id: 'buycart-audit',
     title: 'Auditing the spend and closing a transaction',
     area: 'buying',
-    roles: ['auditor', 'admin', 'superadmin'],
+    roles: STAFF,
     summary: 'Account for every card: what it was spent, what is left. Then check the ten closing conditions and mark it reconciled.',
     when: 'A request shows in the "To audit" queue, and again when its shipment has been received.',
     steps: [

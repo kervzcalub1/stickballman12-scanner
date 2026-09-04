@@ -15,19 +15,19 @@
 //
 // Cards can only go against an APPROVED request. That is the process's first rule
 // stated as code: no known purchase and no approval means no gift cards.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import {
   getBuyCart, addBuyCartGiftCard, voidBuyCartGiftCard, fundBuyCart, dbConfigured,
 } from '../_lib/db.js';
 import { encryptSecret, maskTail, secretsConfigured } from '../_lib/secrets.js';
-import { CAN_ISSUE_CARDS, fundingTarget } from '../_lib/buycart.js';
+import { requirePrivilege, fundingTarget } from '../_lib/buycart.js';
 
 const money = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, CAN_ISSUE_CARDS); // admin/superadmin auto-allowed
+  const user = await requirePrivilege(req, res, 'issue_gift_cards'); // admin/superadmin implicit
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 60 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

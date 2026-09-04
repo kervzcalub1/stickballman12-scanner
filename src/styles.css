@@ -4342,3 +4342,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   .bc-lines .bc-table td, .bc-lines .bc-table th { white-space: nowrap; }
   .bc-lines .bc-table .muted.xs { white-space: normal; max-width: 190px; }
 }
+
+/* Privileges on Check Access — permissions on top of a role, so they sit BESIDE the role
+   dropdown rather than inside it. Stacked, because three lines of plain text read faster
+   than three chips and the labels are sentences, not tags. */
+.priv-group { display: flex; flex-direction: column; gap: 3px; min-width: 200px; }
+.priv { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.priv input { cursor: pointer; }
+.priv-note { margin-top: 3px; font-size: 11.5px; color: #c6871a; white-space: normal; max-width: 260px; }
+.priv-line { display: flex; align-items: flex-start; gap: 10px; }
+@media (max-width: 600px) { .priv-group { min-width: 0; } .priv { white-space: normal; } }

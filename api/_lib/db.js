@@ -165,7 +165,7 @@ export async function createUser({ name, username, passHash, role = 'warehouse' 
 
 export async function findUserByUsername(username) {
   const rows = await db()`
-    SELECT id, name, username, pass_hash, role, status, must_change_password
+    SELECT id, name, username, pass_hash, role, status, privileges, must_change_password
     FROM users WHERE username = ${username} LIMIT 1
   `;
   return rows[0] || null;
@@ -174,7 +174,7 @@ export async function findUserByUsername(username) {
 // Admin views. Pending first, then most recent.
 export async function listUsers() {
   return await db()`
-    SELECT id, name, username, role, status, created_at, reviewed_at, reviewed_by,
+    SELECT id, name, username, role, status, privileges, created_at, reviewed_at, reviewed_by,
            must_change_password, reset_requested_at
     FROM users
     ORDER BY (reset_requested_at IS NOT NULL) DESC, (status = 'pending') DESC, created_at DESC
@@ -5518,6 +5518,30 @@ const actorKeyOf = (a) => {
   const u = String(a?.username || '').trim().toLowerCase();
   return u ? `env:${u}` : null;
 };
+
+// Does this account hold a privilege right now? Read fresh on every privileged call —
+// a permission over company money must stop the moment it is untinked, not at the
+// account's next sign-in (api/_lib/buycart.js explains the trade).
+export async function userHasPrivilege(uid, priv) {
+  const rows = await db()`SELECT 1 FROM users WHERE id = ${uid} AND ${priv} = ANY(privileges) LIMIT 1`;
+  return rows.length > 0;
+}
+
+export async function listUserPrivileges(uid) {
+  const rows = await db()`SELECT privileges FROM users WHERE id = ${uid}`;
+  return rows[0]?.privileges || [];
+}
+
+// Set the whole set at once, so unticking is as ordinary as ticking. A SUPPLIER is
+// external and can hold none: a buyer with the approve privilege would sign off their
+// own request, which is what the process exists to prevent.
+export async function setUserPrivileges(uid, privileges) {
+  const rows = await db()`
+    UPDATE users SET privileges = CASE WHEN role = 'supplier' THEN '{}'::text[] ELSE ${privileges}::text[] END
+     WHERE id = ${uid}
+     RETURNING id, username, name, role, privileges`;
+  return rows[0] || null;
+}
 
 export async function logCartEvent({ cartId, kind, lineId = null, gcId = null, body = null, actor = null }) {
   const sql = db();

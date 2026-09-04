@@ -11,16 +11,24 @@
 //
 // Deliberately rate-limited hard. A reveal is a deliberate act a handful of times a
 // day; anything that looks like a sweep of the table is not that.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireAuth, isPrivileged, blockIfMustChange } from '../_lib/util.js';
 import { getBuyCart, getBuyCartGiftCardSecret, logCartEvent, dbConfigured } from '../_lib/db.js';
 import { decryptSecret, secretsConfigured } from '../_lib/secrets.js';
-import { CAN_ISSUE_CARDS } from '../_lib/buycart.js';
+import { hasPrivilege } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, [...CAN_ISSUE_CARDS, 'supplier']);
+  // Two different people may read a card and they qualify two different ways: the desk
+  // that issued it (a privilege) and the buyer who has to type it into a till (their own
+  // request, and only once it has been released). A single role list can't say that, so
+  // authorise first and branch below.
+  const user = requireAuth(req, res);
   if (!user) return;
+  if (blockIfMustChange(user, res)) return;
+  const isBuyer = user.role === 'supplier' && !isPrivileged(user.role);
+  if (!isBuyer && !(await hasPrivilege(user, 'issue_gift_cards')))
+    return send(res, 403, { ok: false, error: 'You do not have access to gift card numbers.' });
   if (!rateLimit(req, { windowMs: 60_000, max: 20 }))
     return send(res, 429, { ok: false, error: 'Too many card look-ups. Wait a moment.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });

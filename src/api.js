@@ -89,6 +89,10 @@ export const api = {
   adminListUsers: () => get('/api/admin/users'),
   adminReview: (userId, decision) => post('/api/admin/review', { userId, decision }),
   adminSetRole: (userId, role) => post('/api/admin/review', { userId, decision: 'role', role }),
+  // Privileges are set as a WHOLE SET, so unticking is as ordinary as ticking — a
+  // per-key add/remove pair would need its own "which direction" argument and could
+  // drift from what the checkboxes show.
+  adminSetPrivileges: (userId, privileges) => post('/api/admin/review', { userId, decision: 'privileges', privileges }),
   adminDeleteUser: (userId) => post('/api/admin/review', { userId, decision: 'delete' }),
   adminResetPassword: (userId) => post('/api/admin/reset-password', { userId }),
   // App settings (price margin, …). GET is any authed user; POST is admin/superadmin.

@@ -13,9 +13,9 @@
 // genuinely lost receipt leaves a request open indefinitely. The alternative — a
 // force-close button — is the escape hatch that every control like this eventually
 // leaks through, and it can be added later far more easily than it could be taken away.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import { getBuyCart, getBuyCartFull, closeBuyCart, cancelBuyCart, dbConfigured } from '../_lib/db.js';
-import { requireAuditor, cartCloseChecks, allChecksPass, CAN_APPROVE } from '../_lib/buycart.js';
+import { requireAuditPrivilege, cartCloseChecks, allChecksPass, requirePrivilege } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -33,7 +33,7 @@ export default async function handler(req, res) {
   // moved, so it needs no reconciliation and no auditor — just somebody who could have
   // approved it. Once cards exist there is money to account for and this path is shut.
   if (body.cancel) {
-    const user = requireRole(req, res, CAN_APPROVE);
+    const user = await requirePrivilege(req, res, 'approve_buying');
     if (!user) return;
     if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
       return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
@@ -42,7 +42,7 @@ export default async function handler(req, res) {
     return send(res, 200, { ok: true, cart: out });
   }
 
-  const user = requireAuditor(req, res, cart);
+  const user = await requireAuditPrivilege(req, res, cart);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

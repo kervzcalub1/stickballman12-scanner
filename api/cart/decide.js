@@ -1,23 +1,22 @@
 // POST /api/cart/decide  { cartId, action:'approve'|'reject', lineIds?:[…], all?, reason? }
 //   -> { ok, decided, cart }
 //
-// Step 2. EITHER staff side decides — warehouse/admin or PH — one line at a time or
-// every pending line at once. Approval is deliberately not held to a single named
-// account: the people who know whether a pair is worth buying are the floor and the
-// pricing desk, and a buyer standing in a shop at 11pm waiting on one person is how a
-// process gets worked around instead of followed.
+// Step 2. Deciding what company funds may be spent on is a PRIVILEGE
+// (`approve_buying`), not a job title — held by whoever the admin has ticked, on top of
+// whatever role they do. It is checked against the database on every call, so removing
+// it from somebody stops them at once rather than at their next sign-in.
 //
-// The BUYER is excluded, and structurally so: `supplier` is not in the role list, and
-// requireRole does not auto-admit it. Approving your own request is the thing the whole
-// process exists to make impossible.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+// The BUYER is excluded structurally: a `supplier` account can hold no privilege at all
+// (db-setup strips any that are set, and `hasPrivilege` refuses the role outright).
+// Approving your own request is the thing the whole process exists to make impossible.
+import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import { getBuyCart, decideBuyCartLines, dbConfigured } from '../_lib/db.js';
-import { CAN_APPROVE } from '../_lib/buycart.js';
+import { requirePrivilege } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, CAN_APPROVE); // admin/superadmin auto-allowed
+  const user = await requirePrivilege(req, res, 'approve_buying'); // admin/superadmin implicit
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 60 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

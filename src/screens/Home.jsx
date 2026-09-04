@@ -3,14 +3,19 @@ import React from 'react';
 import { TopBar, CardBadges } from '../components/common.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
 import { usePendingCounts } from '../hooks.js';
-import { roleLabel, HOME_SECTIONS, GC_SECTIONS, HOME_ATTENTION, homeCardBadges, isAdminRole, isGcRole } from '../lib/constants.js';
+import { roleLabel, HOME_SECTIONS, HOME_ATTENTION, homeCardBadges, isAdminRole, hasAnyPriv } from '../lib/constants.js';
 
 export function Home({ user, onPick, onSignOut }) {
   const isAdmin = isAdminRole(user.role);
   const isSuper = user.role === 'superadmin';
   const counts = usePendingCounts();
-  // A gift card issuer / auditor gets their own job and nothing else — see GC_SECTIONS.
-  const sections = isGcRole(user.role) ? GC_SECTIONS : HOME_SECTIONS;
+  // Gift Card Buying is a PRIVILEGE, so the card is drawn for whoever holds one rather
+  // than for a role — a warehouse account with none never sees it, and a PH account with
+  // one does. The server refuses independently either way.
+  const canBuy = hasAnyPriv(user);
+  const sections = HOME_SECTIONS
+    .map((s) => (s.cards.some((c) => c.priv) ? { ...s, cards: s.cards.filter((c) => !c.priv || canBuy) } : s))
+    .filter((s) => s.cards.length);
   const attention = counts ? HOME_ATTENTION.filter((a) => (counts[a.count] || 0) > 0) : [];
   return (
     <div className="app">

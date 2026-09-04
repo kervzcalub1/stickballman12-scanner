@@ -57,25 +57,51 @@ await sql(`
     reviewed_by TEXT
   )
 `);
-// Roles: admin · warehouse · ph_team · supplier · gc_issuer · auditor. Migrate any
-// legacy 'employee' rows to 'warehouse' before re-asserting the constraint (idempotent
-// on existing DBs).
+// Roles: admin · warehouse · ph_team · supplier. Migrate any legacy 'employee' rows
+// to 'warehouse' before re-asserting the constraint (idempotent on existing DBs).
 // `supplier` (external partners who scan out shipments — see the PO tables below) is
 // admin-assigned only; signup never offers it (api/auth/signup.js).
-//
-// `gc_issuer` and `auditor` exist for ONE reason: the gift-card SOP's separation of
-// duties (docs/context/buy-cart.md). The person who releases company money must not be
-// the person who approves the spend, and the person who verifies it afterwards must be
-// neither. Written down, that is a convention people drift from; as two roles it is a
-// permission the server enforces.
-//   · gc_issuer — records the cards issued against an approved request. Cannot approve.
-//   · auditor   — signs the financial reconciliation. Cannot approve, cannot issue.
-// Both are STAFF roles: they sign in on the main host, and the supplier-subdomain gate
-// in api/auth/login.js already turns away anything that isn't `supplier`.
 await sql(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check`);
 await sql(`UPDATE users SET role = 'warehouse' WHERE role = 'employee'`);
 await sql(`ALTER TABLE users ALTER COLUMN role SET DEFAULT 'warehouse'`);
-await sql(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('warehouse','admin','ph_team','supplier','gc_issuer','auditor'))`);
+
+/* ---- Privileges, which are NOT roles ---------------------------------------
+   The gift-card process needs three duties kept apart — approving a spend,
+   releasing the cards, and verifying it afterwards. They were briefly modelled as
+   ROLES, and that was wrong: `users.role` is one column, so it made them
+   alternatives to being warehouse or PH. In reality the person who releases cards
+   is a PH team member who ALSO does that, and the auditor is an admin who also does
+   that. A job title and a permission are different things.
+
+   So: a role stays the one job someone does, and privileges are a set on top.
+   Stored as a TEXT[] rather than a join table — it is a handful of flags read
+   whole, never queried across users, and this keeps it one column on a row the
+   code already loads.
+
+     approve_buying    decide what company funds may be spent on
+     issue_gift_cards  record and release cards against an approved request
+     audit_buying      account for the spend and close a transaction out
+
+   admin/superadmin hold all three implicitly (isPrivileged); the checks never look
+   the set up for them.
+
+   SEPARATION OF DUTIES STILL HOLDS, and matters more now: one person CAN hold both
+   approve and audit, so the guard is no longer "a different role" but "not the
+   account that approved THIS request" — see requireAuditPrivilege in
+   api/_lib/buycart.js. */
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS privileges TEXT[] NOT NULL DEFAULT '{}'`);
+// Anyone who was given one of the short-lived roles keeps the capability as a
+// privilege, and lands back on a real job title. Runs before the constraint is
+// re-asserted, or these rows would fail it.
+await sql(`UPDATE users SET privileges = array_append(privileges, 'issue_gift_cards'), role = 'ph_team'
+            WHERE role = 'gc_issuer' AND NOT ('issue_gift_cards' = ANY(privileges))`);
+await sql(`UPDATE users SET privileges = array_append(privileges, 'audit_buying'), role = 'admin'
+            WHERE role = 'auditor' AND NOT ('audit_buying' = ANY(privileges))`);
+await sql(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('warehouse','admin','ph_team','supplier'))`);
+// A SUPPLIER is external. Letting one hold a privilege would let a buyer approve or
+// fund their own request, which is the one thing this whole process exists to prevent.
+await sql(`UPDATE users SET privileges = '{}' WHERE role = 'supplier' AND privileges <> '{}'`);
+await sql(`CREATE INDEX IF NOT EXISTS users_privileges_idx ON users USING GIN (privileges)`);
 
 // Password reset: a user asks for a reset from the sign-in screen (reset_requested_at
 // stamps the request so it shows in the admin's "Check Access" queue). An admin issues
@@ -1052,8 +1078,8 @@ await sql(`
     -- The BUYER: the person going to the shop. That is our supplier role, and the
     -- naming is a trap worth stating once — the written process calls the people who
     -- release the cards "gift card suppliers", who are somebody else entirely
-    -- (gc_issuer). Every label in the UI says "Buyer" and "Gift card issuer"; nothing
-    -- user-facing says "supplier" here.
+    -- (whoever holds issue_gift_cards). Every label in the UI says "Buyer" and "Gift
+    -- card desk"; nothing user-facing says "supplier" for either.
     buyer_user_id     BIGINT NOT NULL REFERENCES users(id),
     buyer_name        TEXT NOT NULL,
     retailer          TEXT,

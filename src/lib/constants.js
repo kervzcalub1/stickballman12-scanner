@@ -12,7 +12,7 @@ export const viewForPath = (p) => {
 
 // `supplier` is deliberately absent: that role never reaches these screens (it has its
 // own portal), and on the buying-cart screens the word for that person is "Buyer".
-export const ROLE_LABEL = { admin: 'Admin', superadmin: 'Super Admin', warehouse: 'Warehouse', ph_team: 'PH Team', gc_issuer: 'Gift Cards', auditor: 'Auditor' };
+export const ROLE_LABEL = { admin: 'Admin', superadmin: 'Super Admin', warehouse: 'Warehouse', ph_team: 'PH Team' };
 export const roleLabel = (r) => ROLE_LABEL[r] || r;
 // Admin-level roles: the env `admin` and env `superadmin` accounts. Superadmin
 // additionally sees the PH-team workspace (see App.jsx / Home.jsx).
@@ -123,7 +123,8 @@ export const HOME_SECTIONS = [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },
     { key: 'instore-listing', icon: '🏷️', title: 'In-Store Listing', sub: 'Mark in-store buys listed to Alias/StockX/Shopify' },
     { key: 'payout', icon: '🧮', title: 'Payout Calculator', sub: 'Cost after discounts vs. what Alias/StockX pay out — is this pair a buy?' },
-    { key: 'buy-carts', icon: '🎁', title: 'Gift Card Buying', sub: 'Buyers ask, you approve, the desk releases the cards — then receipt, audit and reconcile' },
+    // `priv` = only drawn for an account holding one of the buying privileges.
+    { key: 'buy-carts', icon: '🎁', title: 'Gift Card Buying', sub: 'Buyers ask, you approve, the desk releases the cards — then receipt, audit and reconcile', priv: true },
   ] },
   // A one-off migration mode, not part of the daily loop — its own section so it
   // reads as "the project of getting old stock into the system", not as receiving.
@@ -174,20 +175,28 @@ export const HOME_SECTIONS = [
 
 // "Needs attention" strip on Home — a card only appears when its pending count is
 // >0, linking to the screen that clears that queue. (from usePendingCounts)
-// The two gift-card duties are NARROW accounts: a card issuer does not receive
-// shipments and an auditor does not shelve shoes. Showing them the whole warehouse home
-// would be a page of cards that answer 403 when tapped — which reads as a broken app
-// rather than as a role boundary. They get their own job, plus Help.
-export const GC_ROLES = ['gc_issuer', 'auditor'];
-export const isGcRole = (r) => GC_ROLES.includes(r);
-export const GC_SECTIONS = [
-  { title: 'Gift card buying', accent: 'inventory', cards: [
-    { key: 'buy-carts', icon: '🎁', title: 'Gift Card Buying', sub: 'Requests to fund, spend to account for, and transactions to close out' },
-  ] },
-  { title: 'Help', accent: 'help', cards: [
-    { key: 'sop', icon: '📖', title: 'SOP & Help', sub: 'Step-by-step procedures for your part of the process' },
-  ] },
+// PRIVILEGES — permissions on top of a role, not roles of their own.
+//
+// The gift-card process needs three duties kept apart, but the people who hold them
+// still have a day job: the card desk is a PH team member who ALSO does that, the
+// auditor an admin who also does that. Modelling them as roles made them alternatives
+// to being warehouse or PH, which is not how the floor works.
+//
+// This mirror of the server's list (api/_lib/buycart.js) exists so the UI can decide
+// what to DRAW. It never decides what is allowed — every privileged action re-reads the
+// set from the database, so a button drawn from a stale list simply answers 403.
+export const PRIVILEGES = [
+  { key: 'approve_buying', label: 'Approve buying requests', hint: 'Decide what company funds may be spent on' },
+  { key: 'issue_gift_cards', label: 'Issue gift cards', hint: 'Record and release cards against an approved request' },
+  { key: 'audit_buying', label: 'Audit + close transactions', hint: 'Account for the spend and close it out' },
 ];
+export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
+export const privilegeLabel = (k) => (PRIVILEGES.find((p) => p.key === k) || {}).label || k;
+
+// admin/superadmin hold all three implicitly, the same rule the server applies.
+export const hasPriv = (user, key) =>
+  isAdminRole(user?.role) || (Array.isArray(user?.privileges) && user.privileges.includes(key));
+export const hasAnyPriv = (user) => PRIVILEGE_KEYS.some((k) => hasPriv(user, k));
 
 export const HOME_ATTENTION = [
   { key: 'nobox', label: 'No box', count: 'no_box' },

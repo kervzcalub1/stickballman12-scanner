@@ -11,7 +11,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getBuyCart, dbConfigured } from '../_lib/db.js';
 import { presignPutUrl, r2Configured } from '../_lib/r2.js';
-import { CAN_ISSUE_CARDS } from '../_lib/buycart.js';
+import { hasPrivilege } from '../_lib/buycart.js';
 
 const EXT = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
@@ -21,7 +21,7 @@ const EXT = {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, [...CAN_ISSUE_CARDS, 'supplier', 'warehouse']);
+  const user = requireRole(req, res, ['supplier', 'warehouse', 'ph_team']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 60 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
@@ -44,7 +44,10 @@ export default async function handler(req, res) {
     // The receipt is the buyer's evidence and the cards are the issuer's. Crossing them
     // would let a buyer add "gift cards" nobody issued, which is a line in the ledger
     // with no money behind it.
-    if (isBuyer && kind !== 'receipt')
+    // A card image is a card. Uploading one is the issuing desk's job and needs the
+    // privilege — crossing them would let anyone add "gift cards" nobody issued, which
+    // is a line in the ledger with no money behind it.
+    if (kind !== 'receipt' && !(await hasPrivilege(user, 'issue_gift_cards')))
       return send(res, 403, { ok: false, error: 'Only the gift card desk uploads card images.' });
     if (cart.status === 'closed') return send(res, 409, { ok: false, error: 'This request is closed.' });
 

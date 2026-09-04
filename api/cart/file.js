@@ -16,7 +16,7 @@ const TYPE = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'i
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['supplier', 'warehouse', 'ph_team', 'gc_issuer', 'auditor']);
+  const user = requireRole(req, res, ['supplier', 'warehouse', 'ph_team']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

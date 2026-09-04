@@ -11,9 +11,10 @@
 //   · the person who approved cannot also audit
 //   · a request can't be closed until all ten conditions are true in the data
 //
-// Accounts are created here rather than taken from the shared auth helper, because the
-// buyer scoping keys on a REAL users row id — the helper's `e2e-sup` uid is not numeric,
-// and the endpoints (correctly) fail closed on it.
+// Accounts are created here rather than taken from the shared auth helper for two
+// reasons: the buyer scoping keys on a REAL users row id (the helper's `e2e-sup` uid is
+// not numeric, and the endpoints correctly fail closed on it), and the three duties are
+// PRIVILEGES read from the database on every call — a signed token cannot carry them.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { signToken, hashPassword } from '../api/_lib/util.js';
@@ -21,11 +22,17 @@ import { loadEnv } from './helpers/auth.js';
 
 loadEnv();
 
+// Note what these say: the issuer is a PH team member who also releases cards, and the
+// auditor is a warehouse hand who also audits. That is the whole point of the privilege
+// model — the duties sit on top of a real job rather than replacing it.
 const CAST = {
-  buyer: { username: 'e2e_bc_buyer', name: 'E2E Buyer', role: 'supplier' },
-  approver: { username: 'e2e_bc_appr', name: 'E2E Approver', role: 'warehouse' },
-  issuer: { username: 'e2e_bc_iss', name: 'E2E Issuer', role: 'gc_issuer' },
-  auditor: { username: 'e2e_bc_aud', name: 'E2E Auditor', role: 'auditor' },
+  buyer: { username: 'e2e_bc_buyer', name: 'E2E Buyer', role: 'supplier', privileges: [] },
+  approver: { username: 'e2e_bc_appr', name: 'E2E Approver', role: 'warehouse', privileges: ['approve_buying'] },
+  issuer: { username: 'e2e_bc_iss', name: 'E2E Issuer', role: 'ph_team', privileges: ['issue_gift_cards'] },
+  auditor: { username: 'e2e_bc_aud', name: 'E2E Auditor', role: 'warehouse', privileges: ['audit_buying'] },
+  // A staff account with NO privilege — proves the gates are real rather than just
+  // "is this person staff", which is what a role check would have amounted to.
+  bystander: { username: 'e2e_bc_none', name: 'E2E Bystander', role: 'ph_team', privileges: [] },
 };
 
 let pool;
@@ -35,11 +42,12 @@ test.beforeAll(async () => {
   pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
   for (const [key, u] of Object.entries(CAST)) {
     const { rows } = await pool.query(
-      `INSERT INTO users (name, username, pass_hash, role, status)
-       VALUES ($1,$2,$3,$4,'approved')
-       ON CONFLICT (username) DO UPDATE SET role = EXCLUDED.role, status = 'approved'
+      `INSERT INTO users (name, username, pass_hash, role, status, privileges)
+       VALUES ($1,$2,$3,$4,'approved',$5)
+       ON CONFLICT (username) DO UPDATE
+         SET role = EXCLUDED.role, status = 'approved', privileges = EXCLUDED.privileges
        RETURNING id`,
-      [u.name, u.username, hashPassword('e2e-not-used'), u.role],
+      [u.name, u.username, hashPassword('e2e-not-used'), u.role, u.privileges],
     );
     people[key] = { ...u, uid: Number(rows[0].id) };
   }
@@ -57,13 +65,18 @@ test.afterAll(async () => { await pool?.end(); });
 
 // Sign in as one of the cast. Their uid is a real row id, which is what the buyer
 // scoping and the approver-is-not-the-auditor check both key on.
+//
+// `privileges` goes into the stored user exactly as api/auth/login.js puts it there —
+// the CLIENT reads that list to decide which buttons to draw. It is deliberately not in
+// the signed token: the server re-reads the set from the database on every privileged
+// call, so this list only ever affects what is rendered.
 async function as(page, who) {
   const u = people[who];
   const token = signToken({ uid: u.uid, username: u.username, name: u.name, role: u.role });
   await page.addInitScript(([t, j]) => {
     sessionStorage.setItem('sb_session_token', t);
     sessionStorage.setItem('sb_user', j);
-  }, [token, JSON.stringify({ username: u.username, name: u.name, role: u.role })]);
+  }, [token, JSON.stringify({ username: u.username, name: u.name, role: u.role, privileges: u.privileges })]);
   return u;
 }
 
@@ -81,7 +94,7 @@ async function call(request, who, path, body) {
 
 // The two read endpoints are GETs — posting to them answers 405, which would make a
 // test pass for the wrong reason.
-async function read(request, who, path) {
+async function read_(request, who, path) {
   const res = await request.get(`/api/${path}`, {
     headers: { Authorization: `Bearer ${tokenFor(people[who])}` },
   });
@@ -106,7 +119,7 @@ test('a buyer cannot approve their own request', async ({ request }) => {
   expect(r.status).toBe(403);
   expect(r.body.ok).toBe(false);
   // And nothing half-applied: every line is still awaiting a decision.
-  const { body } = await read(request, 'approver', `cart/get?id=${cartId}`);
+  const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
   expect(body.cart.lines.every((l) => l.status === 'pending')).toBe(true);
   expect(body.cart.approved_amount).toBe(0);
 });
@@ -144,13 +157,16 @@ test('a card code never reaches the page, and reading one is recorded', async ({
 
   // The payload every screen renders from — masked to the last four, and no ciphertext
   // either (a `SELECT *` reaching the client would be its own kind of leak).
-  const detail = await read(request, 'issuer', `cart/get?id=${cartId}`);
+  const detail = await read_(request, 'issuer', `cart/get?id=${cartId}`);
   expect(JSON.stringify(detail.body)).not.toContain(CODE);
   expect(JSON.stringify(detail.body)).not.toContain('code_enc');
   expect(detail.body.cart.giftCards[0].code_last4).toBe('4242');
 
+  // The issuer is a PH team member, so their route is the PH one — PH has its own app
+  // and never touches the staff router. Asserting the path here is the point: a
+  // privilege that its holder cannot navigate to is not a working permission.
   await as(page, 'issuer');
-  await page.goto('/buy-carts');
+  await page.goto('/ph/gift-card-buying');
   await page.locator('.bc-row', { hasText: detail.body.cart.cart_code }).first().click();
   await expect(page.locator('.bc-gc-num').first()).toContainText('4242');
   expect(await page.content()).not.toContain(CODE);
@@ -162,14 +178,58 @@ test('a card code never reaches the page, and reading one is recorded', async ({
   await expect(page.locator('.bc-events')).toContainText(/gc revealed/i);
 });
 
+test('a privilege is a real gate, not just "are you staff"', async ({ request }) => {
+  // The bystander is a PH team account with no privileges — the same ROLE as the issuer.
+  // Under the old model both would have passed every one of these, which is precisely
+  // why the duties are not roles.
+  const cartId = await newRequest(request, { lines: [LINE] });
+
+  const approve = await call(request, 'bystander', 'cart/decide', { cartId, all: true, action: 'approve' });
+  expect(approve.status).toBe(403);
+  expect(approve.body.error).toMatch(/approve buying requests/i);
+
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
+
+  const issue = await call(request, 'bystander', 'cart/gift-card', { cartId, card: { code: '1212343456567878', balance: 200 } });
+  expect(issue.status).toBe(403);
+  expect(issue.body.error).toMatch(/issue gift cards/i);
+
+  const audit = await call(request, 'bystander', 'cart/audit', { cartId, cards: [{ id: 1, spent: 1, remaining: 0 }] });
+  expect(audit.status).toBe(403);
+
+  // …but they can still READ it. Any staff account can see what is happening to company
+  // money; what they may DO is the part that is gated.
+  const read = await read_(request, 'bystander', `cart/get?id=${cartId}`);
+  expect(read.status).toBe(200);
+  expect(read.body.cart.cart_code).toBeTruthy();
+});
+
+test('unticking a privilege takes effect immediately, not at next sign-in', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
+  const ok = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '9090808070706060', balance: 200 } });
+  expect(ok.status).toBe(200);
+
+  // Same account, same signed token, privilege revoked in the database underneath it.
+  // A token-carried permission would keep working here for as long as the session lived.
+  await pool.query(`UPDATE users SET privileges = '{}' WHERE id = $1`, [people.issuer.uid]);
+  try {
+    const after = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '1010202030304040', balance: 50 } });
+    expect(after.status).toBe(403);
+  } finally {
+    await pool.query(`UPDATE users SET privileges = $2 WHERE id = $1`, [people.issuer.uid, people.issuer.privileges]);
+  }
+});
+
 test('the person who approved cannot also audit or close it', async ({ request }) => {
   const cartId = await newRequest(request, { lines: [LINE] });
-  // The approver here is a warehouse account, so it can't reach the audit at all —
-  // that's the role half of the control.
+  // The approver holds approve_buying and not audit_buying, so the privilege alone
+  // stops them — both accounts here are warehouse, which is exactly why a role check
+  // would have let this through.
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
   const byApprover = await call(request, 'approver', 'cart/audit', { cartId, cards: [] });
   expect(byApprover.status).toBe(403);
-  expect(byApprover.body.error).toMatch(/only an auditor/i);
+  expect(byApprover.body.error).toMatch(/audit privilege/i);
 
   // The other half: an ADMIN can reach both, so the guard has to refuse on identity.
   // The env admin has no users row, which is exactly the case an id comparison missed.
@@ -235,7 +295,7 @@ test('a request needs a purpose and a store before it can be sent', async ({ req
 test('the till-overrun warning fires when tax outruns the discount', async ({ request }) => {
   const cartId = await newRequest(request, { lines: [LINE] });
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
-  const { body } = await read(request, 'issuer', `cart/get?id=${cartId}`);
+  const { body } = await read_(request, 'issuer', `cart/get?id=${cartId}`);
   // Funding at the sticker is generous almost always — but not when the discount is
   // small and the tax isn't. This buyer's stack is 0% off + 8.25% tax, so the register
   // asks $108.25 against the $100 approved, and the screen has to say so rather than

@@ -16,6 +16,7 @@ import { BuyCartAdd, VerdictChip } from '../components/BuyCartAdd.jsx';
 import { BuyCartGiftCards } from '../components/BuyCartGiftCards.jsx';
 import { BuyCartReceipt } from '../components/BuyCartReceipt.jsx';
 import { estDate, estTime } from '../lib/format.js';
+import { hasPriv } from '../lib/constants.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
 
@@ -271,11 +272,13 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
   const [busy, setBusy] = useState('');
 
   const role = user.role;
-  const isAdmin = role === 'admin' || role === 'superadmin';
   const isBuyer = role === 'supplier';
-  const canDecide = !isBuyer && (isAdmin || ['warehouse', 'ph_team'].includes(role));
-  const canIssue = isAdmin || ['ph_team', 'gc_issuer'].includes(role);
-  const canAudit = isAdmin || role === 'auditor';
+  // What to DRAW, from the privileges the account holds. Never what is allowed — every
+  // one of these actions is re-checked against the database on the way in, so a button
+  // drawn off a stale list simply answers 403 rather than doing anything.
+  const canDecide = !isBuyer && hasPriv(user, 'approve_buying');
+  const canIssue = !isBuyer && hasPriv(user, 'issue_gift_cards');
+  const canAudit = !isBuyer && hasPriv(user, 'audit_buying');
 
   async function load() {
     try { const { cart: c } = await api.cartGet(cartId); setCart(c); setErr(''); }

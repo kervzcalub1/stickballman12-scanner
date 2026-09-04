@@ -6,27 +6,104 @@
 // `cart/close` re-evaluates them server-side, so a person is never told they can close
 // something the server will refuse.
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
-import { getPoReconciliation } from './db.js';
+import { getPoReconciliation, userHasPrivilege } from './db.js';
 
 // ---------------------------------------------------------------------------
-// Roles — separation of duties
+// Privileges — separation of duties
 //
-// The written process names four jobs and is explicit that the point is independence:
-// there must never be a path where one person requests money, spends it, and nobody
-// else checks. Two of those jobs are roles the server enforces.
+// The written process names three duties and is explicit that the point is
+// independence: there must never be a path where one person requests money, spends
+// it, and nobody else checks.
 //
-//   supplier   the BUYER — asks, then goes to the shop. (The process calls the card
-//              releasers "gift card suppliers"; that is a DIFFERENT person. Nothing
-//              user-facing here says "supplier" — it says Buyer and Gift card issuer.)
-//   admin      the APPROVER — decides what company funds may be spent on.
-//   gc_issuer  releases the cards against an approved request.
-//   auditor    verifies afterwards that the money and the goods agree.
+// These are PRIVILEGES, not roles, and that distinction is the whole design. They were
+// briefly modelled as roles, which forced them to be alternatives to being warehouse or
+// PH — but the person who releases cards is a PH team member who also does that, and
+// the auditor is an admin who also does that. `users.role` is one column and holds a
+// job title; `users.privileges` is a set of permissions on top of it.
 //
-// Approval is open to warehouse + PH + admin as well: those are the people who know
-// whether a pair is worth buying, and making a buyer wait on one named account is how
-// a process gets worked around at 11pm.
-export const CAN_APPROVE = ['warehouse', 'ph_team'];        // + admin/superadmin, auto
-export const CAN_ISSUE_CARDS = ['ph_team', 'gc_issuer'];    // + admin/superadmin, auto
+//   approve_buying    decide what company funds may be spent on
+//   issue_gift_cards  record and release cards against an approved request
+//   audit_buying      account for the spend and close a transaction out
+//
+// The BUYER (`supplier`) can hold none of them — db-setup strips any that are set. A
+// buyer with `approve_buying` would approve their own request, which is the single
+// thing this process exists to prevent.
+export const PRIVILEGES = [
+  { key: 'approve_buying', label: 'Approve buying requests' },
+  { key: 'issue_gift_cards', label: 'Issue gift cards' },
+  { key: 'audit_buying', label: 'Audit + close transactions' },
+];
+export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
+
+/**
+ * Does this account hold a privilege, RIGHT NOW?
+ *
+ * Read from the database on every call rather than off the signed token, and that is a
+ * deliberate divergence from how the rest of the app authorises. The role rides in the
+ * token because a job title does not change mid-shift; a permission over company money
+ * does, and revocation that waits for the next sign-in is not revocation — an account
+ * you untick this morning would keep spending until it happened to sign out.
+ *
+ * The cost is one small indexed read on a handful of low-traffic endpoints.
+ *
+ * admin/superadmin hold all three implicitly and are never looked up.
+ */
+export async function hasPrivilege(user, priv) {
+  if (!user) return false;
+  if (isPrivileged(user.role)) return true;
+  // A buyer never holds one, whatever a stale row might say.
+  if (user.role === 'supplier') return false;
+  const uid = Number(user.uid);
+  if (!Number.isInteger(uid) || uid <= 0) return false;
+  return userHasPrivilege(uid, priv);
+}
+
+/**
+ * Guard for a privileged action. Returns the user, or null after answering 403.
+ *
+ * `requireRole` is no use here: it decides on the job title, and every one of these
+ * actions is open to more than one job title and closed to most people who hold it.
+ */
+export async function requirePrivilege(req, res, priv, what) {
+  const user = requireAuth(req, res);
+  if (!user) return null;
+  if (blockIfMustChange(user, res)) return null;
+  if (!(await hasPrivilege(user, priv))) {
+    send(res, 403, {
+      ok: false,
+      error: what || `You do not have the “${(PRIVILEGES.find((p) => p.key === priv) || {}).label || priv}” privilege.`,
+    });
+    return null;
+  }
+  return user;
+}
+
+/**
+ * The audit sign-off — the one control the process says matters most.
+ *
+ * Holding `audit_buying` is not enough on its own, and under the privilege model that
+ * matters MORE than it did under roles: one person can now legitimately hold both
+ * approve and audit, so "a different role" is no longer any guarantee at all. The only
+ * thing standing between a person and signing off their own approval is this check.
+ *
+ * It compares `actorKey`, never the display name (two people can share one, and a name
+ * can be edited afterwards) and never the raw user id — the env admin/superadmin have
+ * no `users` row, so their id is NULL and an id comparison quietly passed for exactly
+ * the accounts that most needed checking.
+ */
+export async function requireAuditPrivilege(req, res, cart) {
+  const user = await requirePrivilege(req, res, 'audit_buying',
+    'Only somebody with the audit privilege can sign off a transaction.');
+  if (!user) return null;
+  if (cart && cart.approved_by_key && cart.approved_by_key === actorKey(user)) {
+    send(res, 403, {
+      ok: false,
+      error: 'You approved this request, so you can’t also audit it. It needs a second pair of eyes.',
+    });
+    return null;
+  }
+  return user;
+}
 
 /**
  * A stable identity for any actor, DB-backed or not.
@@ -42,48 +119,13 @@ export function actorKey(user) {
   return u ? `env:${u}` : null;
 }
 
-/**
- * The audit sign-off cannot use `requireRole`.
- *
- * `requireRole` auto-admits anything privileged, which is correct almost everywhere and
- * exactly wrong here: it would let the admin who approved a request also sign off the
- * audit of that request, which is the single control the process says matters most.
- * So this guard admits `auditor` and admin/superadmin, and THEN refuses when the
- * account is the one that approved — the same shape as `requireSuperadmin`, which
- * likewise had to step outside the helper to exclude admin.
- *
- * The comparison runs on `actorKey`, never on the display name: two people can share a
- * name, and a name can be edited after the fact. It is not the raw user id either —
- * the env admin/superadmin accounts have no `users` row, so their id is NULL and an
- * id comparison quietly passed for exactly the accounts that most need checking.
- */
-export function requireAuditor(req, res, cart) {
-  const user = requireAuth(req, res);
-  if (!user) return null;
-  if (blockIfMustChange(user, res)) return null;
-  if (user.role !== 'auditor' && !isPrivileged(user.role)) {
-    send(res, 403, { ok: false, error: 'Only an auditor can sign off the financial audit.' });
-    return null;
-  }
-  // A buyer could never hold this role, so the "someone other than the buyer" rule is
-  // already structural. This is the one the roles alone don't cover.
-  if (cart && cart.approved_by_key && cart.approved_by_key === actorKey(user)) {
-    send(res, 403, {
-      ok: false,
-      error: 'You approved this request, so you can’t also audit it. It needs a second pair of eyes.',
-    });
-    return null;
-  }
-  return user;
-}
-
 // A buyer only ever reaches their own request. Staff reach all of them. Scoped on the
 // id off the token — a posted buyer id would let one buyer read another's spending.
 export function cartVisibleTo(user, cart) {
   if (!cart) return false;
   if (isPrivileged(user.role)) return true;
   if (user.role === 'supplier') return Number(cart.buyer_user_id) === Number(user.uid);
-  return true; // staff: warehouse, ph_team, gc_issuer, auditor
+  return true; // any staff account can READ a request; what they may DO is a privilege
 }
 
 // ---------------------------------------------------------------------------

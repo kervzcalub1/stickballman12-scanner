@@ -35,12 +35,16 @@ search, and cross-linked without duplicating copy.
   role list rather than being duplicated into two files. `articles.buycart.js` is the
   same shape for the gift-card process, but written one article per JOB rather than per
   screen: four people touch every transaction, and a document that merged their
-  procedures would teach the opposite of what the roles enforce. `index.js` concatenates
+  procedures would teach the opposite of what the process enforces. Those staff articles
+  go to EVERY staff role rather than being gated on the privilege that performs them —
+  knowing how company money moves is useful to the whole floor, and hiding a written
+  procedure behind a checkbox would obscure the process from the people working
+  alongside it. What somebody may actually do is enforced by the server. `index.js` concatenates
   them and owns the vocabulary (`SOP_ROLES`, `SOP_AREAS`, `SOP_KEYWORDS`).
 - **Roles — scoped to the account, not a free filter.** `visibleTo(article, role)`
   is a plain `article.roles.includes(role)`; there is no admin blanket-true (that
   version showed warehouse procedures to an admin browsing as "Supplier").
-  - **warehouse / ph_team / supplier / gc_issuer / auditor are LOCKED** to their own role (`LOCKED_ROLES`
+  - **warehouse / ph_team / supplier are LOCKED** to their own role (`LOCKED_ROLES`
     in `Sop.jsx`): the role switcher isn't rendered, and **`?role=` is ignored** so a
     pasted link can't walk someone into another desk's SOPs. Showing a PH user every
     warehouse procedure buries the handful that are actually theirs.

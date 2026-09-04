@@ -11,7 +11,7 @@
 // comparing on the stored user id rather than a display name.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import { getBuyCart, getBuyCartFull, auditBuyCart, dbConfigured } from '../_lib/db.js';
-import { requireAuditor, cartCloseChecks } from '../_lib/buycart.js';
+import { requireAuditPrivilege, cartCloseChecks } from '../_lib/buycart.js';
 
 const money = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
 
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
   // check needs to know who approved it.
   const cart = await getBuyCart(cartId);
   if (!cart) return send(res, 404, { ok: false, error: 'That buying request does not exist.' });
-  const user = requireAuditor(req, res, cart);
+  const user = await requireAuditPrivilege(req, res, cart);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

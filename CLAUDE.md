@@ -55,7 +55,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
 | Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders** | `docs/context/purchase-orders.md` |
 | Empty shoe boxes end to end: order → declare → receive → shelve → put on a pair | `docs/context/empty-boxes.md` |
-| Gift-card buying: request → approve → cards → receipt → audit → reconciled (`gc_issuer`/`auditor` roles) | `docs/context/buy-cart.md` |
+| Gift-card buying: request → approve → cards → receipt → audit → reconciled; **`users.privileges`** | `docs/context/buy-cart.md` |
 | Merging duplicates (superadmin): one supplier typed twice, one inbound received as two batches | `docs/context/merge-tools.md` |
 | StockX / Alias / KicksDB, Alias auto-relogin, proxies | `docs/context/integrations.md` |
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |
@@ -75,6 +75,11 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
 - **Gift card codes are the one thing here encrypted at rest** (`BUY_GC_KEY`,
   `api/_lib/secrets.js`). It fails CLOSED: no key → pasting a card is refused, never
   stored in the clear (`docs/context/buy-cart.md`).
+- **Roles vs PRIVILEGES.** `users.role` is the one job someone does (warehouse · ph_team ·
+  admin · supplier). `users.privileges` is a set of permissions on top — the gift-card
+  duties. Privileges are read from the DB on every call, NOT from the token, so revoking
+  one takes effect at once. Never add a "role" for something one person could hold
+  alongside their real job.
 - Alias has **auto-relogin on 401; StockX does NOT**.
 - VINs (`SBM-YYMMDD-######`) are never reused; numbering gaps are fine.
 - **Everything is EST (`America/New_York`) — never the viewer's or the host's clock.**

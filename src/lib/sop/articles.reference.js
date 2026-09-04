@@ -1,11 +1,8 @@
 // Cross-cutting reference: the things every SOP assumes you already know —
 // signing in, what a barcode means, what a status means, and what to do when the
 // app misbehaves.
-// Every account there is. gc_issuer and auditor sign in, get locked out, forget
-// passwords and need the glossary like anyone else — leaving them off ALL gave the two
-// newest roles an SOP library of one article.
-const ALL = ['warehouse', 'ph_team', 'supplier', 'gc_issuer', 'auditor', 'admin', 'superadmin'];
-const STAFF = ['warehouse', 'ph_team', 'gc_issuer', 'auditor', 'admin', 'superadmin'];
+const ALL = ['warehouse', 'ph_team', 'supplier', 'admin', 'superadmin'];
+const STAFF = ['warehouse', 'ph_team', 'admin', 'superadmin'];
 
 export const REFERENCE_ARTICLES = [
   {

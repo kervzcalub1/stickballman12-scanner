@@ -3,12 +3,12 @@
 // Records a file this server minted a key for, after the client has PUT the bytes.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getBuyCart, addBuyCartFile, dbConfigured } from '../_lib/db.js';
-import { CAN_ISSUE_CARDS } from '../_lib/buycart.js';
+import { hasPrivilege } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, [...CAN_ISSUE_CARDS, 'supplier', 'warehouse']);
+  const user = requireRole(req, res, ['supplier', 'warehouse', 'ph_team']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 60 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
@@ -26,7 +26,10 @@ export default async function handler(req, res) {
     const isBuyer = user.role === 'supplier' && !isPrivileged(user.role);
     if (isBuyer && Number(cart.buyer_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this request.' });
-    if (isBuyer && kind !== 'receipt')
+    // A card image is a card. Uploading one is the issuing desk's job and needs the
+    // privilege — crossing them would let anyone add "gift cards" nobody issued, which
+    // is a line in the ledger with no money behind it.
+    if (kind !== 'receipt' && !(await hasPrivilege(user, 'issue_gift_cards')))
       return send(res, 403, { ok: false, error: 'Only the gift card desk uploads card images.' });
     // Only a key THIS server minted, and only under this cart's own prefix. Without the
     // cart_code in the pattern, an attach could point one request's record at another

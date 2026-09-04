@@ -13,16 +13,16 @@
 // what we agreed to spend; what the receipt says is what actually exists and is coming.
 // Where they differ, the difference is a finding for the audit — not something to
 // quietly reconcile away by declaring the tidier of the two lists.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import {
   getBuyCartFull, createPo, addPoOrderScan, setPoManifestScope, linkBuyCartPo, dbConfigured,
 } from '../_lib/db.js';
-import { CAN_APPROVE } from '../_lib/buycart.js';
+import { requirePrivilege } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, [...CAN_APPROVE, 'gc_issuer']);
+  const user = await requirePrivilege(req, res, 'approve_buying');
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 20 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

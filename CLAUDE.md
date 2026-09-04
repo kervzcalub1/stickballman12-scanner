@@ -59,6 +59,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | StockX / Alias / KicksDB, Alias auto-relogin, proxies | `docs/context/integrations.md` |
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |
 | In-app SOP & Help: article/FAQ data model, search, SVG schematics, screenshot capture | `docs/context/sop.md` |
+| Failed scans: what a bad scan SAYS, and the `scan_failures` record behind it | `docs/context/scan-failures.md` |
 
 Current work log / next steps: `june22-progress.md`. Full feature history:
 `version-5.md`. Team SOPs: `SOP-WAREHOUSE.md`, `SOP-PH-TEAM.md`.
@@ -93,6 +94,10 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
   **`items.pre_sell` is a second, parallel exclusion on the same paths** — a *unit*
   state rather than a batch kind, so it must be guarded alongside the kind check,
   not instead of it (`docs/context/pre-sell.md`).
+- **A failed scan must say what to do, and leave a row.** "No item found" is a dead end
+  on a warehouse floor; the sticker's real state is one call away (`stickerState`), and
+  every failure writes to `scan_failures` so "it keeps failing" is answerable from data
+  rather than from a phone video (`docs/context/scan-failures.md`).
 - After a rebuild, hard-refresh the browser (stale cached bundle).
 
 ## Working agreements

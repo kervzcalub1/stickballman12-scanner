@@ -17,7 +17,8 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 import { TopBar, StatusPill, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
-import { isVinCode } from '../lib/codes.js';
+import { isVinCode, isRollVin } from '../lib/codes.js';
+import { stickerState, stickerScanMessage } from '../lib/stickerState.js';
 import { beepOk, beepErr } from '../lib/beep.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 
@@ -48,6 +49,13 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
   const isMobile = useMediaQuery('(max-width: 768px)');
   useUnsavedGuard(rows.length > 0);
 
+  // Record a scan that didn't land, so "it keeps failing" is answerable from the data
+  // rather than from a phone video. Deliberately not awaited and it swallows its own
+  // errors: a scanner on the floor must never wait on, or be stopped by, this.
+  function logScanFailure(code, reason, detail) {
+    api.scanFailure({ code, reason, detail, screen: `mark-${target}` });
+  }
+
   // Every scan answers twice — a colour banner to glance at and a tone to hear.
   // Staff are watching the box and the gun, so the tone is the primary signal.
   function pulse(kind, text) {
@@ -62,8 +70,8 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
   // Deliberately does NOT set `error` — the banner says it now and the log keeps
   // it, so a third copy under the input was just noise. `error` stays for save
   // failures, which aren't tied to a single scan.
-  function fail(code, reason) {
-    setFails((f) => [{ key: `${code}-${Date.now()}-${f.length}`, code, reason, at: new Date() }, ...f]);
+  function fail(code, reason, sticker = null) {
+    setFails((f) => [{ key: `${code}-${Date.now()}-${f.length}`, code, reason, at: new Date(), sticker }, ...f]);
     pulse('err', reason);
   }
   useEffect(() => () => clearTimeout(flashTimer.current), []);
@@ -94,7 +102,10 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
     if (recentRef.current[c] && now - recentRef.current[c] < 1200) return; // gun/camera re-read
     recentRef.current[c] = now;
     setInput(''); setError('');
-    if (!isVinCode(c)) return fail(c, `“${c}” is not a VIN — scan the SBM-… label, not the UPC.`);
+    if (!isVinCode(c)) {
+      logScanFailure(c, 'not_a_vin', 'scanned something that is not a 1ID');
+      return fail(c, `“${c}” is not a VIN — scan the SBM-… label, not the UPC.`);
+    }
     if (rows.some((r) => r.vin === c)) return fail(c, `${c} is already in this list — scanned twice.`);
     setBusy(true);
     try {
@@ -104,7 +115,22 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
       pulse('ok', `${item.name || item.sku || item.vin}${item.size ? ` · US ${item.size}` : ''}`);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
-      fail(c, err.message);
+      // "No item found" is where this screen used to stop, and it is the single most
+      // common failure on the floor: a box was labelled from the roll and the shoe was
+      // never received, so a real sticker has no pair behind it. The app already knows
+      // that — vin_stock has the answer — it just wasn't asking. Ask, and say what to
+      // do about it. Best-effort: if the check itself fails, the original error stands.
+      let reason = err.message;
+      let sticker = null;
+      if (isRollVin(c)) {
+        try {
+          const info = await api.checkVin(c);
+          sticker = stickerState(info);
+          reason = stickerScanMessage(c, info, err.message);
+        } catch { /* keep the plain error */ }
+      }
+      fail(c, reason, sticker);
+      logScanFailure(c, sticker ? sticker.key : 'not_found', reason);
     } finally { setBusy(false); }
   }
   const removeRow = (vin) => setRows((rs) => rs.filter((r) => r.vin !== vin));

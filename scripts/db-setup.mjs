@@ -1018,6 +1018,36 @@ await sql(`CREATE INDEX IF NOT EXISTS shipment_tracking_unregistered_idx
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// FAILED SCANS — every scan that did not land, and why.
+//
+// This table exists because of a specific, expensive morning: the floor reported that
+// scan-out "kept failing", and there was no way to find out what had actually happened.
+// The reason for a failed scan lived in one tab in one person's browser and died with
+// it, so answering the question took a phone video, frame extraction, and an hour of
+// inference across four other tables. It should have been one query.
+//
+// Deliberately NOT item_events: the whole point is that these scans matched no item, so
+// there is nothing to hang an event on. `code` is what was actually scanned, whatever
+// shape it was.
+//
+// Write it best-effort and never block a scan on it — a warehouse hand must not be
+// stopped by the audit trail for the thing that stopped them.
+await sql(`
+  CREATE TABLE IF NOT EXISTS scan_failures (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code       TEXT NOT NULL,
+    reason     TEXT NOT NULL,
+    detail     TEXT,
+    screen     TEXT,
+    user_name  TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS scan_failures_at_idx ON scan_failures (created_at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS scan_failures_reason_idx ON scan_failures (reason, created_at DESC)`);
+
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);
 const { rows: [{ po }] } = await sql(`SELECT count(*)::int AS po FROM purchase_orders`);

@@ -4152,3 +4152,193 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   border-color: var(--border); font-weight: 600; }
 .presell-chip.mixed { background: rgba(230,160,60,0.10); color: #cf9740; border-style: dashed; }
 .presell-chip.sold { background: rgba(230,160,60,0.08); color: #b8873a; border-color: rgba(230,160,60,0.30); font-weight: 600; }
+
+/* ===========================================================================
+   Gift-card buying requests (docs/context/buy-cart.md)
+   Money out, then inventory in. The visual job here is different from the rest of
+   the app: every other screen is about stock, and this one is about company funds
+   moving through people's hands. So the money line reads first, the closing
+   conditions read as a checklist rather than as a status, and a gift card number is
+   styled to look like something you don't leave on screen.
+   =========================================================================== */
+
+.bc .card { margin-bottom: 12px; }
+.bc-h { margin: 0 0 10px; font-size: 14px; letter-spacing: 0.01em; }
+.bc-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.bc-w-sm { width: 64px; }
+.bc-w-md { width: 84px; }
+
+/* --- header: what this request IS, before what state it's in ---------------- */
+.bc-head-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.bc-code { margin: 0; font-size: 20px; letter-spacing: 0.02em; }
+.bc-purpose { margin: 10px 0 4px; padding: 8px 10px; border-radius: 8px;
+  background: var(--accent-tint); border: 1px solid var(--accent-edge); }
+/* The four numbers that decide everything downstream, on one line and monospaced so
+   they line up when they're read side by side rather than one at a time. */
+.bc-money { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px;
+  padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+.bc-money b { color: var(--text); font-variant-numeric: tabular-nums; }
+.bc-head-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+/* --- the queue strip -------------------------------------------------------- */
+.bc-queues { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+.bc-queue { display: flex; flex-direction: column; gap: 2px; min-width: 108px; padding: 10px 14px;
+  border-radius: 10px; border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  cursor: pointer; text-align: left; }
+.bc-queue:hover { border-color: var(--accent-edge); }
+.bc-queue.on { border-color: var(--primary); background: var(--accent-tint); color: var(--text); }
+/* A zero is a fact worth showing (the desk is clear); a non-zero is a thing to do. */
+.bc-queue.live .bc-queue-n { color: #c6871a; }
+.bc-queue-n { font-size: 22px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; }
+.bc-queue-l { font-size: 12px; }
+.bc-row { cursor: pointer; }
+.bc-row:hover { background: var(--panel-2); }
+.bc-purpose-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- the buy call ----------------------------------------------------------- */
+.bc-verdict { display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
+/* Green means "take it", never "the arithmetic came out positive" — same rule as the
+   calculator's verdict card. */
+.bc-verdict.buy { background: rgba(46,204,113,0.14); color: var(--ok); border-color: rgba(46,204,113,0.4); }
+.bc-verdict.watch { background: rgba(198,135,26,0.16); color: #c6871a; border-color: rgba(198,135,26,0.42); }
+.bc-verdict.pass { background: rgba(255,107,107,0.13); color: var(--err); border-color: rgba(255,107,107,0.38); }
+
+.bc-add-find { display: flex; gap: 8px; flex-wrap: wrap; }
+.bc-add-find .input { flex: 1 1 200px; min-width: 0; }
+.bc-add-body { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.bc-add-shoe { font-size: 14px; }
+.bc-sizes { display: flex; flex-wrap: wrap; gap: 6px; }
+.bc-add-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.bc-qty { max-width: 92px; }
+.bc-market { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.bc-market b { color: var(--text); font-variant-numeric: tabular-nums; }
+.bc-call { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); }
+.bc-call.buy { border-color: rgba(46,204,113,0.4); }
+.bc-call.watch { border-color: rgba(198,135,26,0.42); }
+.bc-call.pass { border-color: rgba(255,107,107,0.38); }
+.bc-call-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bc-call-note { margin: 6px 0 0; font-size: 13px; }
+.bc-add-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* --- lines + approving ------------------------------------------------------ */
+.bc-table td, .bc-table th { vertical-align: top; }
+.bc-line.rejected { opacity: 0.55; }
+.bc-line-status { font-size: 12px; font-weight: 700; text-transform: capitalize; }
+.bc-line-status.approved { color: var(--ok); }
+.bc-line-status.rejected { color: var(--err); }
+.bc-line-status.pending { color: #c6871a; }
+.bc-decide { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px;
+  padding-top: 10px; border-top: 1px solid var(--border); }
+
+/* --- gift cards ------------------------------------------------------------- */
+.bc-fund { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.bc-fund-nums { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; font-size: 14px; }
+.bc-fund-nums b { font-variant-numeric: tabular-nums; }
+.bc-short { color: var(--err); font-weight: 700; }
+.bc-covered { color: var(--ok); font-weight: 700; }
+/* The one gap in funding at sticker price. Amber, not red: it is a caution about what
+   the till MIGHT ask for, not a failure that has happened. */
+.bc-till-warn { margin: 0; padding: 8px 10px; border-radius: 8px; font-size: 13px;
+  background: rgba(198,135,26,0.12); border: 1px solid rgba(198,135,26,0.38); color: #d9a24a; }
+
+.bc-gc-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bc-gc { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); }
+.bc-gc.voided { opacity: 0.5; }
+.bc-gc-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bc-gc-spacer { flex: 1 1 auto; }
+.bc-gc-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.06em; }
+.bc-gc-bal { font-weight: 700; font-variant-numeric: tabular-nums; }
+/* A revealed code is deliberately loud: it is meant to be read, typed and then hidden
+   again, and it should be obvious at a glance that something spendable is on screen. */
+.bc-gc-secret { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; margin-top: 8px;
+  padding: 8px 10px; border-radius: 8px; background: rgba(198,135,26,0.10);
+  border: 1px dashed rgba(198,135,26,0.5); }
+.bc-gc-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 16px;
+  font-weight: 700; letter-spacing: 0.1em; }
+.bc-gc-pin { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.bc-gc-audit { margin-top: 4px; }
+.bc-gc-add { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; align-items: stretch; }
+.bc-gc-add .input { flex: 1 1 140px; min-width: 0; }
+/* PriceInput renders a WRAPPER span around its input, so the flex rule above never
+   reaches it — without this the balance box collapses and the $ prefix sits on top of
+   its own placeholder. */
+.bc-gc-add .ph-price-wrap { flex: 0 1 130px; min-width: 110px; }
+.bc-gc-add .ph-price-wrap .ph-price { width: 100%; }
+.bc-gc-pin-in { max-width: 120px; }
+.bc-gc-files { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.bc-gc-files-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.bc-upload { position: relative; cursor: pointer; }
+.bc-file-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bc-file-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bc-file-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- receipt ---------------------------------------------------------------- */
+.bc-paste { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; align-items: flex-start; }
+.bc-paste-box { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.bc-review { margin-top: 10px; }
+.bc-review-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 10px; }
+/* A receipt line that matches nothing approved. Not an error — it is the finding. */
+.bc-unmatched td { background: rgba(198,135,26,0.08); }
+.bc-diffs { margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
+  background: rgba(198,135,26,0.10); border: 1px solid rgba(198,135,26,0.35); }
+.bc-diffs ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* --- audit ------------------------------------------------------------------ */
+.bc-audit-list { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.bc-audit-list li { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+  padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); }
+.bc-audit-foot { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+
+/* --- the ten closing conditions --------------------------------------------- */
+.bc-check-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.bc-check-list li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 5px 0; font-size: 13px; color: var(--muted); }
+.bc-check-list li.ok { color: var(--text); }
+.bc-check-mark { width: 14px; flex: 0 0 14px; text-align: center; color: var(--muted); font-weight: 700; }
+.bc-check-list li.ok .bc-check-mark { color: var(--ok); }
+.bc-check-label { flex: 0 1 auto; }
+.bc-check-detail { flex: 1 1 200px; }
+
+/* --- the trail -------------------------------------------------------------- */
+.bc-thread-add { display: flex; gap: 8px; margin-bottom: 10px; }
+.bc-thread-add .input { flex: 1 1 auto; min-width: 0; }
+.bc-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px;
+  max-height: 340px; overflow-y: auto; }
+.bc-ev { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; font-size: 12.5px;
+  padding: 5px 0; border-bottom: 1px solid var(--border); }
+.bc-ev-kind { min-width: 108px; font-weight: 700; text-transform: capitalize; color: var(--muted); }
+/* Reading a card code is the row an auditor scans for, so it is the one that stands out. */
+.bc-ev.gc_revealed .bc-ev-kind { color: #c6871a; }
+.bc-ev.line_approved .bc-ev-kind { color: var(--ok); }
+.bc-ev.line_rejected .bc-ev-kind { color: var(--err); }
+.bc-ev-who { font-weight: 600; }
+.bc-ev-body { flex: 1 1 200px; color: var(--muted); }
+
+/* Phones: the warehouse and the buyers both live on one. Tables scroll inside their own
+   container (never the page), and the action rows stack rather than squeezing. */
+@media (max-width: 768px) {
+  .bc-queues { display: grid; grid-template-columns: 1fr 1fr; }
+  .bc-queue { min-width: 0; }
+  .bc-money { gap: 6px 12px; font-size: 12.5px; }
+  .bc-gc-add .input, .bc-gc-pin-in { flex: 1 1 100%; max-width: none; }
+  .bc-decide, .bc-head-actions { flex-direction: column; align-items: stretch; }
+  .bc-decide .btn, .bc-head-actions .btn { width: 100%; }
+  .bc-ev-kind { min-width: 0; }
+}
+
+/* The review table holds inputs, so it has a real minimum width — it scrolls inside its
+   own container rather than widening the page. On a phone that distinction is the whole
+   layout: a table that pushes the document sideways takes every card with it. */
+.bc-review-table { min-width: 520px; }
+.bc-review-table .input.sm { padding: 4px 6px; font-size: 12.5px; }
+.bc-review-table td, .bc-review-table th { padding: 4px 6px; }
+
+/* On a phone the lines table was squeezing a shoe name into six wrapped lines to avoid
+   scrolling — which is the wrong trade: the row became unreadable AND still didn't fit.
+   Give it a floor and let the container scroll, which is what .bc-scroll is for. */
+@media (max-width: 768px) {
+  .bc-lines .bc-table { min-width: 620px; }
+  .bc-lines .bc-table td, .bc-lines .bc-table th { white-space: nowrap; }
+  .bc-lines .bc-table .muted.xs { white-space: normal; max-width: 190px; }
+}

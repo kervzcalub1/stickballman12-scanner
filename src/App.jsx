@@ -32,6 +32,7 @@ import { ShelvePage } from './screens/ShelvePage.jsx';
 import { Locations } from './screens/Locations.jsx';
 import { InstoreListing } from './screens/InstoreListing.jsx';
 import { PayoutCalculator } from './screens/PayoutCalculator.jsx';
+import { BuyCarts } from './screens/BuyCarts.jsx';
 import { Advisor } from './components/Advisor.jsx';
 import { ExistingStock } from './screens/ExistingStock.jsx';
 import { SupplierApp } from './screens/SupplierApp.jsx';
@@ -186,6 +187,9 @@ export default function App() {
   if (view === 'instore') return withAdvisor(<Receiving mode="instore" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'instore-listing') return withAdvisor(<InstoreListing onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'payout') return withAdvisor(<PayoutCalculator user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  // Gift-card buying requests. Reachable by warehouse/PH (who approve), the gift card
+  // desk (who release) and the auditor (who close) — four jobs, one screen.
+  if (view === 'buy-carts') return withAdvisor(<BuyCarts user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Existing (old) stock: same admin/warehouse gate as in-store — ph_team short-
   // circuits to PHTeamApp above and never reaches this router.
   if (view === 'existing-stock') return withAdvisor(<ExistingStock navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);

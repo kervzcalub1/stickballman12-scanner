@@ -23,6 +23,7 @@ import { SUPPLIER_ARTICLES } from './articles.supplier.js';
 import { ADMIN_ARTICLES } from './articles.admin.js';
 import { REFERENCE_ARTICLES } from './articles.reference.js';
 import { PAYOUT_ARTICLES } from './articles.payout.js';
+import { BUYCART_ARTICLES } from './articles.buycart.js';
 import { FAQ } from './faq.js';
 
 // Roles, in the order the filter bar shows them. `key` matches users.role except
@@ -32,6 +33,10 @@ export const SOP_ROLES = [
   { key: 'warehouse', label: 'Warehouse', blurb: 'Receive, shelve, pick, ship' },
   { key: 'ph_team', label: 'PH Team', blurb: 'Price, list & sync to the stores' },
   { key: 'supplier', label: 'Supplier', blurb: 'Scan out and ship an order' },
+  // The two gift-card duties. They exist as roles precisely so the jobs stay separate,
+  // so they get their own entries here rather than being folded into Admin.
+  { key: 'gc_issuer', label: 'Gift Cards', blurb: 'Release cards against an approved request' },
+  { key: 'auditor', label: 'Auditor', blurb: 'Account for the spend and close it out' },
   { key: 'admin', label: 'Admin', blurb: 'Accounts, settings, oversight' },
   { key: 'superadmin', label: 'Super Admin', blurb: 'Admin + the PH workspace' },
 ];
@@ -46,6 +51,7 @@ export const SOP_AREAS = [
   { key: 'putaway', label: 'Put-away & locations', accent: 'orders' },
   { key: 'rescale', label: 'Rescale', accent: 'requests' },
   { key: 'listing', label: 'Pricing & listing', accent: 'listing' },
+  { key: 'buying', label: 'Gift card buying', accent: 'inventory' },
   { key: 'fulfil', label: 'Sell & ship', accent: 'shipping' },
   { key: 'browse', label: 'Browse, search & labels', accent: 'listing' },
   { key: 'admin', label: 'Administration', accent: 'orders' },
@@ -58,6 +64,9 @@ export const SOP_ARTICLES = [
   // Its own file because it belongs to no single desk — warehouse, PH and admin all
   // buy off it. See the note at the top of articles.payout.js.
   ...PAYOUT_ARTICLES,
+  // Also its own file, and for the same reason: four different desks touch every
+  // transaction and each needs its own procedure. See the note at the top of the file.
+  ...BUYCART_ARTICLES,
   ...SUPPLIER_ARTICLES,
   ...ADMIN_ARTICLES,
   ...REFERENCE_ARTICLES,
@@ -85,7 +94,10 @@ export const articleById = (id) => SOP_ARTICLES.find((a) => a.id === id);
 // This is a permission rule, not a filter default, so it lives beside the search it
 // governs — the SOP screen and the app-wide advisor both apply it, and a rule copied
 // into two files is a rule that eventually disagrees with itself.
-export const SOP_LOCKED_ROLES = ['warehouse', 'ph_team', 'supplier'];
+// gc_issuer and auditor are locked like the rest: their whole reason for existing is
+// that the jobs are separate, so handing them every other desk's procedures would bury
+// the four articles that are actually theirs.
+export const SOP_LOCKED_ROLES = ['warehouse', 'ph_team', 'supplier', 'gc_issuer', 'auditor'];
 export const sopRoleForAccount = (role) => (SOP_LOCKED_ROLES.includes(role) ? role : 'all');
 
 export function visibleTo(article, role) {

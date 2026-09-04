@@ -3,14 +3,16 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge'];
+export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
   return ROUTES.includes(seg) ? seg : 'home';
 };
 
-export const ROLE_LABEL = { admin: 'Admin', superadmin: 'Super Admin', warehouse: 'Warehouse', ph_team: 'PH Team' };
+// `supplier` is deliberately absent: that role never reaches these screens (it has its
+// own portal), and on the buying-cart screens the word for that person is "Buyer".
+export const ROLE_LABEL = { admin: 'Admin', superadmin: 'Super Admin', warehouse: 'Warehouse', ph_team: 'PH Team', gc_issuer: 'Gift Cards', auditor: 'Auditor' };
 export const roleLabel = (r) => ROLE_LABEL[r] || r;
 // Admin-level roles: the env `admin` and env `superadmin` accounts. Superadmin
 // additionally sees the PH-team workspace (see App.jsx / Home.jsx).
@@ -121,6 +123,7 @@ export const HOME_SECTIONS = [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },
     { key: 'instore-listing', icon: '🏷️', title: 'In-Store Listing', sub: 'Mark in-store buys listed to Alias/StockX/Shopify' },
     { key: 'payout', icon: '🧮', title: 'Payout Calculator', sub: 'Cost after discounts vs. what Alias/StockX pay out — is this pair a buy?' },
+    { key: 'buy-carts', icon: '🎁', title: 'Gift Card Buying', sub: 'Buyers ask, you approve, the desk releases the cards — then receipt, audit and reconcile' },
   ] },
   // A one-off migration mode, not part of the daily loop — its own section so it
   // reads as "the project of getting old stock into the system", not as receiving.
@@ -171,6 +174,21 @@ export const HOME_SECTIONS = [
 
 // "Needs attention" strip on Home — a card only appears when its pending count is
 // >0, linking to the screen that clears that queue. (from usePendingCounts)
+// The two gift-card duties are NARROW accounts: a card issuer does not receive
+// shipments and an auditor does not shelve shoes. Showing them the whole warehouse home
+// would be a page of cards that answer 403 when tapped — which reads as a broken app
+// rather than as a role boundary. They get their own job, plus Help.
+export const GC_ROLES = ['gc_issuer', 'auditor'];
+export const isGcRole = (r) => GC_ROLES.includes(r);
+export const GC_SECTIONS = [
+  { title: 'Gift card buying', accent: 'inventory', cards: [
+    { key: 'buy-carts', icon: '🎁', title: 'Gift Card Buying', sub: 'Requests to fund, spend to account for, and transactions to close out' },
+  ] },
+  { title: 'Help', accent: 'help', cards: [
+    { key: 'sop', icon: '📖', title: 'SOP & Help', sub: 'Step-by-step procedures for your part of the process' },
+  ] },
+];
+
 export const HOME_ATTENTION = [
   { key: 'nobox', label: 'No box', count: 'no_box' },
   { key: 'costs', label: 'No cost on file', count: 'missing_cost' },
@@ -179,6 +197,12 @@ export const HOME_ATTENTION = [
   { key: 'rescale', label: 'Restock', count: 'restock_pending' },
   { key: 'presell', label: 'Pre-sell to work', count: 'presell_pending' },
   { key: 'reconcile', label: 'PO reconcile', count: 'po_to_reconcile' },
+  // Company money waiting on a person. Both ends of the gift-card process stall the
+  // same way — a buyer stuck in a shop, or a spend nobody has verified.
+  // Two rows, one destination — so they need an explicit `id`: `key` is the screen to
+  // open, and using it as the React key too would collide and drop one of them.
+  { id: 'carts-approve', key: 'buy-carts', label: 'Buy requests', count: 'carts_to_approve' },
+  { id: 'carts-audit', key: 'buy-carts', label: 'Spend to audit', count: 'carts_to_audit' },
 ];
 
 // Total quantity across a [{qty}] size array (rescale reported vs actual).

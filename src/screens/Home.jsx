@@ -3,12 +3,14 @@ import React from 'react';
 import { TopBar, CardBadges } from '../components/common.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
 import { usePendingCounts } from '../hooks.js';
-import { roleLabel, HOME_SECTIONS, HOME_ATTENTION, homeCardBadges, isAdminRole } from '../lib/constants.js';
+import { roleLabel, HOME_SECTIONS, GC_SECTIONS, HOME_ATTENTION, homeCardBadges, isAdminRole, isGcRole } from '../lib/constants.js';
 
 export function Home({ user, onPick, onSignOut }) {
   const isAdmin = isAdminRole(user.role);
   const isSuper = user.role === 'superadmin';
   const counts = usePendingCounts();
+  // A gift card issuer / auditor gets their own job and nothing else — see GC_SECTIONS.
+  const sections = isGcRole(user.role) ? GC_SECTIONS : HOME_SECTIONS;
   const attention = counts ? HOME_ATTENTION.filter((a) => (counts[a.count] || 0) > 0) : [];
   return (
     <div className="app">
@@ -19,7 +21,7 @@ export function Home({ user, onPick, onSignOut }) {
           <h2 className="home-section-title">Needs attention</h2>
           <div className="home-grid">
             {attention.map((a) => (
-              <button className="home-card home-attention" key={a.key} onClick={() => onPick(a.key)}>
+              <button className="home-card home-attention" key={a.id || a.key} onClick={() => onPick(a.key)}>
                 <span className="home-attention-top">
                   <span className="home-card-icon"><NavIcon name={a.key} /></span>
                   <span className="home-attention-count">{counts[a.count]}</span>
@@ -30,7 +32,7 @@ export function Home({ user, onPick, onSignOut }) {
           </div>
         </section>
       )}
-      {HOME_SECTIONS.filter((s) => (!s.adminOnly || isAdmin) && (!s.superOnly || isSuper)).map((section) => (
+      {sections.filter((s) => (!s.adminOnly || isAdmin) && (!s.superOnly || isSuper)).map((section) => (
         <section className="home-section" key={section.title} data-accent={section.accent}>
           <h2 className="home-section-title">{section.title}</h2>
           <div className="home-grid">

@@ -259,6 +259,35 @@ Also caught in the same pass: *"what can you tell me from Shopify?"* called
 backlog**, not sales and not inventory. The prompt now sends anything about Shopify sales
 or Shopify stock to `top_sellers` / `sku_history` / `stock_status` and says so.
 
+### …and again on a question we could only half answer (2026-09-07)
+Same scope line, third time, new cause. Asked to *"pull year-to-date sales history in
+every sales channel… monthly"* he answered *"I only help with Stickballman12 — our stock,
+our numbers, and how we do things here."* — to a question about our own sales.
+
+Two rules collided, and both were written for good reasons:
+
+- *"The sales feed reaches 90 days. Never state or imply anything about older sales"* — a
+  real limit (`MAX_WINDOW_DAYS`).
+- *"Never 'I can't see that' or 'I don't have that data' — decline with the scope line
+  itself"* — written for **off-topic** requests, but stated absolutely.
+
+So a question we could only *partly* answer came out as a question we don't answer. Those
+are different sentences and only one of them was true. The never-say-I-can't-see-it rule
+is now explicitly scoped to off-topic requests, and an on-topic question that reaches past
+our window is carved out of it: run the widest window there is, give the per-channel
+split, state the 90-day limit in one line, and point at Shopify's own admin reports for
+the rest. **The 90 days is the answer; the limit is a fact stated beside it.**
+
+Also named in the same pass: asking for our numbers **in a shape** — by channel, monthly,
+"a report of what sold" — is work, not the composing he refuses. "Pull" and "format" in a
+sentence about our own figures had been reading as a request to write something.
+
+**What is still true, and is not a prompt problem:** year-to-date genuinely cannot come
+out of this feed. `MAX_WINDOW_DAYS` is 90, a window comes back as ONE total per style and
+per channel with no month-by-month split, and at ~1,400 orders a week a YTD pull is
+~50,000 orders — past `MAX_PAGES` and past a chat turn. Monthly history is a Shopify admin
+report, or a persisted/incremental fetch we have not built.
+
 **It answers questions; it doesn't compose things.** An in-scope carve-out for work
 writing (a note to PH, a line to a supplier) was drafted and then dropped: the same
 prompt refused *"draft a message to the supplier about the shortage"* and wrote *"Please

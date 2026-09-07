@@ -304,3 +304,30 @@ test('the till-overrun warning fires when tax outruns the discount', async ({ re
   expect(body.cart.tillWarning).not.toBeNull();
   expect(body.cart.tillWarning.amount).toBeCloseTo(108.25, 2);
 });
+
+// window.prompt was doing real work here, and it could not validate, could not hold two
+// questions at once, and threw the first answer away if you cancelled the second.
+test('a request is started in one modal, and it will not accept a blank purpose', async ({ page }) => {
+  await as(page, 'buyer');
+  await page.goto('/buying');
+  await page.getByRole('button', { name: 'New request' }).click();
+
+  const modal = page.locator('.modal.form-modal');
+  await expect(modal).toBeVisible();
+  // Both questions in ONE dialog — as two chained prompts, cancelling the second binned
+  // the first answer with nothing on screen to say so.
+  await expect(modal.getByRole('textbox')).toHaveCount(2);
+
+  // Blank is refused in the modal, not by the server after the fact.
+  await modal.getByRole('button', { name: 'Start the request' }).click();
+  await expect(modal.locator('.error')).toContainText(/needed/i);
+  await expect(modal).toBeVisible();
+
+  await modal.getByRole('textbox').first().fill('E2E: modal purpose');
+  await modal.getByRole('textbox').nth(1).fill('E2E Modal Store');
+  await modal.getByRole('button', { name: 'Start the request' }).click();
+
+  // It lands on the new request, opened and ready for lines.
+  await expect(page.locator('.bc-lines')).toBeVisible();
+  await expect(page.locator('.app')).toContainText('E2E: modal purpose');
+});

@@ -4194,6 +4194,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .bc-row { cursor: pointer; }
 .bc-row:hover { background: var(--panel-2); }
 .bc-purpose-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The two money columns sit next to each other and get compared, so they line up on the
+   decimal rather than on the dollar sign. Left-aligned proportional figures made
+   "$100.00" and "$0.00" look like different-sized numbers at a glance. */
+.bc-list .table td:nth-last-child(5), .bc-list .table td:nth-last-child(4) { font-variant-numeric: tabular-nums; }
 
 /* --- the buy call ----------------------------------------------------------- */
 .bc-verdict { display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
@@ -4360,3 +4364,55 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   background: rgba(198,135,26,0.12); border: 1px solid rgba(198,135,26,0.38); color: #d9a24a; }
 .vs-stranded b { display: block; color: var(--text); margin-bottom: 2px; }
 .vs-stranded .btn { margin-top: 8px; }
+
+/* ===========================================================================
+   FormModal — the replacement for window.prompt (src/components/common.jsx)
+   Left-aligned, because these are questions with typed answers rather than a
+   yes/no confirmation: a label and its field read as a form, and centring them
+   makes a two-field modal look like two unrelated announcements.
+   =========================================================================== */
+.modal.form-modal { max-width: 460px; width: 100%; text-align: left; max-height: 90vh; overflow-y: auto; }
+.modal.form-modal .modal-title { text-align: center; }
+.modal.form-modal .modal-msg { text-align: center; margin-bottom: 16px; }
+.form-modal-fields { display: flex; flex-direction: column; gap: 14px; }
+.form-modal-label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+.form-modal-label .input { width: 100%; font-size: 15px; }
+/* 15px is deliberate on the inputs: iOS Safari zooms the whole page when a focused
+   field is under 16px, and a zoomed page inside a modal is a layout nobody can undo
+   one-handed. The labels stay small; the thing you type into does not. */
+.form-modal-label textarea.input { resize: vertical; min-height: 68px; line-height: 1.5; font-family: inherit; }
+.form-modal-req { color: #d9a24a; font-style: normal; margin-left: 3px; }
+.form-modal-hint { font-size: 11px; color: var(--muted); line-height: 1.4; font-style: normal; }
+.modal.form-modal .modal-actions { justify-content: flex-end; margin-top: 18px; }
+@media (max-width: 600px) {
+  .modal.form-modal .modal-actions { flex-direction: column-reverse; }
+  .modal.form-modal .modal-actions .btn { width: 100%; }
+}
+
+/* ===========================================================================
+   Buying requests on a phone (/buying, and the staff queue)
+   The table is nine columns wide. Sideways it is unreadable and it drags the
+   page with it, so under 768px the same list renders as cards instead — and
+   the card is ordered the way a buyer reads it: which request, where it has
+   got to, what it is for, then the money.
+   =========================================================================== */
+.bc-list-cards { display: none; }
+@media (max-width: 768px) {
+  .bc-list .bc-table-wrap { display: none; }
+  .bc-list-cards { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 12px 0 0; padding: 0; }
+  .bc-card { display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
+    padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel);
+    color: var(--text); font: inherit; cursor: pointer; }
+  .bc-card:active { background: var(--panel-2); }
+  .bc-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .bc-card-top b { font-size: 14px; letter-spacing: 0.01em; }
+  .bc-card-purpose { font-size: 13px; line-height: 1.45; color: var(--text);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .bc-card-purpose .muted { font-style: italic; }
+  .bc-card-meta { display: flex; flex-wrap: wrap; gap: 4px; font-size: 11.5px; color: var(--muted); }
+  /* The money line is the one a buyer checks twice, so it gets its own rule above it
+     rather than being another grey line in the meta run. */
+  .bc-card-money { display: flex; gap: 16px; font-size: 13px; font-variant-numeric: tabular-nums;
+    padding-top: 7px; border-top: 1px solid var(--border); }
+  .bc-card-money i { font-style: normal; color: var(--muted); font-size: 11.5px; margin-right: 4px; }
+}

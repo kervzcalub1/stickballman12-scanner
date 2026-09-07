@@ -11,7 +11,7 @@
 // A gate that lives in the UI is a gate a stale tab walks straight through.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, PriceInput } from '../components/common.jsx';
+import { TopBar, PriceInput, FormModal } from '../components/common.jsx';
 import { BuyCartAdd, VerdictChip } from '../components/BuyCartAdd.jsx';
 import { BuyCartGiftCards } from '../components/BuyCartGiftCards.jsx';
 import { BuyCartReceipt } from '../components/BuyCartReceipt.jsx';
@@ -71,21 +71,26 @@ function Lines({ cart, canDecide, isBuyer, onChanged, onSignOut }) {
   const [sel, setSel] = useState([]);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
+  // `null` = not asking. `{ all }` = asking why, for one line or for the lot.
+  const [rejecting, setRejecting] = useState(null);
   const lines = cart.lines || [];
   const pending = lines.filter((l) => l.status === 'pending');
   const editable = isBuyer && cart.status === 'draft';
 
   const toggle = (id) => setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
-  async function decide(action, all) {
-    const reason = action === 'reject'
-      ? window.prompt(all ? 'Why are these being turned down?' : 'Why is this being turned down?')
-      : null;
-    if (action === 'reject' && reason === null) return;
+  // Turning something down always asks why; approving does not. The reason travels to
+  // the buyer, who is standing in the shop deciding what to do next.
+  function decide(action, all) {
+    if (action === 'reject') return setRejecting({ all });
+    return commit(action, all, null);
+  }
+
+  async function commit(action, all, reason) {
     setBusy(action); setErr('');
     try {
       await api.cartDecide(cart.id, all ? { action, all: true, reason } : { action, lineIds: sel, reason });
-      setSel([]); onChanged();
+      setSel([]); setRejecting(null); onChanged();
     } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
     finally { setBusy(''); }
   }
@@ -99,6 +104,16 @@ function Lines({ cart, canDecide, isBuyer, onChanged, onSignOut }) {
 
   return (
     <section className="card bc-lines">
+      {rejecting && (
+        <FormModal
+          title={rejecting.all ? 'Turn down every pending line' : `Turn down ${sel.length} line${sel.length === 1 ? '' : 's'}`}
+          message="The buyer reads this in the shop, so say what would change your mind."
+          submitLabel="Turn it down" danger
+          onClose={() => setRejecting(null)}
+          onSubmit={({ reason }) => commit('reject', rejecting.all, reason.trim())}
+          fields={[{ name: 'reason', label: 'Why?', type: 'textarea', required: true,
+            placeholder: 'e.g. Too close to retail — only worth it under $95' }]} />
+      )}
       <h3 className="bc-h">
         What’s being asked for <span className="muted sm">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
       </h3>
@@ -267,6 +282,9 @@ function Thread({ cart, onChanged, onSignOut }) {
 }
 
 export function BuyCart({ user, cartId, onBack, onSignOut }) {
+  // Two questions that used to be native prompts: how many boxes the PO covers, and why
+  // a request is being cancelled.
+  const [asking, setAsking] = useState(null);
   const [cart, setCart] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
@@ -347,7 +365,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           )}
           {canDecide && cart.status === 'receipted' && !cart.po_id && (
             <button className="btn primary" disabled={busy === 'po'}
-              onClick={() => act(() => api.cartRaisePo(cart.id, Number(window.prompt('How many boxes is the buyer sending?', '1')) || 1), 'po')}>
+              onClick={() => setAsking('po')}>
               Raise the purchase order
             </button>
           )}
@@ -360,13 +378,40 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           )}
           {canDecide && ['draft', 'submitted', 'denied'].includes(cart.status) && (
             <button className="btn danger" disabled={busy === 'cx'}
-              onClick={() => {
-                const r = window.prompt('Why is this being cancelled?');
-                if (r !== null) act(() => api.cartCancel(cart.id, r), 'cx');
-              }}>Cancel</button>
+              onClick={() => setAsking('cancel')}>Cancel</button>
           )}
         </div>
         {err && <div className="error mt">{err}</div>}
+
+        {asking === 'po' && (
+          <FormModal
+            title="Raise the purchase order"
+            message="This opens the order the shipment is received against, and prints its labels."
+            submitLabel="Raise it"
+            onClose={() => setAsking(null)}
+            onSubmit={async ({ boxes }) => {
+              // A blank or nonsense count is one box, the same as the old prompt's default —
+              // but the field says so rather than silently deciding it.
+              await api.cartRaisePo(cart.id, Math.max(1, Number(boxes) || 1));
+              setAsking(null); await load();
+            }}
+            fields={[{ name: 'boxes', label: 'How many boxes is the buyer sending?', type: 'number',
+              value: '1', min: 1, max: 99, hint: 'One label is printed per box. Left blank, it is one.' }]} />
+        )}
+
+        {asking === 'cancel' && (
+          <FormModal
+            title="Cancel this request"
+            message="It stays on the record as cancelled — nothing is deleted."
+            submitLabel="Cancel the request" danger
+            onClose={() => setAsking(null)}
+            onSubmit={async ({ reason }) => {
+              await api.cartCancel(cart.id, reason.trim());
+              setAsking(null); await load();
+            }}
+            fields={[{ name: 'reason', label: 'Why is this being cancelled?', type: 'textarea', required: true,
+              placeholder: 'e.g. Buyer got to the store and the price had gone back up' }]} />
+        )}
       </section>
 
       {isBuyer && cart.status === 'draft' && (

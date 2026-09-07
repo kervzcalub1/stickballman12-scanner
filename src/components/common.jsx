@@ -209,6 +209,87 @@ export function Modal({ type, title, message, onClose, children }) {
   );
 }
 
+/**
+ * A floating form modal — the replacement for `window.prompt`.
+ *
+ * A native prompt was doing real work on the money screens, and it was the wrong tool
+ * three ways: it can't be styled, it can't hold two questions at once (so starting a
+ * buying request meant two system dialogs in a row), and it can't validate — an empty
+ * purpose or a blank reason went to the server exactly like a real one.
+ *
+ * `fields` is a list of { name, label, type, placeholder, hint, required, value }.
+ * `onSubmit` gets a plain object keyed by field name and may be async; the modal stays
+ * open and disabled while it runs, so a slow save can't be double-tapped.
+ *
+ * Deliberately NOT auto-focused. On iOS Safari a programmatic focus sets DOM focus but
+ * suppresses the keyboard, which reads as "the keyboard randomly won't show" — and the
+ * people using this are standing in a shop on a phone.
+ */
+export function FormModal({
+  title, message, fields = [], submitLabel = 'Save', danger = false,
+  onSubmit, onClose,
+}) {
+  const [vals, setVals] = useState(() =>
+    Object.fromEntries(fields.map((f) => [f.name, f.value ?? ''])));
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !busy) onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, busy]);
+
+  const set = (name, v) => setVals((s) => ({ ...s, [name]: v }));
+
+  async function submit(e) {
+    e?.preventDefault?.();
+    if (busy) return;
+    // Required means non-blank, not merely present — " " is not a reason.
+    const missing = fields.find((f) => f.required && !String(vals[f.name] ?? '').trim());
+    if (missing) return setErr(`${missing.label} is needed.`);
+    setErr(''); setBusy(true);
+    try { await onSubmit(vals); }
+    catch (e2) { setErr(e2?.message || 'That did not go through.'); setBusy(false); }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <form className="modal form-modal" role="dialog" aria-modal="true"
+        onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h3 className="modal-title">{title}</h3>
+        {message && <p className="modal-msg">{message}</p>}
+        <div className="form-modal-fields">
+          {fields.map((f) => (
+            <label key={f.name} className="form-modal-label">
+              <span>{f.label}{f.required && <i className="form-modal-req" aria-hidden="true">*</i>}</span>
+              {f.type === 'textarea' ? (
+                <textarea className="input" rows={f.rows || 3} value={vals[f.name] ?? ''}
+                  placeholder={f.placeholder || ''} maxLength={f.maxLength || 500} disabled={busy}
+                  onChange={(e) => set(f.name, e.target.value)} />
+              ) : (
+                <input className="input" type={f.type || 'text'} value={vals[f.name] ?? ''}
+                  placeholder={f.placeholder || ''} maxLength={f.maxLength || 200} disabled={busy}
+                  inputMode={f.type === 'number' ? 'numeric' : undefined}
+                  min={f.min} max={f.max}
+                  onChange={(e) => set(f.name, e.target.value)} />
+              )}
+              {f.hint && <i className="form-modal-hint">{f.hint}</i>}
+            </label>
+          ))}
+        </div>
+        {err && <div className="error mt">{err}</div>}
+        <div className="modal-actions">
+          <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="submit" className={`btn ${danger ? 'danger' : 'primary'}`} disabled={busy}>
+            {busy ? 'Working…' : submitLabel}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export function TopBar({ title, onHome, onSignOut, right }) {
   return (
     <header className="topbar">

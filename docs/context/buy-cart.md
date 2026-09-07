@@ -241,6 +241,38 @@ is missing, because a gate that only says no teaches people to route around it.
   hatch every control like this eventually leaks through, and it can be added later far
   more easily than it could be taken away.
 
+## The screens (2026-09-07)
+
+**No `window.prompt` anywhere in this flow.** Six of them were doing real work on the
+money screens, and a native prompt is the wrong tool three ways: it can't be styled, it
+can't hold two questions at once, and it can't validate — a blank purpose or an empty
+reason reached the server looking exactly like a real one. `FormModal`
+(`src/components/common.jsx`) replaces all six: a floating modal with labelled fields,
+required-checking, and the failure held *inside* the modal with the text still in the box.
+
+- **Starting a request asks both questions at once.** As two chained prompts, answering
+  "what are you buying" and then cancelling "which store" threw the first answer away
+  with nothing on screen to say it had happened.
+- **It is deliberately not auto-focused.** On iOS Safari a programmatic `focus()` sets DOM
+  focus but suppresses the keyboard, and the people using this are standing in a shop on a
+  phone. See the same rule on Receiving.
+- **The submit handler calls the API directly rather than through `act()`.** `act` catches
+  its own errors into page state and never throws, so a modal built on it would close on
+  failure and bin the typed reason.
+- Inputs are **15px**: iOS Safari zooms the whole page when a focused field is under 16px,
+  and a zoomed page inside a modal can't be undone one-handed.
+
+**The list is cards under 768px.** The queue table is nine columns; sideways it is
+unreadable and it drags the document with it. The phone rendering is not the table with
+columns dropped — it is ordered the way a buyer reads it: which request, where it has got
+to, what it is for, then the money.
+
+⚠️ **The list card classes are `bc-list-card…`, NOT `bc-card…`.** `bc-cards` was already
+the gift-card section on the *detail* screen (`<section className="card bc-cards">`), so
+a `.bc-cards { display: none }` written for the list hid every gift card on desktop —
+"Show code" vanished and only the e2e test noticed, because `toContainText` reads hidden
+text happily while a click on it times out.
+
 ## Statuses
 `draft → submitted → approved → funded → receipted → audited → closed`, plus `denied`
 and `cancelled`. The cart's own status **follows its lines** rather than being set by

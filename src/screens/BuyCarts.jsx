@@ -7,7 +7,7 @@
 // mode this screen exists to prevent.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar } from '../components/common.jsx';
+import { TopBar, FormModal } from '../components/common.jsx';
 import { estDate } from '../lib/format.js';
 import { BuyCart } from './BuyCart.jsx';
 
@@ -40,7 +40,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
   const [filter, setFilter] = useState('');
   const [open, setOpen] = useState(null);
   const [err, setErr] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
 
   const isBuyer = user.role === 'supplier';
 
@@ -52,17 +52,14 @@ export function BuyCarts({ user, onHome, onSignOut }) {
   }
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter]);
 
-  async function newRequest() {
-    const purpose = window.prompt('What are you buying, and why? (An approver has to be able to tell from this alone.)');
-    if (purpose === null) return;
-    const retailer = window.prompt('Which store?');
-    if (retailer === null) return;
-    setBusy(true);
+  // Both questions in ONE modal. As two chained prompts, answering the first and then
+  // cancelling the second threw the first answer away with nothing on screen to say so.
+  async function newRequest({ purpose, retailer }) {
     try {
-      const { cart } = await api.cartCreate({ purpose, retailer });
+      const { cart } = await api.cartCreate({ purpose: purpose.trim(), retailer: retailer.trim() });
+      setAsking(false);
       setOpen(cart.id);
-    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
-    finally { setBusy(false); }
+    } catch (e) { if (e.unauthorized) return onSignOut(); throw e; }
   }
 
   if (open) {
@@ -73,7 +70,23 @@ export function BuyCarts({ user, onHome, onSignOut }) {
   return (
     <div className="app bc-list">
       <TopBar title={isBuyer ? 'Buying requests' : 'Gift card buying'} onHome={onHome} onSignOut={onSignOut}
-        right={isBuyer ? <button className="btn sm primary" disabled={busy} onClick={newRequest}>New request</button> : null} />
+        right={isBuyer ? <button className="btn sm primary" onClick={() => setAsking(true)}>New request</button> : null} />
+
+      {asking && (
+        <FormModal
+          title="New buying request"
+          message="An approver sees only what you write here, so write it for someone who isn't in the shop with you."
+          submitLabel="Start the request"
+          onClose={() => setAsking(false)}
+          onSubmit={newRequest}
+          fields={[
+            { name: 'purpose', label: 'What are you buying, and why?', type: 'textarea', required: true,
+              placeholder: 'e.g. Restocking Jordan 1 lows — Nike outlet has them at $90',
+              hint: 'An approver has to be able to tell from this alone.' },
+            { name: 'retailer', label: 'Which store?', required: true, maxLength: 80,
+              placeholder: 'e.g. Nike Outlet — Orlando' },
+          ]} />
+      )}
 
       {counts && (
         <div className="bc-queues">
@@ -97,8 +110,41 @@ export function BuyCarts({ user, onHome, onSignOut }) {
         </p>
       )}
 
+      {/* Two renderings of one list, swapped by CSS at 768px. The phone one is not the
+          table with columns dropped: a buyer standing in a shop wants the request, where
+          it has got to, and the money — in that order — and a nine-column table sideways
+          gives none of them without dragging. */}
       {carts && carts.length > 0 && (
-        <div className="bc-scroll">
+        <ul className="bc-list-cards">
+          {carts.map((c) => {
+            const s = STATUS[c.status] || { label: c.status, cls: 'muted' };
+            return (
+              <li key={c.id}>
+                <button type="button" className="bc-card" onClick={() => setOpen(c.id)}>
+                  <span className="bc-card-top">
+                    <b>{c.cart_code}</b>
+                    <span className={`po-chip ${s.cls}`}>{s.label}</span>
+                  </span>
+                  <span className="bc-card-purpose">{c.purpose || <i className="muted">No purpose written</i>}</span>
+                  <span className="bc-card-meta">
+                    <span>{c.retailer || '—'}</span>
+                    {!isBuyer && c.buyer_name && <span>· {c.buyer_name}</span>}
+                    <span>· {estDate(c.created_at)}</span>
+                    {c.po_code && <span>· {c.po_code}</span>}
+                  </span>
+                  <span className="bc-card-money">
+                    <span><i>Approved</i> {money(c.approved_amount)}</span>
+                    <span><i>Cards</i> {money(c.gc_total)}</span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {carts && carts.length > 0 && (
+        <div className="bc-scroll bc-table-wrap">
           <table className="table">
             <thead>
               <tr>

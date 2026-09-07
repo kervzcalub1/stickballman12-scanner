@@ -12,7 +12,7 @@
 // the server writes who did it before it answers.
 import React, { useState } from 'react';
 import { api } from '../api.js';
-import { PriceInput, CopyText, ImageZoomModal } from './common.jsx';
+import { PriceInput, CopyText, ImageZoomModal, FormModal } from './common.jsx';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -21,6 +21,7 @@ const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 function GiftCardRow({ cart, card, canReveal, canVoid, onChanged, onSignOut }) {
   const [secret, setSecret] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [voiding, setVoiding] = useState(false);
   const [err, setErr] = useState('');
 
   async function reveal() {
@@ -36,17 +37,23 @@ function GiftCardRow({ cart, card, canReveal, canVoid, onChanged, onSignOut }) {
     finally { setBusy(false); }
   }
 
-  async function voidIt() {
-    const reason = window.prompt('Why is this card being withdrawn?');
-    if (reason === null) return;
-    setBusy(true); setErr('');
-    try { await api.cartVoidGiftCard(cart.id, card.id, reason); onChanged(); }
-    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
-    finally { setBusy(false); }
+  async function voidIt({ reason }) {
+    try { await api.cartVoidGiftCard(cart.id, card.id, reason.trim()); setVoiding(false); onChanged(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); throw e; }
   }
 
   return (
     <li className={`bc-gc ${card.voided_at ? 'voided' : ''}`}>
+      {voiding && (
+        <FormModal
+          title={`Withdraw card •••• ${card.code_last4 || '????'}`}
+          message="The card stays on the record and drops out of the funded total. It is never deleted."
+          submitLabel="Withdraw it" danger
+          onClose={() => setVoiding(false)}
+          onSubmit={voidIt}
+          fields={[{ name: 'reason', label: 'Why is this card being withdrawn?', type: 'textarea', required: true,
+            placeholder: 'e.g. Card declined at the till — replaced with a new one' }]} />
+      )}
       <div className="bc-gc-top">
         <span className="bc-gc-num">•••• {card.code_last4 || '????'}</span>
         <span className="bc-gc-bal">{money(card.balance)}</span>
@@ -60,7 +67,7 @@ function GiftCardRow({ cart, card, canReveal, canVoid, onChanged, onSignOut }) {
         )}
         {secret && <button type="button" className="btn sm ghost" onClick={() => setSecret(null)}>Hide</button>}
         {canVoid && !card.voided_at && (
-          <button type="button" className="btn sm danger" disabled={busy} onClick={voidIt}>Withdraw</button>
+          <button type="button" className="btn sm danger" disabled={busy} onClick={() => setVoiding(true)}>Withdraw</button>
         )}
       </div>
       {secret && (

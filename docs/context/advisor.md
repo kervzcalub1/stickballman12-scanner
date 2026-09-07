@@ -259,6 +259,75 @@ Also caught in the same pass: *"what can you tell me from Shopify?"* called
 backlog**, not sales and not inventory. The prompt now sends anything about Shopify sales
 or Shopify stock to `top_sellers` / `sku_history` / `stock_status` and says so.
 
+### …and again on a question we could only half answer (2026-09-07)
+Same scope line, third time, new cause. Asked to *"pull year-to-date sales history in
+every sales channel… monthly"* he answered *"I only help with Stickballman12 — our stock,
+our numbers, and how we do things here."* — to a question about our own sales.
+
+Two rules collided, and both were written for good reasons:
+
+- *"The sales feed reaches 90 days. Never state or imply anything about older sales"* — a
+  real limit (`MAX_WINDOW_DAYS`).
+- *"Never 'I can't see that' or 'I don't have that data' — decline with the scope line
+  itself"* — written for **off-topic** requests, but stated absolutely.
+
+So a question we could only *partly* answer came out as a question we don't answer. Those
+are different sentences and only one of them was true. The never-say-I-can't-see-it rule
+is now explicitly scoped to off-topic requests, and an on-topic question that reaches past
+our window is carved out of it: run the widest window there is, give the per-channel
+split, state the 90-day limit in one line, and point at Shopify's own admin reports for
+the rest. **The 90 days is the answer; the limit is a fact stated beside it.**
+
+Also named in the same pass: asking for our numbers **in a shape** — by channel, monthly,
+"a report of what sold" — is work, not the composing he refuses. "Pull" and "format" in a
+sentence about our own figures had been reading as a request to write something.
+
+### …and the follow-up refused too, which was the more useful bug (2026-09-07)
+The fix above landed and the first answer came back right — 90 days, 13,475 units, the
+channel split, the limit stated. Then **"monthly sales not units"** got the scope line.
+
+That fragment exposed two things the first pass had not:
+
+- **The decline was being re-tested on a fragment.** A three-word correction to the answer
+  just given was read as a fresh request and scored on its own. The prompt now says the
+  test for the scope line is the **subject, not whether you can answer**, that a follow-up
+  is never off-topic, and that an ambiguous one is asked about rather than declined.
+- **"Sales" means MONEY as often as it means pairs** — and we were only ever counting
+  pairs, so the honest answer to "not units" was a shrug. That was a data gap wearing a
+  prompt bug's clothes.
+
+**So the data gap got closed rather than explained.** `shopifySales` already read every
+line item's `createdAt` and its `originalUnitPriceSet`; it threw the money away into an
+average and never bucketed the date. It now returns `revenue` on the window and a
+**`months` array** — each calendar month with units and revenue, and both again per
+channel. **Zero extra Shopify calls**: same query, same pages, arithmetic on rows already
+in hand. Verified against the live store — the month rows reconcile exactly to the window
+totals (13,477 units / $1,398,668 over 90 days).
+
+Three things that shaped it:
+- **Months are EST months** (`estDate`), not UTC. An order at 8pm EST on the 31st belongs
+  to that month; a UTC slice files it in the next one. The same slice was fixing a live
+  bug on `last_sold`, which had been UTC all along.
+- **The money is read BEFORE the unmatched-style `continue`.** A line with no style code
+  in its title is still a sale that took money; leaving it after the bail-out understated
+  every revenue figure by whatever the ~14% unmatched units were worth.
+- **The oldest and newest months are marked `partial`.** The window is a rolling 90 days,
+  so it opens mid-month and ends today. A part-month printed like a full one reads as a
+  collapse in trade that never happened — the one way a monthly table actively misleads —
+  so the flag is in the payload and the prompt is told to say it out loud.
+
+`months` sits before `styles` in the payload on purpose: tool results are cut at 8,000
+chars and the monthly table must survive the cut (measured 4,900 at limit 10).
+
+**What is still true:** `MAX_WINDOW_DAYS` is 90, so year-to-date is still out of reach —
+at ~1,400 orders a week a YTD pull is ~50,000 orders, past `MAX_PAGES` and past a chat
+turn. What changed is that "monthly by channel" is now answered for the last ~3 months
+instead of refused. Older history is a Shopify admin report, or a persisted/incremental
+fetch we have not built.
+
+Both misfires are guarded in `e2e/advisor.spec.js` — the subject test, the follow-up rule,
+the money/units rule, and the part-month label.
+
 **It answers questions; it doesn't compose things.** An in-scope carve-out for work
 writing (a note to PH, a line to a supplier) was drafted and then dropped: the same
 prompt refused *"draft a message to the supplier about the shortage"* and wrote *"Please

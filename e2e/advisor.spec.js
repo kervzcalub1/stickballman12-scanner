@@ -353,3 +353,24 @@ test('our own channels, and questions about what he can do, are IN scope', () =>
   // The wrong-tool half: pending_work's per-store backlog quoted as a Shopify figure.
   expect(p).toMatch(/never pending_work/i);
 });
+
+// Three times now the scope line has caught a question that was squarely in scope:
+// Shopify (2026-08-28), year-to-date sales, then the follow-up "monthly sales not units"
+// (both 2026-09-07). The subject decides the decline, never whether we can answer.
+test('a question we can only half answer, and a terse follow-up, stay in scope', () => {
+  const p = systemPrompt('page: Home', { name: 'E2E', role: 'warehouse' });
+  expect(p).toMatch(/THE TEST FOR THE SCOPE LINE IS THE SUBJECT, NOT WHETHER YOU CAN\s*\n?\s*ANSWER/);
+  expect(p).toMatch(/A FOLLOW-UP IS NEVER OFF-TOPIC/);
+  expect(p).toMatch(/asking is always better than declining/i);
+  // "Sales" is money as often as it is pairs — the exact word the follow-up used.
+  expect(p).toMatch(/"Sales" means MONEY as often as it means pairs/);
+});
+
+test('monthly sales are a real answer, and a part month is labelled as one', () => {
+  const p = systemPrompt('page: Home', { name: 'E2E', role: 'warehouse' });
+  expect(p).toMatch(/MONTHLY SALES ARE top_sellers WITH days: 90/);
+  expect(p).toMatch(/partial: true` is NOT a full month of trading/);
+  // The window is still 90 days, and nothing older may be implied.
+  expect(p).toMatch(/sales feed reaches 90 days/);
+  expect(p).toMatch(/never invent a month you were not given/);
+});

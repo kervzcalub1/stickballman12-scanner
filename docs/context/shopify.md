@@ -58,6 +58,20 @@ check the token before anything else.
 - `shopifySales({days})` — pages the window **once**, aggregates by style, caches 30
   min. Both `shopifyTopSellers` and `shopifyVelocity` read that aggregate, so a per-SKU
   question is free after the first fetch. A 7-day window is ~1,400 orders in ~5s.
+  Returns `revenue` and `units` for the window, `styles` ranked, and **`months`** (below).
+- **`months` — the monthly table (2026-09-07).** Each calendar month in the window with
+  its orders, units and **revenue**, and units + revenue again **per channel**. Costs
+  nothing extra: same query, same pages, bucketed from rows already fetched — the money
+  was being read and thrown into an average, and `createdAt` was being read for
+  `last_sold` and nothing else. Three rules live in that arithmetic:
+  - **EST months, via `estDate`.** An order at 8pm EST on the 31st is that month's; a UTC
+    slice files it in the next one. Fixing this also fixed `last_sold`, UTC until now.
+  - **Money is summed BEFORE the unmatched-style `continue`.** A title with no style code
+    is still a sale that took money — ~14% of units — and leaving the read after the
+    bail-out understated every revenue figure.
+  - **The oldest and newest months carry `partial: true`.** A rolling 90-day window opens
+    mid-month and ends today, and a part-month printed like a full one reads as a
+    collapse in trade that never happened.
 - `shopifyVelocity(sku, {days})` — units sold, the **per-channel split**, sizes, average
   price, and the liquidity band the calculator's picker uses.
 - `shopifyInventoryForSku(sku)` — quantities by size. Needs `read_products` /

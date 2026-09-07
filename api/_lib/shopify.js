@@ -23,6 +23,7 @@
 //    "not permitted" rather than an error or, worse, a zero — "none left" and "we can't
 //    see it" are opposite answers, and only one of them sends someone to a shelf.
 import { cacheGet, cacheSet } from './util.js';
+import { estDate } from '../../src/lib/format.js';
 
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2026-07';
 const SALES_TTL = 30 * 60 * 1000;
@@ -146,6 +147,11 @@ export async function shopifySales({ days = 7 } = {}) {
 
   const byStyle = new Map();
   const byChannel = {};
+  // Money and calendar months, bucketed inside the fetch that already runs. "Sales" means
+  // dollars as often as it means pairs, and "how did each month go" is the question people
+  // actually ask — neither costs an extra call, only arithmetic on rows already in hand.
+  const byMonth = new Map();
+  let revenue = 0;
   let orders = 0; let units = 0; let unmatched = 0;
   let after = null; let truncated = false;
 
@@ -165,20 +171,40 @@ export async function shopifySales({ days = 7 } = {}) {
       orders += 1;
       const channel = node.channelInformation?.channelDefinition?.channelName || node.app?.name || 'unknown';
       byChannel[channel] = (byChannel[channel] || 0) + 1;
+      // The month an order belongs to is its EST month, never the host's or UTC's — an
+      // order placed 8pm EST on the 31st is that month's, and UTC would file it in the next.
+      const day = estDate(node.createdAt);
+      const mk = day.slice(0, 7);
+      const month = byMonth.get(mk) || { month: mk, orders: 0, units: 0, revenue: 0, channels: {} };
+      month.orders += 1;
+      byMonth.set(mk, month);
       for (const li of node.lineItems?.edges || []) {
         const item = li.node;
         const qty = Number(item.quantity) || 1;
         units += qty;
+        // Read the money BEFORE the unmatched-style bail-out. A line whose title carries no
+        // style code is still a sale that took money; dropping it here would understate
+        // every revenue figure by whatever the unmatched units were worth.
+        const price = Number(item.originalUnitPriceSet?.shopMoney?.amount);
+        const money = Number.isFinite(price) && price > 0 ? price * qty : 0;
+        revenue += money;
+        month.units += qty;
+        month.revenue += money;
+        const mc = month.channels[channel] || { units: 0, revenue: 0 };
+        mc.units += qty;
+        mc.revenue += money;
+        month.channels[channel] = mc;
         const style = styleFromTitle(item.title);
         if (!style) { unmatched += qty; continue; }
         const k = key(style);
-        const e = byStyle.get(k) || { style_id: style, name: item.title, sold: 0, channels: {}, sizes: {}, prices: [], last_sold: null };
+        const e = byStyle.get(k) || { style_id: style, name: item.title, sold: 0, revenue: 0, channels: {}, sizes: {}, prices: [], last_sold: null };
         e.sold += qty;
         e.channels[channel] = (e.channels[channel] || 0) + qty;
         if (item.variantTitle) e.sizes[item.variantTitle] = (e.sizes[item.variantTitle] || 0) + qty;
-        const price = Number(item.originalUnitPriceSet?.shopMoney?.amount);
         if (Number.isFinite(price) && price > 0) e.prices.push(price);
-        const day = String(node.createdAt).slice(0, 10);
+        e.revenue += money;
+        // `day` is the EST civil date computed above. It used to be a UTC slice of
+        // createdAt, which dated an evening sale to tomorrow.
         if (!e.last_sold || day > e.last_sold) e.last_sold = day;
         byStyle.set(k, e);
       }
@@ -188,18 +214,45 @@ export async function shopifySales({ days = 7 } = {}) {
     if (page === MAX_PAGES - 1) truncated = true;
   }
 
+  const money2 = (n) => Math.round(n * 100) / 100;
+
+  // Newest month first. The oldest and newest entries are marked `partial`: the window is
+  // a rolling number of days, so it opens part-way through one month and ends part-way
+  // through the current one. An unmarked part-month reads as a collapse in trade that
+  // never happened, which is the one way a monthly table actively misleads.
+  const monthRows = [...byMonth.values()]
+    .sort((a, b) => (a.month < b.month ? 1 : -1))
+    .map((m) => ({
+      ...m,
+      revenue: money2(m.revenue),
+      channels: Object.fromEntries(Object.entries(m.channels)
+        .map(([k, v]) => [k, { units: v.units, revenue: money2(v.revenue) }])
+        .sort((a, b) => b[1].units - a[1].units)),
+    }));
+  if (monthRows.length) {
+    monthRows[0].partial = true;
+    monthRows[monthRows.length - 1].partial = true;
+  }
+
   const out = {
     days: d,
     orders,
     units,
+    revenue: money2(revenue),
     // Titles with no style code in them. Reported, never silently folded into a style.
     unmatched_units: unmatched,
     channels: byChannel,
+    // Whole calendar months, newest first. The FIRST and LAST are part-months — the window
+    // is a rolling N days, not a run of complete months — and each says so, because a
+    // part-month read as a full one looks like a collapse in sales that never happened.
+    months: monthRows,
+    months_note: 'Calendar months inside the window. The oldest and newest are PART months — the window is a rolling number of days, so neither is a full month of trading.',
     truncated,
     styles: [...byStyle.values()].map((e) => ({
       ...e,
       avg_price: e.prices.length ? Math.round((e.prices.reduce((a, b) => a + b, 0) / e.prices.length) * 100) / 100 : null,
       prices: undefined,
+      revenue: money2(e.revenue),
     })).sort((a, b) => b.sold - a.sold || a.style_id.localeCompare(b.style_id)),
     source: 'Shopify orders (all channels)',
   };

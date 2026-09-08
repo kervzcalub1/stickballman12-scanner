@@ -1,8 +1,9 @@
 # Gift-card buying — approved money out, verified inventory in
 
 Screens: `src/screens/BuyCarts.jsx` (queue) → `src/screens/BuyCart.jsx` (one request),
-with `src/components/BuyCartAdd.jsx`, `BuyCartGiftCards.jsx`, `BuyCartReceipt.jsx`.
-Endpoints: `api/cart/*` (16). Shared rules: `api/_lib/buycart.js`. Crypto:
+with `src/components/BuyCartAdd.jsx`, `BuyCartCosts.jsx`, `BuyCartGiftCards.jsx`,
+`BuyCartReceipt.jsx`.
+Endpoints: `api/cart/*` (18). Shared rules: `api/_lib/buycart.js`. Crypto:
 `api/_lib/secrets.js`. Receipt parser: `src/lib/receiptParse.js`. Queries: the
 `buy_carts` section at the end of `api/_lib/db.js`. Routes: **`/buy-carts`** (warehouse/admin),
 **`/ph/gift-card-buying`** (PH) and **`/buying`** on the supplier portal. E2E: `e2e/buy-cart.spec.js`.
@@ -131,6 +132,79 @@ factor — that 8% is what *we* save buying the card, not a discount the registe
 and so is the coupon, which is a flat amount off one transaction and would understate
 every line if spread across a request (the same reason batch analysis refuses it).
 
+## The cost stack — and who may write it
+A request's stack is snapshotted from the **buyer's** payout preset when it is opened
+(`payout_presets.supplier_user_id` → `buy_carts.cost_stack`). Buyers do not manage their
+own presets — an admin does — so **a buyer who has never been given one opens a request
+with no stack at all**: every pair "lands at" exactly its sticker, no payout clears a
+threshold, and the Call column is blank on every line. That is not an edge case, it is
+what every new buyer's first request looks like.
+
+So it can be stated by hand — `api/cart/costs.js`, `BuyCartCosts.jsx`, the **What a pair
+costs us** card above the lines.
+
+- **The BUYER writes it first, and either desk can overwrite it** (`canWriteCosts`). The
+  buyer is the only person in the room with the information: they are standing in the
+  shop reading the tax off the register and the discount off the sign, and the desk is
+  not. Desk-only was the first version and it was wrong — it made "the supplier didn't
+  enter the costs" true of *every* request ever raised, because a buyer has no preset of
+  their own to enter them into.
+- **What makes that safe is the trail, not the lock.** A buyer could set a flattering
+  stack; the approver can overwrite it, and `buy_cart_events` holds both versions under
+  the names that set them, so a favourable number is visible *as the buyer's* beside what
+  the approver replaced it with. The thing a buyer still cannot move is the **shelf
+  price** once the cards are out — that is what the money was released against.
+- **A buyer reaches only their own request** (`cartVisibleTo`, re-checked in
+  `canWriteCosts` on `buyer_user_id`). Staff holding neither privilege can read the stack
+  and not write it; the privilege is read from the DB on every call, as everywhere else
+  here.
+- **The seven fields are the calculator's** (`COST_FIELDS`): store %, promo %, gift
+  card %, cashback %, tax %, tip $, shipping $. A blank box is **zero**, not "leave what
+  was there" — the stack is stated as a whole, so a rate somebody clears has to clear.
+  `presetName` survives only while the numbers do: a hand-edited stack stops claiming to
+  be a preset.
+- **The chip IS the field.** Tap a rate and its value becomes an input in place; Enter
+  saves, Esc leaves it, leaving the box commits it. A rate gets corrected one at a time
+  far more often than seven at a time — somebody reads the receipt and the tax is 6%, not
+  8.25% — and opening a seven-box form to change one number is a form you then have to
+  re-read before you can trust you only changed the one. *Edit all seven* is still there
+  for stating a whole stack from nothing.
+  - The inline input is **16px**, unlike every other chip on the screen: under that, iOS
+    Safari zooms the page and it can't be undone one-handed.
+  - **Enter and blur both commit, so it must survive being asked twice.** Enter disables
+    the input while it saves, and disabling a focused element BLURS it — straight into a
+    second identical write. Guarded by a `useRef`, not by the `busy` state: the blur
+    arrives during React's commit, before any re-rendered handler could see it.
+  - The chip is a `<button>` only for someone who may write it — the buyer on their own
+    request, or a desk — and a plain `<span>` for everyone else, rather than a control
+    that answers 403.
+- **Saving re-prices every line**, pending ones included — a pending line is exactly the
+  one an approver is about to judge. `repriceLine` re-derives `final_cost`, `verdict`,
+  `best_platform`, `best_payout`, `profit`, `roi`.
+- **The funding target does not move.** It is shelf × qty over approved lines; a discount
+  we hope for is not money the cards can be short by.
+- **It is not frozen by `funded`** — an auditor still has to be able to state what a
+  transaction they are closing actually cost. Only `closed`/`cancelled` stops it.
+
+### Correcting a line after it was sent in
+*(This half is desk-only — unlike the cost stack above.)*
+A misread shelf ticket used to mean pulling the whole request back and rebuilding it to
+fix one number, which in practice meant approving it wrong instead. `cart/line`'s
+**patch** branch now takes size / qty / shelf price from a cost-privilege holder while
+the request is `draft`, `submitted` or `approved` (the buyer still only in `draft`), and
+re-prices the line when the shelf price moved.
+
+**Shelf prices freeze at `funded`** — the same freeze approvals get, and for the same
+reason: `approved_amount` is the target the gift cards were issued against, and moving it
+afterwards would rewrite what the money was released to cover. From there the **receipt**
+records what was actually paid.
+
+Both writes land in `buy_cart_events` (`costs_edited`, `line_edited`) with the
+before-and-after in words — "Store discount 0% → 20% · Sales tax 0% → 8.25% — 1 line
+re-priced". A record that says something changed and not what it used to be is not a
+record of anything. **No schema change**: `cost_stack` is already JSONB and the event
+`kind` column is free text.
+
 ## The buy call is a SNAPSHOT
 Every line stores the verdict as the buyer saw it: call, final cost, best platform,
 payout, profit, ROI, both market prices, liquidity, basis, and `quoted_at`. It is never
@@ -147,6 +221,43 @@ moving in between is information, not a correction.
   doesn't; the red chip travels to the approver so the disagreement is visible rather
   than prevented. A tool that refuses to record what someone wants to buy just moves the
   conversation to a chat app where nobody can audit it.
+- **The snapshot bends in exactly one place**: an edit to the COST side (above) re-derives
+  the call, because the frozen number was computed against rates that have just been
+  declared wrong. The MARKET half — `alias_price`, `stockx_price`, `liquidity`,
+  `quoted_at` — is never refreshed, so the call still answers "at the prices the buyer was
+  looking at".
+- **No market price means NO call, never a Pass.** "We didn't look" and "we looked and
+  it's bad" are different answers to somebody deciding whether to spend, and the line
+  renders *Not priced* rather than an empty chip.
+
+### Showing the working, and pricing a line that never got one
+**A line opens.** Clicking a row expands the Payout Calculator's own verdict card for
+that pair — chip, "lands at … a pair", profit / ROI / platform, the risk band, the
+calculator's sentence, and the Alias and StockX prices it was computed from with the date
+they were quoted. A chip on its own is a number nobody can check, and the same call read
+on the request and on the calculator must not look like two tools' opinions.
+
+- The **numbers** come off the stored snapshot; only the **prose** (note, risk, spread) is
+  re-derived, by `lineCall` in `BuyCartAdd.jsx`, from the same inputs the server used. One
+  source of truth for anything a person decides on.
+- `best_platform` stores the KEY. Print it raw and the row reads "via alias" beside a
+  calculator saying "via Alias".
+
+**`cart/price-line` re-reads the market for one pair.** The snapshot rule assumes there
+*is* a call — a pair added while api.alias.org was running 20–45s TTFB stored no market
+price, reads *Not priced* forever, and there was no way back short of deleting the line
+and re-adding it, while the same SKU prices fine an hour later.
+
+- Same people as the cost stack (`canWriteCosts`): the buyer on their own request, or
+  either desk. Pricing writes the number an approval is judged on.
+- **Explicit and named, never automatic.** `line_priced` carries the prices it found and
+  what the call was before — an approver who re-prices has chosen to look at today's
+  market instead of the buyer's, and the record says so. The button says as much.
+- **Finding nothing is not an error, and must not be written as one.** Both sources empty
+  answers 200 with `priced:false` and a sentence; writing two more zeros is what created
+  the problem this endpoint exists to undo.
+- Basis is kept (`line.basis` → `consigned`), so a re-price cannot quietly switch which
+  question was asked.
 - There is **no unique index on (cart, sku, size)** — a line carries its own shelf price
   and its own verdict, so the same pair seen in two shops at two prices is two true rows.
 
@@ -296,6 +407,16 @@ one of the process — has somewhere to happen that can be audited later.
   these screens was silently storing an event object at first, and the failure is
   invisible — the field looks like it took the input while everything downstream becomes
   NaN.
+- **`Number(null)` is 0, and a stored zero is a claim.** `cart/line` used
+  `Number.isFinite(Number(l.profit))` to decide whether a field was present, so every line
+  added without a market price stored `profit = 0, roi = 0` and rendered "$0.00 · 0.0% via
+  —" — a priced pair worth nothing, rather than a pair nobody priced. Absent has to stay
+  absent (`num()` / `money()` at the top of the file).
+- **`.table` had no CSS rule anywhere.** All four tables here shipped against a class that
+  did not exist, so they rendered as bare browser tables — no cell padding, no row rules,
+  headings jammed together until "Call" and "Status" read as one column called "Call
+  Status". Defined now in the buy-cart block of `styles.css`, alongside a `.num` class for
+  the money columns.
 - Nothing here touches `items`, so `PH_EXCLUDED_KINDS` and `items.pre_sell` are not in
   play. The PO it raises is an ordinary shipment and follows all the usual rules.
 - All timestamps go through the EST helpers (`src/lib/format.js`).

@@ -29,6 +29,32 @@ export function VerdictChip({ verdict, className = '' }) {
   return <span className={`bc-verdict ${verdict} ${className}`}>{VERDICT_LABEL[verdict] || verdict}</span>;
 }
 
+/**
+ * The PROSE behind a stored line's call — the sentence and the risk band the Payout
+ * Calculator prints under its verdict, re-derived from the snapshot on the row.
+ *
+ * The numbers are NOT re-derived: `verdict`, `profit`, `roi` and `best_platform` are
+ * rendered from the columns, so there is exactly one source of truth for anything a
+ * person decides on. This only fills in what was never stored — `dealVerdict`'s note,
+ * risk and spread — from the same inputs the server used, so the two cannot disagree.
+ *
+ * Returns null when the line carries no market price at all, which is the honest answer:
+ * nobody priced it, and that is different from having priced it badly.
+ */
+export function lineCall(line, stack = {}) {
+  const shelf = Number(line?.shelf_price);
+  if (!(shelf > 0)) return null;
+  const alias = Number(line.alias_price) > 0 ? Number(line.alias_price) : null;
+  const stockx = Number(line.stockx_price) > 0 ? Number(line.stockx_price) : null;
+  if (!alias && !stockx) return null;
+  const cost = calcCostBreakdown({ ...stack, shelfPrice: shelf });
+  const payouts = [
+    ...(alias ? [calcPayout('alias', alias, cost.finalCost, DEFAULT_FEE_PCT.alias)] : []),
+    ...(stockx ? [calcPayout('stockx', stockx, cost.finalCost, DEFAULT_FEE_PCT.stockx)] : []),
+  ];
+  return dealVerdict(payouts, cost.finalCost, line.liquidity || '');
+}
+
 export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   const [skuInput, setSkuInput] = useState('');
   const [product, setProduct] = useState(null);

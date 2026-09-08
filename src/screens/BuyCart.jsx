@@ -12,13 +12,19 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, PriceInput, FormModal } from '../components/common.jsx';
-import { BuyCartAdd, VerdictChip } from '../components/BuyCartAdd.jsx';
+import { BuyCartAdd, VerdictChip, lineCall } from '../components/BuyCartAdd.jsx';
 import { BuyCartGiftCards } from '../components/BuyCartGiftCards.jsx';
 import { BuyCartReceipt } from '../components/BuyCartReceipt.jsx';
+import { BuyCartCosts } from '../components/BuyCartCosts.jsx';
 import { estDate, estTime } from '../lib/format.js';
+import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
+// `best_platform` stores the KEY ('alias'), and printing it raw read "92.7% ROI via
+// alias" beside a calculator that says "via Alias" — the same call looking like two
+// tools' opinions.
+const platform = (key) => PLATFORMS.find((p) => p.key === key)?.label || key || '—';
 
 // The request's own state, in the words of the process rather than the column value.
 const STATUS = {
@@ -67,15 +73,75 @@ function Checks({ checks }) {
   );
 }
 
-function Lines({ cart, canDecide, isBuyer, onChanged, onSignOut }) {
+// The Payout Calculator's verdict card, for a line that already has one. Same shape and
+// the same sentence, because a buy call read on the request and the same call read on the
+// calculator must not look like two different tools' opinions.
+//
+// The NUMBERS come off the stored snapshot; only the prose is re-derived (`lineCall`), so
+// there is one source of truth for anything a person decides on.
+function LineCall({ line, stack, onPrice, canPrice, busy }) {
+  const v = lineCall(line, stack);
+  const alias = Number(line.alias_price) > 0 ? Number(line.alias_price) : null;
+  const stockx = Number(line.stockx_price) > 0 ? Number(line.stockx_price) : null;
+  return (
+    <div className={`bc-call ${line.verdict || 'none'}`}>
+      <div className="bc-call-top">
+        <VerdictChip verdict={line.verdict} />
+        <span className="muted sm">
+          Lands at {money(line.final_cost)} a pair
+          {line.profit != null && ` · ${money(line.profit)} profit · ${Number(line.roi).toFixed(1)}% ROI via ${platform(line.best_platform)}`}
+        </span>
+        {v?.risk && <span className={`bc-risk ${v.risk}`}>{v.risk} risk</span>}
+      </div>
+      {v && <p className="bc-call-note">{v.note}</p>}
+      {/* Why there is no call, in the words of what actually happened. "Not priced" on
+          its own sends people looking for a setting that doesn't exist. */}
+      {!v && (
+        <p className="bc-call-note muted">
+          No Alias or StockX price was captured for this size when it was added, so no call
+          could be made — the market lookup came back empty or timed out.
+          {canPrice ? ' Price it now to get one.' : ''}
+        </p>
+      )}
+      <div className="bc-market">
+        <span>Alias <b>{alias ? money(alias) : '—'}</b></span>
+        <span>StockX <b>{stockx ? money(stockx) : '—'}</b></span>
+        {line.liquidity && <span>sells <b>{line.liquidity}</b></span>}
+        {line.basis && <span className="muted sm">{line.basis === 'consigned' ? 'consigned' : 'you hold it'}</span>}
+        {line.quoted_at && <span className="muted sm">quoted {estDate(line.quoted_at)} EST</span>}
+      </div>
+      {canPrice && (
+        <div className="bc-call-actions">
+          <button type="button" className={`btn sm ${v ? 'ghost' : 'primary'}`} disabled={busy}
+            onClick={onPrice}>
+            {busy ? 'Reading the market…' : v ? 'Re-price against today’s market' : 'Price it'}
+          </button>
+          {v && <span className="muted xs">This replaces the call an approver is reading, and says so in the history.</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Lines({ cart, canDecide, canEditLines, canPrice, isBuyer, onChanged, onSignOut }) {
   const [sel, setSel] = useState([]);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   // `null` = not asking. `{ all }` = asking why, for one line or for the lot.
   const [rejecting, setRejecting] = useState(null);
+  // The line being corrected, if any. A misread shelf ticket is the common case and it
+  // used to mean pulling the whole request back to fix one number.
+  const [fixing, setFixing] = useState(null);
+  // Which line's working is open. One at a time: the panel is tall, and two of them open
+  // is a table you have to scroll to compare two rows of.
+  const [open, setOpen] = useState(null);
   const lines = cart.lines || [];
   const pending = lines.filter((l) => l.status === 'pending');
   const editable = isBuyer && cart.status === 'draft';
+  const canFix = editable || canEditLines;
+  // Kept in one place: the detail row has to span exactly the header, and a colSpan that
+  // drifts from the columns leaves a ragged edge nobody notices in review.
+  const cols = 7 + (canDecide && pending.length > 0 ? 1 : 0) + (canFix ? 1 : 0);
 
   const toggle = (id) => setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
@@ -102,6 +168,30 @@ function Lines({ cart, canDecide, isBuyer, onChanged, onSignOut }) {
     finally { setBusy(''); }
   }
 
+  // Re-read the market for one pair. Explicit and named — see api/cart/price-line.js.
+  async function price(id) {
+    setBusy(`px${id}`); setErr('');
+    try {
+      const r = await api.cartPriceLine(cart.id, id);
+      // A successful call that found nothing is not an error, and it must not read as
+      // one — but it does have to say so, or the button looks broken.
+      if (r.priced === false) setErr(r.error || 'No market price for that size right now.');
+      onChanged();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(''); }
+  }
+
+  // Not through `act`-style error swallowing: FormModal keeps the typed values when the
+  // server refuses, which is the whole reason these stopped being window.prompts.
+  async function fix({ size, qty, shelfPrice }) {
+    await api.cartEditLine(cart.id, fixing.id, {
+      size: String(size ?? '').trim() || null,
+      qty: Number(qty) || fixing.qty,
+      shelfPrice: String(shelfPrice ?? '').trim() === '' ? null : Number(shelfPrice),
+    });
+    setFixing(null); onChanged();
+  }
+
   return (
     <section className="card bc-lines">
       {rejecting && (
@@ -114,6 +204,23 @@ function Lines({ cart, canDecide, isBuyer, onChanged, onSignOut }) {
           fields={[{ name: 'reason', label: 'Why?', type: 'textarea', required: true,
             placeholder: 'e.g. Too close to retail — only worth it under $95' }]} />
       )}
+      {fixing && (
+        <FormModal
+          title={`Correct ${fixing.sku}`}
+          message={isBuyer
+            ? 'Fix what you typed. The buy call re-prices against the same market prices it was quoted at.'
+            : 'The buyer read the ticket in a shop. Correcting it here re-prices the line and the change is recorded against your name.'}
+          submitLabel="Save the correction"
+          onClose={() => setFixing(null)}
+          onSubmit={fix}
+          fields={[
+            { name: 'size', label: 'Size', value: fixing.size || '', maxLength: 20 },
+            { name: 'qty', label: 'Pairs', type: 'number', value: String(fixing.qty ?? 1), min: 1, max: 999, required: true },
+            { name: 'shelfPrice', label: 'Price on the shelf', type: 'number', step: '0.01',
+              value: fixing.shelf_price == null ? '' : String(fixing.shelf_price), min: 0, required: true,
+              hint: 'What the sticker says, before any discount — it is what the gift cards have to cover.' },
+          ]} />
+      )}
       <h3 className="bc-h">
         What’s being asked for <span className="muted sm">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
       </h3>
@@ -124,17 +231,28 @@ function Lines({ cart, canDecide, isBuyer, onChanged, onSignOut }) {
             <thead>
               <tr>
                 {canDecide && pending.length > 0 && <th className="bc-w-sm" />}
-                <th>Shoe</th><th>Size</th><th>Qty</th><th>Shelf</th>
-                <th>Lands at</th><th>Call</th><th>Status</th>{editable && <th />}
+                <th>Shoe</th><th>Size</th><th className="num">Qty</th><th className="num">Shelf</th>
+                {/* Two columns, not one. Unstyled they ran together and read as a single
+                    "Call Status" heading, so a blank buy call looked like a request whose
+                    STATUS was the word Pending sitting in the wrong place. */}
+                <th className="num">Lands at</th><th>Buy call</th><th>Approval</th>{canFix && <th />}
               </tr>
             </thead>
             <tbody>
-              {lines.map((l) => (
-                <tr key={l.id} className={`bc-line ${l.status}`}>
+              {lines.map((l) => {
+                const id = Number(l.id);
+                const shown = open === id;
+                return (
+                <React.Fragment key={l.id}>
+                <tr className={`bc-line ${l.status}${shown ? ' open' : ''}`}
+                  onClick={() => setOpen(shown ? null : id)} tabIndex={0}
+                  aria-expanded={shown}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(shown ? null : id); } }}>
                   {canDecide && pending.length > 0 && (
-                    <td>{l.status === 'pending' && (
-                      <input type="checkbox" checked={sel.includes(Number(l.id))}
-                        onChange={() => toggle(Number(l.id))} aria-label={`Select ${l.sku}`} />
+                    // Ticking a line to approve it must not also open its working.
+                    <td onClick={(e) => e.stopPropagation()}>{l.status === 'pending' && (
+                      <input type="checkbox" checked={sel.includes(id)}
+                        onChange={() => toggle(id)} aria-label={`Select ${l.sku}`} />
                     )}</td>
                   )}
                   <td>
@@ -142,30 +260,51 @@ function Lines({ cart, canDecide, isBuyer, onChanged, onSignOut }) {
                     {l.name && <div className="muted xs">{l.name}</div>}
                   </td>
                   <td>{l.size || '—'}</td>
-                  <td>{l.qty}</td>
-                  <td>{money(l.shelf_price)}</td>
-                  <td>
-                    {money(l.final_cost)}
-                    {/* The snapshot's own working, so an approver can see WHY it said
-                        what it said rather than taking the chip on trust. */}
-                    {l.profit != null && (
+                  <td className="num">{l.qty}</td>
+                  <td className="num">{money(l.shelf_price)}</td>
+                  <td className="num">{money(l.final_cost)}</td>
+                  {/* The call and its working together — the profit and ROI used to sit
+                      under "Lands at", a column away from the verdict they justify.
+                      No verdict means nobody priced it, which is a different answer from
+                      "we priced it and it's a Pass". */}
+                  <td className="bc-call-cell">
+                    {l.verdict ? <VerdictChip verdict={l.verdict} />
+                      : <span className="muted xs">Not priced</span>}
+                    {l.profit != null ? (
                       <div className="muted xs">
-                        {money(l.profit)} · {Number(l.roi).toFixed(1)}% via {l.best_platform || '—'}
+                        {money(l.profit)} · {Number(l.roi).toFixed(1)}% via {platform(l.best_platform)}
                       </div>
+                    ) : (
+                      <div className="muted xs">{shown ? 'why ▴' : 'why ▾'}</div>
                     )}
                   </td>
-                  <td><VerdictChip verdict={l.verdict} /></td>
                   <td>
                     <span className={`bc-line-status ${l.status}`}>{l.status}</span>
                     {l.decided_by && <div className="muted xs">{l.decided_by}</div>}
                     {l.decided_reason && <div className="muted xs">{l.decided_reason}</div>}
                   </td>
-                  {editable && (
-                    <td><button type="button" className="btn sm ghost" disabled={busy === 'rm'}
-                      onClick={() => remove(l.id)} aria-label={`Remove ${l.sku}`}>×</button></td>
+                  {canFix && (
+                    <td className="bc-line-actions" onClick={(e) => e.stopPropagation()}>
+                      <button type="button" className="btn sm ghost" onClick={() => setFixing(l)}
+                        aria-label={`Correct ${l.sku}`} title="Correct the size, quantity or shelf price">✎</button>
+                      {editable && (
+                        <button type="button" className="btn sm ghost" disabled={busy === 'rm'}
+                          onClick={() => remove(l.id)} aria-label={`Remove ${l.sku}`}>×</button>
+                      )}
+                    </td>
                   )}
                 </tr>
-              ))}
+                {shown && (
+                  <tr className="bc-line-detail">
+                    <td colSpan={cols} onClick={(e) => e.stopPropagation()}>
+                      <LineCall line={l} stack={cart.cost_stack || {}} canPrice={canPrice}
+                        busy={busy === `px${id}`} onPrice={() => price(id)} />
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -297,6 +436,12 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
   const canDecide = !isBuyer && hasPriv(user, 'approve_buying');
   const canIssue = !isBuyer && hasPriv(user, 'issue_gift_cards');
   const canAudit = !isBuyer && hasPriv(user, 'audit_buying');
+  // The cost side is the BUYER'S first — they are the one in the shop who can read the
+  // tax off the register — and either desk can then overwrite anything they typed. The
+  // control is the trail, not the lock: every version is named in the history. Shelf
+  // prices are the exception and still freeze once the cards are out, because that is
+  // the number the money was released against.
+  const canCost = isBuyer || canDecide || canAudit;
 
   async function load() {
     try { const { cart: c } = await api.cartGet(cartId); setCart(c); setErr(''); }
@@ -418,7 +563,14 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         <BuyCartAdd cart={cart} onAdded={load} onSignOut={onSignOut} />
       )}
 
-      <Lines cart={cart} canDecide={canDecide} isBuyer={isBuyer} onChanged={load} onSignOut={onSignOut} />
+      {/* Before the lines, because it is what the "Lands at" column on them means. */}
+      <BuyCartCosts cart={cart} canEdit={canCost && !['closed', 'cancelled'].includes(cart.status)}
+        onChanged={load} onSignOut={onSignOut} />
+
+      <Lines cart={cart} canDecide={canDecide} isBuyer={isBuyer}
+        canEditLines={(canDecide || canAudit) && ['draft', 'submitted', 'approved'].includes(cart.status)}
+        canPrice={canCost && !['closed', 'cancelled'].includes(cart.status)}
+        onChanged={load} onSignOut={onSignOut} />
 
       {['approved', 'funded', 'receipted', 'audited', 'closed'].includes(cart.status) && (
         <BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer}

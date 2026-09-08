@@ -270,8 +270,10 @@ export function FormModal({
               ) : (
                 <input className="input" type={f.type || 'text'} value={vals[f.name] ?? ''}
                   placeholder={f.placeholder || ''} maxLength={f.maxLength || 200} disabled={busy}
-                  inputMode={f.type === 'number' ? 'numeric' : undefined}
-                  min={f.min} max={f.max}
+                  inputMode={f.type === 'number' ? (f.step ? 'decimal' : 'numeric') : undefined}
+                  // Without a step, a number input rejects 8.25 on submit with the
+                  // browser's own "please enter a valid value" and no field ever says why.
+                  min={f.min} max={f.max} step={f.step}
                   onChange={(e) => set(f.name, e.target.value)} />
               )}
               {f.hint && <i className="form-modal-hint">{f.hint}</i>}
@@ -287,6 +289,26 @@ export function FormModal({
         </div>
       </form>
     </div>
+  );
+}
+
+// A labelled bare-number box with either a $ in front or a % behind — the shape every
+// register-stack field takes. Lived on the Payout Calculator until the buying request's
+// cost stack needed exactly the same seven boxes; two copies of a money input is how the
+// two screens start disagreeing about what "blank" means.
+export function NumField({ label, value, onChange, prefix, suffix, placeholder = '0', hint, disabled }) {
+  return (
+    <label className="pc-field">
+      <span className="pc-field-label">{label}</span>
+      <span className={`pc-input-wrap${prefix ? ' has-prefix' : ''}${suffix ? ' has-suffix' : ''}`}>
+        {prefix ? <span className="pc-affix" aria-hidden="true">{prefix}</span> : null}
+        <input
+          type="number" min="0" step="0.01" inputMode="decimal" placeholder={placeholder}
+          value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
+        {suffix ? <span className="pc-affix suffix" aria-hidden="true">{suffix}</span> : null}
+      </span>
+      {hint ? <span className="pc-field-hint muted sm">{hint}</span> : null}
+    </label>
   );
 }
 

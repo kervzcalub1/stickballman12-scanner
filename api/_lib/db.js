@@ -5679,20 +5679,96 @@ export async function addBuyCartLine(cartId, line, actor) {
   return lineOut(rows[0]);
 }
 
-export async function updateBuyCartLine(cartId, lineId, patch, actor) {
+export async function getBuyCartLine(cartId, lineId) {
+  const rows = await db()`SELECT * FROM buy_cart_lines WHERE id = ${lineId} AND cart_id = ${cartId}`;
+  return lineOut(rows[0] || null);
+}
+
+// Edit one line. `call` is the re-derived landed cost and buy call (api/_lib/buycart.js
+// repriceLine) when the shelf price moved -- passing null leaves the snapshot alone,
+// which is what a pure size or quantity correction should do. `note` is the before/after
+// in words: an edit to a number somebody is approving has to say what it used to be, or
+// the trail records that something changed and nothing about what.
+export async function updateBuyCartLine(cartId, lineId, patch, actor, call = null, note = null) {
+  const sql = db();
+  const rows = call
+    ? await sql`
+      UPDATE buy_cart_lines SET
+        qty = coalesce(${patch.qty ?? null}::int, qty),
+        shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
+        size = coalesce(${patch.size ?? null}::text, size),
+        final_cost = ${call.finalCost}, verdict = ${call.verdict},
+        best_platform = ${call.bestPlatform}, best_payout = ${call.bestPayout},
+        profit = ${call.profit}, roi = ${call.roi},
+        updated_at = now()
+      WHERE id = ${lineId} AND cart_id = ${cartId}
+      RETURNING *`
+    : await sql`
+      UPDATE buy_cart_lines SET
+        qty = coalesce(${patch.qty ?? null}::int, qty),
+        shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
+        size = coalesce(${patch.size ?? null}::text, size),
+        updated_at = now()
+      WHERE id = ${lineId} AND cart_id = ${cartId}
+      RETURNING *`;
+  if (!rows[0]) return null;
+  await recalcCartMoney(sql, cartId);
+  await logCartEvent({ cartId, kind: 'line_edited', lineId, actor, body: note });
+  return lineOut(rows[0]);
+}
+
+// Put a MARKET price on one line, and the buy call that follows from it.
+//
+// The snapshot rule (a line's call is frozen as the buyer saw it) assumes there IS a
+// call. A line quoted while Alias was timing out has nothing to protect: it stored zeros,
+// and zeros render as "Not priced" forever with no way back short of deleting the line
+// and re-adding it. This is that way back, and it is an explicit act by a named person
+// rather than anything automatic.
+//
+// `quoted_at` moves with it, so the screen can say how old the numbers are.
+export async function priceBuyCartLine(cartId, lineId, snap, actor, note) {
   const sql = db();
   const rows = await sql`
     UPDATE buy_cart_lines SET
-      qty = coalesce(${patch.qty ?? null}::int, qty),
-      shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
-      size = coalesce(${patch.size ?? null}::text, size),
-      updated_at = now()
+      verdict = ${snap.verdict}, final_cost = ${snap.finalCost},
+      best_platform = ${snap.bestPlatform}, best_payout = ${snap.bestPayout},
+      profit = ${snap.profit}, roi = ${snap.roi},
+      alias_price = ${snap.aliasPrice}, stockx_price = ${snap.stockxPrice},
+      liquidity = ${snap.liquidity}, quoted_at = now(), updated_at = now()
     WHERE id = ${lineId} AND cart_id = ${cartId}
     RETURNING *`;
   if (!rows[0]) return null;
-  await recalcCartMoney(sql, cartId);
-  await logCartEvent({ cartId, kind: 'line_edited', lineId, actor });
+  await logCartEvent({ cartId, kind: 'line_priced', lineId, actor, body: note });
   return lineOut(rows[0]);
+}
+
+// Write the request's cost stack and re-derive every line against it.
+//
+// The stack is what turns a shelf price into a landed cost, and a buyer who has never
+// been given a payout preset arrives with none at all -- so an approver or an auditor
+// can state it. The recompute is the point rather than a side effect: leaving the old
+// landed costs beside a stack that has just been declared wrong would show numbers
+// nothing on the screen can explain. The MARKET half of each snapshot is untouched.
+//
+// `note` is the before/after diff in words, written by the endpoint, so the trail says
+// which rate moved and from what.
+export async function setBuyCartCostStack(cartId, stack, calls, actor, note) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET cost_stack = ${JSON.stringify(stack)}, updated_at = now()
+     WHERE id = ${cartId}
+     RETURNING *`;
+  if (!rows[0]) return null;
+  for (const c of calls || []) {
+    await sql`
+      UPDATE buy_cart_lines SET
+        final_cost = ${c.finalCost}, verdict = ${c.verdict},
+        best_platform = ${c.bestPlatform}, best_payout = ${c.bestPayout},
+        profit = ${c.profit}, roi = ${c.roi}, updated_at = now()
+       WHERE id = ${c.id} AND cart_id = ${cartId}`;
+  }
+  await logCartEvent({ cartId, kind: 'costs_edited', actor, body: note });
+  return cartOut(rows[0]);
 }
 
 export async function removeBuyCartLine(cartId, lineId, actor) {

@@ -33,6 +33,9 @@ const CAST = {
   // A staff account with NO privilege — proves the gates are real rather than just
   // "is this person staff", which is what a role check would have amounted to.
   bystander: { username: 'e2e_bc_none', name: 'E2E Bystander', role: 'ph_team', privileges: [] },
+  // A second buyer, so "the buyer may set the costs" can be shown to mean THEIR OWN
+  // request and not anybody's.
+  buyer2: { username: 'e2e_bc_buyer2', name: 'E2E Other Buyer', role: 'supplier', privileges: [] },
 };
 
 let pool;
@@ -330,4 +333,286 @@ test('a request is started in one modal, and it will not accept a blank purpose'
   // It lands on the new request, opened and ready for lines.
   await expect(page.locator('.bc-lines')).toBeVisible();
   await expect(page.locator('.app')).toContainText('E2E: modal purpose');
+});
+
+// ---------------------------------------------------------------------------
+// The cost stack — what a pair on a request actually costs the company.
+//
+// A request's stack is snapshotted from the BUYER'S payout preset when it is opened, and
+// buyers do not manage their own presets. So a buyer who has never been given one opens
+// a request where every pair lands at exactly its sticker, no payout clears a threshold,
+// and no buy call can be made at all. The desk being asked to release the money can
+// state it — and everything below is about that not becoming a hole of its own.
+
+// The buyer writes it FIRST — they are the only person in the room with the information.
+// What keeps that safe is not withholding the box: it is that the desk can overwrite it
+// and both versions are named in the trail.
+test('the buyer sets the costs, and the desk can overwrite them', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+  const buyer = await call(request, 'buyer', 'cart/costs', {
+    cartId, stack: { storePct: 40, promoPct: 0, giftPct: 0, cashbackPct: 0, taxPct: 0, tipAmt: 0, shippingAmt: 0 },
+  });
+  expect(buyer.status).toBe(200);
+
+  const over = await call(request, 'approver', 'cart/costs', {
+    cartId, stack: { storePct: 10, promoPct: 0, giftPct: 0, cashbackPct: 0, taxPct: 0, tipAmt: 0, shippingAmt: 0 },
+  });
+  expect(over.status).toBe(200);
+
+  const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  expect(body.cart.cost_stack.storePct).toBe(10);
+  // Two versions, each under the name that set it — a favourable stack is visible AS the
+  // buyer's, beside the number the approver replaced it with.
+  const trail = body.cart.events.filter((e) => e.kind === 'costs_edited');
+  expect(trail).toHaveLength(2);
+  expect(trail[0].actor_name).toBe('E2E Approver');
+  expect(trail[0].body).toMatch(/Store discount 40% → 10%/);
+  expect(trail[1].actor_name).toBe('E2E Buyer');
+  expect(trail[1].body).toMatch(/Store discount 0% → 40%/);
+});
+
+test('but only on their own request, and never for staff holding neither privilege', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+  // A different buyer's request is not theirs to cost, or even to read.
+  const other = await call(request, 'buyer2', 'cart/costs', { cartId, stack: { storePct: 90 } });
+  expect(other.status).toBe(403);
+  // And no staff account gets it for free either — it is a privilege, not a job title.
+  const b = await call(request, 'bystander', 'cart/costs', { cartId, stack: { storePct: 90 } });
+  expect(b.status).toBe(403);
+  const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  expect(body.cart.cost_stack.storePct).toBe(0);
+});
+
+test('either desk can state the costs, and every line re-prices against them', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [{ ...LINE, aliasPrice: 120 }] });
+  const before = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  // Nothing has costed it yet — the buyer's screen is what computes a landed cost, and
+  // the API took the line without one rather than inventing a zero for it.
+  expect(before.body.cart.lines[0].final_cost).toBeNull();
+
+  // 50% off a $50 sticker, and nothing else at all.
+  const r = await call(request, 'auditor', 'cart/costs', {
+    cartId,
+    stack: { storePct: 50, promoPct: 0, giftPct: 0, cashbackPct: 0, taxPct: 0, tipAmt: 0, shippingAmt: 0 },
+  });
+  expect(r.status).toBe(200);
+  expect(r.body.repriced).toBe(1);
+
+  const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const line = after.body.cart.lines[0];
+  expect(line.final_cost).toBe(25);
+  // The MARKET half of the snapshot is untouched — the call still answers at the price
+  // the buyer was quoted, which is the whole reason a snapshot exists.
+  expect(line.alias_price).toBe(120);
+  expect(line.best_platform).toBe('alias');
+
+  // The funding target does NOT move: it is the sticker × qty, and a discount we hope
+  // for is not money the cards can be short by.
+  expect(after.body.cart.approved_amount).toBe(before.body.cart.approved_amount);
+
+  // And the trail says which rate moved, from what, by whom. A number that decides
+  // whether company money goes out must not be able to change silently.
+  const ev = after.body.cart.events.find((e) => e.kind === 'costs_edited');
+  expect(ev).toBeTruthy();
+  expect(ev.actor_name).toBe('E2E Auditor');
+  expect(ev.body).toMatch(/Store discount 0% → 50%/);
+  expect(ev.body).toMatch(/1 line re-priced/);
+});
+
+// A line with no market price on it is not a Pass. "We didn't look" and "we looked and
+// it's bad" are different answers to somebody deciding whether to spend.
+test('a line nobody priced comes back with no call, not a zero one', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [{ sku: 'DZ5485-612', size: '10', qty: 1, shelfPrice: 63 }] });
+  const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const line = body.cart.lines[0];
+  expect(line.profit).toBeNull();
+  expect(line.roi).toBeNull();
+  expect(line.verdict).toBeNull();
+});
+
+test('the desk can correct a shelf price after submission, until the cards are out', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });          // 2 × $50, submitted
+  const lineId = Number((await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0].id);
+
+  // The buyer can no longer touch it — that half of the freeze is unchanged.
+  const buyer = await call(request, 'buyer', 'cart/line', { cartId, lineId, patch: { shelfPrice: 20 } });
+  expect(buyer.status).toBe(403);
+
+  // The approver can, because a misread shelf ticket used to mean rebuilding the whole
+  // request to fix one number, which in practice meant approving it wrong instead.
+  const fix = await call(request, 'approver', 'cart/line', { cartId, lineId, patch: { shelfPrice: 45 } });
+  expect(fix.status).toBe(200);
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
+
+  const mid = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  expect(mid.body.cart.approved_amount).toBe(90);                        // 2 × $45, recomputed
+  const ev = mid.body.cart.events.find((e) => e.kind === 'line_edited');
+  expect(ev.body).toMatch(/shelf \$50\.00 → \$45\.00/);
+
+  // Once the cards are out, the sticker is what the money was released against and it
+  // freezes. The COST stack does not — an auditor still has to be able to state what a
+  // transaction they are closing actually cost.
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '4111111111119999', balance: 100 } });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+  const late = await call(request, 'approver', 'cart/line', { cartId, lineId, patch: { shelfPrice: 10 } });
+  expect(late.status).toBe(409);
+  expect(late.body.error).toMatch(/already been issued/i);
+  const costs = await call(request, 'auditor', 'cart/costs', { cartId, stack: { taxPct: 7 } });
+  expect(costs.status).toBe(200);
+});
+
+// A rate is corrected one at a time far more often than seven at a time — somebody reads
+// the receipt and the tax is 6%, not 8.25%. Opening a seven-box form to change one number
+// is a form you then have to re-read before you can trust you only changed the one.
+test('a cost chip is the field: tap it, type, Enter', async ({ page, request }) => {
+  const purpose = `E2E: chip edit ${Date.now()}`;
+  const { body } = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store', purpose });
+  const cartId = Number(body.cart.id);
+  await call(request, 'buyer', 'cart/line', { cartId, line: LINE });
+  await call(request, 'buyer', 'cart/submit', { cartId });
+
+  await as(page, 'approver');
+  await page.goto('/buy-carts');
+  await page.locator('.bc-table-wrap tr.bc-row', { hasText: purpose }).first().click();
+
+  const card = page.locator('section.bc-costs');
+  await expect(card).toBeVisible();
+  // The buyer's own preset: 8.25% tax, and $50 × 2 landing at $147.99 on this stack.
+  const chip = card.getByRole('button', { name: /Sales tax/ });
+  await expect(chip).toContainText('8.25%');
+
+  await chip.click();
+  const input = card.locator('.bc-cost-input');
+  await expect(input).toBeFocused();
+  await input.fill('6');
+  await input.press('Enter');
+
+  await expect(card.getByRole('button', { name: /Sales tax/ })).toContainText('6%');
+  const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  expect(after.body.cart.cost_stack.taxPct).toBe(6);
+  // The other six are untouched — a chip states the whole stack, it does not clear it.
+  expect(after.body.cart.cost_stack.giftPct).toBe(8);
+  expect(after.body.cart.cost_stack.tipAmt).toBe(5);
+  // Exactly ONE write. Enter disables the input while it saves, which BLURS it — and the
+  // blur handler commits too. Without a guard that is two identical rows in the trail.
+  expect(after.body.cart.events.filter((e) => e.kind === 'costs_edited')).toHaveLength(1);
+
+  // Escape leaves the rate as it was and writes nothing.
+  await card.getByRole('button', { name: /Store discount/ }).click();
+  await card.locator('.bc-cost-input').fill('99');
+  await card.locator('.bc-cost-input').press('Escape');
+  await expect(card.getByRole('button', { name: /Store discount/ })).toContainText('0%');
+  const esc = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  expect(esc.body.cart.cost_stack.storePct).toBe(0);
+  expect(esc.body.cart.events.filter((e) => e.kind === 'costs_edited')).toHaveLength(1);
+});
+
+// The buyer gets the same tappable chips on their own request — they are the one in the
+// shop who can read the tax off the register.
+test('the buyer gets the chips too, on the supplier portal', async ({ page, request }) => {
+  const purpose = `E2E: chip buyer ${Date.now()}`;
+  const { body } = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store', purpose });
+  const cartId = Number(body.cart.id);
+  await call(request, 'buyer', 'cart/line', { cartId, line: LINE });
+
+  await as(page, 'buyer');
+  await page.goto('/buying');
+  await page.locator('.bc-table-wrap tr.bc-row', { hasText: purpose }).first().click();
+  const card = page.locator('section.bc-costs');
+  await card.getByRole('button', { name: /Shipping/ }).click();
+  const input = card.locator('.bc-cost-input');
+  await input.fill('14');
+  await input.press('Enter');
+  await expect(card.getByRole('button', { name: /Shipping/ })).toContainText('$14.00');
+
+  const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  expect(after.body.cart.cost_stack.shippingAmt).toBe(14);
+  expect(after.body.cart.events.find((e) => e.kind === 'costs_edited').actor_name).toBe('E2E Buyer');
+});
+
+// The chips are a control over company money, so for anybody who may NOT write them they
+// are drawn as plain text rather than as buttons that answer 403.
+test('staff with neither privilege see the costs and cannot tap them', async ({ page, request }) => {
+  const purpose = `E2E: chip readonly ${Date.now()}`;
+  const { body } = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store', purpose });
+  await call(request, 'buyer', 'cart/line', { cartId: Number(body.cart.id), line: LINE });
+  await call(request, 'buyer', 'cart/submit', { cartId: Number(body.cart.id) });
+
+  // The bystander is ph_team, and PH has its own app — a ph_team account never reaches
+  // the staff router at all (docs/context/buy-cart.md, "where each holder finds it").
+  await as(page, 'bystander');
+  await page.goto('/ph/gift-card-buying');
+  await page.locator('.bc-table-wrap tr.bc-row', { hasText: purpose }).first().click();
+  const card = page.locator('section.bc-costs');
+  await expect(card).toContainText('Sales tax');
+  await expect(card.locator('.bc-cost-chip.editable')).toHaveCount(0);
+  await expect(card.getByRole('button', { name: /Edit all seven/ })).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// Pricing a line that was never priced
+//
+// The snapshot rule assumes there IS a call. A pair added while Alias was timing out
+// stored no market price, reads "Not priced" forever, and there was no way back short of
+// deleting the line and re-adding it — while the same SKU prices fine an hour later.
+
+test('a line with no market price says why, and can be priced', async ({ page, request }) => {
+  const purpose = `E2E: price it ${Date.now()}`;
+  const { body } = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store', purpose });
+  const cartId = Number(body.cart.id);
+  // No verdict and no market prices — exactly what a timed-out quote leaves behind.
+  await call(request, 'buyer', 'cart/line', { cartId, line: { sku: 'CW2288-111', size: '9', qty: 1, shelfPrice: 50 } });
+
+  await as(page, 'buyer');
+  await page.goto('/buying');
+  await page.locator('.bc-table-wrap tr.bc-row', { hasText: purpose }).first().click();
+
+  const lines = page.locator('section.bc-lines');
+  await expect(lines.locator('tr.bc-line')).toContainText('Not priced');
+  // Opening the row says WHY, in the words of what happened. "Not priced" on its own
+  // sends people looking for a setting that does not exist.
+  await lines.locator('tr.bc-line').first().click();
+  const detail = lines.locator('tr.bc-line-detail');
+  await expect(detail).toContainText(/no call could be made/i);
+  await expect(detail).toContainText('Alias');
+  await expect(detail.getByRole('button', { name: /Price it/ })).toBeVisible();
+});
+
+test('pricing a line is an explicit act, and it is named in the trail', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [{ ...LINE, aliasPrice: 0 }], submit: false });
+  const lineId = Number((await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines[0].id);
+
+  // Staff holding neither privilege cannot write the number an approval is judged on.
+  const b = await call(request, 'bystander', 'cart/price-line', { cartId, lineId });
+  expect(b.status).toBe(403);
+  // Nor can a different buyer.
+  const other = await call(request, 'buyer2', 'cart/price-line', { cartId, lineId });
+  expect(other.status).toBe(403);
+
+  const r = await call(request, 'approver', 'cart/price-line', { cartId, lineId });
+  expect(r.status).toBe(200);
+  const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const ev = after.body.cart.events.find((e) => e.kind === 'line_priced');
+  expect(ev).toBeTruthy();
+  expect(ev.actor_name).toBe('E2E Approver');
+  // The prices it found and what the call was before it — an approver re-pricing has
+  // chosen to look at today's market instead of the buyer's, and the record says so.
+  expect(ev.body).toMatch(/Alias /);
+  expect(ev.body).toMatch(/was (not priced|buy|watch|pass)/);
+});
+
+// An edit that changes nothing must not leave a row saying something changed.
+test('a no-op line edit writes nothing to the trail', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+  const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+  const before = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.events.length;
+
+  const r = await call(request, 'approver', 'cart/line', {
+    cartId, lineId: Number(line.id),
+    patch: { size: line.size, qty: line.qty, shelfPrice: line.shelf_price },
+  });
+  expect(r.status).toBe(200);
+  expect(r.body.unchanged).toBe(true);
+  const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  expect(after.body.cart.events).toHaveLength(before);
 });

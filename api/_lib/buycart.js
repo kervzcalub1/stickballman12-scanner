@@ -7,6 +7,7 @@
 // something the server will refuse.
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
 import { getPoReconciliation, userHasPrivilege } from './db.js';
+import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
 
 // ---------------------------------------------------------------------------
 // Privileges — separation of duties
@@ -165,6 +166,153 @@ export function tillOverrunWarning(cart) {
 
 const money = (v) => (v == null ? null : Number(v));
 const near = (a, b, tol = 0.01) => Math.abs(Number(a) - Number(b)) <= tol;
+
+// ---------------------------------------------------------------------------
+// The cost stack, and who is allowed to write it
+//
+// A request's stack is snapshotted from the BUYER'S payout preset when it is opened.
+// Buyers do not manage their own presets — an admin does — so a buyer who has never had
+// one produces a request where every pair "lands at" exactly its shelf price, no payout
+// clears any threshold, and no buy call can be made at all. That is not a rare edge: it
+// is what every new buyer looks like on their first request.
+//
+// So the desk that is being asked to release money can write the stack itself. It is
+// deliberately NOT the buyer's to edit after the fact — the buyer states what the
+// sticker says, and the company states what the sticker actually costs it.
+export const COST_FIELDS = [
+  { key: 'storePct', label: 'Store discount', unit: '%' },
+  { key: 'promoPct', label: 'Promo / birthday', unit: '%' },
+  { key: 'giftPct', label: 'Gift card', unit: '%' },
+  { key: 'cashbackPct', label: 'Cashback', unit: '%' },
+  { key: 'taxPct', label: 'Sales tax', unit: '%' },
+  { key: 'tipAmt', label: 'Tip', unit: '$' },
+  { key: 'shippingAmt', label: 'Shipping', unit: '$' },
+];
+
+const rate = (v) => {
+  if (v == null || (typeof v === 'string' && v.trim() === '')) return 0;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n * 100) / 100;
+};
+
+/**
+ * A posted stack, cleaned to exactly the seven fields the arithmetic reads.
+ *
+ * A blank box means zero here, not "leave whatever was there": the stack is stated as a
+ * whole, so a rate someone cleared has to actually clear. `presetName` survives only as
+ * provenance — it says where the numbers originally came from, and a hand-edited stack
+ * stops claiming to be a preset.
+ */
+export function normaliseCostStack(raw = {}, previous = null) {
+  const out = {};
+  for (const f of COST_FIELDS) out[f.key] = Math.min(rate(raw[f.key]), f.unit === '%' ? 100 : 100000);
+  const changed = COST_FIELDS.some((f) => rate(previous?.[f.key]) !== out[f.key]);
+  if (previous?.presetName && !changed) out.presetName = previous.presetName;
+  return out;
+}
+
+/** "Sales tax 0% → 8.25% · Shipping $0.00 → $12.00", or null when nothing moved. */
+export function describeCostChange(before, after) {
+  const bits = [];
+  for (const f of COST_FIELDS) {
+    const a = rate(before?.[f.key]); const b = rate(after?.[f.key]);
+    if (a === b) continue;
+    bits.push(f.unit === '%'
+      ? `${f.label} ${a}% → ${b}%`
+      : `${f.label} $${a.toFixed(2)} → $${b.toFixed(2)}`);
+  }
+  return bits.length ? bits.join(' · ') : null;
+}
+
+/**
+ * Re-derive one line's landed cost and buy call against a cost stack.
+ *
+ * **This is the one place the snapshot rule bends, and only on purpose.** A line's call
+ * is normally frozen so an approver sees exactly what the buyer saw; the market moving
+ * in between is information, not a correction. But when somebody deliberately edits the
+ * COST side, the frozen number is no longer describing anything real — it was computed
+ * against rates that have just been declared wrong.
+ *
+ * What is emphatically NOT refreshed is the market: `alias_price` / `stockx_price` /
+ * `liquidity` are re-used exactly as captured, so the call still answers "at the prices
+ * the buyer was looking at", and every edit lands in `buy_cart_events` with the before
+ * and after. Same functions as the calculator and the same `with_you` basis the buyer's
+ * screen used, so a cart line and a calculator line can never be priced by two code
+ * paths that disagree.
+ *
+ * Returns null for a line with no usable shelf price — nothing to recompute from.
+ */
+export function repriceLine(line, stack) {
+  const shelf = Number(line?.shelf_price);
+  if (!(shelf > 0)) return null;
+  const r2 = (n) => Math.round(Number(n) * 100) / 100;
+  const cost = calcCostBreakdown({ ...(stack || {}), shelfPrice: shelf });
+  const alias = Number(line.alias_price) > 0 ? Number(line.alias_price) : null;
+  const stockx = Number(line.stockx_price) > 0 ? Number(line.stockx_price) : null;
+  const payouts = [
+    ...(alias ? [calcPayout('alias', alias, cost.finalCost, DEFAULT_FEE_PCT.alias)] : []),
+    ...(stockx ? [calcPayout('stockx', stockx, cost.finalCost, DEFAULT_FEE_PCT.stockx)] : []),
+  ];
+  const v = dealVerdict(payouts, cost.finalCost, line.liquidity || '');
+  return {
+    id: Number(line.id),
+    finalCost: r2(cost.finalCost),
+    // No market price means no call — and a null verdict, never a 'pass'. "We didn't
+    // look" and "we looked and it's bad" are different answers to an approver.
+    verdict: v ? v.call : null,
+    bestPlatform: v ? v.best.platform : null,
+    bestPayout: v ? r2(v.best.payout) : null,
+    profit: v ? r2(v.best.profit) : null,
+    roi: v ? r2(v.best.roi) : null,
+  };
+}
+
+/**
+ * Can this request's SHELF PRICES still be edited?
+ *
+ * They freeze at `funded`, and that is the same freeze approvals get. `approved_amount`
+ * is what the gift cards were issued against, so editing a shelf price afterwards would
+ * retroactively change the target the money was already released to cover — the receipt
+ * is where what was actually paid gets recorded from then on.
+ *
+ * The cost stack is NOT frozen here: it never moves the funding target (that is shelf ×
+ * qty), only what the pair lands at, so an auditor can still state the true cost of a
+ * transaction they are closing out.
+ */
+export const shelfPricesEditable = (cart) =>
+  ['draft', 'submitted', 'approved'].includes(cart?.status);
+export const costStackEditable = (cart) =>
+  !['closed', 'cancelled'].includes(cart?.status);
+
+/** Holds either of the two desk privileges — the people who may write the cost side. */
+export async function hasCostPrivilege(user) {
+  if (await hasPrivilege(user, 'approve_buying')) return true;
+  return hasPrivilege(user, 'audit_buying');
+}
+
+/**
+ * Who may write the cost stack: the BUYER whose request it is, or either desk.
+ *
+ * The buyer first, because they are the only person in the room with the information —
+ * they are standing in the shop reading the tax off the register and the discount off
+ * the sign, and the desk is not. Leaving it desk-only made "the supplier didn't enter
+ * the costs" true of every request ever raised, since a buyer has no preset of their own
+ * to enter them into.
+ *
+ * What keeps that safe is not withholding the box, it is that **the desk can overwrite
+ * anything the buyer typed and every version is named in `buy_cart_events`**. A cost
+ * stack a buyer set favourably is visible as theirs, beside the number the approver
+ * replaced it with. The one thing they still cannot move is the SHELF price once the
+ * cards are out (`shelfPricesEditable`) — that is what the money was released against.
+ *
+ * A buyer only ever reaches their own request; staff with neither privilege reach none.
+ */
+export async function canWriteCosts(user, cart) {
+  if (!user || !cart) return false;
+  if (user.role === 'supplier') return Number(cart.buyer_user_id) === Number(user.uid);
+  return hasCostPrivilege(user);
+}
 
 /**
  * The ten conditions, evaluated against the data rather than against a checklist

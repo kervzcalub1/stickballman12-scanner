@@ -148,8 +148,8 @@ export function BuyCarts({ user, onHome, onSignOut }) {
           <table className="table">
             <thead>
               <tr>
-                <th>Request</th>{!isBuyer && <th>Buyer</th>}<th>Store</th><th>Buying</th>
-                <th>Approved</th><th>Cards</th><th>Status</th><th>Order</th><th>Opened</th>
+                <th>Request</th>{!isBuyer && <th>Buyer</th>}<th>Store</th><th className="bc-purpose-cell">Buying</th>
+                <th className="num">Approved</th><th className="num">Cards</th><th>Status</th><th>Order</th><th>Opened</th>
               </tr>
             </thead>
             <tbody>
@@ -162,8 +162,8 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                     {!isBuyer && <td>{c.buyer_name}</td>}
                     <td>{c.retailer || '—'}</td>
                     <td className="bc-purpose-cell">{c.purpose || <span className="muted">—</span>}</td>
-                    <td>{money(c.approved_amount)}</td>
-                    <td>{money(c.gc_total)}</td>
+                    <td className="num">{money(c.approved_amount)}</td>
+                    <td className="num">{money(c.gc_total)}</td>
                     <td><span className={`po-chip ${s.cls}`}>{s.label}</span></td>
                     <td>{c.po_code || '—'}</td>
                     <td className="muted sm">{estDate(c.created_at)}</td>

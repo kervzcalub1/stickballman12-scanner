@@ -250,6 +250,12 @@ export const api = {
   cartAddLine: (cartId, line) => post('/api/cart/line', { cartId, line }),
   cartEditLine: (cartId, lineId, patch) => post('/api/cart/line', { cartId, lineId, patch }),
   cartRemoveLine: (cartId, lineId) => post('/api/cart/line', { cartId, lineId, remove: true }),
+  // The cost stack an approver or an auditor states when the buyer's preset never had
+  // one. Saving re-prices every line server-side and writes the diff into the trail.
+  cartSetCosts: (cartId, stack) => post('/api/cart/costs', { cartId, stack }),
+  // Re-read the market for one requested pair and write the call that follows. Explicit
+  // and named — never automatic, because it replaces the snapshot an approver judges on.
+  cartPriceLine: (cartId, lineId) => post('/api/cart/price-line', { cartId, lineId }),
   cartSubmit: (cartId) => post('/api/cart/submit', { cartId }),
   cartWithdraw: (cartId) => post('/api/cart/submit', { cartId, withdraw: true }),
   cartDecide: (cartId, payload) => post('/api/cart/decide', { cartId, ...payload }),

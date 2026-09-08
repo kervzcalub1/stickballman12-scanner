@@ -111,8 +111,32 @@ app.all(/^\/api\//, async (req, res) => {
   }
 });
 
+// A visible mark on any deployment that is NOT production.
+//
+// Injected into the HTML here rather than baked in at build time, so the SAME build can
+// be promoted between environments and so the mark is present BEFORE anybody signs in —
+// which is the moment somebody most needs to know whether the request they are about to
+// approve spends real money. Unset (production) changes nothing at all.
+//
+// Read once: dist/ does not change while the process is alive.
+const ENV_LABEL = String(process.env.ENV_LABEL || '').trim().slice(0, 24)
+  .replace(/[^A-Za-z0-9 _.\-]/g, '');
+let appShellHtml = null;
+function appShell() {
+  if (appShellHtml) return appShellHtml;
+  let html = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
+  if (ENV_LABEL) html = html.replace('</head>', `<meta name="sb-env" content="${ENV_LABEL}"></head>`);
+  appShellHtml = html;
+  return appShellHtml;
+}
+
 // Static SPA + history fallback (final middleware serves index.html).
-app.use(express.static(distDir));
+// The shell is served by US, never by express.static, so the ENV_LABEL stamp cannot be
+// bypassed: `index: false` stops static answering `/` with the raw file, and the explicit
+// route below covers somebody typing `/index.html`. A banner with a URL that skips it is
+// not a banner.
+app.get(['/index.html'], (req, res) => res.type('html').send(appShell()));
+app.use(express.static(distDir, { index: false }));
 // A build asset that no longer exists must 404 — NOT get handed the HTML shell.
 // Vite's lazy chunks are content-hashed and every deploy renames them, so a tab
 // left open across a deploy imports a filename we no longer have. Falling back
@@ -124,7 +148,7 @@ app.use(express.static(distDir));
 // Only /assets/ is treated this way: app ROUTES have no extension and must keep
 // falling through to index.html for client-side routing to work.
 app.use('/assets', (req, res) => res.status(404).type('text/plain').send('Not found'));
-app.use((req, res) => res.sendFile(path.join(distDir, 'index.html')));
+app.use((req, res) => res.type('html').send(appShell()));
 
 // --- Server start: HTTPS when TLS certs are provided, else plain HTTP --------
 // Set TLS_CERT + TLS_KEY (paths to PEM files; optional TLS_CA for the chain) to

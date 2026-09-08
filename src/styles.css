@@ -4154,6 +4154,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .presell-chip.sold { background: rgba(230,160,60,0.08); color: #b8873a; border-color: rgba(230,160,60,0.30); font-weight: 600; }
 
 /* ===========================================================================
+   Non-production banner (server.mjs ENV_LABEL → <meta name="sb-env">)
+   Loud on purpose and impossible to mistake for chrome: the whole job of this bar
+   is to stop somebody approving a $4,000 buying request on the staging copy and
+   wondering next week why the cards never arrived. Production sets no label and
+   this never renders.
+   =========================================================================== */
+.env-bar {
+  position: sticky; top: 0; z-index: 100;
+  padding: 5px 12px; text-align: center;
+  font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+  color: #1b1200; background: repeating-linear-gradient(135deg,
+    #e0a32e 0 14px, #c98f22 14px 28px);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.35);
+}
+@media print { .env-bar { display: none; } }
+
+/* ===========================================================================
    Gift-card buying requests (docs/context/buy-cart.md)
    Money out, then inventory in. The visual job here is different from the rest of
    the app: every other screen is about stock, and this one is about company funds

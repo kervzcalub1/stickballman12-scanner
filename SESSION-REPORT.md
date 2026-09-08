@@ -1,219 +1,214 @@
-# Session report — 2026-08-22
+# Session report — Fri 5 Sep 2026 (EST)
 
-**2 PRs merged and live (#141, #142), plus one feature branch committed but deliberately
-NOT pushed.** No schema change anywhere — **no `db:setup`**.
+One fix shipped to production, one large feature parked for testing.
 
-| Work | State |
+A video came in from the floor showing the daily scan-out failing on every attempt —
+that got diagnosed and fixed, and is now live. Alongside it, the gift-card buying
+process was built to the written ten-step procedure and then rebuilt around a
+correction from Kervy about roles versus privileges; that one waits for local testing.
+
+Four bugs found in total. **Three of them were already live.**
+
+| Branch | State |
 |---|---|
-| #141 · A sold pair is done | CI pass → merged `0aa3aa7` → Railway **success** |
-| #142 · UPC digits on the outside edge | CI pass → merged `3e819b0` → Railway **success** |
-| Payout Calculator + StockX API | `feat/payout-calculator` (`fdcb505`), **not pushed** |
-| StockX client test coverage | `feat/payout-calculator` (`c232960`), **not pushed** |
-| Manifest-print smoke test fix | `fix/smoke-manifest-print-count` (`eda64a6`), **not pushed** |
-
-One caveat on the two merged PRs, stated plainly: the usual last step — fetching the prod
-bundle and grepping it for the new code — **could not be run**. `stickballman12.com` returns
-**403** to both `curl` and the fetch tool from this session, so those two are verified as far
-as *CI green → merge landed → Railway deployment `success`*, and no further. `gh api
-repos/.../deployments` works without a Railway token and is the fallback worth reusing.
+| `fix/scan-out-failures` | **MERGED & LIVE** — [PR #189](https://github.com/kervzcalub1/stickballman12-scanner/pull/189). Prod migrated, deploy verified in the bundle |
+| `feat/gift-card-buying` | [PR #188](https://github.com/kervzcalub1/stickballman12-scanner/pull/188), CI green, **parked** for local testing next session |
 
 ---
 
-## 1. A sold pair is done — it leaves the listing worklist — PR #141
+# PART ONE — "Scan-out keeps failing"
 
-**The question that started it:** *"for items that are not listed to II and stores yet, then
-they are marked as sold — are those items still added to the PH team's New Inventory tasks
-for listing?"*
+## What the floor reported
+Jadi has been scanning shoes out daily. Some scans work, most don't. Kervy filmed a
+live spot-test and every scan tested failed. Two options were on the table: abort the
+process, or fix it.
 
-**They were.** `phListItems(kind='receiving')` filtered on scan date, batch kind and
-`status <> 'no_box'` — nothing else. A pair the warehouse sold before PH ever listed it came
-back from the API showing no store flags, and therefore read as **Pending**: it sat in PH's
-default tab with a live Edit button, and someone could still price and flag stock that had
-already left the building. The home badges had been right the whole time
-(`pendingCounts.listable` has always excluded sold/shipped) — only the grid disagreed.
+## What was actually happening
 
-**The rule now: sold is as good as done.** `PH_CLOSED_STATUSES = ['sold','shipped']`.
+**332 boxes are wearing a real 1ID sticker with no pair behind it in the system.**
 
-- The pair reports `done` whatever its flags say, so it **drops out of Pending / In-Progress**
-  and files under **Done** — where it stays **visible** with its Sold pill rather than
-  vanishing. That was the explicit call: PH can still see what became of a pair they were
-  part way through.
-- The row goes **read-only**: no Edit, no Remove…, GOAT-only renders as a badge, and the
-  Action cell reads *"Sold — nothing to list"*.
-- **Enforced server-side too**, so a tab loaded before the scan-out can't write to it:
-  `phUpdateGroup` and `setItemsGoatOnly` exclude both statuses the way they already exclude
-  in-store units.
+A box gets a sticker off the roll, the shoe is never received against it, and the
+sticker is genuine while pointing at nothing. Scanning it answered:
 
-Item status is part of the grid's group key, so a row is never half sold — the whole row is
-closed or none of it is.
+```
+No item found for SBM-R-004754.
+```
 
-**On the local DB:** 13 sold/shipped units were sitting in the grid, **11 of them showing as
-live work** (8 Pending, 3 In-Progress). `missing` and `issue` were deliberately left alone —
-unresolved is not done, and locking those rows could bury a problem.
+True, useless, and exactly why people concluded the software was broken.
 
----
+**The app already knew.** `vin_stock` holds that sticker's real state, and Inventory has
+been asking it for months. The scan-out screen — the one used two hundred times a day —
+never did.
 
-## 2. UPC digits run down the OUTSIDE edge of a box label — PR #142
+## Why it looked random
 
-**Brent, mid-shift**, with a photo of one of our labels: *"could you possibly make the numbers
-of the UPC be on the outside left edge?"* — then a photo of a real Nike box label as the
-reference.
+A roll is peeled in order, so unused numbers should sit at the **end** of a run. They
+didn't:
 
-**The cause was the rotation direction, and only that.** JsBarcode draws the digits under the
-bars, so which edge they land on is decided entirely by which way the canvas is turned. We
-turned it **counter-clockwise**, which swings them to the **inside** edge — the number ended
-up trapped between the bars and the text column, the half you can't see once boxes are
-stacked on a shelf.
+| Run | Printed | Used | Unused **inside** the worked stretch | Untouched tail |
+|---|---|---|---|---|
+| 34 | 150 | 83 | **55** | 0 |
+| 25 | 250 | 190 | **60** | 0 |
+| 22 | 150 | 91 | **59** | 0 |
 
-Turned **clockwise** instead: one sign change in `rotate90`. Digits on the outside left edge,
-bars inboard, number reading top-to-bottom with its first digit at the top — the layout Nike
-prints. Nothing else moved: same column width, digits still ride inside the barcode canvas,
-`flat: true` untouched, module width unchanged, so scannability is exactly what it was.
+Run 34 was worked right through to sticker #150 while 55 in the middle were never bound.
+Those were peeled and applied. A labelled-and-received box scans; the labelled-but-
+unreceived box beside it doesn't. That is the "some work, some don't", and it is why a
+spot-test failed every time.
 
-**Verified by generating the real PDF** through `buildLabelPdf` in a browser and rasterizing
-it — not by reading the geometry. `e2e/box-labels.spec.js` 13/13.
+## What a failed scan says now
 
-*Not a bug, but worth knowing:* a hand-built item passing `gender: 'M'` prints a bare `13`,
-because `sizeParts` expects the normalized catalogue value (`Men`/`Women`/…). Live rows store
-the normalized form, so real labels are unaffected.
+| Scanned | Before | Now |
+|---|---|---|
+| Labelled, never received | `No item found for SBM-R-004754.` | **`SBM-R-004754 — labelled but never received — send it to Receiving.`** |
+| Voided sticker | `No item found…` | `this sticker was voided` |
+| Not one of ours | `No item found…` | `not a sticker we printed` |
+| Manufacturer UPC | *(unchanged)* | `is not a VIN — scan the SBM-… label, not the UPC` |
 
----
+One wording correction came with it. Inventory's line for an unused sticker read *"Still
+on the roll"* — an assumption, and production says it's false 332 times over. Someone
+holding such a box, told its sticker is still on the roll, learns the app is wrong. What
+we can state as fact is narrower and more useful: nothing was ever received against it.
 
-## 3. Payout Calculator — committed, NOT pushed
+## The thing that made this expensive
 
-At **`/payout`** (admin + warehouse home) and **`/ph/payout`** (PH home). Branch
-`feat/payout-calculator`, commit `fdcb505`.
+**Nothing about a failed scan was recorded anywhere.** The reason lived in one browser
+tab and died with it, so answering "why is it failing" took a phone video, ffmpeg frame
+extraction and four tables of inference.
 
-Answers one question, standing in a store with a shoe in your hand: **should I buy this
-pair?** Nothing is saved — it never touches inventory. Three steps down the page: what it
-costs at the register (the discount stack), what each platform pays out after fees, and the
-**Buy / Watch / Pass** call that falls out of the two.
+`scan_failures` now takes one row per failure — code, reason, screen, who, when:
 
-### Where it came from
-Ported from the public **GemsClean/payout-calculator**. That repo is Next.js + TypeScript +
-Tailwind and carries **no licence file**, so nothing was copied — this is our own code in our
-own idiom. The **arithmetic is faithful**, including two quirks documented in `lib/payout.js`
-(cashback nets off the total but is computed pre-tax; "saved" counts the sticker only,
-ignoring tax/tip/shipping), because the floor already trades numbers out of that tool and a
-screen that silently disagrees is worse than no screen. Their inventory intake, scanner,
-product search, bulk analyser and AI advisor were **not** ported.
+```
+012345678905   not_a_vin    mark-sold   Jadi   17:47:13
+SBM-R-999999   unknown      mark-sold   Jadi   17:47:12
+SBM-R-900002   void         mark-sold   Jadi   17:47:11
+SBM-R-900001   available    mark-sold   Jadi   17:47:09
+```
 
-⚠️ **Licence exposure**: public with no licence means no grant of rights by default. The
-formulas and thresholds are theirs. Worth a word with that repo's owner if this goes beyond
-internal use.
+Fire-and-forget by contract: the client never awaits it, the endpoint answers 200 even
+when the insert fails, and a test kills the endpoint and asserts scanning still works.
+The audit trail must never be able to stop the thing it is auditing.
 
-### The StockX question, and the answer
-Their repo pulls StockX prices by **impersonating the Android app**: `gateway.stockx.com/api/graphql`,
-an `x-api-key` lifted from the decompiled APK, queries decompiled from `BrowseQuery.java`, and
-a spoofed `okhttp4_android_13` TLS fingerprint to defeat bot detection. **That was not
-ported** — it's circumvention, it dies whenever StockX rotates the key, and it fails by
-showing silently wrong prices on a buy call.
+## A second bug the same investigation turned up
 
-Instead, StockX is wired to its **official Public API** (`api.stockx.com/v2`) with your own
-approved credentials. Every field name and parameter comes from **StockX's own OpenAPI spec**
-(`developer.stockx.com/swagger.json`, Public API 2.0.0), which corrected two guesses:
+Fifteen sticker runs were minted **3–23 seconds before** the run that actually got used:
 
-1. **Amounts are decimal STRINGS** with no cents encoding. A "looks too big, must be cents"
-   heuristic would have divided a $150,000 grail by 100 — turning a great buy into a terrible
-   one. Removed.
-2. **There is no last-sale field** anywhere in the sanctioned API. stockx.com shows one and
-   the Android gateway returns one; the Public API does not. StockX therefore shows ask, bid,
-   **earn more** and **sell faster** — and only Alias can offer a last-sold comparison.
+```
+run 4   250 stickers  0 used    11:13:27
+run 5   250 stickers  246 used  11:13:36   <- 9 seconds later
+run 14  100 stickers  0 used    15:14:05
+run 15  500 stickers  466 used  15:14:08   <- 3 seconds later
+```
 
-Also found: `GET /catalog/products/variants/gtins/{gtin}` resolves a variant **straight from a
-barcode** in one call — half the requests, and it cannot land on the wrong colourway or size.
-Implemented (`stockxVariantByGtin`); the endpoint prefers it when given a `upc`. The screen
-doesn't send one yet — wiring the scanner to it is the obvious next step.
+Mint, no labels come out, hit Mint again — and the first run becomes a permanent hole in
+the numbering. **~2,700 numbers burned.** There's now an amber banner naming the
+stranded run with a Print-again button, and Mint confirms before burning fresh numbers
+on top of it. Reprint always existed; it just wasn't where the hand goes when nothing
+comes out of the printer.
 
-### Behaviour worth remembering
-- Tapping a size fetches **both markets in one call**, and they **fail independently**
-  (`allSettled`): a StockX outage must never cost the buyer their Alias number. The screen
-  distinguishes *no market for this size* / *unavailable right now* / *not configured*.
-- **Style ID is matched exactly** after the text search, so `DZ5485` can't silently return
-  `DZ5485-400`; a near-miss renders an amber warning naming what it actually matched.
-- **A blank fee box means the default rate, never 0%** — reading it as zero would inflate
-  every payout on screen.
-- **Rates persist per device** (store %, promo, gift card, cashback, tax — the same all
-  afternoon in one shop); **per-pair amounts never do**. The URL carries the shoe only: a
-  shared link with someone's cost basis in it is a leak, not a convenience.
-- **StockX is entirely optional.** Unset credentials leave that column manual and the Alias
-  half fully working.
+## The work order
 
-**Roles:** admin + warehouse + PH, per your call. That makes `api/payout/quote` the first
-pricing surface the **warehouse** role can reach — deliberate, because the tool is useless to
-the person actually holding the shoe otherwise. Price Inquiry stays PH + admin.
+The failing boxes are a finite, known list — 332 stickers, written to
+`unreceived-stickers.csv`:
 
-**Tests:** 12 in `e2e/payout-calculator.spec.js`, stubbed so they don't depend on either
-upstream. `npm run build` clean.
+```
+run 25   60 stickers   SBM-R-004754 … SBM-R-004979
+run 22   59 stickers   SBM-R-004251 … SBM-R-004389
+run 34   55 stickers   SBM-R-006051 … SBM-R-006199
+…14 runs, 332 total
+```
+
+Receiving each one clears it permanently.
+
+## On abort vs fix
+
+**Fix, clearly.** Scan-out marked **558 pairs sold successfully**, most recently Sep 3.
+The software was working; the feedback was mute on a bounded set of boxes.
+
+## The bigger thing, which is not a bug
+
+The video is three minutes of walking, and that's the number worth raising separately:
+
+- **3,525 of 3,846 received pairs have never been put away**
+- the only shelved stock is the **641** from the old-stock count, which stopped Sep 2
+- 722 shelves are defined; **45** have anything on them
+
+The system cannot tell Jadi where anything is, because nothing was ever told where it
+went. The scan failures are fixed. The hunting is a separate and larger problem.
 
 ---
 
-## 4. Second shift — test coverage, and a green test that wasn't
+# PART TWO — Gift-card buying (parked, not deployed)
 
-### `api/_lib/stockx.js` now has 18 tests (`c232960`)
+Built to the written ten-step process. **Six of those steps already existed** — a
+purchase order's `po_lines` ARE "expected inventory", PO reconciliation already compares
+expected against arrived, 17TRACK already watches the parcel. So the cart carries steps
+1–7 and hands off: the parsed receipt raises a PO, and `buy_carts.po_id` is the seam.
 
-It was the only part of the calculator with no coverage, and the one part you **cannot**
-exercise by using the app — it needs credentials CI doesn't have. So it's tested against
-fixtures shaped exactly like StockX's OpenAPI spec, with `fetch` stubbed. They live in
-`e2e/` on purpose: `npm run e2e` is what CI runs, so that's what makes them run at all.
+Walked end to end on live Alias/StockX data — request, approval, $650 in cards against
+$559.82 approved, a $606.01 receipt raising PO-103479, six pairs received, an audit
+accounting for every card, and a close with all ten conditions green.
 
-What they pin, in order of what it would cost to get wrong:
+## Kervy's correction, and what it exposed
 
-- **A five-figure grail is not divided by 100.** Amounts arrive as decimal strings, and the
-  cents heuristic this replaced turned a $150,000 ask into $1,500 — a terrible buy dressed
-  up as the deal of the year.
-- **The exact styleId wins** even when it isn't the first search hit, and a near-miss comes
-  back *flagged* rather than silently pricing another colourway.
-- **A size StockX doesn't carry returns no market** — never the nearest variant's price
-  under a different size's name.
-- **The refresh call sends `audience`; the code exchange doesn't.** That asymmetry is real
-  and is exactly the sort of thing a tidy-up would "fix".
-- A 401 re-mints and retries **once**, not in a loop. Zero and null read as *no market*,
-  not as a $0 price. Flex and Direct market data are ignored (other fulfilment programmes —
-  prices we can't actually sell at). Half-configured makes no upstream calls at all.
+I shipped the three duties — approve, issue cards, audit — as **roles**. That was wrong:
+`users.role` is one column, so it made them alternatives to being warehouse or PH, when
+the card desk is a PH team member who *also* does that. Rebuilt as `users.privileges`
+with checkboxes beside the role dropdown on Check Access.
 
-Two bugs surfaced while writing them, both in my tests rather than the client: the
-market-data path contains `/variants`, so a substring route was swallowing it, and the
-"variant with no id" fixture had an id.
+The rebuild exposed two things the role version had hidden:
 
-### The manifest-print smoke test was green by absence (`eda64a6`, own branch)
+- **PH team members couldn't reach the screen at all.** PH has its own app and never
+  touches the staff router. Under roles this never came up, because a card issuer wasn't
+  PH. The moment the desk became "a PH person who also does this", they had nowhere to go.
+- **The separation-of-duties check became load-bearing.** Roles were doing half the work
+  for free; now one person can legitimately hold approve *and* audit, so the
+  per-transaction check is the only guard left.
 
-The failure I flagged last shift turned out to be more interesting than a stale assertion.
-`toHaveCount(2)` on the buttons inside `.po-receive-banner .mf-print` predates the PDF|CSV
-format picker landing in that block — the real count is 4, and 5 or 6 once a PO has received
-stock or a box differs.
+## The bug in the control itself
 
-**But the reason CI never caught it matters more.** The test skips itself when the database
-has no open PO, and the seeded CI database has none — so it reported **pass while being
-broken against any database with real data**. Given the rule about checking CI before
-merging, that's the kind of green worth distrusting. It now asserts the actual controls
-(both downloads plus the format picker), which survives the optional buttons appearing.
-Smoke is 30/30.
+The "you can't audit what you approved" check compared `approved_by_id` — and the env
+`admin`/`superadmin` accounts have **no row in `users`**, so their id saved as NULL and
+the check silently never fired for the two accounts most likely to do both jobs. A
+control that is off for its most privileged user is not a control.
+
+## And two more that were already live
+
+`po/ship` and `po/close-box` both demanded per-box lines, but `po/scan` refuses per-box
+lines on a whole-order manifest — so **a Path-C order could never be closed or shipped by
+anybody**. Unnoticed because nobody had moved one through the portal.
+
+Also: every price box on the new screens was silently storing an event object.
+`PriceInput` hands its `onChange` the event, not the value — no error, just a verdict
+panel that never appeared. Caught by browser QA, not the build.
 
 ---
 
-## Open for you
+# Deployment
 
-1. **Nothing is pushed.** Two branches waiting: `feat/payout-calculator` (two commits — the
-   feature and its StockX tests) and `fix/smoke-manifest-print-count` (one). Say the word and
-   they go out as PRs; they're independent, so either can go first.
-2. **`STOCKX_REFRESH_TOKEN` is still empty**, which is why no StockX prices appear. It needs a
-   one-time browser grant only you can do:
-   `node scripts/stockx-auth.mjs` → open the URL → approve → `node scripts/stockx-auth.mjs <code>`
-   → paste the printed line into `.env`. Check the **Callback URI** on
-   developer.stockx.com → **Applications** first; if it isn't `https://localhost:3000/callback`,
-   set `STOCKX_REDIRECT_URI` to the exact value.
-3. **Restart the dev server after editing `.env`** — vite and `server.mjs` read it once at
-   process start, so a running instance won't see new keys.
-4. **Verify with** `node scripts/probe-stockx.mjs DD1391-100 10` before judging the UI. It
-   walks token → search → variants → market data and names the link that broke.
-5. **When it ships**, the four `STOCKX_*` vars need setting on Railway too — local `.env`
-   doesn't reach production.
-6. **Team hard-refresh** for #141 and #142 (stale bundle). Then: a sold pair should be gone
-   from PH's Pending/In-Progress, and Brent's next box label should have the number on the
-   outside edge. **Brent's printed label is the real verification for #142**, since the live
-   bundle couldn't be grepped from here.
-7. **Two decisions still open on the calculator**, both deliberate and both reversible: the
-   **licence question** on the source repo (public, no licence, so the formulas and
-   thresholds are theirs), and the fact that this becomes the **first pricing surface the
-   warehouse role can see**.
+**Scan-out fix (#189) — DONE, live on production.**
+- `db:setup` ran against prod and added `scan_failures` and nothing else — verified no
+  `buy_cart*` tables and no `users.privileges` came with it.
+- CI green (6m46s, fresh database), merged, branch deleted.
+- Deploy verified in the live bundle: both the new failure wording and the stranded-run
+  guard are present on `stickballman12.com`.
+- 332 boxes still need receiving; the list is in `unreceived-stickers.csv`.
+
+**Gift-card buying (#188) — next session, after local testing.** Its migration has NOT
+been run. When it goes:
+```
+DATABASE_URL="$PROD_DATABASE_URL" node scripts/db-setup.mjs                 # six tables + users.privileges
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"   # -> BUY_GC_KEY on Railway
+```
+Migration first; the code reads tables production doesn't have yet. And note: after that
+migration **nobody can approve a buying request until you tick boxes in Check Access** —
+admin excepted, so you're never locked out.
+
+# One known issue that is not from either branch
+
+The local suite fails on a **different spec on every full run** — `mobile-qa` once,
+`raw-vin` once, then `ph-grid` + `po-edit` + `inventory-rapid-scan` — and every one of
+them passes when run alone. `mobile-qa`'s PH-grid note test also fails on unmodified
+`main`. That is tests sharing one local database and stepping on each other, not a
+product defect, but it makes a full local run untrustworthy as a gate. CI is currently
+the reliable signal because it builds a fresh database each time. Worth a separate fix.

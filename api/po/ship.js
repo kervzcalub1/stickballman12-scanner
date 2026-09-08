@@ -3,7 +3,7 @@
 // shipped, the PO flips to 'shipped'. Returns the refreshed full PO.
 import { STILL_WITH_SUPPLIER } from '../_lib/po-manifest.js';
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
-import { getPoBox, getPo, countPoBoxLines, shipPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
+import { getPoBox, getPo, countPoBoxLines, countPoOrderLines, shipPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
@@ -32,8 +32,20 @@ export default async function handler(req, res) {
       return send(res, 409, { ok: false, error: 'Close the box for shipment before shipping it.' });
     if (box.status !== 'packed')
       return send(res, 409, { ok: false, error: 'This label is already shipped.' });
-    if ((await countPoBoxLines(poBoxId)) < 1)
-      return send(res, 400, { ok: false, error: 'Scan at least one item into this label before shipping it.' });
+    // "Don't ship an empty box." On a WHOLE-ORDER manifest (Path C) a box holds no lines
+    // of its own by design — po/scan refuses per-box lines on such an order — so this
+    // check made those orders unshippable by anyone, supplier and admin alike. The
+    // declaration is at order level there, so that is what has to be non-empty.
+    const declared = po.manifest_scope === 'po'
+      ? await countPoOrderLines(po.id)
+      : await countPoBoxLines(poBoxId);
+    if (declared < 1)
+      return send(res, 400, {
+        ok: false,
+        error: po.manifest_scope === 'po'
+          ? 'Nothing has been declared on this order yet.'
+          : 'Scan at least one item into this label before shipping it.',
+      });
 
     await shipPoBox(poBoxId);
     // Start tracking this label's shipment (best-effort; no-ops without a key).

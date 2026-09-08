@@ -1,5 +1,5 @@
 // GET /api/items/pending-counts -> { ok, counts:{ not_ii, not_alias, not_stockx,
-//   not_shopify, needs_shelf, no_box, restock_pending } }
+//   not_shopify, needs_shelf, no_box, restock_pending, carts_to_approve, … } }
 // Powers the home-screen pending badges. Readable by all signed-in staff.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { pendingCounts, dbConfigured } from '../_lib/db.js';

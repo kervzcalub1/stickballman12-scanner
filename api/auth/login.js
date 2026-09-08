@@ -9,6 +9,9 @@ import {
 import {
   findUserByUsername, recordLoginAttempt, countRecentFailures, dbConfigured,
 } from '../_lib/db.js';
+// The env admin/superadmin accounts hold every privilege implicitly (isPrivileged), so
+// the payload says so — otherwise their own screens would hide the cards they can use.
+import { PRIVILEGE_KEYS } from '../_lib/buycart.js';
 
 // A real hash to verify against when the username doesn't exist, so login costs
 // the same scrypt time either way (defeats username enumeration by timing).
@@ -77,7 +80,7 @@ export default async function handler(req, res) {
     if (!adminPass) return send(res, 500, { ok: false, error: 'Admin login is not configured.' });
     if (!constantTimeEqual(password, adminPass)) return fail();
     await recordLoginAttempt({ username, ip, success: true });
-    const user = { uid: 'admin', username: 'admin', name: 'Alex', role: 'admin' };
+    const user = { uid: 'admin', username: 'admin', name: 'Alex', role: 'admin', privileges: PRIVILEGE_KEYS };
     return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });
   }
 
@@ -90,7 +93,7 @@ export default async function handler(req, res) {
     if (!superPass) return send(res, 500, { ok: false, error: 'Superadmin login is not configured.' });
     if (!constantTimeEqual(password, superPass)) return fail();
     await recordLoginAttempt({ username, ip, success: true });
-    const user = { uid: 'superadmin', username: superUser, name: 'Super Admin', role: 'superadmin' };
+    const user = { uid: 'superadmin', username: superUser, name: 'Super Admin', role: 'superadmin', privileges: PRIVILEGE_KEYS };
     return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });
   }
 
@@ -131,9 +134,20 @@ export default async function handler(req, res) {
   // until the user sets a new password (see requireRole/requireAdmin).
   const mustChange = !!row.must_change_password;
   const user = { uid: row.id, username: row.username, name: row.name, role: row.role, ...(mustChange ? { mustChange: true } : {}) };
-  return send(res, 200, { ok: true, token: signToken(user), user: publicUser(user) });
+  // publicUser only — signToken ignores it, see the note there.
+  const userOut = { ...user, privileges: row.privileges || [] };
+  return send(res, 200, { ok: true, token: signToken(user), user: publicUser(userOut) });
 }
 
 function publicUser(u) {
-  return { username: u.username, name: u.name, role: u.role, ...(u.mustChange ? { mustChange: true } : {}) };
+  // `privileges` rides along for the UI ONLY — deciding which cards and buttons to draw.
+  // It is deliberately NOT in the signed token and no endpoint trusts it: every
+  // privileged action re-reads the set from the database, so a permission over company
+  // money stops the moment it is untinked rather than at the next sign-in
+  // (api/_lib/buycart.js). A stale list here costs a button that answers 403.
+  return {
+    username: u.username, name: u.name, role: u.role,
+    privileges: u.privileges || [],
+    ...(u.mustChange ? { mustChange: true } : {}),
+  };
 }

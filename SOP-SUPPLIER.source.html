@@ -1,0 +1,383 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Supplier SOP</title>
+<style>
+  @page { size: Letter; margin: 16mm 15mm 14mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0; font: 10.5pt/1.5 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #1a1d24; background: #fff;
+  }
+  h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  p { margin: 0 0 8px; }
+  b, strong { font-weight: 700; }
+
+  /* ---- cover ------------------------------------------------------------ */
+  .cover { padding-top: 4mm; }
+  .brandline {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 3px solid #2f6bff; padding-bottom: 7px; margin-bottom: 15px;
+  }
+  .brand { font-size: 13pt; font-weight: 700; }
+  .brand-r { font-size: 9pt; color: #6b7280; }
+  h1 { font-size: 22pt; line-height: 1.12; margin-bottom: 7px; }
+  .sub { font-size: 10.5pt; color: #4b5563; margin-bottom: 15px; max-width: 150mm; }
+
+  /* ---- the loop strip --------------------------------------------------- */
+  .loop { display: flex; gap: 5px; margin: 0 0 14px; }
+  .loop div {
+    flex: 1; background: #f2f5fb; border-top: 3px solid #2f6bff; padding: 8px 9px 9px;
+    font-size: 8.5pt; line-height: 1.3;
+  }
+  .loop .n { display: block; font-weight: 700; font-size: 8pt; color: #2f6bff; margin-bottom: 2px; }
+  .loop .t { font-weight: 700; font-size: 9.5pt; }
+
+  /* ---- steps ------------------------------------------------------------ */
+  .step { page-break-inside: avoid; margin: 0 0 20px; }
+  .step-h { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; }
+  .step-n {
+    flex: none; width: 22px; height: 22px; border-radius: 50%; background: #2f6bff; color: #fff;
+    font-size: 10.5pt; font-weight: 700; text-align: center; line-height: 22px;
+    position: relative; top: 3px;
+  }
+  .step-t { font-size: 14pt; font-weight: 700; }
+  .step-body { padding-left: 32px; }
+  ol.do, ul.do { margin: 0 0 9px; padding-left: 17px; }
+  ol.do li, ul.do li { margin-bottom: 4px; }
+  .shot { margin: 9px 0 4px; page-break-inside: avoid; }
+  .shot img { display: block; border: 1px solid #d7dce5; border-radius: 5px; max-width: 100%; }
+  .cap { font-size: 8pt; color: #6b7280; margin-top: 4px; }
+
+  /* ---- callouts --------------------------------------------------------- */
+  .note {
+    border-left: 3px solid #c8ced9; background: #f7f8fa; padding: 8px 11px;
+    margin: 9px 0; font-size: 9.5pt; page-break-inside: avoid;
+  }
+  .note.warn { border-left-color: #d98324; background: #fdf6ec; }
+  .note.stop { border-left-color: #c1493f; background: #fdf0ef; }
+  .note .lbl {
+    display: block; font-size: 7.5pt; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: #6b7280; margin-bottom: 3px;
+  }
+  .note.warn .lbl { color: #b5701c; }
+  .note.stop .lbl { color: #b03a30; }
+
+  /* ---- tables ----------------------------------------------------------- */
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin: 8px 0 14px; }
+  th {
+    text-align: left; font-size: 7.5pt; letter-spacing: .07em; text-transform: uppercase;
+    color: #fff; background: #232a36; padding: 6px 9px;
+  }
+  td { padding: 6px 9px; border-bottom: 1px solid #e4e8ee; vertical-align: top; }
+  tr { page-break-inside: avoid; }
+  thead { display: table-header-group; }
+  tr:nth-child(even) td { background: #f7f8fa; }
+  .chip {
+    display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 8.5pt;
+    font-weight: 700; white-space: nowrap;
+  }
+  .c-amber { background: #fdf0dc; color: #93611a; }
+  .c-violet { background: #ece9fd; color: #5b46c4; }
+  .c-blue { background: #e3ecff; color: #2a56c6; }
+  .c-green { background: #ddf3e4; color: #1f7a41; }
+
+  h2.sec {
+    font-size: 15pt; margin: 0 0 3px; padding-bottom: 5px;
+    border-bottom: 2px solid #232a36;
+  }
+  .sec-sub { font-size: 9.5pt; color: #6b7280; margin: 0 0 12px; }
+  .pb { page-break-before: always; }
+  .two { display: flex; gap: 14px; align-items: flex-start; }
+  .two > div { flex: 1; }
+  footer.foot {
+    margin-top: 16px; padding-top: 8px; border-top: 1px solid #d7dce5;
+    font-size: 8pt; color: #6b7280;
+  }
+</style></head>
+<body>
+
+<!-- ============================== PAGE 1 ============================== -->
+<section class="cover">
+  <div class="brandline">
+    <span class="brand">Stickballman12 LLC</span>
+    <span class="brand-r">Supplier Standard Operating Procedure</span>
+  </div>
+
+  <h1>Packing an order:<br>scan, close, print, ship</h1>
+  <p class="sub">
+    Everything you send us goes out under a shipping label we have already paid for. This
+    is how you record what is in each box, print the sheet that travels with it, and hand
+    it to the courier.
+  </p>
+
+  <div class="loop">
+    <div><span class="n">STEP 1</span><span class="t">Scan items</span><br>into the label you are packing</div>
+    <div><span class="n">STEP 2</span><span class="t">Review &amp; close</span><br>the box when it is full</div>
+    <div><span class="n">STEP 3</span><span class="t">Print manifest</span><br>on plain Letter paper</div>
+    <div><span class="n">STEP 4</span><span class="t">Attach &amp; seal</span><br>the sheet goes on the box</div>
+    <div><span class="n">STEP 5</span><span class="t">Ship label</span><br>once the courier has it</div>
+  </div>
+
+  <div class="note">
+    <span class="lbl">Before you start</span>
+    You need your supplier sign-in, the boxes you are packing, and the shoes in front of
+    you. Do this <b>one box at a time</b> — a label is closed and printed as a unit, so
+    finishing one box before opening the next is what keeps the paperwork matching the
+    contents.
+  </div>
+
+  <div class="step">
+    <div class="step-h"><span class="step-n">1</span><span class="step-t">Sign in and open the order</span></div>
+    <div class="step-body">
+      <ol class="do">
+        <li>Go to the portal address you were given. It begins with <b>supplier.</b></li>
+        <li>Sign in. You land on your home screen with two cards — tap <b>Purchase Orders</b>.</li>
+        <li>Your orders are listed by code (<b>PO-101693</b>). Open the one you are packing.</li>
+      </ol>
+      <div class="note">
+        <span class="lbl">If you cannot sign in</span>
+        A supplier account only works on the <b>supplier.</b> address — signing in on our
+        main site is refused on purpose. New accounts stay pending until we approve them.
+        Forgotten password: use <b>Forgot password?</b>, then tell us, and we issue a
+        temporary one.
+      </div>
+      <div class="shot"><img src="IMG_02" style="max-width:150mm"></div>
+      <div class="cap">Your shipments. Each row shows the order code, how many labels have shipped, and the total pairs declared so far.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== PAGE 2 ============================== -->
+<section class="pb">
+  <div class="step">
+    <div class="step-h"><span class="step-n">2</span><span class="step-t">Find the label you are packing</span></div>
+    <div class="step-body">
+      <p>
+        Inside the order, <b>each shipping label is one box on screen</b>, shown with its
+        courier tracking number. Match the number on screen to the number on the physical
+        label you are about to stick on that box — that pairing is the whole point, and it
+        is what tells us which parcel to expect the contents in.
+      </p>
+      <p>The <b>Ship to</b> panel is where the boxes go. It is also printed on every manifest.</p>
+      <div class="shot"><img src="IMG_03" style="max-width:126mm"></div>
+      <div class="cap">An order with two labels. Label 1 has three lines scanned into it; Label 2 is still empty.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== PAGE 3 ============================== -->
+<section class="pb">
+  <div class="step">
+    <div class="step-h"><span class="step-n">3</span><span class="step-t">Scan the shoes into that label</span></div>
+    <div class="step-body">
+      <p>Tap <b>Add items</b> on the label you are filling.</p>
+      <div class="note">
+        <span class="lbl">What this does and does not do</span>
+        Scanning here records <b>what you intend to ship</b>. It does not create stock on
+        our side — we scan the box in ourselves when it lands, and compare our count to
+        your list. That comparison is the reason the list needs to be right.
+      </div>
+      <div class="two">
+        <div>
+          <ol class="do">
+            <li>Scan the barcode on the shoe box, or type the <b>SKU</b> and tap <b>Add</b>. The camera button scans with your phone.</li>
+            <li>The shoe comes back with its size chips. Tap the size you are putting in the box.</li>
+            <li><b>Tap the same size again</b> to add another pair of it. Or use the <b>+</b> and <b>&minus;</b> steppers.</li>
+            <li>A size not in the list? Tap <b>+ Custom</b> and type it.</li>
+            <li>Enter <b>Cost ea</b> and <b>Tip ea</b> if you are declaring what you paid.</li>
+            <li>Tap <b>Add N units to label</b> to commit the shoe.</li>
+            <li>Keep going until the box is packed. Every line stays editable while the label is open — change a size, step the quantity, correct a price, or tap <b>&times;</b> to remove it.</li>
+          </ol>
+        </div>
+        <div class="shot"><img src="IMG_05" style="max-width:60mm"></div>
+      </div>
+      <div class="cap">Two sizes of one shoe, ready to add. The running total at the bottom is cost plus tips.</div>
+
+      <div class="note">
+        <span class="lbl">Cost and tip are per size, and optional</span>
+        The same shoe can cost you a different amount in a 9 than in an 11, so the money
+        sits on the size's own row. Leaving them blank records <b>nothing</b> — it is not
+        the same as entering $0. A new size row copies whatever you typed on the last one,
+        so type the price once and only change the size that differs.
+      </div>
+      <div class="note">
+        <span class="lbl">Scanning a different shoe</span>
+        If you scan a second shoe before adding the first, the app asks whether to
+        <b>Add &amp; switch</b>. That commits what is on screen and opens the new shoe —
+        nothing is lost. Repeat scans of the same barcode within a second are ignored, so
+        a scan gun firing twice will not double your count.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== PAGE 4 ============================== -->
+<section class="pb">
+  <div class="step">
+    <div class="step-h"><span class="step-n">4</span><span class="step-t">Review and close the box</span></div>
+    <div class="step-body">
+      <p>
+        When the box is physically full, tap <b>Review &amp; close box</b> and check the
+        list against what is actually in front of you. This is the last easy moment to fix
+        a miscount.
+      </p>
+      <div class="two">
+        <div class="shot"><img src="IMG_06" style="max-width:62mm"></div>
+        <div>
+          <p><b>Keep editing</b> takes you back to the lines.</p>
+          <p><b>Close box for shipment</b> marks the label <span class="chip c-violet">Ready to ship</span> — packed and ready, but <b>not yet gone</b>.</p>
+          <ul class="do">
+            <li>A label needs at least one item before it can close.</li>
+            <li>Closing is reversible: <b>Reopen to edit</b> puts it back.</li>
+            <li>Closing does <b>not</b> tell the courier anything. That is step 6.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h"><span class="step-n">5</span><span class="step-t">Print the manifest, attach it, seal the box</span></div>
+    <div class="step-body">
+      <p>
+        The moment you close the box, the app puts these three steps in front of you. Do
+        them now, while the box is still open in front of you.
+      </p>
+      <div class="two">
+        <div class="shot"><img src="IMG_07" style="max-width:62mm"></div>
+        <div>
+          <ol class="do">
+            <li>Tap <b>Print manifest</b>. The sheet <b>downloads as a PDF</b> — open the downloaded file and print it from there, on plain <b>Letter</b> paper.</li>
+            <li>Attach the printed sheet to the box.</li>
+            <li>Seal the box.</li>
+          </ol>
+        </div>
+      </div>
+      <div class="note stop">
+        <span class="lbl">Reopening a label makes a printed sheet wrong</span>
+        The sheet is only guaranteed to match the contents at the moment you closed the
+        box. If you reopen the label and change anything, <b>throw the old sheet away and
+        print it again</b> — the <b>Print manifest</b> button stays on the label for
+        exactly that reason.
+      </div>
+      <div class="note warn">
+        <span class="lbl">Two buttons — use the right one</span>
+        <b>Print manifest</b> is the sheet that goes on the box, and it carries no prices.
+        <b>With my prices</b> is the same list with your cost and tip on it, for checking
+        your own numbers. <b>Do not attach the priced one to the box.</b>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== PAGE 5 ============================== -->
+<section class="pb">
+  <h2 class="sec">What the printed manifest looks like</h2>
+  <p class="sec-sub">One sheet per box. This is what we open the parcel and check against.</p>
+  <div class="two">
+    <div class="shot"><img src="IMG_MFC" style="max-width:88mm"></div>
+    <div>
+      <p>Check these four things before you tape it on:</p>
+      <ul class="do">
+        <li><b>Box N of M</b> — says which box of the shipment this is. If it reads "Box 1 of 2", we are expecting a second parcel.</li>
+        <li><b>Tracking number</b> — must match the label physically stuck to this box.</li>
+        <li><b>Ship to</b> — where the parcel is going.</li>
+        <li><b>Total pairs</b> — count the shoes in the box against this number one last time.</li>
+      </ul>
+      <div class="note">
+        <span class="lbl">Why it matters</span>
+        When the parcel reaches us, the warehouse counts what comes out of it and lines
+        that up against this sheet. If the two disagree, this page is the evidence for
+        what you say you sent.
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h"><span class="step-n">6</span><span class="step-t">Ship the label</span></div>
+    <div class="step-body">
+      <p>
+        Mark the label shipped <b>once the courier physically has the box</b> — not when
+        you close it, and not when you print the sheet.
+      </p>
+      <div class="shot"><img src="IMG_08" style="max-width:118mm"></div>
+      <div class="cap">A closed label. Reopen to edit, reprint the sheet, or ship it.</div>
+      <div class="note stop">
+        <span class="lbl">Shipping is the point of no return</span>
+        You are asked to confirm, and after that <b>the items on that label can no longer
+        be edited</b>. If something is wrong, fix it before you ship.
+      </div>
+      <p>
+        Repeat steps 2&ndash;6 for each label. The whole order only flips to
+        <b>on its way to us</b> once every label has been shipped.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== PAGE 6 ============================== -->
+<section class="pb">
+  <h2 class="sec">Reading the screen</h2>
+  <p class="sec-sub">Two different chips: one for the whole order, one for each label.</p>
+
+  <h3 style="font-size:11pt;margin-bottom:2px;">On the order</h3>
+  <table>
+    <tr><th style="width:38mm">Chip</th><th>What it means</th></tr>
+    <tr><td><span class="chip c-amber">Filling</span></td><td>Nothing has shipped yet. Everything is still editable.</td></tr>
+    <tr><td><span class="chip c-blue">1 of 2 shipped</span></td><td>Part of the order has gone. The rest is still yours to pack.</td></tr>
+    <tr><td><span class="chip c-blue">On its way to us</span></td><td>Every label has shipped. Nothing left to do but tracking.</td></tr>
+    <tr><td><span class="chip c-amber">Receiving</span></td><td>We have started unpacking it at the warehouse.</td></tr>
+    <tr><td><span class="chip c-green">Reconciled</span></td><td>Counted and settled. If anything was short, there will be a note on the order.</td></tr>
+  </table>
+
+  <h3 style="font-size:11pt;margin-bottom:2px;">On a label</h3>
+  <table>
+    <tr><th style="width:38mm">Chip</th><th>What it means</th></tr>
+    <tr><td><i>no chip</i></td><td>Still filling. <b>Add items</b> and <b>Review &amp; close box</b> are available.</td></tr>
+    <tr><td><span class="chip c-violet">Ready to ship</span></td><td>Closed and packed, still with you. Reopen, reprint or ship.</td></tr>
+    <tr><td><span class="chip c-blue">Shipped &check;</span></td><td>You handed it over. Items are locked.</td></tr>
+    <tr><td><span class="chip c-blue">In transit</span></td><td>The courier is moving it. Tap <b>Refresh this label</b> for the latest checkpoint.</td></tr>
+    <tr><td><span class="chip c-green">Delivered &check;</span></td><td>It reached us.</td></tr>
+  </table>
+
+  <h2 class="sec pb">If something goes wrong</h2>
+  <p class="sec-sub">The five questions we actually get asked.</p>
+  <table>
+    <tr><th style="width:56mm">Situation</th><th>What to do</th></tr>
+    <tr>
+      <td><b>I scanned the wrong size or quantity</b></td>
+      <td>Fix it on the line: retype the size, step the quantity, or tap <b>&times;</b> to remove it. Works any time the label is still open. If it is already closed, <b>Reopen to edit</b> first — then reprint the sheet.</td>
+    </tr>
+    <tr>
+      <td><b>The barcode will not scan</b></td>
+      <td>Type the SKU into the same field instead and tap <b>Add</b>. If the shoe still does not come back, tap a size chip and enter it by hand — a typed line counts exactly the same as a scanned one.</td>
+    </tr>
+    <tr>
+      <td><b>I printed the sheet, then changed the box</b></td>
+      <td>Throw the printed sheet away and tap <b>Print manifest</b> again. An out-of-date sheet is worse than none — it is what we count against.</td>
+    </tr>
+    <tr>
+      <td><b>I shipped a label by mistake</b></td>
+      <td>You cannot undo it yourself and the items are locked. Tell us straight away so we know what is really in the parcel before it arrives.</td>
+    </tr>
+    <tr>
+      <td><b>There is a "Replacement shipment" on my order</b></td>
+      <td>That is a box <b>we</b> raised to cover a shortage — not one you forgot to pack. It does not count against your labels. If we asked you to send pairs back, list them on it so the warehouse can check them off.</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <span class="lbl">Two more things worth knowing</span>
+    A line marked <b>"Entered for you by … Staff"</b> is one we typed from a list you sent
+    us. Edit it if it is wrong and it becomes yours. &nbsp;·&nbsp; After we receive an
+    order, anything we need to tell you about it — including a shortage — appears as a
+    <b>note on the order</b>. That is the single channel for it.
+  </div>
+
+  <footer class="foot">
+    Stickballman12 LLC &middot; Supplier SOP &middot; Screens shown are the live portal.
+    Questions about an order go in the group chat, or as a reply to the note on that order.
+  </footer>
+</section>
+
+</body></html>

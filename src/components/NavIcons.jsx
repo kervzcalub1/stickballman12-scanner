@@ -102,6 +102,16 @@ const PATHS = {
     <path d="M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5h.01" />
     <path d="M8.5 18h7" />
   </>),
+  // Gift Card Buying — a gift card with a ribbon across it. Deliberately not a
+  // shopping bag (that is In-Store Buying) and not a calculator (that is Payout): what
+  // this screen is about is the CARD the money leaves on.
+  'buy-carts': (<>
+    <rect x="2.5" y="5.5" width="19" height="13" rx="2" />
+    <path d="M12 5.5v13" />
+    <path d="M2.5 10.5h19" />
+    <path d="M12 5.5c-1.2-1.8-4.2-1.6-4.2.3 0 1 1 1.5 2 1.5H12" />
+    <path d="M12 5.5c1.2-1.8 4.2-1.6 4.2.3 0 1-1 1.5-2 1.5H12" />
+  </>),
   // In-Store Buying — a shopping bag
   instore: (<>
     <path d="M6 8h12l1 12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />

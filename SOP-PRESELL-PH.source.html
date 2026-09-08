@@ -1,0 +1,239 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Pre-sell — PH Team SOP</title>
+<style>
+  @page { size: Letter; margin: 16mm 15mm 14mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0; font: 10.5pt/1.5 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #1a1d24; background: #fff;
+  }
+  h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  p { margin: 0 0 8px; }
+  b, strong { font-weight: 700; }
+
+  /* ---- cover ------------------------------------------------------------ */
+  .cover { padding-top: 4mm; }
+  .brandline {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 3px solid #2f6bff; padding-bottom: 7px; margin-bottom: 15px;
+  }
+  .brand { font-size: 13pt; font-weight: 700; }
+  .brand-r { font-size: 9pt; color: #6b7280; }
+  h1 { font-size: 22pt; line-height: 1.12; margin-bottom: 7px; }
+  .sub { font-size: 10.5pt; color: #4b5563; margin-bottom: 15px; max-width: 150mm; }
+
+  /* ---- the loop strip --------------------------------------------------- */
+  .loop { display: flex; gap: 5px; margin: 0 0 14px; }
+  .loop div {
+    flex: 1; background: #f2f5fb; border-top: 3px solid #2f6bff; padding: 8px 9px 9px;
+    font-size: 8.5pt; line-height: 1.3;
+  }
+  .loop .n { display: block; font-weight: 700; font-size: 8pt; color: #2f6bff; margin-bottom: 2px; }
+  .loop .t { font-weight: 700; font-size: 9.5pt; }
+
+  /* ---- steps ------------------------------------------------------------ */
+  .step { page-break-inside: avoid; margin: 0 0 20px; }
+  .step-h { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; }
+  .step-n {
+    flex: none; width: 22px; height: 22px; border-radius: 50%; background: #2f6bff; color: #fff;
+    font-size: 10.5pt; font-weight: 700; text-align: center; line-height: 22px;
+    position: relative; top: 3px;
+  }
+  .step-t { font-size: 14pt; font-weight: 700; }
+  .step-body { padding-left: 32px; }
+  ol.do, ul.do { margin: 0 0 9px; padding-left: 17px; }
+  ol.do li, ul.do li { margin-bottom: 4px; }
+  .shot { margin: 9px 0 4px; page-break-inside: avoid; }
+  .shot img {
+    display: block; border: 1px solid #d7dce5; border-radius: 5px;
+    max-width: 100%; max-height: 95mm; width: auto; height: auto; margin: 0 auto;
+  }
+  .shot.tall img { max-height: 165mm; }
+  .shot.wide img { max-height: 62mm; }
+  .cap { font-size: 8pt; color: #6b7280; margin-top: 4px; }
+
+  /* ---- callouts --------------------------------------------------------- */
+  .note {
+    border-left: 3px solid #c8ced9; background: #f7f8fa; padding: 8px 11px;
+    margin: 9px 0; font-size: 9.5pt; page-break-inside: avoid;
+  }
+  .note.warn { border-left-color: #d98324; background: #fdf6ec; }
+  .note.stop { border-left-color: #c1493f; background: #fdf0ef; }
+  .note .lbl {
+    display: block; font-size: 7.5pt; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: #6b7280; margin-bottom: 3px;
+  }
+  .note.warn .lbl { color: #b5701c; }
+  .note.stop .lbl { color: #b03a30; }
+
+  /* ---- tables ----------------------------------------------------------- */
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin: 8px 0 14px; }
+  th {
+    text-align: left; font-size: 7.5pt; letter-spacing: .07em; text-transform: uppercase;
+    color: #fff; background: #232a36; padding: 6px 9px;
+  }
+  td { padding: 6px 9px; border-bottom: 1px solid #e4e8ee; vertical-align: top; }
+  tr { page-break-inside: avoid; }
+  thead { display: table-header-group; }
+  tr:nth-child(even) td { background: #f7f8fa; }
+  .chip {
+    display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 8.5pt;
+    font-weight: 700; white-space: nowrap;
+  }
+  .c-amber { background: #fdf0dc; color: #93611a; }
+  .c-violet { background: #ece9fd; color: #5b46c4; }
+  .c-blue { background: #e3ecff; color: #2a56c6; }
+  .c-green { background: #ddf3e4; color: #1f7a41; }
+
+  h2.sec {
+    font-size: 15pt; margin: 0 0 3px; padding-bottom: 5px;
+    border-bottom: 2px solid #232a36;
+  }
+  .sec-sub { font-size: 9.5pt; color: #6b7280; margin: 0 0 12px; }
+  .pb { page-break-before: always; }
+  .two { display: flex; gap: 14px; align-items: flex-start; }
+  .two > div { flex: 1; }
+  footer.foot {
+    margin-top: 16px; padding-top: 8px; border-top: 1px solid #d7dce5;
+    font-size: 8pt; color: #6b7280;
+  }
+</style></head>
+<body>
+
+<section class="cover">
+  <div class="brandline">
+    <span class="brand">Stickballman12 LLC</span>
+    <span class="brand-r">Pre-sell &middot; PH Team Standard Operating Procedure</span>
+  </div>
+
+  <h1>Pre-sell shipments, and why you will not see them</h1>
+  <p class="sub">
+    Some shipments are sold before they arrive. Those pairs are deliberately kept out of
+    your listing worklist &mdash; if you listed one, we would be offering a pair that
+    already belongs to somebody else&rsquo;s order. <b>Your job starts later</b>: the pairs
+    that were <em>not</em> sold come to you on <b>Rescale Stock</b> to be priced and listed
+    like anything else.
+  </p>
+
+  <div class="loop">
+    <div><span class="n">WAREHOUSE</span><span class="t">Receives it</span><br>ticked as pre-sell</div>
+    <div><span class="n">WAREHOUSE</span><span class="t">Says what sold</span><br>size by size</div>
+    <div><span class="n">WAREHOUSE</span><span class="t">Releases the rest</span><br>&ldquo;send for rescale&rdquo;</div>
+    <div><span class="n">YOU</span><span class="t">Price &amp; list</span><br>on Rescale Stock</div>
+    <div><span class="n">YOU</span><span class="t">Tick Restocked</span><br>it becomes normal stock</div>
+  </div>
+
+  <div class="note">
+    <span class="lbl">The one-line version</span>
+    You do nothing differently. Pre-sell pairs simply never reach you, and the leftovers
+    arrive on <b>Rescale Stock</b>, which you already work every day.
+  </div>
+
+  <h2 class="sec">What you will notice</h2>
+  <p class="sec-sub">Two things, and both are correct behaviour.</p>
+  <table>
+    <thead><tr><th style="width:38%">What you see</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>A shipment arrived, but nothing is on New Inventory</b></td>
+        <td>It was a pre-sell shipment. The pairs are held until the warehouse says which
+        orders they cover. Nothing is broken and nothing is lost.</td>
+      </tr>
+      <tr>
+        <td><b>Only some of a shipment reaches you</b></td>
+        <td>Normal. The warehouse released the pairs that were not spoken for. The rest are
+        already sold and are not ours to list.</td>
+      </tr>
+      <tr>
+        <td><b>The listing badges do not count them</b></td>
+        <td>Deliberate. A pre-sell pair is not listing work, so it must not sit in your
+        backlog making it look larger than it is.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note stop">
+    <span class="lbl">Please do not chase these as missing stock</span>
+    A pre-sell shipment that has not been released yet is <b>not</b> a bug, and it is not a
+    receiving mistake. If a shipment seems to be taking a long time, ask the warehouse
+    whether it is still on their Pre-sell page &mdash; do not raise a rescale request for it.
+  </div>
+</section>
+
+<section class="pb">
+  <div class="step">
+    <div class="step-h"><span class="step-n">1</span><span class="step-t">The released pairs arrive on <em>Rescale Stock</em></span></div>
+    <div class="step-body">
+      <p>When the warehouse presses <b>Send for rescale</b>, the pairs that were not sold
+      land on your <b>Rescale Stock</b> worklist, dated the day they were released.</p>
+      <div class="shot tall"><img src="sop-presell/ph-rescale.png" alt="Rescale Stock showing released pre-sell pairs">
+        <div class="cap">Nine pairs released from one pre-sell shipment, arriving as two lines to price and list.</div></div>
+      <div class="note">
+        <span class="lbl">Nothing new to learn</span>
+        This is the same worklist you already use for stock the warehouse has rescanned.
+        There is no separate pre-sell screen for you, and there is no new button.
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h"><span class="step-n">2</span><span class="step-t">Price them and list them, as usual</span></div>
+    <div class="step-body">
+      <ol class="do">
+        <li>Set the price the way you normally do &mdash; <b>Refresh prices</b> pulls the
+        global indicator for the range.</li>
+        <li>List to <b>II</b> and the stores as the row requires.</li>
+        <li>Press <b>&#10003; Restocked</b>. The pair drops off the worklist and behaves as
+        ordinary inventory from then on.</li>
+      </ol>
+      <div class="note warn">
+        <span class="lbl">These are not new arrivals</span>
+        They landed days ago and have been sitting on a shelf while the warehouse worked out
+        what was sold. Price them against today&rsquo;s market, not the date on the shipment.
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="pb">
+  <h2 class="sec">Questions you may be asked</h2>
+  <p class="sec-sub">Short answers you can give without checking with anyone.</p>
+  <table>
+    <thead><tr><th style="width:44%">Question</th><th>Answer</th></tr></thead>
+    <tbody>
+      <tr><td>Can I see which pairs are pre-sold?</td>
+          <td>Not on your screens, and you do not need to. If you must know, ask the
+          warehouse &mdash; the shipment carries a <span class="chip c-amber">Pre-sell</span>
+          chip on their Batches and Inventory pages.</td></tr>
+      <tr><td>Can I list a pre-sold pair if a store is short?</td>
+          <td>No. It is already somebody&rsquo;s. The system will not show it to you, and it
+          must not be worked around.</td></tr>
+      <tr><td>A pre-sold pair came back &mdash; the buyer cancelled.</td>
+          <td>The warehouse hands it back on their Pre-sell page and it comes to you on
+          Rescale Stock like the rest. Nothing for you to do until it appears.</td></tr>
+      <tr><td>Do these count towards my listing backlog?</td>
+          <td>Only once released. Until then they are invisible to every PH count, on
+          purpose.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sec">Where a pre-sell pair sits in its life</h2>
+  <table>
+    <thead><tr><th style="width:26%">Stage</th><th>Who</th><th>Visible to PH?</th></tr></thead>
+    <tbody>
+      <tr><td>Received, ticked pre-sell</td><td>Warehouse</td><td>No &mdash; held out of New Inventory</td></tr>
+      <tr><td><span class="chip c-amber">Pre-sold</span> &mdash; an order covers it</td><td>Warehouse</td><td>No &mdash; never listed</td></tr>
+      <tr><td>Released for listing</td><td>Warehouse</td><td><b>Yes</b> &mdash; appears on Rescale Stock</td></tr>
+      <tr><td>Priced &amp; listed, ticked Restocked</td><td><b>PH team</b></td><td>Yes &mdash; ordinary inventory</td></tr>
+    </tbody>
+  </table>
+
+  <footer class="foot">
+    Stickballman12 LLC &middot; Pre-sell, PH team procedure &middot; If a shipment looks
+    missing, ask the warehouse whether it is still on their Pre-sell page before raising
+    anything.
+  </footer>
+</section>
+
+</body></html>

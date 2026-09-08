@@ -209,6 +209,109 @@ export function Modal({ type, title, message, onClose, children }) {
   );
 }
 
+/**
+ * A floating form modal — the replacement for `window.prompt`.
+ *
+ * A native prompt was doing real work on the money screens, and it was the wrong tool
+ * three ways: it can't be styled, it can't hold two questions at once (so starting a
+ * buying request meant two system dialogs in a row), and it can't validate — an empty
+ * purpose or a blank reason went to the server exactly like a real one.
+ *
+ * `fields` is a list of { name, label, type, placeholder, hint, required, value }.
+ * `onSubmit` gets a plain object keyed by field name and may be async; the modal stays
+ * open and disabled while it runs, so a slow save can't be double-tapped.
+ *
+ * Deliberately NOT auto-focused. On iOS Safari a programmatic focus sets DOM focus but
+ * suppresses the keyboard, which reads as "the keyboard randomly won't show" — and the
+ * people using this are standing in a shop on a phone.
+ */
+export function FormModal({
+  title, message, fields = [], submitLabel = 'Save', danger = false,
+  onSubmit, onClose,
+}) {
+  const [vals, setVals] = useState(() =>
+    Object.fromEntries(fields.map((f) => [f.name, f.value ?? ''])));
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !busy) onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, busy]);
+
+  const set = (name, v) => setVals((s) => ({ ...s, [name]: v }));
+
+  async function submit(e) {
+    e?.preventDefault?.();
+    if (busy) return;
+    // Required means non-blank, not merely present — " " is not a reason.
+    const missing = fields.find((f) => f.required && !String(vals[f.name] ?? '').trim());
+    if (missing) return setErr(`${missing.label} is needed.`);
+    setErr(''); setBusy(true);
+    try { await onSubmit(vals); }
+    catch (e2) { setErr(e2?.message || 'That did not go through.'); setBusy(false); }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <form className="modal form-modal" role="dialog" aria-modal="true"
+        onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h3 className="modal-title">{title}</h3>
+        {message && <p className="modal-msg">{message}</p>}
+        <div className="form-modal-fields">
+          {fields.map((f) => (
+            <label key={f.name} className="form-modal-label">
+              <span>{f.label}{f.required && <i className="form-modal-req" aria-hidden="true">*</i>}</span>
+              {f.type === 'textarea' ? (
+                <textarea className="input" rows={f.rows || 3} value={vals[f.name] ?? ''}
+                  placeholder={f.placeholder || ''} maxLength={f.maxLength || 500} disabled={busy}
+                  onChange={(e) => set(f.name, e.target.value)} />
+              ) : (
+                <input className="input" type={f.type || 'text'} value={vals[f.name] ?? ''}
+                  placeholder={f.placeholder || ''} maxLength={f.maxLength || 200} disabled={busy}
+                  inputMode={f.type === 'number' ? (f.step ? 'decimal' : 'numeric') : undefined}
+                  // Without a step, a number input rejects 8.25 on submit with the
+                  // browser's own "please enter a valid value" and no field ever says why.
+                  min={f.min} max={f.max} step={f.step}
+                  onChange={(e) => set(f.name, e.target.value)} />
+              )}
+              {f.hint && <i className="form-modal-hint">{f.hint}</i>}
+            </label>
+          ))}
+        </div>
+        {err && <div className="error mt">{err}</div>}
+        <div className="modal-actions">
+          <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="submit" className={`btn ${danger ? 'danger' : 'primary'}`} disabled={busy}>
+            {busy ? 'Working…' : submitLabel}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// A labelled bare-number box with either a $ in front or a % behind — the shape every
+// register-stack field takes. Lived on the Payout Calculator until the buying request's
+// cost stack needed exactly the same seven boxes; two copies of a money input is how the
+// two screens start disagreeing about what "blank" means.
+export function NumField({ label, value, onChange, prefix, suffix, placeholder = '0', hint, disabled }) {
+  return (
+    <label className="pc-field">
+      <span className="pc-field-label">{label}</span>
+      <span className={`pc-input-wrap${prefix ? ' has-prefix' : ''}${suffix ? ' has-suffix' : ''}`}>
+        {prefix ? <span className="pc-affix" aria-hidden="true">{prefix}</span> : null}
+        <input
+          type="number" min="0" step="0.01" inputMode="decimal" placeholder={placeholder}
+          value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
+        {suffix ? <span className="pc-affix suffix" aria-hidden="true">{suffix}</span> : null}
+      </span>
+      {hint ? <span className="pc-field-hint muted sm">{hint}</span> : null}
+    </label>
+  );
+}
+
 export function TopBar({ title, onHome, onSignOut, right }) {
   return (
     <header className="topbar">
@@ -333,6 +436,10 @@ export function SizesQty({ sizes }) {
 // exact background of the panel they sat in (--panel-2 on --panel-2), so a
 // blank "fill me in" field for brand-new inventory read as invisible. A
 // contrasting background + leading "$" + placeholder make it unmistakable.
+// `onChange` is passed STRAIGHT to the <input>, so it receives the EVENT, not the value:
+// callers write `onChange={(e) => setX(e.target.value)}`. Passing a bare setter stores the
+// event object instead of a number, and the failure is silent — the box looks like it
+// took the input while everything computed from it quietly becomes NaN.
 export function PriceInput({ value, onChange, className = '', ...rest }) {
   return (
     <span className="ph-price-wrap">

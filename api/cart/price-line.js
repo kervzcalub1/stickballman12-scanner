@@ -79,18 +79,49 @@ export default async function handler(req, res) {
 
     const aliasRow = (alias.value?.results || [])[0] || null;
     const aliasPrice = money(aliasRow?.lowest_listing);
-    const sxMarket = sx.status === 'fulfilled' ? (sx.value?.market || null) : null;
-    const stockxPrice = money(sxMarket?.lowest_ask);
     const v = vel.status === 'fulfilled' ? vel.value : null;
     const liquidity = v && !v.error ? (v.liquidity || null) : null;
+
+    // StockX's catalogue search falls back to the FIRST result when no product actually
+    // carries the style code, and flags that with `exact:false` (api/_lib/stockx.js). On
+    // the calculator an inexact hit is still shown — it is usually the right shoe in
+    // another colourway and a person is looking at the title. Here nobody is: this writes
+    // the number an approval gets judged on. Probed with a style code no shop has ever
+    // sold, and it came back a confident "$264, BUY" off a completely unrelated shoe.
+    //
+    // But refusing every inexact hit throws away real prices: StockX's styleId formatting
+    // often differs from the code on the box, so the RIGHT shoe frequently comes back
+    // inexact — IO8116-600 does. So it is CORROBORATION that decides, not the flag alone:
+    //
+    //   Alias priced it too  → the style code is a real shoe and we have a second
+    //                          opinion beside it. Use the inexact hit, say it was matched
+    //                          by name in the trail.
+    //   Alias found nothing  → nothing says this style code exists at all, and a lone
+    //                          first-search-result is a guess. Refuse it.
+    //
+    // That is exactly what separates ZZ0000-999 (no Alias, inexact StockX) from a real
+    // shoe whose StockX styleId is written differently.
+    const sxHit = sx.status === 'fulfilled' ? sx.value : null;
+    const sxInexact = !!sxHit?.market && sxHit?.product?.exact === false;
+    const sxUsable = !!sxHit?.market && (!sxInexact || aliasPrice != null);
+    const stockxPrice = sxUsable ? money(sxHit.market.lowest_ask) : null;
+    const marketOut = {
+      alias: aliasPrice, stockx: stockxPrice, liquidity,
+      stockxConfigured: stockxConfigured(),
+      // Reported either way, so the screen can say HOW StockX was matched rather than
+      // implying a style-code hit.
+      stockxInexact: sxInexact,
+      stockxTitle: sxInexact ? (sxHit?.product?.title || null) : null,
+    };
 
     // Neither side answered. Say so rather than writing two more zeros — the whole
     // reason this line reads "Not priced" is that somebody once did exactly that.
     if (aliasPrice == null && stockxPrice == null)
       return send(res, 200, {
-        ok: true, line, priced: false,
-        market: { alias: null, stockx: null, liquidity, stockxConfigured: stockxConfigured() },
-        error: `No Alias or StockX price for ${line.sku} in size ${line.size} right now.`,
+        ok: true, line, priced: false, market: marketOut,
+        error: sxInexact
+          ? `Nothing carries the style code ${line.sku}: Alias has no price for it, and StockX's closest match is a different shoe (${sxHit?.product?.title || 'unnamed'}), so it is not being used. Check the code.`
+          : `No Alias or StockX price for ${line.sku} in size ${line.size} right now.`,
       });
 
     const snap = {
@@ -101,14 +132,12 @@ export default async function handler(req, res) {
       ? `was ${line.verdict}, ${fmt(line.profit)} profit`
       : 'was not priced';
     const saved = await priceBuyCartLine(cartId, lineId, snap, user,
-      `${line.sku}${line.size ? ` size ${line.size}` : ''} — Alias ${fmt(aliasPrice)} · StockX ${fmt(stockxPrice)}`
+      `${line.sku}${line.size ? ` size ${line.size}` : ''} — Alias ${fmt(aliasPrice)}`
+      + ` · StockX ${stockxPrice == null ? (sxInexact ? 'no style-code match, ignored' : '—') : `${fmt(stockxPrice)}${sxInexact ? ' (matched by name)' : ''}`}`
       + ` → ${snap.verdict || 'no call'}, ${fmt(snap.profit)} profit (${was})`);
     if (!saved) return send(res, 404, { ok: false, error: 'That line does not exist.' });
 
-    return send(res, 200, {
-      ok: true, line: saved, priced: true,
-      market: { alias: aliasPrice, stockx: stockxPrice, liquidity, stockxConfigured: stockxConfigured() },
-    });
+    return send(res, 200, { ok: true, line: saved, priced: true, market: marketOut });
   } catch (e) {
     console.error('[cart/price-line]', e.message);
     return send(res, 500, { ok: false, error: 'Could not price that line.' });

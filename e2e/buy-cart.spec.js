@@ -591,14 +591,31 @@ test('pricing a line is an explicit act, and it is named in the trail', async ({
 
   const r = await call(request, 'approver', 'cart/price-line', { cartId, lineId });
   expect(r.status).toBe(200);
+
+  // BOTH branches are asserted, and which one runs depends on whether this environment
+  // has upstream credentials — CI is hermetic and deliberately has none. A test that
+  // only asserted the happy path would be a test of somebody else's API being up.
   const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
   const ev = after.body.cart.events.find((e) => e.kind === 'line_priced');
-  expect(ev).toBeTruthy();
-  expect(ev.actor_name).toBe('E2E Approver');
-  // The prices it found and what the call was before it — an approver re-pricing has
-  // chosen to look at today's market instead of the buyer's, and the record says so.
-  expect(ev.body).toMatch(/Alias /);
-  expect(ev.body).toMatch(/was (not priced|buy|watch|pass)/);
+  if (r.body.priced) {
+    expect(ev).toBeTruthy();
+    expect(ev.actor_name).toBe('E2E Approver');
+    // The prices it found and what the call was before it — an approver re-pricing has
+    // chosen to look at today's market instead of the buyer's, and the record says so.
+    expect(ev.body).toMatch(/Alias /);
+    expect(ev.body).toMatch(/was (not priced|buy|watch|pass)/);
+    expect(after.body.cart.lines[0].alias_price ?? after.body.cart.lines[0].stockx_price).toBeTruthy();
+  } else {
+    // Neither source answered. That is not an error and must not be written as one:
+    // it says so in words, writes NOTHING, and above all does not store another pair of
+    // zeros — which is exactly what left these lines reading "Not priced" forever.
+    expect(r.body.error).toMatch(/no alias or stockx price/i);
+    expect(ev).toBeUndefined();
+    const line = after.body.cart.lines[0];
+    expect(line.verdict).toBeNull();
+    expect(line.alias_price).toBeNull();
+    expect(line.stockx_price).toBeNull();
+  }
 });
 
 // An edit that changes nothing must not leave a row saying something changed.
@@ -615,4 +632,30 @@ test('a no-op line edit writes nothing to the trail', async ({ request }) => {
   expect(r.body.unchanged).toBe(true);
   const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
   expect(after.body.cart.events).toHaveLength(before);
+});
+
+// StockX's catalogue search falls back to its first result when nothing carries the
+// style code. On the calculator that is shown to a person; here it would be STORED as
+// the call an approval is judged on. Probed with a code no shop has ever sold and it
+// came back a confident "$264, BUY" off an unrelated shoe.
+test('a style code nothing carries is refused, not priced off the nearest shoe', async ({ request }) => {
+  const cartId = await newRequest(request, { submit: false });
+  const { body } = await call(request, 'buyer', 'cart/line', {
+    cartId, line: { sku: 'ZZ0000-999', size: '10', qty: 1, shelfPrice: 63 },
+  });
+  const lineId = Number(body.line.id);
+
+  const r = await call(request, 'approver', 'cart/price-line', { cartId, lineId });
+  expect(r.status).toBe(200);
+  expect(r.body.priced).toBe(false);
+  expect(r.body.error).toMatch(/no .*price|style code/i);
+
+  // Nothing stored, and nothing in the trail. A refusal that still wrote a row would be
+  // the same bug in a different place.
+  const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const line = after.body.cart.lines.find((l) => Number(l.id) === lineId);
+  expect(line.verdict).toBeNull();
+  expect(line.alias_price).toBeNull();
+  expect(line.stockx_price).toBeNull();
+  expect(after.body.cart.events.some((e) => e.kind === 'line_priced')).toBe(false);
 });

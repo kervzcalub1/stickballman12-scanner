@@ -256,6 +256,16 @@ and re-adding it, while the same SKU prices fine an hour later.
 - **Finding nothing is not an error, and must not be written as one.** Both sources empty
   answers 200 with `priced:false` and a sentence; writing two more zeros is what created
   the problem this endpoint exists to undo.
+- **An inexact StockX match needs CORROBORATION.** `stockxProductForSku` falls back to
+  the first search result when no product carries the style code, flagged `exact:false`.
+  The calculator shows that to a person; here it would be *stored* as the call an approval
+  is judged on — probed with `ZZ0000-999` and it came back a confident **"$264, BUY"** off
+  a Nike Vomero. But refusing every inexact hit throws away real prices, because StockX's
+  styleId formatting often differs from the code on the box (`IO8116-600` is inexact and is
+  the right shoe). So Alias decides: **Alias priced it too** → the code is a real shoe and
+  there is a second opinion beside it, use the hit and say "matched by name" in the trail;
+  **Alias found nothing** → nothing says the code exists, refuse, and name the shoe it
+  nearly used so the buyer can check what they typed.
 - Basis is kept (`line.basis` → `consigned`), so a re-price cannot quietly switch which
   question was asked.
 - There is **no unique index on (cart, sku, size)** — a line carries its own shelf price

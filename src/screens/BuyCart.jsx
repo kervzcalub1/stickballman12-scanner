@@ -127,6 +127,9 @@ function Lines({ cart, canDecide, canEditLines, canPrice, isBuyer, onChanged, on
   const [sel, setSel] = useState([]);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
+  // Not an error and not nothing: something about the last price that a person should
+  // read once. Cleared by the next action.
+  const [note, setNote] = useState('');
   // `null` = not asking. `{ all }` = asking why, for one line or for the lot.
   const [rejecting, setRejecting] = useState(null);
   // The line being corrected, if any. A misread shelf ticket is the common case and it
@@ -170,12 +173,18 @@ function Lines({ cart, canDecide, canEditLines, canPrice, isBuyer, onChanged, on
 
   // Re-read the market for one pair. Explicit and named — see api/cart/price-line.js.
   async function price(id) {
-    setBusy(`px${id}`); setErr('');
+    setBusy(`px${id}`); setErr(''); setNote('');
     try {
       const r = await api.cartPriceLine(cart.id, id);
       // A successful call that found nothing is not an error, and it must not read as
       // one — but it does have to say so, or the button looks broken.
       if (r.priced === false) setErr(r.error || 'No market price for that size right now.');
+      // StockX had no product carrying this style code and was matched on the name
+      // instead. Worth saying once, out loud: it is usually the right shoe in another
+      // colourway, and occasionally it is not the shoe at all.
+      else if (r.market?.stockxInexact && r.market?.stockx != null) {
+        setNote(`StockX had no product with the style code ${cart.lines.find((l) => Number(l.id) === id)?.sku || ''} — its ${r.market.stockxTitle || 'closest match'} was used. The Alias price is the style-code one.`);
+      }
       onChanged();
     } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
     finally { setBusy(''); }
@@ -320,6 +329,7 @@ function Lines({ cart, canDecide, canEditLines, canPrice, isBuyer, onChanged, on
         </div>
       )}
       {err && <div className="error mt">{err}</div>}
+      {note && <p className="bc-till-warn mt">{note}</p>}
     </section>
   );
 }

@@ -111,11 +111,27 @@ async function build() {
 }
 
 // 2. The real server (dist/ + /api, production headers + traversal guard).
+//
+// APP_ENV=dev is forced here for the same reason vite.config.js forces it, and it was
+// MISSING for years: this script runs `server.mjs`, which production also runs and which
+// therefore never sets it — so a preview inherited a bare environment and looked like
+// production to every guard keyed on it. The one that matters is 17TRACK registration
+// (api/_lib/tracking.js): a preview pointed at the local database, handed to teammates
+// who then click through a purchase order, would register invented tracking numbers
+// against the real, quota-limited account. That has already happened once from a dev
+// server — 50 numbers in a week. TRACKING_ALLOW_DEV=1 still opts back in deliberately.
+//
+// ENV_LABEL draws the "not production" bar. Defaulted rather than forced, because
+// somebody previewing a specific thing may want to name it — but a preview with no bar
+// at all is a copy of the app that looks exactly like the real one, which is the whole
+// failure this is here to prevent.
 function serve(tls) {
   const s = run('node', ['server.mjs'], {
     stdio: VERBOSE ? 'inherit' : ['ignore', 'ignore', 'inherit'],
     env: {
       ...process.env,
+      APP_ENV: 'dev',
+      ENV_LABEL: process.env.ENV_LABEL || (TUNNEL ? 'PREVIEW · public link' : 'PREVIEW'),
       PORT: String(PORT),
       ...(tls ? { TLS_CERT: tls.cert, TLS_KEY: tls.key, HTTPS_PORT: String(HTTPS_PORT) } : {}),
     },

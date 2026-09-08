@@ -87,6 +87,25 @@ run the migration after schema changes, on every environment.**
 - On Railway: `railway ssh` → `npm run db:go-live`, or locally against
   `DATABASE_PUBLIC_URL`. Snapshot the DB first; there is no undo.
 
+## The quick preview: `npm run mobile:tunnel`
+A public HTTPS URL off this laptop, against the LOCAL database, for as long as the
+command runs. Right for "walk the team through it this afternoon"; wrong for a week of
+poking, because it is somebody's laptop and the deliberately-public endpoints
+(`/api/track`, `/api/get-price`) are public on that hostname too.
+
+Two things it now does for you, which it did not before:
+- **`APP_ENV=dev` is forced** on the spawned `server.mjs`. It was missing for years, and
+  the gap was invisible: this script runs the same entrypoint production runs, which
+  never sets `APP_ENV`, so a preview looked like production to every guard keyed on it —
+  including 17TRACK registration. A teammate clicking through a purchase order on a
+  tunnel would have registered invented tracking numbers against the real account.
+- **`ENV_LABEL` defaults**, so the "not production" bar is on the page the moment the
+  link is opened. Override it (`ENV_LABEL='Buy-cart demo' npm run mobile:tunnel`) to name
+  what is being previewed.
+
+Still true and still on you: it serves whatever is in your local database, so look at
+what is in there before sending the link.
+
 ## Staging / preview (a second service, prod untouched)
 Letting the team try a branch without touching production. The risk is **not** the
 code — it is the side effects that leave the building. This app registers tracking

@@ -589,6 +589,11 @@ test('pricing a line is an explicit act, and it is named in the trail', async ({
   const other = await call(request, 'buyer2', 'cart/price-line', { cartId, lineId });
   expect(other.status).toBe(403);
 
+  // The line as it stands BEFORE, so the "found nothing" branch can assert that nothing
+  // moved rather than assuming what was there. This one carries the buyer's own snapshot
+  // (verdict 'buy'), and a lookup that finds no market must leave it exactly alone.
+  const was = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+
   const r = await call(request, 'approver', 'cart/price-line', { cartId, lineId });
   expect(r.status).toBe(200);
 
@@ -596,6 +601,7 @@ test('pricing a line is an explicit act, and it is named in the trail', async ({
   // has upstream credentials — CI is hermetic and deliberately has none. A test that
   // only asserted the happy path would be a test of somebody else's API being up.
   const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const now = after.body.cart.lines[0];
   const ev = after.body.cart.events.find((e) => e.kind === 'line_priced');
   if (r.body.priced) {
     expect(ev).toBeTruthy();
@@ -604,17 +610,18 @@ test('pricing a line is an explicit act, and it is named in the trail', async ({
     // chosen to look at today's market instead of the buyer's, and the record says so.
     expect(ev.body).toMatch(/Alias /);
     expect(ev.body).toMatch(/was (not priced|buy|watch|pass)/);
-    expect(after.body.cart.lines[0].alias_price ?? after.body.cart.lines[0].stockx_price).toBeTruthy();
+    expect(now.alias_price ?? now.stockx_price).toBeTruthy();
   } else {
-    // Neither source answered. That is not an error and must not be written as one:
-    // it says so in words, writes NOTHING, and above all does not store another pair of
-    // zeros — which is exactly what left these lines reading "Not priced" forever.
-    expect(r.body.error).toMatch(/no alias or stockx price/i);
+    // Neither source answered. That is not an error and must not be written as one: it
+    // says so in words, writes no event, and — the point — does not touch the snapshot.
+    // Storing another pair of zeros here is exactly what left lines reading "Not priced"
+    // forever, and blanking a call the buyer legitimately made would be worse still.
+    expect(r.body.error).toMatch(/no alias or stockx price|style code/i);
     expect(ev).toBeUndefined();
-    const line = after.body.cart.lines[0];
-    expect(line.verdict).toBeNull();
-    expect(line.alias_price).toBeNull();
-    expect(line.stockx_price).toBeNull();
+    expect(now.verdict).toBe(was.verdict);
+    expect(now.alias_price).toBe(was.alias_price);
+    expect(now.stockx_price).toBe(was.stockx_price);
+    expect(now.quoted_at).toBe(was.quoted_at);
   }
 });
 

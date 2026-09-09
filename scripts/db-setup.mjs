@@ -776,6 +776,24 @@ await sql(`CREATE INDEX IF NOT EXISTS purchase_orders_resolution_idx
 // those units were already declared and already counted short, so declaring them again
 // would double the expected count and make chasing a shortage look like a bigger one.
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'original'`);
+// WHEN it is expected, which is a different question from where it is.
+//
+// The inbound feed could say a parcel was "in transit" and never say whether that meant
+// today or next Thursday — so "what should the warehouse expect this morning" could only
+// be answered by opening each order and reading checkpoints. 17TRACK already sends an
+// estimated delivery window in the webhook payload we receive; we simply were not
+// reading it, so this costs no extra call and no quota.
+//
+// A WINDOW, not a day: carriers quote "Tue–Thu" as often as a date, and collapsing that
+// to its first day would put a parcel on the floor's list two days before anyone should
+// expect it. DATE columns, compared against the EST day like every other date here.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS eta_from DATE`);
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS eta_to DATE`);
+// Whose estimate it is. The carrier's own beats 17TRACK's inference, and a screen that
+// tells the floor to expect twelve boxes should be able to say where the date came from.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS eta_source TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS po_boxes_eta_idx ON po_boxes (eta_from) WHERE eta_from IS NOT NULL`);
+
 
 // Link the received receiving-batch back to its PO (set on scan-in). Reconciliation
 // joins po_lines (expected) against items under this batch (actual), by (sku, size).

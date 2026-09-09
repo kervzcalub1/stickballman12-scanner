@@ -104,3 +104,98 @@ export function countStates(rows, now = Date.now()) {
   for (const r of rows || []) out[inboundState(r, now)] += 1;
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// WHEN it is expected — a different question from where it is, and the one the
+// warehouse actually opens the day with.
+//
+// The feed could say a parcel was "in transit" and never say whether that meant this
+// morning or next Thursday, so "what should we expect today" could only be answered by
+// opening every order and reading checkpoints. The carrier's own estimate is in the
+// 17TRACK payload we already receive (`po_boxes.eta_from` / `eta_to`); this turns it
+// into the handful of buckets a floor actually plans around.
+
+// Every date here is an EST calendar day, compared as a string. `estToday()` and the
+// DATE columns are both 'YYYY-MM-DD', so string comparison IS date comparison — and it
+// avoids the `new Date('YYYY-MM-DD')` trap that reads a day in the viewer's zone. The PH
+// team's clock is a day ahead of the EST day the warehouse works to.
+export const addDays = (ymd, n) => {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+};
+
+export const ARRIVAL_BUCKETS = {
+  landed:    { label: 'Landed',      blurb: 'Already at the warehouse.' },
+  overdue:   { label: 'Overdue',     blurb: 'The carrier’s own estimate has passed and it is not here.' },
+  today:     { label: 'Today',       blurb: 'Expected on the floor today.' },
+  tomorrow:  { label: 'Tomorrow',    blurb: 'Expected tomorrow.' },
+  this_week: { label: 'Within a week', blurb: 'Expected in the next seven days.' },
+  later:     { label: 'Later',       blurb: 'Expected beyond the next week.' },
+  unknown:   { label: 'No date',     blurb: 'Moving, but the carrier has not given a delivery estimate.' },
+};
+export const ARRIVAL_ORDER = ['overdue', 'today', 'tomorrow', 'this_week', 'later', 'unknown', 'landed'];
+
+/**
+ * Which day-bucket a box falls in.
+ *
+ * `out for delivery` beats the estimate outright: the parcel is on a truck, so it is
+ * arriving today whatever a three-day window said this morning. That is the single most
+ * useful thing this screen can tell the floor, and it is the one case where the carrier's
+ * movement is better evidence than the carrier's own promise.
+ *
+ * A box with no estimate is `unknown`, never quietly folded into "later" — the difference
+ * between "not for a while" and "we have no idea" is the difference between planning the
+ * day and being surprised by it.
+ */
+export function arrivalBucket(box, today, state = null) {
+  const st = state || inboundState(box);
+  if (st === 'delivered') return 'landed';
+  if (st === 'out') return 'today';
+  // Nothing the carrier has never scanned gets a date it does not deserve.
+  if (st === 'no_tracking' || st === 'with_supplier') return 'unknown';
+
+  const from = box?.eta_from || null;
+  const to = box?.eta_to || from;
+  if (!from) return 'unknown';
+  // Inside the quoted window counts as today — a "Tue–Thu" parcel is genuinely due on
+  // any of those days, and telling the floor "Tuesday" on Wednesday helps nobody.
+  if (from <= today && today <= to) return 'today';
+  if (to < today) return 'overdue';
+  if (from === addDays(today, 1)) return 'tomorrow';
+  return from <= addDays(today, 7) ? 'this_week' : 'later';
+}
+
+/**
+ * The day's arrivals, in the terms the floor plans in: BOXES and PAIRS per bucket.
+ *
+ * Pairs, not just boxes, because they are what costs time — twelve boxes of two is a
+ * quiet morning and two boxes of a hundred and sixty is not. `box_units` is null on a box
+ * nobody declared a manifest for, and that stays visible as `unknownUnits` rather than
+ * being counted as zero: "no pairs expected" and "we don't know how many" are different
+ * answers, and only one of them means you can stop planning.
+ */
+export function arrivalPlan(rows, today, now = Date.now()) {
+  const out = {};
+  for (const k of ARRIVAL_ORDER) out[k] = { boxes: 0, units: 0, unknownUnits: 0, shipments: new Set() };
+  for (const r of rows || []) {
+    const state = inboundState(r, now);
+    const b = out[arrivalBucket(r, today, state)];
+    b.boxes += 1;
+    const u = Number(r.box_units);
+    if (Number.isFinite(u) && u > 0) b.units += u; else b.unknownUnits += 1;
+    b.shipments.add(Number(r.po_id));
+  }
+  for (const k of ARRIVAL_ORDER) out[k].shipments = out[k].shipments.size;
+  return out;
+}
+
+/** Everything still coming — the denominator of the "how much of it is here" bar. */
+export function inboundProgress(rows, now = Date.now()) {
+  let landed = 0; let total = 0;
+  for (const r of rows || []) {
+    total += 1;
+    if (inboundState(r, now) === 'delivered') landed += 1;
+  }
+  return { landed, total, pct: total ? Math.round((landed / total) * 100) : 0 };
+}

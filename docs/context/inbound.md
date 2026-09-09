@@ -17,10 +17,66 @@ shipped that same order was still open on prod and the feed put it at the top �
 
 ## Nothing is fetched
 `listInboundBoxes` reads what the **17TRACK webhook has already written** to
-`po_boxes`. Opening the screen costs one query and **no tracking quota**. There is no
-new column and no schema change — the raw `tracking_status` already retains detail
+`po_boxes`. Opening the screen costs one query and **no tracking quota**. The raw `tracking_status` already retains detail
 that `mapBoxStatus` throws away (it folds **Out for Delivery** into In Transit, which
 is right for a box's own status and wrong for a daily feed).
+
+## The day comes first (2026-09-10)
+The feed classified every box by **where** it was and never by **when** it was due, so
+"In transit" covered both a parcel on a truck two streets away and one leaving Guangzhou
+on Thursday. A floor cannot plan a morning from that. The top of the screen is now the
+carrier's own estimated delivery window, in **boxes and pairs**, for today and the days
+after it.
+
+- **`po_boxes.eta_from` / `eta_to` / `eta_source`** — 17TRACK sends the estimate in the
+  webhook payload we already receive (`track_info.time_metrics.estimated_delivery_date`);
+  we simply were not reading it, so this costs no extra call and no quota. Both the
+  webhook and `po/track-refresh` populate it, because both hand the whole parsed entry to
+  `setPoBoxTracking`. **Needs `db:setup`.**
+- **A WINDOW, not a day.** Carriers quote "Tue–Thu" as often as a date, and collapsing
+  that to its first day puts a parcel on the warehouse's list two days early. Any day
+  inside the window reads as *due today*.
+- **Tied to the status that carried it**, like `tracking_sub_status` and for the same
+  reason: a window that has passed is not an estimate, it is a stale promise, so a
+  COALESCE would leave "arriving Tuesday" on a parcel the carrier has since re-quoted.
+- **Existing boxes have no ETA until their next update.** The column is new; nothing is
+  backfilled. Each live parcel fills in as the webhook fires, or immediately on a manual
+  `po/track-refresh` (which does cost quota).
+
+### The buckets (`ARRIVAL_BUCKETS`, `arrivalBucket`)
+`overdue · today · tomorrow · this_week · later · unknown · landed`, in that order.
+
+- **Out for delivery beats the estimate outright.** The parcel is on a truck, so it
+  arrives today whatever a three-day window said this morning — the one case where the
+  carrier's movement is better evidence than the carrier's own promise.
+- **`unknown` is never folded into `later`.** "Not for a while" and "we have no idea" are
+  different answers, and only one of them lets somebody stop planning around it. Anything
+  the carrier has never scanned (`no_tracking`, `with_supplier`) is `unknown` too — a
+  label with no parcel behind it has not earned a date.
+- Dates are compared as **strings** against `estToday()`. Both sides are `YYYY-MM-DD`, so
+  string comparison IS date comparison, and it avoids the `new Date('YYYY-MM-DD')` trap
+  that reads a day in the viewer's zone — the PH team's clock is a day ahead of the EST
+  day the warehouse works to. `addDays` does the arithmetic in UTC for the same reason.
+
+### Pairs, and the ones it cannot count
+`arrivalPlan` returns `{ boxes, units, unknownUnits, shipments }` per bucket. Pairs matter
+because they are what cost time: twelve boxes of two is a quiet morning and two boxes of a
+hundred and sixty is not. `box_units` (new on `listInboundBoxes`, summed from `po_lines`
+per **box**, not per order) is what makes that answerable when three of an order's five
+boxes land on Thursday.
+
+**A box with no manifest contributes to `unknownUnits`, never to `units` as a zero.** "No
+pairs expected" and "we don't know how many" are different answers, and the strip says
+which one it means.
+
+### Two strips, two axes
+**When it lands** and **How it is travelling** are separate and stay separate — a parcel
+can be due today *and* stuck, and a delayed box has no meaningful arrival date to sit
+under. Both filter the list below, and they combine. `?due=today` is in the URL like the
+other filters, so "look at what lands today" is a link you can send.
+
+`inboundProgress` is the bar under the headline: landed boxes over everything still
+inbound, in the current filter scope.
 
 ## The seven states (`INBOUND_STATES`, worst first)
 | State | Means | Keyed on |

@@ -3563,6 +3563,11 @@ export async function listInboundBoxes() {
     SELECT b.id AS box_id, b.box_number, b.tracking_number, b.carrier, b.status AS box_status,
            b.tracking_status, b.tracking_sub_status, b.tracking_sub_status_descr,
            b.last_checkpoint, b.checked_at, b.kind AS box_kind, b.shipped_at,
+           b.eta_from, b.eta_to, b.eta_source,
+           -- PER-BOX units, not just the order's. "What lands today" is a number of
+           -- PAIRS the floor has to find room and time for, and an order-level total
+           -- cannot answer it when three of its five boxes arrive on Thursday.
+           (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_box_id = b.id)::int AS box_units,
            coalesce((b.tracking_events -> 0 ->> 'time')::timestamptz, b.checked_at) AS last_move_at,
            (b.tracking_events -> 0 ->> 'location') AS last_location,
            p.id AS po_id, p.po_code, p.supplier_name, p.status AS po_status,
@@ -4484,7 +4489,7 @@ export async function listPoTrackingItems(poId) {
 // supplier has marked it shipped) never moves the box backwards. Never downgrades to null.
 // Returns the affected { id, po_id } rows.
 const BOX_STATUS_RANK = { pending: 0, packed: 1, pre_transit: 2, shipped: 3, in_transit: 4, delivered: 5 };
-export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus, subStatus, subStatusDescr, lastCheckpoint, boxStatus, events }) {
+export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus, subStatus, subStatusDescr, lastCheckpoint, boxStatus, events, etaFrom, etaTo, etaSource }) {
   const sql = db();
   const eventsJson = Array.isArray(events) && events.length ? JSON.stringify(events) : null;
   const newRank = boxStatus != null ? BOX_STATUS_RANK[boxStatus] : undefined;
@@ -4503,6 +4508,13 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
           tracking_sub_status_descr = CASE WHEN ${hasStatus} THEN ${subStatusDescr ?? null} ELSE tracking_sub_status_descr END,
           last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
           tracking_events = COALESCE(${eventsJson}::jsonb, tracking_events),
+          -- The ETA is tied to the update that carried it, like sub_status and for the
+          -- same reason: a window that has passed is not an estimate, it is a stale
+          -- promise, and COALESCE would leave "arriving Tuesday" on a parcel the carrier
+          -- has since re-quoted. Only an update that actually carries a status replaces it.
+          eta_from = CASE WHEN ${hasStatus} THEN ${etaFrom ?? null}::date ELSE eta_from END,
+          eta_to = CASE WHEN ${hasStatus} THEN ${etaTo ?? null}::date ELSE eta_to END,
+          eta_source = CASE WHEN ${hasStatus} THEN ${etaSource ?? null} ELSE eta_source END,
           checked_at = now(),
           status = CASE WHEN (CASE status
               WHEN 'pending' THEN 0 WHEN 'packed' THEN 1 WHEN 'pre_transit' THEN 2
@@ -4520,6 +4532,9 @@ export async function setPoBoxTracking(trackingNumber, { carrier, trackingStatus
         tracking_sub_status_descr = CASE WHEN ${hasStatus} THEN ${subStatusDescr ?? null} ELSE tracking_sub_status_descr END,
         last_checkpoint = COALESCE(${lastCheckpoint ?? null}, last_checkpoint),
         tracking_events = COALESCE(${eventsJson}::jsonb, tracking_events),
+        eta_from = CASE WHEN ${hasStatus} THEN ${etaFrom ?? null}::date ELSE eta_from END,
+        eta_to = CASE WHEN ${hasStatus} THEN ${etaTo ?? null}::date ELSE eta_to END,
+        eta_source = CASE WHEN ${hasStatus} THEN ${etaSource ?? null} ELSE eta_source END,
         checked_at = now()
     WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g')
         = regexp_replace(upper(${trackingNumber}), '[^A-Z0-9]', '', 'g')

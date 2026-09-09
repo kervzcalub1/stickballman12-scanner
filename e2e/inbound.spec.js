@@ -125,3 +125,88 @@ test('a number typed the way a person reads it still registers', async () => {
   expect(normalizeTrackingNumber('  1Z3YY4080325234836 ')).toBe('1Z3YY4080325234836');
   expect(normalizeTrackingNumber('')).toBe('');
 });
+
+// --- WHEN it is due -------------------------------------------------------
+// The half the feed did not answer. "In transit" covered both a parcel two streets
+// away and one leaving Guangzhou on Thursday, and a floor cannot plan a morning from
+// that. These pin the day buckets, because getting one wrong puts boxes on the
+// warehouse's list for the wrong day — which is worse than no list at all.
+import { arrivalBucket, arrivalPlan, inboundProgress, addDays } from '../src/lib/inbound.js';
+
+const TODAY = '2026-09-03';
+const due = (o) => box({ tracking_status: 'InTransit', ...o });
+
+test('out for delivery beats the carrier’s own estimate', () => {
+  // The parcel is on a truck. Whatever a three-day window said this morning, it is
+  // arriving today — the movement is better evidence than the promise.
+  expect(arrivalBucket(due({ tracking_status: 'OutForDelivery', eta_from: '2026-09-20' }), TODAY)).toBe('today');
+});
+
+test('a quoted WINDOW counts as today on any day inside it', () => {
+  // Carriers quote "Tue–Thu" as often as a date. Telling the floor "Tuesday" on
+  // Wednesday helps nobody, and collapsing the window to its first day would put a
+  // parcel on the list two days early.
+  expect(arrivalBucket(due({ eta_from: '2026-09-02', eta_to: '2026-09-04' }), TODAY)).toBe('today');
+  expect(arrivalBucket(due({ eta_from: '2026-09-03', eta_to: '2026-09-03' }), TODAY)).toBe('today');
+});
+
+test('a window that has passed is overdue, not "later"', () => {
+  expect(arrivalBucket(due({ eta_from: '2026-08-30', eta_to: '2026-09-01' }), TODAY)).toBe('overdue');
+});
+
+test('tomorrow, this week and later are separate answers', () => {
+  expect(arrivalBucket(due({ eta_from: '2026-09-04' }), TODAY)).toBe('tomorrow');
+  expect(arrivalBucket(due({ eta_from: '2026-09-08' }), TODAY)).toBe('this_week');
+  expect(arrivalBucket(due({ eta_from: '2026-09-10' }), TODAY)).toBe('this_week'); // exactly +7
+  expect(arrivalBucket(due({ eta_from: '2026-09-11' }), TODAY)).toBe('later');
+});
+
+test('no estimate is "no date", never quietly folded into later', () => {
+  // "Not for a while" and "we have no idea" are different answers, and only one of
+  // them lets somebody stop planning around it.
+  expect(arrivalBucket(due({}), TODAY)).toBe('unknown');
+  // And nothing the carrier has never scanned gets a date it has not earned.
+  expect(arrivalBucket(box({ tracking_status: 'InfoReceived', eta_from: '2026-09-03' }), TODAY)).toBe('unknown');
+  expect(arrivalBucket(box({ tracking_number: '', eta_from: '2026-09-03' }), TODAY)).toBe('unknown');
+});
+
+test('a delivered box has landed, whatever its estimate said', () => {
+  expect(arrivalBucket(box({ tracking_status: 'Delivered', eta_from: '2026-09-30' }), TODAY)).toBe('landed');
+});
+
+test('the plan counts boxes AND pairs, and says how many it cannot count', () => {
+  const rows = [
+    { ...due({ eta_from: TODAY }), po_id: 1, box_units: 8 },
+    { ...due({ eta_from: TODAY }), po_id: 1, box_units: 5 },
+    // Same day, different order — the shipment count must not double it.
+    { ...due({ eta_from: TODAY }), po_id: 2, box_units: 0 },
+    { ...due({ eta_from: '2026-09-04' }), po_id: 3, box_units: 40 },
+  ];
+  const plan = arrivalPlan(rows, TODAY, NOW);
+  expect(plan.today.boxes).toBe(3);
+  expect(plan.today.units).toBe(13);
+  expect(plan.today.shipments).toBe(2);
+  // A box with no manifest behind it is NOT zero pairs — it is an unknown, and the
+  // strip says so rather than reporting a total it cannot stand behind.
+  expect(plan.today.unknownUnits).toBe(1);
+  expect(plan.tomorrow.units).toBe(40);
+});
+
+test('the progress bar counts landed against everything still inbound', () => {
+  const rows = [
+    box({ tracking_status: 'Delivered' }),
+    box({ tracking_status: 'Delivered' }),
+    due({}),
+    due({}),
+  ];
+  expect(inboundProgress(rows, NOW)).toEqual({ landed: 2, total: 4, pct: 50 });
+});
+
+test('day arithmetic crosses months and years without a timezone', () => {
+  // String dates, string comparison — `new Date('YYYY-MM-DD')` reads midnight in the
+  // VIEWER'S zone, and the PH team's clock is a day ahead of the EST day the
+  // warehouse is working to.
+  expect(addDays('2026-09-30', 1)).toBe('2026-10-01');
+  expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
+  expect(addDays('2028-02-28', 1)).toBe('2028-02-29');
+});

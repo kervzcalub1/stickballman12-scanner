@@ -270,6 +270,8 @@ export const api = {
   cartGcReveal: (cartId, gcId) => post('/api/cart/gc-reveal', { cartId, gcId }),
   cartFileSign: (cartId, kind, contentType) => post('/api/cart/file-sign', { cartId, kind, contentType }),
   cartFileAttach: (payload) => post('/api/cart/file-attach', payload),
+  // Removing a mis-uploaded file. The removal is recorded even though the file is not.
+  cartFileDelete: (cartId, fileId) => post('/api/cart/file-delete', { cartId, fileId }),
   // The bytes are PROXIED — the bucket never serves a card photo or a receipt by URL,
   // so there is no `src` an <img> could point at. Both of these fetch WITH the session
   // token and hand back a blob; the viewer turns it into an object URL and revokes it

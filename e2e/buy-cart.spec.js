@@ -312,6 +312,52 @@ test('anyone who can reach the request can attach the receipt — the buyer, PH,
   expect(other.status).toBe(403);
 });
 
+test('the receipt parser reads a discounting till: net price, not the ticket price', async () => {
+  const { parseReceipt } = await import('../src/lib/receiptParse.js');
+  // The Athlete's Foot shape, from a real receipt. Three things it got wrong at once:
+  // the columnar quantity was dropped (3 pairs read as 1), the GROSS was taken as the
+  // spend, and the unit price was therefore the ticket price of the whole line.
+  const text = [
+    'W NIKE AIR MAX 90, in UNIVERSITY',
+    'BLUE/STAR BLUE-HYDROGEN BLUE',
+    '    IM4613-400 8        3      405.00',
+    '        Discount              -285.00',
+    '        Net Price              120.00',
+    'W NIKE AIR MAX 95 OG, in BLACK/PINK',
+    '    HJ5996-001 12.5     5      950.00',
+    '        Discount 50.00%       -475.00',
+    '        Net Price              475.00',
+    '                Subtotal:    1,395.00',
+    '                TAX:            39.19',
+    '                Total:       1,434.19',
+  ].join('\n');
+  const r = parseReceipt(text, { source: 'paste' });
+
+  expect(r.rows).toHaveLength(2);
+  // The quantity is a bare column with nothing labelling it. Read wrong, it divides the
+  // total by the wrong number and misstates every unit price on the receipt.
+  expect(r.rows[0]).toMatchObject({ sku: 'IM4613-400', size: '8', qty: 3, totalPrice: 120, unitPrice: 40 });
+  expect(r.rows[1]).toMatchObject({ sku: 'HJ5996-001', size: '12.5', qty: 5, totalPrice: 475, unitPrice: 95 });
+  // What the till actually charged, not what the tickets added up to. Taking the gross
+  // would have stated $1,355 of spend against $595 really paid.
+  expect(r.total).toBe(595);
+  expect(r.statedTotal).toBe(1434.19);
+});
+
+test('a stray net price cannot reach back and rewrite an earlier item', async () => {
+  const { parseReceipt } = await import('../src/lib/receiptParse.js');
+  const r = parseReceipt([
+    '    IM4613-400 8        3      405.00',
+    'Cashier: 13',
+    'Store #1178',
+    'Thank you for shopping',
+    '        Net Price               12.00',
+  ].join('\n'), { source: 'paste' });
+  // Out of reach and behind noise: the row keeps what it was printed with rather than
+  // being rewritten by an unrelated number further down the paper.
+  expect(r.rows[0].totalPrice).toBe(405);
+});
+
 test('a draft offers no approve controls, and says which kind of "not now" it is', async ({ page, request }) => {
   // Seeded, not created through the API: this is a test about what the screen DRAWS
   // and what the endpoint refuses, and the suite sits exactly on `cart/create`'s

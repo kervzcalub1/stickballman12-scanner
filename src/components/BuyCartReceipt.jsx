@@ -53,9 +53,50 @@ async function textFromPdf(file) {
   return out.join('\n');
 }
 
+/**
+ * Make a phone photo of a thermal receipt legible to OCR.
+ *
+ * A receipt photographed on a desk is a narrow strip of small grey-on-grey text inside a
+ * big frame of wood grain, and tesseract reported the one that prompted this at ~132 DPI
+ * — far under what it needs. Straight off the camera it read NOTHING; grey-scaled,
+ * upscaled and thresholded it recovered several rows of the same photo. Measured, not
+ * assumed: the two were run against the same image and the same parser.
+ *
+ * Canvas only, no new dependency, and it hands back the ORIGINAL file if anything here
+ * fails — a preprocessing step that can break the upload is worse than a blurry read.
+ */
+async function sharpenForOcr(file) {
+  try {
+    const bmp = await createImageBitmap(file);
+    // 3× the long edge, capped: past ~4000px tesseract slows sharply for no more accuracy,
+    // and a phone photo is already several megapixels.
+    const scale = Math.min(3, Math.max(1, 3600 / Math.max(bmp.width, bmp.height)));
+    const w = Math.round(bmp.width * scale); const h = Math.round(bmp.height * scale);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    // Grey-scale, then push toward black and white around mid-grey. Thermal print is
+    // low-contrast by nature and the paper picks up the colour of whatever it is lying
+    // on; flattening both is most of what makes the digits separable.
+    for (let i = 0; i < d.length; i += 4) {
+      const g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
+      const v = g > 145 ? 255 : g < 105 ? 0 : g;
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
+    const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+    return blob || file;
+  } catch { return file; }
+}
+
 async function textFromImage(file, onProgress) {
   const { default: Tesseract } = await lazyImport(() => import('tesseract.js'));
-  const { data } = await Tesseract.recognize(file, 'eng', {
+  const prepared = await sharpenForOcr(file);
+  const { data } = await Tesseract.recognize(prepared, 'eng', {
     logger: (m) => { if (m.status === 'recognizing text') onProgress(Math.round(m.progress * 100)); },
   });
   return data?.text || '';
@@ -79,6 +120,10 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
   const [busy, setBusy] = useState('');
   const [progress, setProgress] = useState(0);
   const [err, setErr] = useState('');
+  // Two taps to remove, without a native dialog: the row itself asks. `window.confirm`
+  // is the same wrong tool as `window.prompt` — unstyleable, and it reads as the browser
+  // asking rather than the app.
+  const [confirming, setConfirming] = useState(null);
 
   const files = (cart.files || []).filter((f) => f.kind === 'receipt');
   const committed = cart.receiptLines || [];
@@ -92,8 +137,19 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
     // The receipt's own total is what the cards were actually charged, so it is what the
     // reconciliation must run against — prefilled, and still editable.
     setStatedTotal(parsed.statedTotal != null ? String(parsed.statedTotal) : String(parsed.total || ''));
-    if (!parsed.rows.length) setErr('Nothing on that looked like a purchased item. Check the text, or add the lines by hand.');
-    else setErr('');
+    if (!parsed.rows.length) {
+      setErr(source === 'ocr'
+        // Naming the cause, because the fix is in the photographer's hands and no amount
+        // of retrying the same picture will help. Measured on a real one: the receipt
+        // filling the frame is the whole difference between this and a clean read.
+        ? 'Nothing on that photo looked like a purchased item. Retake it with the receipt filling the frame — flat, straight on, no desk around it — or paste the text instead.'
+        : 'Nothing on that looked like a purchased item. Check the text, or add the lines by hand.');
+    } else if (source === 'ocr' && parsed.statedTotal == null) {
+      // Rows but no "Total:" line is the signature of a HALF-read photo, and half a
+      // receipt is more dangerous than none — it looks like it worked. Say so while the
+      // person still has the paper in front of them.
+      setErr(`Read ${parsed.rows.length} line${parsed.rows.length === 1 ? '' : 's'} but couldn’t find the receipt’s own total, which usually means the photo was only partly readable. Check every row against the paper before saving.`);
+    } else setErr('');
   }
 
   async function upload(e) {
@@ -154,6 +210,13 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
     finally { setBusy(''); }
   }
 
+  async function remove(f) {
+    setBusy(`rm${f.id}`); setErr('');
+    try { await api.cartFileDelete(cart.id, f.id); setConfirming(null); onChanged(); }
+    catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
+
   async function download(f) {
     try {
       const { blob, filename } = await api.cartFileDownload(cart.id, f.id, 'receipt');
@@ -192,7 +255,25 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
             <li key={f.id}>
               <span className="bc-file-name">{f.name || 'receipt'}</span>
               <span className="muted xs">{f.uploaded_by}</span>
-              <button type="button" className="btn sm ghost" onClick={() => download(f)}>Download</button>
+              {confirming === f.id ? (
+                <>
+                  {/* The removal is recorded even though the file is not, and saying so
+                      here is what makes the second tap an informed one. */}
+                  <span className="muted sm">Remove it? The removal is logged.</span>
+                  <button type="button" className="btn sm danger" disabled={busy === `rm${f.id}`}
+                    onClick={() => remove(f)}>{busy === `rm${f.id}` ? 'Removing…' : 'Remove'}</button>
+                  <button type="button" className="btn sm ghost" onClick={() => setConfirming(null)}>Keep</button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="btn sm ghost" onClick={() => download(f)}>Download</button>
+                  {canUpload && (
+                    <button type="button" className="btn sm ghost" title="Remove this file"
+                      aria-label={`Remove ${f.name || 'receipt'}`}
+                      onClick={() => setConfirming(f.id)}>×</button>
+                  )}
+                </>
+              )}
             </li>
           ))}
         </ul>

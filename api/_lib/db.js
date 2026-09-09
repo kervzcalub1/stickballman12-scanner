@@ -6007,6 +6007,22 @@ export async function addBuyCartFile({ cartId, kind, key, name, contentType, siz
   return rows[0];
 }
 
+/**
+ * Remove an uploaded file's ROW. The bucket object is deleted by the endpoint.
+ *
+ * A hard delete, deliberately, and paired with an event that survives it. The row is
+ * not evidence of anything on its own — the FILE was the evidence, and once that is
+ * gone a row pointing at a missing object is just a broken download button. What has to
+ * survive is the fact that a file existed and somebody removed it, which is why the
+ * caller writes `file_removed` with the name before this runs.
+ */
+export async function deleteBuyCartFile(cartId, fileId) {
+  const rows = await db()`
+    DELETE FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId}
+    RETURNING id, kind, r2_key, name`;
+  return rows[0] || null;
+}
+
 export async function getBuyCartFile(cartId, fileId) {
   const sql = db();
   return (await sql`SELECT * FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId}`)[0] || null;

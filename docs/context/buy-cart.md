@@ -309,6 +309,33 @@ stored `v1:<iv>:<tag>:<ct>` so a key rotation stays possible.
   "gift cards" nobody issued, a line in the ledger with no money behind it.
 - All three file endpoints refuse a `closed` / `cancelled` / `written_off` request.
 
+### Removing a file
+`api/cart/file-delete.js`. Almost always a wrong file — the shot before the one in focus,
+a different request's receipt — and leaving those on the record makes "1 file on file"
+mean nothing.
+
+- **The record of the removal outlives the file.** `file_removed` is written with the name
+  and the actor BEFORE the object is deleted, the same ordering `gc-reveal` follows: write
+  that somebody acted, then act.
+- **Who:** whoever uploaded it, or a buying desk. Being able to read the ledger is not the
+  same as being able to edit it.
+- Refused on a `closed` / `cancelled` / `written_off` request — nothing may be pulled out
+  from under a reconciliation already signed off against it.
+- The ROW must not survive a half-failure; a bucket object that outlives its row is
+  litter, a row that outlives its object is a broken download button.
+
+### OCR needs the receipt to fill the frame
+A phone photo of a receipt lying on a desk is a narrow strip of grey-on-grey text in a
+big frame of wood grain — tesseract measured the one that prompted this at **~132 DPI**
+and read *nothing* from it. `sharpenForOcr` (canvas, no new dependency: grey-scale, 3×
+upscale, threshold toward black and white) recovered several rows from the same photo.
+Measured against the same image and parser, not assumed.
+
+It is not a cure. That photo still yielded 4 of 10 lines with wrong quantities, so:
+**rows with no stated total is treated as a half-read** and says so, because half a
+receipt looks like it worked and none does not. The empty-result message names the actual
+fix — retake it with the receipt filling the frame, or paste the text.
+
 The **file** is evidence and is uploaded first, kept whatever happens next. The **lines**
 are a reading of it, and a reading can be wrong, so they land in an **editable table**
 and nothing is committed until a person has looked at them.
@@ -326,6 +353,17 @@ three were already dependencies; none costs an API call.
   total the till printed over one we multiply. Otherwise take the LAST money token as
   the line total and divide — tills print the extended price last, and dividing a total
   is safe where multiplying a misread unit price is not.
+- **A DISCOUNTING till prints the ticket price on the item row and what was actually
+  charged two lines below it.** The Athlete's Foot shape is
+  `IM4613-400 8   3   405.00` / `Discount -285.00` / `Net Price 120.00`, and read at face
+  value it stated **$3,320 of spend against a real $1,395**. `Net Price` now amends the
+  row it follows (within 3 lines, so a stray one at the foot cannot rewrite an item from
+  the top), and `Discount` is skipped without ending that reach.
+- **The COLUMNAR row shape**: style code, size, quantity and money in unlabelled columns.
+  The bare `3` was being dropped, so three pairs read as one at $405 each. `COLUMNAR_RE`
+  is anchored to the whole remainder of the line on purpose — an unanchored bare integer
+  would start being read as a quantity anywhere, and a quantity read wrong misstates every
+  unit price on the receipt.
 - **Both totals are shown and neither is silently chosen**: what the rows add up to, and
   what the receipt *says*. On a shop receipt they differ by the tax, and that gap is the
   difference between "we read this receipt" and "we read most of it". The **stated**

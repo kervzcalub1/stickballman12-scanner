@@ -32,6 +32,18 @@ const BARE_SIZE_RE = /(?:^|\s)([0-9]{1,2}\.[05]|[0-9]{1,2})\s*([CYWcyw])?(?=\s|$
 // unit price beside it. This is the row shape worth trusting most: it states both.
 const QTY_AT_RE = /\b(\d{1,3})\s*(?:@|x|×)\s*\$?\s*([0-9,]+\.\d{2})\b/i;
 const QTY_RE = /\b(?:qty|quantity)\s*[:.]?\s*(\d{1,3})\b/i;
+// A COLUMNAR row: `IM4613-400 8        3      405.00` — size, quantity and money in
+// their own columns after the style code, with nothing labelling any of them. Anchored
+// to the WHOLE remainder of the line on purpose: without that anchor a bare integer
+// anywhere would start being read as a quantity, and a quantity read wrong divides a
+// total by the wrong number and misstates every unit price on the receipt.
+//
+// Found on The Athlete's Foot's till, where it read `3 × $135` as one pair at $405.
+const COLUMNAR_RE = /^\s*([0-9]{1,2}(?:\.[05])?)\s*([CYWMcywm]?)\s+(\d{1,3})\s+\$?\s*([0-9,]+\.\d{2})\s*$/;
+// The two lines a discounting till prints UNDER an item: what came off, and what was
+// actually charged. The gross above them is the ticket price, not the spend.
+const DISCOUNT_LINE_RE = /^\s*discount\b/i;
+const NET_PRICE_RE = /^\s*net\s*price\b/i;
 // Every money-looking token on the line. Order matters — a till prints the line total
 // last, which is why the LAST one is taken as the total when nothing better is on offer.
 const MONEY_RE = /\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})\b/g;
@@ -79,6 +91,21 @@ function readAmounts(line, skuText) {
   // Look for the size AFTER the style code where there is one: a code like
   // `DD1391-100` is full of digits a bare-size pattern would happily eat.
   const rest = skuText && line.includes(skuText) ? line.slice(line.indexOf(skuText) + skuText.length) : line;
+
+  // Columns first, because they state the quantity outright and nothing else on the
+  // line does. Read as free text this row gives up its size and its money and silently
+  // drops the `3`, which then divides nothing and calls one pair $405.
+  const col = rest.match(COLUMNAR_RE);
+  if (col) {
+    const qty = Math.min(Math.max(Number(col[3]) || 1, 1), 999);
+    const totalPrice = money(col[4]);
+    return {
+      size: normSize(col[1] + (col[2] || '')),
+      qty,
+      unitPrice: totalPrice != null && qty > 0 ? Math.round((totalPrice / qty) * 100) / 100 : null,
+      totalPrice: totalPrice ?? null,
+    };
+  }
   const sizeM = line.match(SIZE_RE) || rest.match(BARE_SIZE_RE);
   const size = sizeM ? normSize(sizeM[1] + (sizeM[2] || '')) : null;
 
@@ -155,18 +182,49 @@ export function parseReceipt(text, { source = 'paste' } = {}) {
   // 200.00` rows at the bottom and inventing a purchase out of a tender line.
   let pending = null;
   const flush = () => { pending = null; };
+  // A discounting till prints the TICKET price on the item row and what was actually
+  // charged two lines below it, under `Net Price`. Taking the row at face value states
+  // a spend the shop never charged — on the receipt that found this, $3,320 against a
+  // real $1,395 — and the reconciliation then balances against a number nobody paid.
+  //
+  // So the last row stays amendable for a few lines. Bounded, because an unbounded
+  // reach-back lets a stray "Net Price" at the foot of a receipt rewrite an item from
+  // the top of it.
+  let lastRow = null;
+  let sinceRow = 0;
+  const NET_REACH = 3;
   for (const raw of lines) {
     const line = String(raw || '').trim();
+    if (lastRow) sinceRow += 1;
+
+    // Checked BEFORE the noise test, and `Discount` is left in the noise list: what came
+    // off is not a fact we need, only what was left to pay.
+    if (line && NET_PRICE_RE.test(line) && lastRow && sinceRow <= NET_REACH) {
+      const net = [...line.matchAll(MONEY_RE)].map((m) => money(m[1])).filter((n) => n != null).pop();
+      if (net != null) {
+        lastRow.totalPrice = net;
+        lastRow.unitPrice = lastRow.qty > 0 ? Math.round((net / lastRow.qty) * 100) / 100 : net;
+        lastRow.discounted = true;
+        lastRow = null;
+      }
+      continue;
+    }
+    // A discount line sits between the item and its net price, so it must not end the
+    // reach — but it is still noise in every other sense.
+    if (line && DISCOUNT_LINE_RE.test(line)) { flush(); continue; }
+
     if (!line) { flush(); continue; }
     if (rows.length >= MAX_ROWS) { skipped++; flush(); continue; }
-    if (NOISE_RE.test(line)) { flush(); continue; }
+    if (NOISE_RE.test(line)) { flush(); lastRow = null; continue; }
 
     const found = readSku(line);
     if (found) {
       const amt = readAmounts(line, found.text);
       if (amt.totalPrice != null) {
         // Everything on one line — the simpler shape, and no header needed.
-        rows.push({ sku: found.sku, ...amt, name: readName(line, found.text), source });
+        const row = { sku: found.sku, ...amt, name: readName(line, found.text), source };
+        rows.push(row);
+        lastRow = row; sinceRow = 0;
         flush();
       } else {
         // A code with no money: hold it for the numbers below.
@@ -178,7 +236,9 @@ export function parseReceipt(text, { source = 'paste' } = {}) {
     if (pending) {
       const amt = readAmounts(line, null);
       if (amt.totalPrice != null) {
-        rows.push({ sku: pending.sku, ...amt, name: pending.name, source });
+        const row = { sku: pending.sku, ...amt, name: pending.name, source };
+        rows.push(row);
+        lastRow = row; sinceRow = 0;
         flush();
       }
       // A line between the two that carries no money (a colourway, a promo note) is

@@ -146,7 +146,12 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
   const anyDue = ARRIVAL_ORDER.some((k) => k !== 'landed' && plan[k].boxes > 0);
 
   return (
-    <div className="page">
+    // `app`, not `page`. This screen shipped against `.page`, which has no rule anywhere
+    // in styles.css — so it alone rendered full-bleed, with no max width, no centring and
+    // no padding, while every other screen sat in the same gutters. Third instance of the
+    // same failure after `.table` and `.chip`: a class that does not exist looks like a
+    // styling choice rather than a missing one.
+    <div className="app">
       <TopBar title="Inbound" onHome={onHome} onSignOut={onSignOut} />
 
       {/* ---- The day, first. Everything else on this screen is context for it. ---- */}

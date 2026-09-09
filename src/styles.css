@@ -4073,6 +4073,21 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    each tile is a filter, because the number somebody is alarmed by is the one they
    want to click. Tones are semantic (bad/warn/due/info/ok) and separate from the
    app's blue — a shipment being late is not a brand moment. */
+/* --- "Expected today" on Home ----------------------------------------------
+   The headline and the bar only. Home is a chore list; the day strip, the state
+   strip and the shipment list stay on Inbound, or the chores get buried under a
+   second copy of that page. */
+.inb-today { display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left;
+  padding: 14px 16px; border-radius: 12px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text); }
+.inb-today:hover { border-color: var(--primary); }
+.inb-today:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.inb-today-line { font-size: 15px; }
+.inb-today-n { font-size: 26px; font-weight: 800; line-height: 1; margin-right: 4px;
+  font-variant-numeric: tabular-nums; }
+.inb-today-overdue { color: var(--err); font-weight: 600; }
+.inb-today-foot { display: block; }
+
 /* --- Inbound, the dashboard half -------------------------------------------
    The day comes first: what lands today, then how far through the inbound pile
    we are, then the days after it. The state strip below stays a SEPARATE axis —
@@ -4083,9 +4098,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   font-variant-numeric: tabular-nums; }
 .inb-overdue-note { color: var(--err); }
 
-.inb-progress { height: 8px; border-radius: 999px; background: var(--panel-2);
-  border: 1px solid var(--border); overflow: hidden; margin: 2px 0 6px; }
-.inb-progress-fill { height: 100%; background: var(--ok); transition: width .2s ease; }
+.inb-progress { display: block; height: 8px; border-radius: 999px; overflow: hidden;
+  margin: 2px 0 6px;
+  /* A visible TRACK, same as the per-shipment bar. Against a dark panel a bare
+     `--panel-2` fill with a hairline border reads as a divider rule, so at 3% the
+     whole control looked like a stray line with a green speck on the end. */
+  background: rgba(255,255,255,0.10); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
+.inb-progress-fill { display: block; height: 100%; background: var(--ok); border-radius: 999px;
+  transition: width .2s ease; }
 
 .inb-strip-h { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
   color: var(--muted); margin: 14px 0 0; font-weight: 600; }

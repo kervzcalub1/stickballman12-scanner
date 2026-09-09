@@ -813,6 +813,24 @@ await sql(`CREATE INDEX IF NOT EXISTS purchase_orders_resolution_idx
 // those units were already declared and already counted short, so declaring them again
 // would double the expected count and make chasing a shortage look like a bigger one.
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'original'`);
+// WHEN it is expected, which is a different question from where it is.
+//
+// The inbound feed could say a parcel was "in transit" and never say whether that meant
+// today or next Thursday — so "what should the warehouse expect this morning" could only
+// be answered by opening each order and reading checkpoints. 17TRACK already sends an
+// estimated delivery window in the webhook payload we receive; we simply were not
+// reading it, so this costs no extra call and no quota.
+//
+// A WINDOW, not a day: carriers quote "Tue–Thu" as often as a date, and collapsing that
+// to its first day would put a parcel on the floor's list two days before anyone should
+// expect it. DATE columns, compared against the EST day like every other date here.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS eta_from DATE`);
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS eta_to DATE`);
+// Whose estimate it is. The carrier's own beats 17TRACK's inference, and a screen that
+// tells the floor to expect twelve boxes should be able to say where the date came from.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS eta_source TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS po_boxes_eta_idx ON po_boxes (eta_from) WHERE eta_from IS NOT NULL`);
+
 
 // Link the received receiving-batch back to its PO (set on scan-in). Reconciliation
 // joins po_lines (expected) against items under this batch (actual), by (sku, size).
@@ -1120,8 +1138,12 @@ await sql(`
   )
 `);
 await sql(`ALTER TABLE buy_carts DROP CONSTRAINT IF EXISTS buy_carts_status_check`);
+// `written_off` belongs in THIS list, not in a wider one added further down. A later
+// DROP+ADD does not save you: this statement re-validates the narrow constraint against
+// rows that already exist, so the moment one request had been written off, db:setup
+// failed here on every environment — including the one that had just created the row.
 await sql(`ALTER TABLE buy_carts ADD CONSTRAINT buy_carts_status_check CHECK (status IN
-  ('draft','submitted','approved','denied','funded','receipted','audited','closed','cancelled'))`);
+  ('draft','submitted','approved','denied','funded','receipted','audited','closed','cancelled','written_off'))`);
 // WHO acted, in a form that works for EVERY account.
 //
 // `approved_by_id` alone was not enough, and the way it failed is the worst kind: the
@@ -1281,6 +1303,112 @@ await sql(`
   )
 `);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_events_cart_idx ON buy_cart_events (cart_id, id DESC)`);
+// ---------------------------------------------------------------------------
+// THE CONTROL STANDARD (Supplier & Buyer Accountability deck, Sept 2026)
+//
+// The deck says three things the process did not have a place to record:
+//
+//   1. Company funds leave by TWO routes, not one — a gift card, or a company card
+//      charge. Everything here was keyed on `gc_total`, so a card-funded purchase had
+//      no way to state what was authorised or reconcile what was charged.
+//   2. Every open task needs an OWNER, a NEXT ACTION, a DUE DATE and EVIDENCE. A wrong
+//      purchase is the sharpest case: it is frozen cash on somebody's shelf with a
+//      retailer's return cutoff running against it, and "returned" is not "refunded".
+//   3. Stock sitting with a buyer between the till and the courier is company
+//      inventory with no visibility. It needs a holder and a ship-by date.
+//
+// Plus one correction to how this ended: there was no way out of a request that can
+// never be completed, so the only options were leaving it open forever or faking a
+// clean close. The deck's answer is better than both — a written-off state that says
+// so, with a reason and a name, never a false "received" or "refunded".
+// ---------------------------------------------------------------------------
+
+// Route the money took. 'gift_card' is the existing path and stays the default so every
+// row already written keeps its meaning. On 'company_card' there are no cards to
+// reconcile, so the funding and spend conditions read the authorised charge instead —
+// the reference is what makes a charge traceable back to a statement line.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS funding_method TEXT NOT NULL DEFAULT 'gift_card'`);
+await sql(`ALTER TABLE buy_carts DROP CONSTRAINT IF EXISTS buy_carts_funding_method_check`);
+await sql(`ALTER TABLE buy_carts ADD CONSTRAINT buy_carts_funding_method_check
+           CHECK (funding_method IN ('gift_card','company_card'))`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS card_reference TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS card_authorized NUMERIC(12,2)`);
+
+// Custody. Between the till and the courier the shoes are company inventory sitting in
+// somebody's flat, and nothing recorded whose. A DATE, not a timestamp: a ship-by is a
+// day on a calendar, and it is compared against the EST day everywhere else is.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS holder TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS holder_location TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS ship_by DATE`);
+
+// The two audits, kept apart because they answer different questions from different
+// evidence at different times. The MONEY audit (cards or charge vs receipt) can be done
+// the day the receipt lands; the GOODS audit cannot happen until the boxes are in the
+// warehouse, which may be weeks. One sign-off for both would hold the money open for
+// the length of a shipment. `audited_*` is the money audit — it always was — so the
+// existing columns keep their meaning and only the goods half is new.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_by TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_by_id BIGINT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_by_key TEXT`);
+
+// A request that can never be completed. NOT a force-close: the status says out loud
+// that the company took a loss, the reason is required, and it is a different word from
+// `closed` everywhere it is read. "Never a false received or refunded."
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_by TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS write_off_reason TEXT`);
+
+// Every open task, in ONE table rather than a return-case table beside a follow-up
+// table. The deck's rule is a single sentence — "owner + next action + due date +
+// evidence" — and two mechanisms that both half-satisfy it is how a queue ends up with
+// two answers to "what is outstanding".
+//
+// A RETURN CASE is that same row with the extra facts a return needs: which pairs, what
+// they cost, and the retailer's own final return date, which is the deadline that
+// actually bites. `refund_verified_at` is separate from `status='returned'` on purpose
+// — returned is not refunded, and only a posted credit closes a return.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_cart_tasks (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cart_id        BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL DEFAULT 'followup',
+    title          TEXT NOT NULL,
+    next_action    TEXT,
+    owner_name     TEXT,
+    owner_user_id  BIGINT,
+    due_date       DATE,
+    status         TEXT NOT NULL DEFAULT 'open',
+    -- Return-case facts. Null on an ordinary follow-up.
+    sku            TEXT,
+    size           TEXT,
+    qty            INT,
+    cost_at_risk   NUMERIC(12,2),
+    holder         TEXT,
+    return_by      DATE,
+    return_tracking TEXT,
+    refund_amount  NUMERIC(12,2),
+    refund_verified_at TIMESTAMPTZ,
+    refund_verified_by TEXT,
+    -- How it ended, in words. A task closed with no resolution records that somebody
+    -- ticked a box, not what happened.
+    resolution     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by     TEXT,
+    closed_at      TIMESTAMPTZ,
+    closed_by      TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`ALTER TABLE buy_cart_tasks DROP CONSTRAINT IF EXISTS buy_cart_tasks_kind_check`);
+await sql(`ALTER TABLE buy_cart_tasks ADD CONSTRAINT buy_cart_tasks_kind_check
+           CHECK (kind IN ('return','shortage','followup'))`);
+await sql(`ALTER TABLE buy_cart_tasks DROP CONSTRAINT IF EXISTS buy_cart_tasks_status_check`);
+await sql(`ALTER TABLE buy_cart_tasks ADD CONSTRAINT buy_cart_tasks_status_check
+           CHECK (status IN ('open','resolved','written_off'))`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_tasks_cart_idx ON buy_cart_tasks (cart_id, id)`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_tasks_open_idx ON buy_cart_tasks (status, due_date) WHERE status = 'open'`);
+
 
 
 // ---------------------------------------------------------------------------

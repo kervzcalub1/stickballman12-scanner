@@ -61,7 +61,18 @@ async function textFromImage(file, onProgress) {
   return data?.text || '';
 }
 
-export function BuyCartReceipt({ cart, canEdit, onChanged, onSignOut }) {
+// TWO permissions, not one, because they are two different acts.
+//
+// `canUpload` is attaching EVIDENCE — a photo of a till receipt. It is safe, it is the
+// thing that most often needs doing from a phone by whoever happens to have the paper,
+// and holding it back is how a request sits waiting on one person. The buyer, the PH
+// team, the warehouse and admin can all do it; the server re-checks and scopes a buyer
+// to their own request.
+//
+// `canEdit` is stating WHAT THE RECEIPT SAYS — the total the whole reconciliation then
+// runs against, and the lines the purchase order is raised from. That is a claim about
+// money, so it stays with the buyer, either desk, or the auditor.
+export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut }) {
   const [text, setText] = useState('');
   const [rows, setRows] = useState(null);
   const [statedTotal, setStatedTotal] = useState('');
@@ -103,6 +114,11 @@ export function BuyCartReceipt({ cart, canEdit, onChanged, onSignOut }) {
       });
       onChanged();
 
+      // Somebody who may attach evidence but not state what it says gets no review
+      // table — reading a receipt they cannot commit would leave a filled-in form with
+      // no button, which reads as broken rather than as "not your step".
+      if (!canEdit) return;
+
       if (file.type === 'application/pdf') {
         setBusy('pdf');
         const t = await textFromPdf(file);
@@ -118,7 +134,9 @@ export function BuyCartReceipt({ cart, canEdit, onChanged, onSignOut }) {
       if (ex.unauthorized) return onSignOut();
       // The file may well have landed even though the reading fell over — say so rather
       // than leaving someone re-uploading it.
-      setErr(`${ex.message} The receipt itself was saved; you can still type the lines in.`);
+      setErr(canEdit
+        ? `${ex.message} The receipt itself was saved; you can still type the lines in.`
+        : `${ex.message} The receipt itself was saved.`);
     } finally { setBusy(''); setProgress(0); }
   }
 
@@ -154,10 +172,16 @@ export function BuyCartReceipt({ cart, canEdit, onChanged, onSignOut }) {
       <div className="bc-gc-files-h">
         <span className="muted sm">
           {files.length ? `${files.length} file${files.length === 1 ? '' : 's'} on file` : 'No receipt uploaded — this is required.'}
+          {!files.length && canUpload && !canEdit && (
+            <span className="muted sm"> Attach it here; the desk reads it in.</span>
+          )}
         </span>
-        {canEdit && (
+        {canUpload && (
           <label className="btn sm ghost bc-upload">
             {busy === 'upload' ? 'Uploading…' : busy === 'pdf' ? 'Reading the PDF…' : busy === 'ocr' ? `Reading the photo… ${progress}%` : 'Upload receipt'}
+            {/* `capture` is deliberately absent: on a phone the file picker still offers
+                the camera, and forcing it would stop somebody attaching a PDF the shop
+                emailed them — which is the better evidence of the two. */}
             <input type="file" accept="image/*,application/pdf" hidden onChange={upload} />
           </label>
         )}

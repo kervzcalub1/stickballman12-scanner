@@ -1,5 +1,6 @@
-// POST /api/cart/close  { cartId }         -> { ok, cart }
-// POST /api/cart/close  { cartId, cancel:true, reason } -> cancel an un-funded request
+// POST /api/cart/close  { cartId }                         -> { ok, cart }
+// POST /api/cart/close  { cartId, cancel:true, reason }     -> cancel an un-funded request
+// POST /api/cart/close  { cartId, writeOff:true, reason }   -> a documented loss
 //
 // Step 10, and the point of the whole thing: a transaction is NOT complete because the
 // gift cards were spent. It is complete when every one of the ten conditions is true in
@@ -9,12 +10,17 @@
 // The checks are re-evaluated HERE, server-side, against the same function the screen
 // renders. A gate that only exists in the UI is a gate that a stale tab walks through.
 //
-// There is deliberately NO override. That is a decision with a cost worth stating: a
-// genuinely lost receipt leaves a request open indefinitely. The alternative — a
-// force-close button — is the escape hatch that every control like this eventually
-// leaks through, and it can be added later far more easily than it could be taken away.
+// There is deliberately no way to CLOSE this without every condition being true. What
+// there is instead is a third ending, and it is not the same thing as an override.
+//
+// A genuinely lost receipt used to leave a request open forever, and the pressure that
+// creates is pressure to record a false "received" or "refunded" instead — which is
+// worse than either honest outcome. WRITE-OFF says out loud that the company took a
+// loss: its own status, a required reason, a name against it, and a word that reads
+// differently from `closed` everywhere it is shown. It is a documented management
+// decision, not a way past the checks.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
-import { getBuyCart, getBuyCartFull, closeBuyCart, cancelBuyCart, dbConfigured } from '../_lib/db.js';
+import { getBuyCart, getBuyCartFull, closeBuyCart, cancelBuyCart, writeOffBuyCart, dbConfigured } from '../_lib/db.js';
 import { requireAuditPrivilege, cartCloseChecks, allChecksPass, requirePrivilege } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
@@ -42,6 +48,23 @@ export default async function handler(req, res) {
     return send(res, 200, { ok: true, cart: out });
   }
 
+  // A write-off ends a request that can never be completed. Same guard as closing it —
+  // the account that approved the spend cannot be the one that declares it a loss.
+  if (body.writeOff) {
+    const user = await requireAuditPrivilege(req, res, cart);
+    if (!user) return;
+    if (!rateLimit(req, { windowMs: 60_000, max: 10 }))
+      return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
+    const reason = String(body.reason ?? '').trim().slice(0, 1000);
+    // The reason IS the control. A write-off with no account of what was lost and why
+    // is indistinguishable from a force-close, which is the thing this is not.
+    if (reason.length < 10)
+      return send(res, 400, { ok: false, error: 'Say what could not be recovered and why — a write-off with no reason is just a force-close.' });
+    const out = await writeOffBuyCart({ cartId, reason, actor: user });
+    if (!out) return send(res, 409, { ok: false, error: 'This request is already finished.' });
+    return send(res, 200, { ok: true, cart: out });
+  }
+
   const user = await requireAuditPrivilege(req, res, cart);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
@@ -57,7 +80,7 @@ export default async function handler(req, res) {
         ok: false,
         // Name what is missing, not just that something is. A refusal with no detail is
         // what teaches people to route around a process rather than finish it.
-        error: `${outstanding.length} of the 10 checks are still outstanding: ${outstanding.map((c) => c.label.toLowerCase()).join('; ')}.`,
+        error: `${outstanding.length} of the ${checks.length} checks are still outstanding: ${outstanding.map((c) => c.label.toLowerCase()).join('; ')}.`,
         checks,
       });
     }

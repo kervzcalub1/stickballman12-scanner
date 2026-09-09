@@ -251,17 +251,163 @@ test('the person who approved cannot also audit or close it', async ({ request }
   expect((await audit.json()).error).toMatch(/you approved this request/i);
 });
 
-test('a request cannot be closed until all ten conditions are true', async ({ request }) => {
+test('a request cannot be closed until every condition is true', async ({ request }) => {
   const cartId = await newRequest(request, { lines: [LINE] });
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
   const r = await call(request, 'auditor', 'cart/close', { cartId });
   expect(r.status).toBe(409);
   // The refusal NAMES what is outstanding. A gate that only says no is a gate people
   // learn to route around.
-  expect(r.body.error).toMatch(/of the 10 checks are still outstanding/);
+  expect(r.body.error).toMatch(/checks are still outstanding/);
   expect(r.body.error).toContain('receipt was received');
-  expect(r.body.checks).toHaveLength(10);
   expect(r.body.checks.filter((c) => c.ok).map((c) => c.key)).toContain('approved');
+
+  // Each condition is tagged with WHICH audit answers it. The money half is answerable
+  // the day the receipt lands; the goods half not until the boxes are in the building,
+  // and holding one signature for both would keep every request open for the length of
+  // a shipment. Asserting on the split rather than on a count, because the count moves
+  // with the funding route — a card-funded request has no cards to reconcile.
+  const scopes = new Set(r.body.checks.map((c) => c.scope));
+  expect([...scopes].sort()).toEqual(['goods', 'money']);
+  const keys = r.body.checks.map((c) => c.key);
+  // The third leg. Reconciliation compares the MANIFEST against what arrived, and the
+  // manifest is the buyer's own account of what they packed; this one compares the
+  // RECEIPT against what arrived and takes nobody's word for anything.
+  expect(keys).toContain('receipt_vs_received');
+  // And a case that is still costing the company money holds the request open.
+  expect(keys).toContain('exceptions');
+});
+
+test('anyone who can reach the request can attach the receipt — the buyer, PH, or a hand', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '3131414151516161', balance: 200 } });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+
+  // Attaching EVIDENCE is not the same act as stating what it says. Whoever has the
+  // paper should be able to put it on the record — a request that waits because the one
+  // person with the button is asleep in another timezone is the problem this exists to
+  // solve. The buyer, the card desk and a staff member holding NO buying privilege at
+  // all can each do it.
+  for (const who of ['buyer', 'issuer', 'bystander']) {
+    const r = await call(request, who, 'cart/file-sign', { cartId, kind: 'receipt', contentType: 'image/jpeg' });
+    expect(r.status, `${who} should be able to attach a receipt`).toBe(200);
+    expect(r.body.key).toMatch(/^buy-carts\/BC-\d+\/receipt-\d+\.jpg$/);
+  }
+
+  // A card image is still the issuing desk's alone: crossing them would let anyone add
+  // "gift cards" nobody issued, which is a line in the ledger with no money behind it.
+  const cardShot = await call(request, 'bystander', 'cart/file-sign', { cartId, kind: 'gift_card', contentType: 'image/jpeg' });
+  expect(cardShot.status).toBe(403);
+
+  // And a buyer still only ever reaches their OWN request.
+  const other = await call(request, 'buyer2', 'cart/file-sign', { cartId, kind: 'receipt', contentType: 'image/jpeg' });
+  expect(other.status).toBe(403);
+});
+
+test('a company card request can actually be funded, and then take a receipt', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
+
+  // Recording the authorised charge IS the release of company funds. Without that a
+  // card-funded request stayed at `approved` forever — and every step after it is gated
+  // on `funded`, so the receipt could never be uploaded, read or reconciled. The whole
+  // route was a dead end from the step after the one that created it.
+  const set = await call(request, 'approver', 'cart/control', {
+    cartId, funding: { method: 'company_card', cardReference: 'AX-4417', cardAuthorized: 63.02 },
+  });
+  expect(set.status).toBe(200);
+  expect(set.body.cart.status).toBe('funded');
+  expect(set.body.cart.funded_by).toBeTruthy();
+
+  const receipt = await call(request, 'buyer', 'cart/receipt', {
+    cartId, receiptTotal: 63.02,
+    lines: [{ sku: LINE.sku, size: LINE.size, qty: 1, unitPrice: 63.02, totalPrice: 63.02, source: 'paste' }],
+  });
+  expect(receipt.status).toBe(200);
+
+  // A reference with no amount is not an authorisation, so it must not fund anything.
+  const cart2 = await newRequest(request, { lines: [LINE] });
+  await call(request, 'approver', 'cart/decide', { cartId: cart2, all: true, action: 'approve' });
+  const noAmount = await call(request, 'approver', 'cart/control', {
+    cartId: cart2, funding: { method: 'company_card', cardReference: 'AX-9999' },
+  });
+  expect(noAmount.body.cart.status).toBe('approved');
+});
+
+test('a case needs an owner and a date, and a return closes on the refund not the parcel', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+
+  // "Owner + next action + due date + evidence" is the rule, so it is enforced rather
+  // than printed on a slide: an item with no owner and no date is a hope, not a task.
+  const bare = await call(request, 'approver', 'cart/task', { cartId, task: { kind: 'return', title: 'Wrong colourway' } });
+  expect(bare.status).toBe(400);
+  expect(bare.body.error).toMatch(/owner and a due date/i);
+
+  const opened = await call(request, 'approver', 'cart/task', {
+    cartId,
+    task: { kind: 'return', title: '2 x 10W wrong colourway', ownerName: 'Ops', dueDate: '2026-09-30', costAtRisk: 296 },
+  });
+  expect(opened.status).toBe(200);
+  const taskId = opened.body.task.id;
+
+  // Closing with no account of how it ended records that somebody ticked a box.
+  const silent = await call(request, 'approver', 'cart/task', { cartId, taskId, close: { status: 'resolved' } });
+  expect(silent.status).toBe(400);
+
+  const done = await call(request, 'approver', 'cart/task', {
+    cartId, taskId, close: { status: 'resolved', resolution: 'Credit posted 12 Sep', refundAmount: 296 },
+  });
+  expect(done.status).toBe(200);
+  const task = done.body.cart.tasks.find((t) => Number(t.id) === Number(taskId));
+  // Returned is not refunded: only a resolved return stamps the money as actually back.
+  expect(task.status).toBe('resolved');
+  expect(task.refund_verified_at).toBeTruthy();
+});
+
+test('a purchase order raised from a receipt carries NO manifest until the buyer packs', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
+  // A receipt belongs to a request that has been funded, so the cards go out first.
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '1212343456567878', balance: 200 } });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+  await call(request, 'approver', 'cart/receipt', {
+    cartId, receiptTotal: 63.02,
+    lines: [{ sku: LINE.sku, size: LINE.size, qty: 1, unitPrice: 63.02, totalPrice: 63.02, source: 'paste' }],
+  });
+  const raised = await call(request, 'approver', 'cart/raise-po', { cartId, boxes: 1 });
+  expect(raised.status).toBe(200);
+
+  // The receipt cannot produce a per-box manifest — when it is parsed the shoes are
+  // still in the buyer's car. So the order is raised EMPTY, and scanning a pair into a
+  // label is what declares it.
+  const after = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const pack = after.body.cart.pack;
+  expect(pack.poId).toBeTruthy();
+  expect(pack.totalQty).toBe(1);
+  expect(pack.unpacked).toBe(1);
+  expect(pack.boxes.every((b) => b.units === 0)).toBe(true);
+
+  // Nothing may be packed that the receipt does not have — otherwise the box manifest
+  // becomes a second, independently-typed list that can disagree with what was paid for.
+  const wrong = await call(request, 'approver', 'cart/pack', {
+    cartId, poBoxId: pack.boxes[0].id, sku: 'ZZ0000-999', size: '10', qty: 1,
+  });
+  expect(wrong.status).toBe(409);
+  expect(wrong.body.error).toMatch(/receipt has no/i);
+
+  const packed = await call(request, 'approver', 'cart/pack', {
+    cartId, poBoxId: pack.boxes[0].id, sku: LINE.sku, size: LINE.size, qty: 1,
+  });
+  expect(packed.status).toBe(200);
+  expect(packed.body.cart.pack.unpacked).toBe(0);
+
+  // And not one more than it has.
+  const over = await call(request, 'approver', 'cart/pack', {
+    cartId, poBoxId: pack.boxes[0].id, sku: LINE.sku, size: LINE.size, qty: 1,
+  });
+  expect(over.status).toBe(409);
+  expect(over.body.error).toMatch(/already packed/i);
 });
 
 test('the buyer builds a request and a Pass can still be added', async ({ page, request }) => {

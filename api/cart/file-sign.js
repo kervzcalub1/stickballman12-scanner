@@ -41,15 +41,20 @@ export default async function handler(req, res) {
     const isBuyer = user.role === 'supplier' && !isPrivileged(user.role);
     if (isBuyer && Number(cart.buyer_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this request.' });
-    // The receipt is the buyer's evidence and the cards are the issuer's. Crossing them
-    // would let a buyer add "gift cards" nobody issued, which is a line in the ledger
-    // with no money behind it.
+    // A RECEIPT is open to every role this endpoint admits — the buyer, PH, warehouse
+    // and admin. Whoever has the paper should be able to attach it; holding that behind
+    // one desk is how a request sits waiting on somebody in another timezone. What it
+    // SAYS is a separate act, gated separately (`cart/receipt`).
     // A card image is a card. Uploading one is the issuing desk's job and needs the
     // privilege — crossing them would let anyone add "gift cards" nobody issued, which
     // is a line in the ledger with no money behind it.
     if (kind !== 'receipt' && !(await hasPrivilege(user, 'issue_gift_cards')))
       return send(res, 403, { ok: false, error: 'Only the gift card desk uploads card images.' });
-    if (cart.status === 'closed') return send(res, 409, { ok: false, error: 'This request is closed.' });
+    // A finished request takes no more evidence. `closed` alone left a cancelled or
+    // written-off one still accepting uploads, which is a file attached to a record
+    // nobody will ever read again.
+    if (['closed', 'cancelled', 'written_off'].includes(cart.status))
+      return send(res, 409, { ok: false, error: 'This request is finished — it takes no more files.' });
 
     const key = `buy-carts/${cart.cart_code}/${kind}-${Date.now()}.${EXT[contentType]}`;
     return send(res, 200, { ok: true, uploadUrl: presignPutUrl({ key, expiresIn: 300 }), key });

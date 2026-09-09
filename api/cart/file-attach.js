@@ -31,6 +31,8 @@ export default async function handler(req, res) {
     // is a line in the ledger with no money behind it.
     if (kind !== 'receipt' && !(await hasPrivilege(user, 'issue_gift_cards')))
       return send(res, 403, { ok: false, error: 'Only the gift card desk uploads card images.' });
+    if (['closed', 'cancelled', 'written_off'].includes(cart.status))
+      return send(res, 409, { ok: false, error: 'This request is finished — it takes no more files.' });
     // Only a key THIS server minted, and only under this cart's own prefix. Without the
     // cart_code in the pattern, an attach could point one request's record at another
     // request's file.

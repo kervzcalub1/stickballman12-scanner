@@ -2,8 +2,8 @@
 
 Screens: `src/screens/BuyCarts.jsx` (queue) → `src/screens/BuyCart.jsx` (one request),
 with `src/components/BuyCartAdd.jsx`, `BuyCartCosts.jsx`, `BuyCartGiftCards.jsx`,
-`BuyCartReceipt.jsx`.
-Endpoints: `api/cart/*` (18). Shared rules: `api/_lib/buycart.js`. Crypto:
+`BuyCartReceipt.jsx`, `BuyCartPack.jsx`, `BuyCartTasks.jsx`.
+Endpoints: `api/cart/*` (21). Shared rules: `api/_lib/buycart.js`. Crypto:
 `api/_lib/secrets.js`. Receipt parser: `src/lib/receiptParse.js`. Queries: the
 `buy_carts` section at the end of `api/_lib/db.js`. Routes: **`/buy-carts`** (warehouse/admin),
 **`/ph/gift-card-buying`** (PH) and **`/buying`** on the supplier portal. E2E: `e2e/buy-cart.spec.js`.
@@ -27,12 +27,13 @@ answers to "what are we still waiting on", which is worse than none.
 BUY CART (new)                          PURCHASE ORDER (existing)
 1 Request      buyer lists pairs + the buy call
 2 Approval     either staff side, per line or bulk
-3 Gift cards   issuer records + releases (encrypted)
+3 Funding      gift cards, or a company card charge
 4 Receipt      buyer uploads — required
 5 Parse        paste / PDF / OCR → review table
-6 Expected  ─────────────────────────►  po_lines (whole-order manifest)
-7 Audit        cards vs receipt vs left  8 Ship + 17TRACK
-                                          9 Receive vs manifest
+6 Pack      ─────────────────────────►  po_lines, ONE MANIFEST PER BOX
+                 each pair into one box   (a box holds many pairs)
+7a Money audit  cards/charge vs receipt  8 Ship + 17TRACK
+7b Goods audit  receipt vs received      9 Receive box by box
 10 CLOSED ◄──────────────────────────────  Reconciled
 ```
 
@@ -293,6 +294,21 @@ stored `v1:<iv>:<tag>:<ct>` so a key rotation stays possible.
   `Cache-Control: private, no-store`, and the client holds an object URL it revokes.
 
 ## The receipt
+### Attaching it and reading it are two different permissions
+- **Anyone who can reach the request may ATTACH one** — the buyer on their own request,
+  and PH / warehouse / admin on any of them (`cart/file-sign`, `cart/file-attach`,
+  `canUpload` on `BuyCartReceipt`). It is evidence, it usually needs doing from a phone
+  by whoever has the paper, and a request that waits because the one person with the
+  button is asleep in another timezone is the problem this process exists to solve.
+- **Stating what it SAYS stays gated** (`cart/receipt`, `canEdit`): the buyer, either
+  desk, or the auditor. That total is what the whole reconciliation runs against and
+  those lines are what the purchase order is raised from — it is a claim about money.
+- Somebody who may attach but not commit gets **no review table** after the upload. A
+  filled-in form with no button reads as broken rather than as "not your step".
+- A **card image** is still the issuing desk's alone — crossing them would let anyone add
+  "gift cards" nobody issued, a line in the ledger with no money behind it.
+- All three file endpoints refuse a `closed` / `cancelled` / `written_off` request.
+
 The **file** is evidence and is uploaded first, kept whatever happens next. The **lines**
 are a reading of it, and a reading can be wrong, so they land in an **editable table**
 and nothing is committed until a person has looked at them.
@@ -394,9 +410,128 @@ a `.bc-cards { display: none }` written for the list hid every gift card on desk
 "Show code" vanished and only the e2e test noticed, because `toContainText` reads hidden
 text happily while a click on it times out.
 
+## Packing — the receipt is the pick list, not the manifest
+*(`api/cart/pack.js`, `BuyCartPack.jsx`, `getCartPackState`)*
+
+`cart/raise-po` used to write the whole receipt onto the order as one order-level list
+(`manifest_scope='po'`). It now raises the order **empty**, on the ordinary per-box
+scope, and the buyer packs.
+
+**Why.** A whole-order manifest can tell the warehouse what the PURCHASE contained. It
+can never tell them what THIS CARTON should contain, so a short box was only ever
+discoverable as a short order — "one pair short" instead of "**box 2 is one 8.5W
+short**", which is the difference between a claim against the buyer and a search of the
+warehouse. And the receipt genuinely cannot produce a per-box manifest: when it is
+parsed the shoes are still in the buyer's car and no box has been filled. Splitting it
+across boxes then was a guess presented as a record.
+
+- **A box holds many pairs.** Its manifest is SKU + size + a pair count, the sheet we
+  already print for every supplier box. The rule is not one pair per box; it is that
+  **every pair belongs to exactly one box**, so the box counts sum to the receipt.
+- **The write is `addPoScan`** — the same call the supplier scan-out portal makes,
+  deliberately, so the printed manifest, close-and-seal and per-box receive differences
+  come free instead of being rebuilt.
+- **What `cart/pack` adds is the receipt as a CEILING.** A pack screen that let a buyer
+  type any SKU would build a second, independently-typed list that can quietly disagree
+  with what the money bought. Nothing may be packed that the receipt does not have, and
+  never more of it; the refusal names the pair it was looking for, because on a shop
+  floor the answer is usually a mistyped size.
+- A negative `qty` takes a pair back out. Packing the wrong size into the wrong box is
+  the likeliest mistake on this screen, and a correction that needs a desk is one that
+  gets skipped in favour of shipping it wrong. Only a box still `pending` can be edited —
+  a closed box's manifest is the sheet already taped inside it.
+- **Unpacked is not the same as unexpected, and that is the trap.** Under per-box scope
+  reconciliation counts only lines on labels that SHIPPED, so a pair bought and never
+  packed is absent from the arithmetic rather than short in it — the order would receive
+  and reconcile perfectly clean while the shoe is nowhere. Two guards close it:
+  `expected_recorded` fails while `pack.unpacked > 0`, and **`po/ship` refuses the last
+  unshipped box** while anything is loose (earlier boxes may still ship — what is
+  refused is closing the door on unpacked stock).
+
+## Two audits, not one
+Step 7 is **7a money** (`scope:'money'`) and **7b goods** (`scope:'goods'`) on the same
+endpoint, stamped into `audited_*` and `goods_audited_*`.
+
+They answer different questions from different evidence at different times: the money is
+answerable the day the receipt lands, the goods not until the boxes are in the building,
+which may be weeks. One signature for both would hold every request open for the length
+of a shipment — and a control people wait weeks to satisfy is one they start working
+around. Both take `requireAuditPrivilege`, so the approver still cannot sign off either.
+
+**7b exists because three lists have to agree and only two were ever compared:**
+
+| Comparison | Where |
+|---|---|
+| Receipt → manifest | guarded live at the pack step |
+| Manifest → received | `getPoReconciliation` — the one we already ran |
+| **Receipt → received** | `receipt_vs_received` — new; reconciliation checks the buyer's own account of what they packed, this one takes nobody's word |
+
+## The closing conditions are now twelve, in two groups
+`cartCloseChecks` tags each with `scope`. The count **moves with the funding route** — a
+card-funded request has no cards to reconcile — so never assert on a number.
+
+New since the ten: `receipt_vs_received`, `exceptions` (no open case), and
+`expected_recorded` now also requires everything packed. `cards_recorded` /
+`spend_reconciled` / `balance` swap to `charge_recorded` / `charge_reconciled` on the
+company-card route.
+
+## Open cases — the exception path
+*(`buy_cart_tasks`, `api/cart/task.js`, `BuyCartTasks.jsx`)*
+
+**One table for follow-ups AND return cases**, not two. The rule is a single sentence —
+every open item has an **owner, a next action, a due date and evidence** — and two
+mechanisms that each half-satisfy it is how a queue ends up with two answers to "what is
+outstanding". A return case is that same row with the extra facts: which pairs, cost at
+risk, holder, and the **retailer's own final return date** (`return_by`), kept apart from
+our internal `due_date` because ours can be moved and theirs cannot.
+
+- **Owner + due date are REQUIRED** at 400. An item with neither is a hope, not a task.
+- **Returned is not refunded.** `status='resolved'` on a return stamps
+  `refund_verified_at`; the parcel going back proves the retailer has the shoes, not that
+  the money came home. `written_off` is the honest alternative and reads differently.
+- Closing needs a `resolution` in words — a case closed with no account of how records
+  that somebody ticked a box.
+- An open case fails the `exceptions` condition, so a request cannot close over the top
+  of money still out.
+
+## Two funding routes
+`buy_carts.funding_method` — `gift_card` (the default, and every existing row) or
+`company_card` with `card_reference` + `card_authorized`. Set on `cart/control`, and
+**frozen once money has moved**: re-labelling a funded request would silently re-point
+every closing condition at evidence nobody gathered.
+
+**Recording the charge IS the release.** A gift-card request reaches `funded` when the
+desk hands the cards over; a card-funded one has no cards to hand over, so `cart/control`
+funds it when a reference and an amount above zero are both recorded on an `approved`
+request. Without that it stayed at `approved` forever — and every step after it is gated
+on `funded`, so the receipt could never be uploaded, read or reconciled. **The route was
+a dead end from the step after the one that created it**, and only an end-to-end test
+found it. A reference with no amount is not an authorisation and funds nothing.
+
+Cards are objects with balances; a charge is a reference on a statement. Asking either
+question of the other proves nothing — which is why everything keyed on `gc_total` read
+every card-funded purchase as unfunded forever. `cart/audit` refuses the card-balance
+audit on a card-funded request rather than writing an empty one over the top.
+
+## Custody
+`holder`, `holder_location`, `ship_by` (a DATE — a ship-by is a day on a calendar, and
+compared against `estToday()`). Between the till and the courier these are company shoes
+sitting in somebody's flat, and nothing recorded whose. The ship-by is what turns "he
+still hasn't sent it" from a memory into a date somebody can be asked about.
+
+## Written off — the third ending
+`status='written_off'` + `write_off_reason` (required, ≥10 chars),
+`POST cart/close { writeOff:true }` behind the same auditor guard as closing.
+
+**Not a force-close.** There was no way out of a request that can never be completed, so
+the only options were leaving it open forever or faking a clean close — and the pressure
+an unclosable request creates is pressure to record a false "received" or "refunded".
+This is a documented management decision: its own status, a required reason, a name
+against it, and a word that reads differently from `closed` everywhere it is shown.
+
 ## Statuses
-`draft → submitted → approved → funded → receipted → audited → closed`, plus `denied`
-and `cancelled`. The cart's own status **follows its lines** rather than being set by
+`draft → submitted → approved → funded → receipted → audited → closed`, plus `denied`,
+`cancelled` and `written_off`. The cart's own status **follows its lines** rather than being set by
 hand: once nothing is pending it is `approved` if anything survived, `denied` if nothing
 did. Approvals **freeze** at `funded` — you cannot re-decide a line the money has
 already gone out against. Cancelling is only possible before any card exists; after that
@@ -410,6 +545,11 @@ one of the process — has somewhere to happen that can be audited later.
 
 ## Gotchas
 - **`BUY_GC_KEY` must be set on every environment**, or the desk can only upload photos.
+- **`buy_cart_tasks` + eleven `buy_carts` columns (funding, custody, goods audit,
+  write-off) → `db:setup`** on local and prod, on top of the original tables.
+- **Never assert on a COUNT of closing conditions.** It moves with the funding route.
+  The old e2e test asserted ten and broke the moment a card-funded request asked a
+  different question; it now asserts on the `scope` split and the keys.
 - **New tables + a `users.privileges` column → `db:setup`** on local and prod
   (`docs/context/deploy.md`). The migration also folds anyone who held the short-lived
   `gc_issuer` / `auditor` roles back onto a real job title with the matching privilege.

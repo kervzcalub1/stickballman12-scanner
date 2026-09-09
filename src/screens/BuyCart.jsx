@@ -16,6 +16,8 @@ import { BuyCartAdd, VerdictChip, lineCall } from '../components/BuyCartAdd.jsx'
 import { BuyCartGiftCards } from '../components/BuyCartGiftCards.jsx';
 import { BuyCartReceipt } from '../components/BuyCartReceipt.jsx';
 import { BuyCartCosts } from '../components/BuyCartCosts.jsx';
+import { BuyCartPack } from '../components/BuyCartPack.jsx';
+import { BuyCartTasks } from '../components/BuyCartTasks.jsx';
 import { estDate, estTime } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
@@ -37,6 +39,9 @@ const STATUS = {
   audited: { label: 'Audited — waiting on the shipment', cls: 'shipped' },
   closed: { label: 'Closed / reconciled', cls: 'ok' },
   cancelled: { label: 'Cancelled', cls: 'muted' },
+  // Neither closed nor open. A request that could not be completed says so, with a
+  // reason and a name — never a false "received" or "refunded".
+  written_off: { label: 'Written off — documented loss', cls: 'danger' },
 };
 
 function StatusChip({ status }) {
@@ -49,23 +54,45 @@ function StatusChip({ status }) {
 function Checks({ checks }) {
   if (!checks?.length) return null;
   const done = checks.filter((c) => c.ok).length;
+  // TWO groups, because they are answerable at different times from different evidence.
+  // The money can be reconciled the day the receipt lands; the goods not until the boxes
+  // are in the building. Showing them as one list of ten made a request look stuck on the
+  // money for weeks when it was only ever waiting for a parcel.
+  const groups = [
+    { scope: 'money', title: 'The money', note: 'Answerable as soon as the receipt is in.' },
+    { scope: 'goods', title: 'The goods', note: 'Not answerable until the boxes have landed.' },
+  ];
   return (
     <section className="card bc-checks">
       <h3 className="bc-h">
         Closing conditions <span className="muted sm">{done} of {checks.length}</span>
       </h3>
-      <ul className="bc-check-list">
-        {checks.map((c) => (
-          <li key={c.key} className={c.ok ? 'ok' : ''}>
-            <span className="bc-check-mark" aria-hidden="true">{c.ok ? '✓' : '○'}</span>
-            <span className="bc-check-label">{c.label}</span>
-            {c.detail && <span className="bc-check-detail muted sm">{c.detail}</span>}
-          </li>
-        ))}
-      </ul>
+      {groups.map((g) => {
+        const list = checks.filter((c) => (c.scope || 'money') === g.scope);
+        if (!list.length) return null;
+        const gd = list.filter((c) => c.ok).length;
+        return (
+          <div key={g.scope} className="bc-check-group">
+            <h4 className="bc-check-group-h">
+              {g.title}
+              <span className={gd === list.length ? 'bc-covered sm' : 'muted sm'}>{gd} of {list.length}</span>
+            </h4>
+            <p className="muted xs">{g.note}</p>
+            <ul className="bc-check-list">
+              {list.map((c) => (
+                <li key={c.key} className={c.ok ? 'ok' : ''}>
+                  <span className="bc-check-mark" aria-hidden="true">{c.ok ? '\u2713' : '\u25cb'}</span>
+                  <span className="bc-check-label">{c.label}</span>
+                  {c.detail && <span className="bc-check-detail muted sm">{c.detail}</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
       {done < checks.length && (
         <p className="muted sm">
-          A transaction isn’t finished because the cards were spent. It’s finished when every
+          A transaction isn’t finished because the money was spent. It’s finished when every
           line above is true.
         </p>
       )}
@@ -476,6 +503,9 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
   }
 
   const checksDone = (cart.checks || []).every((c) => c.ok);
+  // The goods half on its own — a shipment can be verified while a card balance is still
+  // outstanding, and vice versa.
+  const goodsDone = (cart.checks || []).filter((c) => c.scope === 'goods').every((c) => c.ok);
 
   return (
     <div className="app bc">
@@ -491,11 +521,16 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           </div>
           <StatusChip status={cart.status} />
         </div>
+        {cart.status === 'written_off' && (
+          <p className="bc-writeoff"><b>Written off:</b> {cart.write_off_reason}</p>
+        )}
         {cart.purpose && <p className="bc-purpose"><b>Buying:</b> {cart.purpose}</p>}
         {cart.restrictions && <p className="muted sm"><b>Limits:</b> {cart.restrictions}</p>}
         <div className="bc-money">
           <span>Approved <b>{money(cart.approved_amount)}</b></span>
-          <span>Cards <b>{money(cart.gc_total)}</b></span>
+          {cart.funding_method === 'company_card'
+            ? <span>Card charge <b>{money(cart.card_authorized)}</b></span>
+            : <span>Cards <b>{money(cart.gc_total)}</b></span>}
           <span>Receipt <b>{money(cart.receipt_total)}</b></span>
           <span>Left over <b>{money(cart.balance_remaining)}</b></span>
           {cart.po && <span>Order <b>{cart.po.po_code}</b> ({cart.po.status})</span>}
@@ -504,8 +539,10 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           <p className="muted xs">
             Approved by {cart.approved_by} ({cart.approved_by_role}) {estDate(cart.approved_at)}
             {cart.funded_by ? ` · cards released by ${cart.funded_by}` : ''}
-            {cart.audited_by ? ` · audited by ${cart.audited_by}` : ''}
+            {cart.audited_by ? ` · money audited by ${cart.audited_by}` : ''}
+            {cart.goods_audited_by ? ` · goods audited by ${cart.goods_audited_by}` : ''}
             {cart.closed_by ? ` · closed by ${cart.closed_by}` : ''}
+            {cart.written_off_by ? ` · written off by ${cart.written_off_by}` : ''}
           </p>
         )}
 
@@ -524,12 +561,19 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
               Raise the purchase order
             </button>
           )}
-          {canAudit && cart.status !== 'closed' && (
+          {canAudit && !['closed', 'written_off'].includes(cart.status) && (
             <button className="btn primary" disabled={busy === 'close' || !checksDone}
               title={checksDone ? '' : 'Not every closing condition is met yet.'}
               onClick={() => act(() => api.cartClose(cart.id), 'close')}>
               {busy === 'close' ? 'Closing…' : 'Close / reconciled'}
             </button>
+          )}
+          {/* The third ending, and deliberately not a force-close: it needs a reason and
+              it reads as a loss everywhere it is shown afterwards. Offered only once
+              money has actually moved — before that, cancelling is the honest word. */}
+          {canAudit && ['funded', 'receipted', 'audited'].includes(cart.status) && !checksDone && (
+            <button className="btn ghost danger" disabled={busy === 'wo'}
+              onClick={() => setAsking('writeoff')}>Write off…</button>
           )}
           {canDecide && ['draft', 'submitted', 'denied'].includes(cart.status) && (
             <button className="btn danger" disabled={busy === 'cx'}
@@ -567,6 +611,21 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
             fields={[{ name: 'reason', label: 'Why is this being cancelled?', type: 'textarea', required: true,
               placeholder: 'e.g. Buyer got to the store and the price had gone back up' }]} />
         )}
+
+        {asking === 'writeoff' && (
+          <FormModal
+            title="Write this request off"
+            message="This is a documented loss, not a shortcut past the checks. It stays visible as written off, with your name on it, and never reads as closed."
+            submitLabel="Write it off" danger
+            onClose={() => setAsking(null)}
+            onSubmit={async ({ reason }) => {
+              await api.cartWriteOff(cart.id, reason.trim());
+              setAsking(null); await load();
+            }}
+            fields={[{ name: 'reason', label: 'What could not be recovered, and why?', type: 'textarea', required: true,
+              placeholder: 'e.g. Receipt lost and the retailer cannot reprint it; $184.98 of gift card balance unaccounted for',
+              hint: 'Escalate first. A write-off is a management decision — say what was tried.' }]} />
+        )}
       </section>
 
       {isBuyer && cart.status === 'draft' && (
@@ -582,19 +641,59 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         canPrice={canCost && !['closed', 'cancelled'].includes(cart.status)}
         onChanged={load} onSignOut={onSignOut} />
 
-      {['approved', 'funded', 'receipted', 'audited', 'closed'].includes(cart.status) && (
+      {cart.funding_method !== 'company_card'
+        && ['approved', 'funded', 'receipted', 'audited', 'closed', 'written_off'].includes(cart.status) && (
         <BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer}
           onChanged={load} onSignOut={onSignOut} />
       )}
 
-      {['funded', 'receipted', 'audited', 'closed'].includes(cart.status) && (
-        <BuyCartReceipt cart={cart} canEdit={cart.status !== 'closed' && (isBuyer || canDecide || canIssue)}
+      {['funded', 'receipted', 'audited', 'closed', 'written_off'].includes(cart.status) && (
+        <BuyCartReceipt cart={cart}
+          // ATTACHING the receipt is open to everyone who can reach the request: the
+          // buyer standing in the shop, and any staff member the paper reaches first.
+          // It is evidence, and a request that sits waiting because the one person with
+          // the button is asleep in another timezone is the whole problem this process
+          // was meant to solve. The server scopes a buyer to their own request.
+          canUpload={!['closed', 'cancelled', 'written_off'].includes(cart.status)}
+          // STATING what it says is a claim about money — the total the reconciliation
+          // runs against and the lines the order is raised from. That stays with the
+          // buyer, either desk, or the auditor.
+          canEdit={!['closed', 'cancelled', 'written_off'].includes(cart.status)
+            && (isBuyer || canDecide || canIssue || canAudit)}
           onChanged={load} onSignOut={onSignOut} />
+      )}
+
+      {/* Step 6, second half. Appears the moment the order exists, because that is when
+          the buyer starts filling cartons — and the count of what is still loose is the
+          thing that decides whether the last box may ship. */}
+      {cart.po_id && (
+        <BuyCartPack cart={cart} onChanged={load} onSignOut={onSignOut}
+          canPack={(isBuyer || canDecide || canAudit) && !['closed', 'cancelled', 'written_off'].includes(cart.status)} />
       )}
 
       {canAudit && ['receipted', 'audited'].includes(cart.status) && (
         <Audit cart={cart} onChanged={load} onSignOut={onSignOut} />
       )}
+
+      {/* The goods sign-off is separate from the money one and can be weeks later, so it
+          hangs off the goods conditions rather than the cart's status. */}
+      {canAudit && cart.po_id && !cart.goods_audited_at && !['cancelled', 'written_off'].includes(cart.status) && (
+        <section className="card bc-goods-audit">
+          <h3 className="bc-h">The shipment against the receipt</h3>
+          <p className="muted sm">
+            Three lists have to agree: what the receipt says was paid for, what the buyer packed
+            into each box, and what the warehouse counted. Reconciliation only ever compared the
+            last two — this is the one that takes nobody’s word for anything.
+          </p>
+          <button type="button" className="btn primary" disabled={busy === 'ga' || !goodsDone}
+            title={goodsDone ? '' : 'The goods conditions below are not all met yet.'}
+            onClick={() => act(() => api.cartAuditGoods(cart.id, null), 'ga')}>
+            {busy === 'ga' ? 'Signing off\u2026' : 'Sign off the shipment'}
+          </button>
+        </section>
+      )}
+
+      <BuyCartTasks cart={cart} canManage={canDecide} onChanged={load} onSignOut={onSignOut} />
 
       <Checks checks={cart.checks} />
       <Thread cart={cart} onChanged={load} onSignOut={onSignOut} />

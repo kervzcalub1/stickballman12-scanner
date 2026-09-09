@@ -202,9 +202,17 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
           <div className="bc-sizes" role="group" aria-label="Size">
             {(product.sizes || []).map((s) => {
               const label = typeof s === 'string' ? s : (s.size ?? s.label ?? '');
+              const picked = String(label) === String(size);
               return (
+                // `size-chip` is the app's existing size control (Receiving, the PH grid).
+                // These shipped against a bare `chip`, which has no rule anywhere in
+                // styles.css — so they rendered as the browser's default buttons: light
+                // grey boxes on a dark screen, with no selected state at all. Same failure
+                // as the `.table` one, and the same fix: use what already exists rather
+                // than define a second chip beside it.
                 <button key={label} type="button"
-                  className={`chip ${String(label) === String(size) ? 'on' : ''}`}
+                  className={`size-chip ${picked ? 'on' : ''}`}
+                  aria-pressed={picked}
                   onClick={() => tapSize(label)}>{label}</button>
               );
             })}

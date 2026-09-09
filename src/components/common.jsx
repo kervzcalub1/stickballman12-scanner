@@ -267,6 +267,16 @@ export function FormModal({
                 <textarea className="input" rows={f.rows || 3} value={vals[f.name] ?? ''}
                   placeholder={f.placeholder || ''} maxLength={f.maxLength || 500} disabled={busy}
                   onChange={(e) => set(f.name, e.target.value)} />
+              ) : f.type === 'select' ? (
+                // A closed set of answers is a select, not a free-text box somebody has
+                // to spell right — "how did this end" and "which funding route" are both
+                // decisions, and a typo in either changes what the closing conditions ask.
+                <select className="input" value={vals[f.name] ?? ''} disabled={busy}
+                  onChange={(e) => set(f.name, e.target.value)}>
+                  {(f.options || []).map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
               ) : (
                 <input className="input" type={f.type || 'text'} value={vals[f.name] ?? ''}
                   placeholder={f.placeholder || ''} maxLength={f.maxLength || 200} disabled={busy}

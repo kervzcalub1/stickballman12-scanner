@@ -1,214 +1,230 @@
-# Session report — Fri 5 Sep 2026 (EST)
+# Session report — Tue 9 Sep 2026 (EST)
 
-One fix shipped to production, one large feature parked for testing.
+The gift-card buying screens, from three screenshots to a feature the floor can
+actually use. Six commits on `feat/gift-card-buying`, all pushed.
 
-A video came in from the floor showing the daily scan-out failing on every attempt —
-that got diagnosed and fixed, and is now live. Alongside it, the gift-card buying
-process was built to the written ten-step procedure and then rebuilt around a
-correction from Kervy about roles versus privileges; that one waits for local testing.
+**Two bugs were found by fixing something else**, and both were worse than the thing
+that surfaced them: a preview link that would have written to a live 17TRACK account,
+and a buy call that priced a made-up style code off an unrelated shoe.
 
-Four bugs found in total. **Three of them were already live.**
-
-| Branch | State |
+| Where | State |
 |---|---|
-| `fix/scan-out-failures` | **MERGED & LIVE** — [PR #189](https://github.com/kervzcalub1/stickballman12-scanner/pull/189). Prod migrated, deploy verified in the bundle |
-| `feat/gift-card-buying` | [PR #188](https://github.com/kervzcalub1/stickballman12-scanner/pull/188), CI green, **parked** for local testing next session |
+| `feat/gift-card-buying` ([PR #188](https://github.com/kervzcalub1/stickballman12-scanner/pull/188)) | 6 new commits **pushed**; 24/24 e2e locally; **CI green** (run 34292952619) |
+| `main` | Untouched today |
+| Prod | Untouched today. **No `db:setup` needed** for any of this |
 
 ---
 
-# PART ONE — "Scan-out keeps failing"
+# PART ONE — "fix UI"
 
-## What the floor reported
-Jadi has been scanning shoes out daily. Some scans work, most don't. Kervy filmed a
-live spot-test and every scan tested failed. Two options were on the table: abort the
-process, or fix it.
+A screenshot of the buying-requests list, columns jammed against each other.
 
-## What was actually happening
+**`.table` had no CSS rule anywhere in `styles.css`.** All four buy-cart tables shipped
+against a class that does not exist, so they rendered as bare browser tables: no cell
+padding, no row rules, columns collapsed onto their content.
 
-**332 boxes are wearing a real 1ID sticker with no pair behind it in the system.**
+That is also the answer to the second screenshot — *"why call status is pending?"*.
+`Call` and `Status` are **two columns**, and unstyled they ran together into one heading
+that read "Call Status". So a blank buy call looked like a request whose *status* was the
+word Pending, sitting in the wrong place.
 
-A box gets a sticker off the roll, the shoe is never received against it, and the
-sticker is genuine while pointing at nothing. Scanning it answered:
-
-```
-No item found for SBM-R-004754.
-```
-
-True, useless, and exactly why people concluded the software was broken.
-
-**The app already knew.** `vin_stock` holds that sticker's real state, and Inventory has
-been asking it for months. The scan-out screen — the one used two hundred times a day —
-never did.
-
-## Why it looked random
-
-A roll is peeled in order, so unused numbers should sit at the **end** of a run. They
-didn't:
-
-| Run | Printed | Used | Unused **inside** the worked stretch | Untouched tail |
-|---|---|---|---|---|
-| 34 | 150 | 83 | **55** | 0 |
-| 25 | 250 | 190 | **60** | 0 |
-| 22 | 150 | 91 | **59** | 0 |
-
-Run 34 was worked right through to sticker #150 while 55 in the middle were never bound.
-Those were peeled and applied. A labelled-and-received box scans; the labelled-but-
-unreceived box beside it doesn't. That is the "some work, some don't", and it is why a
-spot-test failed every time.
-
-## What a failed scan says now
-
-| Scanned | Before | Now |
-|---|---|---|
-| Labelled, never received | `No item found for SBM-R-004754.` | **`SBM-R-004754 — labelled but never received — send it to Receiving.`** |
-| Voided sticker | `No item found…` | `this sticker was voided` |
-| Not one of ours | `No item found…` | `not a sticker we printed` |
-| Manufacturer UPC | *(unchanged)* | `is not a VIN — scan the SBM-… label, not the UPC` |
-
-One wording correction came with it. Inventory's line for an unused sticker read *"Still
-on the roll"* — an assumption, and production says it's false 332 times over. Someone
-holding such a box, told its sticker is still on the roll, learns the app is wrong. What
-we can state as fact is narrower and more useful: nothing was ever received against it.
-
-## The thing that made this expensive
-
-**Nothing about a failed scan was recorded anywhere.** The reason lived in one browser
-tab and died with it, so answering "why is it failing" took a phone video, ffmpeg frame
-extraction and four tables of inference.
-
-`scan_failures` now takes one row per failure — code, reason, screen, who, when:
-
-```
-012345678905   not_a_vin    mark-sold   Jadi   17:47:13
-SBM-R-999999   unknown      mark-sold   Jadi   17:47:12
-SBM-R-900002   void         mark-sold   Jadi   17:47:11
-SBM-R-900001   available    mark-sold   Jadi   17:47:09
-```
-
-Fire-and-forget by contract: the client never awaits it, the endpoint answers 200 even
-when the insert fails, and a test kills the endpoint and asserts scanning still works.
-The audit trail must never be able to stop the thing it is auditing.
-
-## A second bug the same investigation turned up
-
-Fifteen sticker runs were minted **3–23 seconds before** the run that actually got used:
-
-```
-run 4   250 stickers  0 used    11:13:27
-run 5   250 stickers  246 used  11:13:36   <- 9 seconds later
-run 14  100 stickers  0 used    15:14:05
-run 15  500 stickers  466 used  15:14:08   <- 3 seconds later
-```
-
-Mint, no labels come out, hit Mint again — and the first run becomes a permanent hole in
-the numbering. **~2,700 numbers burned.** There's now an amber banner naming the
-stranded run with a Print-again button, and Mint confirms before burning fresh numbers
-on top of it. Reprint always existed; it just wasn't where the hand goes when nothing
-comes out of the printer.
-
-## The work order
-
-The failing boxes are a finite, known list — 332 stickers, written to
-`unreceived-stickers.csv`:
-
-```
-run 25   60 stickers   SBM-R-004754 … SBM-R-004979
-run 22   59 stickers   SBM-R-004251 … SBM-R-004389
-run 34   55 stickers   SBM-R-006051 … SBM-R-006199
-…14 runs, 332 total
-```
-
-Receiving each one clears it permanently.
-
-## On abort vs fix
-
-**Fix, clearly.** Scan-out marked **558 pairs sold successfully**, most recently Sep 3.
-The software was working; the feedback was mute on a bounded set of boxes.
-
-## The bigger thing, which is not a bug
-
-The video is three minutes of walking, and that's the number worth raising separately:
-
-- **3,525 of 3,846 received pairs have never been put away**
-- the only shelved stock is the **641** from the old-stock count, which stopped Sep 2
-- 722 shelves are defined; **45** have anything on them
-
-The system cannot tell Jadi where anything is, because nothing was ever told where it
-went. The scan failures are fixed. The hunting is a separate and larger problem.
+Defined `.table` the same shape as `.inv-table` (which every other table in the app
+uses), plus a `.num` class so money lines up on the decimal. The two headings are now
+**Buy call** and **Approval** so they cannot merge again.
 
 ---
 
-# PART TWO — Gift-card buying (parked, not deployed)
+# PART TWO — "$0.00 · 0.0% via —" was a lie
 
-Built to the written ten-step process. **Six of those steps already existed** — a
-purchase order's `po_lines` ARE "expected inventory", PO reconciliation already compares
-expected against arrived, 17TRACK already watches the parcel. So the cart carries steps
-1–7 and hands off: the parsed receipt raises a PO, and `buy_carts.po_id` is the seam.
+The line said a pair was worth nothing. Nobody had priced it.
 
-Walked end to end on live Alias/StockX data — request, approval, $650 in cards against
-$559.82 approved, a $606.01 receipt raising PO-103479, six pairs received, an audit
-accounting for every card, and a close with all ten conditions green.
+`api/cart/line.js` decided whether a field was supplied with
+`Number.isFinite(Number(v))` — and **`Number(null)` is `0`**. So every line added
+without a market price stored `profit = 0, roi = 0`.
 
-## Kervy's correction, and what it exposed
+A stored zero is a **claim**. Nothing downstream can tell it back apart from a gap, and
+an approver reads "we priced this and it's worthless" instead of "nobody priced this".
 
-I shipped the three duties — approve, issue cards, audit — as **roles**. That was wrong:
-`users.role` is one column, so it made them alternatives to being warehouse or PH, when
-the card desk is a PH team member who *also* does that. Rebuilt as `users.privileges`
-with checkboxes beside the role dropdown on Check Access.
-
-The rebuild exposed two things the role version had hidden:
-
-- **PH team members couldn't reach the screen at all.** PH has its own app and never
-  touches the staff router. Under roles this never came up, because a card issuer wasn't
-  PH. The moment the desk became "a PH person who also does this", they had nowhere to go.
-- **The separation-of-duties check became load-bearing.** Roles were doing half the work
-  for free; now one person can legitimately hold approve *and* audit, so the
-  per-transaction check is the only guard left.
-
-## The bug in the control itself
-
-The "you can't audit what you approved" check compared `approved_by_id` — and the env
-`admin`/`superadmin` accounts have **no row in `users`**, so their id saved as NULL and
-the check silently never fired for the two accounts most likely to do both jobs. A
-control that is off for its most privileged user is not a control.
-
-## And two more that were already live
-
-`po/ship` and `po/close-box` both demanded per-box lines, but `po/scan` refuses per-box
-lines on a whole-order manifest — so **a Path-C order could never be closed or shipped by
-anybody**. Unnoticed because nobody had moved one through the portal.
-
-Also: every price box on the new screens was silently storing an event object.
-`PriceInput` hands its `onChange` the event, not the value — no error, just a verdict
-panel that never appeared. Caught by browser QA, not the build.
+> This is the **second** time this exact coercion has bitten. In August a blank cost box
+> at receiving saved as `$0` (`Number('') === 0`) and hid 73 rows behind 10 visible ones.
+> The rule now written down: in this codebase, "is it a number" is never the right test
+> for "was it supplied". Test for absence **first**, then coerce.
 
 ---
 
-# Deployment
+# PART THREE — costs somebody can actually state
 
-**Scan-out fix (#189) — DONE, live on production.**
-- `db:setup` ran against prod and added `scan_failures` and nothing else — verified no
-  `buy_cart*` tables and no `users.privileges` came with it.
-- CI green (6m46s, fresh database), merged, branch deleted.
-- Deploy verified in the live bundle: both the new failure wording and the stranded-run
-  guard are present on `stickballman12.com`.
-- 332 boxes still need receiving; the list is in `unreceived-stickers.csv`.
+The brief: *"if supplier did not enter costs then let the approver and auditor enter it
+instead… but we need logs to document everything."*
 
-**Gift-card buying (#188) — next session, after local testing.** Its migration has NOT
-been run. When it goes:
+**Why it was empty in the first place.** A request's cost stack is snapshotted from the
+buyer's **payout preset**, and buyers do not manage their own presets — an admin does.
+So a buyer who was never given one opens a request where every pair "lands at" its shelf
+price, no payout clears any threshold, and no buy call can be made at all. That is not an
+edge case; it is what every new buyer's first request looks like.
+
+### The correction, and it mattered
+
+I built it approver/auditor-only, reasoning separation of duties. **Wrong reading of the
+brief** — *"if supplier did not enter costs… let the approver and auditor enter it
+**instead**"* makes the buyer the primary enterer. Confirmed directly when asked.
+
+Now: **the buyer writes it, either desk can overwrite it.**
+
+What makes that safe is **the trail, not the lock**. A buyer could set a flattering
+stack; the approver overwrites it, and `buy_cart_events` holds both versions under the
+names that set them — so a favourable number is visible *as the buyer's*, beside what the
+approver replaced it with.
+
+### What shipped
+
+- **What a pair costs us** card above the lines: store %, promo %, gift card %,
+  cashback %, tax %, tip $, shipping $.
+- **The chip IS the field.** Tap a rate, type over it, Enter. A rate is corrected one at
+  a time far more often than seven at a time. *Edit all seven* remains for stating a
+  whole stack from nothing.
+- Saving **re-prices every line** against the new rates — using the market prices already
+  captured, never re-reading the market.
+- **Correcting a line after submission** (size / qty / shelf price) is desk-only, and
+  shelf prices **freeze at `funded`** — that is the number the gift cards were issued
+  against.
+- Every write lands in the history in words: `Store discount 0% → 20% · Sales tax 0% →
+  8.25% · Shipping $0.00 → $12.00 — 1 line re-priced`, with the actor's name.
+
+> **The UI trap worth keeping.** Enter commits *and* disables the input — and disabling a
+> focused element **blurs** it, firing the blur handler into a second identical write.
+> Guarded with a `useRef`, not the `busy` state: the blur arrives during React's commit,
+> before any re-rendered handler could see it.
+
+---
+
+# PART FOUR — "why buy call is not priced? show decision like in the payout calculator"
+
+The line had `alias_price` and `stockx_price` stored as **0** — the market lookup came
+back empty when the buyer added it. The shoe prices fine now (Alias $133, StockX $97), so
+it was a bad minute, not a bad SKU.
+
+**A line now opens** to the Payout Calculator's own verdict card: chip, "lands at $62.19
+a pair · $57.64 profit · 92.7% ROI via Alias", risk band, the calculator's sentence, and
+the market prices with the date they were quoted. Same shape and same words, because one
+call read in two places must not look like two tools' opinions. The **numbers** come off
+the stored snapshot; only the **prose** is re-derived.
+
+**`cart/price-line`** re-reads the market for a pair that never got a call. Explicit and
+named, never automatic — an approver who re-prices has chosen to look at today's market
+instead of the buyer's, and `line_priced` says so with the prices found and what the call
+was before.
+
+That line is now **BUY · $57.64 · 92.7% ROI · medium risk**.
+
+---
+
+# PART FIVE — the two bugs found by fixing the above
+
+### 1 · The tunnel ran with the 17TRACK guard OFF
+
+You chose Cloudflare tunnel over a Railway staging service. Before handing you the
+command I checked it, and found this:
+
+`vite.config.js` forces `APP_ENV=dev` so a dev server can never claim to be production.
+**`scripts/mobile-preview.mjs` never did** — and it is the script that publishes this
+machine on a *public URL*. It spawns `server.mjs`, the entrypoint production runs, which
+deliberately never sets `APP_ENV`. So the preview inherited a bare environment and looked
+like production to every guard keyed on it.
+
+A teammate handed a tunnel link, clicking through a purchase order, would have registered
+invented tracking numbers with the real, quota-limited 17TRACK account. **That is the
+exact leak the guard was added for** after it happened once from a dev server — 50 numbers
+in a week — and the preview path walked around it.
+
+Fixed: `APP_ENV: 'dev'` is forced, and `ENV_LABEL` defaults so a published link carries a
+"not production" bar.
+
+> **The lesson:** the guard lives on `APP_ENV`, and only `vite.config.js` was setting it.
+> Any *new* way of running this app — a preview script, a staging service, a container —
+> has to set it too, or it silently opts out.
+
+### 2 · A made-up style code priced as a confident BUY
+
+CI went red: my `price-line` test asserted a stored event, which only exists when an
+upstream actually answers — and CI is hermetic with no Alias or StockX creds. It was a
+test of somebody else's API being up. Both branches are asserted now.
+
+**Probing that empty branch found the real bug.** StockX's catalogue search falls back to
+its first result when nothing carries the style code, flagged `exact:false`. The
+calculator shows that to a person who can read the title; `price-line` **stores** it as
+the call an approval is judged on. Asked for `ZZ0000-999` — a code no shop has ever sold —
+it answered **"$264, BUY"** off a Nike Vomero.
+
+Refusing every inexact hit was the first fix and it was too blunt: StockX's styleId
+formatting often differs from the code on the box, so the *right* shoe frequently comes
+back inexact (`IO8116-600` does). **Corroboration decides instead:**
+
+- Alias priced it too → the code is a real shoe and there is a second opinion beside it.
+  Use the hit, record "matched by name".
+- Alias found nothing → nothing says the code exists. **Refuse it, and name the shoe it
+  nearly used** — which turns a wrong answer into "check what you typed".
+
+---
+
+# Also shipped
+
+**A non-production banner.** `server.mjs` stamps `<meta name="sb-env">` into the HTML
+shell when `ENV_LABEL` is set, and `main.jsx` turns it into a striped bar above every
+screen, **sign-in included** — the moment somebody most needs to know whether the request
+they are about to approve spends real money. Injected at serve time, so the same build can
+be promoted between environments; unset (production) changes nothing.
+
+The shell is now served by us and never by `express.static`, or the stamp would be
+bypassable at `/` and `/index.html`. A banner with a URL that skips it is not a banner.
+
+**A staging runbook** in `docs/context/deploy.md`, written for the Railway route you
+decided against for now. It leads with the variables that must *differ* rather than the
+Railway clicks, because the risk in a preview deployment is not the code — it is the side
+effects that leave the building: 17TRACK registrations, the metered KicksDB quota, the
+shared R2 bucket, the gift-card key.
+
+---
+
+# Where things stand
+
+**Pushed, nothing merged.** Five commits on `feat/gift-card-buying`:
+
 ```
-DATABASE_URL="$PROD_DATABASE_URL" node scripts/db-setup.mjs                 # six tables + users.privileges
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"   # -> BUY_GC_KEY on Railway
+4af3f63  test(buy-cart): the no-market branch asserts nothing MOVED, not that it is blank
+84cffc4  fix(buy-cart): a style code nothing carries must not price off the nearest shoe
+512cf7f  fix(preview): the tunnel ran with the 17TRACK guard off
+6502de2  docs(deploy): how to stand up a staging service without spending prod's quotas
+fb38f3e  feat(deploy): a non-production deployment says so, before you sign in
+6527adf  feat(buy-cart): costs somebody can state, and a call you can check
 ```
-Migration first; the code reads tables production doesn't have yet. And note: after that
-migration **nobody can approve a buying request until you tick boxes in Check Access** —
-admin excepted, so you're never locked out.
 
-# One known issue that is not from either branch
+> **CI went red twice, both times on the same new test, and it was worth it.**
+> Run 1: the test asserted a stored event that only exists when an upstream answers —
+> CI is hermetic. Chasing that is what found the `ZZ0000-999 → "$264, BUY"` bug.
+> Run 2: my rewritten no-market branch asserted `verdict` would be null, but the fixture
+> line carries the buyer's own `verdict: 'buy'` and a lookup that finds nothing correctly
+> writes **nothing**. It now asserts the line is *untouched*, which is the stronger claim:
+> blanking a call the buyer legitimately made because an API was down would be worse than
+> the zeros this endpoint exists to undo.
 
-The local suite fails on a **different spec on every full run** — `mobile-qa` once,
-`raw-vin` once, then `ph-grid` + `po-edit` + `inventory-rapid-scan` — and every one of
-them passes when run alone. `mobile-qa`'s PH-grid note test also fails on unmodified
-`main`. That is tests sharing one local database and stepping on each other, not a
-product defect, but it makes a full local run untrustworthy as a gate. CI is currently
-the reliable signal because it builds a fresh database each time. Worth a separate fix.
+### Before merging
+- **CI is green** on `4af3f63` (run 34292952619, 523 passed). Re-check with
+  `gh pr checks 188` if anything else lands first — never merge on a red run.
+- **Prod needs `BUY_GC_KEY`** and a `db:setup` for the buy-cart tables — that is the
+  original PR #188 requirement and has not changed. **Nothing added today needs a
+  migration**: `cost_stack` is already JSONB and `buy_cart_events.kind` is free text.
+
+### To show the team now
+```
+ENV_LABEL='Buy-cart demo' npm run mobile:tunnel
+```
+Serves **your local database** on a public HTTPS URL. I deleted the six `probe` carts I
+created, but BC-165 is now priced and BC-223 / BC-231 carry edited cost stacks. The
+endpoints that are public by design (`/api/track`, `/api/get-price`) are public on that
+hostname too — don't leave it running unattended.
+
+### Loose ends
+- `.env.staging.secrets` (gitignored) holds generated staging keys. **Delete it** unless
+  you go the Railway route.
+- `docs/context/buy-cart.md` and `docs/context/deploy.md` are both updated and committed.

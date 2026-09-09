@@ -3,7 +3,8 @@
 // shipped, the PO flips to 'shipped'. Returns the refreshed full PO.
 import { STILL_WITH_SUPPLIER } from '../_lib/po-manifest.js';
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
-import { getPoBox, getPo, countPoBoxLines, countPoOrderLines, shipPoBox, getPoFull, dbConfigured } from '../_lib/db.js';
+import { getPoBox, getPo, countPoBoxLines, countPoOrderLines, shipPoBox, getPoFull,
+  getCartIdForPo, getCartPackState, dbConfigured } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
@@ -46,6 +47,25 @@ export default async function handler(req, res) {
           ? 'Nothing has been declared on this order yet.'
           : 'Scan at least one item into this label before shipping it.',
       });
+
+    // A cart-raised order carries a RECEIPT as its ceiling, and under a per-box manifest
+    // reconciliation only counts lines on labels that shipped — so a pair that was bought
+    // and never packed into any box is not "short", it is absent from the arithmetic
+    // entirely, and the order would receive and reconcile perfectly clean while the shoe
+    // is nowhere. Shipping the last box is the moment that becomes permanent.
+    //
+    // Earlier boxes may ship while others are still filling; what is refused is closing
+    // the door on unpacked stock.
+    const cartId = await getCartIdForPo(po.id);
+    if (cartId) {
+      const pack = await getCartPackState(cartId);
+      const stillFilling = (pack?.boxes || []).some((b) => b.id !== poBoxId && b.status === 'pending');
+      if (pack && pack.unpacked > 0 && !stillFilling)
+        return send(res, 409, {
+          ok: false,
+          error: `${pack.unpacked} of ${pack.totalQty} pairs on the receipt are still not packed into a box. Pack them, or add another label to put them in.`,
+        });
+    }
 
     await shipPoBox(poBoxId);
     // Start tracking this label's shipment (best-effort; no-ops without a key).

@@ -9,13 +9,16 @@
 // the warehouse receives against the manifest. A second expected-inventory table would
 // give the company two answers to "what are we still waiting on".
 //
+// The order is raised EMPTY. The receipt is the pick list the buyer packs from, not
+// the manifest itself — see `cart/pack`.
+//
 // The lines come off the RECEIPT, not off the approved request. What was approved is
 // what we agreed to spend; what the receipt says is what actually exists and is coming.
 // Where they differ, the difference is a finding for the audit — not something to
 // quietly reconcile away by declaring the tidier of the two lists.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import {
-  getBuyCartFull, createPo, addPoOrderScan, setPoManifestScope, linkBuyCartPo, dbConfigured,
+  getBuyCartFull, createPo, linkBuyCartPo, dbConfigured,
 } from '../_lib/db.js';
 import { requirePrivilege } from '../_lib/buycart.js';
 
@@ -55,22 +58,20 @@ export default async function handler(req, res) {
       createdBy: user.name || user.username || '',
     });
 
-    // A WHOLE-ORDER manifest (Path C, po_box_id NULL): the receipt is one list for the
-    // whole purchase, and which box a pair ends up in is decided later when the buyer
-    // packs. Splitting the receipt across boxes now would be a guess presented as a
-    // record. `manifest_scope` must flip with it, or reconciliation counts the
-    // per-label lines (of which there are none) and reads the whole order as short.
+    // NO manifest is written here, and that is the change. The order is created with
+    // its blank labels and nothing else, on the ordinary PER-BOX scope.
+    //
+    // The receipt cannot produce a per-box manifest: when it is parsed the shoes are
+    // still in the buyer's car and no box has been filled. Writing the whole receipt as
+    // one order-level list was a way of pretending otherwise — it told the warehouse
+    // what the PURCHASE contained, and could never tell them what THIS BOX should
+    // contain, so a short carton was only ever discoverable as a short order.
+    //
+    // The receipt stays where it already lives, on the request, and becomes the pick
+    // list for `cart/pack`. Scanning a pair into a label is what declares it, exactly
+    // as every other supplier order is declared — which is also why the printed box
+    // manifest, the close-and-seal step and per-box receive differences all come free.
     const po = created.po;
-    await setPoManifestScope(po.id, 'po');
-    for (const r of cart.receiptLines) {
-      await addPoOrderScan({
-        poId: po.id, sku: r.sku, size: r.size, qty: r.qty, name: r.name,
-        unitCost: r.unit_price,
-        // Always on-behalf: a staff member raised this from the buyer's receipt. The
-        // buyer did not scan it out themselves, and the attribution has to say so.
-        enteredBy: Number(user.uid) || null, enteredOnBehalf: true,
-      });
-    }
 
     const updated = await linkBuyCartPo(cartId, po.id, user);
     return send(res, 200, { ok: true, po: { id: po.id, po_code: po.po_code }, cart: updated });

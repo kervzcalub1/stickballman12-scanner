@@ -276,9 +276,21 @@ export const api = {
     downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}&download=1${kind ? `&kind=${kind}` : ''}`),
   cartSaveReceipt: (cartId, lines, receiptTotal) => post('/api/cart/receipt', { cartId, lines, receiptTotal }),
   cartRaisePo: (cartId, boxes) => post('/api/cart/raise-po', { cartId, boxes }),
-  cartAudit: (cartId, cards) => post('/api/cart/audit', { cartId, cards }),
+  // Two sign-offs, not one: the money can be reconciled the day the receipt lands, the
+  // goods only once the boxes are in the building. See api/cart/audit.js.
+  cartAudit: (cartId, cards) => post('/api/cart/audit', { cartId, scope: 'money', cards }),
+  cartAuditGoods: (cartId, note) => post('/api/cart/audit', { cartId, scope: 'goods', note }),
   cartClose: (cartId) => post('/api/cart/close', { cartId }),
   cartCancel: (cartId, reason) => post('/api/cart/close', { cartId, cancel: true, reason }),
+  // A documented loss — its own ending, never a force-close wearing `closed`.
+  cartWriteOff: (cartId, reason) => post('/api/cart/close', { cartId, writeOff: true, reason }),
+  // Packing the receipt into boxes. A negative qty takes a pair back out of a box.
+  cartPack: (cartId, poBoxId, sku, size, qty) => post('/api/cart/pack', { cartId, poBoxId, sku, size, qty }),
+  cartTask: (cartId, task) => post('/api/cart/task', { cartId, task }),
+  cartTaskPatch: (cartId, taskId, patch) => post('/api/cart/task', { cartId, taskId, patch }),
+  cartTaskClose: (cartId, taskId, close) => post('/api/cart/task', { cartId, taskId, close }),
+  cartFunding: (cartId, funding) => post('/api/cart/control', { cartId, funding }),
+  cartCustody: (cartId, custody) => post('/api/cart/control', { cartId, custody }),
   cartComment: (cartId, body) => post('/api/cart/comment', { cartId, body }),
   // The app-wide advisor (components/Advisor.jsx). `context` is whatever screen the
   // asker is on; the server can also look things up for itself. 503 when no model key

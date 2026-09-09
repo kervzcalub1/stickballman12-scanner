@@ -156,6 +156,21 @@ export function parseTrackEntry(entry) {
   const subStatus = ti?.latest_status?.sub_status || null;
   const subStatusDescr = ti?.latest_status?.sub_status_descr || null;
   const lastCheckpoint = ti?.latest_event?.description || ti?.latest_event?.stage || null;
+  // WHEN it is expected. 17TRACK sends this in the payload we already receive, so
+  // reading it costs nothing — and without it the inbound feed could say a parcel was
+  // "in transit" and never say whether that meant today or next Thursday.
+  //
+  // A WINDOW, not a day: carriers quote "Tue-Thu" as often as a date, and collapsing
+  // that to its first day puts a parcel on the warehouse's list two days early. Kept as
+  // plain YYYY-MM-DD — an ETA is a calendar day, and running it through a Date would
+  // re-interpret it in whatever zone the server happens to be in.
+  const edd = ti?.time_metrics?.estimated_delivery_date || null;
+  const ymd = (v) => {
+    const m = String(v ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : null;
+  };
+  const etaFrom = ymd(edd?.from) || ymd(edd?.to);
+  const etaTo = ymd(edd?.to) || etaFrom;
   // Prefer the human-readable provider name; else map 17TRACK's numeric carrier code to a
   // name (UPS, FedEx…) so labels never show a bare code like "100002".
   const providerName = ti?.tracking?.providers?.[0]?.provider?.name || null;
@@ -178,6 +193,9 @@ export function parseTrackEntry(entry) {
     subStatusDescr: subStatusDescr ? String(subStatusDescr).slice(0, 300) : null,
     lastCheckpoint: lastCheckpoint ? String(lastCheckpoint).slice(0, 300) : null,
     boxStatus: mapBoxStatus(trackingStatus),
+    etaFrom,
+    etaTo,
+    etaSource: edd?.source ? String(edd.source).slice(0, 60) : null,
     events,
   };
 }

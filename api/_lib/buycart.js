@@ -315,22 +315,32 @@ export async function canWriteCosts(user, cart) {
 }
 
 /**
- * The ten conditions, evaluated against the data rather than against a checklist
- * someone ticks. A transaction is not complete because the cards were spent; it is
+ * The closing conditions, evaluated against the data rather than against a checklist
+ * someone ticks. A transaction is not complete because the money was spent; it is
  * complete when every one of these is true.
  *
- * 6–9 are answered by the PURCHASE ORDER, because that half of the process already
- * exists and already knows whether the boxes arrived. Re-deriving "did it turn up"
- * here would give the company two answers to one question.
+ * They come in TWO GROUPS, and that split is the point rather than a presentation
+ * choice. The MONEY conditions are answerable the day the receipt lands; the GOODS
+ * conditions cannot be answered until the boxes are physically in the warehouse, which
+ * may be weeks later. One sign-off covering both would hold the money open for the
+ * length of a shipment, and a control people have to wait weeks to satisfy is a control
+ * they start working around.
  *
- * Returns `[{ key, label, ok, detail }]` — `detail` names what is still missing, since
- * a gate that only says "no" teaches people to route around it.
+ * The goods half is answered by the PURCHASE ORDER, because that side already exists
+ * and already knows whether the boxes arrived. Re-deriving "did it turn up" here would
+ * give the company two answers to one question.
+ *
+ * Returns `[{ key, scope, label, ok, detail }]` — `detail` names what is still missing,
+ * since a gate that only says "no" teaches people to route around it.
  */
 export async function cartCloseChecks(full) {
   const c = full;
+  const byCard = (c.funding_method || 'gift_card') !== 'company_card';
   const cards = (c.giftCards || []).filter((g) => !g.voided_at);
   const target = fundingTarget(c);
   const receiptTotal = money(c.receipt_total);
+  const pack = c.pack || null;
+  const openTasks = (c.tasks || []).filter((t) => t.status === 'open');
 
   let recon = null;
   if (c.po_id) { try { recon = await getPoReconciliation(c.po_id); } catch { recon = null; } }
@@ -339,64 +349,96 @@ export async function cartCloseChecks(full) {
 
   const spentSum = cards.reduce((n, g) => n + (Number(g.spent_amount) || 0), 0);
   const everyCardAudited = cards.length > 0 && cards.every((g) => g.spent_amount != null && g.remaining != null);
+  const authorized = money(c.card_authorized);
 
   const checks = [
     {
-      key: 'approved', label: 'Purchase was approved',
+      key: 'approved', scope: 'money', label: 'Purchase was approved',
       ok: Boolean(c.approved_at) && Number(c.approved_count) > 0,
       detail: c.approved_at ? null : 'No line has been approved yet.',
     },
+    // The funding condition asks the same question of both routes — "was the money that
+    // left authorised, and is it recorded?" — but it cannot ask it the same way. A gift
+    // card is an object with a balance; a company card charge is a reference on a
+    // statement. Reading `gc_total` on a card-funded request would have reported every
+    // one of them as unfunded forever.
+    byCard
+      ? {
+        key: 'cards_recorded', scope: 'money', label: 'Gift cards were issued and recorded',
+        ok: cards.length > 0 && target > 0 && Number(c.gc_total) >= target,
+        detail: cards.length === 0
+          ? 'No gift cards recorded.'
+          : Number(c.gc_total) < target
+            ? `Cards total $${Number(c.gc_total).toFixed(2)} against $${target.toFixed(2)} approved — $${(target - Number(c.gc_total)).toFixed(2)} short.`
+            : null,
+      }
+      : {
+        key: 'charge_recorded', scope: 'money', label: 'Company card charge was authorised and recorded',
+        ok: Boolean(c.card_reference) && authorized != null && authorized > 0,
+        detail: !c.card_reference
+          ? 'No payment reference recorded — a charge nobody can trace to a statement line is not evidence.'
+          : 'No authorised amount recorded.',
+      },
     {
-      key: 'cards_recorded', label: 'Gift cards were issued and recorded',
-      ok: cards.length > 0 && target > 0 && Number(c.gc_total) >= target,
-      detail: cards.length === 0
-        ? 'No gift cards recorded.'
-        : Number(c.gc_total) < target
-          ? `Cards total $${Number(c.gc_total).toFixed(2)} against $${target.toFixed(2)} approved — $${(target - Number(c.gc_total)).toFixed(2)} short.`
-          : null,
-    },
-    {
-      key: 'receipt', label: 'Receipt was received',
+      key: 'receipt', scope: 'money', label: 'Receipt was received',
       ok: (c.files || []).some((f) => f.kind === 'receipt'),
       detail: 'No receipt has been uploaded.',
     },
     {
-      key: 'parsed', label: 'Receipt was parsed',
+      key: 'parsed', scope: 'money', label: 'Receipt was parsed',
       ok: (c.receiptLines || []).length > 0 && receiptTotal != null,
       detail: 'The receipt has not been read into lines yet.',
     },
+    byCard
+      ? {
+        key: 'spend_reconciled', scope: 'money', label: 'Gift card spending was reconciled',
+        // Each card's own spend recorded AND the total agreeing with the receipt. Either
+        // half alone lets a gap hide: matching totals with blank cards says nothing about
+        // WHICH card the money left, and per-card figures that don't sum to the receipt
+        // mean something was bought that this receipt doesn't cover.
+        ok: everyCardAudited && receiptTotal != null && near(spentSum, receiptTotal),
+        detail: !everyCardAudited
+          ? 'Not every card has its spend and remaining balance recorded.'
+          : receiptTotal == null
+            ? 'No receipt total to reconcile against.'
+            : !near(spentSum, receiptTotal)
+              ? `Cards account for $${spentSum.toFixed(2)} but the receipt says $${receiptTotal.toFixed(2)} — a $${Math.abs(spentSum - receiptTotal).toFixed(2)} gap.`
+              : null,
+      }
+      : {
+        key: 'charge_reconciled', scope: 'money', label: 'Card charge matches the receipt',
+        // An authorised amount that does not equal what the till took is the same class
+        // of finding as a card gap, and it is the only thing standing between an
+        // approved limit and an unapproved purchase on the same card.
+        ok: authorized != null && receiptTotal != null && near(authorized, receiptTotal),
+        detail: authorized == null ? 'No authorised charge recorded.'
+          : receiptTotal == null ? 'No receipt total to reconcile against.'
+            : `Authorised $${authorized.toFixed(2)} against a receipt of $${receiptTotal.toFixed(2)} — a $${Math.abs(authorized - receiptTotal).toFixed(2)} gap.`,
+      },
     {
-      key: 'spend_reconciled', label: 'Gift card spending was reconciled',
-      // Each card's own spend recorded AND the total agreeing with the receipt. Either
-      // half alone lets a gap hide: matching totals with blank cards says nothing about
-      // WHICH card the money left, and per-card figures that don't sum to the receipt
-      // mean something was bought that this receipt doesn't cover.
-      ok: everyCardAudited && receiptTotal != null && near(spentSum, receiptTotal),
-      detail: !everyCardAudited
-        ? 'Not every card has its spend and remaining balance recorded.'
-        : receiptTotal == null
-          ? 'No receipt total to reconcile against.'
-          : !near(spentSum, receiptTotal)
-            ? `Cards account for $${spentSum.toFixed(2)} but the receipt says $${receiptTotal.toFixed(2)} — a $${Math.abs(spentSum - receiptTotal).toFixed(2)} gap.`
-            : null,
+      key: 'expected_recorded', scope: 'goods', label: 'Purchased inventory was recorded as expected',
+      // Raising the order is only half of it now that the manifest is per box. A pair
+      // that was bought and never packed into a label is not counted as expected by the
+      // reconciliation at all — so without this the order can ship, receive and
+      // reconcile perfectly clean while the shoe is nowhere.
+      ok: Boolean(c.po_id) && Boolean(pack) && pack.totalQty > 0 && pack.unpacked === 0 && pack.overPacked === 0,
+      detail: !c.po_id ? 'No purchase order has been raised from this receipt.'
+        : !pack || pack.totalQty === 0 ? 'The receipt has not been read into lines yet.'
+          : pack.overPacked > 0 ? `${pack.overPacked} more unit${pack.overPacked === 1 ? '' : 's'} packed than the receipt covers.`
+            : `${pack.unpacked} of ${pack.totalQty} receipt unit${pack.totalQty === 1 ? '' : 's'} not packed into a box yet.`,
     },
     {
-      key: 'expected_recorded', label: 'Purchased inventory was recorded as expected',
-      ok: Boolean(c.po_id),
-      detail: 'No purchase order has been raised from this receipt.',
-    },
-    {
-      key: 'shipped', label: 'Products were shipped',
+      key: 'shipped', scope: 'goods', label: 'Products were shipped',
       ok: Boolean(poStatus) && ['shipped', 'receiving', 'reconciled', 'closed'].includes(poStatus),
       detail: c.po_id ? 'The order’s boxes have not left the buyer yet.' : 'No purchase order yet.',
     },
     {
-      key: 'received', label: 'Products were physically received',
+      key: 'received', scope: 'goods', label: 'Products were physically received',
       ok: Boolean(poStatus) && ['receiving', 'reconciled', 'closed'].includes(poStatus),
       detail: c.po_id ? 'Nothing has been scanned in against the order.' : 'No purchase order yet.',
     },
     {
-      key: 'matches', label: 'Expected inventory matches received inventory',
+      key: 'matches', scope: 'goods', label: 'Each box matches what was packed into it',
       // `no_manifest` is a clean-looking summary with nothing behind it: every unit
       // reads as an overage because nothing was ever declared. That must not pass as a
       // match — it is the absence of the comparison, not the result of one.
@@ -406,9 +448,33 @@ export async function cartCloseChecks(full) {
           : `${summary.shortage} short, ${summary.overage} over, ${summary.wrong_size + summary.wrong_sku} mismatched.`,
     },
     {
-      key: 'balance', label: 'Any remaining gift card balance is accounted for',
-      ok: c.balance_remaining != null && cards.length > 0 && cards.every((g) => g.remaining != null),
-      detail: 'The balance left on each card has not been recorded.',
+      key: 'receipt_vs_received', scope: 'goods', label: 'What was received matches what was bought',
+      // The third leg, and the only one that closes the loop. Reconciliation compares
+      // the MANIFEST against what arrived; the manifest is the buyer's own account of
+      // what they packed. Comparing the RECEIPT against what arrived is the comparison
+      // that does not take the buyer's word for anything.
+      ok: Boolean(summary) && pack != null && pack.totalQty > 0
+        && summary.received_units === pack.totalQty,
+      detail: !summary ? 'Nothing has been received yet.'
+        : !pack || pack.totalQty === 0 ? 'The receipt has not been read into lines yet.'
+          : `The receipt says ${pack.totalQty} pair${pack.totalQty === 1 ? '' : 's'}; ${summary.received_units} arrived — a gap of ${Math.abs(pack.totalQty - summary.received_units)}.`,
+    },
+    {
+      key: 'balance', scope: 'money',
+      label: byCard ? 'Any remaining gift card balance is accounted for' : 'Any unspent authorised amount is accounted for',
+      ok: byCard
+        ? (c.balance_remaining != null && cards.length > 0 && cards.every((g) => g.remaining != null))
+        : c.balance_remaining != null,
+      detail: byCard ? 'The balance left on each card has not been recorded.'
+        : 'The difference between what was authorised and what was spent has not been recorded.',
+    },
+    {
+      key: 'exceptions', scope: 'goods', label: 'Every open case was resolved',
+      // The deck's rule, and the reason a return case is a row rather than a note: an
+      // update is not completion, and a promise is not a refund. A request cannot close
+      // over the top of a case that is still costing the company money.
+      ok: openTasks.length === 0,
+      detail: `${openTasks.length} still open: ${openTasks.slice(0, 3).map((t) => t.title).join('; ')}${openTasks.length > 3 ? '…' : ''}`,
     },
   ];
 

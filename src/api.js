@@ -284,7 +284,8 @@ export const api = {
     downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}${kind ? `&kind=${kind}` : ''}`),
   cartFileDownload: (cartId, fileId, kind) =>
     downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}&download=1${kind ? `&kind=${kind}` : ''}`),
-  cartSaveReceipt: (cartId, lines, receiptTotal) => post('/api/cart/receipt', { cartId, lines, receiptTotal }),
+  cartSaveReceipt: (cartId, lines, receiptTotal, subtotal = null, tax = null) =>
+    post('/api/cart/receipt', { cartId, lines, receiptTotal, subtotal, tax }),
   cartRaisePo: (cartId, boxes) => post('/api/cart/raise-po', { cartId, boxes }),
   // Two sign-offs, not one: the money can be reconciled the day the receipt lands, the
   // goods only once the boxes are in the building. See api/cart/audit.js.

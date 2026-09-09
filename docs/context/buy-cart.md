@@ -343,6 +343,14 @@ input / 270 output tokens.
   every read writes `receipt_ai_read` to the trail **including whether it agreed with the
   receipt's own totals**.
 
+#### The closing checklist shows what is LEFT
+Outstanding conditions render at full strength and completed ones recede — it was the
+other way round, so the list drew the eye to the work already behind you. Within each
+group the outstanding ones sort first, each condition's `detail` sits on its own line
+under it (run together they read as one sentence), and each group carries its own
+progress bar: the two halves are answerable weeks apart, so a single overall figure hides
+which of them is actually holding the request open.
+
 #### The model is a reader, not a decider
 It fails differently, and that is the whole design. Tesseract garbles visibly
 (`fussssonn 12.8`); a vision model returns a well-formed row with a plausible style code
@@ -402,6 +410,14 @@ three were already dependencies; none costs an API call.
   is anchored to the whole remainder of the line on purpose — an unanchored bare integer
   would start being read as a quantity anywhere, and a quantity read wrong misstates every
   unit price on the receipt.
+- **The receipt's THREE figures are kept, not one.** `receipt_subtotal` + `receipt_tax`
+  beside `receipt_total` (**needs `db:setup`**). The review footer asks for all three in
+  the order the till prints them and checks them against each other live — `subtotal +
+  tax = total`, and the rows against the subtotal. It used to ask for the total alone and
+  then GUESS at the gap ("usually the tax"); now that is arithmetic. Blank stays absent,
+  never 0 — a stored zero would read as "the shop charged no tax".
+  **`balance_remaining` is worked out against the TOTAL**, because that is what the cards
+  were charged.
 - **Both totals are shown and neither is silently chosen**: what the rows add up to, and
   what the receipt *says*. On a shop receipt they differ by the tax, and that gap is the
   difference between "we read this receipt" and "we read most of it". The **stated**

@@ -118,6 +118,11 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
   const [text, setText] = useState('');
   const [rows, setRows] = useState(null);
   const [statedTotal, setStatedTotal] = useState('');
+  // The receipt's OWN breakdown. Kept apart from the rows' sum on purpose: what the
+  // lines add up to and what the shop says the goods cost are two different claims, and
+  // the screen has always shown both rather than choosing.
+  const [subtotal, setSubtotal] = useState('');
+  const [tax, setTax] = useState('');
   const [busy, setBusy] = useState('');
   const [progress, setProgress] = useState(0);
   const [err, setErr] = useState('');
@@ -135,6 +140,12 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
   const approved = (cart.lines || []).filter((l) => l.status === 'approved');
   const diffs = compareReceiptToApproved(committed, approved);
   const rowsTotal = rows ? Math.round(rows.reduce((n, r) => n + (Number(r.totalPrice) || 0), 0) * 100) / 100 : 0;
+  // Blank is ABSENT, not zero — the difference between "no tax was charged" and "nobody
+  // read the tax", which is the same distinction the stored columns keep.
+  const numOrNull = (v) => (String(v ?? '').trim() === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+  const subN = numOrNull(subtotal); const taxN = numOrNull(tax); const totalN = numOrNull(statedTotal);
+  const rowsMatch = subN != null && Math.abs(rowsTotal - subN) <= 0.02;
+  const sumsUp = subN != null && taxN != null && totalN != null && Math.abs((subN + taxN) - totalN) <= 0.02;
 
   function read(t, source) {
     // Clearing it matters: a note left over from a previous AI read would sit above a
@@ -145,6 +156,9 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
     // The receipt's own total is what the cards were actually charged, so it is what the
     // reconciliation must run against — prefilled, and still editable.
     setStatedTotal(parsed.statedTotal != null ? String(parsed.statedTotal) : String(parsed.total || ''));
+    // The text parser reads the total but not the breakdown, so these are cleared rather
+    // than left showing figures from a previous read of a different receipt.
+    setSubtotal(''); setTax('');
     if (!parsed.rows.length) {
       setErr(source === 'ocr'
         // Naming the cause, because the fix is in the photographer's hands and no amount
@@ -232,6 +246,8 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
       // The receipt's OWN total, never a sum of what was read — that gap is the whole
       // point of showing both.
       setStatedTotal(r.statedTotal != null ? String(r.statedTotal) : '');
+      setSubtotal(r.subtotal != null ? String(r.subtotal) : '');
+      setTax(r.tax != null ? String(r.tax) : '');
       setNote(receiptCheckSentence(r.check));
       setErr('');
       return true;
@@ -248,8 +264,14 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
   async function commit() {
     setBusy('save'); setErr('');
     try {
-      await api.cartSaveReceipt(cart.id, rows.filter((r) => String(r.sku || '').trim()), Number(statedTotal));
-      setRows(null); setText('');
+      await api.cartSaveReceipt(
+        cart.id, rows.filter((r) => String(r.sku || '').trim()), Number(statedTotal),
+        // Blank stays blank. Sending 0 for a tax nobody read would record "the shop
+        // charged no tax", which is a claim rather than a gap.
+        String(subtotal).trim() === '' ? null : Number(subtotal),
+        String(tax).trim() === '' ? null : Number(tax),
+      );
+      setRows(null); setText(''); setSubtotal(''); setTax('');
       onChanged();
     } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
     finally { setBusy(''); }
@@ -345,7 +367,13 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
             </tbody>
           </table>
           </div>
-          <p className="muted sm">Receipt total <b>{money(cart.receipt_total)}</b> · cards issued {money(cart.gc_total)} · <b>{money(cart.balance_remaining)}</b> left over.</p>
+          <p className="muted sm">
+            {cart.receipt_subtotal != null && (
+              <>Goods <b>{money(cart.receipt_subtotal)}</b>
+                {cart.receipt_tax != null && <> + tax <b>{money(cart.receipt_tax)}</b></>} · </>
+            )}
+            Receipt total <b>{money(cart.receipt_total)}</b> · cards issued {money(cart.gc_total)} · <b>{money(cart.balance_remaining)}</b> left over.
+          </p>
           {diffs.length > 0 && (
             // The whole reason both lists are kept. Approved and bought are different
             // claims, and where they part is a finding for the audit — not something to
@@ -399,16 +427,43 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
           </div>
           <div className="bc-review-foot">
             <button type="button" className="btn sm ghost" onClick={addRow}>Add a row</button>
-            <label className="field">
-              <span className="field-label">Receipt total (what the till charged)</span>
-              <PriceInput value={statedTotal} onChange={(e) => setStatedTotal(e.target.value)} />
-            </label>
-            <span className="muted sm">
-              These rows add up to {money(rowsTotal)}
-              {Number(statedTotal) > 0 && Math.abs(rowsTotal - Number(statedTotal)) > 0.01
-                ? ` — ${money(Math.abs(Number(statedTotal) - rowsTotal))} apart from the total, usually the tax.`
-                : ''}
-            </span>
+            {/* The receipt's three figures, in the order it prints them. It used to ask
+                for the total alone and then GUESS at the difference — "usually the tax"
+                — beside whatever gap it found. A reader that returns the printed
+                subtotal and tax turns that guess into something checkable. */}
+            <div className="bc-totals">
+              <label className="bc-total">
+                <span className="field-label">Goods (subtotal)</span>
+                <PriceInput value={subtotal} onChange={(e) => setSubtotal(e.target.value)} />
+              </label>
+              <span className="bc-total-op">+</span>
+              <label className="bc-total">
+                <span className="field-label">Tax</span>
+                <PriceInput value={tax} onChange={(e) => setTax(e.target.value)} />
+              </label>
+              <span className="bc-total-op">=</span>
+              <label className="bc-total strong">
+                <span className="field-label">Total charged</span>
+                <PriceInput value={statedTotal} onChange={(e) => setStatedTotal(e.target.value)} />
+              </label>
+            </div>
+            <div className="bc-totals-check">
+              <span className={rowsMatch ? 'bc-covered' : 'muted'}>
+                The rows add up to {money(rowsTotal)}
+                {subN != null
+                  ? (rowsMatch ? ' — matching the subtotal.' : ` — ${money(Math.abs(subN - rowsTotal))} off the subtotal.`)
+                  : ''}
+              </span>
+              {/* Arithmetic, not a guess. Only shown when all three are present: a
+                  receipt with no tax line has nothing to disagree about. */}
+              {subN != null && taxN != null && totalN != null && (
+                <span className={sumsUp ? 'bc-covered' : 'bc-short'}>
+                  {sumsUp
+                    ? `${money(subN)} + ${money(taxN)} = ${money(totalN)} ✓`
+                    : `${money(subN)} + ${money(taxN)} is ${money(subN + taxN)}, not ${money(totalN)} — one of the three is misread.`}
+                </span>
+              )}
+            </div>
             <button type="button" className="btn primary" disabled={busy === 'save' || !rows.length || !(Number(statedTotal) > 0)} onClick={commit}>
               {busy === 'save' ? 'Saving…' : 'Save these lines'}
             </button>

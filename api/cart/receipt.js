@@ -51,7 +51,14 @@ export default async function handler(req, res) {
     const receiptTotal = money(body.receiptTotal);
     if (receiptTotal == null) return send(res, 400, { ok: false, error: 'Enter the receipt total.' });
 
-    const full = await setBuyCartReceiptLines({ cartId, lines, receiptTotal, actor: user });
+    const full = // The breakdown is optional — plenty of tills print no tax line, and a receipt with
+    // no subtotal is still a receipt. Absent stays ABSENT rather than becoming 0: a
+    // stored zero would read as "the shop charged no tax", which is a claim.
+    await setBuyCartReceiptLines({
+      cartId, lines, receiptTotal,
+      subtotal: money(body.subtotal), tax: money(body.tax),
+      actor: user,
+    });
     return send(res, 200, { ok: true, cart: full });
   } catch (e) {
     console.error('[cart/receipt]', e.message);

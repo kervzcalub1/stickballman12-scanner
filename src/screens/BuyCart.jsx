@@ -72,19 +72,32 @@ function Checks({ checks }) {
         const list = checks.filter((c) => (c.scope || 'money') === g.scope);
         if (!list.length) return null;
         const gd = list.filter((c) => c.ok).length;
+        const pct = Math.round((gd / list.length) * 100);
+        // Outstanding first WITHIN each group. The order that matters on a checklist is
+        // "what is left", and a done row sitting above three outstanding ones is a row
+        // you have to read past every time you open the request.
+        const ordered = [...list].sort((a, b) => Number(a.ok) - Number(b.ok));
         return (
           <div key={g.scope} className="bc-check-group">
-            <h4 className="bc-check-group-h">
-              {g.title}
+            <div className="bc-check-group-h">
+              <h4>{g.title}</h4>
               <span className={gd === list.length ? 'bc-covered sm' : 'muted sm'}>{gd} of {list.length}</span>
-            </h4>
-            <p className="muted xs">{g.note}</p>
+              <span className="bc-check-bar" aria-hidden="true">
+                <span className={`bc-check-fill${gd === list.length ? ' done' : ''}`} style={{ width: `${pct}%` }} />
+              </span>
+            </div>
+            <p className="muted xs bc-check-blurb">{g.note}</p>
             <ul className="bc-check-list">
-              {list.map((c) => (
+              {ordered.map((c) => (
                 <li key={c.key} className={c.ok ? 'ok' : ''}>
                   <span className="bc-check-mark" aria-hidden="true">{c.ok ? '\u2713' : '\u25cb'}</span>
-                  <span className="bc-check-label">{c.label}</span>
-                  {c.detail && <span className="bc-check-detail muted sm">{c.detail}</span>}
+                  <span className="bc-check-body">
+                    <span className="bc-check-label">{c.label}</span>
+                    {/* On its OWN line. Run together, "Receipt was parsed  The receipt
+                        has not been read into lines yet." reads as one long sentence and
+                        the condition stops being scannable. */}
+                    {c.detail && <span className="bc-check-detail">{c.detail}</span>}
+                  </span>
                 </li>
               ))}
             </ul>

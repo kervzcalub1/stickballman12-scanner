@@ -1355,6 +1355,15 @@ await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_by_key T
 // A request that can never be completed. NOT a force-close: the status says out loud
 // that the company took a loss, the reason is required, and it is a different word from
 // `closed` everywhere it is read. "Never a false received or refunded."
+// The receipt's own breakdown, kept beside the total it charged.
+//
+// `receipt_total` alone could not answer "how much of this was tax", so the review
+// screen guessed — it printed "usually the tax" beside whatever gap it found between the
+// rows and the total. Now that a reader returns the printed subtotal and tax, the gap is
+// a fact that can be checked rather than explained away, and an auditor months later can
+// see what the shop actually charged for the goods.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_subtotal NUMERIC(12,2)`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_tax NUMERIC(12,2)`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_by TEXT`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS write_off_reason TEXT`);

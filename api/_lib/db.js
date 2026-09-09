@@ -6041,7 +6041,7 @@ export async function removeBuyCartFile(cartId, fileId, actor) {
 // same receipt, and leaving the previous attempt's rows behind would double the spend.
 // Each line is matched to an approved request line where SKU and size agree, which is
 // what makes "bought but never approved" visible instead of silently fine.
-export async function setBuyCartReceiptLines({ cartId, lines, receiptTotal, actor }) {
+export async function setBuyCartReceiptLines({ cartId, lines, receiptTotal, subtotal = null, tax = null, actor }) {
   const sql = db();
   await sql`DELETE FROM buy_cart_receipt_lines WHERE cart_id = ${cartId}`;
   for (const l of lines) {
@@ -6057,11 +6057,18 @@ export async function setBuyCartReceiptLines({ cartId, lines, receiptTotal, acto
   }
   await sql`
     UPDATE buy_carts SET receipt_total = ${receiptTotal},
+           receipt_subtotal = ${subtotal}, receipt_tax = ${tax},
+           -- The TOTAL is what the balance is worked out against, not the subtotal: the
+           -- cards were charged the amount at the bottom of the receipt, tax included.
            balance_remaining = gc_total - ${receiptTotal},
            status = CASE WHEN status IN ('funded','receipted') THEN 'receipted' ELSE status END,
            updated_at = now()
      WHERE id = ${cartId}`;
-  await logCartEvent({ cartId, kind: 'receipt_parsed', actor, body: `${lines.length} lines · $${Number(receiptTotal).toFixed(2)}` });
+  await logCartEvent({
+    cartId, kind: 'receipt_parsed', actor,
+    body: `${lines.length} lines · $${Number(receiptTotal).toFixed(2)}`
+      + (subtotal != null ? ` (goods $${Number(subtotal).toFixed(2)}${tax != null ? ` + tax $${Number(tax).toFixed(2)}` : ''})` : ''),
+  });
   return getBuyCartFull(cartId);
 }
 

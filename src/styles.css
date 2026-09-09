@@ -4073,6 +4073,66 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
    each tile is a filter, because the number somebody is alarmed by is the one they
    want to click. Tones are semantic (bad/warn/due/info/ok) and separate from the
    app's blue — a shipment being late is not a brand moment. */
+/* --- Inbound, the dashboard half -------------------------------------------
+   The day comes first: what lands today, then how far through the inbound pile
+   we are, then the days after it. The state strip below stays a SEPARATE axis —
+   a parcel can be due today and stuck, and a delayed box has no meaningful
+   arrival date to sit under. */
+.inb-hero .inb-headline { font-size: 15px; margin: 4px 0 12px; }
+.inb-big { font-size: 30px; font-weight: 800; line-height: 1; margin-right: 4px;
+  font-variant-numeric: tabular-nums; }
+.inb-overdue-note { color: var(--err); }
+
+.inb-progress { height: 8px; border-radius: 999px; background: var(--panel-2);
+  border: 1px solid var(--border); overflow: hidden; margin: 2px 0 6px; }
+.inb-progress-fill { height: 100%; background: var(--ok); transition: width .2s ease; }
+
+.inb-strip-h { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin: 14px 0 0; font-weight: 600; }
+.inb-due-strip { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+.inb-due { display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  min-width: 116px; padding: 8px 12px; border-radius: 10px; cursor: pointer; text-align: left;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  /* A left rail rather than a tinted fill: six tiles in a row all tinted reads as
+     noise, and the one that matters stops standing out. */
+  border-left-width: 3px; border-left-color: var(--border); }
+.inb-due:hover { border-color: var(--primary); }
+.inb-due.on { border-color: var(--primary); background: rgba(79,124,255,0.12); }
+.inb-due-lbl { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.inb-due-n { font-size: 22px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.inb-due-sub { font-size: 11.5px; color: var(--muted); }
+/* Only the two that mean "act now" carry colour. Tomorrow and later are information. */
+.inb-due.today { border-left-color: var(--primary); }
+.inb-due.today .inb-due-n { color: var(--primary); }
+.inb-due.overdue { border-left-color: var(--err); }
+.inb-due.overdue .inb-due-n { color: var(--err); }
+.inb-due.tomorrow { border-left-color: #c6871a; }
+.inb-due.landed { border-left-color: var(--ok); }
+
+/* Per-shipment progress, inline in the row so the list scans without opening
+   anything. Boxes rather than pairs: a box is what turns up, and the pair count
+   only becomes real once somebody has scanned the contents in. */
+.inb-ship-bar { flex: 0 0 56px; height: 7px; border-radius: 999px; overflow: hidden;
+  /* A visible TRACK. At 0% an unfilled bar with a dark fill and a hairline border was
+     indistinguishable from a divider rule, so the row looked like it had a stray line
+     through it rather than a progress bar sitting at zero. */
+  background: rgba(255,255,255,0.10); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
+.inb-ship-fill { display: block; height: 100%; background: var(--ok); border-radius: 999px; }
+
+.inb-eta { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.inb-eta.today { color: var(--primary); }
+.inb-eta.overdue { color: var(--err); }
+.inb-eta.tomorrow { color: #c6871a; }
+.inb-eta.this_week, .inb-eta.later, .inb-eta.unknown, .inb-eta.landed { color: var(--muted); font-weight: 500; }
+
+@media (max-width: 768px) {
+  /* One scrolling row on a phone rather than a wrapped grid of six: the floor reads
+     this standing up, and "today" must be the first thing under the thumb. */
+  .inb-due-strip { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .inb-due { flex: 0 0 auto; min-width: 104px; }
+  .inb-ship-bar { display: none; }
+}
+
 .inbound-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .inbound-stat { display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
   min-width: 92px; padding: 8px 13px; border-radius: 10px; cursor: pointer; text-align: left;

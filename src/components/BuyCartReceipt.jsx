@@ -21,6 +21,7 @@ import { api } from '../api.js';
 import { lazyImport } from '../lib/chunkLoad.js';
 import { PriceInput } from './common.jsx';
 import { parseReceipt, compareReceiptToApproved } from '../lib/receiptParse.js';
+import { receiptCheckSentence } from '../lib/receiptCheck.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
 const FLAG_LABEL = {
@@ -124,6 +125,10 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
   // is the same wrong tool as `window.prompt` — unstyleable, and it reads as the browser
   // asking rather than the app.
   const [confirming, setConfirming] = useState(null);
+  // What the receipt's own arithmetic says about the reading — shown whether it agreed
+  // or not, because "we checked and it adds up" is a much stronger thing to hand a
+  // reviewer than silence.
+  const [note, setNote] = useState('');
 
   const files = (cart.files || []).filter((f) => f.kind === 'receipt');
   const committed = cart.receiptLines || [];
@@ -132,6 +137,9 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
   const rowsTotal = rows ? Math.round(rows.reduce((n, r) => n + (Number(r.totalPrice) || 0), 0) * 100) / 100 : 0;
 
   function read(t, source) {
+    // Clearing it matters: a note left over from a previous AI read would sit above a
+    // hand-pasted table claiming its figures had been checked.
+    setNote('');
     const parsed = parseReceipt(t, { source });
     setRows(parsed.rows.map((r) => ({ ...r })));
     // The receipt's own total is what the cards were actually charged, so it is what the
@@ -164,7 +172,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
       const { uploadUrl, key } = await api.cartFileSign(cart.id, 'receipt', file.type);
       const put = await fetch(uploadUrl, { method: 'PUT', body: file });
       if (!put.ok) throw new Error('The upload did not go through. Try again.');
-      await api.cartFileAttach({
+      const { file: attached } = await api.cartFileAttach({
         cartId: cart.id, kind: 'receipt', key, name: file.name,
         contentType: file.type, sizeBytes: file.size,
       });
@@ -176,15 +184,26 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
       if (!canEdit) return;
 
       if (file.type === 'application/pdf') {
+        // A PDF already carries its text. Reading that beats looking at a picture of it,
+        // costs nothing and cannot invent a digit.
         setBusy('pdf');
         const t = await textFromPdf(file);
         setText(t);
         read(t, 'pdf');
       } else if (String(file.type).startsWith('image/')) {
-        setBusy('ocr');
-        const t = await textFromImage(file, setProgress);
-        setText(t);
-        read(t, 'ocr');
+        // A PHOTOGRAPH goes to the vision reader first. Tesseract cannot read one: the
+        // receipt that prompted this came out at ~132 DPI of grey-on-grey text and OCR
+        // returned nothing at all, while the same image read cleanly here.
+        setBusy('ai');
+        const done = await aiRead(attached?.id);
+        // Fallback, not a dead end — an unconfigured key, a timeout or a refusal drops to
+        // the reader that needs no network and no budget, which sometimes still works.
+        if (!done) {
+          setBusy('ocr');
+          const t = await textFromImage(file, setProgress);
+          setText(t);
+          read(t, 'ocr');
+        }
       }
     } catch (ex) {
       if (ex.unauthorized) return onSignOut();
@@ -194,6 +213,32 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
         ? `${ex.message} The receipt itself was saved; you can still type the lines in.`
         : `${ex.message} The receipt itself was saved.`);
     } finally { setBusy(''); setProgress(0); }
+  }
+
+  /**
+   * Read one uploaded receipt with the vision model. Returns true when it produced rows.
+   *
+   * Its output goes into the SAME editable table the text parser fills. Nothing about
+   * the review step relaxes because the reading improved — if anything it tightens, as
+   * this reader fails cleanly where tesseract fails visibly, so `check` (the receipt's
+   * own arithmetic, run against the rows) is what a person is told before they look.
+   */
+  async function aiRead(fileId) {
+    if (!fileId) return false;
+    try {
+      const r = await api.cartReceiptRead(cart.id, fileId);
+      if (!r.rows?.length) return false;
+      setRows(r.rows.map((x) => ({ ...x })));
+      // The receipt's OWN total, never a sum of what was read — that gap is the whole
+      // point of showing both.
+      setStatedTotal(r.statedTotal != null ? String(r.statedTotal) : '');
+      setNote(receiptCheckSentence(r.check));
+      setErr('');
+      return true;
+    } catch (ex) {
+      if (ex.unauthorized) { onSignOut(); return true; }
+      return false;   // fall through to tesseract
+    }
   }
 
   function editRow(i, patch) { setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r))); }
@@ -241,7 +286,10 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
         </span>
         {canUpload && (
           <label className="btn sm ghost bc-upload">
-            {busy === 'upload' ? 'Uploading…' : busy === 'pdf' ? 'Reading the PDF…' : busy === 'ocr' ? `Reading the photo… ${progress}%` : 'Upload receipt'}
+            {busy === 'upload' ? 'Uploading…'
+              : busy === 'pdf' ? 'Reading the PDF…'
+                : busy === 'ai' ? 'Reading the receipt…'
+                  : busy === 'ocr' ? `Reading the photo… ${progress}%` : 'Upload receipt'}
             {/* `capture` is deliberately absent: on a phone the file picker still offers
                 the camera, and forcing it would stop somebody attaching a PDF the shop
                 emailed them — which is the better evidence of the two. */}
@@ -369,6 +417,11 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
         </div>
       )}
 
+      {/* What the receipt's own figures say about the reading. Rendered separately from
+          the error: "the lines add up to the printed subtotal" is not a failure, and
+          burying it in the same grey as everything else wastes the one sentence that
+          tells a reviewer how hard to look. */}
+      {note && <p className={`bc-read-note ${/does not|gap|but the receipt|missing/i.test(note) ? 'bad' : 'ok'}`}>{note}</p>}
       {err && <div className="error mt">{err}</div>}
     </section>
   );

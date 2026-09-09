@@ -312,6 +312,49 @@ test('anyone who can reach the request can attach the receipt — the buyer, PH,
   expect(other.status).toBe(403);
 });
 
+test('the receipt checks the reading against its own arithmetic', async () => {
+  const { checkReceiptRead } = await import('../src/lib/receiptCheck.js');
+  const real = [
+    { sku: 'IM4613-400', size: '8', qty: 3, totalPrice: 120 },
+    { sku: 'HJ5996-001', size: '12.5', qty: 5, totalPrice: 475 },
+  ];
+
+  // A clean read SAYS it was checked. Silence and success must not look the same — a
+  // reviewer deciding how hard to check every row needs to know which one they have.
+  const good = checkReceiptRead({ rows: real, subtotal: 595, itemsSold: 8, statedTotal: 634.19, tax: 39.19 });
+  expect(good.ok).toBe(true);
+  expect(good.checked.join(' ')).toMatch(/add up to the printed subtotal/);
+  expect(good.checked.join(' ')).toMatch(/quantities add up/);
+
+  // The failure this exists for. A vision model fails CLEANLY: a well-formed row with a
+  // plausible style code and a plausible price, indistinguishable from a real one. The
+  // till's own subtotal is what catches it.
+  const invented = checkReceiptRead({
+    rows: [...real, { sku: 'DD1391-100', size: '10', qty: 1, totalPrice: 90 }],
+    subtotal: 595, itemsSold: 8,
+  });
+  expect(invented.ok).toBe(false);
+  expect(invented.problems.join(' ')).toMatch(/\$685\.00 but the receipt's own subtotal says \$595\.00/);
+
+  // A DROPPED line is caught by the same arithmetic, from the other direction.
+  const missed = checkReceiptRead({ rows: [real[0]], subtotal: 595, itemsSold: 8 });
+  expect(missed.ok).toBe(false);
+  expect(missed.problems.join(' ')).toMatch(/cover 3 items but the receipt says 8/);
+
+  // A misread QUANTITY leaves the money looking perfectly reasonable and silently
+  // misstates every unit price on the line. Only the item count sees it.
+  const badQty = checkReceiptRead({
+    rows: [{ ...real[0], qty: 1 }, real[1]], subtotal: 595, itemsSold: 8,
+  });
+  expect(badQty.ok).toBe(false);
+  expect(badQty.problems.join(' ')).toMatch(/cover 6 items but the receipt says 8/);
+
+  // A receipt that prints no totals cannot be checked, and says so rather than passing.
+  const unverifiable = checkReceiptRead({ rows: real });
+  expect(unverifiable.ok).toBe(false);
+  expect(unverifiable.problems.join(' ')).toMatch(/nothing to check the lines against/);
+});
+
 test('the receipt parser reads a discounting till: net price, not the ticket price', async () => {
   const { parseReceipt } = await import('../src/lib/receiptParse.js');
   // The Athlete's Foot shape, from a real receipt. Three things it got wrong at once:

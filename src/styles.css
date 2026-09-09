@@ -4496,6 +4496,11 @@ button.bc-cost-chip { font-family: inherit; line-height: inherit; }
 .bc-no-decide { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px;
   background: var(--panel-2); border: 1px solid var(--border); }
 
+.bc-read-note { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; font-size: 13px;
+  background: var(--panel-2); border: 1px solid var(--border); border-left-width: 3px; }
+.bc-read-note.ok { border-left-color: var(--ok); }
+.bc-read-note.bad { border-left-color: var(--err); color: var(--text); }
+
 /* --- the queue's buyer filter ----------------------------------------------- */
 .bc-filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 0 0 12px; }
 .bc-filter { display: flex; flex-direction: column; gap: 3px; }

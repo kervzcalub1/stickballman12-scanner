@@ -324,6 +324,44 @@ mean nothing.
 - The ROW must not survive a half-failure; a bucket object that outlives its row is
   litter, a row that outlives its object is a broken download button.
 
+### Reading a photo: the vision model first, tesseract behind it
+`api/cart/receipt-read.js`. A phone photo of a receipt is not OCR-able — measured on a
+real one at ~132 DPI, tesseract returned **nothing**. The same image through
+`gpt-5.4-mini` returned **all ten lines, nineteen pairs, $1,395**, and correctly took the
+Net Price over the ticket price on every discounted row. ~$0.0024 a receipt at 1,555
+input / 270 output tokens.
+
+- **A PDF never goes to the model.** Its text is already there; paying to look at a
+  picture of text we can extract would spend money to lose accuracy.
+- **Server-side.** The key never reaches the browser and the image is pulled from OUR
+  bucket rather than posted up a second time by the phone. Downscaled to 1500px and
+  EXIF-rotated first — image tokens are what the call costs, and a receipt needs nothing
+  like camera resolution to be legible.
+- **Tesseract is the fallback, not a dead end.** No key, a timeout, a refusal → the
+  reader that needs no network and no budget, which sometimes still works.
+- Rate limited to 12/min (tighter than the upload — this one costs money per call), and
+  every read writes `receipt_ai_read` to the trail **including whether it agreed with the
+  receipt's own totals**.
+
+#### The model is a reader, not a decider
+It fails differently, and that is the whole design. Tesseract garbles visibly
+(`fussssonn 12.8`); a vision model returns a well-formed row with a plausible style code
+and a plausible price. **On a money screen a plausible wrong number is the worst possible
+output** — it looks exactly like a right one.
+
+So the receipt checks itself (`src/lib/receiptCheck.js`), on arithmetic off the paper
+rather than trust in the model:
+
+| Check | Catches |
+|---|---|
+| rows sum vs the printed **subtotal** | an invented line, or a missed one |
+| quantities sum vs **Items Sold** | a misread quantity column — which leaves the money looking reasonable while misstating every unit price on the line |
+| subtotal + tax vs the **stated total** | weakest, and last: plenty of tills print no tax line |
+
+A receipt that prints no totals is reported as **unverifiable** rather than passing —
+"we couldn't check this" and "this checks out" must never look the same. And a clean read
+says so out loud: silence and success reading identically is what stops people looking.
+
 ### OCR needs the receipt to fill the frame
 A phone photo of a receipt lying on a desk is a narrow strip of grey-on-grey text in a
 big frame of wood grain — tesseract measured the one that prompted this at **~132 DPI**

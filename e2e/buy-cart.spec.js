@@ -104,13 +104,20 @@ async function read_(request, who, path) {
   return { status: res.status(), body: await res.json() };
 }
 
-async function newRequest(request, { lines = [], submit = true } = {}) {
-  const { body } = await call(request, 'buyer', 'cart/create', {
+// `who` defaults to the main buyer; the second one exists so "a buyer reaches only
+// their own" can be shown to mean something rather than being trivially true.
+async function newRequest(request, { lines = [], submit = true } = {}, who = 'buyer') {
+  const { status, body } = await call(request, who, 'cart/create', {
     retailer: 'E2E Store', purpose: 'E2E: restocking for listings',
   });
+  // Say what actually went wrong. `cart/create` is rate limited to 30 a minute, and a
+  // suite that quietly crosses it reported "cannot read properties of undefined" from
+  // two unrelated tests at the end of the run — which points at the wrong thing.
+  if (status !== 200 || !body?.cart)
+    throw new Error(`cart/create failed (${status}): ${body?.error || 'no cart in the response'}`);
   const cartId = Number(body.cart.id);
-  for (const l of lines) await call(request, 'buyer', 'cart/line', { cartId, line: l });
-  if (submit) await call(request, 'buyer', 'cart/submit', { cartId });
+  for (const l of lines) await call(request, who, 'cart/line', { cartId, line: l });
+  if (submit) await call(request, who, 'cart/submit', { cartId });
   return cartId;
 }
 
@@ -303,6 +310,85 @@ test('anyone who can reach the request can attach the receipt — the buyer, PH,
   // And a buyer still only ever reaches their OWN request.
   const other = await call(request, 'buyer2', 'cart/file-sign', { cartId, kind: 'receipt', contentType: 'image/jpeg' });
   expect(other.status).toBe(403);
+});
+
+test('a draft offers no approve controls, and says which kind of "not now" it is', async ({ page, request }) => {
+  // Seeded, not created through the API: this is a test about what the screen DRAWS
+  // and what the endpoint refuses, and the suite sits exactly on `cart/create`'s
+  // 30-a-minute limit. That limit is a real control and there is deliberately no
+  // environment switch to turn it off — one that could be turned off would be off
+  // somewhere it mattered.
+  const { rows: cr } = await pool.query(
+    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status)
+     VALUES ($1, $2, 'E2E Store', 'E2E: draft with nothing to approve', 'draft') RETURNING id`,
+    [people.buyer.uid, people.buyer.name],
+  );
+  const cartId = Number(cr[0].id);
+  await pool.query(
+    `INSERT INTO buy_cart_lines (cart_id, sku, size, qty, shelf_price, verdict, status)
+     VALUES ($1, $2, $3, $4, $5, 'buy', 'pending')`,
+    [cartId, LINE.sku, LINE.size, LINE.qty, LINE.shelfPrice],
+  );
+  await as(page, 'approver');
+  await page.goto('/buy-carts');
+  await page.locator('.bc-row').filter({ hasText: 'nothing to approve' }).first().click();
+  await page.locator('.bc-lines').waitFor();
+
+  // The server has always refused a draft. The screen used to draw the checkboxes,
+  // "Approve selected" and "Approve all" anyway, so the only possible outcome of a full
+  // set of controls was a red line underneath them.
+  await expect(page.locator('.bc-decide')).toHaveCount(0);
+  await expect(page.locator('.bc-lines input[type="checkbox"]')).toHaveCount(0);
+  await expect(page.locator('.bc-no-decide')).toContainText('hasn’t sent this yet');
+
+  // Correcting a misread shelf ticket is a COST-side act and stays open on a draft —
+  // which is the state where a typo is most likely still to be there.
+  await expect(page.locator('.bc-line-actions').first()).toBeVisible();
+
+  // And the endpoint still refuses, in the same words, for a stale tab.
+  const r = await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve' });
+  expect(r.status).toBe(409);
+  expect(r.body.error).toMatch(/hasn’t sent this yet/);
+});
+
+test('the queue filters by buyer, and a buyer cannot use it to widen their own scope', async ({ request }) => {
+  // Seeded with SQL rather than through `cart/create`. This is a test about READING a
+  // filtered list, and the suite already sits exactly on the endpoint's own 30-a-minute
+  // rate limit — one more creation here pushed an unrelated test at the end of the run
+  // into a 429. The limit is a real control and the fix is not to spend it here.
+  const { rows } = await pool.query(
+    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status)
+     VALUES ($1, $2, 'E2E Store', 'E2E: filter fixture', 'submitted') RETURNING id`,
+    [people.buyer2.uid, people.buyer2.name],
+  );
+  const theirs = Number(rows[0].id);
+
+  // Staff see every buyer who has ever raised a request — built from the whole table,
+  // not from the capped page above it, so nobody whose requests have scrolled off is
+  // missing from the dropdown that is supposed to find them.
+  const all = await read_(request, 'approver', 'cart/list');
+  const ids = all.body.buyers.map((b) => b.id);
+  expect(ids).toContain(people.buyer.uid);
+  expect(ids).toContain(people.buyer2.uid);
+  // A display name is not an identity, so the username comes back to disambiguate.
+  expect(all.body.buyers.every((b) => 'username' in b)).toBe(true);
+
+  const filtered = await read_(request, 'approver', `cart/list?buyer=${people.buyer.uid}`);
+  expect(filtered.body.carts.length).toBeGreaterThan(0);
+  expect(filtered.body.carts.map((c) => Number(c.id))).not.toContain(theirs);
+  expect(filtered.body.carts.every((c) => Number(c.buyer_user_id) === people.buyer.uid)).toBe(true);
+
+  const mineToo = await read_(request, 'approver', `cart/list?buyer=${people.buyer2.uid}`);
+  expect(mineToo.body.carts.map((c) => Number(c.id))).toContain(theirs);
+
+  // A BUYER's own scoping comes off the token and the parameter is dropped on the
+  // floor for them — otherwise `?buyer=` reads as a way to widen it, and one buyer's
+  // spending history becomes a URL anybody can edit.
+  const asOther = await read_(request, 'buyer2', `cart/list?buyer=${people.buyer.uid}`);
+  expect(asOther.body.carts.every((c) => Number(c.buyer_user_id) === people.buyer2.uid)).toBe(true);
+  expect(asOther.body.carts.every((c) => Number(c.buyer_user_id) !== people.buyer.uid)).toBe(true);
+  // And they are told about nobody else.
+  expect(asOther.body.buyers ?? null).toBeNull();
 });
 
 test('a company card request can actually be funded, and then take a receipt', async ({ request }) => {

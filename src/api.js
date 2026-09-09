@@ -244,7 +244,12 @@ export const api = {
      Note what is NOT here: there is no method that fetches a gift card code in bulk.
      Reading one is `cartGcReveal`, one card at a time, and the server writes an audit
      row before it answers. */
-  cartList: (status) => get(`/api/cart/list${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  cartList: (status, buyerId) => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    if (buyerId) q.set('buyer', String(buyerId));
+    return get(`/api/cart/list${q.toString() ? `?${q}` : ''}`);
+  },
   cartGet: (id) => get(`/api/cart/get?id=${encodeURIComponent(id)}`),
   cartCreate: (payload) => post('/api/cart/create', payload),
   cartAddLine: (cartId, line) => post('/api/cart/line', { cartId, line }),

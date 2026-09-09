@@ -5662,8 +5662,12 @@ export async function getBuyCartFull(id) {
 // List for a queue screen. `buyerUserId` scopes a buyer to their own carts; staff pass
 // null and get everything. Scoping on the id off the token (never a name) is the same
 // rule the payout presets follow, and for the same reason.
-export async function listBuyCarts({ buyerUserId = null, status = null, limit = 100 } = {}) {
+export async function listBuyCarts({ buyerUserId = null, status = null, buyerId = null, limit = 100 } = {}) {
   const sql = db();
+  // `buyerUserId` is the SCOPE — a buyer reaching only their own, off the token.
+  // `buyerId` is a staff FILTER, and they are deliberately different arguments: folding
+  // them into one parameter is how a filter becomes a way to read somebody else's
+  // spending. When both are set the scope still wins, because it is ANDed in.
   const rows = buyerUserId != null
     ? await sql`
         SELECT c.*, (SELECT po_code FROM purchase_orders p WHERE p.id = c.po_id) AS po_code
@@ -5674,8 +5678,33 @@ export async function listBuyCarts({ buyerUserId = null, status = null, limit = 
         SELECT c.*, (SELECT po_code FROM purchase_orders p WHERE p.id = c.po_id) AS po_code
           FROM buy_carts c
          WHERE (${status}::text IS NULL OR c.status = ${status})
+           AND (${buyerId}::bigint IS NULL OR c.buyer_user_id = ${buyerId})
          ORDER BY c.id DESC LIMIT ${limit}`;
   return rows.map(cartOut);
+}
+
+/**
+ * Every buyer who has ever raised a request, with how many are still live.
+ *
+ * Derived from the whole table rather than from the page the screen happens to be
+ * holding: the list is capped at 100, so a dropdown built from the loaded rows would
+ * quietly omit anyone whose requests had all scrolled off — and picking a name that was
+ * missing is not a thing a person can do.
+ */
+export async function listBuyCartBuyers() {
+  // The USERNAME comes back too, because a display name is not an identity: two
+  // accounts can carry the same one, and on live data two do. A dropdown offering
+  // "Test Supplier" twice is a filter a person cannot use correctly even though the
+  // value behind each option is right.
+  const rows = await db()`
+    SELECT c.buyer_user_id AS id, max(c.buyer_name) AS name, max(u.username) AS username,
+           count(*)::int AS total,
+           count(*) FILTER (WHERE c.status NOT IN ('closed', 'cancelled', 'written_off'))::int AS live
+      FROM buy_carts c LEFT JOIN users u ON u.id = c.buyer_user_id
+     WHERE c.buyer_user_id IS NOT NULL
+     GROUP BY c.buyer_user_id
+     ORDER BY 2`;
+  return rows.map((r) => ({ ...r, id: Number(r.id) }));
 }
 
 export async function addBuyCartLine(cartId, line, actor) {

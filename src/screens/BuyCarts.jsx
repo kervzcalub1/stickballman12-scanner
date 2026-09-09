@@ -9,6 +9,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, FormModal } from '../components/common.jsx';
 import { estDate } from '../lib/format.js';
+import { useQueryParam } from '../lib/urlstate.js';
 import { BuyCart } from './BuyCart.jsx';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -37,20 +38,32 @@ const QUEUES = [
 export function BuyCarts({ user, onHome, onSignOut }) {
   const [carts, setCarts] = useState(null);
   const [counts, setCounts] = useState(null);
+  const [buyers, setBuyers] = useState(null);
   const [filter, setFilter] = useState('');
+  // In the URL, like the other filtered lists: "look at Eric's requests" is a link
+  // somebody sends, and it has to survive the refresh you do after approving one.
+  const [buyer, setBuyer] = useQueryParam('buyer');
   const [open, setOpen] = useState(null);
   const [err, setErr] = useState('');
   const [asking, setAsking] = useState(false);
 
   const isBuyer = user.role === 'supplier';
+  // Names that more than one account carries — see the dropdown below.
+  const dupeNames = new Set(
+    (buyers || []).map((b) => b.name)
+      .filter((n, i, all) => all.indexOf(n) !== i),
+  );
 
   async function load() {
     try {
-      const { carts: c, counts: n } = await api.cartList(filter || undefined);
-      setCarts(c); setCounts(n); setErr('');
+      const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined);
+      setCarts(c); setCounts(n); if (b) setBuyers(b); setErr('');
     } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
   }
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter]);
+  // Filtered SERVER-side, not in the browser: the list is capped at 100, so narrowing
+  // the loaded page would quietly show a fraction of somebody's requests and read as
+  // though that were all of them.
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter, buyer]);
 
   // Both questions in ONE modal. As two chained prompts, answering the first and then
   // cancelling the second threw the first answer away with nothing on screen to say so.
@@ -98,7 +111,45 @@ export function BuyCarts({ user, onHome, onSignOut }) {
               <span className="bc-queue-l">{q.label}</span>
             </button>
           ))}
-          {filter && <button type="button" className="btn sm ghost" onClick={() => setFilter('')}>Show all</button>}
+          {(filter || buyer) && (
+            <button type="button" className="btn sm ghost"
+              onClick={() => { setFilter(''); setBuyer(''); }}>Show all</button>
+          )}
+        </div>
+      )}
+
+      {/* The person is "Buyer" here and everywhere else on these screens, never
+          "supplier". They hold the `supplier` ROLE, but the gift card SUPPLIERS are a
+          different set of people entirely — and two different people reading as one is
+          how a separation-of-duties control quietly stops being one. */}
+      {!isBuyer && buyers && buyers.length > 1 && (
+        <div className="bc-filters">
+          <label className="bc-filter">
+            <span className="muted sm">Buyer</span>
+            <select className="input" value={buyer} onChange={(e) => setBuyer(e.target.value)}>
+              <option value="">Every buyer</option>
+              {buyers.map((b) => (
+                // The live count, not the total: on a queue screen the useful question
+                // is who still has something open, and a buyer with 40 closed requests
+                // and nothing outstanding should not read as the busiest person here.
+                //
+                // The username is shown ONLY when the display name is shared, which on
+                // live data it is — two accounts are both called "Test Supplier". Two
+                // identical options is a filter a person cannot use correctly even
+                // though the value behind each one is right; adding @username to every
+                // row to cover that case would clutter the common one.
+                <option key={b.id} value={b.id}>
+                  {b.name}{dupeNames.has(b.name) && b.username ? ` @${b.username}` : ''} ({b.live})
+                </option>
+              ))}
+            </select>
+          </label>
+          {buyer && carts && (
+            <span className="muted sm">
+              {carts.length === 0 ? 'No requests' : `${carts.length} request${carts.length === 1 ? '' : 's'}`}
+              {filter ? ' in this queue' : ''} from <b>{buyers.find((b) => String(b.id) === String(buyer))?.name || 'that buyer'}</b>.
+            </span>
+          )}
         </div>
       )}
 
@@ -106,7 +157,11 @@ export function BuyCarts({ user, onHome, onSignOut }) {
       {!carts && <p className="muted">Loading…</p>}
       {carts && !carts.length && (
         <p className="muted">
-          {filter ? 'Nothing in that queue.' : isBuyer ? 'No requests yet — start one when you are heading to a store.' : 'No buying requests yet.'}
+          {filter && buyer ? 'Nothing in that queue for that buyer.'
+            : filter ? 'Nothing in that queue.'
+              : buyer ? 'No requests from that buyer.'
+                : isBuyer ? 'No requests yet — start one when you are heading to a store.'
+                  : 'No buying requests yet.'}
         </p>
       )}
 

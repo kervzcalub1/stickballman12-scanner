@@ -529,6 +529,48 @@ an unclosable request creates is pressure to record a false "received" or "refun
 This is a documented management decision: its own status, a required reason, a name
 against it, and a word that reads differently from `closed` everywhere it is shown.
 
+## A control never exists for an act the server will refuse
+`src/lib/buycartRules.js` — `decisionsOpen(status)` and `decisionsClosedBecause(status)`,
+imported by **both** `api/cart/decide.js` and `src/screens/BuyCart.jsx`, the same way
+`payout.js` is shared so a cart line and a calculator line can't be priced by two code
+paths that disagree.
+
+The rule lived only on the server, so a **draft** drew the checkboxes, *Approve selected*
+and *Approve all 3* — a full set of controls whose only possible outcome was the red line
+`The buyer has not sent this request yet.` A button that cannot work is worse than no
+button: it reads as a broken feature rather than as a step that hasn't happened, and on a
+money screen it invites somebody to keep clicking.
+
+- **The two "not now"s are different and are said differently.** *Not yet* (`draft` — the
+  buyer hasn't sent it) is "wait"; *frozen* (`funded` onward — the money went out against
+  these approvals) is "too late". An approver told the wrong one goes and does the wrong
+  thing about it.
+- **Correcting a line is gated on the PRIVILEGE, not the decision window** (`mayDecide`,
+  not `canDecide`). A misread shelf ticket stays fixable through draft / submitted /
+  approved — draft is the state where the typo is most likely still there, and gating the
+  ✎ on the decision window would have taken it away exactly there.
+
+## Filtering the queue by buyer
+`/buy-carts` takes `?buyer=<user id>`, filtered **server-side** in `listBuyCarts` and
+persisted in the URL like the other filtered lists.
+
+- **Server-side because the list is capped at 100.** Narrowing the loaded page in the
+  browser would show a fraction of somebody's requests and read as though that were all
+  of them.
+- **`buyerUserId` (the scope) and `buyerId` (the filter) are different arguments** on
+  purpose. Folding them into one is how a filter becomes a way to read another buyer's
+  spending; the scope is ANDed in and always wins, and `cart/list` drops `?buyer=`
+  outright for a buyer rather than merely hiding the control.
+- **The dropdown's options come from `listBuyCartBuyers()`, not from the loaded page** —
+  otherwise anyone whose requests had all scrolled past the cap would be missing from the
+  filter meant to find them. Each option shows the **live** count, not the total: a buyer
+  with 40 closed requests and nothing outstanding should not read as the busiest person
+  on a queue screen.
+- **The username disambiguates a shared display name.** Two live accounts are both called
+  "Test Supplier"; two identical options is a filter a person cannot use correctly even
+  though the value behind each is right. Shown only when the name is actually duplicated.
+- It says **Buyer**, never "supplier" — see the naming trap above.
+
 ## Statuses
 `draft → submitted → approved → funded → receipted → audited → closed`, plus `denied`,
 `cancelled` and `written_off`. The cart's own status **follows its lines** rather than being set by
@@ -547,6 +589,11 @@ one of the process — has somewhere to happen that can be audited later.
 - **`BUY_GC_KEY` must be set on every environment**, or the desk can only upload photos.
 - **`buy_cart_tasks` + eleven `buy_carts` columns (funding, custody, goods audit,
   write-off) → `db:setup`** on local and prod, on top of the original tables.
+- **`cart/create` is rate limited to 30 a minute and the e2e suite sits exactly on it.**
+  Adding one more request-creating test pushed two unrelated tests at the end of the run
+  into a 429, which surfaced as `Cannot read properties of undefined` and pointed at the
+  wrong thing entirely. `newRequest` now reports the status; a test that only needs a
+  fixture seeds it with SQL rather than spending a create.
 - **Never assert on a COUNT of closing conditions.** It moves with the funding route.
   The old e2e test asserted ten and broke the moment a card-funded request asked a
   different question; it now asserts on the `scope` split and the keys.

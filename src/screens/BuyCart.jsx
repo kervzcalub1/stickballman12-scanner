@@ -21,6 +21,7 @@ import { BuyCartTasks } from '../components/BuyCartTasks.jsx';
 import { estDate, estTime } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
+import { decisionsOpen, decisionsClosedBecause } from '../lib/buycartRules.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
 // `best_platform` stores the KEY ('alias'), and printing it raw read "92.7% ROI via
@@ -150,7 +151,7 @@ function LineCall({ line, stack, onPrice, canPrice, busy }) {
   );
 }
 
-function Lines({ cart, canDecide, canEditLines, canPrice, isBuyer, onChanged, onSignOut }) {
+function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, onChanged, onSignOut }) {
   const [sel, setSel] = useState([]);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -346,6 +347,12 @@ function Lines({ cart, canDecide, canEditLines, canPrice, isBuyer, onChanged, on
         </div>
       )}
 
+      {/* Says which of the two it is: "wait" and "too late" are not interchangeable,
+          and an approver told the wrong one goes and does the wrong thing about it. */}
+      {whyNoDecide && pending.length > 0 && (
+        <p className="muted sm bc-no-decide">{whyNoDecide}</p>
+      )}
+
       {canDecide && pending.length > 0 && (
         <div className="bc-decide">
           <span className="muted sm">{pending.length} awaiting a decision{sel.length ? ` · ${sel.length} selected` : ''}</span>
@@ -470,7 +477,12 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
   // What to DRAW, from the privileges the account holds. Never what is allowed — every
   // one of these actions is re-checked against the database on the way in, so a button
   // drawn off a stale list simply answers 403 rather than doing anything.
-  const canDecide = !isBuyer && hasPriv(user, 'approve_buying');
+  // Holding the privilege is not the same as there being anything to decide. Drawing
+  // the checkboxes and "Approve all" on a DRAFT gave an approver a full set of controls
+  // whose only possible outcome was a refusal — the server has always said no, and the
+  // screen was asking anyway. `decisionsOpen` is the endpoint's own predicate.
+  const mayDecide = !isBuyer && hasPriv(user, 'approve_buying');
+  const canDecide = mayDecide && decisionsOpen(cart?.status);
   const canIssue = !isBuyer && hasPriv(user, 'issue_gift_cards');
   const canAudit = !isBuyer && hasPriv(user, 'audit_buying');
   // The cost side is the BUYER'S first — they are the one in the shop who can read the
@@ -637,7 +649,14 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         onChanged={load} onSignOut={onSignOut} />
 
       <Lines cart={cart} canDecide={canDecide} isBuyer={isBuyer}
-        canEditLines={(canDecide || canAudit) && ['draft', 'submitted', 'approved'].includes(cart.status)}
+        // Only shown to somebody who WOULD be deciding — telling a buyer their own
+        // request has nothing to approve is noise.
+        whyNoDecide={mayDecide ? decisionsClosedBecause(cart.status) : null}
+        // `mayDecide`, not `canDecide`: correcting a misread shelf ticket is a cost-side
+        // act and stays open through draft/submitted/approved. Gating it on the DECISION
+        // window would have taken the ✎ away on a draft, which is the state where a
+        // typo is most likely to still be there.
+        canEditLines={(mayDecide || canAudit) && ['draft', 'submitted', 'approved'].includes(cart.status)}
         canPrice={canCost && !['closed', 'cancelled'].includes(cart.status)}
         onChanged={load} onSignOut={onSignOut} />
 

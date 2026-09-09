@@ -1,12 +1,12 @@
-// GET /api/cart/list[?status=]  -> { ok, carts:[…], counts:{…} }
+// GET /api/cart/list[?status=][&buyer=<id>]  -> { ok, carts:[…], counts:{…}, buyers:[…] }
 //
 // The queue screen for every desk, and the buyer's own list. A BUYER is scoped to their
 // own requests off the token — never off a query parameter, which would turn one
 // buyer's spending history into a URL anybody could edit.
 import { send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { listBuyCarts, buyCartPendingCounts, dbConfigured } from '../_lib/db.js';
+import { listBuyCarts, listBuyCartBuyers, buyCartPendingCounts, dbConfigured } from '../_lib/db.js';
 
-const STATUSES = ['draft', 'submitted', 'approved', 'denied', 'funded', 'receipted', 'audited', 'closed', 'cancelled'];
+const STATUSES = ['draft', 'submitted', 'approved', 'denied', 'funded', 'receipted', 'audited', 'closed', 'cancelled', 'written_off'];
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -25,11 +25,22 @@ export default async function handler(req, res) {
   const uid = Number(user.uid);
   const buyerUserId = isBuyer ? (Number.isInteger(uid) && uid > 0 ? uid : -1) : null;
 
+  // Filtering by buyer is a STAFF thing, and it is ignored outright for a buyer rather
+  // than merely being unavailable in their UI: `?buyer=` on a buyer's own request would
+  // otherwise read as an attempt to widen their scope, and the safe answer to that is to
+  // drop it on the floor. Their own scoping is ANDed in regardless.
+  const buyerParam = Number(params.get('buyer'));
+  const buyerId = !isBuyer && Number.isInteger(buyerParam) && buyerParam > 0 ? buyerParam : null;
+
   try {
-    const carts = await listBuyCarts({ buyerUserId, status });
+    const carts = await listBuyCarts({ buyerUserId, status, buyerId });
     // Desk counts are a staff thing — a buyer has no queue to hold up.
     const counts = isBuyer ? null : await buyCartPendingCounts();
-    return send(res, 200, { ok: true, carts, counts });
+    // The dropdown's options come from the whole table, not from the page above: the
+    // list is capped, so options built from `carts` would omit anyone whose requests had
+    // all scrolled off — and a filter that cannot name somebody hides them twice over.
+    const buyers = isBuyer ? null : await listBuyCartBuyers();
+    return send(res, 200, { ok: true, carts, counts, buyers });
   } catch (e) {
     console.error('[cart/list]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load buying requests.' });

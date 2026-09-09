@@ -3,6 +3,7 @@ import React from 'react';
 import { TopBar, CardBadges } from '../components/common.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
 import { usePendingCounts } from '../hooks.js';
+import { InboundToday } from '../components/InboundToday.jsx';
 import { roleLabel, HOME_SECTIONS, HOME_ATTENTION, homeCardBadges, isAdminRole } from '../lib/constants.js';
 
 export function Home({ user, onPick, onSignOut }) {
@@ -14,6 +15,10 @@ export function Home({ user, onPick, onSignOut }) {
     <div className="app">
       <TopBar onSignOut={onSignOut} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
+      {/* Above the chores, because it is the thing that decides what the morning looks
+          like. It renders nothing at all when there is no inbound stock, so a quiet
+          week does not leave a permanent empty card people learn to skip past. */}
+      <InboundToday onOpen={() => onPick('inbound')} />
       {attention.length > 0 && (
         <section className="home-section" data-accent="attention">
           <h2 className="home-section-title">Needs attention</h2>

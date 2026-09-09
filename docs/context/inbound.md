@@ -69,6 +69,26 @@ boxes land on Thursday.
 pairs expected" and "we don't know how many" are different answers, and the strip says
 which one it means.
 
+### On Home
+`src/components/InboundToday.jsx`, above **Needs attention**. The headline and the
+progress bar only — Home is a chore list, and putting the day strip, the state strip and
+the shipment list there would turn it into a second Inbound page and bury the chores.
+
+- **Renders nothing when there is no inbound stock**, so a quiet week leaves no permanent
+  empty card for people to learn to skip past.
+- **Fails silently.** A warehouse hand's home screen must not show an error because a
+  summary could not load; the chores under it are the point.
+- Same functions as the screen (`arrivalPlan`, `inboundProgress`), because two places
+  counting the same boxes differently is worse than one place counting them at all.
+
+### `.page` had no CSS rule
+The screen shipped against `<div className="page">` and was the only file in `src/` using
+it. Nothing in `styles.css` defines `.page`, so Inbound alone rendered full-bleed — no
+max width, no centring, no safe-area padding — while every other screen sat in `.app`'s
+gutters. **Third instance of this exact failure** after `.table` (buy-cart) and `.chip`
+(size chips): a class that does not exist looks like a deliberate styling choice rather
+than a missing one, which is why all three survived review.
+
 ### Two strips, two axes
 **When it lands** and **How it is travelling** are separate and stay separate — a parcel
 can be due today *and* stuck, and a delayed box has no meaningful arrival date to sit

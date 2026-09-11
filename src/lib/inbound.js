@@ -35,6 +35,13 @@ export const daysSince = (iso, now = Date.now()) => {
   return Number.isFinite(t) ? (now - t) / 86400000 : null;
 };
 
+// A label exists but the parcel does not: either we have no number at all, or the
+// carrier has only ever acknowledged the paperwork. Its own predicate because two
+// different questions need it — what STATE a box is in, and whether it has earned an
+// arrival date — and the second must not depend on the box still being fresh.
+export const neverScanned = (box) => !String(box?.tracking_number || '').trim()
+  || words(box?.tracking_status).includes('inforeceived');
+
 // The order matters: an exception outranks "in transit" even though the carrier is
 // still reporting movement, and a delivered box is never chased no matter how old.
 export function inboundState(box, now = Date.now()) {
@@ -148,12 +155,25 @@ export const ARRIVAL_ORDER = ['overdue', 'today', 'tomorrow', 'this_week', 'late
  * between "not for a while" and "we have no idea" is the difference between planning the
  * day and being surprised by it.
  */
-export function arrivalBucket(box, today, state = null) {
-  const st = state || inboundState(box);
+export function arrivalBucket(box, today, state = null, now = Date.now()) {
+  // `now` is threaded, not defaulted inside. Every real caller passes `state`, so the
+  // fallback below rarely fires — but when it did, a function handed an explicit
+  // `today` went and read the WALL CLOCK to derive the state, and the answer changed
+  // depending on when you ran it. That is the same class of bug as a bare `toLocale*()`
+  // in this codebase, and it showed up exactly the way those do: a test pinned to a
+  // fixed NOW passed for eight days and then went red on its own.
+  const st = state || inboundState(box, now);
   if (st === 'delivered') return 'landed';
   if (st === 'out') return 'today';
   // Nothing the carrier has never scanned gets a date it does not deserve.
-  if (st === 'no_tracking' || st === 'with_supplier') return 'unknown';
+  //
+  // Checked on the box's OWN status as well as on the derived state, because a
+  // label-only box that has sat for INVESTIGATE_DAYS derives as `investigate` — it is
+  // still a label with no parcel behind it, and it was landing in "arriving today" off
+  // an estimate the carrier never earned. `investigate` is deliberately NOT excluded
+  // wholesale: a parcel that WAS scanned and then went quiet has a real ETA behind it,
+  // and "overdue" is the honest answer for that one.
+  if (st === 'no_tracking' || st === 'with_supplier' || neverScanned(box)) return 'unknown';
 
   const from = box?.eta_from || null;
   const to = box?.eta_to || from;
@@ -180,7 +200,7 @@ export function arrivalPlan(rows, today, now = Date.now()) {
   for (const k of ARRIVAL_ORDER) out[k] = { boxes: 0, units: 0, unknownUnits: 0, shipments: new Set() };
   for (const r of rows || []) {
     const state = inboundState(r, now);
-    const b = out[arrivalBucket(r, today, state)];
+    const b = out[arrivalBucket(r, today, state, now)];
     b.boxes += 1;
     const u = Number(r.box_units);
     if (Number.isFinite(u) && u > 0) b.units += u; else b.unknownUnits += 1;

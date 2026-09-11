@@ -104,11 +104,12 @@ export const WAREHOUSE_ARTICLES = [
       { do: 'Expand a box row to see the shoes in it. Tap any VIN to open that unit\'s full detail and history.' },
       { do: 'To CONTINUE a box marked "pending", tap "Add items" on its own row. That drops you into the receiving wizard aimed at that box — its number and tracking come with it, and everything you scan lands in it.', note: 'Pending means the box is recorded but nothing has been scanned into it yet. This is how you pick a batch back up.' },
       { do: 'Tap "+ Add box" only for a box that is NOT already listed — a late arrival, or one nobody recorded. It creates the next box number.', warn: 'Do not use "+ Add box" to continue a pending box. It opens a new box beside it, and you end up with a batch of empty ones.' },
+      { do: 'Found more pairs in a box you already SUBMITTED? Tap "Reopen box" on its row, confirm, and you go straight to scanning that box. What was already in it stays; the new pairs land in the same box. Submit the box again when you are done.', note: 'Works after the batch says Done too — the batch opens again with the box. Do not use "+ Add box" for this: it files the pairs under a box number that is not on the carton.' },
       { do: 'Tap "Finish"/mark done when the shipment is complete.', note: 'If the batch belongs to a purchase order, finishing it is what triggers the reconciliation check.' },
     ],
     rules: [
       'A red 0 on a box row means a tracking number was recorded but no items were ever scanned into it. Either scan it or investigate — it is not cosmetic.',
-      'A received box has no "Add items" button. Received is final — reopen the batch only if you genuinely need to correct it.',
+      'A received box has no "Add items" button — it has "Reopen box" instead. Reopen only to add pairs you found in that box; nothing already scanned is touched.',
     ],
     related: ['receive-multibox', 'receive-against-po', 'reconcile-warehouse'],
     keywords: ['open batch', 'past batches', 'resume', 'add box', 'batch page', 'history'],

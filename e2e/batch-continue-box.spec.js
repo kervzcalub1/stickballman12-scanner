@@ -108,12 +108,85 @@ test('a pending box offers "Add items", and scans land in THAT box', async ({ pa
   expect(boxes.filter((b) => b.box_number !== 2).every((b) => b.n === 0)).toBe(true);
 });
 
-test('a received box has no "Add items" — it is closed', async ({ page }) => {
+test('a received box has no "Add items" — it offers "Reopen box" instead', async ({ page }) => {
   await loginAs(page, 'warehouse');
   await openBatch(page);
   const row2 = page.locator('.box-row-wrap').filter({ hasText: 'Box 2' });
   await expect(row2).toContainText('received');
   await expect(row2.getByRole('button', { name: 'Add items' })).toHaveCount(0);
-  // …while the ones still waiting keep theirs.
+  await expect(row2.getByRole('button', { name: 'Reopen box' })).toHaveCount(1);
+  // …while the ones still waiting keep theirs, and don't get a reopen.
   await expect(page.locator('.box-row-add')).toHaveCount(2);
+  await expect(page.locator('.box-row-reopen')).toHaveCount(1);
+});
+
+// "I submitted box 3, then found two more pairs in it." Before this the only route was
+// "+ Add box", which files those pairs as a box 4 that isn't on any carton. The batch is
+// FINISHED by then in the worst case (the box that gets reopened was the last one in),
+// so the reopen has to bring the batch back with it.
+test('a submitted box can be reopened, and the extra pairs land in THAT box', async ({ page, request }) => {
+  // Finish the batch first — the pairs are found after it says Done.
+  const done = await request.post('/api/batches/set-status', { headers: authHeaders(), data: { id: batchId, status: 'done' } });
+  expect(done.status()).toBe(200);
+  const before = await q('SELECT id, received_by, received_at FROM batch_boxes WHERE batch_id = $1 AND box_number = 2', [batchId]);
+
+  await loginAs(page, 'warehouse');
+  await openBatch(page);
+  await expect(page.locator('.batch-page-code')).toContainText('Done');
+  const row2 = page.locator('.box-row-wrap').filter({ hasText: 'Box 2' });
+  await row2.getByRole('button', { name: 'Reopen box' }).click();
+  await expect(page.locator('.modal')).toContainText(/submitted with 1 pair/);
+  await expect(page.locator('.modal')).toContainText(/batch opens again/);
+  await page.getByRole('button', { name: 'Reopen & add items' }).click();
+
+  // Straight into scanning box 2 — no second tap on "Add items".
+  await expect(page.locator('.box-context')).toContainText('Box 2');
+  await expect(page.locator('.rows-title').first()).toContainText('Continue box 2');
+  await expect(page.locator('.track-field input').first()).toHaveValue('E2E-CONT-2');
+  // The reopen itself is already recorded: box pending, batch open again.
+  const mid = await q('SELECT bx.status, b.status AS batch_status FROM batch_boxes bx JOIN batches b ON b.id = bx.batch_id WHERE bx.batch_id = $1 AND bx.box_number = 2', [batchId]);
+  expect(mid[0]).toEqual({ status: 'pending', batch_status: 'open' });
+
+  await page.route('**/api/items/find*', (r) => r.fulfill({ json: { ok: true, product: null, units: [] } }));
+  await page.route('**/api/sku-search', (r) => r.fulfill({
+    json: { ok: true, product: { name: 'E2E Continue Runner', sku: SKU, upc: null, image: null, brand: 'Nike', colorway: 'Black/White', sizes: ['9', '9.5', '10'], gender: 'Men', source: 'alias' } },
+  }));
+  await page.getByRole('button', { name: 'Next →' }).click();
+  // Two pairs: each unsized scan lands as its own "size?" row, then both are sized.
+  const needSize = page.locator(`.recv-item[data-sku="${SKU}"] .sz.need`);
+  for (let i = 0; i < 2; i++) {
+    await page.locator('.scanbar input').first().fill(SKU);
+    await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+    await expect(needSize).toHaveCount(i + 1, { timeout: 10_000 });
+  }
+  // One at a time: a sized row leaves the "size?" set on blur, so the next unsized
+  // row is always first.
+  for (const size of ['9', '10']) {
+    await needSize.first().fill(size);
+    await needSize.first().press('Tab');
+    await expect(page.locator(`.recv-item[data-sku="${SKU}"] .recv-size-name`).filter({ hasText: size })).toHaveCount(1);
+  }
+  await page.getByRole('button', { name: 'Review →' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+  await page.getByRole('button', { name: /Submit box/i }).click();
+  await page.getByRole('button', { name: /Yes, (commit|submit)/i }).click();
+  await expect(page.locator('.modal')).toContainText(/saved|received/i, { timeout: 15_000 });
+
+  // Three pairs in box 2 — the first one still there — no box 4, and the box is
+  // received again under the person who FIRST received it.
+  const boxes = await q('SELECT id, box_number, status, received_by, received_at, (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS n FROM batch_boxes bx WHERE batch_id = $1 ORDER BY box_number', [batchId]);
+  expect(boxes.map((b) => b.box_number)).toEqual([1, 2, 3]);
+  const b2 = boxes.find((b) => b.box_number === 2);
+  expect(b2.n).toBe(3);
+  expect(b2.status).toBe('received');
+  expect(b2.received_by).toBe(before[0].received_by);
+  expect(String(b2.received_at)).toBe(String(before[0].received_at));
+  expect(boxes.filter((b) => b.box_number !== 2).every((b) => b.n === 0)).toBe(true);
+});
+
+test('reopening a box that is not submitted is refused', async ({ request }) => {
+  const box1 = (await q('SELECT id FROM batch_boxes WHERE batch_id = $1 AND box_number = 1', [batchId]))[0];
+  const r = await request.post('/api/batches/reopen-box', { headers: authHeaders(), data: { batchId, boxId: Number(box1.id) } });
+  expect(r.status()).toBe(409);
+  expect((await r.json()).error).toMatch(/already open/);
 });

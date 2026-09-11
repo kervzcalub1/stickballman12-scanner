@@ -1493,7 +1493,12 @@ export async function commitBoxItems({ batchId, boxId, items, createdBy, dateRec
   // status pre-check and both insert → duplicate items (TOCTOU). Only the request
   // that flips status pending→received proceeds; the loser gets 0 rows and aborts.
   const claim = await db()`
-    UPDATE batch_boxes SET status = 'received', received_by = ${createdBy || null}, received_at = now()
+    UPDATE batch_boxes
+       SET status = 'received',
+           -- A REOPENED box (reopenBatchBox) keeps who first received it and when; the
+           -- pairs added on the second pass carry their own created_by / intake event.
+           received_by = coalesce(received_by, ${createdBy || null}),
+           received_at = coalesce(received_at, now())
     WHERE id = ${boxId} AND batch_id = ${batchId} AND status <> 'received'
     RETURNING id
   `;
@@ -1521,6 +1526,27 @@ export async function setBatchStatus(id, status) {
   } else {
     await db()`UPDATE batches SET status = 'committed', committed_at = now() WHERE id = ${id}`;
   }
+}
+
+// Reopen a SUBMITTED box so more pairs can be scanned into it — "I submitted box 3,
+// then found two more pairs in it". The box goes back to 'pending' (its pairs stay:
+// commitBoxItems only ever appends), and the batch is reopened with it if the box's
+// submission had auto-completed it, since add-box / box-commit refuse a finished batch.
+// Returns { reopenedBatch, box, boxes } or { error }.
+export async function reopenBatchBox(batchId, boxId) {
+  const sql = db();
+  const box = (await sql`
+    SELECT bx.id, bx.box_number, bx.status, bx.tracking_number, b.status AS batch_status
+      FROM batch_boxes bx JOIN batches b ON b.id = bx.batch_id
+     WHERE bx.id = ${boxId} AND bx.batch_id = ${batchId}`)[0];
+  if (!box) return { error: 'Box not found in this batch.' };
+  if (box.status !== 'received') return { error: `Box ${box.box_number} is already open — tap Add items on its row.` };
+  const reopenedBatch = box.batch_status !== 'open';
+  const queries = [sql`UPDATE batch_boxes SET status = 'pending' WHERE id = ${boxId} AND batch_id = ${batchId}`];
+  if (reopenedBatch) queries.push(sql`UPDATE batches SET status = 'open', committed_at = NULL WHERE id = ${batchId}`);
+  await sql.transaction(queries);
+  const boxes = await listBatchBoxes(batchId);
+  return { reopenedBatch, box: boxes.find((x) => Number(x.id) === Number(boxId)) || null, boxes };
 }
 
 // Exact UPC / SKU lookup against OUR OWN stock — the Box Labels tool asks this

@@ -55,6 +55,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [reopenId, setReopenId] = useState(null);
+  // The SUBMITTED box being reopened for more pairs — "I submitted box 3, then found
+  // two more pairs in it". Confirmed, it goes straight into scanning that box.
+  const [reopenBox, setReopenBox] = useState(null); // { box, err? }
   // The box whose number is being corrected, + the number typed for it.
   const [renumber, setRenumber] = useState(null); // { box, value }
   // The number on the parcel, kept in ?q= so "the batch this box belongs to" is a link
@@ -197,6 +200,23 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     finally { setBusy(false); }
   }
 
+  async function confirmReopenBox() {
+    if (!reopenBox) return;
+    const b = detail?.batch;
+    setBusy(true);
+    try {
+      const r = await api.batchReopenBox(b.id, reopenBox.box.id);
+      setReopenBox(null);
+      // Straight to scanning: the box is pending again, so this is the same "Add items"
+      // a pending row offers — aimed at THIS box, its number and tracking intact. The
+      // batch is open now whatever the header said a moment ago.
+      onAddBox({ ...b, status: 'open' }, r.box || { ...reopenBox.box, status: 'pending' });
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setReopenBox((x) => (x ? { ...x, err: err.message } : x));
+    } finally { setBusy(false); }
+  }
+
   async function setStatus(id, status) {
     setBusy(true);
     try { await api.batchSetStatus(id, status); await Promise.all([loadDetail(id), loadLists()]); }
@@ -306,6 +326,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           {isOpen && !readOnly && boxes.some((x) => x.status !== 'received') && (
             <p className="muted sm">“Pending” means the box is recorded but nothing has been scanned into it yet — tap <b>Add items</b> on its row to continue it. <b>+ Add box</b> is for a box that isn’t listed here at all.</p>
           )}
+          {!readOnly && boxes.some((x) => x.status === 'received') && (
+            <p className="muted sm">Found more pairs in a box you already submitted? <b>Reopen box</b> on its row — what’s in it stays, and the new pairs land in the same box.</p>
+          )}
           {boxes.length > 1 && !readOnly && (
             <p className="muted sm">Boxes that arrive out of order are numbered as they land — use the <Icon name="pencil" /> on a row to put its number back in step with the label on the carton.</p>
           )}
@@ -329,7 +352,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                         <span className="box-num">Box {bx.box_number}</span>
                         <span className="box-track muted sm">{bx.tracking_number || 'no tracking'}</span>
                         <span className="box-count" style={empty ? { color: '#e08f8f', fontWeight: 600 } : undefined}>{bx.item_count} item{bx.item_count === 1 ? '' : 's'}</span>
-                        <span className={`box-status ${bx.status}`}>{bx.status === 'received' ? '✓ received' : 'pending'}</span>
+                        {/* A pending box WITH pairs is one that was reopened (or left
+                            mid-way); "pending" would read as "nothing scanned yet". */}
+                        <span className={`box-status ${bx.status}`}>{bx.status === 'received' ? '✓ received' : bx.item_count > 0 ? 'reopened' : 'pending'}</span>
                         {/* On every box, not only the batch header. Pre-sell is declared
                             for the whole shipment, and a box is what somebody actually
                             has open in front of them — the header is scrolled away by
@@ -341,8 +366,12 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                           scanned into — and without this the row was a dead end: the only
                           visible action was "+ Add box", which creates box N+1 rather than
                           filling this one. Scans land in THIS box, keeping its number and
-                          tracking. Received boxes get no button: they're closed, and the
-                          commit would be refused anyway. */}
+                          tracking. A RECEIVED box gets "Reopen box" instead: the commit
+                          refuses a submitted box, so "I submitted box 3, then found two
+                          more pairs in it" had no route but "+ Add box" — which files
+                          those pairs under a box number that isn't on the carton. Offered
+                          on a finished batch too (the reopen brings the batch back with
+                          it); the two pairs are found after the batch says Done. */}
                       {/* Renumbering stays available on a RECEIVED box: a box arriving
                           out of order is numbered max+1, and that only becomes obviously
                           wrong once its contents are in and the count doesn't match the
@@ -356,6 +385,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                       {isOpen && !readOnly && bx.status !== 'received' && (
                         <button className="btn primary sm box-row-add" onClick={() => onAddBox(b, bx)}
                           title={`Scan shoes into box ${bx.box_number}`}>Add items</button>
+                      )}
+                      {!readOnly && bx.status === 'received' && (
+                        <button className="btn ghost sm box-row-reopen" disabled={busy}
+                          onClick={() => { setError(''); setReopenBox({ box: bx }); }}
+                          title={`Reopen box ${bx.box_number} to scan more pairs into it`}>Reopen box</button>
                       )}
                     </div>
                     {isBoxOpen && (
@@ -413,6 +447,15 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
                 <button className="btn ghost" disabled={busy} onClick={() => setRenumber(null)}>Cancel</button>
               </div>
             </div>
+          </Modal>
+        )}
+        {reopenBox && (
+          <Modal type="warn" title={`Reopen box ${reopenBox.box.box_number}?`}
+            message={`Box ${reopenBox.box.box_number} was submitted with ${reopenBox.box.item_count} pair${reopenBox.box.item_count === 1 ? '' : 's'}. Reopening it lets you scan more pairs into the same box — what's already in it stays. You'll go straight to scanning; submit the box again when you're done.${isOpen ? '' : ' The batch opens again with it.'}`}
+            onClose={() => setReopenBox(null)}>
+            {reopenBox.err && <div className="error">{reopenBox.err}</div>}
+            <button className="btn primary" disabled={busy} onClick={confirmReopenBox}>Reopen & add items</button>
+            <button className="btn ghost" disabled={busy} onClick={() => setReopenBox(null)}>Cancel</button>
           </Modal>
         )}
         {reopenId != null && (

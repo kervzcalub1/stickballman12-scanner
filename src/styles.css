@@ -701,6 +701,7 @@ body {
 /* Renumber: a quiet icon beside the row — needed often enough to be one tap away,
    rare enough that it must not compete with "Add items". */
 .box-row-renum { flex: none; padding: 6px 8px; line-height: 1; }
+.box-row-reopen { flex: none; white-space: nowrap; }
 .renum-form { display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left; }
 .renum-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .renum-form input { width: 120px; }

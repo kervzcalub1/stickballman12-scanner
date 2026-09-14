@@ -20,7 +20,7 @@ import {
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
   phSearchTokens, phRowMatches,
 } from '../lib/ph.js';
-import { clearQuery, useQueryParam } from '../lib/urlstate.js';
+import { clearQuery, useQueryParam, writeParam } from '../lib/urlstate.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
 import { ItemCosts } from './ItemCosts.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
@@ -74,7 +74,9 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   // The warehouse Inventory page, same component. `canEditStock={false}`: PH looks
   // stock up (and can still correct a miscount), but status changes and shelving are
   // warehouse work — and warehouse-only server-side, so the buttons would 403.
-  if (page === 'inventory') return <Inventory canEditStock={false} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  // PH can't change stock from Inventory, but cost is theirs to fix (set-cost allows
+  // ph_team), so the "Edit cost" hop to /ph/costs stays on.
+  if (page === 'inventory') return <Inventory canEditStock={false} onOpenCosts={(q) => { goPage('costs'); writeParam('q', q); }} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   // The warehouse Batches page, same component, `readOnly`. PH prices what the warehouse
   // receives, so "which batch did this parcel become, and what was in it" is their
   // question too — but adding boxes, finishing and renumbering are warehouse work (and

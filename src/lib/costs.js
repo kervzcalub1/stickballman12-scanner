@@ -76,3 +76,55 @@ export function costChanged(draft, stored) {
   if (hasDraft !== hasStored) return true;
   return Math.abs(Number(d) - Number(stored)) >= 0.005;
 }
+
+/* ------------------------- Receiving: cost per shoe ------------------------- */
+// Receiving used to carry ONE cost for the whole batch ("Default cost") and stamp it
+// on every pair, so fifteen SKUs at fifteen prices meant fifteen trips to the Costs
+// page afterwards. A shoe in the cart can now carry its own cost, and a pair received
+// against a PO inherits what the supplier declared for that size. Resolution order,
+// most specific first:
+//   typed on the shoe card  →  the PO line for that SKU + size  →  the batch default
+// Blank at every level stays blank (NULL, "not known"): a missing number is never
+// turned into $0 here, the same rule `toCost` enforces on the server (intake.js).
+
+// A typed cost as a number, or null for blank / not a number / negative. Negative is
+// nulled rather than kept because the server rejects it outright (receiving.md) — the
+// card reads "no cost" and the person types it again, instead of a 400 at commit.
+export function costOrNull(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (s === '') return null;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+const bareSku = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
+
+// What the supplier declared this SKU + size cost on the PO, or null. Matched on the
+// code with spaces/dashes stripped and on the NUMERIC size ("9.5W" is "9.5" — the
+// reconciliation learned this the hard way, po-reconciliation-notation-matching).
+// A line for the box being received wins over the same SKU + size declared on another
+// label; a whole-order (Path C) manifest has no box on its lines, so it matches too.
+export function poLineCost(lines, sku, size, poBoxId = null) {
+  if (!Array.isArray(lines) || !lines.length) return null;
+  const want = bareSku(sku);
+  if (!want) return null;
+  const n = sizeNum(size);
+  let any = null;
+  for (const l of lines) {
+    if (bareSku(l.sku) !== want) continue;
+    const ln = sizeNum(l.size);
+    if (!(Number.isNaN(n) && Number.isNaN(ln)) && ln !== n) continue;
+    const c = costOrNull(l.unit_cost);
+    if (c == null) continue;
+    if (poBoxId != null && Number(l.po_box_id) === Number(poBoxId)) return c;
+    if (any == null) any = c;
+  }
+  return any;
+}
+
+// The cost a unit is committed with. `shoeCost` is what was typed on the card,
+// `poCost` what the PO declared for the size, `defaultCost` the batch header.
+export function unitCost(shoeCost, poCost, defaultCost) {
+  return costOrNull(shoeCost) ?? costOrNull(poCost) ?? costOrNull(defaultCost);
+}

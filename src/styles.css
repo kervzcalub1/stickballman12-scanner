@@ -432,6 +432,20 @@ body {
 .recv-item-toggles { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .goat-chip-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .goat-chip-toggle input { width: 16px; height: 16px; }
+/* Per-shoe cost on the cart / Review card. Sits in the toggles row so it wraps
+   with Box / GOAT only on a phone. The source tag under the box says where a blank
+   will be filled from ("from PO", "batch default") or that it won't be. */
+.recv-item-cost { display: inline-grid; grid-template-columns: auto auto; column-gap: 6px; row-gap: 2px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.recv-item-cost-lbl { white-space: nowrap; }
+.recv-item-cost .ph-price-wrap { width: 96px; }
+.recv-item-cost .ph-price { width: 100%; padding-top: 5px; padding-bottom: 5px; font-size: 13px; }
+/* The source line sits under the box, full width, so the card's info column (a
+   thumbnail, photo count and × already share the row) never has to fit three things. */
+.recv-item-cost-src { grid-column: 1 / -1; font-size: 11px; white-space: nowrap; opacity: 0.85; }
+.recv-item-cost-src.typed { color: var(--ok); font-weight: 600; }
+/* A line in the commit confirm that is a warning, not a fact — e.g. pairs about to
+   land with no cost on file. */
+.warn-line { color: #e0a458; font-size: 13px; }
 .ph-flag-na { color: var(--muted); font-size: 12px; font-weight: 600; }
 .ph-sync-cell { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .recv-unit-n { color: var(--muted); width: 18px; flex: none; }
@@ -1195,6 +1209,8 @@ body {
 .inv-metrics > div { display: flex; gap: 8px; font-size: 13px; }
 .inv-metrics dt { color: var(--muted); flex: none; min-width: 92px; }
 .inv-metrics dd { margin: 0; word-break: break-word; }
+/* The pencil beside a cost: sits inline with the figure, hands off to /costs?q=. */
+.inv-cost-edit { flex: none; padding: 2px 6px; line-height: 1; margin-left: 6px; vertical-align: middle; }
 .inv-history-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 8px; }
 .inv-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
 .inv-status-edit { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }

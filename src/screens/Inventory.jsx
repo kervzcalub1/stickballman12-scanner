@@ -212,6 +212,10 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   ), [supplierOptions, supplier]);
   const [lightbox, setLightbox] = useState(null);  // defect-issue photos viewer
   const [expanded, setExpanded] = useState(() => new Set()); // vins with the accordion open
+  // group key -> the one size its detail is narrowed to. A size chip is a filter, not
+  // a label: 42 pairs across nine sizes is a wall, and the question on the floor is
+  // almost always "where are the 7Ws". Picking the same chip again clears it.
+  const [sizePick, setSizePick] = useState({});
   const [removing, setRemoving] = useState(null); // { title, sku, units } — remove-pairs modal
   const [hist, setHist] = useState({}); // vin -> { loading, events, error } (lazily loaded)
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -603,6 +607,12 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
 
   // Accordion: toggle a row open/closed; the first time it opens, lazily fetch
   // that item's audit notes & history (keeps the list query light).
+  // A size chip on a row or in its detail: open the row if it's closed, and narrow it
+  // to that size (or widen it back if that size was already picked).
+  function pickSize(g, size) {
+    setSizePick((p) => (p[g.key] === size ? { ...p, [g.key]: null } : { ...p, [g.key]: size }));
+    if (!expanded.has(g.key)) toggleRow(g.key);
+  }
   function toggleRow(vin) {
     setExpanded((s) => { const n = new Set(s); n.has(vin) ? n.delete(vin) : n.add(vin); return n; });
     if (hist[vin]) return;
@@ -853,14 +863,15 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   const toggleGroup = (g) => setSel((s) => { const n = new Set(s); const all = g.vins.every((v) => n.has(v)); g.vins.forEach((v) => (all ? n.delete(v) : n.add(v))); return n; });
   const selectedItems = rows.filter((r) => sel.has(r.vin));
 
-  // Status change over a whole SKU group (all its VINs) via bulk-status.
-  async function saveGroupStatus(g) {
+  // Status change over a SKU group via bulk-status — every VIN, or only the picked
+  // size's when the detail is narrowed (the label beside the control says which).
+  async function saveGroupStatus(g, units = groupItems(g)) {
     if (!canEditStock) return;
     const status = statusDrafts[g.key];
     if (!status || status === g.status) return;
     // In Stock requires a shelf — route unshelved units to put-away instead.
     if (status === 'in_stock') {
-      const items = groupItems(g).filter(shelvable);
+      const items = units.filter(shelvable);
       if (items.length) {
         setStatusDrafts((d) => { const n = { ...d }; delete n[g.key]; return n; });
         openShelve(items, g.name); return;
@@ -868,7 +879,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     }
     setSavingStatusVin(g.key); setError('');
     try {
-      await api.bulkStatus(g.vins, status);
+      await api.bulkStatus(units.map((r) => r.vin), status);
       setStatusDrafts((d) => { const n = { ...d }; delete n[g.key]; return n; });
       load();
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
@@ -878,7 +889,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   // Expanded detail for a SKU group — metrics, group status change, print all,
   // and a per-VIN units list (drill into any one for its full history).
   const invDetail = (g) => {
-    const gItems = groupItems(g);
+    const allItems = groupItems(g);
+    // Narrowed to the picked size, if any. Everything below — the units list, shelf
+    // location, and the print / shelve / remove actions with their counts — acts on
+    // THIS set, so "Print labels (7)" after picking 7W means exactly those seven.
+    const size = sizePick[g.key] || null;
+    const gItems = size ? allItems.filter((r) => String(r.size) === String(size)) : allItems;
+    const n = gItems.length;
     const locs = [...new Set(gItems.map((r) => r.location_code).filter(Boolean))];
     const locLabel = locs.length === 0 ? null : locs.length === 1 ? locs[0] : `${locs.length} shelves`;
     const unshelved = gItems.filter(shelvable);
@@ -895,20 +912,20 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
           )}
         </dd></div>
         <div><dt>Supplier / Buyer</dt><dd>{g.supplier_name || '—'}{g.buyer_name ? ` / ${g.buyer_name}` : ''}</dd></div>
-        <div><dt>Total units</dt><dd>{g.qty}</dd></div>
-        <div className="inv-metrics-wide"><dt>Sizes</dt><dd><SizesQty sizes={g.sizes} /></dd></div>
+        <div><dt>Total units</dt><dd>{size ? <>{n} <span className="muted">of {g.qty} · size {size}</span></> : g.qty}</dd></div>
+        <div className="inv-metrics-wide"><dt>Sizes</dt><dd><SizesQty sizes={g.sizes} active={size} onPick={(sz) => pickSize(g, sz)} /></dd></div>
         <div><dt>Price</dt><dd>{g.price != null ? `${g.priceMixed ? '~' : ''}$${Number(g.price).toFixed(2)}` : '—'}</dd></div>
         <div className="inv-metrics-wide"><dt>Listed / synced</dt><dd><SyncBadges item={g} /></dd></div>
       </dl>
       <div className="inv-actions">
         {canEditStock && (
           <>
-            <label className="inv-status-edit">Status (all {g.qty})
+            <label className="inv-status-edit">Status ({size ? `size ${size} · ${n}` : `all ${g.qty}`})
               <select value={statusDrafts[g.key] ?? g.status} onChange={(e) => setStatusDraft(g.key, e.target.value)}>
                 {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
               </select>
             </label>
-            <button className="btn sm primary" disabled={(statusDrafts[g.key] ?? g.status) === g.status || savingStatusVin === g.key} onClick={() => saveGroupStatus(g)}>
+            <button className="btn sm primary" disabled={(statusDrafts[g.key] ?? g.status) === g.status || savingStatusVin === g.key} onClick={() => saveGroupStatus(g, gItems)}>
               {savingStatusVin === g.key ? 'Saving…' : 'Save'}
             </button>
             {unshelved.length > 0 && (
@@ -918,14 +935,17 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
             )}
           </>
         )}
-        <button className="btn sm ghost" onClick={() => setLabels(gItems)}><Icon name="print" /> Print labels ({g.qty})</button>
+        <button className="btn sm ghost" onClick={() => setLabels(gItems)}><Icon name="print" /> Print labels ({n})</button>
         <button className="btn sm ghost danger" title="Correct the count — deletes pairs and files them under Deleted"
           onClick={() => setRemoving({ title: g.name || g.sku || 'Unknown shoe', sku: g.sku, units: gItems })}>
           Remove pairs…
         </button>
       </div>
       <div className="inv-units">
-        <div className="inv-history-title">Units</div>
+        <div className="inv-history-title">
+          Units{size && <> · size {size} ({n})
+            <button type="button" className="btn sm ghost inv-size-clear" onClick={() => pickSize(g, size)}>Show all {g.qty}</button></>}
+        </div>
         {gItems.map((r) => (
           <div className="inv-unit-row" key={r.vin}>
             <CopyText text={r.vin} className="vin">{r.vin}</CopyText>
@@ -1064,7 +1084,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                       {/* SKU sits OUTSIDE the expand button — click-to-copy can't be nested in one. */}
                       <div className="dcard-line"><CopyText text={g.sku} className="muted">{g.sku || '—'}</CopyText><span>×{g.qty}</span></div>
                       <button className="dcard-main" onClick={() => toggleRow(g.key)}>
-                        <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} /></span></div>
+                        <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} active={sizePick[g.key] || null} onPick={(sz) => pickSize(g, sz)} /></span></div>
                         <div className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</div>
                       </button>
                       {open && invDetail(g)}
@@ -1098,7 +1118,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                           </td>
                           <td className="inv-name" title={g.name}><span className="inv-name-inner"><span className="inv-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={28} /><CopyText text={g.name} className="inv-name-text">{g.name}</CopyText></span></td>
                           <td className="inv-col-sku"><CopyText text={g.sku}>{g.sku || '—'}</CopyText></td>
-                          <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
+                          <td className="ph-sizes"><SizesQty sizes={g.sizes} active={sizePick[g.key] || null} onPick={(sz) => pickSize(g, sz)} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>
                           <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</span></td>
                         </tr>

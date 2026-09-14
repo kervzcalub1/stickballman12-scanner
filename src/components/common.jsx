@@ -433,11 +433,21 @@ export function DateRangeBar({ mode, anchor, onChange, right }) {
 }
 
 // Sizes as discrete chips (clearer than a run-on string when there are many).
-export function SizesQty({ sizes }) {
+// With `onPick`, each chip is a button that narrows the group to that size (Inventory);
+// `active` marks the size currently picked. Without it the chips are plain text (PH).
+export function SizesQty({ sizes, onPick = null, active = null }) {
   if (!sizes || !sizes.length) return <span className="muted">—</span>;
   return (
     <span className="szq">
-      {sizes.map((s) => <span className="szq-chip" key={s.size}><span className="szq-size">{s.size}</span><span className="szq-qty">×{s.qty}</span></span>)}
+      {sizes.map((s) => onPick ? (
+        <button type="button" className={`szq-chip pick ${active === s.size ? 'on' : ''}`} key={s.size}
+          aria-pressed={active === s.size} title={active === s.size ? 'Show every size' : `Show only size ${s.size}`}
+          onClick={(e) => { e.stopPropagation(); onPick(s.size); }}>
+          <span className="szq-size">{s.size}</span><span className="szq-qty">×{s.qty}</span>
+        </button>
+      ) : (
+        <span className="szq-chip" key={s.size}><span className="szq-size">{s.size}</span><span className="szq-qty">×{s.qty}</span></span>
+      ))}
     </span>
   );
 }

@@ -11,6 +11,37 @@ cost, else the batch `default_cost`). Suppliers routinely leave cost off a PO ma
 so pairs land with nothing on file — and until this page there was **no UPDATE of
 `items.cost` anywhere in the codebase**, so a blank stayed blank forever.
 
+## Cost per shoe at receiving (2026-09-15)
+Until this, the Receive form had **one "Default cost" for the whole batch** and
+`doCommit` stamped it on every pair — fifteen SKUs at fifteen prices meant fifteen
+corrections here afterwards — and a box received against a PO **ignored the
+`po_lines.unit_cost` the supplier had already typed per size**. Now every shoe card
+(Items step and Review, both layouts) carries a **"Cost ea"** `PriceInput` bound to
+`it.cost` (raw string on the cart item). Resolution per pair, most specific first
+(`unitCost` / `poLineCost` / `costOrNull` in `src/lib/costs.js`, applied by `sizeCost`
+in `Receiving.jsx`):
+
+1. **typed on the card** (`it.cost`) →
+2. **the PO line for that SKU + size** — `receivingPo.lines` on a receive-against-PO,
+   or `poCostLines` (fetched alongside the labels) when adding a box to a PO-linked
+   batch; matched on bare SKU + **numeric** size (`"10W"` ≡ `"10"`), a line for the
+   active label winning over the same SKU+size on another label →
+3. **the batch default** — `header.defaultCost`, or in box mode the batch's own
+   `default_cost` (sent as `null`; `box-commit.js` fills it server-side).
+
+The line under the box says which will apply (`typed` · `from PO` · `from PO ·
+$A–$B by size` when the supplier priced sizes differently · `batch default` ·
+`no cost — fill in later on Costs`). Blank at every level stays **NULL**; the commit
+confirm prints *"N pairs with no cost — they'll wait on the Costs page"* so a skipped
+box is a choice, not a surprise. The header field is now labelled "Default cost ($ per
+pair)" and only fills rows left blank. Guarded by `e2e/receiving-per-shoe-cost.spec.js`.
+
+**Getting here from a pair.** Inventory's detail view and SKU-group card show a ✎ beside
+the cost (`onOpenCosts` → `go('costs')` + `writeParam('q', sku)`; PH's Inventory does
+the same into `/ph/costs`). `ItemCosts` seeds its search from `?q=` on mount and mirrors
+it back on every search, so a refresh keeps the shoe. Inventory also now prints
+**"no cost"** for a NULL where it used to print `$0.00` (the blank-vs-zero trap, below).
+
 ## The two lists (tabs) + search
 - **No cost on file** — `cost IS NULL`. The backlog you clear. Drives the home
   card badge (`missing_cost`) and the Needs-attention strip.

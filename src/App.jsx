@@ -174,6 +174,8 @@ export default function App() {
   // Jump straight from "batch saved, but this PO is 2 short" into that PO's report.
   // go() lands on /reconcile and clears the query, so the ?po= is written after.
   const openReconcile = (poId) => { setBatchContext(null); go('reconcile'); writeParam('po', poId); };
+  // Inventory → Costs with the shoe already searched, the same way (go clears the query).
+  const openCosts = (q) => { go('costs'); writeParam('q', q); };
   if (view === 'receiving') return withAdvisor(<Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onOpenReconcile={openReconcile} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />);
   // Pre-sell lives with the warehouse, not PH: the team holding the shipment is the one
   // that knows which pairs an order covers. PH's part comes after release, on Rescale Stock.
@@ -191,7 +193,7 @@ export default function App() {
   if (view === 'existing-stock') return withAdvisor(<ExistingStock navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
   // `box` is set when continuing an EXISTING pending box; absent = add a new one.
   if (view === 'batches') return withAdvisor(<BatchPage initialBatchId={batchReturnId} onAddBox={(batch, box = null) => { setBatchContext({ ...batch, box }); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
-  if (view === 'inventory') return withAdvisor(<Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'inventory') return withAdvisor(<Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onOpenCosts={openCosts} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'report') return withAdvisor(<PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'deleted') return withAdvisor(<DeletedItems onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);

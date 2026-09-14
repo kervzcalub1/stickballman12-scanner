@@ -37,7 +37,11 @@ sticker bar sits above the checklist. Full rules: `docs/context/vin-stock.md`.
    `api/_lib/intake.js`, the single copy all four intake paths now import. It used to be
    `Number(v)` guarded only by `isFinite && >= 0`, and `Number('')` is 0, so every
    skipped cost box was quietly recorded as a free shoe. A deliberate zero still works
-   (type `0`). Blanks are backfilled later on the Costs page (`costs.md`). The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
+   (type `0`). Blanks are backfilled later on the Costs page (`costs.md`). **Cost is per
+   SHOE, not per batch (2026-09-15):** every cart card has a "Cost ea" box; the header's
+   "Default cost ($ per pair)" only fills rows left blank, and a PO-linked receive
+   inherits `po_lines.unit_cost` per size before falling back to it — resolution order
+   and the `from PO` / `batch default` / `no cost` hint are in `costs.md`. The **supplier dropdown is loaded from `GET /api/suppliers`** (seeded
    list + auto-saved custom names + every name already on a batch — the same
    list the Inventory supplier filter uses, see `inventory.md`); picking "Custom…" and typing a new vendor
    auto-saves it on commit (`addSupplier`, V6 Feature 1). Tracking typed /

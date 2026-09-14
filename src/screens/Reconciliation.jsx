@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
-import { poMatchesSearch } from '../lib/postatus.js';
+import { poMatchesSearch, expectsAtOrderLevel, hasOrderedList } from '../lib/postatus.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { isBoxesOrder } from '../lib/postatus.js';
@@ -20,11 +20,23 @@ const FLAG = {
   overage:    { label: 'Over', cls: 'warn' },
   wrong_size: { label: 'Wrong size', cls: 'warn' },
   wrong_sku:  { label: 'Not on PO', cls: 'bad' },
+  // Ordered, not all here — and everything that HAS shipped arrived. Neutral, not amber:
+  // it is the ordinary state of an order whose last box is on a truck, and a screen that
+  // goes amber for that stops being read for the things that are actually wrong.
+  awaiting:   { label: 'Still coming', cls: '' },
+  // Bought, never put in a box, and the shipment has gone. A discrepancy, but not the
+  // carrier's: nothing was lost in transit, it never left the buyer.
+  unpacked:   { label: 'Never sent', cls: 'bad' },
 };
 
 function flagText(r) {
-  if (r.flag === 'shortage') return `Short ${r.expected - r.received}`;
+  // A shortage now means the pairs SHIPPED and didn't arrive — `r.short`, not the whole
+  // gap. On an order that carries its own list the gap also contains pairs still sitting
+  // in a box at the buyer's, and calling those short would be an accusation.
+  if (r.flag === 'shortage') return `Short ${r.short || (r.expected - r.received)}`;
   if (r.flag === 'overage') return `Over +${r.received - r.expected}`;
+  if (r.flag === 'awaiting') return `${r.awaiting} to come`;
+  if (r.flag === 'unpacked') return `${r.unpacked} never sent`;
   return FLAG[r.flag]?.label || r.flag;
 }
 
@@ -39,7 +51,8 @@ export function poChip(status, rc) {
   if (!rc) return { cls: 'receiving', label: 'To reconcile' };
   if (!rc.intake_done) return { cls: 'receiving', label: 'Receiving' };
   if (rc.no_manifest) return { cls: 'warn', label: 'Received blind' };
-  const issues = (rc.shortage || 0) + (rc.overage || 0) + (rc.wrong_size || 0) + (rc.wrong_sku || 0);
+  const issues = (rc.shortage || 0) + (rc.overage || 0) + (rc.wrong_size || 0)
+    + (rc.wrong_sku || 0) + (rc.unpacked || 0);
   if (issues) return { cls: 'bad', label: `${issues} discrepanc${issues === 1 ? 'y' : 'ies'}` };
   // Clean, but auto-reconcile held off because a label hasn't left the supplier yet —
   // more units are still due, so closing now would freeze an incomplete picture.
@@ -55,7 +68,7 @@ const tagOf = (po) => {
 };
 
 // Worst-first, so a SKU group inherits the flag that most needs attention.
-const SEVERITY = ['shortage', 'wrong_sku', 'overage', 'wrong_size', 'match'];
+const SEVERITY = ['shortage', 'unpacked', 'wrong_sku', 'overage', 'wrong_size', 'awaiting', 'match'];
 const worstFlag = (rows) => SEVERITY.find((f) => rows.some((r) => r.flag === f)) || 'match';
 
 // Collapse the per-size rows into one row per SKU: the product name is printed once
@@ -416,6 +429,17 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                 <PoKindChip po={po} />
               </div>
               <p className="muted sm">{po.supplier_name} · received <b>{s.received_units}</b> of <b>{s.expected_units}</b> expected {isBoxesOrder(po) ? 'boxes' : 'units'}</p>
+              {/* Where the gap actually is, on an order that knew what it was owed before
+                  a box was filled. Three different conversations: a pair still in the
+                  buyer's hands, a pair on a truck, and a pair that did not turn up. */}
+              {hasOrderedList(po) && s.expected_units !== s.received_units && (
+                <p className="muted sm rcn-ordered">
+                  Ordered <b>{s.expected_units}</b> · packed <b>{s.packed_units}</b> · shipped <b>{s.shipped_units}</b> · received <b>{s.received_units}</b>
+                  {s.never_packed_units > 0 && (s.still_filling
+                    ? <> — <b>{s.never_packed_units}</b> not packed yet</>
+                    : <> — <b className="rcn-unpacked">{s.never_packed_units} never packed</b>, and every label has gone</>)}
+                </p>
+              )}
 
               {blind ? (
                 <p className="rcn-no-manifest sm">
@@ -429,10 +453,17 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                   {s.overage ? <span className="po-flag warn">{s.overage} over</span> : null}
                   {s.wrong_size ? <span className="po-flag warn">{s.wrong_size} wrong size</span> : null}
                   {s.wrong_sku ? <span className="po-flag bad">{s.wrong_sku} not on PO</span> : null}
+                  {s.unpacked_units ? <span className="po-flag bad">{s.unpacked_units} never sent</span> : null}
+                  {/* Deliberately last and deliberately not a discrepancy colour. */}
+                  {s.awaiting_units ? <span className="po-flag">{s.awaiting_units} still to come</span> : null}
                 </div>
               )}
-              {po.manifest_scope === 'po' && !s.no_manifest && (
-                <p className="muted xs" style={{ marginTop: '8px' }}>Whole-order manifest — matched on order totals, no per-box breakdown.</p>
+              {expectsAtOrderLevel(po) && !s.no_manifest && (
+                <p className="muted xs" style={{ marginTop: '8px' }}>
+                  {hasOrderedList(po)
+                    ? 'Matched against the receipt — what this order was bought for. The per-box lists say which carton each pair is in.'
+                    : 'Whole-order manifest — matched on order totals, no per-box breakdown.'}
+                </p>
               )}
               {/* What the supplier said was in the boxes, as a printable packing slip —
                   the paper you stand next to the pallet with when a count is disputed.

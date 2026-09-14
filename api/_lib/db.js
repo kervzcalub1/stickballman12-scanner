@@ -14,7 +14,7 @@ import { ROLL_VIN_RE } from './vins.js';
 // search so both find one parcel the same way. Deliberately imported under another
 // name: this file already has a `trackKey` further down that only strips whitespace,
 // and that one is for MATCHING a label to a box — a stricter job than searching.
-import { trackKey as searchTrackKey } from '../../src/lib/postatus.js';
+import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
 // number has to canonicalise too — see normalizeTrackingNumber for why.
 import { normalizeTrackingNumber } from './tracking.js';
@@ -165,7 +165,7 @@ export async function createUser({ name, username, passHash, role = 'warehouse' 
 
 export async function findUserByUsername(username) {
   const rows = await db()`
-    SELECT id, name, username, pass_hash, role, status, must_change_password
+    SELECT id, name, username, pass_hash, role, status, privileges, must_change_password
     FROM users WHERE username = ${username} LIMIT 1
   `;
   return rows[0] || null;
@@ -174,8 +174,8 @@ export async function findUserByUsername(username) {
 // Admin views. Pending first, then most recent.
 export async function listUsers() {
   return await db()`
-    SELECT id, name, username, role, status, created_at, reviewed_at, reviewed_by,
-           must_change_password, reset_requested_at
+    SELECT id, name, username, role, status, privileges, created_at, reviewed_at, reviewed_by,
+           must_change_password, reset_requested_at, telegram_user_id
     FROM users
     ORDER BY (reset_requested_at IS NOT NULL) DESC, (status = 'pending') DESC, created_at DESC
     LIMIT 500
@@ -537,6 +537,61 @@ export async function phListingBySizeForSku(sku) {
            count(*) FILTER (WHERE off_ph)::int                                                       AS in_store_or_existing
       FROM u
      GROUP BY size
+  `;
+  return rows;
+}
+
+// "How many of this shoe do we already hold?" — per size, for the approver deciding
+// whether to release money for more of it (`api/cart/stock.js`).
+//
+// Split on ONE axis, `synced_shopify`, because that is the seam between the two halves
+// of the answer: what Shopify believes it holds, and what we hold that Shopify cannot
+// see. The caller adds Shopify's own per-size figure to the NOT-listed half only —
+// adding it to a bucket that already contains Shopify-listed pairs would count the same
+// shelf twice, and an approver told we hold ten when we hold five turns down a buy we
+// wanted.
+//
+// Out of the count entirely:
+//   · sold / shipped / missing / issue — not on our floor.
+//   · `pre_sold` — on our floor and already somebody else's (`pre-sell.md`). Returned
+//     BESIDE the count, never folded into it: "we hold 6" and "we hold 6, 5 of them
+//     spoken for" lead to opposite decisions.
+//   · `kind='boxes'` — an empty shoe box is not a pair (`empty-boxes.md`).
+//
+// In the count, but named: no-box units, in-store/existing stock and unreleased
+// pre-sell pairs are all real stock that PH never lists, so they are never on Shopify
+// and always land in the not-listed half. Dropping them would understate the shelf.
+//
+// Not date-windowed and not PH-scoped: the question is what we HAVE, from every source.
+export async function stockOnHandBySizeForSku(sku) {
+  const codes = String(sku || '').split('/').map((c) => c.trim().toUpperCase()).filter(Boolean);
+  if (!codes.length) return [];
+  const rows = await db()`
+    WITH u AS (
+      SELECT coalesce(nullif(btrim(i.size), ''), '?') AS size,
+             i.status,
+             coalesce(i.synced_shopify, false) AS on_shopify,
+             coalesce(i.pre_sell, false)       AS held,
+             (b.kind IS NOT NULL AND b.kind = ANY(${PH_EXCLUDED_KINDS})) AS off_ph
+        FROM items i
+        LEFT JOIN batches b ON b.id = i.batch_id
+       WHERE upper(i.sku) = ANY(${codes}::text[])
+         AND (b.kind IS NULL OR b.kind <> 'boxes')
+         AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue')
+    )
+    SELECT size,
+           count(*) FILTER (WHERE status <> 'pre_sold')::int                       AS on_hand,
+           count(*) FILTER (WHERE status <> 'pre_sold' AND on_shopify)::int        AS listed_shopify,
+           count(*) FILTER (WHERE status <> 'pre_sold' AND NOT on_shopify)::int    AS not_listed,
+           count(*) FILTER (WHERE status <> 'pre_sold' AND NOT on_shopify
+                              AND status = 'no_box')::int                          AS no_box,
+           count(*) FILTER (WHERE status <> 'pre_sold' AND NOT on_shopify
+                              AND off_ph)::int                                     AS off_ph,
+           count(*) FILTER (WHERE status <> 'pre_sold' AND held)::int              AS pre_sell,
+           count(*) FILTER (WHERE status = 'pre_sold')::int                        AS pre_sold
+      FROM u
+     GROUP BY size
+     ORDER BY size
   `;
   return rows;
 }
@@ -1850,7 +1905,14 @@ export async function pendingCounts() {
       -- waiting on us to buy the labels. Nothing moves until somebody does.
       (SELECT count(*) FROM purchase_orders p
         WHERE p.labels_requested_at IS NOT NULL
-          AND p.status NOT IN ('reconciled', 'closed'))::int AS po_labels_requested
+          AND p.status NOT IN ('reconciled', 'closed'))::int AS po_labels_requested,
+      -- Gift-card buying. Both ends of that process stall on a person rather than on a
+      -- parcel: a buyer standing in a shop waiting to be told yes, and a spend nobody
+      -- has independently verified. Company money is on the wrong side of both.
+      (SELECT count(*) FROM buy_carts WHERE status = 'submitted')::int AS carts_to_approve,
+      (SELECT count(*) FROM buy_carts WHERE status = 'approved')::int  AS carts_to_fund,
+      (SELECT count(*) FROM buy_carts WHERE status = 'funded')::int    AS carts_awaiting_receipt,
+      (SELECT count(*) FROM buy_carts WHERE status IN ('receipted','audited'))::int AS carts_to_audit
     FROM (
       -- ph_managed gates the PH store-sync badges only: in-store buys and existing
       -- (old) stock bypass PH, so they must NOT inflate not_ii/alias/stockx/shopify.
@@ -3718,6 +3780,14 @@ export async function addPoScan({ poId, poBoxId, sku, size, dimensions = null, q
 // How many expected lines each label of a PO already carries. Drives the manifest
 // import's "only fill a label that has NOTHING declared" rule in one query rather
 // than a round trip per box.
+// Lines declared against the ORDER rather than a label (whole-order manifest, Path C).
+// `po/ship` needs this: on such an order a box legitimately holds no lines of its own,
+// and the order-level list is the declaration.
+export async function countPoOrderLines(poId) {
+  const rows = await db()`SELECT count(*)::int AS n FROM po_lines WHERE po_id = ${poId} AND po_box_id IS NULL`;
+  return rows[0]?.n || 0;
+}
+
 export async function poBoxLineCounts(poId) {
   const rows = await db()`
     SELECT po_box_id, count(*)::int AS n
@@ -4138,13 +4208,15 @@ export async function getPoReceivedBoxes(poId) {
 // the same canonical matching as `getPoReconciliation`, so a notation difference never
 // reads as a missing pair here either.
 //
-// ONLY on a per-box manifest. On a whole-order list there is no per-box expectation and
-// inventing one would be us making up a claim the supplier never made — the same reason
-// the received PDF states only what we counted per box (see purchase-orders.md).
+// ONLY where boxes carry their own lines. On a pure whole-order list (Path C) there is no
+// per-box expectation and inventing one would be us making up a claim the supplier never
+// made — the same reason the received PDF states only what we counted per box (see
+// purchase-orders.md). On 'order+box' the per-box expectation is real: the buyer declared
+// it themselves at the pack step, which is exactly what makes a shortage locatable.
 export async function getPoBoxDiffs(poId) {
   const sql = db();
   const po = (await sql`SELECT id, manifest_scope FROM purchase_orders WHERE id = ${poId}`)[0];
-  if (!po || po.manifest_scope === 'po') return [];
+  if (!po || !declaresPerBox(po)) return [];
 
   const expected = await sql`
     SELECT l.po_box_id, l.sku, l.size, max(l.name) AS name, sum(l.qty_expected)::int AS qty
@@ -4290,7 +4362,7 @@ export async function getPoReconciliation(poId) {
   // short by that amount forever — even after the reship landed and `received` caught up.
   // The reship's manifest exists to tell the warehouse what to check off (and both sides
   // what was promised), never to move this arithmetic. See `docs/context/purchase-orders.md`.
-  const expected = po.manifest_scope === 'po'
+  const expected = expectsAtOrderLevel(po)
     ? await sql`
         SELECT l.sku, l.size, sum(l.qty_expected)::int AS qty, max(l.name) AS name
         FROM po_lines l
@@ -4303,6 +4375,48 @@ export async function getPoReconciliation(poId) {
         WHERE l.po_id = ${poId} AND b.kind <> 'replacement'
           AND b.status IN ('shipped', 'in_transit', 'delivered')
         GROUP BY l.sku, l.size`;
+
+  // ── 'order+box' only: what is on its way, and what is still in the buyer's hands ──
+  //
+  // The order-level list is what we PAID FOR, so it is `expected` from the moment the
+  // order is raised — before a single box is filled. That is the whole point (an unpacked
+  // pair used to be invisible rather than short) and it creates one problem: for most of a
+  // shipment's life, `expected` legitimately exceeds `received` and NOTHING IS WRONG.
+  //
+  // Printing that as a shortage would cry wolf on every order until its last box landed,
+  // and a screen that is amber by default stops being read. So the gap is split:
+  //
+  //   awaiting  the pairs are on a box that has not shipped, or are not in a box at all
+  //   short     the box carrying them HAS shipped and they did not arrive
+  //
+  // Only the second is a discrepancy. `unpacked` is carried separately because it is a
+  // different conversation again — not "where is my parcel" but "you bought this and never
+  // put it in a box", which is answerable while the buyer is still standing next to it.
+  const perBox = hasOrderedList(po)
+    ? await sql`
+        SELECT l.sku, l.size,
+               sum(l.qty_expected)::int AS packed,
+               sum(l.qty_expected) FILTER (
+                 WHERE b.status IN ('shipped', 'in_transit', 'delivered'))::int AS shipped
+        FROM po_lines l
+        JOIN po_boxes b ON b.id = l.po_box_id
+        WHERE l.po_id = ${poId} AND b.kind <> 'replacement'
+        GROUP BY l.sku, l.size`
+    : [];
+  // Is anything still fillable or still with the buyer? This is what decides whether a
+  // pair that was never packed is "not packed YET" or "bought and never sent".
+  //
+  // While a box is still open, an unpacked pair is the ordinary state of a job in
+  // progress and flagging it would make every order amber the moment it was raised. Once
+  // every label has gone, the same pair is a finding — and a different one from a
+  // shortage: nobody lost it in transit, it never left.
+  const openBox = hasOrderedList(po)
+    ? await sql`
+        SELECT 1 FROM po_boxes
+        WHERE po_id = ${poId} AND kind <> 'replacement' AND status IN ('pending', 'packed')
+        LIMIT 1`
+    : [];
+  const stillFilling = openBox.length > 0;
   // Counted across EVERY batch linked to this PO, not just `received_batch_id`. An order
   // can be received in more than one batch — most obviously a replacement shipment that
   // arrives weeks later — and keying off the first batch alone silently undercounts the
@@ -4332,15 +4446,51 @@ export async function getPoReconciliation(poId) {
   const expMap = bucket(expected);
   const recMap = bucket(received);
   const expShoes = new Set([...expMap.keys()].map((k) => k.split('|')[0]));
+  // Same canonical key as both sides above, so a notation difference cannot make a
+  // packed pair look like a different shoe from the one that was ordered.
+  const packMap = new Map();
+  for (const x of perBox) {
+    const k = key(x);
+    const cur = packMap.get(k) || { packed: 0, shipped: 0 };
+    cur.packed += Number(x.packed) || 0;
+    cur.shipped += Number(x.shipped) || 0;
+    packMap.set(k, cur);
+  }
 
   const rows = [];
   for (const k of new Set([...expMap.keys(), ...recMap.keys()])) {
     const e = expMap.get(k); const r = recMap.get(k);
     const exp = e?.qty || 0; const rec = r?.qty || 0;
     const sku = (e || r).sku; const size = (e || r).size; const name = e?.name || r?.name || sku;
+    // Split the gap between the three things it can actually be. They need three
+    // different people to do three different things, so collapsing them into one
+    // "shortage" number is what made the old figure unusable.
+    //
+    //   awaiting   in a box that has not shipped, or not packed while boxes are still
+    //              open — nothing is wrong, it simply is not here yet
+    //   unpacked   bought, never put in a box, and the shipment has now gone. Chase the
+    //              BUYER: it never left. This is the pair that used to be invisible.
+    //   short      it shipped and did not arrive. Chase the carrier or the count.
+    //
+    // Everything is capped against the gap, and floored at zero: a box can legitimately
+    // carry more than the order expected, and an overage must not turn into a negative
+    // anything or eat a real shortage.
+    const pk = packMap.get(k) || (hasOrderedList(po) ? { packed: 0, shipped: 0 } : null);
+    const gap = Math.max(0, exp - rec);
+    const neverPacked = pk ? Math.max(0, exp - pk.packed) : 0;
+    const inOpenBox = pk ? Math.max(0, pk.packed - pk.shipped) : 0;
+    const awaiting = pk ? Math.min(gap, inOpenBox + (stillFilling ? neverPacked : 0)) : 0;
+    const rest = gap - awaiting;
+    const unpacked = stillFilling ? 0 : Math.min(rest, neverPacked);
+    const short = rest - unpacked;
+
     let flag;
     if (exp > 0 && rec === exp) flag = 'match';
-    else if (exp > 0 && rec < exp) flag = 'shortage';
+    // Worst first. A pair that shipped and vanished outranks one that never left, which
+    // outranks one that simply has not arrived yet.
+    else if (exp > 0 && short > 0) flag = 'shortage';
+    else if (exp > 0 && unpacked > 0) flag = 'unpacked';
+    else if (exp > 0 && rec < exp) flag = 'awaiting';
     else if (exp > 0 && rec > exp) flag = 'overage';
     else if (exp === 0 && expShoes.has(k.split('|')[0])) flag = 'wrong_size'; // shoe expected, this size wasn't
     else flag = 'wrong_sku';                                                  // shoe not on the PO at all
@@ -4348,7 +4498,18 @@ export async function getPoReconciliation(poId) {
     // can show "7.5 → 7.5W" instead of silently normalising the difference away.
     const skuOurs = r && e && rcSku(r.sku) !== rcSku(e.sku) ? r.sku : null;
     const sizeOurs = r && e && rcSize(r.size) !== rcSize(e.size) ? r.size : null;
-    rows.push({ sku, size, name, expected: exp, received: rec, delta: rec - exp, flag, sku_ours: skuOurs, size_ours: sizeOurs });
+    rows.push({
+      sku, size, name, expected: exp, received: rec, delta: rec - exp, flag,
+      sku_ours: skuOurs, size_ours: sizeOurs,
+      // Only meaningful on an 'order+box' order; zero everywhere else so no screen has
+      // to know which scope it is looking at before it can read a row.
+      packed: pk ? pk.packed : 0,
+      shipped: pk ? pk.shipped : 0,
+      never_packed: neverPacked,
+      awaiting,
+      unpacked,
+      short,
+    });
   }
   rows.sort((a, b) => (a.sku || '').localeCompare(b.sku || '') || rcSize(a.size).localeCompare(rcSize(b.size)));
 
@@ -4360,8 +4521,25 @@ export async function getPoReconciliation(poId) {
     overage: rows.filter((x) => x.flag === 'overage').length,
     wrong_size: rows.filter((x) => x.flag === 'wrong_size').length,
     wrong_sku: rows.filter((x) => x.flag === 'wrong_sku').length,
+    awaiting: rows.filter((x) => x.flag === 'awaiting').length,
+    unpacked: rows.filter((x) => x.flag === 'unpacked').length,
+    awaiting_units: rows.reduce((n, x) => n + x.awaiting, 0),
+    unpacked_units: rows.reduce((n, x) => n + x.unpacked, 0),
+    never_packed_units: rows.reduce((n, x) => n + x.never_packed, 0),
+    packed_units: rows.reduce((n, x) => n + x.packed, 0),
+    shipped_units: rows.reduce((n, x) => n + x.shipped, 0),
+    still_filling: stillFilling,
   };
-  summary.clean = summary.shortage + summary.overage + summary.wrong_size + summary.wrong_sku === 0;
+  // 'awaiting' is NOT a discrepancy — an order whose last box is on a truck stays clean,
+  // and `autoReconcileIfClean` separately requires received === expected, so it still
+  // waits for that box rather than closing on the strength of the first.
+  //
+  // 'unpacked' IS one, and this is the whole point of putting the receipt on the order.
+  // Before, a pair the buyer never boxed was not counted as expected at all: the order
+  // reconciled clean while the shoe was nowhere, and only the buying request's own
+  // checklist ever noticed. It now holds the order open like any other discrepancy.
+  summary.clean = summary.shortage + summary.overage + summary.wrong_size
+    + summary.wrong_sku + summary.unpacked === 0;
   // "No manifest" (Option 2): the PO was received but nothing was ever declared for the
   // shipped labels — the supplier didn't scan out and no one entered a manifest on their
   // behalf. Every received unit then reads as wrong_sku; flag it so the report says
@@ -5383,29 +5561,6 @@ const presetOut = (r) => (r ? {
  * account. The filter is applied HERE rather than in the endpoint so there's one place
  * a supplier's scope can be got wrong, and it keys on the id, never the name.
  */
-// One row per scan that did not land. Best-effort by contract — the caller is mid-scan.
-export async function recordScanFailure({ code, reason, detail, screen, userName }) {
-  await db()`
-    INSERT INTO scan_failures (code, reason, detail, screen, user_name)
-    VALUES (${code}, ${reason}, ${detail || null}, ${screen || null}, ${userName || null})`;
-}
-
-// What has been failing, and how much of it. The report behind "scan-out keeps failing".
-export async function scanFailureSummary({ days = 7 } = {}) {
-  const sql = db();
-  const [byReason, recent, topCodes] = await Promise.all([
-    sql`SELECT reason, count(*)::int n, max(created_at) AS last_at
-          FROM scan_failures WHERE created_at > now() - (${days} || ' days')::interval
-         GROUP BY reason ORDER BY n DESC`,
-    sql`SELECT code, reason, detail, user_name, created_at
-          FROM scan_failures ORDER BY id DESC LIMIT 50`,
-    sql`SELECT code, count(*)::int n FROM scan_failures
-         WHERE created_at > now() - (${days} || ' days')::interval
-         GROUP BY code HAVING count(*) > 1 ORDER BY n DESC LIMIT 20`,
-  ]);
-  return { byReason, recent, topCodes };
-}
-
 export async function listPayoutPresets({ supplierUserId = null } = {}) {
   const sql = db();
   // The shim can't nest sql fragments — branch with if/else.
@@ -5484,4 +5639,1159 @@ export async function savePayoutPreset(p, updatedBy) {
 export async function deletePayoutPreset(id) {
   const rows = await db()`DELETE FROM payout_presets WHERE id = ${id} RETURNING id, name`;
   return rows[0] || null;
+}
+
+/* ===========================================================================
+   GIFT-CARD BUYING CARTS — steps 1–7 of the written process, then a handoff.
+   docs/context/buy-cart.md · schema in scripts/db-setup.mjs
+
+   The half this file owns is money moving OUT: a buyer requests, staff approve,
+   an issuer releases cards, the receipt comes back and is parsed, an auditor
+   reconciles. The half it hands to purchase_orders is inventory coming IN.
+   `buy_carts.po_id` is the seam, and nothing here re-implements what the PO
+   side already answers — "did it arrive" is getPoReconciliation's question.
+
+   Two rules run through every function below:
+   · A gift-card CODE never leaves this file in the clear. Every list and detail
+     query selects `code_last4` and never `code_enc`; decryption is one endpoint,
+     and it writes an event first.
+   · Totals are recomputed from the rows in the same statement that changes them
+     (recalcCartMoney), never patched incrementally. An approved_amount that
+     drifts from its lines is a funding target nobody can trust.
+   =========================================================================== */
+
+// The buying cart's own row shape for lists: enough to draw a queue, nothing
+// sensitive. Money comes back as numbers rather than the NUMERIC strings pg hands
+// over, because every consumer compares them.
+const cartMoney = (r) => ({
+  approved_amount: r.approved_amount == null ? 0 : Number(r.approved_amount),
+  gc_total: r.gc_total == null ? 0 : Number(r.gc_total),
+  receipt_total: r.receipt_total == null ? null : Number(r.receipt_total),
+  balance_remaining: r.balance_remaining == null ? null : Number(r.balance_remaining),
+});
+const cartOut = (r) => (r ? { ...r, ...cartMoney(r) } : null);
+
+const lineOut = (r) => (r ? {
+  ...r,
+  // NULL stays NULL. A pending line has no quantity because the buyer never stated one —
+  // the approver sets it when they approve. Coercing to 0 printed "×0" on screen and,
+  // worse, made "does it have a quantity" look answered when it is the question being
+  // asked. `receiptLines` below keeps the coercion: a receipt line always has a count.
+  qty: r.qty == null ? null : Number(r.qty),
+  shelf_price: r.shelf_price == null ? null : Number(r.shelf_price),
+  final_cost: r.final_cost == null ? null : Number(r.final_cost),
+  best_payout: r.best_payout == null ? null : Number(r.best_payout),
+  profit: r.profit == null ? null : Number(r.profit),
+  roi: r.roi == null ? null : Number(r.roi),
+  alias_price: r.alias_price == null ? null : Number(r.alias_price),
+  stockx_price: r.stockx_price == null ? null : Number(r.stockx_price),
+} : null);
+
+// Recompute the cart's money and counts FROM ITS ROWS. Called by every mutation that
+// can move them. The funding target is the SHELF price of every approved pair — the
+// sticker, with no discount assumed — so a card is never short at the till because the
+// buyer didn't get the promo they expected (docs/context/buy-cart.md).
+async function recalcCartMoney(sql, cartId) {
+  await sql`
+    UPDATE buy_carts c SET
+      line_count     = l.total,
+      approved_count = l.approved,
+      pending_count  = l.pending,
+      approved_amount = l.approved_amount,
+      gc_total        = g.total,
+      balance_remaining = CASE WHEN c.receipt_total IS NULL THEN NULL
+                               ELSE g.total - c.receipt_total END,
+      updated_at = now()
+    FROM (
+      SELECT count(*)::int AS total,
+             count(*) FILTER (WHERE status = 'approved')::int AS approved,
+             count(*) FILTER (WHERE status = 'pending')::int  AS pending,
+             coalesce(sum(coalesce(shelf_price,0) * qty) FILTER (WHERE status = 'approved'), 0) AS approved_amount
+        FROM buy_cart_lines WHERE cart_id = ${cartId}
+    ) l,
+    (
+      SELECT coalesce(sum(balance), 0) AS total
+        FROM buy_cart_gift_cards WHERE cart_id = ${cartId} AND voided_at IS NULL
+    ) g
+    WHERE c.id = ${cartId}
+  `;
+}
+
+// The actor's stable identity, the same rule as api/_lib/buycart.js `actorKey`.
+// Deliberately duplicated rather than imported: buycart.js imports THIS file, so taking
+// it the other way would be a cycle. Kept to two lines so the two can't drift far.
+const actorKeyOf = (a) => {
+  const uid = Number(a?.uid);
+  if (Number.isInteger(uid) && uid > 0) return String(uid);
+  const u = String(a?.username || '').trim().toLowerCase();
+  return u ? `env:${u}` : null;
+};
+
+// One row per scan that did not land. Best-effort by contract — the caller is mid-scan.
+export async function recordScanFailure({ code, reason, detail, screen, userName }) {
+  await db()`
+    INSERT INTO scan_failures (code, reason, detail, screen, user_name)
+    VALUES (${code}, ${reason}, ${detail || null}, ${screen || null}, ${userName || null})`;
+}
+
+// What has been failing, and how much of it. The report behind "scan-out keeps failing".
+export async function scanFailureSummary({ days = 7 } = {}) {
+  const sql = db();
+  const [byReason, recent, topCodes] = await Promise.all([
+    sql`SELECT reason, count(*)::int n, max(created_at) AS last_at
+          FROM scan_failures WHERE created_at > now() - (${days} || ' days')::interval
+         GROUP BY reason ORDER BY n DESC`,
+    sql`SELECT code, reason, detail, user_name, created_at
+          FROM scan_failures ORDER BY id DESC LIMIT 50`,
+    sql`SELECT code, count(*)::int n FROM scan_failures
+         WHERE created_at > now() - (${days} || ' days')::interval
+         GROUP BY code HAVING count(*) > 1 ORDER BY n DESC LIMIT 20`,
+  ]);
+  return { byReason, recent, topCodes };
+}
+
+// Does this account hold a privilege right now? Read fresh on every privileged call —
+// a permission over company money must stop the moment it is untinked, not at the
+// account's next sign-in (api/_lib/buycart.js explains the trade).
+export async function userHasPrivilege(uid, priv) {
+  const rows = await db()`SELECT 1 FROM users WHERE id = ${uid} AND ${priv} = ANY(privileges) LIMIT 1`;
+  return rows.length > 0;
+}
+
+export async function listUserPrivileges(uid) {
+  const rows = await db()`SELECT privileges FROM users WHERE id = ${uid}`;
+  return rows[0]?.privileges || [];
+}
+
+// Set the whole set at once, so unticking is as ordinary as ticking. A SUPPLIER is
+// external and can hold only `request_buying` (the buyer's own gate): a buyer with the
+// approve privilege would sign off their own request, which is what the process exists
+// to prevent. The staff duties are filtered out here, not just in the UI.
+export async function setUserPrivileges(uid, privileges) {
+  const rows = await db()`
+    UPDATE users SET privileges = CASE WHEN role = 'supplier'
+        THEN ARRAY(SELECT p FROM unnest(${privileges}::text[]) p WHERE p = 'request_buying')
+        ELSE ${privileges}::text[] END
+     WHERE id = ${uid}
+     RETURNING id, username, name, role, privileges`;
+  return rows[0] || null;
+}
+
+export async function logCartEvent({ cartId, kind, lineId = null, gcId = null, body = null, actor = null }) {
+  const sql = db();
+  // `Number(uid) || null` — an env admin/superadmin has no row in `users`, and its uid
+  // reaches here as a non-numeric. Writing that into a BIGINT column is the bug that
+  // took down PO comments once already.
+  const actorId = actor && Number(actor.uid) ? Number(actor.uid) : null;
+  const rows = await sql`
+    INSERT INTO buy_cart_events (cart_id, kind, line_id, gc_id, body, actor_id, actor_name, actor_role)
+    VALUES (${cartId}, ${kind}, ${lineId}, ${gcId}, ${body},
+            ${actorId}, ${actor ? (actor.name || actor.username || null) : null}, ${actor ? actor.role : null})
+    RETURNING *`;
+  return rows[0];
+}
+
+export async function createBuyCart({ buyerUserId, buyerName, retailer, purpose, restrictions, presetId, costStack, actor }) {
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, restrictions, preset_id, cost_stack)
+    VALUES (${buyerUserId}, ${buyerName}, ${retailer || null}, ${purpose || null},
+            ${restrictions || null}, ${presetId || null}, ${costStack ? JSON.stringify(costStack) : null})
+    RETURNING *`;
+  await logCartEvent({ cartId: rows[0].id, kind: 'created', actor });
+  return cartOut(rows[0]);
+}
+
+export async function getBuyCart(id) {
+  const sql = db();
+  return cartOut((await sql`SELECT * FROM buy_carts WHERE id = ${id}`)[0] || null);
+}
+
+// The whole record for one screen. Gift cards come back MASKED — `code_last4` and the
+// balance, never `code_enc`. This is the payload every role's cart page renders, so a
+// code selected here would end up in a browser cache, a screenshot and a bug report.
+export async function getBuyCartFull(id) {
+  const sql = db();
+  const cart = cartOut((await sql`SELECT * FROM buy_carts WHERE id = ${id}`)[0]);
+  if (!cart) return null;
+  const [lines, giftCards, files, receiptLines, events, po] = await Promise.all([
+    sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${id} ORDER BY id`,
+    sql`SELECT id, cart_id, code_last4, balance, retailer, label, spent_amount, remaining,
+               issued_by, issued_at, voided_at, voided_reason,
+               (pin_enc IS NOT NULL) AS has_pin
+          FROM buy_cart_gift_cards WHERE cart_id = ${id} ORDER BY id`,
+    sql`SELECT id, cart_id, kind, sku, name, content_type, size_bytes, uploaded_by, uploaded_at
+          FROM buy_cart_files WHERE cart_id = ${id} ORDER BY kind, id`,
+    sql`SELECT * FROM buy_cart_receipt_lines WHERE cart_id = ${id} ORDER BY id`,
+    sql`SELECT * FROM buy_cart_events WHERE cart_id = ${id} ORDER BY id DESC LIMIT 200`,
+    cart.po_id
+      ? sql`SELECT id, po_code, status, resolution_state, manifest_scope, labels_requested_at
+              FROM purchase_orders WHERE id = ${cart.po_id}`
+      : Promise.resolve([]),
+  ]);
+  // Loaded after the batch above because both read the same receipt lines the batch
+  // just fetched — and the pack state needs the PO id, which is on the cart, not on
+  // anything the batch returns.
+  const [tasks, pack] = await Promise.all([listCartTasks(id), getCartPackState(id)]);
+  return {
+    ...cart,
+    lines: lines.map(lineOut),
+    giftCards: giftCards.map((g) => ({
+      ...g,
+      balance: Number(g.balance) || 0,
+      spent_amount: g.spent_amount == null ? null : Number(g.spent_amount),
+      remaining: g.remaining == null ? null : Number(g.remaining),
+    })),
+    files,
+    receiptLines: receiptLines.map((r) => ({
+      ...r,
+      qty: Number(r.qty) || 0,
+      unit_price: r.unit_price == null ? null : Number(r.unit_price),
+      total_price: r.total_price == null ? null : Number(r.total_price),
+    })),
+    events,
+    tasks,
+    pack,
+    po: po[0] || null,
+  };
+}
+
+// List for a queue screen. `buyerUserId` scopes a buyer to their own carts; staff pass
+// null and get everything. Scoping on the id off the token (never a name) is the same
+// rule the payout presets follow, and for the same reason.
+export async function listBuyCarts({ buyerUserId = null, status = null, buyerId = null, limit = 100 } = {}) {
+  const sql = db();
+  // `buyerUserId` is the SCOPE — a buyer reaching only their own, off the token.
+  // `buyerId` is a staff FILTER, and they are deliberately different arguments: folding
+  // them into one parameter is how a filter becomes a way to read somebody else's
+  // spending. When both are set the scope still wins, because it is ANDed in.
+  const rows = buyerUserId != null
+    ? await sql`
+        SELECT c.*, (SELECT po_code FROM purchase_orders p WHERE p.id = c.po_id) AS po_code
+          FROM buy_carts c WHERE c.buyer_user_id = ${buyerUserId}
+           AND (${status}::text IS NULL OR c.status = ${status})
+         ORDER BY c.id DESC LIMIT ${limit}`
+    : await sql`
+        SELECT c.*, (SELECT po_code FROM purchase_orders p WHERE p.id = c.po_id) AS po_code
+          FROM buy_carts c
+         WHERE (${status}::text IS NULL OR c.status = ${status})
+           AND (${buyerId}::bigint IS NULL OR c.buyer_user_id = ${buyerId})
+         ORDER BY c.id DESC LIMIT ${limit}`;
+  return rows.map(cartOut);
+}
+
+/**
+ * Every buyer who has ever raised a request, with how many are still live.
+ *
+ * Derived from the whole table rather than from the page the screen happens to be
+ * holding: the list is capped at 100, so a dropdown built from the loaded rows would
+ * quietly omit anyone whose requests had all scrolled off — and picking a name that was
+ * missing is not a thing a person can do.
+ */
+export async function listBuyCartBuyers() {
+  // The USERNAME comes back too, because a display name is not an identity: two
+  // accounts can carry the same one, and on live data two do. A dropdown offering
+  // "Test Supplier" twice is a filter a person cannot use correctly even though the
+  // value behind each option is right.
+  const rows = await db()`
+    SELECT c.buyer_user_id AS id, max(c.buyer_name) AS name, max(u.username) AS username,
+           count(*)::int AS total,
+           count(*) FILTER (WHERE c.status NOT IN ('closed', 'cancelled', 'written_off'))::int AS live
+      FROM buy_carts c LEFT JOIN users u ON u.id = c.buyer_user_id
+     WHERE c.buyer_user_id IS NOT NULL
+     GROUP BY c.buyer_user_id
+     ORDER BY 2`;
+  return rows.map((r) => ({ ...r, id: Number(r.id) }));
+}
+
+export async function addBuyCartLine(cartId, line, actor) {
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO buy_cart_lines
+      (cart_id, sku, size, qty, name, colorway, gender, upc, shelf_price, verdict,
+       final_cost, best_platform, best_payout, profit, roi, alias_price, stockx_price,
+       liquidity, basis, quoted_at)
+    VALUES (${cartId}, ${line.sku}, ${line.size || null}, ${line.qty}, ${line.name || null},
+            ${line.colorway || null}, ${line.gender || null}, ${line.upc || null},
+            ${line.shelfPrice}, ${line.verdict || null}, ${line.finalCost ?? null},
+            ${line.bestPlatform || null}, ${line.bestPayout ?? null}, ${line.profit ?? null},
+            ${line.roi ?? null}, ${line.aliasPrice ?? null}, ${line.stockxPrice ?? null},
+            ${line.liquidity || null}, ${line.basis || null}, now())
+    RETURNING *`;
+  await recalcCartMoney(sql, cartId);
+  await logCartEvent({
+    cartId, kind: 'line_added', lineId: rows[0].id, actor,
+    // No "×null". The buyer states no quantity — it is the decision being asked for — so
+    // the line simply does not carry one yet, and printing the absence as a number made
+    // the trail read like a request for zero pairs.
+    body: `${line.sku}${line.size ? ` size ${line.size}` : ''}${Number(line.qty) > 0 ? ` ×${line.qty}` : ''} @ $${Number(line.shelfPrice || 0).toFixed(2)}${line.verdict ? ` — ${line.verdict}` : ''}`,
+  });
+  return lineOut(rows[0]);
+}
+
+export async function getBuyCartLine(cartId, lineId) {
+  const rows = await db()`SELECT * FROM buy_cart_lines WHERE id = ${lineId} AND cart_id = ${cartId}`;
+  return lineOut(rows[0] || null);
+}
+
+// Edit one line. `call` is the re-derived landed cost and buy call (api/_lib/buycart.js
+// repriceLine) when the shelf price moved -- passing null leaves the snapshot alone,
+// which is what a pure size or quantity correction should do. `note` is the before/after
+// in words: an edit to a number somebody is approving has to say what it used to be, or
+// the trail records that something changed and nothing about what.
+export async function updateBuyCartLine(cartId, lineId, patch, actor, call = null, note = null) {
+  const sql = db();
+  const rows = call
+    ? await sql`
+      UPDATE buy_cart_lines SET
+        qty = coalesce(${patch.qty ?? null}::int, qty),
+        shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
+        size = coalesce(${patch.size ?? null}::text, size),
+        final_cost = ${call.finalCost}, verdict = ${call.verdict},
+        best_platform = ${call.bestPlatform}, best_payout = ${call.bestPayout},
+        profit = ${call.profit}, roi = ${call.roi},
+        updated_at = now()
+      WHERE id = ${lineId} AND cart_id = ${cartId}
+      RETURNING *`
+    : await sql`
+      UPDATE buy_cart_lines SET
+        qty = coalesce(${patch.qty ?? null}::int, qty),
+        shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
+        size = coalesce(${patch.size ?? null}::text, size),
+        updated_at = now()
+      WHERE id = ${lineId} AND cart_id = ${cartId}
+      RETURNING *`;
+  if (!rows[0]) return null;
+  await recalcCartMoney(sql, cartId);
+  await logCartEvent({ cartId, kind: 'line_edited', lineId, actor, body: note });
+  return lineOut(rows[0]);
+}
+
+// Put a MARKET price on one line, and the buy call that follows from it.
+//
+// The snapshot rule (a line's call is frozen as the buyer saw it) assumes there IS a
+// call. A line quoted while Alias was timing out has nothing to protect: it stored zeros,
+// and zeros render as "Not priced" forever with no way back short of deleting the line
+// and re-adding it. This is that way back, and it is an explicit act by a named person
+// rather than anything automatic.
+//
+// `quoted_at` moves with it, so the screen can say how old the numbers are.
+export async function priceBuyCartLine(cartId, lineId, snap, actor, note) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_cart_lines SET
+      verdict = ${snap.verdict}, final_cost = ${snap.finalCost},
+      best_platform = ${snap.bestPlatform}, best_payout = ${snap.bestPayout},
+      profit = ${snap.profit}, roi = ${snap.roi},
+      alias_price = ${snap.aliasPrice}, stockx_price = ${snap.stockxPrice},
+      liquidity = ${snap.liquidity}, quoted_at = now(), updated_at = now()
+    WHERE id = ${lineId} AND cart_id = ${cartId}
+    RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({ cartId, kind: 'line_priced', lineId, actor, body: note });
+  return lineOut(rows[0]);
+}
+
+// Write the request's cost stack and re-derive every line against it.
+//
+// The stack is what turns a shelf price into a landed cost, and a buyer who has never
+// been given a payout preset arrives with none at all -- so an approver or an auditor
+// can state it. The recompute is the point rather than a side effect: leaving the old
+// landed costs beside a stack that has just been declared wrong would show numbers
+// nothing on the screen can explain. The MARKET half of each snapshot is untouched.
+//
+// `note` is the before/after diff in words, written by the endpoint, so the trail says
+// which rate moved and from what.
+export async function setBuyCartCostStack(cartId, stack, calls, actor, note) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET cost_stack = ${JSON.stringify(stack)}, updated_at = now()
+     WHERE id = ${cartId}
+     RETURNING *`;
+  if (!rows[0]) return null;
+  for (const c of calls || []) {
+    await sql`
+      UPDATE buy_cart_lines SET
+        final_cost = ${c.finalCost}, verdict = ${c.verdict},
+        best_platform = ${c.bestPlatform}, best_payout = ${c.bestPayout},
+        profit = ${c.profit}, roi = ${c.roi}, updated_at = now()
+       WHERE id = ${c.id} AND cart_id = ${cartId}`;
+  }
+  await logCartEvent({ cartId, kind: 'costs_edited', actor, body: note });
+  return cartOut(rows[0]);
+}
+
+export async function removeBuyCartLine(cartId, lineId, actor) {
+  const sql = db();
+  const rows = await sql`DELETE FROM buy_cart_lines WHERE id = ${lineId} AND cart_id = ${cartId} RETURNING sku, size, qty`;
+  if (!rows[0]) return null;
+  await recalcCartMoney(sql, cartId);
+  await logCartEvent({ cartId, kind: 'line_removed', actor, body: `${rows[0].sku} ${rows[0].size || ''} ×${rows[0].qty}` });
+  return rows[0];
+}
+
+// Adding a pair IS asking about it, so the buyer's add puts the request in front of the
+// approvers rather than waiting for a separate "send". Idempotent and safe to call on
+// every add: a request already carrying pending lines is already `submitted`, and the
+// stamp is only written the first time.
+//
+// It also pulls a fully-decided request BACK to `submitted`, which is the honest state —
+// there is something undecided on it again, and the gift card desk must not fund a total
+// that is about to move. Never touches a funded request; `cart/line` refuses the add
+// before it gets here.
+export async function askBuyCart(cartId, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET
+      status = 'submitted',
+      submitted_at = coalesce(submitted_at, now()),
+      submitted_by = coalesce(submitted_by, ${actor.name || actor.username || null}),
+      updated_at = now()
+    WHERE id = ${cartId} AND status IN ('draft', 'submitted', 'approved', 'denied')
+    RETURNING *`;
+  if (!rows[0]) return null;
+  return getBuyCartFull(cartId);
+}
+
+// An unlinked Telegram account tapped something. Record the number so an admin can
+// point it at a person with one click — nobody knows their own numeric Telegram id, so
+// capturing it here is the difference between a one-click link and a scavenger hunt.
+//
+// The name is whatever Telegram reported and is NOT trusted for anything; it is there so
+// an admin can tell the rows apart. `taps` counts how many times somebody has tried,
+// which is a useful thing to see: three taps from one unlinked account is somebody
+// waiting on you.
+export async function noteTelegramLinkRequest({ telegramUserId, name, username }) {
+  await db()`
+    INSERT INTO telegram_link_requests (telegram_user_id, name, username)
+    VALUES (${telegramUserId}, ${name || null}, ${username || null})
+    ON CONFLICT (telegram_user_id) DO UPDATE
+      SET name = COALESCE(EXCLUDED.name, telegram_link_requests.name),
+          username = COALESCE(EXCLUDED.username, telegram_link_requests.username),
+          taps = telegram_link_requests.taps + 1,
+          last_seen_at = now()`;
+}
+
+// Waiting to be linked — and never anything already linked, so a row disappears the
+// moment it is dealt with rather than needing to be dismissed.
+export async function listTelegramLinkRequests() {
+  return await db()`
+    SELECT r.telegram_user_id, r.name, r.username, r.taps, r.first_seen_at, r.last_seen_at
+      FROM telegram_link_requests r
+     WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.telegram_user_id = r.telegram_user_id)
+     ORDER BY r.last_seen_at DESC
+     LIMIT 50`;
+}
+
+export async function clearTelegramLinkRequest(telegramUserId) {
+  await db()`DELETE FROM telegram_link_requests WHERE telegram_user_id = ${telegramUserId}`;
+}
+
+// Link (or unlink, with null) a Telegram account to a user. The unique index is what
+// stops two accounts claiming one Telegram id; the caller turns that into a message.
+export async function setUserTelegramId(userId, telegramUserId) {
+  const rows = await db()`
+    UPDATE users SET telegram_user_id = ${telegramUserId}
+     WHERE id = ${userId}
+     RETURNING id, name, username, role, status, privileges, telegram_user_id`;
+  return rows[0] || null;
+}
+
+export async function getUserById(userId) {
+  const rows = await db()`SELECT id, name, username, role, status FROM users WHERE id = ${userId}`;
+  return rows[0] || null;
+}
+
+// Who a Telegram tap is. Approvals arrive from a group where everyone can press a
+// button, so the decision has to be attributable to a real account here — see
+// `api/cart/telegram-decide.js`. Returns null for an unlinked account, which that
+// endpoint refuses rather than recording against nobody.
+export async function userByTelegramId(telegramUserId) {
+  const rows = await db()`
+    SELECT id, name, username, role, status, privileges
+      FROM users WHERE telegram_user_id = ${telegramUserId}`;
+  const u = rows[0];
+  // Shaped like the token payload the rest of the code passes around, so `hasPrivilege`
+  // and `decideBuyCartLines` need no special case for a Telegram actor.
+  return u ? { ...u, uid: Number(u.id) } : null;
+}
+
+// One file by its id alone, WITHOUT a cart to scope it. Only `cart/shoe-photo` uses
+// this — a machine caller holding an API key has no cart in hand, so the row itself has
+// to carry the check. It returns `kind`, and that endpoint refuses anything but 'shoe'.
+export async function getBuyCartFileById(fileId) {
+  const rows = await db()`
+    SELECT id, cart_id, kind, sku, r2_key, name, content_type, size_bytes
+      FROM buy_cart_files WHERE id = ${fileId}`;
+  return rows[0] || null;
+}
+
+// The photo file ids for one shoe on one request, oldest first. Keyed on the STYLE CODE:
+// one set of shots covers every size of it.
+export async function cartShoePhotos(cartId, sku) {
+  const rows = await db()`
+    SELECT id FROM buy_cart_files
+     WHERE cart_id = ${cartId} AND kind = 'shoe'
+       AND upper(btrim(sku)) = upper(btrim(${String(sku || '')}))
+     ORDER BY id`;
+  return rows.map((r) => Number(r.id));
+}
+
+// Does this request carry a photo of that shoe? Keyed on the STYLE CODE — one shot
+// covers every size of it.
+export async function cartHasShoePhoto(cartId, sku) {
+  const rows = await db()`
+    SELECT 1 FROM buy_cart_files
+     WHERE cart_id = ${cartId} AND kind = 'shoe'
+       AND upper(btrim(sku)) = upper(btrim(${String(sku || '')}))
+     LIMIT 1`;
+  return rows.length > 0;
+}
+
+export async function submitBuyCart(cartId, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET status = 'submitted', submitted_at = now(),
+           submitted_by = ${actor.name || actor.username || null}, updated_at = now()
+     WHERE id = ${cartId} AND status = 'draft' RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({ cartId, kind: 'submitted', actor });
+  return cartOut(rows[0]);
+}
+
+// Back to draft while nothing has been decided. Allowed only with no approved lines —
+// pulling a request somebody already said yes to would let the buyer swap the contents
+// of an approval.
+export async function withdrawBuyCart(cartId, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET status = 'draft', submitted_at = NULL, submitted_by = NULL, updated_at = now()
+     WHERE id = ${cartId} AND status = 'submitted'
+       AND NOT EXISTS (SELECT 1 FROM buy_cart_lines WHERE cart_id = ${cartId} AND status <> 'pending')
+     RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({ cartId, kind: 'withdrawn', actor });
+  return cartOut(rows[0]);
+}
+
+/**
+ * Approve or reject lines — one, several, or every pending one.
+ *
+ * Either staff side may decide (warehouse/admin or PH): the endpoint is the gate, and
+ * what's recorded here is WHO, by id and by role, because the auditor later must not be
+ * the approver and that comparison can't run on a display name.
+ *
+ * The cart's own status follows the lines rather than being set by hand: once nothing is
+ * pending it is `approved` if anything survived, `denied` if nothing did. A status typed
+ * separately from the rows it describes is a status that drifts from them.
+ */
+// Style codes on a request that carry no photo. One shot covers every size of the same
+// shoe, so this is keyed on the SKU rather than the line — a buyer sending a 7, an 8 and
+// a 9 of one pair photographs it once.
+export async function skusWithoutPhotos(cartId) {
+  const rows = await db()`
+    SELECT DISTINCT l.sku
+      FROM buy_cart_lines l
+     WHERE l.cart_id = ${cartId}
+       AND NOT EXISTS (
+         SELECT 1 FROM buy_cart_files f
+          WHERE f.cart_id = l.cart_id AND f.kind = 'shoe'
+            AND upper(btrim(f.sku)) = upper(btrim(l.sku)))
+     ORDER BY l.sku`;
+  return rows.map((r) => r.sku);
+}
+
+// Which of the lines about to be approved still have no quantity — theirs, or one the
+// caller supplied. Returned as rows so the refusal can NAME the pairs rather than saying
+// a number is missing somewhere on a twelve-line request.
+export async function linesAwaitingQty(cartId, lineIds, qtyById = {}, qtyAll = null) {
+  const sql = db();
+  const ids = Array.isArray(lineIds) && lineIds.length ? lineIds.map(Number).filter(Number.isInteger) : null;
+  const rows = ids
+    ? await sql`SELECT id, sku, size, qty FROM buy_cart_lines
+                 WHERE cart_id = ${cartId} AND id = ANY(${ids}::bigint[]) AND status <> 'rejected'`
+    : await sql`SELECT id, sku, size, qty FROM buy_cart_lines
+                 WHERE cart_id = ${cartId} AND status <> 'rejected'`;
+  return rows.filter((r) => !(Number(qtyById[r.id]) > 0 || Number(r.qty) > 0 || Number(qtyAll) > 0));
+}
+
+/**
+ * Approve or turn down lines, and — when approving — SET HOW MANY.
+ *
+ * `qtyById` is a { lineId: qty } map. The buyer never states a quantity: they report what
+ * they found in a shop, and how many of it to buy is the decision being asked for. An
+ * approve therefore carries a number, and a line approved without one would be a line
+ * the funding total silently valued at whatever was left in the column.
+ *
+ * `qtyAll` is the number a bulk "approve all" uses for anything the map does not name.
+ *
+ * OVERRIDING somebody else's decision is allowed, and that is deliberate: the floor says
+ * one approver sometimes reverses another's call, and a system that refuses it just moves
+ * that conversation somewhere unauditable. What it must never do is lose the first
+ * decision — `overrode_*` keeps who decided what, so the line can say "JK approved →
+ * Alex turned it down" rather than presenting the last write as the only one.
+ * `decisionsOpen` still gates the whole thing: once the cards are out, the approvals are
+ * what the money was released against and nothing may move.
+ */
+export async function decideBuyCartLines({
+  cartId, lineIds = null, action, reason = null, actor, qtyById = {}, qtyAll = null,
+}) {
+  const sql = db();
+  const status = action === 'approve' ? 'approved' : 'rejected';
+  const actorId = actor && Number(actor.uid) ? Number(actor.uid) : null;
+  const actorName = actor.name || actor.username || null;
+  const ids = Array.isArray(lineIds) && lineIds.length ? lineIds.map(Number).filter(Number.isInteger) : null;
+
+  // Read first, so an override can carry what it replaced. Includes already-decided
+  // lines — the whole point — but never a line on a cart the caller has not passed.
+  const targets = ids
+    ? await sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId} AND id = ANY(${ids}::bigint[])`
+    : await sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId}`;
+
+  const rows = [];
+  for (const t of targets) {
+    const wasDecided = t.status !== 'pending';
+    // A bulk "approve all" re-approving a line it already approved, with the same
+    // quantity, is a no-op rather than an override — otherwise pressing the button twice
+    // invents a history of reversals.
+    const qty = action === 'approve'
+      ? (Number.isInteger(Number(qtyById[t.id])) && Number(qtyById[t.id]) > 0
+        ? Number(qtyById[t.id])
+        : (Number(t.qty) > 0 ? Number(t.qty) : (Number(qtyAll) > 0 ? Number(qtyAll) : null)))
+      // A REFUSAL CARRIES NO QUANTITY. Quantity IS the approval here — the buyer never
+      // states one — so a rejected line that kept its number reads as "buy 2" to anyone
+      // looking at the row, and that is exactly the row somebody checks before spending.
+      // Turning down a line that was approved for 2 left `qty = 2` sitting beside
+      // "Rejected". What it REVERSED is not lost: `overrode_qty` below holds it.
+      : null;
+    if (action === 'approve' && !(qty > 0)) continue;   // refused upstream; belt and braces
+
+    // THE NO-OP GUARD LIVES IN THE WHERE CLAUSE, not in an `if` above it.
+    //
+    // It was a read-then-write, and Telegram redelivers a callback that is not answered
+    // fast enough — so two taps of the same button both read `pending`, both decided it,
+    // and the trail carried the same approval twice under the same name. Seen in real
+    // data: three taps, two `line_approved` rows.
+    //
+    // Written as one statement, the second tap matches nothing and returns no row, so it
+    // is not counted as a decision and writes no event. The comparison is
+    // IS NOT DISTINCT FROM because `qty` is null on a rejection and on a line nobody has
+    // decided yet, and `null = null` is null in SQL, not true.
+    const [row] = await sql`
+      UPDATE buy_cart_lines SET
+        status = ${status}, qty = ${qty ?? null},
+        decided_by = ${actorName}, decided_by_id = ${actorId}, decided_role = ${actor.role},
+        decided_at = now(), decided_reason = ${reason},
+        overrode_by = ${wasDecided ? (t.decided_by || null) : null},
+        overrode_status = ${wasDecided ? t.status : null},
+        overrode_qty = ${wasDecided ? (t.qty ?? null) : null},
+        updated_at = now()
+      WHERE id = ${t.id} AND cart_id = ${cartId}
+        AND NOT (status = ${status} AND qty IS NOT DISTINCT FROM ${qty ?? null})
+      RETURNING *`;
+    if (row) rows.push(row);
+  }
+  await recalcCartMoney(sql, cartId);
+  // Now settle the cart's own status from what the lines say.
+  await sql`
+    UPDATE buy_carts SET
+      status = CASE WHEN pending_count > 0 THEN 'submitted'
+                    WHEN approved_count > 0 THEN 'approved'
+                    ELSE 'denied' END,
+      approved_at = CASE WHEN pending_count = 0 AND approved_count > 0 AND approved_at IS NULL
+                         THEN now() ELSE approved_at END,
+      approved_by = CASE WHEN pending_count = 0 AND approved_count > 0 AND approved_by IS NULL
+                         THEN ${actor.name || actor.username || null} ELSE approved_by END,
+      approved_by_id = CASE WHEN pending_count = 0 AND approved_count > 0 AND approved_by_id IS NULL
+                            THEN ${actorId} ELSE approved_by_id END,
+      approved_by_role = CASE WHEN pending_count = 0 AND approved_count > 0 AND approved_by_role IS NULL
+                              THEN ${actor.role} ELSE approved_by_role END,
+      -- The key the "approver can't also audit" check compares on. The id alone is NULL
+      -- for the env admin/superadmin accounts, which turned that control off for exactly
+      -- the two accounts it most needed to cover.
+      approved_by_key = CASE WHEN pending_count = 0 AND approved_count > 0 AND approved_by_key IS NULL
+                             THEN ${actorKeyOf(actor)} ELSE approved_by_key END,
+      updated_at = now()
+    WHERE id = ${cartId} AND status IN ('submitted','approved','denied')`;
+  for (const r of rows) {
+    // `×null` on a refusal, and `×2` on a refusal that reversed an approval of 2, both
+    // said something false in the one place an auditor reads. Print the number only when
+    // there is one, and say what a reversal reversed.
+    const qtyPart = Number(r.qty) > 0 ? ` ×${r.qty}` : '';
+    const was = r.overrode_status === 'approved' && Number(r.overrode_qty) > 0
+      ? ` (was approved ×${r.overrode_qty})` : '';
+    await logCartEvent({
+      cartId, kind: action === 'approve' ? 'line_approved' : 'line_rejected',
+      lineId: r.id, actor,
+      body: reason || `${r.sku} ${r.size || ''}${qtyPart}${was}`.replace(/\s{2,}/g, ' ').trim(),
+    });
+  }
+  return { decided: rows.length, cart: await getBuyCart(cartId) };
+}
+
+// ---- Gift cards -----------------------------------------------------------
+// `codeEnc`/`pinEnc` arrive ALREADY encrypted: the endpoint holds the plaintext for the
+// length of one request and this layer never sees it. Keeping the cipher call out of
+// here is deliberate — it means no query in this file can accidentally round-trip a
+// code, and a `SELECT *` on this table is useless to whoever runs it.
+export async function addBuyCartGiftCard({ cartId, codeEnc, codeLast4, pinEnc, balance, retailer, label, actor }) {
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO buy_cart_gift_cards (cart_id, code_enc, code_last4, pin_enc, balance, retailer, label, issued_by, issued_by_id)
+    VALUES (${cartId}, ${codeEnc}, ${codeLast4}, ${pinEnc}, ${balance}, ${retailer || null}, ${label || null},
+            ${actor.name || actor.username || null}, ${actor && Number(actor.uid) ? Number(actor.uid) : null})
+    RETURNING id, cart_id, code_last4, balance, retailer, label, issued_by, issued_at`;
+  await recalcCartMoney(sql, cartId);
+  await logCartEvent({ cartId, kind: 'gc_added', gcId: rows[0].id, actor, body: `•••• ${codeLast4} · $${Number(balance).toFixed(2)}` });
+  return { ...rows[0], balance: Number(rows[0].balance) };
+}
+
+// Void rather than delete: a card that was issued and then withdrawn is a thing that
+// happened to company money, and the trail has to keep it. Voided cards drop out of
+// `gc_total`, so the funding check is unaffected.
+export async function voidBuyCartGiftCard({ cartId, gcId, reason, actor }) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_cart_gift_cards SET voided_at = now(), voided_reason = ${reason || null}
+     WHERE id = ${gcId} AND cart_id = ${cartId} AND voided_at IS NULL
+     RETURNING id, code_last4, balance`;
+  if (!rows[0]) return null;
+  await recalcCartMoney(sql, cartId);
+  await logCartEvent({ cartId, kind: 'gc_voided', gcId, actor, body: reason || null });
+  return rows[0];
+}
+
+// The ONE place a stored code comes back out, and the caller writes a `gc_revealed`
+// event before handing it on. Returns the ciphertext; decrypting is the endpoint's job,
+// so the key never has to be reachable from the query layer.
+export async function getBuyCartGiftCardSecret(cartId, gcId) {
+  const sql = db();
+  return (await sql`
+    SELECT id, cart_id, code_enc, pin_enc, code_last4, balance
+      FROM buy_cart_gift_cards WHERE id = ${gcId} AND cart_id = ${cartId}`)[0] || null;
+}
+
+/**
+ * Release the request — the moment company money becomes spendable.
+ *
+ * `note` exists because there are two routes to this state and they are funded by
+ * different things. Gift cards are objects with balances; a company card charge is an
+ * authorisation with a reference. The default sentence reads off `gc_total`, which is
+ * zero on the card route — so a card-funded request would have recorded "$0.00 issued"
+ * as the record of the money going out.
+ */
+export async function fundBuyCart(cartId, actor, note = null) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET status = 'funded', funded_at = now(),
+           funded_by = ${actor.name || actor.username || null},
+           funded_by_id = ${actor && Number(actor.uid) ? Number(actor.uid) : null}, updated_at = now()
+     WHERE id = ${cartId} AND status = 'approved' RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({
+    cartId, kind: 'funded', actor,
+    body: note || `$${Number(rows[0].gc_total).toFixed(2)} issued against $${Number(rows[0].approved_amount).toFixed(2)} approved`,
+  });
+  return cartOut(rows[0]);
+}
+
+// ---- Files ----------------------------------------------------------------
+export async function addBuyCartFile({ cartId, kind, key, name, contentType, sizeBytes, sku = null, actor }) {
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type, size_bytes, sku, uploaded_by, uploaded_by_id)
+    VALUES (${cartId}, ${kind}, ${key}, ${name || null}, ${contentType || null}, ${sizeBytes ?? null}, ${sku || null},
+            ${actor.name || actor.username || null}, ${actor && Number(actor.uid) ? Number(actor.uid) : null})
+    RETURNING id, cart_id, kind, sku, name, content_type, size_bytes, uploaded_by, uploaded_at`;
+  // The receipt is a step in its own right, so its arrival is stamped on the cart —
+  // "receipt was received" is a closing condition and must not be inferred from a file
+  // list somebody could have filtered differently.
+  if (kind === 'receipt') {
+    await sql`UPDATE buy_carts SET receipt_at = coalesce(receipt_at, now()),
+                     receipt_by = coalesce(receipt_by, ${actor.name || actor.username || null}),
+                     status = CASE WHEN status = 'funded' THEN 'receipted' ELSE status END,
+                     updated_at = now()
+               WHERE id = ${cartId}`;
+  }
+  await logCartEvent({ cartId, kind: 'file_added', actor, body: `${kind}: ${name || key}` });
+  return rows[0];
+}
+
+/**
+ * Remove an uploaded file's ROW. The bucket object is deleted by the endpoint.
+ *
+ * A hard delete, deliberately, and paired with an event that survives it. The row is
+ * not evidence of anything on its own — the FILE was the evidence, and once that is
+ * gone a row pointing at a missing object is just a broken download button. What has to
+ * survive is the fact that a file existed and somebody removed it, which is why the
+ * caller writes `file_removed` with the name before this runs.
+ */
+export async function deleteBuyCartFile(cartId, fileId) {
+  const rows = await db()`
+    DELETE FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId}
+    RETURNING id, kind, r2_key, name`;
+  return rows[0] || null;
+}
+
+export async function getBuyCartFile(cartId, fileId) {
+  const sql = db();
+  return (await sql`SELECT * FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId}`)[0] || null;
+}
+
+export async function removeBuyCartFile(cartId, fileId, actor) {
+  const sql = db();
+  const rows = await sql`DELETE FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId} RETURNING r2_key, kind, name`;
+  if (!rows[0]) return null;
+  await logCartEvent({ cartId, kind: 'file_removed', actor, body: `${rows[0].kind}: ${rows[0].name || ''}` });
+  return rows[0];
+}
+
+// ---- Receipt --------------------------------------------------------------
+// Replaces the whole parsed set in one transaction: a re-parse is a correction of the
+// same receipt, and leaving the previous attempt's rows behind would double the spend.
+// Each line is matched to an approved request line where SKU and size agree, which is
+// what makes "bought but never approved" visible instead of silently fine.
+export async function setBuyCartReceiptLines({ cartId, lines, receiptTotal, subtotal = null, tax = null, actor }) {
+  const sql = db();
+  await sql`DELETE FROM buy_cart_receipt_lines WHERE cart_id = ${cartId}`;
+  for (const l of lines) {
+    await sql`
+      INSERT INTO buy_cart_receipt_lines (cart_id, sku, size, qty, name, unit_price, total_price, source, matched_line_id)
+      VALUES (${cartId}, ${l.sku || null}, ${l.size || null}, ${l.qty}, ${l.name || null},
+              ${l.unitPrice ?? null}, ${l.totalPrice ?? null}, ${l.source || 'manual'},
+              (SELECT id FROM buy_cart_lines
+                WHERE cart_id = ${cartId} AND status = 'approved'
+                  AND upper(btrim(sku)) = upper(btrim(${l.sku || ''}))
+                  AND coalesce(upper(btrim(size)), '') = coalesce(upper(btrim(${l.size || ''})), '')
+                ORDER BY id LIMIT 1))`;
+  }
+  await sql`
+    UPDATE buy_carts SET receipt_total = ${receiptTotal},
+           receipt_subtotal = ${subtotal}, receipt_tax = ${tax},
+           -- The TOTAL is what the balance is worked out against, not the subtotal: the
+           -- cards were charged the amount at the bottom of the receipt, tax included.
+           balance_remaining = gc_total - ${receiptTotal},
+           status = CASE WHEN status IN ('funded','receipted') THEN 'receipted' ELSE status END,
+           updated_at = now()
+     WHERE id = ${cartId}`;
+  await logCartEvent({
+    cartId, kind: 'receipt_parsed', actor,
+    body: `${lines.length} lines · $${Number(receiptTotal).toFixed(2)}`
+      + (subtotal != null ? ` (goods $${Number(subtotal).toFixed(2)}${tax != null ? ` + tax $${Number(tax).toFixed(2)}` : ''})` : ''),
+  });
+  return getBuyCartFull(cartId);
+}
+
+export async function linkBuyCartPo(cartId, poId, actor) {
+  const sql = db();
+  const rows = await sql`UPDATE buy_carts SET po_id = ${poId}, updated_at = now() WHERE id = ${cartId} RETURNING *`;
+  await logCartEvent({ cartId, kind: 'po_raised', actor, body: `PO #${poId}` });
+  return cartOut(rows[0]);
+}
+
+// ---- Audit + close --------------------------------------------------------
+// The auditor writes what each card was actually spent and what is left on it. Those
+// two numbers are what "the company can account for the funds supplied" means in
+// practice — an unexplained gap is exactly what the step exists to surface.
+export async function auditBuyCart({ cartId, cards, actor }) {
+  const sql = db();
+  for (const c of cards) {
+    await sql`
+      UPDATE buy_cart_gift_cards SET spent_amount = ${c.spent ?? null}, remaining = ${c.remaining ?? null}
+       WHERE id = ${c.id} AND cart_id = ${cartId}`;
+  }
+  const rows = await sql`
+    UPDATE buy_carts SET status = CASE WHEN status = 'receipted' THEN 'audited' ELSE status END,
+           audited_at = now(), audited_by = ${actor.name || actor.username || null},
+           audited_by_id = ${actor && Number(actor.uid) ? Number(actor.uid) : null},
+           audited_by_key = ${actorKeyOf(actor)}, updated_at = now()
+     WHERE id = ${cartId} RETURNING *`;
+  await logCartEvent({ cartId, kind: 'audited', actor });
+  return cartOut(rows[0]);
+}
+
+export async function closeBuyCart(cartId, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET status = 'closed', closed_at = now(),
+           closed_by = ${actor.name || actor.username || null}, updated_at = now()
+     WHERE id = ${cartId} RETURNING *`;
+  await logCartEvent({ cartId, kind: 'closed', actor });
+  return cartOut(rows[0]);
+}
+
+export async function cancelBuyCart(cartId, reason, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET status = 'cancelled', denied_reason = ${reason || null}, updated_at = now()
+     WHERE id = ${cartId} AND status IN ('draft','submitted','denied') RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({ cartId, kind: 'cancelled', actor, body: reason || null });
+  return cartOut(rows[0]);
+}
+
+
+// ---- The control standard -------------------------------------------------
+// Funding route, custody, tasks and return cases, the goods audit, and the one way a
+// request ends without either a lie or an eternity. See docs/context/buy-cart.md.
+
+/**
+ * Receipt vs packed, per pair AND per box.
+ *
+ * This is the comparison a whole-order manifest never had to make. Now that the buyer
+ * packs the receipt into labelled boxes, three quantities exist for every pair — bought,
+ * packed, received — and only the first two are knowable before the parcel lands.
+ *
+ * The join is on a NORMALISED (sku, size): a till prints `hj5996-001` and a scan-out
+ * screen sends `HJ5996-001`, and a comparison that treats those as different pairs
+ * reports a shortage on a perfect shipment. Same rule as PO reconciliation.
+ *
+ * `unpacked` is the number that matters. Under a per-box manifest, reconciliation only
+ * counts lines on labels that SHIPPED — so a pair that was bought and never packed is
+ * not short, it is absent from the arithmetic entirely, and the order reconciles clean
+ * while the shoe is nowhere. Nothing may ship while this is above zero.
+ */
+export async function getCartPackState(cartId) {
+  const sql = db();
+  const cart = (await sql`SELECT id, po_id FROM buy_carts WHERE id = ${cartId}`)[0];
+  if (!cart) return null;
+  const key = (a, b) => `${String(a ?? '').trim().toUpperCase()}|${String(b ?? '').trim().toUpperCase()}`;
+
+  const receipt = await sql`
+    SELECT max(sku) AS sku, max(size) AS size, max(name) AS name, sum(qty)::int AS qty
+      FROM buy_cart_receipt_lines WHERE cart_id = ${cartId}
+     GROUP BY upper(btrim(coalesce(sku, ''))), upper(btrim(coalesce(size, '')))
+     ORDER BY 1, 2`;
+
+  // A replacement label re-declares units the original manifest already expected, so it
+  // is excluded here for the same reason reconciliation excludes it — counting a reship
+  // as freshly packed would let the receipt look satisfied twice over.
+  const packedRows = cart.po_id
+    ? await sql`
+        SELECT l.sku, l.size, sum(l.qty_expected)::int AS qty
+          FROM po_lines l JOIN po_boxes b ON b.id = l.po_box_id
+         WHERE l.po_id = ${cart.po_id} AND b.kind <> 'replacement'
+         GROUP BY l.sku, l.size`
+    : [];
+  const packedBy = new Map();
+  for (const r of packedRows) packedBy.set(key(r.sku, r.size), (packedBy.get(key(r.sku, r.size)) || 0) + Number(r.qty));
+
+  const rows = receipt.map((r) => {
+    const packed = packedBy.get(key(r.sku, r.size)) || 0;
+    const qty = Number(r.qty) || 0;
+    return { sku: r.sku, size: r.size, name: r.name, qty, packed, remaining: Math.max(0, qty - packed) };
+  });
+
+  const boxes = cart.po_id
+    ? await sql`
+        SELECT b.id, b.box_number, b.status, b.kind, b.tracking_number,
+               coalesce(sum(l.qty_expected), 0)::int AS units
+          FROM po_boxes b LEFT JOIN po_lines l ON l.po_box_id = b.id
+         WHERE b.po_id = ${cart.po_id}
+         GROUP BY b.id ORDER BY b.box_number NULLS LAST, b.id`
+    : [];
+  const boxLines = cart.po_id
+    ? await sql`
+        SELECT id, po_box_id, sku, size, name, qty_expected FROM po_lines
+         WHERE po_id = ${cart.po_id} AND po_box_id IS NOT NULL ORDER BY id`
+    : [];
+
+  const totalQty = rows.reduce((n, r) => n + r.qty, 0);
+  const totalPacked = rows.reduce((n, r) => n + Math.min(r.packed, r.qty), 0);
+  // Packed MORE than the receipt says was bought is its own finding, not a rounding
+  // error: something went into a box that this receipt does not cover.
+  const overPacked = rows.reduce((n, r) => n + Math.max(0, r.packed - r.qty), 0);
+  return {
+    poId: cart.po_id ? Number(cart.po_id) : null,
+    rows,
+    boxes: boxes.map((b) => ({
+      ...b, id: Number(b.id), units: Number(b.units) || 0,
+      lines: boxLines.filter((l) => Number(l.po_box_id) === Number(b.id))
+        .map((l) => ({ ...l, id: Number(l.id), qty_expected: Number(l.qty_expected) || 0 })),
+    })),
+    totalQty, totalPacked, overPacked,
+    unpacked: Math.max(0, totalQty - totalPacked),
+  };
+}
+
+/** The buying request an order was raised from, if any. Null for an ordinary PO. */
+export async function getCartIdForPo(poId) {
+  const rows = await db()`SELECT id FROM buy_carts WHERE po_id = ${poId} ORDER BY id LIMIT 1`;
+  return rows[0] ? Number(rows[0].id) : null;
+}
+
+/** Funding route + the company-card facts. Recorded before cards or a charge exist. */
+export async function setCartFunding({ cartId, method, cardReference, cardAuthorized, actor }) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET funding_method = ${method},
+           card_reference = ${cardReference ?? null},
+           card_authorized = ${cardAuthorized ?? null}, updated_at = now()
+     WHERE id = ${cartId} RETURNING *`;
+  await logCartEvent({
+    cartId, kind: 'funding_set', actor,
+    body: method === 'company_card'
+      ? `Company card${cardReference ? ` · ref ${cardReference}` : ''}${cardAuthorized != null ? ` · authorised $${Number(cardAuthorized).toFixed(2)}` : ''}`
+      : 'Company-funded gift cards',
+  });
+  return cartOut(rows[0]);
+}
+
+/** Who is physically holding the shoes, where, and the day they must be shipped by. */
+export async function setCartCustody({ cartId, holder, holderLocation, shipBy, actor }) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET holder = ${holder ?? null}, holder_location = ${holderLocation ?? null},
+           ship_by = ${shipBy ?? null}::date, updated_at = now()
+     WHERE id = ${cartId} RETURNING *`;
+  await logCartEvent({
+    cartId, kind: 'custody_set', actor,
+    body: `${holder || 'Nobody'}${holderLocation ? ` · ${holderLocation}` : ''}${shipBy ? ` · ship by ${shipBy}` : ' · no ship-by date'}`,
+  });
+  return cartOut(rows[0]);
+}
+
+const taskOut = (t) => (t ? {
+  ...t,
+  id: Number(t.id),
+  qty: t.qty == null ? null : Number(t.qty),
+  cost_at_risk: t.cost_at_risk == null ? null : Number(t.cost_at_risk),
+  refund_amount: t.refund_amount == null ? null : Number(t.refund_amount),
+} : null);
+
+export async function listCartTasks(cartId) {
+  const rows = await db()`
+    SELECT * FROM buy_cart_tasks WHERE cart_id = ${cartId}
+     ORDER BY (status = 'open') DESC, due_date NULLS LAST, id`;
+  return rows.map(taskOut);
+}
+
+/** Open a task or a return case. The two differ only by which columns are filled. */
+export async function addCartTask({ cartId, task, actor }) {
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO buy_cart_tasks
+      (cart_id, kind, title, next_action, owner_name, owner_user_id, due_date,
+       sku, size, qty, cost_at_risk, holder, return_by, created_by)
+    VALUES (${cartId}, ${task.kind}, ${task.title}, ${task.nextAction ?? null},
+            ${task.ownerName ?? null}, ${task.ownerUserId ?? null}, ${task.dueDate ?? null}::date,
+            ${task.sku ?? null}, ${task.size ?? null}, ${task.qty ?? null},
+            ${task.costAtRisk ?? null}, ${task.holder ?? null}, ${task.returnBy ?? null}::date,
+            ${actor ? (actor.name || actor.username || null) : null})
+    RETURNING *`;
+  await logCartEvent({
+    cartId, kind: task.kind === 'return' ? 'return_opened' : 'task_opened', actor,
+    body: `${task.title}${task.ownerName ? ` — ${task.ownerName}` : ''}${task.dueDate ? ` · due ${task.dueDate}` : ''}`,
+  });
+  return taskOut(rows[0]);
+}
+
+/**
+ * Update an open task. `null` fields are left alone rather than cleared: a person
+ * recording the return tracking should not have to restate the owner and the due date.
+ */
+export async function updateCartTask({ cartId, taskId, patch, actor }) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_cart_tasks SET
+      next_action     = coalesce(${patch.nextAction ?? null}::text, next_action),
+      owner_name      = coalesce(${patch.ownerName ?? null}::text, owner_name),
+      due_date        = coalesce(${patch.dueDate ?? null}::date, due_date),
+      return_tracking = coalesce(${patch.returnTracking ?? null}::text, return_tracking),
+      refund_amount   = coalesce(${patch.refundAmount ?? null}::numeric, refund_amount),
+      updated_at      = now()
+     WHERE id = ${taskId} AND cart_id = ${cartId} AND status = 'open'
+     RETURNING *`;
+  if (!rows[0]) return null;
+  const bits = [];
+  if (patch.ownerName) bits.push(`owner ${patch.ownerName}`);
+  if (patch.dueDate) bits.push(`due ${patch.dueDate}`);
+  if (patch.nextAction) bits.push(patch.nextAction);
+  if (patch.returnTracking) bits.push(`return tracking ${patch.returnTracking}`);
+  if (patch.refundAmount != null) bits.push(`refund $${Number(patch.refundAmount).toFixed(2)}`);
+  await logCartEvent({ cartId, kind: 'task_updated', actor, body: `${rows[0].title} — ${bits.join(' · ') || 'updated'}` });
+  return taskOut(rows[0]);
+}
+
+/**
+ * Close a task out.
+ *
+ * On a RETURN, `resolved` requires the refund to have been verified — that is the whole
+ * point of the exception path. Returned is not refunded: the shoes leaving the building
+ * says the retailer has them, not that the company's money came back. `written_off` is
+ * the honest alternative when it never will, and it says so rather than reading as a
+ * clean resolution.
+ */
+export async function closeCartTask({ cartId, taskId, status, resolution, refundAmount, actor }) {
+  const sql = db();
+  const verified = status === 'resolved';
+  const rows = await sql`
+    UPDATE buy_cart_tasks SET status = ${status}, resolution = ${resolution ?? null},
+           refund_amount = coalesce(${refundAmount ?? null}::numeric, refund_amount),
+           refund_verified_at = CASE WHEN kind = 'return' AND ${verified} THEN now() ELSE refund_verified_at END,
+           refund_verified_by = CASE WHEN kind = 'return' AND ${verified}
+                                THEN ${actor ? (actor.name || actor.username || null) : null}
+                                ELSE refund_verified_by END,
+           closed_at = now(), closed_by = ${actor ? (actor.name || actor.username || null) : null},
+           updated_at = now()
+     WHERE id = ${taskId} AND cart_id = ${cartId} AND status = 'open'
+     RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({
+    cartId, kind: status === 'written_off' ? 'task_written_off' : 'task_resolved', actor,
+    body: `${rows[0].title} — ${resolution || status}`,
+  });
+  return taskOut(rows[0]);
+}
+
+/**
+ * The GOODS sign-off: the shipment against the receipt.
+ *
+ * Separate from `auditBuyCart` (the money) because it is answerable at a different time
+ * from different evidence, and holding one signature for both would leave every request
+ * open for the length of a shipment. Same separation-of-duties rule applies to each.
+ */
+export async function goodsAuditBuyCart({ cartId, note, actor }) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET goods_audited_at = now(),
+           goods_audited_by = ${actor.name || actor.username || null},
+           goods_audited_by_id = ${actor && Number(actor.uid) ? Number(actor.uid) : null},
+           goods_audited_by_key = ${actorKeyOf(actor)}, updated_at = now()
+     WHERE id = ${cartId} RETURNING *`;
+  await logCartEvent({ cartId, kind: 'goods_audited', actor, body: note || null });
+  return cartOut(rows[0]);
+}
+
+/**
+ * End a request that can never be completed — and say so.
+ *
+ * The alternative that was in place was worse in both directions: a genuinely lost
+ * receipt left a request open forever, and the pressure that creates is pressure to
+ * record a false "received" or "refunded" instead. A written-off request is neither
+ * closed nor open; it is a documented management decision with a name against it.
+ */
+export async function writeOffBuyCart({ cartId, reason, actor }) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET status = 'written_off', written_off_at = now(),
+           written_off_by = ${actor.name || actor.username || null},
+           write_off_reason = ${reason}, updated_at = now()
+     WHERE id = ${cartId} AND status NOT IN ('closed', 'cancelled', 'written_off')
+     RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({ cartId, kind: 'written_off', actor, body: reason });
+  return cartOut(rows[0]);
+}
+
+// Home-screen badges. One query, four numbers: what each desk is holding up.
+export async function buyCartPendingCounts() {
+  const sql = db();
+  const rows = await sql`
+    SELECT count(*) FILTER (WHERE status = 'submitted')::int              AS carts_to_approve,
+           count(*) FILTER (WHERE status = 'approved')::int               AS carts_to_fund,
+           count(*) FILTER (WHERE status = 'funded')::int                 AS carts_awaiting_receipt,
+           count(*) FILTER (WHERE status IN ('receipted','audited'))::int AS carts_to_audit
+      FROM buy_carts`;
+  return rows[0];
 }

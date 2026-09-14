@@ -9,6 +9,68 @@ the courier carries it, and the **warehouse** receives it back **against the sam
 reconciling what was promised vs. what actually arrived. A batch spans **multiple shipping
 labels** (one tracking number each); it closes only when every label is shipped.
 
+## A purchase order can now be raised from a RECEIPT (2026-09-05)
+The buying-request process (`docs/context/buy-cart.md`) ends by raising a PO from the
+buyer's parsed receipt — `raised_by='supplier'`, **`manifest_scope='order+box'`**, tagged
+with the buying request's code. That order is then an ordinary shipment and follows every
+rule below; the buying request stays open until it reconciles.
+
+### TWO lists on one order (2026-09-11)
+This said `manifest_scope='po'`, then the order was changed to raise **empty** on the
+per-box scope, and this line was never updated — so the doc described a version that had
+already been replaced. What is true now is neither: the order carries **both** lists,
+because they are different documents written by different people.
+
+| | Written by | When | What it is |
+|---|---|---|---|
+| `po_lines` with `po_box_id IS NULL` | **us**, from the receipt | at `cart/raise-po` | **the order** — what we paid for, and so what we are owed. This is `expected` |
+| `po_lines` with a `po_box_id` | **the buyer**, at `cart/pack` | as they fill each carton | **the packing list** — which box a pair is in |
+
+**Why both.** Raising empty meant the order expected NOTHING until the buyer packed, and
+a pair they never boxed was therefore not short — it was *invisible*. Reconciliation
+counted only lines on labels that shipped, so the order came out clean while the shoe was
+nowhere, and only the request's own checklist ever noticed. The old comment argued that a
+receipt cannot produce a per-box manifest, which is true and beside the point: the fix is
+the order level *above* the boxes, not instead of them. The warehouse still checks a
+carton against its own printed sheet and a shortage is still located to a box.
+
+**`manifest_scope` now has three values, and reading it as a yes/no is the trap.** Two
+different questions hang off it, and `src/lib/postatus.js` exports one predicate each —
+use them rather than comparing the string:
+
+- `expectsAtOrderLevel(po)` — *where does `expected` come from?* True for `po` and
+  `order+box`.
+- `declaresPerBox(po)` — *does a box carry its own lines?* True for `box` and `order+box`.
+- `hasOrderedList(po)` — the `order+box` case specifically.
+
+`po/ship` and `po/close-box` ask the SECOND question (the sheet going inside the carton is
+the box's own list); reconciliation and `PoLinkBatch`'s preview ask the first.
+
+**The gap is split three ways**, because `expected` now legitimately exceeds `received`
+for most of a shipment's life and printing that as a shortage would cry wolf on every
+order in transit:
+
+| On a row | Means | Who to talk to |
+|---|---|---|
+| `awaiting` | in a box that has not shipped, or not packed while boxes are still open | nobody — it isn't here yet |
+| `unpacked` | bought, never put in a box, **and every label has gone** | the **buyer**: it never left |
+| `short` | it shipped and did not arrive | the carrier, or the count |
+
+`awaiting` is **not** a discrepancy and keeps `summary.clean` true — `autoReconcileIfClean`
+separately requires `received === expected`, so an incomplete order still waits for its
+last box rather than closing on the strength of the first. `unpacked` **is** one, and
+holds the order open; that is the whole point. `still_filling` (any non-replacement box
+still `pending`/`packed`) is what decides which of the two an unpacked pair is.
+
+Guarded by `e2e/po-order-manifest.spec.js` — six cases, including that an overage eats
+neither of the other two.
+
+**Two bugs that surfaced the first time one ran.** `po/ship` and `po/close-box` both
+required per-box lines before a box could move — but `po/scan` refuses per-box lines on
+a whole-order-manifest order, so a Path-C order **could never be closed or shipped, by
+anybody**. Both now count the order-level list when `manifest_scope='po'`
+(`countPoOrderLines`).
+
 ## Manifest first: the supplier can raise the order (2026-09-03)
 
 The workflow inverted. It **was** labels-first: PH buys courier labels, raises the order

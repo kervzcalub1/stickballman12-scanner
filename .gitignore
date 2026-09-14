@@ -48,3 +48,4 @@ sop-videos/
 # Local intake/scratch notes — may hold prod credentials or API keys. NEVER commit.
 # (Root .md files were scrubbed from history once already; keep them out.)
 *.local.md
+.claude/worktrees/

@@ -1,0 +1,269 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Pre-sell — Warehouse SOP</title>
+<style>
+  @page { size: Letter; margin: 16mm 15mm 14mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0; font: 10.5pt/1.5 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #1a1d24; background: #fff;
+  }
+  h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  p { margin: 0 0 8px; }
+  b, strong { font-weight: 700; }
+
+  /* ---- cover ------------------------------------------------------------ */
+  .cover { padding-top: 4mm; }
+  .brandline {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 3px solid #2f6bff; padding-bottom: 7px; margin-bottom: 15px;
+  }
+  .brand { font-size: 13pt; font-weight: 700; }
+  .brand-r { font-size: 9pt; color: #6b7280; }
+  h1 { font-size: 22pt; line-height: 1.12; margin-bottom: 7px; }
+  .sub { font-size: 10.5pt; color: #4b5563; margin-bottom: 15px; max-width: 150mm; }
+
+  /* ---- the loop strip --------------------------------------------------- */
+  .loop { display: flex; gap: 5px; margin: 0 0 14px; }
+  .loop div {
+    flex: 1; background: #f2f5fb; border-top: 3px solid #2f6bff; padding: 8px 9px 9px;
+    font-size: 8.5pt; line-height: 1.3;
+  }
+  .loop .n { display: block; font-weight: 700; font-size: 8pt; color: #2f6bff; margin-bottom: 2px; }
+  .loop .t { font-weight: 700; font-size: 9.5pt; }
+
+  /* ---- steps ------------------------------------------------------------ */
+  .step { page-break-inside: avoid; margin: 0 0 20px; }
+  .step-h { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; }
+  .step-n {
+    flex: none; width: 22px; height: 22px; border-radius: 50%; background: #2f6bff; color: #fff;
+    font-size: 10.5pt; font-weight: 700; text-align: center; line-height: 22px;
+    position: relative; top: 3px;
+  }
+  .step-t { font-size: 14pt; font-weight: 700; }
+  .step-body { padding-left: 32px; }
+  ol.do, ul.do { margin: 0 0 9px; padding-left: 17px; }
+  ol.do li, ul.do li { margin-bottom: 4px; }
+  .shot { margin: 9px 0 4px; page-break-inside: avoid; }
+  .shot img {
+    display: block; border: 1px solid #d7dce5; border-radius: 5px;
+    max-width: 100%; max-height: 95mm; width: auto; height: auto; margin: 0 auto;
+  }
+  .shot.tall img { max-height: 165mm; }
+  .shot.wide img { max-height: 62mm; }
+  .cap { font-size: 8pt; color: #6b7280; margin-top: 4px; }
+
+  /* ---- callouts --------------------------------------------------------- */
+  .note {
+    border-left: 3px solid #c8ced9; background: #f7f8fa; padding: 8px 11px;
+    margin: 9px 0; font-size: 9.5pt; page-break-inside: avoid;
+  }
+  .note.warn { border-left-color: #d98324; background: #fdf6ec; }
+  .note.stop { border-left-color: #c1493f; background: #fdf0ef; }
+  .note .lbl {
+    display: block; font-size: 7.5pt; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: #6b7280; margin-bottom: 3px;
+  }
+  .note.warn .lbl { color: #b5701c; }
+  .note.stop .lbl { color: #b03a30; }
+
+  /* ---- tables ----------------------------------------------------------- */
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin: 8px 0 14px; }
+  th {
+    text-align: left; font-size: 7.5pt; letter-spacing: .07em; text-transform: uppercase;
+    color: #fff; background: #232a36; padding: 6px 9px;
+  }
+  td { padding: 6px 9px; border-bottom: 1px solid #e4e8ee; vertical-align: top; }
+  tr { page-break-inside: avoid; }
+  thead { display: table-header-group; }
+  tr:nth-child(even) td { background: #f7f8fa; }
+  .chip {
+    display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 8.5pt;
+    font-weight: 700; white-space: nowrap;
+  }
+  .c-amber { background: #fdf0dc; color: #93611a; }
+  .c-violet { background: #ece9fd; color: #5b46c4; }
+  .c-blue { background: #e3ecff; color: #2a56c6; }
+  .c-green { background: #ddf3e4; color: #1f7a41; }
+
+  h2.sec {
+    font-size: 15pt; margin: 0 0 3px; padding-bottom: 5px;
+    border-bottom: 2px solid #232a36;
+  }
+  .sec-sub { font-size: 9.5pt; color: #6b7280; margin: 0 0 12px; }
+  .pb { page-break-before: always; }
+  .two { display: flex; gap: 14px; align-items: flex-start; }
+  .two > div { flex: 1; }
+  footer.foot {
+    margin-top: 16px; padding-top: 8px; border-top: 1px solid #d7dce5;
+    font-size: 8pt; color: #6b7280;
+  }
+</style></head>
+<body>
+
+<section class="cover">
+  <div class="brandline">
+    <span class="brand">Stickballman12 LLC</span>
+    <span class="brand-r">Pre-sell &middot; Warehouse Standard Operating Procedure</span>
+  </div>
+
+  <h1>Shipments that were sold before they landed</h1>
+  <p class="sub">
+    Some shipments are already spoken for before the boxes arrive. Those pairs must
+    <b>not</b> be listed &mdash; offering one would sell a pair that belongs to somebody
+    else&rsquo;s order. But the extra pairs on the same shipment are ordinary stock and
+    <b>do</b> need listing. You are the one who says which is which.
+  </p>
+
+  <div class="loop">
+    <div><span class="n">STEP 1</span><span class="t">Tick Pre-sell</span><br>when you start the shipment</div>
+    <div><span class="n">STEP 2</span><span class="t">Receive as normal</span><br>nothing else changes</div>
+    <div><span class="n">STEP 3</span><span class="t">Open Pre-sell</span><br>from the home screen</div>
+    <div><span class="n">STEP 4</span><span class="t">Say how many sold</span><br>size by size</div>
+    <div><span class="n">STEP 5</span><span class="t">Send the rest</span><br>for rescale &rarr; PH lists them</div>
+  </div>
+
+  <div class="note">
+    <span class="lbl">Why this is your job and not the PH team&rsquo;s</span>
+    You are holding the shipment, so you are the one who can tell which pairs an order
+    covers. The PH team cannot open this page at all. Their part starts after you press
+    <b>Send for rescale</b>.
+  </div>
+
+  <div class="step">
+    <div class="step-h"><span class="step-n">1</span><span class="step-t">Tick <em>Pre-sell</em> when you start the shipment</span></div>
+    <div class="step-body">
+      <p>On the Receiving screen, under the tracking number, tick <b>Pre-sell shipment</b>
+      before you start scanning.</p>
+      <div class="shot wide"><img src="sop-presell/wh-tick.png" alt="Pre-sell shipment checkbox">
+        <div class="cap">Receiving &rarr; Shipment step. One tick, for the whole shipment.</div></div>
+      <div class="note warn">
+        <span class="lbl">It is per shipment, not per pair</span>
+        The tick covers everything in the batch, including every box you add later. If a
+        shipment is only <em>partly</em> pre-sold, still tick it &mdash; you tell the system
+        which pairs are sold in step 4, and the rest are released.
+      </div>
+      <div class="note stop">
+        <span class="lbl">If you forget to tick it</span>
+        The pairs go straight into normal stock and the PH team will list them &mdash;
+        including the ones somebody has already bought. Tell an admin the batch number
+        straight away.
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="pb">
+  <div class="step">
+    <div class="step-h"><span class="step-n">2</span><span class="step-t">Receive it exactly as you always do</span></div>
+    <div class="step-body">
+      <p>Nothing about intake changes. Same scanning, same 1ID stickers, same boxes, same
+      review, same issues. Shelve the pairs as normal &mdash; they are real stock sitting on
+      your shelves and they still need a location.</p>
+      <div class="note">
+        <span class="lbl">What is different, and it is invisible to you</span>
+        The pairs are held back from the PH team. They do not appear on the PH
+        <b>New Inventory</b> screen and are not counted in any of the PH listing badges, so
+        nobody can price or list them by accident.
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h"><span class="step-n">3</span><span class="step-t">Open <em>Pre-sell</em> from the home screen</span></div>
+    <div class="step-body">
+      <p>The card sits with <b>Receiving Shipment Orders</b>. The badge counts the pairs
+      still waiting for an answer.</p>
+      <div class="shot"><img src="sop-presell/wh-home.png" alt="Pre-sell card on the warehouse home screen">
+        <div class="cap">Home &rarr; Receiving Shipment Orders.</div></div>
+      <p>When any are waiting it also appears at the top of the screen under
+      <b>Needs attention</b>.</p>
+      <div class="shot wide"><img src="sop-presell/wh-attention.png" alt="Needs attention strip">
+        <div class="cap">Nothing on the shipment can be listed until this reaches zero.</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="pb">
+  <div class="step">
+    <div class="step-h"><span class="step-n">4</span><span class="step-t">Say how many of each size are sold</span></div>
+    <div class="step-body">
+      <p>Each shipment is listed shoe by shoe, size by size. For every size, type how many
+      of them an order covers. <b>Remains</b> updates as you go &mdash; that is what will be
+      released for listing.</p>
+      <div class="shot tall"><img src="sop-presell/wh-counted.png" alt="Pre-sell shipment with counts filled in">
+        <div class="cap">19 arrived, 10 spoken for, 9 to list. Sizes with nothing left go grey.</div></div>
+
+      <table>
+        <thead><tr><th style="width:32%">If you want to&hellip;</th><th>Do this</th></tr></thead>
+        <tbody>
+          <tr><td><b>Count a row</b></td><td>Type the number in the <b>Sold</b> box and press Tab or Enter. Best when a whole size run is spoken for.</td></tr>
+          <tr><td><b>Name one exact pair</b></td><td>Scan its <b>1ID</b> into the box at the top of the page. Use this when a specific pair is the one that sold.</td></tr>
+          <tr><td><b>Undo</b></td><td>Type a smaller number. The extra pairs are handed straight back and become ordinary stock again.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <span class="lbl">Which pair does the system pick?</span>
+        When you type a count, it takes the oldest pairs of that size first. That is
+        deliberate: the pairs are identical, unshelved and interchangeable, so nobody needs
+        to decide which VIN carries which order.
+      </div>
+      <div class="note warn">
+        <span class="lbl">A pre-sale that falls through</span>
+        Lower the number. The pairs come back as ordinary stock and go out for listing with
+        the rest. Nothing is stuck.
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="pb">
+  <div class="step">
+    <div class="step-h"><span class="step-n">5</span><span class="step-t">Send the rest for rescale</span></div>
+    <div class="step-body">
+      <p>When the counts are right, press <b>Send the N remaining for rescale</b>. Those
+      pairs go onto the PH team&rsquo;s <b>Rescale Stock</b> worklist, where they are priced
+      and listed to II and the stores.</p>
+      <div class="note">
+        <span class="lbl">The sold pairs stay put</span>
+        Anything you marked sold is left alone and stays on this page. It is spoken for, and
+        listing it would offer somebody else&rsquo;s pair for sale.
+      </div>
+      <div class="note warn">
+        <span class="lbl">You can release more than once</span>
+        If a few more pairs turn out to be sold later, work the same shipment again: the ones
+        you did not release are still here.
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Marked sold is not the same as sold</h2>
+  <p class="sec-sub">The pair has not left the building yet.</p>
+  <table>
+    <thead><tr><th style="width:26%">State</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip c-amber">Pre-sold</span></td><td>An order covers this pair. It is still on your shelf and has <b>not</b> shipped. It is not listed anywhere.</td></tr>
+      <tr><td><b>Sold / Shipped</b></td><td>The normal end of a pair&rsquo;s life &mdash; reached the usual way, by scanning it out on <b>Mark Sold</b> / <b>Mark Shipped</b> when it actually leaves.</td></tr>
+    </tbody>
+  </table>
+  <div class="note stop">
+    <span class="lbl">Do not mark them sold on the Mark Sold screen instead</span>
+    That is the final step for a pair that is going out the door today. If you use it early
+    and the order collapses, the pair is stranded. Use the Pre-sell page &mdash; it can be
+    undone.
+  </div>
+
+  <h2 class="sec">Spotting a pre-sell shipment</h2>
+  <p class="sec-sub">The chip shows anywhere the shipment does.</p>
+  <div class="shot wide"><img src="sop-presell/wh-chip-row.png" alt="Pre-sell chip on a batch row">
+    <div class="cap">Batches list. The same chip is on the batch page, on every box inside it, on Receiving &rarr; Recent, and on Inventory rows.</div></div>
+
+  <footer class="foot">
+    Stickballman12 LLC &middot; Pre-sell, warehouse procedure &middot; Questions: ask an admin
+    before releasing a shipment you are unsure about &mdash; releasing is how pairs reach the
+    stores.
+  </footer>
+</section>
+
+</body></html>

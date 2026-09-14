@@ -15,8 +15,10 @@ import { api } from '../api.js';
 import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
 import { PayoutCalculator } from './PayoutCalculator.jsx';
+import { BuyCarts } from './BuyCarts.jsx';
 import { Sop } from './Sop.jsx';
 import { carrierName } from '../lib/carriers.js';
+import { readParam, writeParam } from '../lib/urlstate.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
@@ -25,6 +27,7 @@ import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
 import { isBoxesOrder, hasLeftSupplier, isSupplierRaised } from '../lib/postatus.js';
+import { hasPriv } from '../lib/constants.js';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',     cls: 'draft' },
@@ -87,7 +90,7 @@ function ShipToCard({ shipTo }) {
 // Which of the supplier's two screens a path means. Their own tiny router, the same
 // shape as the PH one: the page lives in the path so a refresh (or a link) comes back
 // to it, and anything unrecognised falls to the home chooser rather than a blank app.
-const SUP_PATHS = { orders: '/orders', payout: '/payout' };
+const SUP_PATHS = { orders: '/orders', payout: '/payout', buying: '/buying' };
 const supPathForPage = (p) => SUP_PATHS[p] || '/';
 const supPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -114,6 +117,18 @@ function SupplierHome({ user, onPick, onSignOut, onHelp }) {
             <span className="home-card-title">Payout Calculator</span>
             <span className="home-card-sub">Standing in the store: what a pair pays out, and whether to buy it.</span>
           </button>
+          {/* The buyer's side of the gift-card process. Named "Buying Requests" rather
+              than "cart", because what they are doing is asking to be funded — the list
+              is the ask, and it goes to somebody for a yes. Drawn only for a supplier
+              switched on for it (`request_buying`, set on Check Access): most suppliers
+              only ship us boxes, and a card that answers 403 is worse than no card. */}
+          {hasPriv(user, 'request_buying') && (
+            <button className="home-card" onClick={() => onPick('buying')}>
+              <span className="home-card-icon"><NavIcon name="buy-carts" /></span>
+              <span className="home-card-title">Buying Requests</span>
+              <span className="home-card-sub">Ask for gift cards: list what you want to buy, get it approved, then send the receipt back.</span>
+            </button>
+          )}
         </div>
       </section>
     </div>
@@ -182,11 +197,22 @@ export function SupplierApp({ user, onSignOut }) {
 
   const openPo = (id) => {
     setOpenId(id); setDetail(null); setError('');
+    writeParam('po', String(id));
     api.poGet(id)
       .then((r) => { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); setBusinessName(r.businessName || ''); setShipTo(r.shipTo || null); })
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
   const refreshDetail = () => { if (openId) openPo(openId); };
+  // `/orders?po=ID` opens that order straight away — it is where a buying request's
+  // "Open the order" link lands. Read once on arrival; the list still loads behind it so
+  // closing the order shows the usual screen. The param is dropped on close so a later
+  // refresh comes back to the list, not to an order the person has already left.
+  useEffect(() => {
+    if (page !== 'orders') return;
+    const id = Number(readParam('po'));
+    if (Number.isInteger(id) && id > 0 && !openId) openPo(id);
+  }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+  const closePo = () => { setOpenId(null); setDetail(null); writeParam('po', ''); };
 
   const [trackBusy, setTrackBusy] = useState(false);  // whole-PO refresh
   const [trackBoxBusy, setTrackBoxBusy] = useState(null); // po_box id being refreshed on its own
@@ -257,6 +283,17 @@ export function SupplierApp({ user, onSignOut }) {
   // theirs alone and read-only. The server scopes and refuses independently.
   if (page === 'payout') {
     return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  }
+
+  // The SAME screen the desks use, scoped by the server to this buyer's own requests
+  // (api/cart/list.js keys on the account off the token). One screen means the buyer and
+  // the approver are demonstrably looking at the same transaction rather than at two
+  // renderings of it that can drift apart.
+  if (page === 'buying') {
+    // A typed /buying without the privilege lands on home, the same as no card — the
+    // server would answer 403 to every call on the screen anyway.
+    if (!hasPriv(user, 'request_buying')) return <SupplierHome user={user} onPick={goPage} onSignOut={onSignOut} onHelp={() => setHelp(true)} />;
+    return <BuyCarts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   }
 
   // Raise your own shipment. The workflow inverted: we want the manifest BEFORE we buy
@@ -423,7 +460,7 @@ export function SupplierApp({ user, onSignOut }) {
   return (
     <div className="app">
       <TopBar title={po ? po.po_code : 'Shipment'} onSignOut={onSignOut}
-        right={<button className="btn ghost sm" onClick={() => { setOpenId(null); setDetail(null); }}>← Shipments</button>} />
+        right={<button className="btn ghost sm" onClick={closePo}>← Shipments</button>} />
       <div className="wrap-narrow">
         {error && <div className="po-err">{error}</div>}
         {!po ? <p className="muted">Loading…</p> : (

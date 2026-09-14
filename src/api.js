@@ -89,6 +89,14 @@ export const api = {
   adminListUsers: () => get('/api/admin/users'),
   adminReview: (userId, decision) => post('/api/admin/review', { userId, decision }),
   adminSetRole: (userId, role) => post('/api/admin/review', { userId, decision: 'role', role }),
+  // Privileges are set as a WHOLE SET, so unticking is as ordinary as ticking — a
+  // per-key add/remove pair would need its own "which direction" argument and could
+  // drift from what the checkboxes show.
+  adminSetPrivileges: (userId, privileges) => post('/api/admin/review', { userId, decision: 'privileges', privileges }),
+  // Link a Telegram account so a button tap in the approval group can be recorded
+  // against a real person. Empty string unlinks.
+  adminSetTelegram: (userId, telegramUserId) =>
+    post('/api/admin/review', { userId, decision: 'telegram', telegramUserId }),
   adminDeleteUser: (userId) => post('/api/admin/review', { userId, decision: 'delete' }),
   adminResetPassword: (userId) => post('/api/admin/reset-password', { userId }),
   // App settings (price margin, …). GET is any authed user; POST is admin/superadmin.
@@ -232,6 +240,79 @@ export const api = {
   payoutPresets: () => get('/api/payout/presets'),
   payoutPresetSave: (preset) => post('/api/payout/presets', { preset }),
   payoutPresetDelete: (deleteId) => post('/api/payout/presets', { deleteId }),
+
+  /* ---- Buying requests (docs/context/buy-cart.md) ----------------------------
+     Money out, then inventory in. A buyer asks, staff approve, the gift card desk
+     releases the cards, the receipt comes back and raises a purchase order, and an
+     auditor closes it once all ten conditions are true.
+
+     Note what is NOT here: there is no method that fetches a gift card code in bulk.
+     Reading one is `cartGcReveal`, one card at a time, and the server writes an audit
+     row before it answers. */
+  cartList: (status, buyerId) => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    if (buyerId) q.set('buyer', String(buyerId));
+    return get(`/api/cart/list${q.toString() ? `?${q}` : ''}`);
+  },
+  cartGet: (id) => get(`/api/cart/get?id=${encodeURIComponent(id)}`),
+  cartCreate: (payload) => post('/api/cart/create', payload),
+  cartAddLine: (cartId, line) => post('/api/cart/line', { cartId, line }),
+  cartEditLine: (cartId, lineId, patch) => post('/api/cart/line', { cartId, lineId, patch }),
+  cartRemoveLine: (cartId, lineId) => post('/api/cart/line', { cartId, lineId, remove: true }),
+  // The cost stack an approver or an auditor states when the buyer's preset never had
+  // one. Saving re-prices every line server-side and writes the diff into the trail.
+  cartSetCosts: (cartId, stack) => post('/api/cart/costs', { cartId, stack }),
+  // Re-read the market for one requested pair and write the call that follows. Explicit
+  // and named — never automatic, because it replaces the snapshot an approver judges on.
+  cartPriceLine: (cartId, lineId) => post('/api/cart/price-line', { cartId, lineId }),
+  // What we ALREADY hold of every shoe on the request — Shopify's live figure for the
+  // pairs we have listed, plus our own units it cannot see. One press, every line.
+  cartStock: (cartId) => post('/api/cart/stock', { cartId }),
+  cartSubmit: (cartId) => post('/api/cart/submit', { cartId }),
+  cartWithdraw: (cartId) => post('/api/cart/submit', { cartId, withdraw: true }),
+  // Approving CARRIES the quantity: the buyer reports what they found, and how many to
+  // buy is the decision. `qty` is a { lineId: n } map; `qtyAll` covers an approve-all.
+  cartDecide: (cartId, payload) => post('/api/cart/decide', { cartId, ...payload }),
+  cartAddGiftCard: (cartId, card) => post('/api/cart/gift-card', { cartId, card }),
+  cartVoidGiftCard: (cartId, voidId, reason) => post('/api/cart/gift-card', { cartId, voidId, reason }),
+  cartFund: (cartId) => post('/api/cart/gift-card', { cartId, fund: true }),
+  cartGcReveal: (cartId, gcId) => post('/api/cart/gc-reveal', { cartId, gcId }),
+  cartFileSign: (cartId, kind, contentType, sku) => post('/api/cart/file-sign', { cartId, kind, contentType, sku }),
+  cartFileAttach: (payload) => post('/api/cart/file-attach', payload),
+  // Removing a mis-uploaded file. The removal is recorded even though the file is not.
+  cartFileDelete: (cartId, fileId) => post('/api/cart/file-delete', { cartId, fileId }),
+  // Read an uploaded receipt with the vision model. Server-side: the key never reaches
+  // the browser, and the image is pulled from our own bucket rather than posted twice.
+  cartReceiptRead: (cartId, fileId) => post('/api/cart/receipt-read', { cartId, fileId }),
+  // The bytes are PROXIED — the bucket never serves a card photo or a receipt by URL,
+  // so there is no `src` an <img> could point at. Both of these fetch WITH the session
+  // token and hand back a blob; the viewer turns it into an object URL and revokes it
+  // on close, which also means a card photo never lingers in the browser's HTTP cache
+  // (the endpoint sends `no-store`, and an object URL isn't cached at all).
+  cartFileBlob: (cartId, fileId, kind) =>
+    downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}${kind ? `&kind=${kind}` : ''}`),
+  cartFileDownload: (cartId, fileId, kind) =>
+    downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}&download=1${kind ? `&kind=${kind}` : ''}`),
+  cartSaveReceipt: (cartId, lines, receiptTotal, subtotal = null, tax = null) =>
+    post('/api/cart/receipt', { cartId, lines, receiptTotal, subtotal, tax }),
+  cartRaisePo: (cartId, boxes) => post('/api/cart/raise-po', { cartId, boxes }),
+  // Two sign-offs, not one: the money can be reconciled the day the receipt lands, the
+  // goods only once the boxes are in the building. See api/cart/audit.js.
+  cartAudit: (cartId, cards) => post('/api/cart/audit', { cartId, scope: 'money', cards }),
+  cartAuditGoods: (cartId, note) => post('/api/cart/audit', { cartId, scope: 'goods', note }),
+  cartClose: (cartId) => post('/api/cart/close', { cartId }),
+  cartCancel: (cartId, reason) => post('/api/cart/close', { cartId, cancel: true, reason }),
+  // A documented loss — its own ending, never a force-close wearing `closed`.
+  cartWriteOff: (cartId, reason) => post('/api/cart/close', { cartId, writeOff: true, reason }),
+  // Packing the receipt into boxes. A negative qty takes a pair back out of a box.
+  cartPack: (cartId, poBoxId, sku, size, qty) => post('/api/cart/pack', { cartId, poBoxId, sku, size, qty }),
+  cartTask: (cartId, task) => post('/api/cart/task', { cartId, task }),
+  cartTaskPatch: (cartId, taskId, patch) => post('/api/cart/task', { cartId, taskId, patch }),
+  cartTaskClose: (cartId, taskId, close) => post('/api/cart/task', { cartId, taskId, close }),
+  cartFunding: (cartId, funding) => post('/api/cart/control', { cartId, funding }),
+  cartCustody: (cartId, custody) => post('/api/cart/control', { cartId, custody }),
+  cartComment: (cartId, body) => post('/api/cart/comment', { cartId, body }),
   // The app-wide advisor (components/Advisor.jsx). `context` is whatever screen the
   // asker is on; the server can also look things up for itself. 503 when no model key
   // is set — the panel retires itself rather than pretending it's there.

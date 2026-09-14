@@ -148,7 +148,7 @@ export const hideReceivedUnits = (boxes) => (boxes || []).map(({ received_units,
 // A user carrying the signed `mustChange` flag (admin issued a temp password) is blocked
 // from every role/admin-gated endpoint until they set a new password via
 // /api/auth/change-password (which requireAuth allows). 428 = "precondition required".
-function blockIfMustChange(user, res) {
+export function blockIfMustChange(user, res) {
   if (user && user.mustChange) {
     send(res, 428, { ok: false, error: 'Set a new password to continue.', mustChange: true });
     return true;

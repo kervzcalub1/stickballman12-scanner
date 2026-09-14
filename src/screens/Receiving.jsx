@@ -19,6 +19,7 @@ import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/co
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineCost, unitCost } from '../lib/costs.js';
 import { estToday } from '../lib/format.js';
+import { declaresPerBox } from '../lib/postatus.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -234,7 +235,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // "unexpected". Without knowing that, the screen chips every single pair "not on PO"
   // for the entire job and reads as if the whole shipment were a surprise. The SKUs that
   // ARE on the order-level list are what tells the two apart.
-  const isWholeOrderPo = receivingPo?.po?.manifest_scope === 'po';
+  // Pure Path C only: on 'order+box' every label DOES carry its own checklist (the
+  // buyer packed it), so the screen behaves exactly as it does for any supplier order.
+  const isWholeOrderPo = receivingPo?.po ? !declaresPerBox(receivingPo.po) : false;
   const orderManifestSkus = React.useMemo(() => new Set(
     (receivingPo?.lines || []).filter((l) => l.po_box_id == null)
       .map((l) => String(l.sku || '').toUpperCase().replace(/[\s-]/g, '')),

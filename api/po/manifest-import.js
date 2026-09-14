@@ -21,6 +21,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getPo, getPoBox, addPoScan, poBoxLineCounts, dbConfigured } from '../_lib/db.js';
 import { manifestEditBlock, isReplacementBox, isBoxesOrder } from '../_lib/po-manifest.js';
+import { declaresPerBox } from '../../src/lib/postatus.js';
 
 const MAX_BOXES = 200;
 const MAX_LINES = 2000;
@@ -65,9 +66,10 @@ export default async function handler(req, res) {
   try {
     const po = await getPo(poId);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
-    // A PO is one manifest scope or the other. Importing per-label lines onto an order
-    // declared as a single whole-order list would double-count it at reconciliation.
-    if (po.manifest_scope === 'po')
+    // Path C has no labels to import onto — its one list IS the declaration, and adding
+    // per-label lines beside it would double-count at reconciliation. 'order+box' is fine:
+    // there, per-box lines are expected and reconciliation reads the order level instead.
+    if (!declaresPerBox(po))
       return send(res, 409, { ok: false, error: 'This PO uses a whole-order manifest — import per-label lines only on an order that declares them per label.' });
     // The importer reads a supplier sheet of SKU + shoe SIZE. An empty-box order is
     // declared by carton dimensions instead, which no such sheet carries — importing one
@@ -91,7 +93,7 @@ export default async function handler(req, res) {
       }
       const blocked = manifestEditBlock({ po, box, onBehalf: true });
       if (blocked) { skipped.push({ poBoxId: b.poBoxId, reason: blocked.error }); continue; }
-      if (po.manifest_scope === 'po' && !isReplacementBox(box)) {
+      if (!declaresPerBox(po) && !isReplacementBox(box)) {
         skipped.push({ poBoxId: b.poBoxId, reason: 'Whole-order manifest — not a per-label order.' });
         continue;
       }

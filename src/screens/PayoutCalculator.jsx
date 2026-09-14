@@ -18,7 +18,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
-import { TopBar, ShoeThumb } from '../components/common.jsx';
+import { TopBar, ShoeThumb, NumField } from '../components/common.jsx';
 import { BatchAnalysis } from '../components/BatchAnalysis.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { loadPrefs, savePrefs } from '../prefs.js';
@@ -104,24 +104,6 @@ function MarketStrip({ title, cols, row, onUse, note, activeValue }) {
         })}
       </div>
     </div>
-  );
-}
-
-// A labelled number box. Kept local: every field on this screen is a bare number with
-// either a $ in front or a % behind, which no shared input does.
-function NumField({ label, value, onChange, prefix, suffix, placeholder = '0', hint }) {
-  return (
-    <label className="pc-field">
-      <span className="pc-field-label">{label}</span>
-      <span className={`pc-input-wrap${prefix ? ' has-prefix' : ''}${suffix ? ' has-suffix' : ''}`}>
-        {prefix ? <span className="pc-affix" aria-hidden="true">{prefix}</span> : null}
-        <input
-          type="number" min="0" step="0.01" inputMode="decimal" placeholder={placeholder}
-          value={value} onChange={(e) => onChange(e.target.value)} />
-        {suffix ? <span className="pc-affix suffix" aria-hidden="true">{suffix}</span> : null}
-      </span>
-      {hint ? <span className="pc-field-hint muted sm">{hint}</span> : null}
-    </label>
   );
 }
 

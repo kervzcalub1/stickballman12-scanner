@@ -78,6 +78,21 @@ check the token before anything else.
   `read_inventory`, which are **separate grants**. Without them it returns a
   `permission` result and the advisor says the figure is unavailable. **Never a zero** —
   "none left" and "we can't see it" are opposite answers.
+  - **The query term is BARE, and it has to stay bare** (`productVariants(query: "Q47101")`).
+    Rule 1 above bites here too: the catalogue is mixed, and the products that actually
+    hold stock carry an internal numeric variant `sku` (`10018961`) with the style code
+    only in the **product title** — `adidas Retropy E5 Solid Grey (Q47101)`. A bare term
+    matches on the title and finds them; measured on the live store, `sku:Q47101`,
+    `product_title:Q47101` and `title:Q47101` **all return zero**. "Tightening" this to a
+    field-scoped query looks more correct and silently reports no stock for everything.
+    Older products whose variant sku IS the style code match either way.
+  - A style with no product at all comes back `variants: 0`, which is different from a
+    product whose sizes are all sold out (`variants: 13, total: 0`). Both are honest
+    zeros; only the second means "we had it".
+  - Callers: the advisor's `stock_status`, and `api/cart/stock.js` — the "what do we
+    already hold" answer on a buying request, where this is the **listed** half and our
+    own `synced_shopify = false` units are the half Shopify cannot see
+    (`buy-cart.md`).
 
 ## Two rules the prompt enforces
 - **Sales totals are real totals** (every channel), but give the split when it changes

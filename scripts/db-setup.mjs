@@ -64,7 +64,79 @@ await sql(`
 await sql(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check`);
 await sql(`UPDATE users SET role = 'warehouse' WHERE role = 'employee'`);
 await sql(`ALTER TABLE users ALTER COLUMN role SET DEFAULT 'warehouse'`);
+
+/* ---- Privileges, which are NOT roles ---------------------------------------
+   The gift-card process needs three duties kept apart — approving a spend,
+   releasing the cards, and verifying it afterwards. They were briefly modelled as
+   ROLES, and that was wrong: `users.role` is one column, so it made them
+   alternatives to being warehouse or PH. In reality the person who releases cards
+   is a PH team member who ALSO does that, and the auditor is an admin who also does
+   that. A job title and a permission are different things.
+
+   So: a role stays the one job someone does, and privileges are a set on top.
+   Stored as a TEXT[] rather than a join table — it is a handful of flags read
+   whole, never queried across users, and this keeps it one column on a row the
+   code already loads.
+
+     approve_buying    decide what company funds may be spent on
+     issue_gift_cards  record and release cards against an approved request
+     audit_buying      account for the spend and close a transaction out
+
+   admin/superadmin hold all three implicitly (isPrivileged); the checks never look
+   the set up for them.
+
+   SEPARATION OF DUTIES STILL HOLDS, and matters more now: one person CAN hold both
+   approve and audit, so the guard is no longer "a different role" but "not the
+   account that approved THIS request" — see requireAuditPrivilege in
+   api/_lib/buycart.js. */
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS privileges TEXT[] NOT NULL DEFAULT '{}'`);
+
+// WHO A TELEGRAM TAP IS. Approvals now happen from a Telegram group, and a button is not
+// an identity: everyone in the group can press one. This maps a Telegram account to a
+// real user here, so `cart/telegram-decide` can record the decision under the person who
+// tapped — "Alex overrode JK" only means something if both names are real.
+//
+// Nullable and unique: almost nobody has one, and two accounts claiming the same Telegram
+// id would make the attribution ambiguous in exactly the place it must not be.
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_user_id BIGINT`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS users_telegram_id_idx ON users (telegram_user_id) WHERE telegram_user_id IS NOT NULL`);
+
+// A Telegram account that tapped a decision and is not linked to anybody yet.
+//
+// The id is the thing nobody knows about themselves — a person cannot read their own
+// numeric Telegram id off their phone, and an admin cannot link an account they cannot
+// identify. So the first tap CAPTURES it: the decision is still refused (a decision has
+// to name a person), but the number and the display name land here, and linking becomes
+// one click on Check Access instead of a hunt through @userinfobot.
+//
+// `name` is whatever Telegram reported at tap time and is NOT trusted for anything —
+// a display name is changeable at will. It is here so an admin can tell which row is
+// which; the id is the identity.
+await sql(`
+  CREATE TABLE IF NOT EXISTS telegram_link_requests (
+    telegram_user_id BIGINT PRIMARY KEY,
+    name             TEXT,
+    username         TEXT,
+    taps             INT NOT NULL DEFAULT 1,
+    first_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+// Anyone who was given one of the short-lived roles keeps the capability as a
+// privilege, and lands back on a real job title. Runs before the constraint is
+// re-asserted, or these rows would fail it.
+await sql(`UPDATE users SET privileges = array_append(privileges, 'issue_gift_cards'), role = 'ph_team'
+            WHERE role = 'gc_issuer' AND NOT ('issue_gift_cards' = ANY(privileges))`);
+await sql(`UPDATE users SET privileges = array_append(privileges, 'audit_buying'), role = 'admin'
+            WHERE role = 'auditor' AND NOT ('audit_buying' = ANY(privileges))`);
 await sql(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('warehouse','admin','ph_team','supplier'))`);
+// A SUPPLIER is external. Letting one hold a staff duty would let a buyer approve or
+// fund their own request, which is the one thing this whole process exists to prevent.
+// The one privilege a supplier CAN hold is `request_buying` — the buyer's own gate, set
+// per account because most suppliers only ship boxes and never buy for the company.
+await sql(`UPDATE users SET privileges = ARRAY(SELECT p FROM unnest(privileges) p WHERE p = 'request_buying')
+            WHERE role = 'supplier' AND EXISTS (SELECT 1 FROM unnest(privileges) p WHERE p <> 'request_buying')`);
+await sql(`CREATE INDEX IF NOT EXISTS users_privileges_idx ON users USING GIN (privileges)`);
 
 // Password reset: a user asks for a reset from the sign-in screen (reset_requested_at
 // stamps the request so it shows in the admin's "Check Access" queue). An admin issues
@@ -692,15 +764,23 @@ await sql(`
   ON CONFLICT (key) DO NOTHING
 `);
 
-// Whole-order manifest (Path C): when a supplier gives ONE list for the whole purchase
-// (no per-box breakdown), PH enters it against the PO itself — po_lines with po_box_id
-// NULL. `manifest_scope` flips to 'po' on the first such line; reconciliation then counts
-// the whole list order-wide instead of per shipped label. A PO is one scope or the other.
-// Receiving is still per box (like a blind receive). See docs/context/purchase-orders.md.
+// Where a manifest lives. THREE scopes, not two:
+//   'box'        the supplier declares per label — po_lines carry a po_box_id.
+//   'po'         Path C: the supplier gave ONE list for the whole purchase and there is
+//                no per-box breakdown at all. PH enters it against the PO itself
+//                (po_lines with po_box_id NULL) and reconciliation counts it order-wide
+//                instead of per shipped label.
+//   'order+box'  BOTH lists, meaning different things (2026-09-11). A buying request's
+//                RECEIPT is written onto the order when it is raised, so we know what we
+//                are owed before a box is filled; the buyer then packs, and each box
+//                carries its own list saying which carton a pair is in. `expected` comes
+//                from the order level; the box lists locate a shortage and print the
+//                sheet that travels inside the carton.
+// Receiving is per box in every scope. See docs/context/purchase-orders.md.
 await sql(`ALTER TABLE po_lines ALTER COLUMN po_box_id DROP NOT NULL`);
 await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS manifest_scope TEXT NOT NULL DEFAULT 'box'`);
 await sql(`ALTER TABLE purchase_orders DROP CONSTRAINT IF EXISTS purchase_orders_manifest_scope_check`);
-await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_manifest_scope_check CHECK (manifest_scope IN ('box','po'))`);
+await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_manifest_scope_check CHECK (manifest_scope IN ('box','po','order+box'))`);
 // Order-scoped lines have no box, so the per-label unique index doesn't cover them —
 // this partial index keeps one line per (PO, sku, size) for the whole-order manifest.
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_size_idx ON po_lines (po_id, sku, size) WHERE po_box_id IS NULL`);
@@ -1038,6 +1118,372 @@ await sql(`CREATE INDEX IF NOT EXISTS shipment_tracking_unregistered_idx
 
 
 // ---------------------------------------------------------------------------
+// GIFT-CARD BUYING — request → approval → cards → receipt → audit → reconciled
+//
+// The written process (docs/context/buy-cart.md) has ten steps, and the back half of
+// it already exists in this database: a purchase order's `po_lines` ARE "expected
+// inventory", PO reconciliation already compares expected against what physically
+// arrived, and 17TRACK already watches the parcel. So these tables carry steps 1–7
+// and then HAND OFF: the parsed receipt raises a PO, and `buy_carts.po_id` is the
+// join. Building a second expected-inventory system beside po_lines would give us two
+// answers to "what are we still waiting on", which is worse than none.
+//
+// The control the whole thing exists for: there must never be a path where somebody
+// requests money, spends it, and nobody independently checks what happened. Every
+// gate below is a piece of that, and `buy_cart_events` is the trail.
+await sql(`CREATE SEQUENCE IF NOT EXISTS buy_cart_seq START 1`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_carts (
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cart_code         TEXT UNIQUE NOT NULL DEFAULT ('BC-' || nextval('buy_cart_seq')),
+    -- The BUYER: the person going to the shop. That is our supplier role, and the
+    -- naming is a trap worth stating once — the written process calls the people who
+    -- release the cards "gift card suppliers", who are somebody else entirely
+    -- (whoever holds issue_gift_cards). Every label in the UI says "Buyer" and "Gift
+    -- card desk"; nothing user-facing says "supplier" for either.
+    buyer_user_id     BIGINT NOT NULL REFERENCES users(id),
+    buyer_name        TEXT NOT NULL,
+    retailer          TEXT,
+    -- "What are you buying?" — the first question in the process, and the one that
+    -- decides whether cards are released at all. Required to submit, never nullable in
+    -- practice past draft, because "I'm just buying stuff" is the exact answer the
+    -- process exists to refuse.
+    purpose           TEXT,
+    restrictions      TEXT,
+    status            TEXT NOT NULL DEFAULT 'draft',
+    -- The cost stack the verdicts were computed against, frozen when the request is
+    -- submitted. A preset edited next week must not silently restate what an approver
+    -- was looking at when they said yes.
+    preset_id         BIGINT REFERENCES payout_presets(id),
+    cost_stack        JSONB,
+    -- Money. approved_amount is the funding target: the SHELF price of every approved
+    -- pair, no discounts assumed. Deliberately generous — see docs/context/buy-cart.md.
+    approved_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+    gc_total          NUMERIC(12,2) NOT NULL DEFAULT 0,
+    receipt_total     NUMERIC(12,2),
+    balance_remaining NUMERIC(12,2),
+    -- The handoff to the physical half. Set when the parsed receipt raises the order.
+    po_id             BIGINT REFERENCES purchase_orders(id),
+    line_count        INT NOT NULL DEFAULT 0,
+    approved_count    INT NOT NULL DEFAULT 0,
+    pending_count     INT NOT NULL DEFAULT 0,
+    denied_reason     TEXT,
+    submitted_at      TIMESTAMPTZ, submitted_by TEXT,
+    -- Who approved is kept as an ID as well as a name: the auditor must not be the
+    -- approver, and that comparison has to run on something that can't be retyped.
+    approved_at       TIMESTAMPTZ, approved_by TEXT, approved_by_id BIGINT, approved_by_role TEXT,
+    funded_at         TIMESTAMPTZ, funded_by TEXT, funded_by_id BIGINT,
+    receipt_at        TIMESTAMPTZ, receipt_by TEXT,
+    audited_at        TIMESTAMPTZ, audited_by TEXT, audited_by_id BIGINT,
+    closed_at         TIMESTAMPTZ, closed_by TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`ALTER TABLE buy_carts DROP CONSTRAINT IF EXISTS buy_carts_status_check`);
+// `written_off` belongs in THIS list, not in a wider one added further down. A later
+// DROP+ADD does not save you: this statement re-validates the narrow constraint against
+// rows that already exist, so the moment one request had been written off, db:setup
+// failed here on every environment — including the one that had just created the row.
+await sql(`ALTER TABLE buy_carts ADD CONSTRAINT buy_carts_status_check CHECK (status IN
+  ('draft','submitted','approved','denied','funded','receipted','audited','closed','cancelled','written_off'))`);
+// WHO acted, in a form that works for EVERY account.
+//
+// `approved_by_id` alone was not enough, and the way it failed is the worst kind: the
+// env `admin` and `superadmin` accounts have no row in `users`, so their id landed as
+// NULL — and the "the approver cannot also be the auditor" comparison silently never
+// fired for the two accounts most likely to try to do both jobs. A control that is off
+// for its most privileged user is not a control.
+//
+// The key is the row id for a real account and `env:<username>` for the others, so one
+// comparison covers both. Kept alongside the id rather than replacing it: the id is
+// still the right thing for a foreign key and for joining to a name.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS approved_by_key TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS audited_by_key TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_carts_buyer_idx ON buy_carts (buyer_user_id, created_at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_carts_status_idx ON buy_carts (status, created_at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_carts_po_idx ON buy_carts (po_id) WHERE po_id IS NOT NULL`);
+
+// One requested pair: SKU + size × quantity, at the price on the shelf.
+//
+// There is deliberately NO unique index on (cart_id, sku, size). A line carries its own
+// shelf price and its own verdict, so the same pair seen in two shops at two prices is
+// two true rows; merging them would average away the thing an approver is judging. The
+// screen warns on a duplicate instead of silently folding it.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_cart_lines (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cart_id       BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
+    sku           TEXT NOT NULL,
+    size          TEXT,
+    qty           INT,
+    name          TEXT,
+    colorway      TEXT,
+    gender        TEXT,
+    upc           TEXT,
+    shelf_price   NUMERIC(12,2),
+    -- The buy call AS SEEN WHEN IT WAS ADDED, never recomputed. An approver has to be
+    -- looking at what the buyer was looking at; the market moving between the request
+    -- and the approval is information, not a correction. The screen offers a re-price
+    -- that shows today's number BESIDE this one and never overwrites it.
+    verdict       TEXT,
+    final_cost    NUMERIC(12,2),
+    best_platform TEXT,
+    best_payout   NUMERIC(12,2),
+    profit        NUMERIC(12,2),
+    roi           NUMERIC(8,2),
+    alias_price   NUMERIC(12,2),
+    stockx_price  NUMERIC(12,2),
+    liquidity     TEXT,
+    basis         TEXT,
+    quoted_at     TIMESTAMPTZ,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    decided_by    TEXT,
+    decided_by_id BIGINT,
+    decided_role  TEXT,
+    decided_at    TIMESTAMPTZ,
+    decided_reason TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`ALTER TABLE buy_cart_lines DROP CONSTRAINT IF EXISTS buy_cart_lines_status_check`);
+await sql(`ALTER TABLE buy_cart_lines ADD CONSTRAINT buy_cart_lines_status_check
+           CHECK (status IN ('pending','approved','rejected'))`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_lines_cart_idx ON buy_cart_lines (cart_id, id)`);
+
+// THE APPROVER SETS THE QUANTITY, so a pending line does not have one yet (2026-09-11).
+// The buyer hunting a shop reports what they FOUND — size, price, a photo of the shoe —
+// and how many of it to buy is the decision being asked for, not part of the question.
+// NULL until a line is approved; `1` would be a claim nobody made, and it is exactly the
+// number that would get funded if the approver never looked.
+await sql(`ALTER TABLE buy_cart_lines ALTER COLUMN qty DROP DEFAULT`);
+await sql(`ALTER TABLE buy_cart_lines ALTER COLUMN qty DROP NOT NULL`);
+// An override keeps what it replaced. One approver reversing another's call is a real
+// thing on this floor, and a system that refuses it moves the conversation somewhere
+// unauditable — but the last write must not be able to present itself as the only one.
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_by TEXT`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_status TEXT`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_qty INT`);
+
+// The cards themselves. A code plus a PIN is money in the hand, so neither is ever
+// stored as typed — api/_lib/secrets.js encrypts both under BUY_GC_KEY, and only
+// `code_last4` is safe to put in a list payload. Reading a full code is its own
+// endpoint and its own audited event.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_cart_gift_cards (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cart_id        BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
+    code_enc       TEXT NOT NULL,
+    code_last4     TEXT,
+    pin_enc        TEXT,
+    balance        NUMERIC(12,2) NOT NULL,
+    retailer       TEXT,
+    label          TEXT,
+    -- Filled at the audit, not when the card is issued: what this specific card was
+    -- actually spent, and what is left sitting on it. "Any remaining gift card balance
+    -- is accounted for" is a closing condition, so it needs somewhere to be accounted.
+    spent_amount   NUMERIC(12,2),
+    remaining      NUMERIC(12,2),
+    issued_by      TEXT,
+    issued_by_id   BIGINT,
+    issued_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    voided_at      TIMESTAMPTZ,
+    voided_reason  TEXT
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_gc_cart_idx ON buy_cart_gift_cards (cart_id, id)`);
+
+// Uploaded evidence: photographs or PDFs of the cards, and the receipt itself. One
+// table, split by `kind`, because both are the same thing — a file that must never be
+// served from the bucket by URL. Downloads go through an endpoint that authorises the
+// request first, exactly like the courier labels (docs/context/purchase-orders.md).
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_cart_files (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cart_id        BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL DEFAULT 'gift_card',
+    r2_key         TEXT NOT NULL,
+    name           TEXT,
+    content_type   TEXT,
+    size_bytes     INT,
+    uploaded_by    TEXT,
+    uploaded_by_id BIGINT,
+    uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+// A photo of the SHOE, keyed by SKU rather than by line (2026-09-11). The buyer hunting
+// a shop sends one shoe in several sizes, and photographing it once per size is work
+// nobody does twice — so the photos hang off the style code and every line carrying that
+// SKU shows them. `sku` is NULL on a gift-card or receipt file.
+await sql(`ALTER TABLE buy_cart_files ADD COLUMN IF NOT EXISTS sku TEXT`);
+await sql(`ALTER TABLE buy_cart_files DROP CONSTRAINT IF EXISTS buy_cart_files_kind_check`);
+await sql(`ALTER TABLE buy_cart_files ADD CONSTRAINT buy_cart_files_kind_check
+           CHECK (kind IN ('gift_card','receipt','shoe'))`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_files_cart_idx ON buy_cart_files (cart_id, kind, id)`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_files_sku_idx ON buy_cart_files (cart_id, sku) WHERE sku IS NOT NULL`);
+
+// What the receipt SAYS was bought — which is not the same list as what was approved,
+// and the gap between them is the point of keeping both. `matched_line_id` is the
+// join where they agree; a receipt line with no match is something bought that nobody
+// approved, and an approved line with no receipt line is money that went elsewhere.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_cart_receipt_lines (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cart_id         BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
+    sku             TEXT,
+    size            TEXT,
+    qty             INT NOT NULL DEFAULT 1,
+    name            TEXT,
+    unit_price      NUMERIC(12,2),
+    total_price     NUMERIC(12,2),
+    source          TEXT NOT NULL DEFAULT 'manual',
+    matched_line_id BIGINT REFERENCES buy_cart_lines(id) ON DELETE SET NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`ALTER TABLE buy_cart_receipt_lines DROP CONSTRAINT IF EXISTS buy_cart_receipt_lines_source_check`);
+await sql(`ALTER TABLE buy_cart_receipt_lines ADD CONSTRAINT buy_cart_receipt_lines_source_check
+           CHECK (source IN ('pdf','ocr','paste','manual'))`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_receipt_lines_cart_idx ON buy_cart_receipt_lines (cart_id, id)`);
+
+// The trail. Append-only, never edited, never read by a list screen — the same shape
+// as po_comments and for the same reason. `gc_revealed` is the row that matters most:
+// a full card code is only ever handed out through an endpoint that writes one of
+// these first, so "who could have spent this" always has an answer.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_cart_events (
+    id          BIGSERIAL PRIMARY KEY,
+    cart_id     BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL DEFAULT 'comment',
+    line_id     BIGINT,
+    gc_id       BIGINT,
+    body        TEXT,
+    actor_id    BIGINT,
+    actor_name  TEXT,
+    actor_role  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_events_cart_idx ON buy_cart_events (cart_id, id DESC)`);
+// ---------------------------------------------------------------------------
+// THE CONTROL STANDARD (Supplier & Buyer Accountability deck, Sept 2026)
+//
+// The deck says three things the process did not have a place to record:
+//
+//   1. Company funds leave by TWO routes, not one — a gift card, or a company card
+//      charge. Everything here was keyed on `gc_total`, so a card-funded purchase had
+//      no way to state what was authorised or reconcile what was charged.
+//   2. Every open task needs an OWNER, a NEXT ACTION, a DUE DATE and EVIDENCE. A wrong
+//      purchase is the sharpest case: it is frozen cash on somebody's shelf with a
+//      retailer's return cutoff running against it, and "returned" is not "refunded".
+//   3. Stock sitting with a buyer between the till and the courier is company
+//      inventory with no visibility. It needs a holder and a ship-by date.
+//
+// Plus one correction to how this ended: there was no way out of a request that can
+// never be completed, so the only options were leaving it open forever or faking a
+// clean close. The deck's answer is better than both — a written-off state that says
+// so, with a reason and a name, never a false "received" or "refunded".
+// ---------------------------------------------------------------------------
+
+// Route the money took. 'gift_card' is the existing path and stays the default so every
+// row already written keeps its meaning. On 'company_card' there are no cards to
+// reconcile, so the funding and spend conditions read the authorised charge instead —
+// the reference is what makes a charge traceable back to a statement line.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS funding_method TEXT NOT NULL DEFAULT 'gift_card'`);
+await sql(`ALTER TABLE buy_carts DROP CONSTRAINT IF EXISTS buy_carts_funding_method_check`);
+await sql(`ALTER TABLE buy_carts ADD CONSTRAINT buy_carts_funding_method_check
+           CHECK (funding_method IN ('gift_card','company_card'))`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS card_reference TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS card_authorized NUMERIC(12,2)`);
+
+// Custody. Between the till and the courier the shoes are company inventory sitting in
+// somebody's flat, and nothing recorded whose. A DATE, not a timestamp: a ship-by is a
+// day on a calendar, and it is compared against the EST day everywhere else is.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS holder TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS holder_location TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS ship_by DATE`);
+
+// The two audits, kept apart because they answer different questions from different
+// evidence at different times. The MONEY audit (cards or charge vs receipt) can be done
+// the day the receipt lands; the GOODS audit cannot happen until the boxes are in the
+// warehouse, which may be weeks. One sign-off for both would hold the money open for
+// the length of a shipment. `audited_*` is the money audit — it always was — so the
+// existing columns keep their meaning and only the goods half is new.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_by TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_by_id BIGINT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_by_key TEXT`);
+
+// A request that can never be completed. NOT a force-close: the status says out loud
+// that the company took a loss, the reason is required, and it is a different word from
+// `closed` everywhere it is read. "Never a false received or refunded."
+// The receipt's own breakdown, kept beside the total it charged.
+//
+// `receipt_total` alone could not answer "how much of this was tax", so the review
+// screen guessed — it printed "usually the tax" beside whatever gap it found between the
+// rows and the total. Now that a reader returns the printed subtotal and tax, the gap is
+// a fact that can be checked rather than explained away, and an auditor months later can
+// see what the shop actually charged for the goods.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_subtotal NUMERIC(12,2)`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_tax NUMERIC(12,2)`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_by TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS write_off_reason TEXT`);
+
+// Every open task, in ONE table rather than a return-case table beside a follow-up
+// table. The deck's rule is a single sentence — "owner + next action + due date +
+// evidence" — and two mechanisms that both half-satisfy it is how a queue ends up with
+// two answers to "what is outstanding".
+//
+// A RETURN CASE is that same row with the extra facts a return needs: which pairs, what
+// they cost, and the retailer's own final return date, which is the deadline that
+// actually bites. `refund_verified_at` is separate from `status='returned'` on purpose
+// — returned is not refunded, and only a posted credit closes a return.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_cart_tasks (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cart_id        BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL DEFAULT 'followup',
+    title          TEXT NOT NULL,
+    next_action    TEXT,
+    owner_name     TEXT,
+    owner_user_id  BIGINT,
+    due_date       DATE,
+    status         TEXT NOT NULL DEFAULT 'open',
+    -- Return-case facts. Null on an ordinary follow-up.
+    sku            TEXT,
+    size           TEXT,
+    qty            INT,
+    cost_at_risk   NUMERIC(12,2),
+    holder         TEXT,
+    return_by      DATE,
+    return_tracking TEXT,
+    refund_amount  NUMERIC(12,2),
+    refund_verified_at TIMESTAMPTZ,
+    refund_verified_by TEXT,
+    -- How it ended, in words. A task closed with no resolution records that somebody
+    -- ticked a box, not what happened.
+    resolution     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by     TEXT,
+    closed_at      TIMESTAMPTZ,
+    closed_by      TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`ALTER TABLE buy_cart_tasks DROP CONSTRAINT IF EXISTS buy_cart_tasks_kind_check`);
+await sql(`ALTER TABLE buy_cart_tasks ADD CONSTRAINT buy_cart_tasks_kind_check
+           CHECK (kind IN ('return','shortage','followup'))`);
+await sql(`ALTER TABLE buy_cart_tasks DROP CONSTRAINT IF EXISTS buy_cart_tasks_status_check`);
+await sql(`ALTER TABLE buy_cart_tasks ADD CONSTRAINT buy_cart_tasks_status_check
+           CHECK (status IN ('open','resolved','written_off'))`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_tasks_cart_idx ON buy_cart_tasks (cart_id, id)`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_tasks_open_idx ON buy_cart_tasks (status, due_date) WHERE status = 'open'`);
+
+
+
+// ---------------------------------------------------------------------------
 // FAILED SCANS — every scan that did not land, and why.
 //
 // This table exists because of a specific, expensive morning: the floor reported that
@@ -1069,5 +1515,6 @@ await sql(`CREATE INDEX IF NOT EXISTS scan_failures_reason_idx ON scan_failures 
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);
 const { rows: [{ po }] } = await sql(`SELECT count(*)::int AS po FROM purchase_orders`);
-console.log(`✓ Tables ready. users: ${count}, batches: ${b}, purchase_orders: ${po}`);
+const { rows: [{ bc }] } = await sql(`SELECT count(*)::int AS bc FROM buy_carts`);
+console.log(`✓ Tables ready. users: ${count}, batches: ${b}, purchase_orders: ${po}, buy_carts: ${bc}`);
 await pool.end();

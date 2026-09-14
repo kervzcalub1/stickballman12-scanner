@@ -102,6 +102,16 @@ const PATHS = {
     <path d="M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5h.01" />
     <path d="M8.5 18h7" />
   </>),
+  // Buying Requests — a shopping CART, because that is the thing being built: a buyer
+  // adds pairs to it and asks for them. It was a gift card with a ribbon until
+  // 2026-09-11, which drew the funding rather than the process and made the screen look
+  // like somewhere you buy gift cards. Distinct from the shopping bag (In-Store Buying)
+  // and the calculator (Payout).
+  'buy-carts': (<>
+    <path d="M2.5 4h2.2l2.4 10.2a1.6 1.6 0 0 0 1.6 1.3h7.9a1.6 1.6 0 0 0 1.6-1.2l1.6-6.3H6" />
+    <circle cx="9.5" cy="19.5" r="1.5" />
+    <circle cx="17" cy="19.5" r="1.5" />
+  </>),
   // In-Store Buying — a shopping bag
   instore: (<>
     <path d="M6 8h12l1 12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />

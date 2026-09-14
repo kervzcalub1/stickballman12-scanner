@@ -46,7 +46,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Shopify: the all-channel sales + inventory feed (`api/_lib/shopify.js`) | `docs/context/shopify.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
 | Inventory browse, SKU-merge, bulk status, labels, **removing pairs + Deleted archive** | `docs/context/inventory.md` |
-| Costs page: backfilling a cost the supplier skipped, blank-vs-$0 | `docs/context/costs.md` |
+| Costs: **per-shoe cost at receiving** (typed → PO line → batch default), the Costs page backfill, Inventory ✎, blank-vs-$0 | `docs/context/costs.md` |
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
 | Pre-sell: shipments sold before they landed (held out of listing, then released) | `docs/context/pre-sell.md` |

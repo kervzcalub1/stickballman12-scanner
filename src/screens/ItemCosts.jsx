@@ -15,6 +15,7 @@ import { usePendingCounts } from '../hooks.js';
 import { rangeOf, PH_DATE } from '../lib/format.js';
 import { sizeLabel } from '../lib/codes.js';
 import { groupCostRows, costFieldValue, costChanged } from '../lib/costs.js';
+import { readParam, writeParam } from '../lib/urlstate.js';
 
 export function ItemCosts({ onHome, onSignOut }) {
   const [rows, setRows] = useState(null);
@@ -25,7 +26,9 @@ export function ItemCosts({ onHome, onSignOut }) {
   // Month, not Day: this is a backlog. A Day filter would read "all clear" while the
   // home badge still shows dozens waiting — the same reason No Box defaults to Month.
   const [dr, setDr] = useState(() => ({ mode: 'month', anchor: new Date() }));
-  const [query, setQuery] = useState('');
+  // `?q=` seeds the search so Inventory's "Edit cost" (and a refresh) lands straight
+  // on the shoe rather than on the backlog.
+  const [query, setQuery] = useState(() => readParam('q'));
   const [searched, setSearched] = useState('');  // the term actually loaded, '' = worklist
   // 'blank' = no cost on file · 'zero' = recorded as free. Two lists, not one: a $0 is
   // a claim already on file, so folding it into the backlog would assert it's a gap
@@ -42,7 +45,12 @@ export function ItemCosts({ onHome, onSignOut }) {
       setRows(r); setDrafts({}); setSearched('');
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
-  useEffect(() => { if (!searched) loadWorklist(); }, [dr, tab]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    // Arrived with ?q= (Inventory's "Edit cost", or a refresh mid-search): run it
+    // instead of loading the backlog the person didn't ask for.
+    if (!searched && query.trim() && rows === null) { runSearch(); return; }
+    if (!searched) loadWorklist();
+  }, [dr, tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function runSearch(e) {
     e?.preventDefault?.();
@@ -51,12 +59,12 @@ export function ItemCosts({ onHome, onSignOut }) {
     setError(''); setNotice(''); setRows(null);
     try {
       const { rows: r } = await api.costsSearch(q);
-      setRows(r); setDrafts({}); setSearched(q);
+      setRows(r); setDrafts({}); setSearched(q); writeParam('q', q);
       if (!r.length) setNotice(`Nothing found for “${q}”.`);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   function backToWorklist() {
-    setQuery(''); setSearched(''); setNotice(''); loadWorklist();
+    setQuery(''); setSearched(''); setNotice(''); writeParam('q', ''); loadWorklist();
   }
 
   const groups = rows ? groupCostRows(rows) : null;

@@ -167,7 +167,7 @@ function StickerResult({ info, onOpenItem }) {
 // that on their own grid) — but NOT the physical-stock writes: status changes and
 // Move to shelf. Those endpoints stay warehouse-only server-side, so this flag hides
 // buttons that would 403 rather than granting anything (docs/context/inventory.md).
-export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, canEditStock = true }) {
+export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome, onSignOut, canEditStock = true }) {
   const today = estToday();
   const [mode, setMode] = useState('list'); // 'list' | 'detail'
 
@@ -727,7 +727,15 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
                     <div><dt>SKU</dt><dd><CopyText text={it.sku}>{it.sku || '—'}</CopyText></dd></div>
                     <div><dt>UPC</dt><dd><CopyText text={it.upc}>{it.upc || '—'}</CopyText></dd></div>
                     <div><dt>Size</dt><dd>{it.size || '—'}</dd></div>
-                    <div><dt>Cost</dt><dd>${Number(it.cost || 0).toFixed(2)}</dd></div>
+                    {/* Blank is "not known", never $0.00 (costs.md). The pencil hands the
+                        whole SKU to the Costs page — cost is set per size per shipment there. */}
+                    <div><dt>Cost</dt><dd>
+                      {it.cost != null ? `$${Number(it.cost).toFixed(2)}` : <span className="muted">no cost</span>}
+                      {onOpenCosts && (it.sku || it.vin) && (
+                        <button type="button" className="btn ghost sm inv-cost-edit" title="Edit the cost on the Costs page"
+                          onClick={() => onOpenCosts(it.sku || it.vin)}><Icon name="pencil" /></button>
+                      )}
+                    </dd></div>
                     <div><dt>Status</dt><dd><StatusPill status={it.status} /></dd></div>
                     <div><dt>Location</dt><dd>{it.location_code
                       ? <span className="loc-chip" title={it.location_code}><Icon name="pin" /> {it.location_warehouse ? `${it.location_warehouse} · ` : ''}{it.location_label || it.location_code}</span>
@@ -879,7 +887,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onHome, onSignOut, 
       <dl className="inv-metrics">
         <div><dt>Date received</dt><dd>{(g.date_received || '').slice(0, 10) || '—'}</dd></div>
         <div><dt>Location</dt><dd>{locLabel ? <span className="loc-chip" title={locs.join(', ')}><Icon name="pin" /> {locLabel}</span> : <span className="muted">Not shelved</span>}</dd></div>
-        <div><dt>Cost</dt><dd>{g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : '—'}</dd></div>
+        <div><dt>Cost</dt><dd>
+          {g.cost != null ? `${g.costMixed ? '~' : ''}$${Number(g.cost).toFixed(2)}` : <span className="muted">no cost</span>}
+          {onOpenCosts && g.sku && (
+            <button type="button" className="btn ghost sm inv-cost-edit" title="Edit what these pairs cost, per size, on the Costs page"
+              onClick={() => onOpenCosts(g.sku)}><Icon name="pencil" /></button>
+          )}
+        </dd></div>
         <div><dt>Supplier / Buyer</dt><dd>{g.supplier_name || '—'}{g.buyer_name ? ` / ${g.buyer_name}` : ''}</dd></div>
         <div><dt>Total units</dt><dd>{g.qty}</dd></div>
         <div className="inv-metrics-wide"><dt>Sizes</dt><dd><SizesQty sizes={g.sizes} /></dd></div>

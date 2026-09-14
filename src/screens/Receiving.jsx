@@ -5,7 +5,7 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
-import { TopBar, Modal, LabelSheet, PreferencesModal, Pager } from '../components/common.jsx';
+import { TopBar, Modal, LabelSheet, PreferencesModal, Pager, PriceInput } from '../components/common.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
@@ -17,6 +17,7 @@ import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
+import { costOrNull, poLineCost, unitCost } from '../lib/costs.js';
 import { estToday } from '../lib/format.js';
 import { declaresPerBox } from '../lib/postatus.js';
 
@@ -82,6 +83,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // number on the carton says WHICH box it is; the number a person picks while unpacking
   // is a guess, and that guess is what filed box 6 of 9 as "box 10".
   const [poLabels, setPoLabels] = useState(null);
+  const [poCostLines, setPoCostLines] = useState(null); // box mode: the PO's lines, for cost only
   useEffect(() => {
     if (!isBoxMode || boxTarget) return;
     let cancelled = false;
@@ -93,7 +95,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       setNewBoxNumber((v) => v || String(next));
       if (r.batch?.po_id) {
         api.poGet(Number(r.batch.po_id))
-          .then((po) => { if (!cancelled) setPoLabels(po.boxes || []); })
+          .then((po) => {
+            if (cancelled) return;
+            setPoLabels(po.boxes || []);
+            // Box mode never links the PO as `receivingPo` (that would re-run the
+            // Step 1 prefill), but the lines still carry what the supplier said each
+            // size cost — keep them so a box added later inherits it too.
+            setPoCostLines(po.lines || []);
+          })
           .catch(() => { /* fall back to the typed number */ });
       }
     }).catch(() => { /* the field still accepts a number typed by hand */ });
@@ -436,6 +445,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }
   const setItemBox = (itemKey, withBox) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, withBox } : it)));
   const setItemGoat = (itemKey, goatOnly) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, goatOnly } : it)));
+  // Cost per SHOE, typed on the card. Kept as the raw string so a half-typed "12."
+  // survives a re-render; blank means "use the PO line / batch default", never $0.
+  const setItemCost = (itemKey, cost) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, cost } : it)));
   async function bumpSizeQty(itemKey, sizeKey, delta) {
     if (delta > 0) {
       const vins = await reserveMoreVins(1);
@@ -1263,7 +1275,44 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // Pairs this label was supposed to hold — the denominator of the "x of y checked"
   // progress on the PO checklist (overage rows have no expectation, so they're excluded).
   const manifestExpected = items.reduce((s, i) => s + i.sizes.reduce((a, r) => a + (Number(r.expectedQty) || 0), 0), 0);
-  const totalCost = (defaultCostNum || 0) * totalItems;
+
+  // Cost per PAIR, resolved most-specific first: typed on the shoe's card → what the
+  // supplier declared for that SKU + size on the PO → the batch default (costs.js).
+  // Fifteen SKUs at fifteen prices used to mean one "Default cost" stamped on all of
+  // them and fifteen corrections on the Costs page afterwards. In box mode the header
+  // has no default; the server falls back to the batch's own (box-commit.js), so a
+  // blank here is sent as null on purpose and the card shows that fallback instead.
+  const costLines = receivingPo?.lines || poCostLines || [];
+  const activePoBoxId = boxSlots[activeSlot]?.poBoxId ?? null;
+  const batchDefaultCost = isBoxMode ? costOrNull(batchContext?.default_cost) : defaultCostNum;
+  const sizeCost = (it, s) => unitCost(it.cost, poLineCost(costLines, it.sku, s.size, activePoBoxId), batchDefaultCost);
+  // What the card shows when nothing is typed: the PO's figure for the shoe (one
+  // value, or a range when the supplier priced sizes differently), else the default.
+  const shoeCostHint = (it) => {
+    const fromPo = [...new Set(it.sizes.map((s) => poLineCost(costLines, it.sku, s.size, activePoBoxId)).filter((c) => c != null))];
+    if (fromPo.length === 1) return { cost: fromPo[0], source: 'from PO' };
+    if (fromPo.length > 1) return { cost: null, source: `from PO · $${Math.min(...fromPo).toFixed(2)}–$${Math.max(...fromPo).toFixed(2)} by size` };
+    if (batchDefaultCost != null) return { cost: batchDefaultCost, source: 'batch default' };
+    return { cost: null, source: 'no cost — fill in later on Costs' };
+  };
+  // The per-shoe cost box, on the card beside Box / GOAT only. Shown on rescale too:
+  // it can take in unlabeled stock it finds, and that stock is created with a cost.
+  const costField = (it) => {
+    const typed = String(it.cost ?? '').trim() !== '';
+    const hint = shoeCostHint(it);
+    return (
+      <label className="recv-item-cost" title="What this shoe cost, per pair. Leave blank to use the PO line or the batch default.">
+        <span className="recv-item-cost-lbl">Cost ea</span>
+        <PriceInput value={it.cost ?? ''} placeholder={hint.cost != null ? hint.cost.toFixed(2) : '—'}
+          onChange={(e) => setItemCost(it.key, e.target.value)} />
+        <span className={`recv-item-cost-src ${typed ? 'typed' : ''}`}>{typed ? 'typed' : hint.source}</span>
+      </label>
+    );
+  };
+  const totalCost = items.reduce((sum, it) => sum + it.sizes.reduce((a, s) => a + Math.max(0, Number(s.qty) || 0) * (sizeCost(it, s) || 0), 0), 0);
+  // Pairs about to land with NO cost — said out loud on the confirm, so a skipped box
+  // is a choice rather than a surprise on the Costs backlog next month.
+  const uncostedUnits = items.reduce((sum, it) => sum + it.sizes.reduce((a, s) => a + (sizeCost(it, s) == null ? Math.max(0, Number(s.qty) || 0) : 0), 0), 0);
   const rescaledCount = rescanned.length; // existing units re-scanned by VIN (rescale only)
 
   // Rescale finish: allow new stock and/or rescanned VINs, and require a status
@@ -1405,7 +1454,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: defaultCostNum, withBox: it.withBox, goatOnly: it.goatOnly, vin: r.vins?.[n] || null });
+            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), withBox: it.withBox, goatOnly: it.goatOnly, vin: r.vins?.[n] || null });
           }
         }
       }
@@ -1750,7 +1799,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     </label>
                   )}
                   {!isBoxMode && <label>{isInstore ? 'Date' : isRescale ? 'Date *' : 'Date received *'}<input type="date" value={header.dateReceived} onChange={(e) => setH('dateReceived', e.target.value)} /></label>}
-                  {!isBoxMode && <label>Default cost ($)<input type="number" min="0" step="0.01" value={header.defaultCost} onChange={(e) => setH('defaultCost', e.target.value)} /></label>}
+                  {!isBoxMode && (
+                    <label title="Per pair. Each shoe can be given its own cost on its card — this is what any shoe you don't price gets.">
+                      Default cost ($ per pair)
+                      <input type="number" min="0" step="0.01" placeholder="Set per shoe later" value={header.defaultCost} onChange={(e) => setH('defaultCost', e.target.value)} />
+                    </label>
+                  )}
                   {!noShipment && !isBoxMode && (
                     <label>Boxes expected
                       <input type="number" inputMode="numeric" min="1" step="1" value={header.expectedBoxes}
@@ -1993,10 +2047,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                 <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
                                   <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
                                 </label>
+                                {costField(it)}
                               </div>
                             )}
                             <div className="recv-item-meta">
-                              <span className="muted sm">{isRescale ? 'Rescale' : isInstore ? (header.origin?.trim() || 'In-store') : (header.supplier || '—')} · {defaultCostNum != null ? `$${defaultCostNum.toFixed(2)}` : 'no cost'}</span>
+                              <span className="muted sm">{isRescale ? 'Rescale' : isInstore ? (header.origin?.trim() || 'In-store') : (header.supplier || '—')}</span>
                             </div>
                           </div>
                           {!noShipment && !it.pending && String(it.sku || '').trim() && (
@@ -2133,6 +2188,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                               <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
                                 <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
                               </label>
+                              {costField(it)}
                             </div>
                           </div>
                           {!noShipment && String(it.sku || '').trim() && (
@@ -2386,6 +2442,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 : isInstore
                 ? (<>
                     <div><b>{totalItems}</b> pair{totalItems === 1 ? '' : 's'} ({items.length} shoe{items.length === 1 ? '' : 's'}) · total <b>${totalCost.toFixed(2)}</b></div>
+                    {uncostedUnits > 0 && <div className="warn-line">{uncostedUnits} pair{uncostedUnits === 1 ? '' : 's'} with no cost — they’ll wait on the Costs page.</div>}
                     <div className="muted">In-store{header.origin?.trim() ? ` · ${header.origin.trim()}` : ''} · {header.dateReceived}</div>
                     {(autoIssues.length + issues.length) > 0 && <div className="muted">{autoIssues.length + issues.length} issue(s) recorded</div>}
                     {flaggedCount > 0 && <div className="muted">{flaggedCount} unit(s) flagged with a defect</div>}
@@ -2393,6 +2450,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   </>)
                 : (<>
                     <div><b>{totalItems}</b> units ({items.length} shoe{items.length === 1 ? '' : 's'}) · total <b>${totalCost.toFixed(2)}</b></div>
+                    {uncostedUnits > 0 && <div className="warn-line">{uncostedUnits} pair{uncostedUnits === 1 ? '' : 's'} with no cost — they’ll wait on the Costs page.</div>}
                     <div className="muted">Supplier: {header.supplier || '—'} · Buyer: {header.buyer || '—'}</div>
                     {isMultiBoxNew && activeSlot != null
                       ? <div className="muted">Box {Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} of {boxSlots.length} · Tracking: {boxSlots[activeSlot]?.tracking || '—'}</div>
@@ -2800,7 +2858,8 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
                           <div className="batch-detail-row" key={it.id}>
                             <button className="vin vin-link" onClick={() => onOpenItem?.(it.vin)} title="View full shoe detail">{it.vin}</button>
                             <span className="batch-row-name">{it.name}</span>
-                            <span className="muted sm">{it.sku || '—'} · size {it.size || '—'} · ${Number(it.cost || 0).toFixed(2)}</span>
+                            {/* Blank is "not known", not $0.00 — the Costs page exists to fill it in. */}
+                            <span className="muted sm">{it.sku || '—'} · size {it.size || '—'} · {it.cost != null ? `$${Number(it.cost).toFixed(2)}` : 'no cost'}</span>
                           </div>
                         ))}
                         {detail.issues.map((is) => (

@@ -54,6 +54,7 @@ import { DEFAULT_FEE_PCT, BUY_MIN_PROFIT, BUY_MIN_ROI } from '../../src/lib/payo
 import { searchSop, articleById, sopRoleForAccount } from '../../src/lib/sop/index.js';
 import { estToday, estDate, estCivilFromYmd, ymd } from '../../src/lib/format.js';
 import { ADVISOR_NAME } from '../../src/lib/advisorContext.js';
+import { expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const MODEL = process.env.PAYOUT_AI_MODEL || 'gpt-5.4-mini';
@@ -511,7 +512,11 @@ async function poStatus(found) {
     getPoResolution(id).catch(() => null),
   ]);
   const { po, rows, summary, intakeDone, awaitingBoxes } = state;
-  const perLabel = po.manifest_scope !== 'po';
+  // Two questions, and the advisor asks both: where `expected` came from, and whether
+  // there is a per-box breakdown to report beside it. On 'order+box' the answer is
+  // "the order" and "yes" at the same time.
+  const perLabel = !expectsAtOrderLevel(po);
+  const boxLists = declaresPerBox(po);
 
   // The reading, in sentences, worst-first. Order matters: "nothing counted in yet"
   // has to land before anything that sounds like a count.
@@ -555,7 +560,9 @@ async function poStatus(found) {
       supplier: po.supplier_name,
       status: po.status,
       ...(po.tag_code ? { tag: po.tag_code } : {}),
-      manifest: perLabel ? 'one list per label' : 'one list for the whole order',
+      manifest: hasOrderedList(po)
+        ? 'the receipt is the order-level list, and the buyer also packed a list per box'
+        : (perLabel ? 'one list per label' : 'one list for the whole order'),
       raised: estDate(po.created_at),
       ...(po.date_of_purchase ? { purchased: String(po.date_of_purchase).slice(0, 10) } : {}),
       ...(po.reconciled_at ? { settled: estDate(po.reconciled_at) } : {}),
@@ -582,7 +589,7 @@ async function poStatus(found) {
       ...(r.size_ours ? { we_wrote_size: r.size_ours } : {}),
     })),
     ...(disc.length > PO_MAX_ROWS ? { more_discrepant_lines: disc.length - PO_MAX_ROWS } : {}),
-    by_box: perLabel
+    by_box: boxLists
       ? {
         differ: differ.slice(0, PO_MAX_BOXES).map((b) => ({
           box: b.box_number,
@@ -608,7 +615,7 @@ async function poStatus(found) {
       // printing "declared: 0" beside a box with twelve pairs counted out of it reads as
       // "this box was empty" — the opposite of the truth, and the same trap the PO list
       // and the label cards already had to fix.
-      ...(perLabel ? { declared: declaredByBox.get(Number(b.id)) || 0 } : {}),
+      ...(boxLists ? { declared: declaredByBox.get(Number(b.id)) || 0 } : {}),
       counted: b.received_units,
       ...(b.last_checkpoint ? { last_checkpoint: String(b.last_checkpoint).slice(0, 90) } : {}),
     })),

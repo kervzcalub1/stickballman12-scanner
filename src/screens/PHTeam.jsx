@@ -183,8 +183,8 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           {hasAnyPriv(user) && (
             <button className="home-card" onClick={() => goPage('buycarts')}>
               <span className="home-card-icon"><NavIcon name="buy-carts" /></span>
-              <span className="home-card-title">Gift Card Buying</span>
-              <span className="home-card-sub">Buying requests to approve, gift cards to release, and spending to account for</span>
+              <span className="home-card-title">Buying Requests</span>
+              <span className="home-card-sub">Requests to approve, gift cards to release, and spending to account for</span>
             </button>
           )}
           <button className="home-card" onClick={() => goPage('inventory')}>

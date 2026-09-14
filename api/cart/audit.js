@@ -27,7 +27,7 @@
 // comparing on the stored user id rather than a display name.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import { getBuyCart, getBuyCartFull, auditBuyCart, goodsAuditBuyCart, dbConfigured } from '../_lib/db.js';
-import { requireAuditPrivilege, cartCloseChecks, allChecksPass } from '../_lib/buycart.js';
+import { requireAuditPrivilege, cartCloseChecks, allChecksPass, redactCartForViewer } from '../_lib/buycart.js';
 
 const money = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
 
@@ -70,7 +70,7 @@ export default async function handler(req, res) {
       }
       await goodsAuditBuyCart({ cartId, note: String(body.note ?? '').trim().slice(0, 500) || null, actor: user });
       const full = await getBuyCartFull(cartId);
-      return send(res, 200, { ok: true, cart: full, checks: await cartCloseChecks(full) });
+      return send(res, 200, { ok: true, cart: redactCartForViewer(full, user), checks: await cartCloseChecks(full) });
     }
 
     if (!['receipted', 'audited'].includes(cart.status))
@@ -94,7 +94,7 @@ export default async function handler(req, res) {
 
     await auditBuyCart({ cartId, cards, actor: user });
     const full = await getBuyCartFull(cartId);
-    return send(res, 200, { ok: true, cart: full, checks: await cartCloseChecks(full) });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(full, user), checks: await cartCloseChecks(full) });
   } catch (e) {
     console.error('[cart/audit]', e.message);
     return send(res, 500, { ok: false, error: 'Could not record the audit.' });

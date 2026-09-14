@@ -12,6 +12,8 @@
 // receipt does not have — the server refuses it, and says which pair it was looking for.
 import React, { useState } from 'react';
 import { api } from '../api.js';
+import { poHref } from '../lib/poLink.js';
+import { Icon } from './NavIcons.jsx';
 
 const BOX_STATE = {
   pending: 'Filling',
@@ -22,7 +24,7 @@ const BOX_STATE = {
   delivered: 'Delivered',
 };
 
-export function BuyCartPack({ cart, canPack, onChanged, onSignOut }) {
+export function BuyCartPack({ cart, user, canPack, canAskLabels, onChanged, onSignOut }) {
   const pack = cart.pack;
   const [box, setBox] = useState(null);
   const [busy, setBusy] = useState('');
@@ -35,6 +37,18 @@ export function BuyCartPack({ cart, canPack, onChanged, onSignOut }) {
   const fillable = (pack.boxes || []).filter((b) => b.status === 'pending');
   const active = fillable.find((b) => b.id === box) || fillable[0] || null;
 
+  // A box count is a guess made before anything is packed, so running out mid-job is the
+  // normal case rather than the exception — and having to leave the screen to ask a desk
+  // for one is how a pair ends up crammed into a carton that was already sealed.
+  async function addBox() {
+    setBusy('addbox'); setErr('');
+    try {
+      await api.poBoxAdd(pack.poId, 1);
+      await onChanged();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(''); }
+  }
+
   async function move(row, qty) {
     if (!active) return;
     setBusy(`${row.sku}|${row.size}|${qty}`); setErr('');
@@ -43,7 +57,23 @@ export function BuyCartPack({ cart, canPack, onChanged, onSignOut }) {
     finally { setBusy(''); }
   }
 
+  // "I've packed these — send me labels." The same call the supplier makes from their
+  // Outbound Shipments screen; offered HERE because here is where they finish packing.
+  async function askForLabels(on = true) {
+    setBusy('labels'); setErr('');
+    try { await api.poRequestLabels(pack.poId, on); await onChanged(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(''); }
+  }
+
   const done = pack.unpacked === 0 && pack.totalQty > 0;
+  const po = cart.po || null;
+  const orderHref = poHref(user, pack.poId);
+  const awaitingLabels = !!po?.labels_requested_at;
+  // Once a courier number is on every box the ask has been answered: what is left is
+  // closing and shipping, which the order screen owns.
+  const labelled = (pack.boxes || []).length > 0 && (pack.boxes || []).every((b) => b.tracking_number);
+  const orderOpen = po && !['closed', 'cancelled', 'received', 'reconciled'].includes(po.status);
 
   return (
     <section className="card bc-pack">
@@ -66,15 +96,64 @@ export function BuyCartPack({ cart, canPack, onChanged, onSignOut }) {
         )}
       </p>
 
-      {fillable.length > 1 && (
+      {/* THE HANDOFF. "Every pair is in a box" used to be the last thing this panel said,
+          and it was a dead end: the next steps — ask for labels, print each box's
+          manifest, seal, ship — live on the order's own screen, and nothing here led to
+          it. The buyer had to know to go Home → Outbound Shipments and find the order.
+          Now the moment packing is complete the panel says what happens next and offers
+          it: the ask is one tap (its precondition — something declared on the boxes —
+          is exactly what packing just did), and the order is one link. Not a redirect:
+          the request page is the one screen both sides look at, and the buyer may still
+          want the receipt and money in front of them. */}
+      {done && orderOpen && (
+        <div className="bc-pack-next">
+          {labelled ? (
+            <p className="sm">
+              <b>Every box has its tracking number.</b> Print each box’s manifest from the order, seal it, and ship.
+            </p>
+          ) : awaitingLabels ? (
+            <p className="sm">
+              <b>Labels requested.</b> We’ll put the tracking numbers on your boxes — they’ll show on the order.
+              Print each box’s manifest from the order and seal it while you wait.
+            </p>
+          ) : (
+            <p className="sm">
+              <b>Next: ask for labels.</b> We buy the courier labels against what you packed and put the tracking numbers on your boxes.
+            </p>
+          )}
+          <div className="bc-pack-next-actions">
+            {canAskLabels && !labelled && (awaitingLabels
+              ? <button type="button" className="btn sm ghost" disabled={!!busy} onClick={() => askForLabels(false)}>
+                  {busy === 'labels' ? 'Cancelling…' : 'Cancel the label request'}
+                </button>
+              : <button type="button" className="btn sm primary" disabled={!!busy} onClick={() => askForLabels(true)}>
+                  <Icon name="tag" /> {busy === 'labels' ? 'Asking…' : 'Ask for labels'}
+                </button>)}
+            {orderHref && (
+              <a className="btn sm ghost" href={orderHref}>Open the order {po?.po_code ? <b>{po.po_code}</b> : ''} →</a>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Which box you are filling right now. Everything below drops into THIS one, so a
+          size that spans three cartons needs no thought and no special case: fill box 1
+          until it is full, tap box 2, keep going. The Left column counts down whichever
+          box the pairs went into. */}
+      {(canPack || fillable.length > 1) && (
         <div className="bc-pack-boxes" role="group" aria-label="Which box">
           {fillable.map((b) => (
             <button key={b.id} type="button"
               className={`btn sm ${active && active.id === b.id ? 'primary' : 'ghost'}`}
+              aria-pressed={!!active && active.id === b.id}
               onClick={() => setBox(b.id)}>
               Box {b.box_number ?? b.id} <span className="muted xs">{b.units}</span>
             </button>
           ))}
+          {canPack && (
+            <button type="button" className="btn sm ghost" disabled={!!busy}
+              onClick={addBox}>{busy === 'addbox' ? 'Adding…' : '+ Another box'}</button>
+          )}
         </div>
       )}
 
@@ -90,8 +169,14 @@ export function BuyCartPack({ cart, canPack, onChanged, onSignOut }) {
             <thead>
               <tr>
                 <th>Pair</th><th>Size</th>
-                <th className="num">On the receipt</th><th className="num">Packed</th><th className="num">Left</th>
-                {canPack && active && <th>Into box {active.box_number ?? active.id}</th>}
+                {/* Two columns the phone drops. On a 430px screen the six of them pushed
+                    the +1 buttons off the right edge — into a sideways scroll, on the one
+                    screen that is used one-handed over an open carton. "Packed" is
+                    Receipt minus Left, and the countdown is the number being read. */}
+                <th className="num bc-pack-wide">On the receipt</th>
+                <th className="num bc-pack-wide">Packed</th>
+                <th className="num">Left</th>
+                {canPack && active && <th className="num">Box {active.box_number ?? active.id}</th>}
               </tr>
             </thead>
             <tbody>
@@ -99,8 +184,8 @@ export function BuyCartPack({ cart, canPack, onChanged, onSignOut }) {
                 <tr key={`${r.sku}|${r.size}`} className={r.remaining === 0 ? 'bc-line approved' : 'bc-line'}>
                   <td><b>{r.sku}</b>{r.name && <div className="muted xs">{r.name}</div>}</td>
                   <td>{r.size || '—'}</td>
-                  <td className="num">{r.qty}</td>
-                  <td className="num">{r.packed}</td>
+                  <td className="num bc-pack-wide">{r.qty}</td>
+                  <td className="num bc-pack-wide">{r.packed}</td>
                   <td className="num">{r.remaining === 0 ? <span className="bc-covered">✓</span> : r.remaining}</td>
                   {canPack && active && (
                     <td className="bc-pack-actions">

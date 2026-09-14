@@ -11,6 +11,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
+import { expectsAtOrderLevel } from '../lib/postatus.js';
 
 const SHIPPED = ['shipped', 'in_transit', 'delivered'];
 const fmtDate = (d) => (d ? String(d).slice(0, 10) : '—');
@@ -50,14 +51,17 @@ export function PoLinkBatchModal({ po, lines = [], onClose, onLinked, onSignOut 
   // manifest counts only lines on SHIPPED labels, so leaving these behind makes a fully
   // delivered order read as "received blind" with every pair an overage.
   const stuck = labels.filter((l) => chosenIds.includes(Number(l.id)) && ['pending', 'packed'].includes(l.status));
-  const perLabel = po.manifest_scope !== 'po';
+  // Whether a label's shipping status moves `expected`. It does under a per-label
+  // manifest; it does NOT once the order carries its own list — there, a label still
+  // sitting at the buyer means pairs are awaiting, not that the order reads blind.
+  const perLabel = !expectsAtOrderLevel(po);
 
   // What the order will read once this is linked — the same arithmetic reconciliation
   // does, so a surprise shows up here rather than after the fact.
   const expectedUnits = useMemo(() => {
     const willShip = shipLabels ? stuck.map((l) => Number(l.id)) : [];
     return (lines || []).filter((l) => {
-      if (po.manifest_scope === 'po') return l.po_box_id == null;
+      if (expectsAtOrderLevel(po)) return l.po_box_id == null;
       const lb = labels.find((b) => Number(b.id) === Number(l.po_box_id));
       if (!lb || lb.kind === 'replacement') return false;
       return SHIPPED.includes(lb.status) || willShip.includes(Number(lb.id));

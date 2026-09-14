@@ -164,7 +164,7 @@ buying, which is the question this screen exists to answer.
 
 ## The same maths drives the buying-request calls (2026-09-05)
 `calcCostBreakdown` / `calcPayout` / `dealVerdict` are also what price a line on a
-gift-card buying request (`docs/context/buy-cart.md`) — deliberately the same functions,
+buying request (`docs/context/buy-cart.md`) — deliberately the same functions,
 so a cart line and a calculator line can never be priced by two code paths that
 disagree. The buyer's own preset fills the stack there too, snapshotted onto the request
 so a later edit can't restate what an approver saw. Note the one thing that screen adds:

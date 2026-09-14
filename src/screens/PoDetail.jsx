@@ -26,7 +26,7 @@ import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLinkBatchModal } from '../components/PoLinkBatch.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoDetailsEdit, PoAddLabels, PoLabelTools } from '../components/PoEdit.jsx';
-import { boxStatusLabel, boxChipCls, isBoxesOrder, shippedProgress } from '../lib/postatus.js';
+import { boxStatusLabel, boxChipCls, isBoxesOrder, shippedProgress, declaresPerBox } from '../lib/postatus.js';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoOriginChip } from '../components/PoOriginChip.jsx';
@@ -344,7 +344,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
             {/* Bulk on-behalf entry: the supplier's whole manifest PDF at once. Same window
                 as filling a single label by hand — a settled order's manifest is closed, and
                 a whole-order manifest isn't per-label. */}
-            {!FROZEN.includes(po.status) && po.manifest_scope !== 'po' && boxes.length > 0 && (
+            {!FROZEN.includes(po.status) && declaresPerBox(po) && boxes.length > 0 && (
               /* Draws its own dashed container — wrapping it in a card too made a box
                  inside a box. */
               <PoManifestImport po={po} boxes={boxes} lines={lines} onImported={load} onSignOut={onSignOut} />
@@ -373,7 +373,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
               // limits.
               const canFill = isReplacement
                 ? po.status !== 'closed'
-                : (!FROZEN.includes(po.status) && po.manifest_scope !== 'po');
+                : (!FROZEN.includes(po.status) && declaresPerBox(po));
               // Already gone or landed: entering it now only sets what was EXPECTED. It can't
               // rewrite what the warehouse counted.
               const boxIsOut = !['pending', 'pre_transit'].includes(box.status);

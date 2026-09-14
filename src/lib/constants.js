@@ -124,7 +124,10 @@ export const HOME_SECTIONS = [
     { key: 'instore-listing', icon: '🏷️', title: 'In-Store Listing', sub: 'Mark in-store buys listed to Alias/StockX/Shopify' },
     { key: 'payout', icon: '🧮', title: 'Payout Calculator', sub: 'Cost after discounts vs. what Alias/StockX pay out — is this pair a buy?' },
     // `priv` = only drawn for an account holding one of the buying privileges.
-    { key: 'buy-carts', icon: '🎁', title: 'Gift Card Buying', sub: 'Buyers ask, you approve, the desk releases the cards — then receipt, audit and reconcile', priv: true },
+    // NOT "Gift Card Buying", which named the funding and not the process: nobody
+    // here is buying a gift card. A buyer asks to purchase stock, we approve it, the
+    // desk funds them with cards to spend, they ship, we receive and reconcile.
+    { key: 'buy-carts', icon: '🛒', title: 'Buying Requests', sub: 'Buyers ask, you approve, the desk funds the cards — then receipt, audit and reconcile', priv: true },
   ] },
   // A one-off migration mode, not part of the daily loop — its own section so it
   // reads as "the project of getting old stock into the system", not as receiving.
@@ -189,14 +192,20 @@ export const PRIVILEGES = [
   { key: 'approve_buying', label: 'Approve buying requests', hint: 'Decide what company funds may be spent on' },
   { key: 'issue_gift_cards', label: 'Issue gift cards', hint: 'Record and release cards against an approved request' },
   { key: 'audit_buying', label: 'Audit + close transactions', hint: 'Account for the spend and close it out' },
+  // The BUYER's side, and the only privilege a supplier can hold. Most suppliers only
+  // ship us boxes; the ones who buy for the company are switched on one by one.
+  { key: 'request_buying', label: 'Raise buying requests', hint: 'Buy stock for the company: list what to buy, get funded, send the receipt back', buyer: true },
 ];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
+export const STAFF_PRIVILEGES = PRIVILEGES.filter((p) => !p.buyer);
+export const BUYER_PRIVILEGES = PRIVILEGES.filter((p) => p.buyer);
 export const privilegeLabel = (k) => (PRIVILEGES.find((p) => p.key === k) || {}).label || k;
 
-// admin/superadmin hold all three implicitly, the same rule the server applies.
+// admin/superadmin hold every privilege implicitly, the same rule the server applies.
 export const hasPriv = (user, key) =>
   isAdminRole(user?.role) || (Array.isArray(user?.privileges) && user.privileges.includes(key));
-export const hasAnyPriv = (user) => PRIVILEGE_KEYS.some((k) => hasPriv(user, k));
+// Any of the STAFF duties — what draws the Buying Requests card on the staff homes.
+export const hasAnyPriv = (user) => STAFF_PRIVILEGES.some((p) => hasPriv(user, p.key));
 
 export const HOME_ATTENTION = [
   { key: 'nobox', label: 'No box', count: 'no_box' },
@@ -210,7 +219,7 @@ export const HOME_ATTENTION = [
   // same way — a buyer stuck in a shop, or a spend nobody has verified.
   // Two rows, one destination — so they need an explicit `id`: `key` is the screen to
   // open, and using it as the React key too would collide and drop one of them.
-  { id: 'carts-approve', key: 'buy-carts', label: 'Buy requests', count: 'carts_to_approve' },
+  { id: 'carts-approve', key: 'buy-carts', label: 'Buying requests', count: 'carts_to_approve' },
   { id: 'carts-audit', key: 'buy-carts', label: 'Spend to audit', count: 'carts_to_audit' },
 ];
 

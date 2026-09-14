@@ -18,12 +18,9 @@
 // not cost the Alias half of the answer.
 import { getJsonBody, send, applySecurity, rateLimit, requireAuth, blockIfMustChange } from '../_lib/util.js';
 import { getBuyCartFull, priceBuyCartLine, dbConfigured } from '../_lib/db.js';
-import { priceInquiryForSkuSizes } from '../_lib/intake.js';
-import { stockxConfigured, stockxPriceForSkuSize } from '../_lib/stockx.js';
-import { shopifyConfigured, shopifyVelocity } from '../_lib/shopify.js';
-import { cartVisibleTo, canWriteCosts, costStackEditable, repriceLine } from '../_lib/buycart.js';
+import { readMarketForLine } from '../_lib/lineMarket.js';
+import { cartVisibleTo, canWriteCosts, canSeeBuyCall, costStackEditable, repriceLine } from '../_lib/buycart.js';
 
-const money = (n) => (Number(n) > 0 ? Math.round(Number(n) * 100) / 100 : null);
 const fmt = (n) => (n == null ? '—' : `$${Number(n).toFixed(2)}`);
 
 export default async function handler(req, res) {
@@ -48,6 +45,14 @@ export default async function handler(req, res) {
     const full = await getBuyCartFull(cartId);
     if (!full) return send(res, 404, { ok: false, error: 'That buying request does not exist.' });
     if (!cartVisibleTo(user, full)) return send(res, 403, { ok: false, error: 'You do not have access to this request.' });
+    // The buy call is the approver's, so a buyer cannot make one. Writing a number you
+    // are not allowed to read is not a thing to permit, and the response below hands
+    // back live Alias and StockX prices for the pair. See `canSeeBuyCall`.
+    if (!canSeeBuyCall(user))
+      return send(res, 403, {
+        ok: false,
+        error: 'The buy call is made by whoever approves the request — you can’t price a line.',
+      });
     // The same people who may state the costs: the buyer whose request it is, or either
     // desk. Pricing writes the number an approval gets judged on, so it belongs with the
     // cost side rather than with reading the request.
@@ -69,58 +74,17 @@ export default async function handler(req, res) {
     // The basis the line was quoted on, kept: consigned and with-you are different
     // numbers, and re-pricing must not quietly switch which question was asked.
     const consigned = line.basis === 'consigned';
-    const sizes = [String(line.size)];
-    const [alias, sx, vel] = await Promise.allSettled([
-      priceInquiryForSkuSizes(line.sku, sizes, { consigned }),
-      stockxConfigured() ? stockxPriceForSkuSize(line.sku, String(line.size), { upc: line.upc || null }) : Promise.resolve(null),
-      shopifyConfigured() ? shopifyVelocity(line.sku, { days: 30 }) : Promise.resolve(null),
-    ]);
-    if (alias.status === 'rejected') throw alias.reason;
-
-    const aliasRow = (alias.value?.results || [])[0] || null;
-    const aliasPrice = money(aliasRow?.lowest_listing);
-    const v = vel.status === 'fulfilled' ? vel.value : null;
-    const liquidity = v && !v.error ? (v.liquidity || null) : null;
-
-    // StockX's catalogue search falls back to the FIRST result when no product actually
-    // carries the style code, and flags that with `exact:false` (api/_lib/stockx.js). On
-    // the calculator an inexact hit is still shown — it is usually the right shoe in
-    // another colourway and a person is looking at the title. Here nobody is: this writes
-    // the number an approval gets judged on. Probed with a style code no shop has ever
-    // sold, and it came back a confident "$264, BUY" off a completely unrelated shoe.
-    //
-    // But refusing every inexact hit throws away real prices: StockX's styleId formatting
-    // often differs from the code on the box, so the RIGHT shoe frequently comes back
-    // inexact — IO8116-600 does. So it is CORROBORATION that decides, not the flag alone:
-    //
-    //   Alias priced it too  → the style code is a real shoe and we have a second
-    //                          opinion beside it. Use the inexact hit, say it was matched
-    //                          by name in the trail.
-    //   Alias found nothing  → nothing says this style code exists at all, and a lone
-    //                          first-search-result is a guess. Refuse it.
-    //
-    // That is exactly what separates ZZ0000-999 (no Alias, inexact StockX) from a real
-    // shoe whose StockX styleId is written differently.
-    const sxHit = sx.status === 'fulfilled' ? sx.value : null;
-    const sxInexact = !!sxHit?.market && sxHit?.product?.exact === false;
-    const sxUsable = !!sxHit?.market && (!sxInexact || aliasPrice != null);
-    const stockxPrice = sxUsable ? money(sxHit.market.lowest_ask) : null;
-    const marketOut = {
-      alias: aliasPrice, stockx: stockxPrice, liquidity,
-      stockxConfigured: stockxConfigured(),
-      // Reported either way, so the screen can say HOW StockX was matched rather than
-      // implying a style-code hit.
-      stockxInexact: sxInexact,
-      stockxTitle: sxInexact ? (sxHit?.product?.title || null) : null,
-    };
+    const { aliasPrice, stockxPrice, liquidity, priced, market: marketOut } =
+      await readMarketForLine({ sku: line.sku, size: line.size, upc: line.upc, consigned });
+    const sxInexact = marketOut.stockxInexact;
 
     // Neither side answered. Say so rather than writing two more zeros — the whole
     // reason this line reads "Not priced" is that somebody once did exactly that.
-    if (aliasPrice == null && stockxPrice == null)
+    if (!priced)
       return send(res, 200, {
         ok: true, line, priced: false, market: marketOut,
         error: sxInexact
-          ? `Nothing carries the style code ${line.sku}: Alias has no price for it, and StockX's closest match is a different shoe (${sxHit?.product?.title || 'unnamed'}), so it is not being used. Check the code.`
+          ? `Nothing carries the style code ${line.sku}: Alias has no price for it, and StockX's closest match is a different shoe (${marketOut.stockxTitle || 'unnamed'}), so it is not being used. Check the code.`
           : `No Alias or StockX price for ${line.sku} in size ${line.size} right now.`,
       });
 

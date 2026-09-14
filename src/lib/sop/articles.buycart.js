@@ -1,5 +1,10 @@
-// The gift-card buying process — request → approval → cards → receipt → audit →
+// BUYING REQUESTS — request → approval → cards → receipt → audit →
 // expected inventory → shipment → receiving → reconciled.
+//
+// Called "gift card buying" until 2026-09-11, which named the funding instead of the
+// process and read as though the company were buying gift cards. It is buying STOCK:
+// a buyer asks to purchase shoes, we approve, the desk funds them with cards to spend
+// in the shop, they ship, we receive and reconcile. The cards are step 3 of ten.
 //
 // Its own file for the same reason articles.payout.js is: it belongs to no single desk.
 // Four people touch every transaction and each of them needs a different procedure, so
@@ -26,8 +31,8 @@ export const BUYCART_ARTICLES = [
     title: 'How company money buys shoes, end to end',
     area: 'buying',
     roles: EVERYONE,
-    summary: 'Ten steps from "can I have gift cards" to CLOSED / RECONCILED, and who owns each one. Nothing closes until approved money out matches verified inventory in.',
-    when: 'Read this once before you touch any part of the gift-card process.',
+    summary: 'Ten steps from "can I buy these" to CLOSED / RECONCILED, and who owns each one. Nothing closes until approved money out matches verified inventory in.',
+    when: 'Read this once before you touch any part of the buying process.',
     steps: [
       { do: 'A BUYER opens a request and lists what they want to buy — SKU, size, quantity and the shelf price. The app prices each pair and says Buy, Watch or Pass.' },
       { do: 'They send it for approval. The request will not send without saying what is being bought and which store.' },
@@ -53,17 +58,17 @@ export const BUYCART_ARTICLES = [
 
   {
     id: 'buycart-buyer',
-    title: 'Asking for gift cards, and sending the receipt back (buyer)',
+    title: 'Asking to buy stock, and sending the receipt back (buyer)',
     area: 'buying',
     roles: ['supplier'],
-    summary: 'Open a request, scan or type each pair you want, read the buy call, send it for approval — then spend the cards and send the receipt.',
+    summary: 'Open a request, scan or type each pair you want, send it for approval — then spend the cards and send the receipt.',
     when: 'Before a store trip, and again the moment you have paid.',
     steps: [
-      { do: 'Home → Buying Requests → New request. Say what you are buying and which store.', note: 'Be specific. "Restocking Panda Dunks for GOAT" gets approved; "just buying stuff" does not, and the app will not send it either.' },
+      { do: 'Home → Buying Requests → New request. Say what you are buying and which store.', note: 'Be specific. "Restocking Panda Dunks for GOAT" gets approved; "just buying stuff" does not, and the app will not send it either. No Buying Requests card on your home? Buying is switched on per account — an admin ticks "Raise buying requests" for you on Check Access.' },
       { do: 'Type a SKU and press Look up, or press Scan and point the camera at the barcode on the box.', note: 'A barcode is a UPC — it names one size, so the app prices that size straight away without you tapping one.' },
-      { do: 'Tap the size you are holding. Alias and StockX prices load.' },
+      { do: 'Tap the size you are holding.' },
       { do: 'Type the price on the shelf and how many pairs.', warn: 'The shelf price is what the gift cards get sized against. Type the sticker, not what you think it will ring up at.' },
-      { do: 'Read the call, then Add to request. Repeat for every pair.' },
+      { do: 'Add to request. Repeat for every pair.', note: 'The desk prices it against Alias and StockX and makes the call — you will not see a Buy or Pass on your screen, so add anything you think is worth asking about.' },
       { do: 'Send for approval. You can pull it back while nobody has decided on it yet.' },
       { do: 'When the cards are released, open the request and press Show code on each card as you need it.', note: 'The code goes into the till. Tap it to copy rather than retyping sixteen digits.' },
       { do: 'After paying: open the request, Upload receipt, then paste the receipt text or let the photo be read.' },
@@ -72,7 +77,7 @@ export const BUYCART_ARTICLES = [
     ],
     rules: [
       'Ask for a receipt EVERY time. Without it the transaction can never be closed, and it will sit against your name.',
-      'You can add a pair the app calls a Pass. Say why in the history — the person approving will see the red chip and want a reason.',
+      'Add anything worth asking about. The desk decides, and a pair they turn down comes back with a reason on your screen — if you know something the market does not, say so in the history.',
       'A request is locked once you send it. Pull it back if you need to change it, which only works before anyone has decided.',
       'Reading a card code is recorded against your name, with the time. That is normal — it is how the company can account for the money.',
       'The cards are sized on the sticker price, so the till may ask for a little more once tax is added. If a card comes up short, say so in the history rather than paying the difference yourself.',
@@ -89,9 +94,9 @@ export const BUYCART_ARTICLES = [
     summary: 'Read what the buyer wants, check the call on each line, approve or turn down — line by line or in bulk. What you approve is what gets funded.',
     when: 'A request shows in the "To approve" queue, or on the Home attention strip.',
     steps: [
-      { do: 'Home → Gift Card Buying, or tap the "Buy requests" card on the attention strip.' },
+      { do: 'Home → Buying Requests, or tap the "Buying requests" card on the attention strip.' },
       { do: 'Open the request and read what they said they are buying. If it does not tell you what the money is for, ask in the history rather than approving it.' },
-      { do: 'Go down the lines. Each carries the call as the buyer saw it, with the profit, the ROI and which platform it came from.', note: 'That call is a SNAPSHOT from when the pair was added. The market may have moved since; it is deliberately not re-computed, so you see what they saw.' },
+      { do: 'Go down the lines. Each carries the buy call — the verdict, the profit, the ROI and which platform it came from.', note: 'The call is OURS and the buyer never sees it: it is read from Alias and StockX the moment they add a pair, so they cannot shop the number they are being judged on. It is a SNAPSHOT from that moment — the market may have moved, so re-price a line if you want today’s.' },
       { do: 'Tick the lines you want and press Approve selected, or Approve all to take the lot.' },
       { do: 'Turn down what you do not want, with a reason. The reason shows on the buyer’s screen.' },
       { do: 'Once nothing is pending, the request moves to the gift card desk on its own.' },

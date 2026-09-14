@@ -1,16 +1,30 @@
-// "What are you buying?" — the buyer's half of a gift-card request.
+// "What are you buying?" — the buyer's half of a gift-card request. BUYER-ONLY: staff
+// never see this card, which is why nothing in it is conditional on a role.
 //
-// Enter a SKU or scan the barcode, tap the size in your hand, type what the shelf says,
-// and the same arithmetic the Payout Calculator runs gives a Buy / Watch / Pass before
-// the pair goes on the list. The cost stack is the buyer's OWN supplier preset, frozen
-// onto the request when it was opened — so a rate edited next week can't restate what
-// an approver was looking at when they said yes.
+// Enter a SKU or scan the barcode, tap EVERY size you found at that price, photograph
+// the shoe, type what the ticket says — and asking is the same press as adding.
 //
-// **A Pass can still be added, on purpose.** The buyer is standing in the shop and may
-// know something the market data doesn't; the verdict travels with the line and stays
-// red on the approver's screen, so the disagreement is visible rather than prevented.
-// A tool that refuses to record what someone wants to buy just moves the conversation
-// to a chat app where nobody can audit it.
+// What the buyer does NOT see here: the cost stack, what a pair lands at, and the buy
+// call. All three are how the desk decides whether the pair is worth buying, and the
+// party being judged does not get to read the ruling before asking.
+//
+// **The buy call is NOT made here (2026-09-10).** This screen used to fetch Alias and
+// StockX in the buyer's browser, work out a Buy / Watch / Pass, show it to them, and
+// POST it — which meant the person asking for the money supplied the figures that
+// justified releasing it, and could read our call before we made it. Both halves were
+// wrong. The market is now read server-side when the line is added (`cart/line`), and
+// the call belongs to whoever approves the request (`canSeeBuyCall`).
+//
+// It is the same single upstream read, moved rather than added: tapping a size used to
+// block on a quote, so a buyer who tried three sizes and added one spent three calls.
+// Now the tap is instant and the add spends one — and if the market cannot be read at
+// all, the line is still added, unpriced, because a pair not getting bought is worse
+// than an approver pressing "Price it".
+//
+// **A pair the desk will turn down can still be added, on purpose.** The buyer is
+// standing in the shop and may know something the market data doesn't. A tool that
+// refuses to record what someone wants to buy just moves the conversation to a chat app
+// where nobody can audit it.
 import React, { useState, lazy, Suspense } from 'react';
 import { api } from '../api.js';
 import { PriceInput } from './common.jsx';
@@ -58,27 +72,33 @@ export function lineCall(line, stack = {}) {
 export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   const [skuInput, setSkuInput] = useState('');
   const [product, setProduct] = useState(null);
-  const [size, setSize] = useState('');
-  const [qty, setQty] = useState('1');
+  // SIZES, plural. A buyer working a shelf finds the same shoe in an 8, a 9 and a 10 at
+  // one price, and asking about them one at a time is three round trips and three photo
+  // checks for one decision.
+  const [sizes, setSizes] = useState([]);
   const [shelf, setShelf] = useState('');
-  const [market, setMarket] = useState(null);   // { alias, stockx } live prices
-  const [velocity, setVelocity] = useState(null);
+  // ONE PRICE, WITH EXCEPTIONS. A shelf of the same shoe is usually one ticket price, and
+  // making the buyer type it once per size would be the kind of retyping that gets a
+  // size skipped. But a run often breaks — the 12.5 and the 13 sit at a different price
+  // — and before this the only way to send those was a second request at a second price.
+  // So `shelf` is what every selected size costs, and this map holds the ones that don't.
+  // Keyed by the size label; blank means "use the shelf price".
+  const [sizePrice, setSizePrice] = useState({});
+  const [shooting, setShooting] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [showCam, setShowCam] = useState(false);
 
-  const stack = cart.cost_stack || {};
   const shelfNum = Number(String(shelf).replace(/[$,\s]/g, ''));
-  const qtyNum = Math.max(1, Number(qty) || 1);
+  // Photos already on this request for the shoe on screen. Keyed by STYLE CODE, so a
+  // buyer sending a 7, an 8 and a 9 of one pair photographs it once.
+  const shots = (cart.files || []).filter((f) => f.kind === 'shoe'
+    && String(f.sku || '').toUpperCase() === String(product?.sku || '').toUpperCase());
 
-  // The verdict is derived on every render from what is on screen — never stored in
-  // state. A remembered call is one that can survive the number it was made about.
-  const cost = shelfNum > 0 ? calcCostBreakdown({ ...stack, shelfPrice: shelfNum }) : null;
-  const payouts = cost && market ? [
-    ...(market.alias ? [calcPayout('alias', market.alias, cost.finalCost, DEFAULT_FEE_PCT.alias)] : []),
-    ...(market.stockx ? [calcPayout('stockx', market.stockx, cost.finalCost, DEFAULT_FEE_PCT.stockx)] : []),
-  ] : [];
-  const verdict = cost ? dealVerdict(payouts, cost.finalCost, velocity?.liquidity || '') : null;
+  // No "lands at" here any more. The cost stack moved to the desk (`canWriteCosts`), so
+  // what a pair lands at is now derived entirely from rates the buyer cannot see — and
+  // printing the result would hand them the stack one subtraction at a time. They state
+  // the ticket price; the desk decides what it means.
 
   // A scanned code is either a barcode off the box (all digits — a UPC, which names ONE
   // size) or a style code printed on the label. Sending a UPC to the SKU search finds
@@ -88,7 +108,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
     if (!raw) return;
     const digits = raw.replace(/\D/g, '');
     if (digits.length >= 12 && digits.length <= 14) {
-      setBusy('look'); setError(''); setProduct(null); setSize(''); setMarket(null); setVelocity(null);
+      setBusy('look'); setError(''); setProduct(null); setSizes([]);
       try {
         const { product: p } = await api.searchUpc(digits);
         setProduct(p);
@@ -111,7 +131,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
     e?.preventDefault();
     const sku = String(override || skuInput || '').trim();
     if (!sku) return;
-    setBusy('look'); setError(''); setProduct(null); setSize(''); setMarket(null); setVelocity(null);
+    setBusy('look'); setError(''); setProduct(null); setSizes([]);
     try {
       const { product: p } = await api.searchSku(sku);
       setProduct(p);
@@ -122,53 +142,74 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
     } finally { setBusy(''); }
   }
 
-  async function tapSize(sz) {
-    if (String(sz) === String(size)) { setSize(''); setMarket(null); return; }
-    setSize(String(sz)); setMarket(null); setError('');
-    if (!product?.sku) return;
-    setBusy('price');
+  // Just a selection now. The market read moved to the server, where the call is made
+  // (`cart/line`) — so this no longer blocks the buyer on Alias while they are standing
+  // at a shelf, and trying three sizes no longer spends three upstream calls.
+  function tapSize(sz) {
+    const v = String(sz);
+    setSizes((cur) => (cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]));
+    // Deselecting drops its own price with it. A stale override would come back the next
+    // time that size was tapped and send a price the buyer typed for a different shoe.
+    setSizePrice((cur) => {
+      if (!(v in cur)) return cur;
+      const next = { ...cur }; delete next[v]; return next;
+    });
+    setError('');
+  }
+
+  // What one size actually costs: its own price if it has one, the shelf price otherwise.
+  function priceFor(sz) {
+    const own = Number(String(sizePrice[String(sz)] ?? '').replace(/[$,\s]/g, ''));
+    return own > 0 ? own : shelfNum;
+  }
+  const differing = sizes.filter((sz) => priceFor(sz) !== shelfNum).length;
+
+  // A photo of the SHOE, hung off its style code. Required before the request can be
+  // sent — the approver is deciding on something they cannot see, in a shop they are not
+  // standing in, off a code that is four characters away from a different shoe.
+  async function shoot(file) {
+    if (!file || !product?.sku) return;
+    setShooting(true); setError('');
     try {
-      // `with_you` — the buyer holds the pair and ships it on sale, which is what
-      // actually happens to a shoe bought this way. Same default as the calculator.
-      const res = await api.payoutQuote(product.sku, [String(sz)], false);
-      const a = res.results?.[0] || null;
-      const sx = res.stockx?.results?.[0] || null;
-      setVelocity(res.velocity || null);
-      setMarket({
-        alias: Number(a?.lowest_listing) > 0 ? Number(a.lowest_listing) : null,
-        stockx: Number(sx?.lowest_ask) > 0 ? Number(sx.lowest_ask) : null,
-        // Named so the strip can say "no market for this size" rather than going blank,
-        // which reads as "we didn't look".
-        aliasConfigured: !!res.configured,
-        stockxError: res.stockx?.error || '',
+      const { uploadUrl, key } = await api.cartFileSign(cart.id, 'shoe', file.type, product.sku);
+      const put = await fetch(uploadUrl, { method: 'PUT', body: file });
+      if (!put.ok) throw new Error('The photo did not upload. Try again.');
+      await api.cartFileAttach({
+        cartId: cart.id, kind: 'shoe', key, sku: product.sku, name: file.name,
+        contentType: file.type, sizeBytes: file.size,
       });
+      onAdded();
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
-    } finally { setBusy(''); }
+    } finally { setShooting(false); }
   }
 
   async function add() {
     if (!product?.sku || !(shelfNum > 0)) return;
     setBusy('add'); setError('');
     try {
-      const best = verdict?.best || null;
-      await api.cartAddLine(cart.id, {
-        sku: product.sku, size: size || null, qty: qtyNum, shelfPrice: shelfNum,
-        name: product.name || null, colorway: product.colorway || null,
-        gender: product.gender || null, upc: product.upc || null,
-        // The snapshot. Everything an approver needs to see the same picture later,
-        // including the two market prices it was computed from.
-        verdict: verdict?.call || null,
-        finalCost: cost?.finalCost ?? null,
-        bestPlatform: best?.platform || null, bestPayout: best?.payout ?? null,
-        profit: best?.profit ?? null, roi: best?.roi ?? null,
-        aliasPrice: market?.alias ?? null, stockxPrice: market?.stockx ?? null,
-        liquidity: velocity?.liquidity || null, basis: 'with_you',
-      });
+      // What the pair IS, and nothing about what it is worth. The server reads the
+      // market and derives the call — anything sent from here would be the requester
+      // supplying the figures that justify their own request, and is ignored.
+      //
+      // `with_you` — the buyer holds the pair and ships it on sale, which is what
+      // actually happens to a shoe bought this way. Same default as the calculator.
+      // One line per size, at the same shelf price. Sent in order and NOT in parallel:
+      // each add re-reads the market server-side, and forty simultaneous ones would be
+      // forty simultaneous Alias calls off one button.
+      for (const sz of (sizes.length ? sizes : [null])) {
+        await api.cartAddLine(cart.id, {
+          // The price this SIZE is ticketed at, not the one at the top of the form.
+          sku: product.sku, size: sz, shelfPrice: sz == null ? shelfNum : priceFor(sz),
+          name: product.name || null, colorway: product.colorway || null,
+          gender: product.gender || null, upc: product.upc || null,
+          basis: 'with_you',
+        });
+      }
       // Clear the pair, keep the shoe: the next size of the same style is the common
       // next action in a shop, and re-looking it up would spend another call.
-      setSize(''); setShelf(''); setQty('1'); setMarket(null);
+      setSizes([]); setShelf(''); setSizePrice({});
       onAdded();
     } catch (err) {
       if (err.unauthorized) return onSignOut();
@@ -202,7 +243,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
           <div className="bc-sizes" role="group" aria-label="Size">
             {(product.sizes || []).map((s) => {
               const label = typeof s === 'string' ? s : (s.size ?? s.label ?? '');
-              const picked = String(label) === String(size);
+              const picked = sizes.includes(String(label));
               return (
                 // `size-chip` is the app's existing size control (Receiving, the PH grid).
                 // These shipped against a bare `chip`, which has no rule anywhere in
@@ -217,56 +258,94 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
               );
             })}
             {!(product.sizes || []).length && <span className="muted sm">No sizes listed — type the price and add it anyway.</span>}
+            {sizes.length > 1 && (
+              <p className="muted xs bc-sizes-note">
+                {sizes.length} sizes selected — each goes on as its own line{shelfNum > 0 ? ` at ${money(shelfNum)}` : ''}, and the desk decides how many of each.
+                {differing > 0 && shelfNum > 0 && ` ${differing} priced differently.`}
+              </p>
+            )}
           </div>
 
           <div className="bc-add-row">
             <label className="field">
-              <span className="field-label">Price on the shelf</span>
+              <span className="field-label">
+                Price on the shelf{sizes.length > 1 ? <span className="muted xs"> · all {sizes.length} sizes</span> : null}
+              </span>
               <PriceInput value={shelf} onChange={(e) => setShelf(e.target.value)} />
             </label>
-            <label className="field bc-qty">
-              <span className="field-label">Pairs</span>
-              <input className="input" type="number" min="1" max="999" value={qty}
-                onChange={(e) => setQty(e.target.value)} />
-            </label>
+
           </div>
 
-          {busy === 'price' && <p className="muted sm">Pricing that size…</p>}
+          {/* THE EXCEPTIONS, and only once there is a rule to except. A run of one shoe is
+              usually one ticket price, so the field above covers it and this list stays
+              out of the way; when the 12.5 and the 13 sit higher, they get typed here
+              instead of going out as a second request at a second price.
 
-          {market && (
-            <div className="bc-market">
-              <span>Alias <b>{market.alias ? money(market.alias) : '—'}</b></span>
-              <span>StockX <b>{market.stockx ? money(market.stockx) : '—'}</b></span>
-              {velocity?.sold > 0 && (
-                <span className="muted sm">our sales: {velocity.sold} in {velocity.days} days · {velocity.liquidity}</span>
-              )}
-              {!market.alias && !market.stockx && <span className="muted sm">No market for this size.</span>}
-            </div>
-          )}
-
-          {/* The call, and the arithmetic behind it — a verdict with no numbers under it
-              is a number nobody checks. */}
-          {cost && (
-            <div className={`bc-call ${verdict?.call || 'none'}`}>
-              <div className="bc-call-top">
-                <VerdictChip verdict={verdict?.call} />
-                <span className="muted sm">
-                  Lands at {money(cost.finalCost)} a pair
-                  {verdict ? ` · ${money(verdict.best.profit)} profit · ${verdict.best.roi.toFixed(1)}% ROI via ${verdict.best.label}` : ''}
-                </span>
+              Blank means "the shelf price" rather than "free" — the placeholder shows
+              what a blank box will actually send, because a row reading $0.00 next to a
+              size is the kind of thing somebody fixes by typing a zero. */}
+          {sizes.length > 1 && shelfNum > 0 && (
+            <div className="bc-size-prices">
+              <span className="field-label bc-size-prices-head">Different price on some sizes? Type it here.</span>
+              <div className="bc-size-prices-grid">
+                {sizes.map((sz) => (
+                  <label key={sz} className="bc-size-price">
+                    <span className="bc-size-price-sz">{sz}</span>
+                    <PriceInput
+                      value={sizePrice[sz] ?? ''}
+                      placeholder={shelfNum.toFixed(2)}
+                      aria-label={`Price for size ${sz}`}
+                      onChange={(e) => setSizePrice((cur) => ({ ...cur, [sz]: e.target.value }))}
+                    />
+                  </label>
+                ))}
               </div>
-              {verdict && <p className="bc-call-note">{verdict.note}</p>}
-              {!verdict && <p className="bc-call-note muted">Tap the size to price it, or add it and let the desk decide.</p>}
             </div>
           )}
+
+          {/* One set of shots per SHOE, not per size. Sending a 7, an 8 and a 9 of the
+              same pair is the ordinary case, and photographing it three times is work
+              nobody does twice — so it hangs off the style code and every line carrying
+              it shows the same photos. */}
+          <div className="bc-shots">
+            <div className="bc-shots-head">
+              <span className={shots.length ? 'bc-covered sm' : 'bc-short sm'}>
+                {shots.length
+                  ? `${shots.length} photo${shots.length === 1 ? '' : 's'} of this shoe ✓`
+                  : 'No photo of this shoe yet — one is required'}
+              </span>
+              <label className="btn sm ghost bc-shot-btn">
+                {shooting ? 'Uploading…' : shots.length ? 'Add another' : 'Take a photo'}
+                <input type="file" accept="image/*" capture="environment" hidden
+                  disabled={shooting}
+                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; shoot(f); }} />
+              </label>
+            </div>
+            <p className="muted xs">
+              Covers every size of {product.sku} on this request. The desk sees it beside each line.
+            </p>
+          </div>
+
 
           <div className="bc-add-actions">
-            <button type="button" className="btn primary" disabled={busy === 'add' || !(shelfNum > 0)} onClick={add}>
-              {busy === 'add' ? 'Adding…' : 'Add to request'}
+            {/* ADDING IS ASKING. There is no separate "send for approval" any more: the
+                buyer is in a shop and the desk should be able to answer while the shoe
+                is still on the shelf. The photo is required BEFORE this, because it is
+                what the approver decides on. */}
+            <button type="button" className="btn primary"
+              disabled={busy === 'add' || !(shelfNum > 0) || !shots.length}
+              onClick={add}>
+              {busy === 'add'
+                ? 'Sending…'
+                : sizes.length > 1 ? `Ask about ${sizes.length} sizes` : 'Ask the desk about this'}
             </button>
-            {verdict?.call === 'pass' && (
-              <span className="muted sm">This one prices as a Pass — you can still add it, and the desk will see why.</span>
-            )}
+            <span className="muted sm">
+              {!shots.length
+                ? 'Take a photo of the shoe first — it is what the desk decides on.'
+                : !(shelfNum > 0)
+                  ? 'Type the price on the shelf ticket.'
+                  : 'Goes straight to the desk. They price it, decide, and say how many to buy.'}
+            </span>
           </div>
         </div>
       )}

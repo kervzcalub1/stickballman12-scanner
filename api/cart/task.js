@@ -20,7 +20,7 @@ import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import {
   getBuyCart, getBuyCartFull, addCartTask, updateCartTask, closeCartTask, dbConfigured,
 } from '../_lib/db.js';
-import { requirePrivilege } from '../_lib/buycart.js';
+import { requirePrivilege, redactCartForViewer } from '../_lib/buycart.js';
 
 const KINDS = ['return', 'shortage', 'followup'];
 const text = (v, n = 200) => { const s = String(v ?? '').trim().slice(0, n); return s || null; };
@@ -67,7 +67,7 @@ export default async function handler(req, res) {
       const refundAmount = money(body.close.refundAmount);
       const out = await closeCartTask({ cartId, taskId, status, resolution, refundAmount, actor: user });
       if (!out) return send(res, 409, { ok: false, error: 'That case is not open.' });
-      return send(res, 200, { ok: true, cart: await getBuyCartFull(cartId) });
+      return send(res, 200, { ok: true, cart: redactCartForViewer(await getBuyCartFull(cartId), user) });
     }
 
     // ---- update -----------------------------------------------------------
@@ -85,7 +85,7 @@ export default async function handler(req, res) {
         },
       });
       if (!out) return send(res, 409, { ok: false, error: 'That case is not open.' });
-      return send(res, 200, { ok: true, cart: await getBuyCartFull(cartId) });
+      return send(res, 200, { ok: true, cart: redactCartForViewer(await getBuyCartFull(cartId), user) });
     }
 
     // ---- open -------------------------------------------------------------
@@ -114,7 +114,7 @@ export default async function handler(req, res) {
         returnBy: date(t.returnBy),
       },
     });
-    return send(res, 200, { ok: true, task, cart: await getBuyCartFull(cartId) });
+    return send(res, 200, { ok: true, task, cart: redactCartForViewer(await getBuyCartFull(cartId), user) });
   } catch (e) {
     console.error('[cart/task]', e.message);
     return send(res, 500, { ok: false, error: 'Could not record that case.' });

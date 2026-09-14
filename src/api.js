@@ -93,6 +93,10 @@ export const api = {
   // per-key add/remove pair would need its own "which direction" argument and could
   // drift from what the checkboxes show.
   adminSetPrivileges: (userId, privileges) => post('/api/admin/review', { userId, decision: 'privileges', privileges }),
+  // Link a Telegram account so a button tap in the approval group can be recorded
+  // against a real person. Empty string unlinks.
+  adminSetTelegram: (userId, telegramUserId) =>
+    post('/api/admin/review', { userId, decision: 'telegram', telegramUserId }),
   adminDeleteUser: (userId) => post('/api/admin/review', { userId, decision: 'delete' }),
   adminResetPassword: (userId) => post('/api/admin/reset-password', { userId }),
   // App settings (price margin, …). GET is any authed user; POST is admin/superadmin.
@@ -122,6 +126,7 @@ export const api = {
   batchAddBox: (batchId, trackingNumber, boxNumber = null) => post('/api/batches/add-box', { batchId, trackingNumber, boxNumber }),
   batchSyncBoxes: (batchId, boxes) => post('/api/batches/sync-boxes', { batchId, boxes }),
   batchRenumberBox: (batchId, boxId, boxNumber) => post('/api/batches/renumber-box', { batchId, boxId, boxNumber }),
+  batchReopenBox: (batchId, boxId) => post('/api/batches/reopen-box', { batchId, boxId }),
   boxCommit: (payload) => post('/api/batches/box-commit', payload),
   openBatches: () => get('/api/batches/open-list'),
   batchFull: (id) => get(`/api/batches/full?id=${encodeURIComponent(id)}`),
@@ -236,7 +241,7 @@ export const api = {
   payoutPresetSave: (preset) => post('/api/payout/presets', { preset }),
   payoutPresetDelete: (deleteId) => post('/api/payout/presets', { deleteId }),
 
-  /* ---- Gift-card buying requests (docs/context/buy-cart.md) ------------------
+  /* ---- Buying requests (docs/context/buy-cart.md) ----------------------------
      Money out, then inventory in. A buyer asks, staff approve, the gift card desk
      releases the cards, the receipt comes back and raises a purchase order, and an
      auditor closes it once all ten conditions are true.
@@ -261,14 +266,19 @@ export const api = {
   // Re-read the market for one requested pair and write the call that follows. Explicit
   // and named — never automatic, because it replaces the snapshot an approver judges on.
   cartPriceLine: (cartId, lineId) => post('/api/cart/price-line', { cartId, lineId }),
+  // What we ALREADY hold of every shoe on the request — Shopify's live figure for the
+  // pairs we have listed, plus our own units it cannot see. One press, every line.
+  cartStock: (cartId) => post('/api/cart/stock', { cartId }),
   cartSubmit: (cartId) => post('/api/cart/submit', { cartId }),
   cartWithdraw: (cartId) => post('/api/cart/submit', { cartId, withdraw: true }),
+  // Approving CARRIES the quantity: the buyer reports what they found, and how many to
+  // buy is the decision. `qty` is a { lineId: n } map; `qtyAll` covers an approve-all.
   cartDecide: (cartId, payload) => post('/api/cart/decide', { cartId, ...payload }),
   cartAddGiftCard: (cartId, card) => post('/api/cart/gift-card', { cartId, card }),
   cartVoidGiftCard: (cartId, voidId, reason) => post('/api/cart/gift-card', { cartId, voidId, reason }),
   cartFund: (cartId) => post('/api/cart/gift-card', { cartId, fund: true }),
   cartGcReveal: (cartId, gcId) => post('/api/cart/gc-reveal', { cartId, gcId }),
-  cartFileSign: (cartId, kind, contentType) => post('/api/cart/file-sign', { cartId, kind, contentType }),
+  cartFileSign: (cartId, kind, contentType, sku) => post('/api/cart/file-sign', { cartId, kind, contentType, sku }),
   cartFileAttach: (payload) => post('/api/cart/file-attach', payload),
   // Removing a mis-uploaded file. The removal is recorded even though the file is not.
   cartFileDelete: (cartId, fileId) => post('/api/cart/file-delete', { cartId, fileId }),

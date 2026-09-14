@@ -8,6 +8,7 @@
 // Inline by default so the viewer can page through card photos left and right;
 // `download=1` forces the save, which is what a PDF receipt usually wants.
 import { send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { requireBuyerAccess } from '../_lib/buycart.js';
 import { getBuyCart, getBuyCartFile, dbConfigured } from '../_lib/db.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
 
@@ -18,6 +19,7 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const user = requireRole(req, res, ['supplier', 'warehouse', 'ph_team']);
   if (!user) return;
+  if (!(await requireBuyerAccess(req, res, user))) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
@@ -35,8 +37,13 @@ export default async function handler(req, res) {
     if (user.role === 'supplier' && !isPrivileged(user.role)) {
       if (Number(cart.buyer_user_id) !== Number(user.uid))
         return send(res, 403, { ok: false, error: 'You do not have access to this request.' });
-      // Same rule as revealing a pasted code: a photograph of a card is the card.
-      if (params.get('kind') !== 'receipt' && !['funded', 'receipted', 'audited', 'closed'].includes(cart.status))
+      // Same rule as revealing a pasted code: a photograph of a card is the card, and a
+      // card visible before funding is a card that could be spent before it was approved.
+      //
+      // Only a CARD. This read `!== 'receipt'`, which swept in the shoe photos the buyer
+      // took themselves and answered "these cards have not been released to you yet" —
+      // for their own picture, on their own request, before it was funded.
+      if (params.get('kind') === 'gift_card' && !['funded', 'receipted', 'audited', 'closed'].includes(cart.status))
         return send(res, 409, { ok: false, error: 'These cards have not been released to you yet.' });
     }
     const file = await getBuyCartFile(cartId, fileId);

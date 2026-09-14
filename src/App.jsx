@@ -187,7 +187,7 @@ export default function App() {
   if (view === 'instore') return withAdvisor(<Receiving mode="instore" user={user} navBack={navBack} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'instore-listing') return withAdvisor(<InstoreListing onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'payout') return withAdvisor(<PayoutCalculator user={user} onHome={() => go('home')} onSignOut={signOut} />);
-  // Gift-card buying requests. Reachable by warehouse/PH (who approve), the gift card
+  // Buying requests. Reachable by warehouse/PH (who approve), the gift card
   // desk (who release) and the auditor (who close) — four jobs, one screen.
   if (view === 'buy-carts') return withAdvisor(<BuyCarts user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Existing (old) stock: same admin/warehouse gate as in-store — ph_team short-

@@ -16,6 +16,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, addPoScan, dbConfigured } from '../_lib/db.js';
 import { manifestEditBlock, isReplacementBox, money, isBoxesOrder, normalizeDimensions } from '../_lib/po-manifest.js';
+import { declaresPerBox } from '../../src/lib/postatus.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -56,10 +57,12 @@ export default async function handler(req, res) {
     // A supplier is scoped to their own POs; PH/admin can fill any PO on the team's behalf.
     if (user.role === 'supplier' && !isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
-    // A PO is one manifest scope or the other — no mixing a whole-order manifest with
-    // per-box lines. A reship is exempt: it's its own label regardless of how the original
-    // purchase was declared, and it can't pollute the whole-order roll-up.
-    if (po.manifest_scope === 'po' && !isReplacementBox(box))
+    // Path C carries ONE list for the whole purchase and no per-box breakdown, so there
+    // is no label to scan into. 'order+box' is a different animal and is allowed: its
+    // order-level list is a receipt WE hold, and the per-box lines are the buyer's packing
+    // list on top of it. A reship is exempt either way — it's its own label regardless of
+    // how the original purchase was declared, and it can't pollute the roll-up.
+    if (!declaresPerBox(po) && !isReplacementBox(box))
       return send(res, 409, { ok: false, error: 'This PO uses a whole-order manifest — add items to the order, not a label.' });
     // Anyone but the supplier scanning their own order is entering it on the supplier's behalf.
     // entered_by references users(id); the env admin/superadmin have a non-numeric uid, so

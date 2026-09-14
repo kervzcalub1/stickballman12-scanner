@@ -90,6 +90,38 @@ await sql(`ALTER TABLE users ALTER COLUMN role SET DEFAULT 'warehouse'`);
    account that approved THIS request" — see requireAuditPrivilege in
    api/_lib/buycart.js. */
 await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS privileges TEXT[] NOT NULL DEFAULT '{}'`);
+
+// WHO A TELEGRAM TAP IS. Approvals now happen from a Telegram group, and a button is not
+// an identity: everyone in the group can press one. This maps a Telegram account to a
+// real user here, so `cart/telegram-decide` can record the decision under the person who
+// tapped — "Alex overrode JK" only means something if both names are real.
+//
+// Nullable and unique: almost nobody has one, and two accounts claiming the same Telegram
+// id would make the attribution ambiguous in exactly the place it must not be.
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_user_id BIGINT`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS users_telegram_id_idx ON users (telegram_user_id) WHERE telegram_user_id IS NOT NULL`);
+
+// A Telegram account that tapped a decision and is not linked to anybody yet.
+//
+// The id is the thing nobody knows about themselves — a person cannot read their own
+// numeric Telegram id off their phone, and an admin cannot link an account they cannot
+// identify. So the first tap CAPTURES it: the decision is still refused (a decision has
+// to name a person), but the number and the display name land here, and linking becomes
+// one click on Check Access instead of a hunt through @userinfobot.
+//
+// `name` is whatever Telegram reported at tap time and is NOT trusted for anything —
+// a display name is changeable at will. It is here so an admin can tell which row is
+// which; the id is the identity.
+await sql(`
+  CREATE TABLE IF NOT EXISTS telegram_link_requests (
+    telegram_user_id BIGINT PRIMARY KEY,
+    name             TEXT,
+    username         TEXT,
+    taps             INT NOT NULL DEFAULT 1,
+    first_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
 // Anyone who was given one of the short-lived roles keeps the capability as a
 // privilege, and lands back on a real job title. Runs before the constraint is
 // re-asserted, or these rows would fail it.
@@ -98,9 +130,12 @@ await sql(`UPDATE users SET privileges = array_append(privileges, 'issue_gift_ca
 await sql(`UPDATE users SET privileges = array_append(privileges, 'audit_buying'), role = 'admin'
             WHERE role = 'auditor' AND NOT ('audit_buying' = ANY(privileges))`);
 await sql(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('warehouse','admin','ph_team','supplier'))`);
-// A SUPPLIER is external. Letting one hold a privilege would let a buyer approve or
+// A SUPPLIER is external. Letting one hold a staff duty would let a buyer approve or
 // fund their own request, which is the one thing this whole process exists to prevent.
-await sql(`UPDATE users SET privileges = '{}' WHERE role = 'supplier' AND privileges <> '{}'`);
+// The one privilege a supplier CAN hold is `request_buying` — the buyer's own gate, set
+// per account because most suppliers only ship boxes and never buy for the company.
+await sql(`UPDATE users SET privileges = ARRAY(SELECT p FROM unnest(privileges) p WHERE p = 'request_buying')
+            WHERE role = 'supplier' AND EXISTS (SELECT 1 FROM unnest(privileges) p WHERE p <> 'request_buying')`);
 await sql(`CREATE INDEX IF NOT EXISTS users_privileges_idx ON users USING GIN (privileges)`);
 
 // Password reset: a user asks for a reset from the sign-in screen (reset_requested_at
@@ -729,15 +764,23 @@ await sql(`
   ON CONFLICT (key) DO NOTHING
 `);
 
-// Whole-order manifest (Path C): when a supplier gives ONE list for the whole purchase
-// (no per-box breakdown), PH enters it against the PO itself — po_lines with po_box_id
-// NULL. `manifest_scope` flips to 'po' on the first such line; reconciliation then counts
-// the whole list order-wide instead of per shipped label. A PO is one scope or the other.
-// Receiving is still per box (like a blind receive). See docs/context/purchase-orders.md.
+// Where a manifest lives. THREE scopes, not two:
+//   'box'        the supplier declares per label — po_lines carry a po_box_id.
+//   'po'         Path C: the supplier gave ONE list for the whole purchase and there is
+//                no per-box breakdown at all. PH enters it against the PO itself
+//                (po_lines with po_box_id NULL) and reconciliation counts it order-wide
+//                instead of per shipped label.
+//   'order+box'  BOTH lists, meaning different things (2026-09-11). A buying request's
+//                RECEIPT is written onto the order when it is raised, so we know what we
+//                are owed before a box is filled; the buyer then packs, and each box
+//                carries its own list saying which carton a pair is in. `expected` comes
+//                from the order level; the box lists locate a shortage and print the
+//                sheet that travels inside the carton.
+// Receiving is per box in every scope. See docs/context/purchase-orders.md.
 await sql(`ALTER TABLE po_lines ALTER COLUMN po_box_id DROP NOT NULL`);
 await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS manifest_scope TEXT NOT NULL DEFAULT 'box'`);
 await sql(`ALTER TABLE purchase_orders DROP CONSTRAINT IF EXISTS purchase_orders_manifest_scope_check`);
-await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_manifest_scope_check CHECK (manifest_scope IN ('box','po'))`);
+await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_manifest_scope_check CHECK (manifest_scope IN ('box','po','order+box'))`);
 // Order-scoped lines have no box, so the per-label unique index doesn't cover them —
 // this partial index keeps one line per (PO, sku, size) for the whole-order manifest.
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_size_idx ON po_lines (po_id, sku, size) WHERE po_box_id IS NULL`);
@@ -1173,7 +1216,7 @@ await sql(`
     cart_id       BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
     sku           TEXT NOT NULL,
     size          TEXT,
-    qty           INT NOT NULL DEFAULT 1,
+    qty           INT,
     name          TEXT,
     colorway      TEXT,
     gender        TEXT,
@@ -1208,6 +1251,20 @@ await sql(`ALTER TABLE buy_cart_lines DROP CONSTRAINT IF EXISTS buy_cart_lines_s
 await sql(`ALTER TABLE buy_cart_lines ADD CONSTRAINT buy_cart_lines_status_check
            CHECK (status IN ('pending','approved','rejected'))`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_lines_cart_idx ON buy_cart_lines (cart_id, id)`);
+
+// THE APPROVER SETS THE QUANTITY, so a pending line does not have one yet (2026-09-11).
+// The buyer hunting a shop reports what they FOUND — size, price, a photo of the shoe —
+// and how many of it to buy is the decision being asked for, not part of the question.
+// NULL until a line is approved; `1` would be a claim nobody made, and it is exactly the
+// number that would get funded if the approver never looked.
+await sql(`ALTER TABLE buy_cart_lines ALTER COLUMN qty DROP DEFAULT`);
+await sql(`ALTER TABLE buy_cart_lines ALTER COLUMN qty DROP NOT NULL`);
+// An override keeps what it replaced. One approver reversing another's call is a real
+// thing on this floor, and a system that refuses it moves the conversation somewhere
+// unauditable — but the last write must not be able to present itself as the only one.
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_by TEXT`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_status TEXT`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_qty INT`);
 
 // The cards themselves. A code plus a PIN is money in the hand, so neither is ever
 // stored as typed — api/_lib/secrets.js encrypts both under BUY_GC_KEY, and only
@@ -1255,10 +1312,16 @@ await sql(`
     uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+// A photo of the SHOE, keyed by SKU rather than by line (2026-09-11). The buyer hunting
+// a shop sends one shoe in several sizes, and photographing it once per size is work
+// nobody does twice — so the photos hang off the style code and every line carrying that
+// SKU shows them. `sku` is NULL on a gift-card or receipt file.
+await sql(`ALTER TABLE buy_cart_files ADD COLUMN IF NOT EXISTS sku TEXT`);
 await sql(`ALTER TABLE buy_cart_files DROP CONSTRAINT IF EXISTS buy_cart_files_kind_check`);
 await sql(`ALTER TABLE buy_cart_files ADD CONSTRAINT buy_cart_files_kind_check
-           CHECK (kind IN ('gift_card','receipt'))`);
+           CHECK (kind IN ('gift_card','receipt','shoe'))`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_files_cart_idx ON buy_cart_files (cart_id, kind, id)`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_files_sku_idx ON buy_cart_files (cart_id, sku) WHERE sku IS NOT NULL`);
 
 // What the receipt SAYS was bought — which is not the same list as what was approved,
 // and the gap between them is the point of keeping both. `matched_line_id` is the

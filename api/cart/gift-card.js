@@ -20,7 +20,7 @@ import {
   getBuyCart, addBuyCartGiftCard, voidBuyCartGiftCard, fundBuyCart, dbConfigured,
 } from '../_lib/db.js';
 import { encryptSecret, maskTail, secretsConfigured } from '../_lib/secrets.js';
-import { requirePrivilege, fundingTarget } from '../_lib/buycart.js';
+import { requirePrivilege, fundingTarget, redactCartForViewer } from '../_lib/buycart.js';
 
 const money = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
 
@@ -66,7 +66,7 @@ export default async function handler(req, res) {
       }
       const out = await fundBuyCart(cartId, user);
       if (!out) return send(res, 409, { ok: false, error: 'This request has already been released.' });
-      return send(res, 200, { ok: true, cart: out });
+      return send(res, 200, { ok: true, cart: redactCartForViewer(out, user) });
     }
 
     // ---- record a card -----------------------------------------------------

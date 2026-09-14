@@ -47,7 +47,7 @@ export const SOP_AREAS = [
   { key: 'putaway', label: 'Put-away & locations', accent: 'orders' },
   { key: 'rescale', label: 'Rescale', accent: 'requests' },
   { key: 'listing', label: 'Pricing & listing', accent: 'listing' },
-  { key: 'buying', label: 'Gift card buying', accent: 'inventory' },
+  { key: 'buying', label: 'Buying requests', accent: 'inventory' },
   { key: 'fulfil', label: 'Sell & ship', accent: 'shipping' },
   { key: 'browse', label: 'Browse, search & labels', accent: 'listing' },
   { key: 'admin', label: 'Administration', accent: 'orders' },

@@ -707,6 +707,7 @@ body {
 /* Renumber: a quiet icon beside the row — needed often enough to be one tap away,
    rare enough that it must not compete with "Add items". */
 .box-row-renum { flex: none; padding: 6px 8px; line-height: 1; }
+.box-row-reopen { flex: none; white-space: nowrap; }
 .renum-form { display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left; }
 .renum-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .renum-form input { width: 120px; }
@@ -4257,7 +4258,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 @media print { .env-bar { display: none; } }
 
 /* ===========================================================================
-   Gift-card buying requests (docs/context/buy-cart.md)
+   Buying requests (docs/context/buy-cart.md)
    Money out, then inventory in. The visual job here is different from the rest of
    the app: every other screen is about stock, and this one is about company funds
    moving through people's hands. So the money line reads first, the closing
@@ -4296,6 +4297,29 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 
 /* --- header: what this request IS, before what state it's in ---------------- */
 .bc-head-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* The milestone bar — a courier page's dots. Each step owns an equal slice; its dot sits
+   on the centre line and the connector runs from its centre to the next one, so the
+   line is drawn by the steps BEHIND the current one and stops at its dot. */
+.bc-progress { margin: 12px 0 4px; }
+.bc-steps { list-style: none; margin: 0; padding: 0; display: flex; }
+.bc-step { flex: 1 1 0; min-width: 0; position: relative; text-align: center; padding-top: 22px; }
+.bc-step-dot { position: absolute; top: 3px; left: 50%; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%;
+  background: var(--panel-2); border: 2px solid var(--border); box-sizing: border-box; z-index: 1; }
+.bc-step:not(:last-child)::after { content: ''; position: absolute; top: 8px; left: 50%; right: -50%; height: 2px; background: var(--border); }
+.bc-step.done .bc-step-dot { background: var(--ok); border-color: var(--ok); }
+.bc-step.done::after { background: var(--ok); }
+.bc-step.active .bc-step-dot { background: var(--primary); border-color: var(--primary); box-shadow: 0 0 0 4px rgba(79, 124, 255, 0.22); }
+.bc-step.stopped .bc-step-dot { background: #e05a5a; border-color: #e05a5a; box-shadow: 0 0 0 4px rgba(224, 90, 90, 0.2); }
+.bc-step-label { display: block; font-size: 11px; line-height: 1.25; color: var(--muted); padding: 0 2px; }
+.bc-step.active .bc-step-label { color: var(--text, #e8eaf0); font-weight: 600; }
+.bc-step.stopped .bc-step-label { color: #e05a5a; font-weight: 600; }
+.bc-steps-caption { margin: 6px 0 0; color: var(--muted); display: none; }
+.bc-progress.stopped .bc-steps-caption { color: #e05a5a; }
+@media (max-width: 899px) {
+  .bc-step { padding-top: 14px; }
+  .bc-step-label { display: none; }
+  .bc-steps-caption { display: block; }
+}
 .bc-code { margin: 0; font-size: 20px; letter-spacing: 0.02em; }
 .bc-purpose { margin: 10px 0 4px; padding: 8px 10px; border-radius: 8px;
   background: var(--accent-tint); border: 1px solid var(--accent-edge); }
@@ -4343,6 +4367,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .bc-add-body { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 .bc-add-shoe { font-size: 14px; }
 .bc-sizes { display: flex; flex-wrap: wrap; gap: 6px; }
+/* `.field` and `.field-label` had NO rule anywhere in this stylesheet — the third time
+   that has happened on these screens (see the `.table` note above). A bare <label> is
+   inline, so "Price on the shelf" sat ON the same line as its own input and was clipped
+   at phone width instead of sitting above it. Nine uses, all in this feature. */
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field-label { font-size: 12px; color: var(--muted); }
 .bc-add-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
 .bc-qty { max-width: 92px; }
 .bc-market { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
@@ -4356,7 +4386,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .bc-add-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 /* --- the cost stack --------------------------------------------------------- */
-/* The register stack every "Lands at" on the request is computed against. Read-only
+/* The register stack every cost-per-unit figure on the request is computed against. Read-only
    for most people and editable by an approver or an auditor, because a buyer with no
    payout preset produces a request where every pair lands at exactly its shelf price
    and no call can be made at all. */
@@ -4423,6 +4453,104 @@ button.bc-cost-chip { font-family: inherit; line-height: inherit; }
 .bc-line-status.pending { color: #c6871a; }
 .bc-decide { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px;
   padding-top: 10px; border-top: 1px solid var(--border); }
+
+.bc-add-lands { margin: 2px 0 0; }
+/* One set of photos per SHOE. Amber until there is one, because the request cannot be
+   sent without it and finding that out at the Send button is finding out too late. */
+.bc-shots { margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel-2); }
+.bc-shots-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bc-shots-head > span:first-child { flex: 1 1 auto; }
+.bc-shot-btn { cursor: pointer; }
+.bc-sizes-note { flex-basis: 100%; margin: 4px 0 0; }
+
+/* Per-size prices on a multi-size request. A run of one shoe is usually one ticket
+   price, so this whole block only appears once a second size is picked — and it wraps
+   to as many columns as fit, so a buyer sending nine sizes on a phone gets a grid
+   rather than nine full-width rows to scroll past. */
+.bc-size-prices { margin-top: 10px; }
+.bc-size-prices-head { display: block; margin-bottom: 6px; }
+.bc-size-prices-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.bc-size-price { display: flex; align-items: center; gap: 6px; }
+/* Fixed width so the size labels line up down the left of each column instead of the
+   price boxes jittering between a "9" and an "11.5". */
+.bc-size-price-sz {
+  min-width: 34px; text-align: right; font-size: 13px; font-weight: 600;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.bc-size-price .ph-price-wrap { width: 88px; }
+@media (max-width: 480px) { .bc-size-prices-grid { gap: 6px; } .bc-size-price .ph-price-wrap { width: 76px; } }
+.bc-shots p { margin: 6px 0 0; }
+/* The thumbnail on an approver's line. Small on purpose — it is a "yes, that's the shoe"
+   glance, and the full photo is one tap away. */
+.bc-shot-thumb { width: 34px; height: 34px; border-radius: 5px; object-fit: cover;
+  border: 1px solid var(--border); cursor: pointer; display: block; }
+.bc-shot-none { font-size: 11px; color: var(--muted); }
+.bc-shot-bad { color: var(--err); }
+/* Which Telegram account may tap this person's approvals in. */
+.tg-link { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tg-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+  color: var(--muted); }
+.tg-waiting { margin-bottom: 16px; border-left: 3px solid #c6871a; }
+.tg-waiting-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: 15px; }
+.tg-waiting-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex;
+  flex-direction: column; gap: 8px; }
+.tg-waiting-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel-2); }
+.tg-who { flex: 1 1 auto; min-width: 0; }
+.tg-waiting-list select { max-width: 220px; }
+
+
+.bc-qty-in { width: 62px; text-align: right; padding: 4px 6px; font-size: 16px; }
+.bc-override { color: #d9a24a; margin-top: 2px; }
+.bc-shot-lightbox { position: fixed; inset: 0; z-index: 200; display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 24px; background: rgba(0,0,0,.86); cursor: zoom-out; }
+.bc-shot-lightbox img { max-width: 100%; max-height: 80vh; border-radius: 8px; }
+
+
+
+/* The pack table must fit a phone WITHOUT a sideways scroll: the +1 buttons are the
+   whole point of the screen, and a control you have to scroll to find is one that gets
+   skipped in favour of guessing. Under 560px the two derivable columns go. */
+@media (max-width: 560px) {
+  .bc-pack .bc-table { min-width: 0; font-size: 13px; }
+  .bc-pack .bc-scroll { overflow-x: visible; }
+  .bc-pack .bc-pack-wide { display: none; }
+  .bc-pack .bc-table th, .bc-pack .bc-table td { padding-left: 6px; padding-right: 6px; }
+  .bc-pack .bc-pack-actions { white-space: nowrap; }
+}
+
+.rcn-ordered { margin-top: 4px; }
+.rcn-ordered b { font-variant-numeric: tabular-nums; }
+/* Not a shortage colour: nobody has lost anything, the buyer just hasn't packed it. */
+.rcn-unpacked { color: #c6871a; }
+
+/* --- what we already hold ---------------------------------------------------- */
+/* The half of the picture the buy call never had: a good ROI says nothing about the
+   six pairs PH is still trying to move. Basis and reasoning: api/cart/stock.js. */
+.bc-h-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bc-h-row .bc-h { margin: 0; }
+.bc-h-row > .btn { margin-left: auto; }
+/* In the row itself, so twelve lines can be scanned rather than opened one by one. */
+.bc-hold { display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 700;
+  padding: 2px 8px; border-radius: 999px; letter-spacing: 0.01em;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); }
+/* Amber only when we already hold at least as many as are being asked for. */
+.bc-hold.warn { color: #d9a24a; border-color: rgba(198,135,26,0.42); background: rgba(198,135,26,0.12); }
+.bc-stock { margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--panel-2); }
+.bc-stock-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.bc-stock-n { font-size: 20px; font-variant-numeric: tabular-nums; line-height: 1; }
+.bc-stock-sum { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.bc-stock-sum.warn { color: #d9a24a; }
+.bc-stock-sum.muted { color: var(--muted); }
+.bc-stock-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.bc-stock-tags > span { font-size: 12px; padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
+.bc-stock-tags > span.warn { color: #d9a24a; border-color: rgba(198,135,26,0.42); }
+.bc-stock .muted.xs { margin: 8px 0 0; }
 
 /* --- gift cards ------------------------------------------------------------- */
 .bc-fund { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
@@ -4544,6 +4672,13 @@ button.bc-cost-chip { font-family: inherit; line-height: inherit; }
 .bc-pack-fill { height: 100%; background: var(--accent); transition: width .18s ease; }
 .bc-pack-bar.ok .bc-pack-fill { background: var(--ok); }
 .bc-pack-boxes { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+/* The handoff once every pair is boxed: what happens next, and the two ways to do it. */
+.bc-pack-next { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--ok); border-radius: 10px; background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.bc-pack-next p { margin: 0 0 8px; }
+.bc-pack-next-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bc-pack-next-actions a.btn { text-decoration: none; }
+.bc-po-link { color: inherit; text-decoration: underline; text-decoration-color: var(--muted); text-underline-offset: 2px; }
+.bc-po-link:hover { text-decoration-color: currentColor; }
 .bc-pack-actions { display: flex; gap: 6px; }
 .bc-pack-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex;
   flex-direction: column; gap: 8px; }

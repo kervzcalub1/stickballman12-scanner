@@ -4,6 +4,7 @@
 // own requests off the token — never off a query parameter, which would turn one
 // buyer's spending history into a URL anybody could edit.
 import { send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { requireBuyerAccess } from '../_lib/buycart.js';
 import { listBuyCarts, listBuyCartBuyers, buyCartPendingCounts, dbConfigured } from '../_lib/db.js';
 
 const STATUSES = ['draft', 'submitted', 'approved', 'denied', 'funded', 'receipted', 'audited', 'closed', 'cancelled', 'written_off'];
@@ -13,6 +14,7 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const user = requireRole(req, res, ['supplier', 'warehouse', 'ph_team']);
   if (!user) return;
+  if (!(await requireBuyerAccess(req, res, user))) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });

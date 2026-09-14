@@ -21,7 +21,7 @@ import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import {
   getBuyCart, getBuyCartFull, setCartFunding, setCartCustody, fundBuyCart, dbConfigured,
 } from '../_lib/db.js';
-import { requirePrivilege, cartCloseChecks } from '../_lib/buycart.js';
+import { requirePrivilege, cartCloseChecks, redactCartForViewer } from '../_lib/buycart.js';
 
 const text = (v, n = 200) => { const s = String(v ?? '').trim().slice(0, n); return s || null; };
 const money = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
@@ -89,7 +89,7 @@ export default async function handler(req, res) {
       return send(res, 400, { ok: false, error: 'Nothing to change.' });
 
     const full = await getBuyCartFull(cartId);
-    return send(res, 200, { ok: true, cart: full, checks: await cartCloseChecks(full) });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(full, user), checks: await cartCloseChecks(full) });
   } catch (e) {
     console.error('[cart/control]', e.message);
     return send(res, 500, { ok: false, error: 'Could not save that.' });

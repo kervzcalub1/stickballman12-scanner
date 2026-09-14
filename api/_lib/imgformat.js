@@ -68,3 +68,51 @@ export async function normalizeSourceImage(buf) {
   canvas.getContext('2d').drawImage(img, 0, 0);
   return canvas.toBuffer('image/png');
 }
+
+// A photo sized for a TELEGRAM CARD rather than for an archive.
+//
+// The buyer's phone uploads what the camera gave it — 960×1280 and 1.4 MB is typical, and
+// that is the right thing to KEEP: it is the evidence the approver decides on and it is
+// what an auditor sees later. It is the wrong thing to SEND eleven times through a tunnel.
+//
+// A real burst did exactly that: one request, eleven sizes, eleven simultaneous 1.4 MB
+// fetches, and the Cloudflare quick tunnel in front of the dev server folded —
+// `ConnectionError: Service is not reachable` on every one, so eleven cards died. Telegram
+// then resizes whatever it is given down to 1280px for the chat view, so the bytes bought
+// nothing at any point.
+//
+// Long edge capped at 1280 and re-encoded as JPEG: ~1.4 MB becomes ~150-250 KB, the card
+// looks identical, and a ten-size burst moves about a tenth of the data.
+//
+// FAILS OPEN, always. Every path that cannot produce a smaller image returns the ORIGINAL
+// bytes rather than throwing — a big photo is worth far more than no photo, and this sits
+// in front of the one thing the approver cannot do without. HEIC never reaches the
+// decoder: `loadImage` does not throw on it, it SEGFAULTS and takes every in-flight
+// request with it (see the header).
+const CARD_MAX_EDGE = 1280;
+const CARD_JPEG_QUALITY = 82;
+
+export async function imageForCard(buf) {
+  try {
+    const format = sniffImageFormat(buf);
+    // Unknown or decode-unsafe: hand back exactly what we were given.
+    if (!format || format === 'heic') return { bytes: buf, contentType: null };
+
+    const img = await loadImage(buf);
+    const scale = Math.min(1, CARD_MAX_EDGE / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = createCanvas(w, h);
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    // Quality is 0-100 here, NOT 0-1 (the same trap branding.js documents).
+    const out = canvas.toBuffer('image/jpeg', CARD_JPEG_QUALITY);
+
+    // An already-small JPEG can come back BIGGER after a re-encode. Keep whichever is
+    // smaller, so this can only ever help.
+    if (!out || out.length >= buf.length) return { bytes: buf, contentType: null };
+    return { bytes: out, contentType: 'image/jpeg' };
+  } catch (e) {
+    console.warn('[imgformat] card resize failed, sending the original:', e.message);
+    return { bytes: buf, contentType: null };
+  }
+}

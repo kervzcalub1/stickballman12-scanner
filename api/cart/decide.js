@@ -10,9 +10,8 @@
 // (db-setup strips any that are set, and `hasPrivilege` refuses the role outright).
 // Approving your own request is the thing the whole process exists to make impossible.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
-import { getBuyCart, decideBuyCartLines, dbConfigured } from '../_lib/db.js';
-import { requirePrivilege } from '../_lib/buycart.js';
-import { decisionsOpen, decisionsClosedBecause } from '../../src/lib/buycartRules.js';
+import { getBuyCart, dbConfigured } from '../_lib/db.js';
+import { requirePrivilege, decideLines } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -31,24 +30,22 @@ export default async function handler(req, res) {
   try {
     const cart = await getBuyCart(cartId);
     if (!cart) return send(res, 404, { ok: false, error: 'That buying request does not exist.' });
-    // The same predicate the screen draws its buttons from (src/lib/buycartRules.js),
-    // so a control can never exist for an act the server will refuse. Before the buyer
-    // sends it there is nothing to decide; once the cards are out the approvals are
-    // what the money was released against, and re-deciding one would leave the spend
-    // and the approval describing two different things.
-    if (!decisionsOpen(cart.status))
-      return send(res, 409, { ok: false, error: decisionsClosedBecause(cart.status) });
 
-    const lineIds = body.all ? null : (Array.isArray(body.lineIds) ? body.lineIds : []);
-    if (!body.all && (!lineIds || !lineIds.length))
-      return send(res, 400, { ok: false, error: 'Pick at least one line, or use approve-all.' });
+    const qtyById = {};
+    for (const [k, v] of Object.entries(body.qty && typeof body.qty === 'object' ? body.qty : {})) {
+      const id = Number(k); const n = Number(v);
+      if (Number.isInteger(id) && Number.isInteger(n) && n > 0 && n <= 999) qtyById[id] = n;
+    }
+    const qtyAll = Number.isInteger(Number(body.qtyAll)) && Number(body.qtyAll) > 0
+      ? Math.min(Number(body.qtyAll), 999) : null;
 
-    const out = await decideBuyCartLines({
-      cartId, lineIds: body.all ? null : lineIds, action,
-      reason: String(body.reason ?? '').trim().slice(0, 500) || null, actor: user,
+    // Everything from here is shared with `cart/telegram-decide` — see `decideLines`.
+    const out = await decideLines({
+      cart, action, all: !!body.all,
+      lineIds: Array.isArray(body.lineIds) ? body.lineIds : [],
+      qtyById, qtyAll, reason: body.reason, actor: user,
     });
-    if (!out.decided)
-      return send(res, 409, { ok: false, error: 'Nothing was still awaiting a decision — someone may have got there first.' });
+    if (out.error) return send(res, out.code, { ok: false, error: out.error });
     return send(res, 200, { ok: true, ...out });
   } catch (e) {
     console.error('[cart/decide]', e.message);

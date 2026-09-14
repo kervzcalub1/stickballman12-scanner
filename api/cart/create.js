@@ -7,6 +7,7 @@
 // every verdict on the request is computed against that frozen copy. A preset edited
 // next week must not restate what an approver was looking at when they said yes.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { requireBuyerAccess } from '../_lib/buycart.js';
 import { createBuyCart, listPayoutPresets, listSupplierUsers, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
@@ -15,6 +16,7 @@ export default async function handler(req, res) {
   // Staff can raise one on a buyer's behalf; the buyer is then named in the body.
   const user = requireRole(req, res, ['supplier', 'ph_team', 'warehouse']);
   if (!user) return;
+  if (!(await requireBuyerAccess(req, res, user))) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });

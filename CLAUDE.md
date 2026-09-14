@@ -55,7 +55,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
 | Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders** | `docs/context/purchase-orders.md` |
 | Empty shoe boxes end to end: order → declare → receive → shelve → put on a pair | `docs/context/empty-boxes.md` |
-| Gift-card buying: request → approve → cards → receipt → audit → reconciled; **`users.privileges`** | `docs/context/buy-cart.md` |
+| Buying requests (was "gift-card buying"): request → approve → cards → receipt → audit → reconciled; **`users.privileges`** | `docs/context/buy-cart.md` |
 | Merging duplicates (superadmin): one supplier typed twice, one inbound received as two batches | `docs/context/merge-tools.md` |
 | StockX / Alias / KicksDB, Alias auto-relogin, proxies | `docs/context/integrations.md` |
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |
@@ -78,8 +78,10 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
   stored in the clear (`docs/context/buy-cart.md`).
 - **Roles vs PRIVILEGES.** `users.role` is the one job someone does (warehouse · ph_team ·
   admin · supplier). `users.privileges` is a set of permissions on top — the gift-card
-  duties. Privileges are read from the DB on every call, NOT from the token, so revoking
-  one takes effect at once. Never add a "role" for something one person could hold
+  duties, plus `request_buying` — the only one a **supplier** can hold, and the switch
+  that turns the buying screens on for that account (most suppliers only ship boxes).
+  Privileges are read from the DB on every call, NOT from the token, so revoking one
+  takes effect at once. Never add a "role" for something one person could hold
   alongside their real job.
 - Alias has **auto-relogin on 401; StockX does NOT**.
 - VINs (`SBM-YYMMDD-######`) are never reused; numbering gaps are fine.

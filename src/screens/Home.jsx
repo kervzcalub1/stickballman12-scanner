@@ -10,7 +10,7 @@ export function Home({ user, onPick, onSignOut }) {
   const isAdmin = isAdminRole(user.role);
   const isSuper = user.role === 'superadmin';
   const counts = usePendingCounts();
-  // Gift Card Buying is a PRIVILEGE, so the card is drawn for whoever holds one rather
+  // Buying Requests is a PRIVILEGE, so the card is drawn for whoever holds one rather
   // than for a role — a warehouse account with none never sees it, and a PH account with
   // one does. The server refuses independently either way.
   const canBuy = hasAnyPriv(user);

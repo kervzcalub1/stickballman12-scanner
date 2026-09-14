@@ -20,8 +20,7 @@ import { getJsonBody, send, applySecurity, rateLimit, requireAuth, blockIfMustCh
 import { getBuyCartFull, setBuyCartCostStack, dbConfigured } from '../_lib/db.js';
 import {
   cartVisibleTo, canWriteCosts, costStackEditable,
-  normaliseCostStack, describeCostChange, repriceLine,
-} from '../_lib/buycart.js';
+  normaliseCostStack, describeCostChange, repriceLine, redactCartForViewer } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -56,7 +55,7 @@ export default async function handler(req, res) {
     const stack = normaliseCostStack(body.stack || {}, before);
     const note = describeCostChange(before, stack);
     if (!note && full.cost_stack)
-      return send(res, 200, { ok: true, cart: full, repriced: 0, unchanged: true });
+      return send(res, 200, { ok: true, cart: redactCartForViewer(full, user), repriced: 0, unchanged: true });
 
     // Every line, not only the approved ones: a pending line is exactly the one an
     // approver is about to judge, and it has to be judged on the new numbers.

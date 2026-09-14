@@ -24,7 +24,7 @@
 // actually costs.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getBuyCart, getBuyCartFile, logCartEvent, dbConfigured } from '../_lib/db.js';
-import { cartVisibleTo } from '../_lib/buycart.js';
+import { cartVisibleTo, requireBuyerAccess } from '../_lib/buycart.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
 import { checkReceiptRead } from '../../src/lib/receiptCheck.js';
 
@@ -71,6 +71,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const user = requireRole(req, res, ['supplier', 'warehouse', 'ph_team']);
   if (!user) return;
+  if (!(await requireBuyerAccess(req, res, user))) return;
   // Tighter than the upload: this one costs money on every call, and it is a read of a
   // document the caller has to be allowed to act on anyway.
   if (!rateLimit(req, { windowMs: 60_000, max: 12 }))

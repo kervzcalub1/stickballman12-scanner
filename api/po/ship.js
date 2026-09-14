@@ -6,6 +6,7 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged,
 import { getPoBox, getPo, countPoBoxLines, countPoOrderLines, shipPoBox, getPoFull,
   getCartIdForPo, getCartPackState, dbConfigured } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
+import { declaresPerBox } from '../../src/lib/postatus.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -37,15 +38,17 @@ export default async function handler(req, res) {
     // of its own by design — po/scan refuses per-box lines on such an order — so this
     // check made those orders unshippable by anyone, supplier and admin alike. The
     // declaration is at order level there, so that is what has to be non-empty.
-    const declared = po.manifest_scope === 'po'
-      ? await countPoOrderLines(po.id)
-      : await countPoBoxLines(poBoxId);
+    // `declaresPerBox`, not "is it order level" — on 'order+box' BOTH lists exist and the
+    // box's own one is what must be non-empty, because that is the sheet going inside it.
+    const declared = declaresPerBox(po)
+      ? await countPoBoxLines(poBoxId)
+      : await countPoOrderLines(po.id);
     if (declared < 1)
       return send(res, 400, {
         ok: false,
-        error: po.manifest_scope === 'po'
-          ? 'Nothing has been declared on this order yet.'
-          : 'Scan at least one item into this label before shipping it.',
+        error: declaresPerBox(po)
+          ? 'Scan at least one item into this label before shipping it.'
+          : 'Nothing has been declared on this order yet.',
       });
 
     // A cart-raised order carries a RECEIPT as its ceiling, and under a per-box manifest

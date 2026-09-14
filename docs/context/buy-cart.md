@@ -1,4 +1,11 @@
-# Gift-card buying — approved money out, verified inventory in
+# Buying requests — approved money out, verified inventory in
+
+> **Renamed 2026-09-11.** It was "Gift-card buying", which named the FUNDING and not
+> the process — nobody here is buying a gift card. A buyer asks to purchase stock, we
+> approve it, the desk funds them with cards to spend in the shop, they ship, we
+> receive and reconcile. The cards are step 3 of ten. **Copy only**: the routes
+> (`/buy-carts`, `/ph/gift-card-buying`, `/buying`), the tables (`buy_carts`…), the
+> handlers (`api/cart/*`) and the `BC-####` codes are all unchanged.
 
 Screens: `src/screens/BuyCarts.jsx` (queue) → `src/screens/BuyCart.jsx` (one request),
 with `src/components/BuyCartAdd.jsx`, `BuyCartCosts.jsx`, `BuyCartGiftCards.jsx`,
@@ -62,12 +69,25 @@ unticking is as ordinary as ticking).
 | `approve_buying` | decide what company funds may be spent on; raise the PO; cancel |
 | `issue_gift_cards` | record cards, release them, upload card images, read a code |
 | `audit_buying` | record the spend and close a transaction out |
+| `request_buying` | **the buyer's side (2026-09-15)**: see the Buying Requests card on the supplier portal and use `api/cart/*` at all |
 
-- **admin/superadmin hold all three implicitly** (`isPrivileged`), and are never looked up.
-- **A `supplier` can hold none.** `setUserPrivileges` and `db:setup` both strip them. A
-  buyer with `approve_buying` would sign off their own request, which is the single
-  thing this process exists to prevent — so it is enforced in two places, not asked
-  politely of the UI.
+- **admin/superadmin hold all four implicitly** (`isPrivileged`), and are never looked up.
+- **A `supplier` can hold only `request_buying`.** `setUserPrivileges` and `db:setup`
+  both strip the three staff duties from a supplier row (`ARRAY(SELECT … WHERE p =
+  'request_buying')`). A buyer with `approve_buying` would sign off their own request,
+  which is the single thing this process exists to prevent — so it is enforced in two
+  places, not asked politely of the UI.
+- **Buying is switched on per supplier, not per role.** Most suppliers only ship boxes.
+  `requireBuyerAccess(req, res, user)` (`buycart.js`) sits right after the role check on
+  every one of the 15 `api/cart/*` endpoints a supplier can reach (`list`, `get`,
+  `create`, `line`, `submit`, `receipt*`, `file*`, `comment`, `pack`, `gc-reveal`,
+  `raise-po`): staff and admin pass straight through, a supplier is looked up fresh and
+  answers **403 "Buying requests aren't switched on for your account"** without it. The
+  supplier portal draws the card, and serves `/buying`, only for `hasPriv(user,
+  'request_buying')` (a typed `/buying` lands on home). Check Access offers a supplier
+  exactly that one checkbox (`BUYER_PRIVILEGES`) and staff the other three
+  (`STAFF_PRIVILEGES`); `hasAnyPriv` — what draws the staff Home card — counts staff
+  duties only. Guarded by the last test in `e2e/buy-cart.spec.js`.
 - **Any staff account can READ a request.** What they may *do* is the gated part.
   Hiding the ledger from the floor would make the process opaque without making it safer.
 
@@ -101,9 +121,9 @@ holds both.
   that is off for its most privileged user is not a control.
 
 ### Where each holder finds it
-- **warehouse / admin** — Home → *Gift Card Buying* (`/buy-carts`), drawn only for a
+- **warehouse / admin** — Home → *Buying Requests* (`/buy-carts`), drawn only for a
   holder.
-- **PH team** — PH home → *Gift Card Buying* (`/ph/gift-card-buying`). PH has its own app
+- **PH team** — PH home → *Buying Requests* (`/ph/gift-card-buying`). PH has its own app
   and never touches the staff router, so it needs its own route; without one a PH member
   ticked for gift cards had nowhere to go, which is the exact case the model exists for.
 - **buyer** — supplier portal → *Buying Requests* (`/buying`).
@@ -206,6 +226,365 @@ re-priced". A record that says something changed and not what it used to be is n
 record of anything. **No schema change**: `cost_stack` is already JSONB and the event
 `kind` column is free text.
 
+## Telegram approvals via Make.com (2026-09-11)
+The desk approves from a Telegram group instead of the screen. Our half is the two ends;
+Make.com is the middle. Full build guide, including the Make module wiring and the
+Gemini question: the **Telegram Approval Loop** artifact.
+
+### What our system does
+- **Out:** `api/_lib/notify.js` POSTs one event per line to `MAKE_WEBHOOK_URL`. Fired by
+  the BUYER's add only (a desk adding on their behalf is data entry, not a question), and
+  fired **after** the market read so the card carries the buy call rather than "not
+  priced". Fire-and-forget with a 10s timeout — a Make outage must cost a buyer standing
+  in a shop nothing.
+- **Photo:** `GET /api/cart/shoe-photo?fileId=…`, header `x-api-key: $BUYING_API_KEY`.
+  Key-gated and login-free, the `api/listing/ebay.js` pattern — a scenario cannot hold a
+  session, and handing Make somebody's login would make every approval look like theirs.
+- The payload carries a ready-written **`caption`**, deliberately: a card that says BUY
+  while the screen says Pass, because a scenario was edited, is the failure worth a field.
+  Four labelled blocks, blank-line separated — on a phone in a group chat a wall of
+  dot-separated values is one long line to squint at, and the order is the order an
+  approver decides in: what it is, what it costs, what it earns, what we already hold,
+  then the paperwork.
+- The **shoe's name leads**, on its own line above the style code. A code identifies the
+  pair for whoever is holding it and for nobody else; an approver reading a group chat
+  knows the name. It is dropped entirely when we have none, so a card never opens blank.
+
+```
+Air Jordan 1 Retro High OG 'Chicago'
+CW2288-111
+Size: 9
+Shelf $50.00 · costs us $63.05/unit
+
+Payout Engine Result:
+Decision: BUY
+Profit: $61.39
+Alias: $137.00 ask · 98.9% ROI
+StockX: $93.00 ask · 34.9% ROI
+
+Inventory:
+None of this size on hand (6 in other sizes).
+
+BC-2400
+Supplier: E2E Buyer
+Store: E2E Store
+```
+
+  Two degradations that matter: an **unpriced** line replaces the three Decision lines
+  with *"Not priced — no Alias or StockX market for this size right now"* rather than
+  printing an empty verdict ("we didn't look" and "we looked and it's bad" are different
+  answers), and **`costs us` is read off the line, not the call** — what a pair costs is
+  its shelf price through the cost stack, which exists whether or not the market
+  answered.
+
+  **One line per platform we hold a price for**, carrying its LOWEST ASK and its ROI — a
+  line with only an Alias market shows one, so it is not a fixed two-line block. The ask
+  is there because nobody can sanity-check a percentage against a shoe they know, and
+  everybody can check a price.
+
+  **The WINNING platform leads**, because `Decision` and `Profit` above are its numbers.
+  Sorting on ROI alone would have put the loser on the top line: `dealVerdict` does not
+  simply take the biggest ROI — a slow seller can lose to a smaller, faster margin. The stored snapshot keeps
+  only the WINNER, which is enough to make a call and not enough to judge one: two
+  platforms agreeing and two disagreeing are different decisions. Both are re-derived
+  through `calcPayout`, the same function the calculator and the screen run, so they
+  cannot drift from either; `call.platforms` carries the money per platform. `Profit:` is
+  the winner's and is deliberately not repeated beside its own ROI.
+
+### `kind='shoe'` and nothing else
+A static key plus a numeric id is enumerable. That is a fair trade for photographs of
+shoes; it is not one for the other two things in `buy_cart_files`, which are keyed by the
+same sequence one integer away. **A gift card image is a bearer instrument** and a receipt
+is somebody's financial record — both answer **404** to a perfectly valid key, and the
+kind is read off the ROW rather than taken from the query string so a caller cannot widen
+what they may read by asking differently.
+
+### In: a Telegram tap becomes a decision
+`POST /api/cart/telegram-decide`, header `x-api-key`. Make posts this when somebody
+presses a button on the card.
+
+**The first tap captures its own id.** Nobody can read their own numeric Telegram id off
+their phone, and an admin cannot link an account they cannot identify — so refusing with
+"go and find your id" was a dead end for both of them. An unlinked tap is still REFUSED
+(a decision has to name a person), but the number and the Telegram display name land in
+`telegram_link_requests`, and Check Access offers them as a **"Link to…"** picker above
+the account table. Linking clears the row; the next tap goes through.
+
+The display name is untrusted and only ever shown to an admin choosing which account a
+row is — a Telegram name is changeable at will. The **id** is the identity.
+
+**Also linkable by hand on Check Access** — a Telegram column beside the privilege checkboxes,
+`decision: 'telegram'` on `api/admin/review.js`. A blank value unlinks; a **buyer can
+never be linked** (a linked supplier is one tap from looking like an approver in the
+group); two accounts cannot share an id, because ambiguous attribution is the one thing
+this map exists to prevent. `@userinfobot` in Telegram gives somebody their number, and
+the refusal below names it too.
+
+**A button is not an identity, and that is the whole endpoint.** Everyone in the group can
+press one, and the API key proves only that the request came from the scenario — never
+who tapped. So the decision is recorded against `users.telegram_user_id`, and an
+unrecognised Telegram account is **refused** rather than recorded against nobody. Checked
+here rather than in Make: a control living in a scenario is a control anyone with the Make
+login can edit.
+
+- The privilege is re-read from the database on the call, like every other privileged act
+  — revoking `approve_buying` this morning stops them this morning, Telegram included.
+- **The key alone approves nothing.** A linked account without the privilege is refused
+  and NAMED, so the group sees who cannot rather than being told "no".
+- `qty` is accepted as a bare number (what `callback_data` can carry for one line) or as
+  the `{ lineId: n }` map the screen sends. Both front doors run the same
+  `decideLines` — two decide paths that drift would let a tap record something the screen
+  would have refused, and the screen is where the audit gets read.
+- **An approve still needs a quantity**, so Approve cannot be one button. Use quantity
+  buttons: `approve:<lineId>:2`. A reject needs none.
+- The response carries a worded **`outcome`** (*"Alex approved · 3 pairs"*) and a
+  **`reaction`** (👍 approve / 👎 reject) for `setMessageReaction`, so Make can stamp the
+  card and EDIT the original message.
+
+  Both are decided server-side for the same reason the caption is: what the group SEES
+  and what the ledger RECORDS must be one decision. A scenario picking its own emoji can
+  put a thumbs-up on a rejection, and people believe the emoji — it is the thing you can
+  read from across a warehouse without opening anything. A group where every decision leaves a live button behind is
+  a group where somebody taps yesterday's.
+- A repeated tap answers **409**, not a second decision — Telegram redelivers a callback
+  that is not answered fast enough, so this is the ordinary case rather than an edge one.
+  **The guard is in the UPDATE's WHERE clause, never a read-then-write:** two callbacks
+  racing both read the line as `pending` and both committed, and real data carried the
+  same approval twice under the same name. Pinned by a test that fires both taps with
+  `Promise.all` and asserts one 200, one 409, and exactly ONE `line_approved` event.
+
+Guarded by six tests in `e2e/buy-cart.spec.js` § "a Telegram tap is a decision".
+
+### ENV — all three, or it fails quietly
+| Var | Unset means |
+|---|---|
+| `MAKE_WEBHOOK_URL` | no card is ever sent — but the server now LOGS a line saying so. It used to return in silence, which is not distinguishable from a send that worked (see below). |
+| `BUYING_API_KEY` | the photo endpoint answers 503. **Generate a fresh one per environment.** |
+| `APP_BASE_URL` | **`photo.url` is `null`** — the card goes out with no picture and no error anywhere. This is the one that fails silently; the other two announce themselves. |
+
+`APP_BASE_URL` is the absolute origin, no trailing slash (`https://app.example.com`).
+
+**Keeping the e2e suite out of the group.** The suite builds real requests and deletes
+them, and a buyer's add POSTs a card — so every local run put approval cards in front of
+the desk for pairs nobody is buying, and tapping one afterwards answered *"that buying
+request does not exist"* because teardown had removed it. It is stopped by
+`playwright.config.js` blanking `MAKE_WEBHOOK_URL` for the server it starts, the same way
+`TRACKING_API_KEY` is blanked for 17TRACK.
+
+**Not by a guard on `APP_ENV`** — that was tried and reverted the same hour. 17TRACK can
+use that flag because nobody registers parcels by hand from a dev server; this feature is
+*exercised* from one, by a person, and `vite.config.js` forces `APP_ENV=dev`. So the guard
+swallowed every real card from `npm run dev` while returning silently, which looked
+exactly like Make dropping them — two rounds of debugging the wrong half of the system.
+**A control that cannot tell a test run from a person doing their job is an outage with a
+rationale.** Every send and every refusal now logs (`[notify] BC-#### SKU/size → Make 200`),
+because "we never sent" and "we sent and it was dropped" are different problems and used
+to look identical from here.
+
+**`npm run mobile:tunnel` now sets it for you.** The tunnel is opened BEFORE the server
+so the hostname can be passed in — it could never be set afterwards, which is why a
+preview used to emit `http://localhost:5173` as `photo.url`. That is worse than sending
+none: Make's HTTP module sits in front of `sendPhoto`, so an unfetchable link killed the
+whole scenario and **no card appeared at all**. `notify.js` now refuses to emit a
+localhost origin and says why in `photo.unavailable`.
+
+## The floor's actual workflow (2026-09-11)
+
+### Adding a pair IS asking about it
+There is no separate "send for approval" for a buyer. `cart/line` marks the request
+`submitted` on their add (`askBuyCart`) — a trip that ends with the buyer remembering to
+press Send is a trip where the first pair sat unasked for an hour, and by then it has
+usually gone.
+
+- **Only the buyer's add does this.** A desk adding a line on somebody's behalf is data
+  entry, not a question being asked, and flipping the state under them would be a
+  surprise. Their add leaves the status alone.
+- **Adds are allowed while `draft`, `submitted` or `approved`** — they used to require a
+  draft, which froze the list at the first question. A buyer works a shop for an hour: a
+  NEW line is pending and changes nothing already decided, so nothing is at risk.
+  **Removing** still needs a draft, and everything stops at `funded`: from there the
+  approved total is what the cards were issued against.
+- Adding to a fully-decided request pulls it **back to `submitted`**, which is the honest
+  state — there is something undecided on it again, and the desk must not fund a total
+  that is about to move.
+- **The photo is checked on the add**, not only at submit, because for a buyer the add is
+  the submit.
+
+### Several sizes in one ask
+The size chips multi-select. One press creates one line per size, sent in sequence — each
+add re-reads the market server-side, and forty at once would be forty simultaneous Alias
+calls off one button.
+
+**One price for the run, with exceptions.** `Price on the shelf` is what every selected
+size costs, which is the ordinary case and stays one field. Pick a second size and a
+per-size row appears beside each one; **blank means the shelf price**, and the placeholder
+shows the figure a blank box will actually send — a row reading `$0.00` next to a size is
+the kind of thing somebody "fixes" by typing a zero. Deselecting a size drops its override
+with it, so a price typed for one shoe cannot come back on the next.
+
+It is done BEFORE the add, not after, and that is the whole reason it lives in the form:
+**adding a line posts a Telegram card with the price written into its caption.** Re-pricing
+afterwards would leave the group holding a card that quotes a number the request no longer
+carries, and the group is where the decision gets made. A price that is wrong after
+sending is a `Pull it back`, not an edit.
+
+### The cost stack is the desk's too (2026-09-11)
+It moved the same way the buy call did, and for the same reason: **the stack is what turns
+a shelf price into a profit, so it is the basis on which a request gets approved or turned
+down.** The party being judged does not read the ruling before asking.
+
+This reverses the earlier "the buyer writes it first" rule. That argument was good as far
+as it went — the buyer is the one reading the tax off the register — and it missed what
+the stack is FOR.
+
+- `canWriteCosts` refuses a supplier outright; `redactCartForViewer` sends them
+  `cost_stack: null`, and `cart/get` drops the till-overrun warning with it (a number
+  computed from rates they cannot see).
+- **`final_cost` joined `CALL_FIELDS`.** It was deliberately excluded while the stack was
+  the buyer's own; once the stack moved, what a pair "lands at" was derived entirely from
+  figures they cannot see, and showing it would hand them the stack one subtraction away.
+  The buyer's table has no *Lands at* column and no cost card at all — read-only chips
+  would be a row of empty boxes explaining an arithmetic they cannot see.
+- **The buyer keeps the shelf price.** It is the one figure they stated.
+
+### Two guards that read `!== 'receipt'` and should not have
+Both swept in the new shoe photos and treated them as gift cards:
+`cart/file-sign` / `cart/file-attach` demanded `issue_gift_cards` to upload one, and
+`cart/file` answered *"These cards have not been released to you yet"* when the buyer
+opened **their own photo** on an unfunded request. All three now key on
+`kind === 'gift_card'` specifically.
+
+The written process and what the floor does had drifted apart. Reconciled against a
+whiteboard: **supplier hunts → sends size, price and a PHOTO → Alex/JK approve → Alex/JK
+set the quantity**, and *sometimes Alex overrides JK's decision*. The gift-card funding
+step is unchanged; only who says what moved.
+
+### The buyer states no quantity
+`buy_cart_lines.qty` is **nullable and NULL until a line is approved**. The buyer is
+standing in a shop reporting what they FOUND — this shoe, this size, this ticket price —
+and how many to buy is the decision being asked for, not part of the question.
+
+- `cart/line` writes `qty = null` on every add, whoever adds it.
+- `cart/decide` takes `qty` (a `{ lineId: n }` map) and `qtyAll` (for approve-all), and
+  **refuses an approve with no number, naming the pairs**: *"Say how many to buy: 2 lines
+  have no quantity (IO8116-600 size 10, IO8116-600 size 8)."* Defaulting to 1 was the
+  tempting version and it is exactly the number that would get funded if nobody looked.
+- A **reject needs no quantity** — there is nothing to buy, and a rejection also CLEARS
+  one. Turning down a line that had been approved for 2 used to leave `qty = 2` sitting
+  beside "Rejected", which reads as *buy two of something nobody approved* on the row a
+  person checks before spending. What the refusal reversed survives as `overrode_qty`.
+  (Every downstream reader — the funding total, the receipt match, the pack list —
+  filters on `status = 'approved'`, so the stale number was never spendable. It was
+  worse than that: it was wrong in the place people read.)
+- `lineOut` no longer coerces `qty` to 0. `Number(null) || 0` printed "×0" on screen and,
+  worse, made "does this have a quantity" look answered when it is the question.
+- The funding target is unchanged — shelf × qty over approved lines — and now every
+  approved line has a quantity a person chose.
+
+### One approver can override another
+`overrode_by` / `overrode_status` / `overrode_qty` on the line. A decided line can be
+re-decided while `decisionsOpen` (so never after the cards are out), and the row keeps
+what it replaced: the screen reads **"JK said approved ×3 — overridden"** under Alex's
+decision.
+
+The floor says this happens, and a system that refuses it just moves the conversation
+somewhere nobody can audit. What it must never do is let the last write present itself as
+the only one. **No hierarchy is coded** — Alex does not outrank JK in the schema, because
+that puts people's names in the source and breaks the day someone leaves. Re-deciding to
+the same status AND the same quantity is a no-op, so pressing approve-all twice does not
+invent a history of reversals.
+
+### Every shoe needs a photo, keyed by SKU
+`buy_cart_files` gains `kind='shoe'` and a nullable `sku`. `cart/submit` refuses while any
+style code on the request has no photo, naming them.
+
+**Per SKU, not per line.** A buyer sending a 7, an 8 and a 9 of one shoe photographs it
+once and all three lines show the same shots — photographing it three times is work nobody
+does twice. The approver is deciding on something they cannot see, in a shop they are not
+standing in, off a style code four characters from a different shoe.
+
+- Uploading one is open on the same terms as a receipt (the buyer's own evidence). The
+  `issue_gift_cards` guard now keys on `kind === 'gift_card'` specifically — it used to be
+  `!== 'receipt'`, which would have locked the buyer out of their own photo.
+- The bytes are **proxied** like every other file here; `ShoeShots` fetches with the
+  session token, makes an object URL and revokes it on unmount. It has **three** states —
+  loading, loaded, *failed* — because a thumbnail stuck on "photo…" reads as a slow
+  network, so nobody reports it and the approver quietly decides without it.
+- The key pattern in `cart/file-attach` admits `shoe-` as well; leaving it out made every
+  attach answer "Invalid file key".
+
+> **Testing note.** `newRequest` seeds a shoe photo per SKU and STAMPS the submit rather
+> than posting it — `cart/submit` is capped at 30/min and this helper runs forty-odd
+> times, so going through the endpoint 429'd unrelated tests at the end of a run. The
+> tests that are actually about sending call it directly.
+
+## The buy call is the APPROVER's (2026-09-11)
+`canSeeBuyCall` / `redactCartForViewer` / `redactLineForViewer` in `api/_lib/buycart.js`.
+
+A line's call — the BUY/WATCH/PASS verdict, the profit, the ROI, the payout and the
+Alias/StockX prices behind them — is what the approver is judging. The buyer is the
+party being judged. Knowing a pair reads as $60 profit is knowing exactly how much room
+there is to argue; knowing it reads as a Pass before you have asked is knowing not to
+ask honestly. **The buyer is not blind about the market in general** — the supplier
+portal carries the Payout Calculator scoped to their own preset. What is withheld is
+OUR call on THEIR request.
+
+Two separate guarantees, and only one of them is about visibility:
+
+| | Enforced where |
+|---|---|
+| A buyer never **sees** the call | `cart/get` (and every other endpoint returning a cart) strips it from the lines **and from the event trail**; `cart/price-line` answers 403 |
+| A buyer never **writes** it either | `cart/line` ignores any call a supplier posts and reads the market itself |
+
+The second one was a hole before it was a visibility question. `BuyCartAdd` used to fetch
+Alias and StockX **in the buyer's browser**, compute the verdict, show it, and POST it —
+so the party requesting the money supplied the figures justifying its release. A crafted
+request could arrive reading "buy, $180 profit" with no market behind it at all. Staff
+still post their own screen's snapshot (the calculator is the only place those numbers
+are derived); a supplier's is discarded.
+
+- **The trail is redacted, not deleted.** `line_priced` becomes *"Priced. The figures are
+  on the approver's copy of this request."* and `line_added` loses its trailing
+  `— buy`. A record that vanishes for one reader is worse than one that is brief: the
+  buyer can still see that the market was read against their request, and when.
+- **`final_cost` is NOT part of the call.** It is the buyer's own shelf price run
+  through a cost stack they can read and edit on the same screen — hiding an arithmetic
+  result from its own inputs would be theatre. "Lands at" stays on their table, and is
+  derived server-side so it is true even when the market cannot be read at all.
+- **Redaction is applied at every endpoint that returns a cart**, including the ones a
+  supplier cannot reach today. It is a no-op for staff, so it costs nothing, and a
+  privilege that changes later cannot open a hole nobody re-audited.
+- The buyer's screen loses the Buy call column, the call panel and the verdict on *Add a
+  pair*; rows only expand for them once the stock panel has something in it, because a
+  row that opens onto an empty box reads as a bug.
+- **`canPrice` is `mayDecide || canAudit`**, mirroring the server's `canWriteCosts`.
+  It used to be `canCost`, which is the *cost stack's* rule and wrong twice here: true
+  for a buyer, and gated on `canDecide`, which is closed on a draft — so an approver
+  looking at an unpriced line before it was sent in had no way to price it while the
+  endpoint would happily have accepted it.
+
+### Pricing happens AFTER the response, not during it
+`priceInBackground` in `api/cart/line.js`. A buyer's add returns immediately with
+`final_cost` only; the market read and the call land on the row a few seconds later,
+logged with **no actor** so the trail reads as system-generated rather than crediting
+the buyer with a call they may not make.
+
+**Measured: 16,034 ms → 246 ms.** Alias runs ~16s on an ordinary day and 20–45s on a bad
+one, and pricing inline made *Add to request* hang for all of it — the difference between
+a tool you use on a shop floor and one you stop using. Nothing is lost by deferring it:
+the buyer is not allowed to see the call, and the approver reads the line minutes or
+hours later. If it fails the line simply stays unpriced, which is an ordinary state with
+a way back (*Price it*) and the same one a timed-out quote has always left.
+
+It is also the same **single** upstream read, moved rather than added — tapping a size
+used to block on a quote, so a buyer trying three sizes and adding one spent three calls
+and now spends one.
+
+> **Testing note.** `newRequest`'s lines are added by STAFF by default (`linesBy`),
+> because a buyer-authored line now costs one real Alias/StockX call; at thirty-odd tests
+> that is minutes of suite time and an outage away from red. The buyer-authored path has
+> its own test and pays for one call there.
+
 ## The buy call is a SNAPSHOT
 Every line stores the verdict as the buyer saw it: call, final cost, best platform,
 payout, profit, ROI, both market prices, liquidity, basis, and `quoted_at`. It is never
@@ -271,6 +650,63 @@ and re-adding it, while the same SKU prices fine an hour later.
   question was asked.
 - There is **no unique index on (cart, sku, size)** — a line carries its own shelf price
   and its own verdict, so the same pair seen in two shops at two prices is two true rows.
+
+## What we already hold (2026-09-10)
+`api/cart/stock.js` · `stockOnHandBySizeForSku` in `db.js` · `StockPanel` in
+`BuyCart.jsx` · **What do we already hold?** above the lines.
+
+The request answered what a pair costs and what it would sell for, and said nothing
+about the six already on our own shelves. An approver reading a healthy ROI had no way
+to see that PH is still trying to move last month's, so the same shoe got bought again —
+and the buy call, which is about the *market*, would go on saying BUY every time.
+
+**It loads with the request for the desk** — anyone holding approve or audit, on a request
+that is not closed/cancelled/written off. It was a deliberate press because it calls
+Shopify, and that was the wrong call: the one moment the figure decides anything is while
+somebody is looking at pending lines, and a number you have to go and fetch is one that
+gets skipped on the busy days when over-buying actually happens. It stays a press for a
+buyer (they are not the one deciding), and *Recheck what we hold* re-reads it.
+
+Bounded: once per opened request, Shopify cached ten minutes per style, our own half one
+indexed query. Every line is read at once because an approver scanning twelve of them
+wants to spot the one we are about to buy a third of.
+
+**The basis is Shopify plus what is not yet listed**, and the two halves must not
+overlap:
+
+| Half | Why it is the authority for it |
+|---|---|
+| **Shopify** for pairs we have LISTED | every channel lands there (`shopify.md`), so a pair that sold this morning is already off its count while our own `items` row reads in-stock until somebody scans it out |
+| **Our own `synced_shopify = false` units** | Shopify cannot see these at all — still being priced, no-box, in-store, existing stock, held pre-sell — and reports zero for them, correctly |
+
+So the seam is **`synced_shopify`**, and `we_hold = shopify.qty + ours.not_listed`. Our
+own count of *listed* pairs is deliberately **not** added: it is the same shelf Shopify
+already counted, and adding it tells an approver we hold ten when we hold five, which
+turns down a buy we wanted.
+
+- **`pre_sold` is reported beside the count, never inside it.** "We hold 6" and "we hold
+  6, 2 of them spoken for" lead to opposite decisions (`pre-sell.md`).
+- **The no-box / in-store / pre-sell tags are subsets of the not-listed half**, not
+  additions to it, and the copy says "of them" — the first draft read as double.
+- **`kind='boxes'` is excluded outright**: an empty shoe box is not a pair
+  (`empty-boxes.md`).
+- **Sizes match on an exact trimmed label**, the same rule the advisor's breakdown uses.
+  `7.5` and `7.5W` are different shoes on different feet.
+- **A Shopify outage is never a zero.** The basis flips to `our_records_only`, the panel
+  says which, and the figure becomes our own `on_hand` — never a half-count printed as a
+  whole one.
+- **The gap is a finding.** Our records saying 8 listed while Shopify shows 0 means ~8
+  sold and never scanned out, and the panel says so rather than folding it into the sum.
+- **A line with no size gets `we_hold: null`**, not 0 — "we hold none of that size" and
+  "this line has no size" are different answers and only one argues for buying.
+
+The row chip goes **amber only when we already hold at least as many as are being asked
+for**. Any-stock-is-amber made a single spare pair look like a reason to stop.
+
+Readable by anyone who can read the request, the buyer included — a buyer standing in
+the shop is the one person who can still decide not to pick it up, and suppliers can
+already ask the advisor the same question (`SUPPLIER_TOOLS`). It is Shopify's belief
+plus our own records and the panel says so out loud: **not a physical count**.
 
 ## Gift cards — the only bearer instruments in this app
 `api/_lib/secrets.js`: AES-256-GCM under **`BUY_GC_KEY`** (32 bytes, hex or base64),
@@ -426,6 +862,30 @@ three were already dependencies; none costs an API call.
   `qty_differs`. Approved and bought are different claims and both are kept; where they
   part is a finding for the audit, not something to tidy away.
 
+## The receipt becomes the order (2026-09-11)
+`cart/raise-po` writes every receipt line onto the purchase order as an **order-level
+list** (`po_lines` with no box) and sets `manifest_scope='order+box'`; the buyer then
+packs, and each box gets its own list. Two lists, two authors, two jobs — the full rule,
+including the three-way split of the gap, is in `purchase-orders.md`.
+
+**What changed and why.** The order used to be raised empty, so it expected nothing until
+the buyer packed — and a pair they never boxed was not short, it was invisible. Since the
+cart already knows what was bought the moment the receipt is read, the order can say what
+it is owed from that moment too.
+
+- **`entered_by` is `Number(uid) || null`.** It is a `users(id)` FK and the env
+  admin/superadmin have a non-numeric uid; writing a name there is the bigint cast that
+  has taken PO comments down before. The on-behalf flag is stamped either way.
+- **The till price rides along** as `unit_cost`, so a shortage has a value without anybody
+  looking anything up.
+- **A receipt line with no SKU is now REFUSED at `cart/receipt`**, not dropped. It used to
+  be silently filtered out at save time, which was survivable while the receipt was only a
+  pick list — and is not now, because those lines become the order's account of what it is
+  owed. A row discarded quietly is a pair nothing ever expects, counts short, or chases.
+  A shop till frequently prints no style code, so this is the common case, and the person
+  is looking at the review table at exactly that moment. `raise-po` keeps the same check as
+  a backstop for rows written before this.
+
 ## Raising the purchase order (step 6)
 `cart/raise-po` creates a **supplier-raised** PO with the receipt lines as a
 **whole-order manifest** (`po_box_id` NULL, `manifest_scope='po'`), tagged with the cart
@@ -539,6 +999,67 @@ across boxes then was a guess presented as a record.
   `expected_recorded` fails while `pack.unpacked > 0`, and **`po/ship` refuses the last
   unshipped box** while anything is loose (earlier boxes may still ship — what is
   refused is closing the door on unpacked stock).
+
+### The milestone bar (2026-09-12)
+*(`src/lib/buycartMilestones.js`, `src/components/BuyCartProgress.jsx`, `e2e/buy-cart-milestones.spec.js`)*
+
+A courier-page row of ten dots at the top of every request, under the header: **Purchase
+request · Waiting for approval · Waiting for gift card · Waiting for receipt · Sorting /
+packing · Waiting for manifest · Waiting for labels · Shipping · Delivered · Audited.**
+Behind = green, current = blue, ahead = grey; a denied/cancelled/written-off request stops
+on its dot in red. Desktop shows every label; under 900px the labels drop and a caption
+says "Step 7 of 10 · Waiting for labels".
+
+**The stop is DERIVED, evaluated from the end backwards** — the status column can't say it
+(`receipted` covers "receipt just landed" through "every box sealed"), and the back half
+lives on the order and its boxes. `milestoneFor(cart)`, pure, no clock:
+
+| stop | evidence |
+|---|---|
+| Audited (complete) | `status = 'closed'` |
+| Audited | `goods_audited_at`, or PO `reconciled`/`closed` |
+| Delivered | PO `receiving`, or every real box `delivered` |
+| Shipping | PO `shipped`, any box `shipped`/`in_transit`, or **every box has a tracking number** (labels answered) |
+| Waiting for labels | `po.labels_requested_at`, or every pair packed AND every box closed |
+| Waiting for manifest | every pair packed, a box still open (closing a box prints its manifest) |
+| Sorting / packing | `receipted`/`audited`, or `po_id` set |
+| Waiting for receipt / gift card / approval / request | `funded` / `approved` / `submitted` / `draft` |
+
+Replacement boxes (`kind='replacement'`) are ignored — a reship is not "did the shipment
+arrive". `denied` pins to "Waiting for approval"; `cancelled`/`written_off` stop wherever
+the evidence had reached.
+
+### The handoff: what happens when every pair is boxed (2026-09-12)
+"Every pair on the receipt is in a box. The order can ship." used to be the last thing the
+panel said, and it was a dead end. The next steps — ask for labels, print each box's
+manifest, seal, ship — live on the ORDER's screen (the supplier's Outbound Shipments, PH's
+Purchase Orders, the warehouse's Reconciliation), and nothing on the request led there; the
+buyer had to know to go Home → Outbound Shipments and find the order. `Order PO-…` in the
+money strip was plain text.
+
+Now, the moment `pack.unpacked === 0` on an open order, `BuyCartPack` shows a handoff block:
+- **Ask for labels** — `api.poRequestLabels(pack.poId)`, the SAME `po/request-labels` the
+  supplier portal calls (its precondition, something declared on the boxes, is exactly what
+  packing just did). Gated by `canAskLabels` = role ∈ supplier · ph_team · admin ·
+  superadmin, the set the endpoint accepts, so the button never leads to a 403. The
+  approver (a warehouse hand with a privilege) sees the state but not the button — labels
+  are the order's business.
+- Once asked: "Labels requested … print each box's manifest from the order and seal it
+  while you wait", with **Cancel the label request** (the order page's wording). Once every
+  box carries a tracking number: "print, seal, ship". `cart/get`'s `po` summary now carries
+  `labels_requested_at` for this.
+- **Open the order PO-… →** — `poHref(user, poId)` in `src/lib/poLink.js` picks the shell
+  off the ROLE (supplier → `/orders?po=`, ph_team → `/ph/purchase-orders?po=`, else
+  `/reconcile?po=`). A plain `<a href>`: the token lives in sessionStorage, so the full
+  navigation keeps the session, and it works identically from all three shells. The
+  supplier portal learned to honour `?po=` (`SupplierApp`: read on arrival, written on open,
+  cleared on ← Shipments). `Order PO-…` is the same link on the request page and in both
+  list layouts.
+
+Deliberately a button + link, NOT a redirect: the request page is the one screen both
+sides look at, and the buyer may still want the receipt and money in front of them. The
+PO is not created here — `Start packing this shipment` raised it, before packing began.
+Covered at the end of the pack test in `e2e/buy-cart.spec.js`.
 
 ## Two audits, not one
 Step 7 is **7a money** (`scope:'money'`) and **7b goods** (`scope:'goods'`) on the same

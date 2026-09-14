@@ -125,7 +125,14 @@ async function build() {
 // somebody previewing a specific thing may want to name it — but a preview with no bar
 // at all is a copy of the app that looks exactly like the real one, which is the whole
 // failure this is here to prevent.
-function serve(tls) {
+// `publicUrl` is the tunnel's hostname, and it is handed in rather than read from the
+// environment because it does not exist until cloudflared has started. Anything that
+// builds an absolute link for something OUTSIDE this machine to fetch needs it — today
+// that is `photo.url` on the buying webhook, which Make.com's servers dereference. A
+// preview that emitted `http://localhost:5173` there sent Make a link only this Mac can
+// resolve, and because its HTTP module sits in front of `sendPhoto`, the whole scenario
+// died and no card appeared at all. A real value here or none: never a local one.
+function serve(tls, publicUrl = null) {
   const s = run('node', ['server.mjs'], {
     stdio: VERBOSE ? 'inherit' : ['ignore', 'ignore', 'inherit'],
     env: {
@@ -133,6 +140,7 @@ function serve(tls) {
       APP_ENV: 'dev',
       ENV_LABEL: process.env.ENV_LABEL || (TUNNEL ? 'PREVIEW · public link' : 'PREVIEW'),
       PORT: String(PORT),
+      ...(publicUrl ? { APP_BASE_URL: publicUrl } : {}),
       ...(tls ? { TLS_CERT: tls.cert, TLS_KEY: tls.key, HTTPS_PORT: String(HTTPS_PORT) } : {}),
     },
   });
@@ -150,7 +158,13 @@ function tunnel() {
     const scan = (buf) => {
       const text = String(buf);
       if (VERBOSE) process.stderr.write(text);
-      const m = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+      // NOT the first trycloudflare hostname in the output: cloudflared logs the
+      // endpoint it REGISTERS against (https://api.trycloudflare.com) before it prints
+      // the random hostname it was given, and taking the first match started the server
+      // with APP_BASE_URL=https://api.trycloudflare.com — every webhook then carried a
+      // photo link to Cloudflare's API, and "Photo unavailable" on the card was the only
+      // symptom. Quick-tunnel names are always several words joined by hyphens.
+      const m = text.match(/https:\/\/[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com/i);
       if (m && !done) { done = true; resolve(m[0]); }
     };
     t.stdout.on('data', scan);
@@ -187,7 +201,16 @@ if (HTTPS) {
 // own plain-HTTP port, since it's the prerequisite for the HTTPS one.
 const caPort = HTTPS ? await new Promise((r) => { serveCa(CA_PORT, r); }) : CA_PORT;
 
-serve(tls);
+// The TUNNEL comes up FIRST, because the server needs to be told its own public address
+// and cannot be told after it has started. cloudflared is happy to point at a port that
+// is not listening yet — it answers 502 for the second or two before `serve` binds it.
+let publicUrl = null;
+if (TUNNEL) {
+  console.log('[mobile] opening a Cloudflare quick tunnel…');
+  publicUrl = await tunnel();
+}
+
+serve(tls, publicUrl);
 // Give the listener a moment so the first tap doesn't hit a closed port.
 await new Promise((r) => setTimeout(r, 800));
 
@@ -200,13 +223,13 @@ if (HTTPS) {
     `Plain http://${tls.ip}:${PORT} redirects here. Nothing is published to the internet.`,
   ]);
 } else if (TUNNEL) {
-  console.log('[mobile] opening a Cloudflare quick tunnel…');
-  const url = await tunnel();
   banner([
     'On your iPhone, open:',
-    url,
+    publicUrl,
     '',
     'HTTPS — the barcode scanner and photo camera work here.',
+    'APP_BASE_URL is set to this, so outbound webhooks carry links',
+    'that Make.com and Telegram can actually fetch.',
     'PUBLIC while this runs. Ctrl-C kills the tunnel and the URL.',
   ]);
 } else {

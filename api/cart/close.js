@@ -21,7 +21,7 @@
 // decision, not a way past the checks.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import { getBuyCart, getBuyCartFull, closeBuyCart, cancelBuyCart, writeOffBuyCart, dbConfigured } from '../_lib/db.js';
-import { requireAuditPrivilege, cartCloseChecks, allChecksPass, requirePrivilege } from '../_lib/buycart.js';
+import { requireAuditPrivilege, cartCloseChecks, allChecksPass, requirePrivilege, redactCartForViewer } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -45,7 +45,7 @@ export default async function handler(req, res) {
       return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
     const out = await cancelBuyCart(cartId, String(body.reason ?? '').trim().slice(0, 500) || null, user);
     if (!out) return send(res, 409, { ok: false, error: 'Cards have already been issued against this request — it has to be reconciled, not cancelled.' });
-    return send(res, 200, { ok: true, cart: out });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(out, user) });
   }
 
   // A write-off ends a request that can never be completed. Same guard as closing it —
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
       return send(res, 400, { ok: false, error: 'Say what could not be recovered and why — a write-off with no reason is just a force-close.' });
     const out = await writeOffBuyCart({ cartId, reason, actor: user });
     if (!out) return send(res, 409, { ok: false, error: 'This request is already finished.' });
-    return send(res, 200, { ok: true, cart: out });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(out, user) });
   }
 
   const user = await requireAuditPrivilege(req, res, cart);
@@ -85,7 +85,7 @@ export default async function handler(req, res) {
       });
     }
     const out = await closeBuyCart(cartId, user);
-    return send(res, 200, { ok: true, cart: out, checks });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(out, user), checks });
   } catch (e) {
     console.error('[cart/close]', e.message);
     return send(res, 500, { ok: false, error: 'Could not close that request.' });

@@ -84,6 +84,28 @@ export function shippedProgress(boxes) {
 
 // Who raised it, and whether it is waiting on us. Both are facts about the ORDER rather
 // than where it is, so they read as their own chips beside the status one.
+// ── Where a manifest LIVES, which is two questions and not one ────────────────
+// `purchase_orders.manifest_scope` has three values, and the mistake it is easy to make
+// is to treat it as a single yes/no:
+//
+//   'box'        the supplier declares per label. Boxes carry lines; the order does not.
+//   'po'         Path C — the supplier gave ONE list for the whole purchase and there is
+//                no per-box breakdown at all (`purchase-orders.md`).
+//   'order+box'  BOTH, and the two lists mean different things. The order-level list is
+//                OURS — a buying request's receipt, written when the order is raised, so
+//                we know what we are owed before a single box is filled. The per-box
+//                lists are the BUYER'S packing list, saying which carton each pair is in.
+//
+// So every branch site has to say which question it is asking. Sites that ask
+// "where does `expected` come from?" want `expectsAtOrderLevel`; sites that ask "does a
+// box carry its own lines?" want `declaresPerBox`. Reading `=== 'po'` and meaning either
+// one is how 'order+box' would silently behave like Path C in half the app.
+export const expectsAtOrderLevel = (po) => ['po', 'order+box'].includes(String(po?.manifest_scope || 'box'));
+export const declaresPerBox = (po) => ['box', 'order+box'].includes(String(po?.manifest_scope || 'box'));
+// The order was raised from a buying request, so its order-level list is a receipt we
+// already hold rather than a supplier's account of what they sent.
+export const hasOrderedList = (po) => String(po?.manifest_scope || 'box') === 'order+box';
+
 export const isSupplierRaised = (po) => String(po?.raised_by || 'ph') === 'supplier';
 export const awaitingLabels = (po) => !!po?.labels_requested_at;
 

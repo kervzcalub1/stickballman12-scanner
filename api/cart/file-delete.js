@@ -17,7 +17,7 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged 
 import {
   getBuyCart, getBuyCartFile, deleteBuyCartFile, getBuyCartFull, logCartEvent, dbConfigured,
 } from '../_lib/db.js';
-import { hasCostPrivilege, cartVisibleTo, actorKey } from '../_lib/buycart.js';
+import { hasCostPrivilege, cartVisibleTo, actorKey, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
 import { deleteObject, r2Configured } from '../_lib/r2.js';
 
 export default async function handler(req, res) {
@@ -25,6 +25,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const user = requireRole(req, res, ['supplier', 'warehouse', 'ph_team']);
   if (!user) return;
+  if (!(await requireBuyerAccess(req, res, user))) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 30 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
@@ -71,7 +72,7 @@ export default async function handler(req, res) {
       catch (e) { console.warn('[cart/file-delete] bucket object left behind:', e.message); }
     }
 
-    return send(res, 200, { ok: true, cart: await getBuyCartFull(cartId) });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(await getBuyCartFull(cartId), user) });
   } catch (e) {
     console.error('[cart/file-delete]', e.message, actorKey(user));
     return send(res, 500, { ok: false, error: 'Could not remove that file.' });

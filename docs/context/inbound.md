@@ -53,6 +53,20 @@ after it.
   different answers, and only one of them lets somebody stop planning around it. Anything
   the carrier has never scanned (`no_tracking`, `with_supplier`) is `unknown` too — a
   label with no parcel behind it has not earned a date.
+- **"Never scanned" is checked on the box's own status, not only on its state**
+  (`neverScanned`, 2026-09-11). A label-only box that has sat for `INVESTIGATE_DAYS`
+  derives as `investigate` rather than `with_supplier`, and was falling through into the
+  day buckets — appearing in *arriving today* off an estimate the carrier never earned.
+  `investigate` is deliberately **not** excluded wholesale: a parcel that WAS scanned and
+  then went quiet has a real estimate behind it, and `overdue` is the honest answer for
+  that one.
+- **`arrivalBucket(box, today, state, now)` takes `now`.** It used to default it inside
+  and call `inboundState(box)` bare, so a function handed an explicit `today` went and
+  read the **wall clock** to derive the state — the same class as the banned
+  `toLocale*()` (`est-everywhere`), and it failed the way those do: the pinned test
+  passed for eight days, then went red on its own on a commit that touched nothing near
+  it. Every real caller passes `state`, so the fallback was the only route in. The specs
+  pin `NOW` alongside `TODAY` now (`bucket()` helper in `e2e/inbound.spec.js`).
 - Dates are compared as **strings** against `estToday()`. Both sides are `YYYY-MM-DD`, so
   string comparison IS date comparison, and it avoids the `new Date('YYYY-MM-DD')` trap
   that reads a day in the viewer's zone — the PH team's clock is a day ahead of the EST

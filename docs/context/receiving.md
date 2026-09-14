@@ -83,8 +83,24 @@ sticker bar sits above the checklist. Full rules: `docs/context/vin-stock.md`.
    the commit passes `boxNumber = box.box_number`, so `addBatchBox`'s find-or-create
    **reuses that row**. `+ Add box` (no `box`) still means a box that isn't listed at
    all — using it to continue a pending box is what left staff with an empty box
-   beside the one they meant to fill. Received boxes get no button (the box-commit
-   CAS would refuse them anyway).
+   beside the one they meant to fill. Received boxes get **Reopen box** instead (below) —
+   the box-commit CAS refuses a submitted box, so "Add items" would 409.
+   **Reopening a submitted box** (2026-09-12): *"I submitted box 3, then found two more
+   pairs in it"* had no route but `+ Add box`, which filed those pairs under a box number
+   that isn't on the carton. Now every received row (warehouse, batch open OR done) has
+   **Reopen box** → confirm → `POST /api/batches/reopen-box` → `reopenBatchBox`: the box
+   goes back to `pending` (its pairs stay — `commitBoxItems` only ever appends) and the
+   batch is reopened with it if the submission had finished it (add-box/box-commit refuse
+   a finished batch). The page then calls `onAddBox(batch, box)` straight away, so the
+   person lands in box-mode aimed at that box, same as continuing a pending one. On the
+   re-submit `commitBoxItems` keeps the ORIGINAL `received_by`/`received_at`
+   (`coalesce`) — the second-pass pairs carry their own `created_by` + intake event. A
+   pending row that already has pairs shows **"reopened"** rather than "pending" (which
+   the hint defines as "nothing scanned yet"). Reopening a box that isn't received is a
+   409. Note the PO side is untouched: a purchase order that already auto-closed on the
+   first submission keeps its reconciliation snapshot (`reconcileOutcomeForIntake` is
+   gated on `status = 'receiving'`), exactly as with **Reopen** on the batch — reopen the
+   PO separately if its count has to move. Guarded by `e2e/batch-continue-box.spec.js`.
    **Which number a new box gets is staff's call, not a counter's** (2026-08-14).
    `+ Add box` used to hard-code max+1, which is only right while boxes arrive in
    order: box 6 of 9 turning up a day after the rest was filed as **box 10** and

@@ -135,43 +135,63 @@ import { arrivalBucket, arrivalPlan, inboundProgress, addDays } from '../src/lib
 
 const TODAY = '2026-09-03';
 const due = (o) => box({ tracking_status: 'InTransit', ...o });
+// NOW is pinned as well as TODAY. Passing only TODAY left `arrivalBucket` deriving the
+// box's state off the real wall clock, so `last_move_at: daysAgo(1)` drifted further
+// from "1 day ago" every day the suite was not run — these passed for eight days and
+// then failed on their own, on a commit that touched nothing near them.
+const bucket = (b, today = TODAY) => arrivalBucket(b, today, null, NOW);
 
 test('out for delivery beats the carrier’s own estimate', () => {
   // The parcel is on a truck. Whatever a three-day window said this morning, it is
   // arriving today — the movement is better evidence than the promise.
-  expect(arrivalBucket(due({ tracking_status: 'OutForDelivery', eta_from: '2026-09-20' }), TODAY)).toBe('today');
+  expect(bucket(due({ tracking_status: 'OutForDelivery', eta_from: '2026-09-20' }))).toBe('today');
 });
 
 test('a quoted WINDOW counts as today on any day inside it', () => {
   // Carriers quote "Tue–Thu" as often as a date. Telling the floor "Tuesday" on
   // Wednesday helps nobody, and collapsing the window to its first day would put a
   // parcel on the list two days early.
-  expect(arrivalBucket(due({ eta_from: '2026-09-02', eta_to: '2026-09-04' }), TODAY)).toBe('today');
-  expect(arrivalBucket(due({ eta_from: '2026-09-03', eta_to: '2026-09-03' }), TODAY)).toBe('today');
+  expect(bucket(due({ eta_from: '2026-09-02', eta_to: '2026-09-04' }))).toBe('today');
+  expect(bucket(due({ eta_from: '2026-09-03', eta_to: '2026-09-03' }))).toBe('today');
 });
 
 test('a window that has passed is overdue, not "later"', () => {
-  expect(arrivalBucket(due({ eta_from: '2026-08-30', eta_to: '2026-09-01' }), TODAY)).toBe('overdue');
+  expect(bucket(due({ eta_from: '2026-08-30', eta_to: '2026-09-01' }))).toBe('overdue');
 });
 
 test('tomorrow, this week and later are separate answers', () => {
-  expect(arrivalBucket(due({ eta_from: '2026-09-04' }), TODAY)).toBe('tomorrow');
-  expect(arrivalBucket(due({ eta_from: '2026-09-08' }), TODAY)).toBe('this_week');
-  expect(arrivalBucket(due({ eta_from: '2026-09-10' }), TODAY)).toBe('this_week'); // exactly +7
-  expect(arrivalBucket(due({ eta_from: '2026-09-11' }), TODAY)).toBe('later');
+  expect(bucket(due({ eta_from: '2026-09-04' }))).toBe('tomorrow');
+  expect(bucket(due({ eta_from: '2026-09-08' }))).toBe('this_week');
+  expect(bucket(due({ eta_from: '2026-09-10' }))).toBe('this_week'); // exactly +7
+  expect(bucket(due({ eta_from: '2026-09-11' }))).toBe('later');
 });
 
 test('no estimate is "no date", never quietly folded into later', () => {
   // "Not for a while" and "we have no idea" are different answers, and only one of
   // them lets somebody stop planning around it.
-  expect(arrivalBucket(due({}), TODAY)).toBe('unknown');
+  expect(bucket(due({}))).toBe('unknown');
   // And nothing the carrier has never scanned gets a date it has not earned.
-  expect(arrivalBucket(box({ tracking_status: 'InfoReceived', eta_from: '2026-09-03' }), TODAY)).toBe('unknown');
-  expect(arrivalBucket(box({ tracking_number: '', eta_from: '2026-09-03' }), TODAY)).toBe('unknown');
+  expect(bucket(box({ tracking_status: 'InfoReceived', eta_from: '2026-09-03' }))).toBe('unknown');
+  expect(bucket(box({ tracking_number: '', eta_from: '2026-09-03' }))).toBe('unknown');
+});
+
+// The case the wall-clock leak was hiding. A label-only box that has sat long enough
+// derives as `investigate` rather than `with_supplier` — still a label with no parcel
+// behind it, and it was landing in "arriving today" off an estimate the carrier never
+// earned. The state alone is not enough to decide this, because `investigate` also
+// covers a parcel that WAS scanned and then went quiet.
+test('a label-only box that has gone stale still has no arrival date', () => {
+  const stale = { last_move_at: daysAgo(INVESTIGATE_DAYS + 1) };
+  expect(inboundState(box({ tracking_status: 'InfoReceived', ...stale }), NOW)).toBe('investigate');
+  expect(bucket(box({ tracking_status: 'InfoReceived', eta_from: '2026-09-03', ...stale }))).toBe('unknown');
+  expect(bucket(box({ tracking_status: 'InfoReceived', eta_from: '2026-09-20', ...stale }))).toBe('unknown');
+  // But a parcel the carrier DID scan and then lost sight of keeps its estimate, and
+  // "overdue" is the honest answer for it rather than "we have no idea".
+  expect(bucket(box({ tracking_status: 'InTransit', eta_from: '2026-08-28', eta_to: '2026-08-29', ...stale }))).toBe('overdue');
 });
 
 test('a delivered box has landed, whatever its estimate said', () => {
-  expect(arrivalBucket(box({ tracking_status: 'Delivered', eta_from: '2026-09-30' }), TODAY)).toBe('landed');
+  expect(bucket(box({ tracking_status: 'Delivered', eta_from: '2026-09-30' }))).toBe('landed');
 });
 
 test('the plan counts boxes AND pairs, and says how many it cannot count', () => {

@@ -6,8 +6,9 @@
 // `cart/close` re-evaluates them server-side, so a person is never told they can close
 // something the server will refuse.
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
-import { getPoReconciliation, userHasPrivilege } from './db.js';
+import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty } from './db.js';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
+import { decisionsOpen, decisionsClosedBecause } from '../../src/lib/buycartRules.js';
 
 // ---------------------------------------------------------------------------
 // Privileges — separation of duties
@@ -26,15 +27,26 @@ import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../
 //   issue_gift_cards  record and release cards against an approved request
 //   audit_buying      account for the spend and close a transaction out
 //
-// The BUYER (`supplier`) can hold none of them — db-setup strips any that are set. A
-// buyer with `approve_buying` would approve their own request, which is the single
-// thing this process exists to prevent.
+// The BUYER (`supplier`) can hold none of those three — db-setup strips any that are
+// set. A buyer with `approve_buying` would approve their own request, which is the
+// single thing this process exists to prevent.
+//
+//   request_buying    the BUYER'S side: raise a request and be funded for it
+//
+// This one is the opposite way round: it is the only privilege a supplier CAN hold,
+// and the only way a supplier reaches the process at all. Not every supplier buys for
+// the company — most only ship us boxes — so the buying screens are switched on per
+// account rather than handed to the whole role. Without it a supplier's portal simply
+// has no Buying Requests card, and every `api/cart/*` call answers 403.
 export const PRIVILEGES = [
   { key: 'approve_buying', label: 'Approve buying requests' },
   { key: 'issue_gift_cards', label: 'Issue gift cards' },
   { key: 'audit_buying', label: 'Audit + close transactions' },
+  { key: 'request_buying', label: 'Raise buying requests' },
 ];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
+// What a supplier may hold — everything else is stripped (setUserPrivileges, db:setup).
+export const BUYER_PRIVILEGE_KEYS = ['request_buying'];
 
 /**
  * Does this account hold a privilege, RIGHT NOW?
@@ -52,11 +64,28 @@ export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
 export async function hasPrivilege(user, priv) {
   if (!user) return false;
   if (isPrivileged(user.role)) return true;
-  // A buyer never holds one, whatever a stale row might say.
-  if (user.role === 'supplier') return false;
+  // A buyer never holds a staff duty, whatever a stale row might say — only its own.
+  if (user.role === 'supplier' && !BUYER_PRIVILEGE_KEYS.includes(priv)) return false;
   const uid = Number(user.uid);
   if (!Number.isInteger(uid) || uid <= 0) return false;
   return userHasPrivilege(uid, priv);
+}
+
+/**
+ * The buyer's gate. Every `api/cart/*` endpoint a supplier can reach calls this right
+ * after its role check: a supplier without `request_buying` is refused, read fresh from
+ * the database like every other privilege, so switching a buyer off takes effect on
+ * their next call rather than their next sign-in. Staff and admin pass straight through —
+ * their gates are the three duties above, per action.
+ *
+ * Returns true, or false after answering 403.
+ */
+export async function requireBuyerAccess(req, res, user) {
+  if (!user) return false;
+  if (user.role !== 'supplier' || isPrivileged(user.role)) return true;
+  if (await hasPrivilege(user, 'request_buying')) return true;
+  send(res, 403, { ok: false, error: 'Buying requests aren’t switched on for your account. Ask an admin to enable “Raise buying requests”.' });
+  return false;
 }
 
 /**
@@ -310,8 +339,144 @@ export async function hasCostPrivilege(user) {
  */
 export async function canWriteCosts(user, cart) {
   if (!user || !cart) return false;
-  if (user.role === 'supplier') return Number(cart.buyer_user_id) === Number(user.uid);
+  // NOT THE BUYER, as of 2026-09-11. They wrote it first for a while, and the argument
+  // was good — they are the one standing in the shop reading the tax off the register.
+  // What that missed is what the stack IS: the thing that turns a shelf price into a
+  // profit, and therefore the basis on which the request gets approved or turned down.
+  // That makes it the same kind of number as the buy call, and it belongs on the same
+  // side of the table (`canSeeBuyCall`). The buyer states one figure — what the ticket
+  // says — and the desk decides what it means.
+  if (user.role === 'supplier' && !isPrivileged(user.role)) return false;
   return hasCostPrivilege(user);
+}
+
+// ---------------------------------------------------------------------------
+// ONE decision path, two front doors
+//
+// A decision can arrive from the screen (`cart/decide`, a signed-in approver) or from a
+// Telegram button (`cart/telegram-decide`, Make.com holding an API key). They must reach
+// the same code: two decide paths that drift would eventually let a tap record something
+// the screen would have refused, and the screen is where the audit gets read.
+//
+// So this holds everything between "who is asking" and "write it down" — the window
+// check, the quantity rule, and the words each refusal uses.
+export async function decideLines({ cart, action, lineIds, all, qtyById, qtyAll, reason, actor }) {
+  // The same predicate the screen draws its buttons from. Before the buyer sends it there
+  // is nothing to decide; once the cards are out the approvals are what the money was
+  // released against.
+  if (!decisionsOpen(cart.status)) return { error: decisionsClosedBecause(cart.status), code: 409 };
+
+  if (!all && (!Array.isArray(lineIds) || !lineIds.length))
+    return { error: 'Pick at least one line, or use approve-all.', code: 400 };
+
+  // HOW MANY is part of approving. Refused BY NAME rather than defaulted to one: a line
+  // approved without a number is a line the funding total would value at whatever
+  // happened to be in the column, and "we approved one of those" is not a thing anybody
+  // said. A rejection needs no quantity — there is nothing to buy.
+  if (action === 'approve') {
+    const missing = await linesAwaitingQty(cart.id, all ? null : lineIds, qtyById, qtyAll);
+    if (missing.length)
+      return {
+        code: 400,
+        error: `Say how many to buy: ${missing.length} line${missing.length === 1 ? ' has' : 's have'} no quantity (${missing.slice(0, 3).map((l) => `${l.sku}${l.size ? ` size ${l.size}` : ''}`).join(', ')}${missing.length > 3 ? '…' : ''}).`,
+      };
+  }
+
+  const out = await decideBuyCartLines({
+    cartId: cart.id, lineIds: all ? null : lineIds, action,
+    reason: String(reason ?? '').trim().slice(0, 500) || null,
+    actor, qtyById, qtyAll,
+  });
+  if (!out.decided)
+    return { error: 'Nothing was still awaiting a decision — someone may have got there first.', code: 409 };
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The buy call is OURS, not the buyer's
+//
+// A line's call — the BUY/WATCH/PASS verdict, the profit and ROI, the payout and the
+// Alias/StockX prices it was computed from — is what the approver is judging. The buyer
+// is the party being judged, and the person asking for the money should not be able to
+// read the number that decides whether they get it: knowing a pair reads as a $60
+// profit is knowing exactly how much room there is to argue, and knowing it reads as a
+// Pass before you have asked is knowing not to bother asking honestly.
+//
+// The buyer is not left blind about the market in general — the supplier portal carries
+// the Payout Calculator, scoped to their own preset. What is withheld is OUR call on
+// THEIR request.
+//
+// This has to be a server rule and not a hidden column. Three things follow from it and
+// all three are enforced rather than styled away:
+//   · `cart/get` strips the call from a supplier's copy of a request, and from the
+//     event trail, which used to print the verdict in plain words.
+//   · `cart/price-line` refuses a supplier — writing a call you cannot read is not a
+//     thing to allow, and the response hands back live market prices.
+//   · `cart/line` IGNORES any call a supplier posts and reads the market itself. The
+//     buyer's browser used to compute the verdict and send it, which meant the party
+//     requesting the money supplied the figures justifying it. That was a hole in the
+//     control before it was a visibility question.
+export const canSeeBuyCall = (user) => !!user && (user.role !== 'supplier' || isPrivileged(user.role));
+
+// The fields that ARE the call. `final_cost` IS among them now: it used to be excluded
+// on the grounds that it was the buyer's own shelf price run through a stack they could
+// read and edit — and once the stack moved to the desk (`canWriteCosts`), what a pair
+// "lands at" became a number derived entirely from figures the buyer cannot see. Showing
+// it would hand them our cost structure one subtraction at a time.
+const CALL_FIELDS = [
+  'verdict', 'profit', 'roi', 'best_platform', 'best_payout',
+  'alias_price', 'stockx_price', 'liquidity', 'final_cost',
+];
+
+// The trail says a line was priced and by whom, but not to what. A record that
+// disappears for one reader is worse than one that is brief: the buyer can still see
+// that somebody re-read the market against their request, and when.
+const CALL_EVENT_BODY = {
+  line_priced: 'Priced. The figures are on the approver’s copy of this request.',
+};
+
+/**
+ * One LINE, as a supplier may see it. A no-op for everybody else.
+ *
+ * Endpoints hand a line straight back after adding or editing it, and that copy has to
+ * be redacted for the same reason the request is — otherwise the call arrives in the
+ * response to the very act of adding the pair.
+ */
+export function redactLineForViewer(line, user) {
+  if (!line || canSeeBuyCall(user)) return line;
+  const out = { ...line };
+  for (const f of CALL_FIELDS) out[f] = null;
+  return out;
+}
+
+/**
+ * One request, as a supplier may see it. A no-op for everybody else.
+ *
+ * Applied at the read boundary rather than in each query, so a new caller of
+ * `getBuyCartFull` cannot forget it.
+ */
+export function redactCartForViewer(cart, user) {
+  if (!cart || canSeeBuyCall(user)) return cart;
+  return {
+    ...cart,
+    // The stack itself, not just what it produces. Discounts, cashback and the tip we
+    // pay are how the company buys — a supplier who can read them can price against them.
+    cost_stack: null,
+    lines: (cart.lines || []).map((l) => {
+      const out = { ...l };
+      for (const f of CALL_FIELDS) out[f] = null;
+      return out;
+    }),
+    events: (cart.events || []).map((e) => {
+      if (CALL_EVENT_BODY[e.kind]) return { ...e, body: CALL_EVENT_BODY[e.kind] };
+      // `line_added` used to end "— buy". The verdict was never the point of that line
+      // (it says what was added, and for how much); it is stripped rather than the whole
+      // entry being replaced.
+      if (e.kind === 'line_added' && typeof e.body === 'string')
+        return { ...e, body: e.body.replace(/\s+—\s+(buy|watch|pass)\s*$/i, '') };
+      return e;
+    }),
+  };
 }
 
 /**

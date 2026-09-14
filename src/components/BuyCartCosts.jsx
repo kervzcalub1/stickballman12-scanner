@@ -1,6 +1,6 @@
 // The request's cost stack — what a pair on it actually costs the company.
 //
-// Every "Lands at" on the request is this stack applied to a shelf price, so when it is
+// Every cost-per-unit figure on the request is this stack applied to a shelf price, so when it is
 // empty the screen quietly stops saying anything: each pair lands at exactly its
 // sticker, no payout clears a threshold, and the Call column is blank on every line. And
 // empty is the NORMAL state for a new buyer — the stack is snapshotted from the buyer's
@@ -140,7 +140,7 @@ export function BuyCartCosts({ cart, canEdit, onChanged, onSignOut }) {
 
       {isEmpty(stack) && !editing && (
         <p className="bc-costs-none">
-          No costs are on this request, so every pair “lands at” its shelf price and no buy
+          No costs are on this request, so every pair costs exactly its shelf price and no buy
           call can be made. {canEdit ? 'Enter what the store actually charges — discounts, tax, shipping — and every line re-prices.'
             : 'Somebody who can approve or audit this request needs to enter them.'}
         </p>
@@ -226,7 +226,7 @@ export function BuyCartCosts({ cart, canEdit, onChanged, onSignOut }) {
       <div className="bc-costs-foot">
         <span className="bc-costs-effect">
           {shelfTotal > 0
-            ? <>{money(shelfTotal)} on the shelf lands at <b>{money(landedTotal)}</b>{editing ? ' with these rates' : ''}</>
+            ? <>{money(shelfTotal)} on the shelf costs us <b>{money(landedTotal)}</b>{editing ? ' with these rates' : ''}</>
             : 'Nothing on the request to cost yet.'}
         </span>
         <span className="bc-costs-spacer" />

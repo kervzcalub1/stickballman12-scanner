@@ -64,6 +64,14 @@ export default defineConfig({
     //
     // CAVEAT: `reuseExistingServer` means a server YOU started (with real .env) is used
     // as-is. Don't hand-start one on this port and then run the suite against it.
-    env: { TRACKING_API_KEY: '' },
+    //
+    // MAKE_WEBHOOK_URL goes the same way, and for a closer version of the same story: a
+    // buyer's add POSTs a Telegram approval card, so every local run put cards in front
+    // of the desk for pairs nobody is buying — and teardown then deleted the request, so
+    // tapping one answered "that buying request does not exist". Blanked here rather than
+    // guarded in the code on APP_ENV, because that guard cannot tell this suite from a
+    // developer's own `npm run dev` and silently swallowed a real person's cards for half
+    // an hour.
+    env: { TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '' },
   },
 });

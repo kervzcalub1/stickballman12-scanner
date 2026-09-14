@@ -23,7 +23,8 @@ import {
   getBuyCart, getBuyCartFull, getCartPackState, getPoBox, getPo, addPoScan,
   setPoLineQty, logCartEvent, dbConfigured,
 } from '../_lib/db.js';
-import { cartVisibleTo, hasCostPrivilege } from '../_lib/buycart.js';
+import { cartVisibleTo, hasCostPrivilege, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
+import { declaresPerBox } from '../../src/lib/postatus.js';
 
 const norm = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -32,6 +33,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const user = requireAuth(req, res);
   if (!user) return;
+  if (!(await requireBuyerAccess(req, res, user))) return;
   if (blockIfMustChange(user, res)) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
@@ -77,8 +79,11 @@ export default async function handler(req, res) {
       return send(res, 409, { ok: false, error: 'That box is closed for shipment. Reopen it on the order before changing what is in it.' });
 
     const po = await getPo(cart.po_id);
-    if (po && po.manifest_scope === 'po')
-      return send(res, 409, { ok: false, error: 'This order was raised with a whole-order manifest and cannot be packed box by box.' });
+    // 'order+box' is the shape every cart order now has: the receipt sits on the order and
+    // the buyer packs it into boxes. Only a PURE whole-order list (Path C — a supplier who
+    // gave one sheet and no per-box breakdown) has nothing to pack into.
+    if (po && !declaresPerBox(po))
+      return send(res, 409, { ok: false, error: 'This order carries a whole-order manifest only and cannot be packed box by box.' });
 
     // THE CEILING. What the receipt says was bought, minus what is already in a box.
     const state = await getCartPackState(cartId);
@@ -128,7 +133,7 @@ export default async function handler(req, res) {
       body: `${qty > 0 ? 'Packed' : 'Removed'} ${Math.abs(qty)} × ${sku}${size ? ` ${size}` : ''} ${qty > 0 ? 'into' : 'from'} box ${box.box_number ?? poBoxId}`,
     });
 
-    return send(res, 200, { ok: true, cart: await getBuyCartFull(cartId) });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(await getBuyCartFull(cartId), user) });
   } catch (e) {
     console.error('[cart/pack]', e.message);
     return send(res, 500, { ok: false, error: 'Could not pack that pair.' });

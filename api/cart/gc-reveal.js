@@ -14,7 +14,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireAuth, isPrivileged, blockIfMustChange } from '../_lib/util.js';
 import { getBuyCart, getBuyCartGiftCardSecret, logCartEvent, dbConfigured } from '../_lib/db.js';
 import { decryptSecret, secretsConfigured } from '../_lib/secrets.js';
-import { hasPrivilege } from '../_lib/buycart.js';
+import { hasPrivilege, requireBuyerAccess } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -25,6 +25,7 @@ export default async function handler(req, res) {
   // authorise first and branch below.
   const user = requireAuth(req, res);
   if (!user) return;
+  if (!(await requireBuyerAccess(req, res, user))) return;
   if (blockIfMustChange(user, res)) return;
   const isBuyer = user.role === 'supplier' && !isPrivileged(user.role);
   if (!isBuyer && !(await hasPrivilege(user, 'issue_gift_cards')))

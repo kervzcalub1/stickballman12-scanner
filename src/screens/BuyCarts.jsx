@@ -7,6 +7,7 @@
 // mode this screen exists to prevent.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { poHref } from '../lib/poLink.js';
 import { TopBar, FormModal } from '../components/common.jsx';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -82,7 +83,10 @@ export function BuyCarts({ user, onHome, onSignOut }) {
 
   return (
     <div className="app bc-list">
-      <TopBar title={isBuyer ? 'Buying requests' : 'Gift card buying'} onHome={onHome} onSignOut={onSignOut}
+      {/* One name on both sides. The staff half used to say "Gift card buying", which
+          named the funding rather than the process — the buyer is asking to purchase
+          stock, and the cards are how we pay for it. */}
+      <TopBar title="Buying requests" onHome={onHome} onSignOut={onSignOut}
         right={isBuyer ? <button className="btn sm primary" onClick={() => setAsking(true)}>New request</button> : null} />
 
       {asking && (
@@ -185,7 +189,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                     <span>{c.retailer || '—'}</span>
                     {!isBuyer && c.buyer_name && <span>· {c.buyer_name}</span>}
                     <span>· {estDate(c.created_at)}</span>
-                    {c.po_code && <span>· {c.po_code}</span>}
+                    {c.po_code && <span>· <a className="bc-po-link" href={poHref(user, c.po_id)} onClick={(e) => e.stopPropagation()}>{c.po_code}</a></span>}
                   </span>
                   <span className="bc-card-money">
                     <span><i>Approved</i> {money(c.approved_amount)}</span>
@@ -220,7 +224,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                     <td className="num">{money(c.approved_amount)}</td>
                     <td className="num">{money(c.gc_total)}</td>
                     <td><span className={`po-chip ${s.cls}`}>{s.label}</span></td>
-                    <td>{c.po_code || '—'}</td>
+                    <td>{c.po_code ? <a className="bc-po-link" href={poHref(user, c.po_id)} onClick={(e) => e.stopPropagation()}>{c.po_code}</a> : '—'}</td>
                     <td className="muted sm">{estDate(c.created_at)}</td>
                   </tr>
                 );

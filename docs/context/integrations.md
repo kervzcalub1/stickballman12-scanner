@@ -32,6 +32,17 @@ full behaviour, and how the warehouse picks one, in `receiving.md`.
 > lookup takes `variants[0]`, so the **scanned size is a guess** on such a code — Review
 > is where that gets caught, as with any other wrong-product answer.
 
+## Public, no-auth endpoints (rate-limited per IP; prod needs a real `User-Agent`)
+| Endpoint | Answers |
+|---|---|
+| `GET\|POST /api/sku-lookup?sku=` | **what shoe a style code IS** — name, brand, colorway, gender, image, `catalogId`, size run, from the official Alias catalogue (`aliasCatalogBySku`, one upstream call). 404 for an unknown code, 504 on a catalogue timeout. Never anything from our stock (`e2e/sku-lookup.spec.js`). Added 2026-09-15 for outside tools that only have a SKU. |
+| `GET\|POST /api/get-price?sku=[&size=]` | Alias pricing per size, both bases × global/lowest/last-sold/highest, plus the ranked hierarchy |
+| `GET\|POST /api/gi-check?sku=[&size=]` | the Global Indicator only (older, narrower) |
+| `GET\|POST /api/track?number=` | latest 17TRACK status |
+
+There is deliberately **no public endpoint for our own inventory** (units, cost,
+location); those stay behind a session or an API key.
+
 ## Alias client (`api/_lib/alias.js`)
 - Shared: `aliasLogin, getAliasToken, clearAliasToken, looksLikeAuthFailure,
   aliasAuthed(fn), aliasPost(path,body)`.

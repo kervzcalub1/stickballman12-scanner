@@ -5,7 +5,7 @@
 // (thresholds, new carrier statuses). Pinning it here means a tweak that quietly
 // reclassifies half the warehouse's shipments fails in CI rather than on the floor.
 import { test, expect } from '@playwright/test';
-import { inboundState, groupShipments, countStates, needsAttention, STALL_DAYS, INVESTIGATE_DAYS }
+import { inboundState, groupShipments, countStates, shipmentHasState, needsAttention, STALL_DAYS, INVESTIGATE_DAYS }
   from '../src/lib/inbound.js';
 
 const NOW = Date.parse('2026-09-03T12:00:00Z');
@@ -85,6 +85,22 @@ test('counts and needsAttention agree with the states', () => {
   expect(needsAttention('investigate')).toBe(true);
   expect(needsAttention('delivered')).toBe(false);
   expect(needsAttention('in_transit')).toBe(false);
+});
+
+test('a state chip matches any box in that state, so its count and its list agree', () => {
+  // One order: four boxes on the truck behind one with no number. Worst state is
+  // "no tracking", but the "out for delivery" chip says 4 and must not list nothing.
+  const rows = [
+    ...[1, 2, 3, 4].map((n) => ({ po_id: 1, box_id: n, tracking_number: `T${n}`, tracking_status: 'OutForDelivery', last_move_at: daysAgo(0) })),
+    { po_id: 1, box_id: 5, tracking_number: '', tracking_status: null, last_move_at: null },
+  ];
+  const shipments = groupShipments(rows, NOW);
+  expect(shipments[0].state).toBe('no_tracking');
+  expect(countStates(rows, NOW).out).toBe(4);
+  expect(shipments.filter((s) => shipmentHasState(s, 'out'))).toHaveLength(1);
+  expect(shipments.filter((s) => shipmentHasState(s, 'no_tracking'))).toHaveLength(1);
+  expect(shipments.filter((s) => shipmentHasState(s, 'delivered'))).toHaveLength(0);
+  expect(shipments.filter((s) => shipmentHasState(s, ''))).toHaveLength(1);
 });
 
 test('the feed is auth-gated', async ({ request }) => {

@@ -109,6 +109,12 @@ can be due today *and* stuck, and a delayed box has no meaningful arrival date t
 under. Both filter the list below, and they combine. `?due=today` is in the URL like the
 other filters, so "look at what lands today" is a link you can send.
 
+Both strips count **boxes**, so a chip matches a shipment holding **any** box in that
+state/bucket (`shipmentHasState`, `inDue`) — never the shipment's *worst* state. The
+first cut filtered on `s.state === filter`: four boxes out for delivery behind one
+untracked box graded the order "no tracking", the chip said 4, and the list said
+"Nothing in that state." Pinned in `e2e/inbound.spec.js`.
+
 `inboundProgress` is the bar under the headline: landed boxes over everything still
 inbound, in the current filter scope.
 

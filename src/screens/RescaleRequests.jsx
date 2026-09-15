@@ -393,8 +393,11 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                       "Aug 18" next to the text "8/19 12:18 AM" for anyone outside EST —
                       which is most of the PH team. Same formatter the PH grid uses. */}
                   Requested by {r.requested_by || '—'} · {PH_DATETIME.format(new Date(r.created_at))} EST
-                  {r.status === 'audited' && r.resolved_by ? ` · audited by ${r.resolved_by}` : ''}
-                  {r.status === 'cancelled' && r.resolved_by ? ` · cancelled by ${r.resolved_by}` : ''}
+                  {/* WHEN the warehouse counted is half of what an audit means — a count
+                      from last week answers a different question than one from this
+                      morning. Same EST stamp as the request itself. */}
+                  {r.status === 'audited' && r.resolved_by ? ` · audited by ${r.resolved_by}${r.resolved_at ? ` on ${PH_DATETIME.format(new Date(r.resolved_at))} EST` : ''}` : ''}
+                  {r.status === 'cancelled' && r.resolved_by ? ` · cancelled by ${r.resolved_by}${r.resolved_at ? ` on ${PH_DATETIME.format(new Date(r.resolved_at))} EST` : ''}` : ''}
                   {/* Said out loud to BOTH teams: the warehouse may be looking at a
                       printed or stale copy of numbers that have since changed. */}
                   {r.edited_by ? ` · edited by ${r.edited_by}${r.edited_at ? ` on ${PH_DATETIME.format(new Date(r.edited_at))} EST` : ''}` : ''}

@@ -39,7 +39,9 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
 - **PH cancels a request** it raised in error / no longer needs →
   `api/rescale-requests/cancel.js` (`cancelRescaleRequest`). Status → `cancelled`,
   with an optional reason (`cancel_note`, shown to both teams) and
-  `resolved_by`/`resolved_at` reused for who ended it and when — `status` says *how*
+  `resolved_by`/`resolved_at` reused for who ended it and when — `status` says *how*.
+  Both are SHOWN on the request card ("audited by X on MM/DD h:mm AM EST", same for
+  cancelled; 2026-09-16) and in the PH Rescale tab's expanded row + ✓ Counted tooltip
   it ended, so only the reason needed a new column.
   - **PH team only, and deliberately NOT via `requireRole`** — that auto-allows admin,
     and withdrawing a request is the requesting team's own call. Same explicit

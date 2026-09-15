@@ -409,6 +409,20 @@ test('a receipt found by its number in the mailbox lands in the same review tabl
   const own = await call(request, 'buyer', 'cart/receipt-email', { cartId, transactionId: '179364' });
   expect(own.status).toBe(503);
   expect(own.body.error).toMatch(/not configured/);
+
+  // A value pasted with a newline is still the URL; a value that is not a URL at all is
+  // a misconfiguration, said as one. Neither is "could not search".
+  const { hookUrl, receiptEmailMisconfigured } = await import('../api/cart/receipt-email.js');
+  const prev = process.env.MAKE_RECEIPT_PARSER_URL;
+  try {
+    process.env.MAKE_RECEIPT_PARSER_URL = ' https://hook.us2.make.com/abc\n';
+    expect(hookUrl()).toBe('https://hook.us2.make.com/abc');
+    expect(receiptEmailMisconfigured()).toBe(false);
+    process.env.MAKE_RECEIPT_PARSER_URL = 'MAKE_RECEIPT_PARSER_URL=https://hook.us2.make.com/abc';
+    expect(receiptEmailMisconfigured()).toBe(true);
+    process.env.MAKE_RECEIPT_PARSER_URL = 'http://hook.us2.make.com/abc';
+    expect(receiptEmailMisconfigured()).toBe(true);
+  } finally { process.env.MAKE_RECEIPT_PARSER_URL = prev; }
 });
 
 test('the receipt checks the reading against its own arithmetic', async () => {

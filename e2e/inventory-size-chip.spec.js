@@ -66,7 +66,6 @@ test('tapping a size chip narrows the row to that size, and again widens it', as
   await expect(detail.getByRole('button', { name: /Print labels \(4\)/ })).toBeVisible();
   await expect(detail.locator('.szq-chip.pick.on')).toHaveCount(0);
   await detail.locator('.szq-chip.pick', { hasText: '7W' }).click();
-  await page.screenshot({ path: '/Users/kervz/.claude/jobs/42ada988/tmp/size-chip.png' });
   await detail.getByRole('button', { name: /Show all 4/ }).click();
   await expect(detail.locator('.inv-unit-row')).toHaveCount(4);
   // …and the row stayed open throughout — a chip never toggles the accordion shut.

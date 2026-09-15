@@ -95,6 +95,13 @@ test('the modal pre-fills the row own per-size counts, and sends a request the w
   const [after] = await q('SELECT status, actual_sizes FROM rescale_requests WHERE id = $1', [req.id]);
   expect(after.status).toBe('audited');
   expect(after.actual_sizes).toEqual([{ size: '9', qty: 2 }, { size: '10', qty: 1 }]);
+
+  // The request card says WHO counted and WHEN, in EST — a count from last week answers
+  // a different question than one from this morning.
+  await page.goto('/rescalereq');
+  await page.getByRole('button', { name: 'Audited' }).click();
+  const card = page.locator('.rr-card, .card', { hasText: 'Counted the shelf' }).first();
+  await expect(card).toContainText(/audited by .+ on \d\d\/\d\d, \d{1,2}:\d\d [AP]M EST/);
 });
 
 test('a SKU with an open request is chipped, and warns before a second one', async ({ page }) => {

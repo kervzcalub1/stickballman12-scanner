@@ -859,7 +859,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     const over = rows.reduce((n, x) => n + (x.delta != null && x.delta > 0 ? x.delta : 0), 0);
     return (
       <>
-        <span className="ph-rescale-chip ready" title={`Counted by ${r.resolved_by || 'the warehouse'}. Finish listing, then mark the rescale done.`}>✓ Counted</span>
+        <span className="ph-rescale-chip ready" title={`Counted by ${r.resolved_by || 'the warehouse'}${r.resolved_at ? ` on ${PH_DATETIME.format(new Date(r.resolved_at))} EST` : ''}. Finish listing, then mark the rescale done.`}>✓ Counted</span>
         {short > 0 && <span className="ph-rescale-chip short" title="We hold more on file than the shelf holds">{short} short</span>}
         {over > 0 && <span className="ph-rescale-chip over" title="The shelf holds more than we track — often stock that predates this system">{over} extra</span>}
       </>

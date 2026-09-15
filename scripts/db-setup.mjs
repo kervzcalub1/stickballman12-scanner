@@ -485,6 +485,44 @@ await sql(`
 `);
 await sql(`CREATE INDEX IF NOT EXISTS deleted_items_sku_idx ON deleted_items (sku)`);
 await sql(`CREATE INDEX IF NOT EXISTS deleted_items_vin_idx ON deleted_items (vin)`);
+
+// A deleted BATCH and a deleted BUYING REQUEST leave a tombstone the same way a deleted
+// pair does (2026-09-16): the whole row as JSON plus everything that hung off it, so the
+// delete is a delete and not a silent loss of record. The pairs of a deleted batch go
+// through deleteItems and land in deleted_items individually; this row is the batch
+// itself. A request's snapshot never carries a card code — code_enc is stripped, only
+// the last four survive, the same as the request page shows.
+await sql(`
+  CREATE TABLE IF NOT EXISTS deleted_batches (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    batch_id    BIGINT,
+    batch_code  TEXT,
+    supplier    TEXT,
+    kind        TEXT,
+    po_id       BIGINT,
+    unit_count  INT,
+    reason      TEXT,
+    batch_json  JSONB NOT NULL,
+    deleted_by  TEXT,
+    deleted_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS deleted_buy_carts (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cart_id       BIGINT,
+    cart_code     TEXT,
+    buyer_name    TEXT,
+    status        TEXT,
+    gc_total      NUMERIC(12,2),
+    card_count    INT,
+    reason        TEXT,
+    cart_json     JSONB NOT NULL,
+    deleted_by    TEXT,
+    deleted_by_id BIGINT,
+    deleted_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
 await sql(`CREATE INDEX IF NOT EXISTS deleted_items_when_idx ON deleted_items (deleted_at DESC)`);
 
 // Future — profit tracking. Schema now, UI later.

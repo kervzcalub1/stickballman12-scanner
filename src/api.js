@@ -131,6 +131,7 @@ export const api = {
   openBatches: () => get('/api/batches/open-list'),
   batchFull: (id) => get(`/api/batches/full?id=${encodeURIComponent(id)}`),
   batchSetStatus: (id, status) => post('/api/batches/set-status', { id, status }),
+  batchDelete: (batchId, reason) => post('/api/batches/delete', { batchId, reason }),
   // v6 — listing photos (per SKU, stored in Cloudflare R2)
   photoList: (sku) => get(`/api/photos/list?sku=${encodeURIComponent(sku)}`),
   // `source` (optional) = 'warehouse' (default) | 'ph_edited'. Omit for warehouse capture.
@@ -307,6 +308,7 @@ export const api = {
   cartAuditGoods: (cartId, note) => post('/api/cart/audit', { cartId, scope: 'goods', note }),
   cartClose: (cartId) => post('/api/cart/close', { cartId }),
   cartCancel: (cartId, reason) => post('/api/cart/close', { cartId, cancel: true, reason }),
+  cartDelete: (cartId, reason) => post('/api/cart/delete', { cartId, reason }),
   // A documented loss — its own ending, never a force-close wearing `closed`.
   cartWriteOff: (cartId, reason) => post('/api/cart/close', { cartId, writeOff: true, reason }),
   // Packing the receipt into boxes. A negative qty takes a pair back out of a box.

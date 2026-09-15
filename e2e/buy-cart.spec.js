@@ -859,6 +859,59 @@ test('every row a reader produced has to be ticked by a person before the lines 
   await pool.query('DELETE FROM buy_carts WHERE id = $1', [cartId]);
 });
 
+// Delete, as distinct from cancel (2026-09-16). Anyone who can reach a request may
+// delete it — until money is on it. From then the buyer who asked for the money cannot
+// erase the record; only an approver can. Both halves are the server's, not a button's.
+test('a request can be deleted by whoever can reach it — until cards are issued, then only an approver', async ({ request }) => {
+  const seed = async (purpose, status = 'submitted') => Number((await pool.query(
+    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total)
+     VALUES ($1,$2,'E2E Store',$3,$4,100,0) RETURNING id`,
+    [people.buyer.uid, people.buyer.name, purpose, status])).rows[0].id);
+
+  // No money on it: the buyer deletes their own, and a tombstone is left.
+  const mine = await seed('E2E delete: buyer, no cards');
+  const notMine = await call(request, 'buyer2', 'cart/delete', { cartId: mine, reason: 'nope' });
+  expect(notMine.status).toBe(403);
+  const gone = await call(request, 'buyer', 'cart/delete', { cartId: mine, reason: 'Raised twice' });
+  expect(gone.status).toBe(200);
+  expect((await pool.query('SELECT 1 FROM buy_carts WHERE id = $1', [mine])).rowCount).toBe(0);
+  const tomb = (await pool.query('SELECT cart_json, reason, deleted_by, card_count FROM deleted_buy_carts WHERE cart_id = $1', [mine])).rows[0];
+  expect(tomb.reason).toBe('Raised twice');
+  expect(tomb.deleted_by).toBe(people.buyer.name);
+  expect(tomb.cart_json.purpose).toBe('E2E delete: buyer, no cards');
+  expect(tomb.card_count).toBe(0);
+
+  // Money on it: a card was issued. The buyer is refused and told who can; so is the
+  // issuing desk (not an approver); the approver can.
+  const carded = await seed('E2E delete: carded', 'approved');
+  await call(request, 'issuer', 'cart/gift-card', { cartId: carded, card: { code: '9999888877776666', balance: 100 } });
+  const buyerTry = await call(request, 'buyer', 'cart/delete', { cartId: carded, reason: 'x' });
+  expect(buyerTry.status).toBe(403);
+  expect(buyerTry.body.error).toMatch(/only an approver/i);
+  const issuerTry = await call(request, 'issuer', 'cart/delete', { cartId: carded, reason: 'x' });
+  expect(issuerTry.status).toBe(403);
+  const approverGo = await call(request, 'approver', 'cart/delete', { cartId: carded, reason: 'Test card, never used' });
+  expect(approverGo.status).toBe(200);
+  expect((await pool.query('SELECT 1 FROM buy_cart_gift_cards WHERE cart_id = $1', [carded])).rowCount).toBe(0);
+  const tomb2 = (await pool.query('SELECT cart_json, card_count FROM deleted_buy_carts WHERE cart_id = $1', [carded])).rows[0];
+  expect(tomb2.card_count).toBe(1);
+  // The archive keeps the card's last four and never its code.
+  expect(tomb2.cart_json.giftCards[0].code_last4).toBe('6666');
+  expect(JSON.stringify(tomb2.cart_json)).not.toMatch(/code_enc|9999888877776666/);
+
+  // A request that raised an order is refused: the order has its own delete.
+  const withPo = await seed('E2E delete: has PO', 'funded');
+  const po = (await pool.query(`INSERT INTO purchase_orders (po_code, supplier_name, status) VALUES ($1, 'E2E', 'draft') RETURNING id`, [`PO-E2EDEL-${Date.now() % 100000}`])).rows[0];
+  await pool.query('UPDATE buy_carts SET po_id = $1 WHERE id = $2', [po.id, withPo]);
+  const poTry = await call(request, 'approver', 'cart/delete', { cartId: withPo, reason: 'x' });
+  expect(poTry.status).toBe(409);
+  expect(poTry.body.error).toMatch(/purchase order/i);
+
+  await pool.query('DELETE FROM buy_carts WHERE id = $1', [withPo]);
+  await pool.query('DELETE FROM purchase_orders WHERE id = $1', [po.id]);
+  await pool.query('DELETE FROM deleted_buy_carts WHERE cart_id = ANY($1)', [[mine, carded]]);
+});
+
 test('a request needs a purpose and a store before it can be sent', async ({ request }) => {
   const { body } = await call(request, 'buyer', 'cart/create', {});
   const cartId = Number(body.cart.id);

@@ -5,7 +5,7 @@
 // main place to START a batch (expected boxes + tag live there).
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar, StatusPill, Modal, Pager } from '../components/common.jsx';
+import { TopBar, StatusPill, Modal, Pager, FormModal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
@@ -68,6 +68,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   // The SUBMITTED box being reopened for more pairs — "I submitted box 3, then found
   // two more pairs in it". Confirmed, it goes straight into scanning that box.
   const [reopenBox, setReopenBox] = useState(null); // { box, err? }
+  const [deleting, setDeleting] = useState(false);   // the "Delete this batch" modal
   // The box whose number is being corrected, + the number typed for it.
   const [renumber, setRenumber] = useState(null); // { box, value }
   // The number on the parcel, kept in ?q= so "the batch this box belongs to" is a link
@@ -402,9 +403,32 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
               <button className="btn ghost sm" disabled={!!reportBusy} onClick={() => downloadReport('csv')}>
                 <Icon name="download" /> {reportBusy === 'csv' ? 'Building…' : 'CSV'}
               </button>
+              {/* The whole batch, pairs and all — through the same archive "Remove
+                  pairs" uses, plus a tombstone for the batch itself. The server refuses
+                  it while any pair is sold or shipped. */}
+              {!readOnly && (
+                <button className="btn ghost sm danger" onClick={() => setDeleting(true)} title="Delete this batch and every pair in it">
+                  Delete batch…
+                </button>
+              )}
             </div>
           </div>
         </div>
+        {deleting && (
+          <FormModal
+            title={`Delete ${b.batch_code}?`}
+            message={`Every pair in this batch (${(detail.items || []).length}) is removed to the Deleted archive, along with its ${boxes.length} box${boxes.length === 1 ? '' : 'es'} and the batch itself. Counts, the PO's received total and the pending queues all move. It cannot be undone from here. A batch with a sold or shipped pair is refused.`}
+            submitLabel="Delete the batch" danger
+            onClose={() => setDeleting(false)}
+            onSubmit={async ({ reason }) => {
+              await api.batchDelete(b.id, reason.trim());
+              setDeleting(false);
+              closeBatch();
+              loadLists();
+            }}
+            fields={[{ name: 'reason', label: 'Why is this being deleted?', type: 'textarea', required: true,
+              placeholder: 'e.g. Scanned in twice — B-000412 is the real one' }]} />
+        )}
 
         {(boxes.length > 0 || expected || (isOpen && !readOnly)) && (
         <div className="card">

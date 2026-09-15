@@ -841,6 +841,22 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
             <button className="btn danger" disabled={busy === 'cx'}
               onClick={() => setAsking('cancel')}>Cancel</button>
           )}
+          {/* Delete, as distinct from cancel: the record goes (archived server-side).
+              Open to everyone who can reach the request, with one exception the server
+              enforces and the button says out loud — once cards have been issued the
+              buyer cannot erase the record of the money, only an approver can. An order
+              already raised has its own delete. */}
+          {(() => {
+            const carded = (cart.giftCards || []).length > 0 || Number(cart.gc_total) > 0;
+            const blockedForMe = carded && !mayDecide;
+            const why = cart.po_id ? 'This request raised a purchase order — delete the order first.'
+              : blockedForMe ? 'Gift cards have been issued on this request — only an approver can delete it.'
+                : undefined;
+            return (
+              <button className="btn ghost danger" disabled={busy === 'del' || !!why} title={why}
+                onClick={() => setAsking('delete')}>Delete…</button>
+            );
+          })()}
         </div>
         {err && <div className="error mt">{err}</div>}
 
@@ -875,6 +891,20 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
             }}
             fields={[{ name: 'reason', label: 'Why is this being cancelled?', type: 'textarea', required: true,
               placeholder: 'e.g. Buyer got to the store and the price had gone back up' }]} />
+        )}
+
+        {asking === 'delete' && (
+          <FormModal
+            title={`Delete ${cart.cart_code}?`}
+            message={`The request, its ${(cart.lines || []).length} line${(cart.lines || []).length === 1 ? '' : 's'}${(cart.giftCards || []).length ? `, ${(cart.giftCards || []).length} gift card${(cart.giftCards || []).length === 1 ? '' : 's'}` : ''}${(cart.files || []).length ? ` and ${(cart.files || []).length} file${(cart.files || []).length === 1 ? '' : 's'}` : ''} are removed. A copy is kept in the archive, but it cannot be undone from here. To keep it on the record instead, use Cancel.`}
+            submitLabel="Delete the request" danger
+            onClose={() => setAsking(null)}
+            onSubmit={async ({ reason }) => {
+              await api.cartDelete(cart.id, reason.trim());
+              setAsking(null); onBack();
+            }}
+            fields={[{ name: 'reason', label: 'Why is this being deleted?', type: 'textarea', required: true,
+              placeholder: 'e.g. Raised twice by mistake — BC-41 is the real one' }]} />
         )}
 
         {asking === 'writeoff' && (

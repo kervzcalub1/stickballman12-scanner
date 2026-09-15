@@ -34,7 +34,16 @@ const TIMEOUT_MS = 45_000;
 // The scenario caps its own text at ~64 KB; this is a belt for the braces.
 const MAX_TEXT = 128 * 1024;
 
-export const receiptEmailConfigured = () => !!process.env.MAKE_RECEIPT_PARSER_URL;
+// Trimmed, because a value pasted into a dashboard arrives with a newline more often
+// than not, and `fetch` throws on it rather than stripping it. A value that is set but
+// is not a URL is a misconfiguration and is reported as one, not as a search failure.
+export const hookUrl = () => String(process.env.MAKE_RECEIPT_PARSER_URL || '').trim();
+export const receiptEmailConfigured = () => !!hookUrl();
+export const receiptEmailMisconfigured = () => {
+  const v = hookUrl();
+  if (!v) return false;
+  try { return new URL(v).protocol !== 'https:'; } catch { return true; }
+};
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n * 100) / 100 : null; };
 const str = (v, max) => { const s = String(v ?? '').trim(); return s ? s.slice(0, max) : null; };
@@ -147,12 +156,16 @@ export default async function handler(req, res) {
     // an answer for somebody allowed to ask, and a stranger gets the same 403 either way.
     if (!receiptEmailConfigured())
       return send(res, 503, { ok: false, error: 'Finding receipts by email is not configured on this server.' });
+    if (receiptEmailMisconfigured()) {
+      console.error('[cart/receipt-email] MAKE_RECEIPT_PARSER_URL is set but is not an https URL');
+      return send(res, 503, { ok: false, error: 'Finding receipts by email is misconfigured on this server (the webhook URL is not a valid https address).' });
+    }
 
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
     let r; let payload;
     try {
-      r = await fetch(process.env.MAKE_RECEIPT_PARSER_URL, {
+      r = await fetch(hookUrl(), {
         method: 'POST',
         signal: ac.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -161,8 +174,10 @@ export default async function handler(req, res) {
       payload = await r.json().catch(() => null);
     } finally { clearTimeout(timer); }
 
-    // The scenario's own "no such email" is a 404 with ok:false — an answer, not a fault.
-    if (r.status === 404 || (payload && payload.ok === false && payload.error === 'not_found')) {
+    // The scenario's own "no such email" is a 404 WITH its JSON body — an answer, not a
+    // fault. Make itself also answers 404 for a webhook id nobody is listening on, with a
+    // plain "Not Found" body: that is a mis-set URL and must not read as "no receipt".
+    if (payload && payload.ok === false && payload.error === 'not_found') {
       await logCartEvent({ cartId, kind: 'receipt_email_read', actor: user, body: `No email found for “${transactionId}”` });
       return send(res, 200, {
         ok: true, found: false, transactionId,
@@ -196,7 +211,11 @@ export default async function handler(req, res) {
     return send(res, 200, { ok: true, found: true, transactionId, ...reading, email, file });
   } catch (e) {
     const aborted = e.name === 'AbortError';
-    console.error('[cart/receipt-email]', e.message);
+    // Enough to tell a bad env value from a network fault without printing the secret:
+    // the host and the path length are diagnostic, the path itself is the credential.
+    let target = '(unparseable URL)';
+    try { const u = new URL(hookUrl()); target = `${u.host} path=${u.pathname.length}ch${u.search ? ' +query' : ''}`; } catch { /* noted above */ }
+    console.error('[cart/receipt-email]', e.name, e.message, e.cause?.code || '', '→', target);
     return send(res, aborted ? 504 : 500, {
       ok: false,
       error: aborted ? 'The mailbox search took too long. Try again, or upload the receipt.' : 'Could not search for that receipt.',

@@ -34,6 +34,7 @@ import { InstoreListing } from './screens/InstoreListing.jsx';
 import { PayoutCalculator } from './screens/PayoutCalculator.jsx';
 import { BuyCarts } from './screens/BuyCarts.jsx';
 import { Advisor } from './components/Advisor.jsx';
+import { SoftKeypad, isTouchDevice } from './components/SoftKeypad.jsx';
 import { ExistingStock } from './screens/ExistingStock.jsx';
 import { SupplierApp } from './screens/SupplierApp.jsx';
 import { Reconciliation } from './screens/Reconciliation.jsx';
@@ -139,7 +140,10 @@ export default function App() {
   // where it is a much narrower thing: three tools, its own prompt, and results
   // projected down to counts (see api/advisor/ask.js). Still absent from the two
   // returns above it — Auth and the forced password change are pre-auth.
-  const withAdvisor = (screen) => (<>{appUpdated && <AppUpdatedBar />}{screen}<Advisor user={user} /></>);
+  // The on-screen keypad rides on every staff screen of a touch device (a paired
+  // Bluetooth scanner hides the phone's own keyboard everywhere, not just on Receiving).
+  // Off by preference; never on a desktop, where the real keyboard is right there.
+  const withAdvisor = (screen) => (<>{appUpdated && <AppUpdatedBar />}{screen}<Advisor user={user} />{isTouchDevice() && <SoftKeypad />}</>);
 
   const enterPh = () => { setPhMode(true); if (window.location.pathname !== '/ph') window.history.pushState(null, '', '/ph'); };
   const exitPh = () => { setPhMode(false); window.history.pushState(null, '', pathForView('home')); setView('home'); };

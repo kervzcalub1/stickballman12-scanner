@@ -26,6 +26,10 @@ export const DEFAULTS = {
   // ends up in a buy call. The per-pair amounts (shelf price, coupon, tip, shipping,
   // sale prices) are deliberately NOT kept — they must start empty for each shoe.
   payoutRates: {},
+  // The app's own on-screen keypad (touch devices only). A paired Bluetooth scanner is a
+  // hardware keyboard to iOS, which then hides the phone's keyboard for EVERY field —
+  // this is the way to type a size or a SKU by hand without unpairing the gun.
+  softKeypad: true,
 };
 
 export function loadPrefs() {

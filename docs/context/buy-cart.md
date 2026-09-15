@@ -858,6 +858,22 @@ three were already dependencies; none costs an API call.
   what the receipt *says*. On a shop receipt they differ by the tax, and that gap is the
   difference between "we read this receipt" and "we read most of it". The **stated**
   total is what the reconciliation runs against — it is what the cards were charged.
+- **Every row a reader produced is ticked by a person before it saves (2026-09-16).**
+  `unchecked()` marks each machine row `ok:false` (paste, PDF, OCR/AI, email alike); a row
+  added by hand is `ok:true` by construction. Rows tint amber while pending and green
+  once ticked (`.bc-row-tick`, `.bc-row-pending` / `.bc-row-ok`); **Save is disabled
+  until all are ticked** and says how many remain. Editing a field does NOT tick the row
+  — somebody who fixed the size may not have looked at the price beside it. The totals
+  check catches a wrong sum; it cannot catch an 8 read as a 9, which is what the tick
+  is for. `ok` never leaves the browser.
+- **Something visibly happens while a read runs.** `ReadProgress` (`.bc-readprog` — NOT
+  `.bc-progress`, which is the milestone strip; fifth class-collision near miss) shows a
+  bar under the email form / files header: real percent for OCR, elapsed-time against
+  an expected duration otherwise (email 18 s, AI 9 s), capped at 95% so it never sits
+  at "done" — the result replaces it. The suite covers the ticks
+  (`buy-cart.spec.js` → "ticked by a person").
+- `source` accepts `email` (server whitelist + the `buy_cart_receipt_lines_source_check`
+  constraint — **needs `db:setup`**); before that an email-read line was saved as `manual`.
 - `compareReceiptToApproved` flags `bought_unapproved`, `approved_not_bought` and
   `qty_differs`. Approved and bought are different claims and both are kept; where they
   part is a finding for the audit, not something to tidy away.

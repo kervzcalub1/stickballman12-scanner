@@ -19,7 +19,7 @@
 // The two totals are both shown and neither is silently chosen: what the rows add up to
 // and what the receipt SAYS. On a shop receipt they differ by the tax, and that gap is
 // the difference between "we read this receipt" and "we read most of it".
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { lazyImport } from '../lib/chunkLoad.js';
 import { PriceInput } from './common.jsx';
@@ -28,6 +28,52 @@ import { receiptCheckSentence } from '../lib/receiptCheck.js';
 import { estDate, estClock } from '../lib/format.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
+
+// Every row a MACHINE produced starts unchecked, and the save button waits for a person
+// to tick each one. A reader fails cleanly — a well-formed row with a plausible code and
+// a plausible price — and on a money screen a plausible wrong number is the worst
+// output there is. The totals check catches the sum; it cannot catch a size 8 read as
+// a 9. A row somebody typed in by hand is checked by construction.
+const unchecked = (rows) => rows.map((r) => ({ ...r, ok: r.source === 'manual' }));
+
+// How long a read usually takes, so the bar can move while nothing else on screen does.
+// A guess, deliberately generous: the email lookup is two mailbox searches and a
+// handful of catalogue calls on the Make side (measured 14–16 s), the vision read a
+// few seconds, a PDF's text is local.
+const EXPECTED_MS = { email: 18_000, ai: 9_000, ocr: 20_000, pdf: 3_000, upload: 4_000 };
+const BUSY_LABEL = {
+  email: 'Searching the ordering mailboxes for that number',
+  ai: 'Reading the receipt',
+  ocr: 'Reading the photo',
+  pdf: 'Reading the PDF',
+  upload: 'Uploading the file',
+};
+/** A bar that moves: real progress when the reader reports one, elapsed-time otherwise. */
+function ReadProgress({ stage, percent }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    setElapsed(0);
+    const t0 = Date.now();
+    const t = setInterval(() => setElapsed(Date.now() - t0), 250);
+    return () => clearInterval(t);
+  }, [stage]);
+  if (!stage || !BUSY_LABEL[stage]) return null;
+  const expected = EXPECTED_MS[stage] || 10_000;
+  // Never reaches the end on its own — a bar that hits 100% and sits there reads as
+  // "finished and broken". The real result replaces it.
+  const pct = percent > 0 ? Math.min(99, percent) : Math.min(95, Math.round((elapsed / expected) * 95));
+  const secs = Math.floor(elapsed / 1000);
+  return (
+    <div className="bc-readprog" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={BUSY_LABEL[stage]}>
+      <div className="bc-readprog-bar"><div className="bc-readprog-fill" style={{ width: `${pct}%` }} /></div>
+      <div className="muted sm bc-readprog-text">
+        {BUSY_LABEL[stage]}… {secs > 0 ? `${secs}s` : ''}
+        {stage === 'email' && secs >= 10 ? ' · usually 10–20 s' : ''}
+        {stage === 'email' && secs >= 30 ? ' · still going — Make allows up to 40 s' : ''}
+      </div>
+    </div>
+  );
+}
 const FLAG_LABEL = {
   bought_unapproved: 'bought but never approved',
   approved_not_bought: 'approved but not on the receipt',
@@ -162,7 +208,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
     // hand-pasted table claiming its figures had been checked.
     setNote('');
     const parsed = parseReceipt(t, { source });
-    setRows(parsed.rows.map((r) => ({ ...r })));
+    setRows(unchecked(parsed.rows));
     // The receipt's own total is what the cards were actually charged, so it is what the
     // reconciliation must run against — prefilled, and still editable.
     setStatedTotal(parsed.statedTotal != null ? String(parsed.statedTotal) : String(parsed.total || ''));
@@ -252,7 +298,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
     try {
       const r = await api.cartReceiptRead(cart.id, fileId);
       if (!r.rows?.length) return false;
-      setRows(r.rows.map((x) => ({ ...x })));
+      setRows(unchecked(r.rows));
       // The receipt's OWN total, never a sum of what was read — that gap is the whole
       // point of showing both.
       setStatedTotal(r.statedTotal != null ? String(r.statedTotal) : '');
@@ -287,7 +333,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
         if (r.file) onChanged();   // the evidence was still filed; the list should show it
         return;
       }
-      setRows(r.rows.map((x) => ({ ...x })));
+      setRows(unchecked(r.rows));
       setStatedTotal(r.statedTotal != null ? String(r.statedTotal) : '');
       setSubtotal(r.subtotal != null ? String(r.subtotal) : '');
       setTax(r.tax != null ? String(r.tax) : '');
@@ -303,7 +349,11 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
 
   function editRow(i, patch) { setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r))); }
   function dropRow(i) { setRows((rs) => rs.filter((_, j) => j !== i)); }
-  function addRow() { setRows((rs) => [...(rs || []), { sku: '', size: '', qty: 1, unitPrice: null, totalPrice: null, source: 'manual' }]); }
+  function addRow() { setRows((rs) => [...(rs || []), { sku: '', size: '', qty: 1, unitPrice: null, totalPrice: null, source: 'manual', ok: true }]); }
+  // The tick is the person's, so it is explicit: editing a field does not check the row
+  // — somebody who fixed the size may not have looked at the price beside it.
+  const toggleRow = (i) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ok: !r.ok } : r)));
+  const uncheckedCount = (rows || []).filter((r) => !r.ok).length;
 
   async function commit() {
     setBusy('save'); setErr('');
@@ -363,6 +413,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
           </label>
         )}
       </div>
+      {['upload', 'ai', 'pdf', 'ocr'].includes(busy) && <ReadProgress stage={busy} percent={busy === 'ocr' ? progress : 0} />}
       {files.length > 0 && (
         <ul className="bc-file-list">
           {files.map((f) => (
@@ -446,9 +497,10 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
               placeholder="Order / transaction number from the shop’s email"
               autoComplete="off" inputMode="text" maxLength={80} />
             <button type="submit" className="btn" disabled={busy === 'email' || txn.trim().length < 4}>
-              {busy === 'email' ? 'Searching the mailbox…' : 'Find it in the email'}
+              {busy === 'email' ? 'Searching…' : 'Find it in the email'}
             </button>
           </form>
+          {busy === 'email' && <ReadProgress stage="email" />}
           <textarea className="input bc-paste-box" rows={6} value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="…or paste the receipt / order email text here" />
@@ -468,14 +520,20 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
             </p>
           )}
           <p className="muted sm">
-            Check every row before saving — this is what the money gets reconciled against.
+            Check every row against the receipt and tick it — this is what the money gets reconciled against.
+            {uncheckedCount > 0 && <> <b className="bc-pending-count">{uncheckedCount} of {rows.length} still to check.</b></>}
           </p>
           <div className="bc-scroll">
           <table className="table bc-table bc-review-table">
-            <thead><tr><th>SKU</th><th>Size</th><th>Qty</th><th>Unit</th><th>Total</th><th /></tr></thead>
+            <thead><tr><th /><th>SKU</th><th>Size</th><th>Qty</th><th>Unit</th><th>Total</th><th /></tr></thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i}>
+                <tr key={i} className={r.ok ? 'bc-row-ok' : 'bc-row-pending'}>
+                  <td>
+                    <button type="button" className={`btn sm bc-row-tick ${r.ok ? 'ok' : ''}`} aria-pressed={!!r.ok}
+                      title={r.ok ? 'Checked — click to un-check' : 'I have checked this row against the receipt'}
+                      onClick={() => toggleRow(i)}>{r.ok ? '✓' : '○'}</button>
+                  </td>
                   <td><input className="input sm" value={r.sku || ''} onChange={(e) => editRow(i, { sku: e.target.value.toUpperCase() })} /></td>
                   <td><input className="input sm bc-w-sm" value={r.size || ''} onChange={(e) => editRow(i, { size: e.target.value })} /></td>
                   <td><input className="input sm bc-w-sm" type="number" min="1" value={r.qty} onChange={(e) => editRow(i, { qty: Number(e.target.value) || 1 })} /></td>
@@ -526,8 +584,9 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
                 </span>
               )}
             </div>
-            <button type="button" className="btn primary" disabled={busy === 'save' || !rows.length || !(Number(statedTotal) > 0)} onClick={commit}>
-              {busy === 'save' ? 'Saving…' : 'Save these lines'}
+            <button type="button" className="btn primary" disabled={busy === 'save' || !rows.length || !(Number(statedTotal) > 0) || uncheckedCount > 0} onClick={commit}
+              title={uncheckedCount > 0 ? `Tick the ${uncheckedCount} unchecked row${uncheckedCount === 1 ? '' : 's'} first` : undefined}>
+              {busy === 'save' ? 'Saving…' : uncheckedCount > 0 ? `Check ${uncheckedCount} more row${uncheckedCount === 1 ? '' : 's'} to save` : 'Save these lines'}
             </button>
             <button type="button" className="btn ghost" onClick={() => { setRows(null); setEmailHit(null); }}>Cancel</button>
           </div>

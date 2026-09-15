@@ -411,6 +411,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [showPrefs, setShowPrefs] = useState(false);
   const setCameraZoom = (zoom) => setPrefs((p) => { const n = { ...p, cameraZoom: zoom }; savePrefs(n); return n; });
   const setRawVins = (on) => setPrefs((p) => { const n = { ...p, rawVins: !!on }; savePrefs(n); return n; });
+  // The keypad is mounted by App (it reads prefs on render), so flipping this reloads
+  // the pref there on the next navigation; the button under the thumb goes at once.
+  const setSoftKeypad = (on) => setPrefs((p) => { const n = { ...p, softKeypad: !!on }; savePrefs(n); window.dispatchEvent(new Event('sb-prefs')); return n; });
   // Raw 1ID mode: scan a PRE-PRINTED sticker onto each pair instead of minting a VIN
   // to print. Never on for RESCALE — there a VIN scan means "this existing pair",
   // which is the opposite operation.
@@ -2597,7 +2600,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         </div>
       )}
 
-      {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onRawVins={setRawVins} onClose={() => setShowPrefs(false)} />}
+      {showPrefs && <PreferencesModal prefs={prefs} onCameraZoom={setCameraZoom} onRawVins={setRawVins} onSoftKeypad={setSoftKeypad} onClose={() => setShowPrefs(false)} />}
     </div>
   );
 }

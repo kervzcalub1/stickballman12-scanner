@@ -921,7 +921,7 @@ export function RemoveUnitsModal({ title, sku, units, onClose, onDone }) {
 }
 
 // Preferences — saved automatically (localStorage) as the user toggles.
-export function PreferencesModal({ prefs, onCameraZoom, onRawVins, onClose }) {
+export function PreferencesModal({ prefs, onCameraZoom, onRawVins, onSoftKeypad, onClose }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -975,6 +975,31 @@ export function PreferencesModal({ prefs, onCameraZoom, onRawVins, onClose }) {
                   className={`btn sm ${!!prefs.rawVins === v ? 'primary' : 'ghost'}`}
                   aria-pressed={!!prefs.rawVins === v}
                   onClick={() => onRawVins(v)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {onSoftKeypad && (
+          <div className="pref-row">
+            <div className="pref-text">
+              <div className="pref-label">On-screen keypad</div>
+              <div className="pref-help">
+                The ⌨ button on every screen. For when a Bluetooth scanner is paired and the
+                phone hides its own keyboard — tap a field, then type on this one.
+              </div>
+            </div>
+            <div className="zoom-toggle" role="group" aria-label="On-screen keypad">
+              {[['Off', false], ['On', true]].map(([label, v]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`btn sm ${(prefs.softKeypad !== false) === v ? 'primary' : 'ghost'}`}
+                  aria-pressed={(prefs.softKeypad !== false) === v}
+                  onClick={() => onSoftKeypad(v)}
                 >
                   {label}
                 </button>

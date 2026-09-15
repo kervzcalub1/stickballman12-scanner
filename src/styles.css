@@ -3955,8 +3955,41 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .advisor-fab svg { width: 36px; height: 36px; }
 .advisor-fab:hover { border-color: var(--primary); background: var(--panel); }
 .advisor-fab.on { background: var(--panel-2); color: var(--text); border-color: var(--border); font-size: 18px; }
+/* The on-screen keypad's button: bottom-LEFT, the advisor's mirror, same size and tone. */
+.keypad-fab {
+  position: fixed; left: 18px; bottom: 18px; z-index: 60;
+  width: 54px; height: 54px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: 26px; line-height: 1;
+  border: 1px solid var(--border); background: var(--panel-2); color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); cursor: pointer;
+}
+.keypad-fab:hover, .keypad-fab.on { border-color: var(--primary); }
+/* The keypad itself: a sheet along the bottom, above both FABs, sized for thumbs. */
+.keypad {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 59;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--panel); border-top: 1px solid var(--border); box-shadow: 0 -8px 24px rgba(0,0,0,.45);
+  display: flex; flex-direction: column; gap: 6px; user-select: none; -webkit-user-select: none;
+}
+/* While the sheet is open both round buttons would sit on top of the keys — the sheet's
+   own Hide button is the way out, and the advisor comes back when it closes. */
+body.keypad-open .keypad-fab, body.keypad-open .advisor-fab { display: none; }
+.keypad-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); padding: 0 2px 2px; }
+.keypad-target b { color: var(--text); }
+.keypad-row { display: flex; gap: 5px; }
+.keypad-key {
+  flex: 1 1 0; min-width: 0; height: 44px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: 17px; font-weight: 600; cursor: pointer;
+  touch-action: manipulation;
+}
+.keypad-key:active { background: var(--primary); color: #fff; }
+.keypad-key:disabled { opacity: .45; cursor: default; }
+.keypad-key.space { flex: 4 1 0; font-size: 13px; font-weight: 500; color: var(--muted); }
+.keypad-key.enter { flex: 2 1 0; background: var(--primary); border-color: var(--primary); color: #fff; }
+.keypad-key.enter:disabled { background: var(--panel-2); border-color: var(--border); color: var(--text); }
 /* Clear of the iPhone home indicator, which sits exactly where a bottom-right FAB wants to be. */
 @supports (padding: max(0px)) {
+  .keypad-fab { bottom: max(18px, env(safe-area-inset-bottom)); }
   .advisor-fab { bottom: max(18px, env(safe-area-inset-bottom)); }
 }
 

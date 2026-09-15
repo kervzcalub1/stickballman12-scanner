@@ -111,6 +111,24 @@ was already in the server). Everything lands in **`certs/` — git-ignored**; on
   `api/auth/login.js` only relaxes for `localhost`, so a supplier hits "please sign
   in at supplier.stickballman12.com". Staff/admin are unaffected (`auth-roles.md`).
 
+## The on-screen keypad (`src/components/SoftKeypad.jsx`, 2026-09-15)
+iOS treats a paired Bluetooth scanner as a hardware keyboard and hides the software
+keyboard for **every** field; no web API brings it back (the floor was typing on a
+second phone and pasting). So the app draws its own: a ⌨ FAB (bottom-left, the
+advisor's mirror) mounted by `withAdvisor` on **touch devices only** (`isTouchDevice`),
+gated by `prefs.softKeypad` (default on; Preferences → *On-screen keypad*, the toggle
+fires `sb-prefs` so it disappears at once). It types into the **last-focused** typable
+field (a `focusin` listener; focus still works with a scanner paired — only the keyboard
+is suppressed) through the element's **native value setter + an `input` event**, so
+React state updates as if keys were pressed; **Enter** dispatches a keydown Enter and
+`requestSubmit()`s the field's form — what the gun's trailing Enter does. Keys
+`preventDefault` on mousedown (never touchstart — that would cancel the tap) so the
+field keeps focus. While open: `body.keypad-open` hides both FABs, the body gets
+bottom padding equal to the sheet, and a newly-focused field is scrolled to centre so
+it is never under the keys. Capitals, digits, `- . /`, space, ⌫, Clear — every
+character a SKU / UPC / tracking number / size needs. `e2e/soft-keypad.spec.js` (iPhone
+profile). See also the iOS focus-trap rule under Conventions.
+
 ## Testing (Playwright E2E)
 - Specs in `e2e/*.spec.js`; config `playwright.config.js` (chromium, auto-starts
   `npm run dev` on a fixed port). The only tests in the repo — there's no unit suite.

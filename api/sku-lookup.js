@@ -16,12 +16,12 @@ export default async function handler(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
-  if (!process.env.ALIAS_API_KEY) return send(res, 500, { ok: false, error: 'Server is missing the Alias API key.' });
-
+  // A bad request is a 400 whatever the server's own state — the key check comes after.
   const url = new URL(req.url, 'http://localhost');
   const body = req.method === 'POST' ? await getJsonBody(req) : {};
   const sku = cleanSku(url.searchParams.get('sku') ?? body.sku);
   if (!sku) return send(res, 400, { ok: false, error: 'Missing/invalid `sku`.' });
+  if (!process.env.ALIAS_API_KEY) return send(res, 500, { ok: false, error: 'Server is missing the Alias API key.' });
 
   try {
     const c = await aliasCatalogBySku(sku);

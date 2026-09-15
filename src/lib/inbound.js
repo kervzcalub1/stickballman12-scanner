@@ -112,6 +112,14 @@ export function countStates(rows, now = Date.now()) {
   return out;
 }
 
+// The chip that shows a count from `countStates` filters the shipment list, and the
+// two must agree: the count is of BOXES, so the chip matches a shipment holding ANY
+// box in that state — not the shipment's worst state. Four boxes out for delivery
+// behind one untracked box graded the order "no tracking", and the "4" chip listed
+// nothing. With no state, everything passes.
+export const shipmentHasState = (shipment, state) =>
+  !state || (shipment?.boxes || []).some((b) => b.state === state);
+
 // ---------------------------------------------------------------------------
 // WHEN it is expected — a different question from where it is, and the one the
 // warehouse actually opens the day with.

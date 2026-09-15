@@ -30,7 +30,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import {
   INBOUND_STATES, STATE_ORDER, ARRIVAL_BUCKETS, ARRIVAL_ORDER,
-  groupShipments, countStates, needsAttention, arrivalBucket, arrivalPlan, inboundProgress,
+  groupShipments, countStates, shipmentHasState, needsAttention, arrivalBucket, arrivalPlan, inboundProgress,
 } from '../lib/inbound.js';
 import { estDate, estToday, estCivilFromYmd } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -129,7 +129,8 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
   const inDue = (s) => !due || s.boxes.some((b) => arrivalBucket(b, today, b.state) === due);
   const visible = shipments
     .filter(inDue)
-    .filter((s) => (filter ? s.state === filter : (showDone || due === 'landed' || !done(s))));
+    .filter((s) => shipmentHasState(s, filter))
+    .filter((s) => (filter || showDone || due === 'landed' || !done(s)));
   const attention = shipments.filter((s) => needsAttention(s.state)).length;
 
   const flip = (setter) => (id) => setter((o) => {

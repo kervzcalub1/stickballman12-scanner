@@ -368,6 +368,49 @@ test('anyone who can reach the request can attach the receipt — the buyer, PH,
   expect(other.status).toBe(403);
 });
 
+test('a receipt found by its number in the mailbox lands in the same review table', async ({ request }) => {
+  const { readingFromPayload } = await import('../api/cart/receipt-email.js');
+
+  // The scenario's answer, in the shape the Make session documented (id 6282792). A
+  // Nike line is keyed on the style id from its UPC lookup, an adidas line on its
+  // article number; a Champs line has only the store's own code. `final_price` is the
+  // line total after discounts, so the unit price is derived, not taken from list.
+  const r = readingFromPayload({
+    ok: true, transaction_id: '179364', store: 'nike', mailbox: 'gmail',
+    email: { subject: 'Your Nike Purchase', from: 'nike@notifications.nike.com', date: 'Mon, 14 Sep 2026 18:02:11 -0400', date_iso: '2026-09-14T18:02:11-04:00', folder: 'Footlocker', text: 'Thanks for shopping…' },
+    item_count: 3,
+    items: [
+      { name: 'Air Jordan 1 Low', sku: null, upc: '196604935555', style_id: 'FJ6245-106', size: '9.5', qty: 2, list_price: 115, discount: 30, final_price: 200, raw_code: 'x' },
+      { name: 'Samba OG', sku: 'IH8223', upc: null, style_id: 'IH8223', size: '7.5', qty: 1, list_price: 100, discount: null, final_price: 100, raw_code: 'y' },
+      { name: 'Unreadable', sku: null, upc: null, style_id: null, size: null, qty: 1, final_price: 50, raw_code: 'z' },
+    ],
+    totals: { subtotal: 300, tax: 18, shipping: null, total: 318, item_count_stated: 3 },
+    warnings: ['upc_not_found:1 (http 200)'],
+  });
+  expect(r.rows.map((x) => x.sku)).toEqual(['FJ6245-106', 'IH8223']);   // no code → no row, never a blank one
+  expect(r.rows[0]).toMatchObject({ size: '9.5', qty: 2, totalPrice: 200, unitPrice: 100, source: 'email' });
+  expect(r.email).toMatchObject({ subject: 'Your Nike Purchase', date: '2026-09-14T18:02:11-04:00', folder: 'Footlocker' });
+  expect(r.statedTotal).toBe(318);
+  expect(r.check.ok).toBe(true);                       // 200 + 100 = the printed subtotal; 3 = the printed count
+  expect(r.warnings).toEqual(['upc_not_found:1 (http 200)']);
+
+  // Without printed totals there is nothing to check and nothing is claimed: no
+  // subtotal, no stated total — never 0, which would read as "the shop charged nothing".
+  const bare = readingFromPayload({ ok: true, items: [{ style_id: 'A', qty: 1, final_price: 10, raw_code: '' }] });
+  expect(bare.subtotal).toBeNull(); expect(bare.statedTotal).toBeNull(); expect(bare.tax).toBeNull();
+  expect(bare.email.text).toBeNull();
+
+  // The suite runs with MAKE_RECEIPT_PARSER_URL blanked (playwright.config.js), so the
+  // endpoint is UNCONFIGURED here: it must say so, and it must still gate before it
+  // says so — a stranger's request and a bad number are refused ahead of the 503.
+  const cartId = await newRequest(request, { lines: [LINE] });
+  const stranger = await call(request, 'buyer2', 'cart/receipt-email', { cartId, transactionId: '179364' });
+  expect(stranger.status).toBe(403);
+  const own = await call(request, 'buyer', 'cart/receipt-email', { cartId, transactionId: '179364' });
+  expect(own.status).toBe(503);
+  expect(own.body.error).toMatch(/not configured/);
+});
+
 test('the receipt checks the reading against its own arithmetic', async () => {
   const { checkReceiptRead } = await import('../src/lib/receiptCheck.js');
   const real = [

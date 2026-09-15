@@ -6,7 +6,10 @@
 // be wrong, so they land in an editable table and nothing is committed until a person
 // has looked at them.
 //
-// Three ways to get the text out, in the order they cost anything:
+// Four ways to get the lines out, in the order they cost anything:
+//   · email  — the buyer types the order / transaction number and a Make scenario finds
+//              the shop's own email in the ordering mailboxes and parses it. Exact, and
+//              the email itself is filed as the receipt. (`api/cart/receipt-email`)
 //   · paste  — the buyer copies the order email or the web receipt. Free, exact.
 //   · PDF    — pdfjs pulls the text layer out, the same machinery the PO manifest
 //              import already uses. Free, exact when the PDF isn't a scan.
@@ -22,6 +25,7 @@ import { lazyImport } from '../lib/chunkLoad.js';
 import { PriceInput } from './common.jsx';
 import { parseReceipt, compareReceiptToApproved } from '../lib/receiptParse.js';
 import { receiptCheckSentence } from '../lib/receiptCheck.js';
+import { estDate, estClock } from '../lib/format.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
 const FLAG_LABEL = {
@@ -134,6 +138,12 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
   // or not, because "we checked and it adds up" is a much stronger thing to hand a
   // reviewer than silence.
   const [note, setNote] = useState('');
+  // The order number off the shop's email. A string, never a number: a leading zero is
+  // part of it, and adidas / Nike numbers carry letters and dashes.
+  const [txn, setTxn] = useState('');
+  // Which email was read — shown above the rows so a wrong match ("that's the tracking
+  // email, not the receipt") is caught by the person who knows, before anything is saved.
+  const [emailHit, setEmailHit] = useState(null);
 
   const files = (cart.files || []).filter((f) => f.kind === 'receipt');
   const committed = cart.receiptLines || [];
@@ -257,6 +267,40 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
     }
   }
 
+  /**
+   * Find the receipt in the mailbox by its number. The same discipline as `aiRead`: the
+   * scenario is a reader, its rows land in the editable table, and the check against the
+   * receipt's own totals is said out loud. Two answers are not rows and are handled here
+   * rather than shown as an empty table: no email matched, and an email matched that
+   * parsed to nothing (an unrelated mail containing the same digits).
+   */
+  async function findInEmail() {
+    const id = txn.trim();
+    if (!id) return;
+    setBusy('email'); setErr(''); setNote(''); setEmailHit(null);
+    try {
+      const r = await api.cartReceiptEmail(cart.id, id);
+      if (!r.found) { setErr(r.error || 'No email with that number.'); return; }
+      setEmailHit({ ...r.email, store: r.store, filed: !!r.file, warnings: r.warnings || [] });
+      if (!r.rows?.length) {
+        setErr(`Found an email for ${id}${r.email?.subject ? ` (“${r.email.subject}”)` : ''} but nothing on it read as a purchased item — it may not be the receipt. Check the number, or paste the receipt text instead.`);
+        if (r.file) onChanged();   // the evidence was still filed; the list should show it
+        return;
+      }
+      setRows(r.rows.map((x) => ({ ...x })));
+      setStatedTotal(r.statedTotal != null ? String(r.statedTotal) : '');
+      setSubtotal(r.subtotal != null ? String(r.subtotal) : '');
+      setTax(r.tax != null ? String(r.tax) : '');
+      // With no printed totals in the payload there is nothing to check against, and
+      // "checked" must not be said about a reading that was not.
+      setNote(r.statedTotal != null ? receiptCheckSentence(r.check) : '');
+      if (r.file) onChanged();
+    } catch (ex) {
+      if (ex.unauthorized) return onSignOut();
+      setErr(ex.message);
+    } finally { setBusy(''); }
+  }
+
   function editRow(i, patch) { setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r))); }
   function dropRow(i) { setRows((rs) => rs.filter((_, j) => j !== i)); }
   function addRow() { setRows((rs) => [...(rs || []), { sku: '', size: '', qty: 1, unitPrice: null, totalPrice: null, source: 'manual' }]); }
@@ -271,7 +315,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
         String(subtotal).trim() === '' ? null : Number(subtotal),
         String(tax).trim() === '' ? null : Number(tax),
       );
-      setRows(null); setText(''); setSubtotal(''); setTax('');
+      setRows(null); setText(''); setSubtotal(''); setTax(''); setEmailHit(null); setTxn('');
       onChanged();
     } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
     finally { setBusy(''); }
@@ -395,6 +439,16 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
 
       {canEdit && !committed.length && !rows && (
         <div className="bc-paste">
+          {/* The number is on the email the shop sent, and so is the receipt — so ask
+              for the number. Enter submits; on a phone that is the keyboard's Go. */}
+          <form className="bc-email-find" onSubmit={(e) => { e.preventDefault(); findInEmail(); }}>
+            <input className="input" value={txn} onChange={(e) => setTxn(e.target.value)}
+              placeholder="Order / transaction number from the shop’s email"
+              autoComplete="off" inputMode="text" maxLength={80} />
+            <button type="submit" className="btn" disabled={busy === 'email' || txn.trim().length < 4}>
+              {busy === 'email' ? 'Searching the mailbox…' : 'Find it in the email'}
+            </button>
+          </form>
           <textarea className="input bc-paste-box" rows={6} value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="…or paste the receipt / order email text here" />
@@ -405,6 +459,14 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
       {/* The review step, and it is not optional. */}
       {rows && (
         <div className="bc-review">
+          {emailHit && (
+            <p className="muted sm bc-email-hit">
+              Read from the email <b>{emailHit.subject || '(no subject)'}</b>
+              {emailHit.from ? ` from ${emailHit.from}` : ''}{emailHit.date && !Number.isNaN(new Date(emailHit.date).getTime()) ? ` · ${estDate(emailHit.date)} ${estClock(emailHit.date)} EST` : ''}
+              {emailHit.folder && !/all mail/i.test(emailHit.folder) ? ` · in the ${emailHit.folder} folder` : ''}
+              {emailHit.filed ? ' · filed as the receipt' : ''}. If that is not the receipt, cancel and check the number.
+            </p>
+          )}
           <p className="muted sm">
             Check every row before saving — this is what the money gets reconciled against.
           </p>
@@ -467,7 +529,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
             <button type="button" className="btn primary" disabled={busy === 'save' || !rows.length || !(Number(statedTotal) > 0)} onClick={commit}>
               {busy === 'save' ? 'Saving…' : 'Save these lines'}
             </button>
-            <button type="button" className="btn ghost" onClick={() => setRows(null)}>Cancel</button>
+            <button type="button" className="btn ghost" onClick={() => { setRows(null); setEmailHit(null); }}>Cancel</button>
           </div>
         </div>
       )}

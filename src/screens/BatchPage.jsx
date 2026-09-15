@@ -11,6 +11,7 @@ import { PreSellChip } from '../components/PreSellChip.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { batchMatchesSearch } from '../lib/postatus.js';
 import { estTime } from '../lib/format.js';
+import { issueTypeLabel } from '../lib/constants.js';
 import { useQueryParam } from '../lib/urlstate.js';
 
 const shortDate = (s) => String(s || '').slice(0, 10);
@@ -297,6 +298,25 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           {expected ? (
             <div className="progress-bar"><span style={{ width: `${Math.min(100, Math.round((received / expected) * 100))}%` }} /></div>
           ) : null}
+          {/* What was wrong with it, and what the receiver wrote down. Recorded on the
+              Issues step of every receive and, until now, visible only under Receiving →
+              Recent — which is not where anybody looks when a supplier disputes a short
+              count. Header notes and special rules ride here too, for the same reason. */}
+          {((detail.issues || []).length > 0 || b.notes || b.special_rules) && (
+            <div className="batch-issues">
+              <b className="batch-report-h">Issues &amp; notes</b>
+              {b.special_rules && <div className="batch-issue"><span className="batch-issue-type">Special rules</span> {b.special_rules}</div>}
+              {b.notes && <div className="batch-issue"><span className="batch-issue-type">Notes</span> {b.notes}</div>}
+              {(detail.issues || []).map((is) => (
+                <div className={`batch-issue ${is.type === 'note' ? 'note' : 'warn'}`} key={is.id}>
+                  <span className="batch-issue-type">{issueTypeLabel(is.type)}</span>
+                  {is.description ? ` ${is.description}` : ''}
+                  {is.type === 'shortfall' && is.expected_count != null ? ` (${is.received_count ?? '?'} of ${is.expected_count})` : ''}
+                  {is.created_by ? <span className="muted sm"> — {is.created_by}</span> : null}
+                </div>
+              ))}
+            </div>
+          )}
           {/* The shipment on paper, in the header card like the PO reconciliation page
               keeps its manifest print — on a batch with eleven boxes, the bottom of the
               page is a long scroll from the batch it describes. Read-only, so PH has it

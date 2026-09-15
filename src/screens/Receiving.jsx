@@ -15,7 +15,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
-import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES } from '../lib/constants.js';
+import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineCost, unitCost } from '../lib/costs.js';
 import { estToday } from '../lib/format.js';
@@ -1200,7 +1200,19 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     } finally { setOcrBusy(false); }
   }
 
-  const addIssue = () => setIssues((is) => [...is, { key: cartKey++, type: 'mismatched', description: '', expectedCount: '', receivedCount: '' }]);
+  const addIssue = () => setIssues((is) => [...is, { key: cartKey++, type: ISSUE_TYPES[0][0], description: '', expectedCount: '', receivedCount: '' }]);
+  // Free text for anything unusual that isn't one of the named problems. Committed as
+  // one `note` issue row, so it lands beside the issues on the batch and in reports.
+  const [keyNotes, setKeyNotes] = useState('');
+  const issuePayload = () => [
+    ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
+    ...issues.map((i) => ({
+      type: i.type, description: i.description,
+      expectedCount: i.expectedCount === '' ? null : Number(i.expectedCount),
+      receivedCount: i.receivedCount === '' ? null : Number(i.receivedCount),
+    })),
+    ...(keyNotes.trim() ? [{ type: 'note', description: keyNotes.trim() }] : []),
+  ];
   const updateIssue = (key, patch) => setIssues((is) => is.map((i) => (i.key === key ? { ...i, ...patch } : i)));
   const removeIssue = (key) => setIssues((is) => is.filter((i) => i.key !== key));
 
@@ -1366,7 +1378,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }
     setActiveSlot(i); setDraft(null); setStickerTyping(false);
     setItems(isPoReceive ? buildManifestItems(boxSlots[i]?.poBoxId) : []);
-    setIssues([]); setUnitIssues({}); setRescanned([]);
+    setIssues([]); setKeyNotes(''); setUnitIssues({}); setRescanned([]);
     resetScanState();
     emptyBoxAck.current = false;
     setStep(2);
@@ -1375,7 +1387,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // the in-progress, uncommitted draft for that box).
   function backToBoxList() {
     setActiveSlot(null); setStep(1);
-    setItems([]); setIssues([]); setUnitIssues({}); setDraft(null);
+    setItems([]); setIssues([]); setKeyNotes(''); setUnitIssues({}); setDraft(null);
     resetScanState();
     emptyBoxAck.current = false;
   }
@@ -1485,14 +1497,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         const { box } = await api.batchAddBox(batchId, boxTracking, boxNumber);
         const res = await api.boxCommit({
           batchId, boxId: box.id, items: out, unitIssues: flatUnitIssues,
-          issues: [
-            ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
-            ...issues.map((i) => ({
-              type: i.type, description: i.description,
-              expectedCount: i.expectedCount === '' ? null : Number(i.expectedCount),
-              receivedCount: i.receivedCount === '' ? null : Number(i.receivedCount),
-            })),
-          ],
+          issues: issuePayload(),
         });
         setShowConfirm(false);
         // Raw 1ID mode: the pair already wears its number, so there is nothing to
@@ -1507,7 +1512,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
           upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
         }));
-        setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); resetScanState();
+        setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState();
         if (isMultiBoxNew) {
           // Mark the slot received and drop back to the box list (step 1) to do the next.
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
@@ -1529,14 +1534,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           batch: { ...header, origin: effectiveOrigin, defaultCost: defaultCostNum, duplicateOf: dupBatch?.id ?? null },
           items: out,
           unitIssues: flatUnitIssues,
-          issues: isRescale ? [] : [
-            ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
-            ...issues.map((i) => ({
-              type: i.type, description: i.description,
-              expectedCount: i.expectedCount === '' ? null : Number(i.expectedCount),
-              receivedCount: i.receivedCount === '' ? null : Number(i.receivedCount),
-            })),
-          ],
+          issues: isRescale ? [] : issuePayload(),
         };
         batchRes = await api.batchCommit(payload);
       }
@@ -1568,7 +1566,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         printItems,
         reconcile: batchRes?.reconcile || null,
       });
-      setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1);
+      setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1);
       // noTracking resets with the tracking # on purpose: left sticky, the NEXT
       // shipment would quietly commit as untracked too.
       setHeader((h) => ({ ...h, tracking: '', noTracking: false, notes: '', specialRules: '' })); // keep buyer/supplier/date/cost
@@ -2259,6 +2257,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             <>
               <div className="card">
                 <h3 className="rows-title">{isInstore ? 'Issues' : 'Shipment issues'} <span className="muted">(optional)</span></h3>
+                <p className="muted sm">Anything wrong with the package as it arrived — damage, tampering, a short count, bad packing. Pick the closest problem and describe it; every entry stays on the batch.</p>
                 {autoIssues.length > 0 && (
                   <div className="auto-issues">
                     <div className="muted sm">Auto-added — shoes received without a box:</div>
@@ -2281,6 +2280,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   </div>
                 ))}
                 <button type="button" className="btn add-size" onClick={addIssue}>+ Add issue</button>
+                <label className="key-notes">
+                  <span className="key-notes-lbl">Key notes <span className="muted">— anything else unusual about this shipment</span></span>
+                  <textarea rows={3} maxLength={2000} value={keyNotes} onChange={(e) => setKeyNotes(e.target.value)}
+                    placeholder="e.g. outer carton re-taped on one side; two boxes wet; supplier used no filler" />
+                </label>
               </div>
               {error && <div className="error mt">{error}</div>}
               <div className="batch-bar">
@@ -2863,7 +2867,7 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
                           </div>
                         ))}
                         {detail.issues.map((is) => (
-                          <div className="batch-detail-row issue" key={is.id}>⚠ {is.type}: {is.description || ''}{is.type === 'shortfall' ? ` (${is.received_count}/${is.expected_count})` : ''}</div>
+                          <div className="batch-detail-row issue" key={is.id}>{is.type === 'note' ? '📝' : '⚠'} {issueTypeLabel(is.type)}{is.description ? `: ${is.description}` : ''}{is.type === 'shortfall' ? ` (${is.received_count}/${is.expected_count})` : ''}</div>
                         ))}
                       </>
                     )}

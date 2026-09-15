@@ -33,15 +33,28 @@ export const RESCALE_REASONS = [
   ['other', 'Other'],
 ];
 
+// Shipment-level problems, recorded on the Issues step and kept on `shipment_issues`.
+// The list is the one the floor asked for (2026-09-15): what was wrong with the PACKAGE
+// as it arrived, before a single pair is judged. `note` is the free-text "key notes"
+// box on the same step — anything unusual that isn't one of the named problems —
+// stored as an issue row so it shows everywhere the issues do.
 export const ISSUE_TYPES = [
-  ['mismatched', 'Mismatched shoe'],
-  ['stolen', 'Stolen package'],
+  ['damaged_package', 'Package arrived damaged'],
+  ['boxes_damaged', 'Shoe boxes damaged'],
   ['ripped', 'Package ripped open'],
-  ['improperly_packed', 'Improperly packed'],
+  ['tampered', 'Merchandise appears removed / tampered with'],
+  ['missing_item', 'Item appears to be missing'],
   ['missing_boxes', 'Missing boxes'],
   ['shortfall', 'Short count (expected vs received)'],
+  ['improperly_packed', 'Supplier packed it improperly'],
+  ['mismatched', 'Mismatched shoe'],
+  ['stolen', 'Stolen package'],
   ['other', 'Other'],
 ];
+export const issueTypeLabel = (t) => (
+  t === 'note' ? 'Key note' : t === 'no_box' ? 'No box'
+    : (ISSUE_TYPES.find(([k]) => k === t) || [])[1] || String(t || 'Issue')
+);
 
 // Per-unit defect types flagged on the receiving Review screen (V6 Feature 4).
 // Each flagged issue picks one of these; stored on the unit's 'issue' event.

@@ -433,11 +433,21 @@ export function DateRangeBar({ mode, anchor, onChange, right }) {
 }
 
 // Sizes as discrete chips (clearer than a run-on string when there are many).
-export function SizesQty({ sizes }) {
+// With `onPick`, each chip is a button that narrows the group to that size (Inventory);
+// `active` marks the size currently picked. Without it the chips are plain text (PH).
+export function SizesQty({ sizes, onPick = null, active = null }) {
   if (!sizes || !sizes.length) return <span className="muted">—</span>;
   return (
     <span className="szq">
-      {sizes.map((s) => <span className="szq-chip" key={s.size}><span className="szq-size">{s.size}</span><span className="szq-qty">×{s.qty}</span></span>)}
+      {sizes.map((s) => onPick ? (
+        <button type="button" className={`szq-chip pick ${active === s.size ? 'on' : ''}`} key={s.size}
+          aria-pressed={active === s.size} title={active === s.size ? 'Show every size' : `Show only size ${s.size}`}
+          onClick={(e) => { e.stopPropagation(); onPick(s.size); }}>
+          <span className="szq-size">{s.size}</span><span className="szq-qty">×{s.qty}</span>
+        </button>
+      ) : (
+        <span className="szq-chip" key={s.size}><span className="szq-size">{s.size}</span><span className="szq-qty">×{s.qty}</span></span>
+      ))}
     </span>
   );
 }
@@ -921,7 +931,7 @@ export function RemoveUnitsModal({ title, sku, units, onClose, onDone }) {
 }
 
 // Preferences — saved automatically (localStorage) as the user toggles.
-export function PreferencesModal({ prefs, onCameraZoom, onRawVins, onClose }) {
+export function PreferencesModal({ prefs, onCameraZoom, onRawVins, onSoftKeypad, onClose }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -975,6 +985,31 @@ export function PreferencesModal({ prefs, onCameraZoom, onRawVins, onClose }) {
                   className={`btn sm ${!!prefs.rawVins === v ? 'primary' : 'ghost'}`}
                   aria-pressed={!!prefs.rawVins === v}
                   onClick={() => onRawVins(v)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {onSoftKeypad && (
+          <div className="pref-row">
+            <div className="pref-text">
+              <div className="pref-label">On-screen keypad</div>
+              <div className="pref-help">
+                The ⌨ button on every screen. For when a Bluetooth scanner is paired and the
+                phone hides its own keyboard — tap a field, then type on this one.
+              </div>
+            </div>
+            <div className="zoom-toggle" role="group" aria-label="On-screen keypad">
+              {[['Off', false], ['On', true]].map(([label, v]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`btn sm ${(prefs.softKeypad !== false) === v ? 'primary' : 'ghost'}`}
+                  aria-pressed={(prefs.softKeypad !== false) === v}
+                  onClick={() => onSoftKeypad(v)}
                 >
                   {label}
                 </button>

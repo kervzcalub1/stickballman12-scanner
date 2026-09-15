@@ -29,6 +29,13 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 - A merged row's checkbox selects **all member VINs** for bulk actions; expand
   shows a per-VIN **Units** list (each links to its detail/history; labels print
   per VIN). Status change on a group applies to all its VINs via bulk-status.
+- **A size chip is a filter (2026-09-15).** `SizesQty` takes `onPick`/`active`; on
+  Inventory (row, mobile card, and the detail's Sizes line) tapping a chip opens the
+  row narrowed to that size (`sizePick[g.key]`, `pickSize`). The Units list, Location,
+  and **every action's count** — Print labels (n), Move to shelf (n), Remove pairs, and
+  the group Status ("size 7W · 3") — act on the narrowed set. Same chip again, or "Show
+  all N", widens it. PH's use of `SizesQty` passes no `onPick` and stays plain text.
+  `e2e/inventory-size-chip.spec.js`.
 
 ## Features
 - Search box: scan a VIN (gun/camera) to open it, or type VIN / SKU / name /

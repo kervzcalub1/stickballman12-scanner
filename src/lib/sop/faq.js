@@ -45,6 +45,13 @@ export const FAQ = [
     area: 'reference', roles: ALL, see: 'troubleshooting',
     keywords: ['keyboard', 'iphone', 'ios', 'focus', 'safari', 'mobile'],
   },
+  {
+    id: 'faq-keyboard-scanner',
+    q: 'A Bluetooth scanner is paired and the keyboard never shows — how do I type a size or a SKU?',
+    a: 'That is iOS, not the app: a paired Bluetooth scanner is a hardware keyboard to the phone, so it hides the on-screen keyboard for every field. Use the app’s own keypad — the ⌨ button at the bottom-left of every screen on a phone. Tap the field, tap ⌨, type; Enter does what the scanner’s Enter does. Turn it off under Preferences (the gear) if you never need it. Many scanners can also toggle the iPhone keyboard themselves — a double-press of the trigger, or a setup barcode in their manual — which is the other way round the same problem.',
+    area: 'reference', roles: ALL, see: 'troubleshooting',
+    keywords: ['bluetooth', 'scanner', 'gun', 'keyboard', 'keypad', 'hidden', 'iphone', 'ios', 'type', 'manual entry', 'copy paste'],
+  },
 
   // ------------------------------------------------------------- statuses ---
   {

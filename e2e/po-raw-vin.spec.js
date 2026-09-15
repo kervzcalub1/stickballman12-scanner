@@ -111,7 +111,7 @@ test('the manifest asks for a sticker per ticked pair, and marks the row it will
   // Nothing ticked yet: the box hasn't been opened, so there is nothing to stick.
   const bar = page.locator('.po-sticker-bar');
   await expect(bar).toBeVisible();
-  await expect(bar.locator('.rawvin-beat')).toContainText('Tick a size');
+  await expect(bar.locator('.rawvin-beat')).toContainText('Scan each shoe');
 
   const row = page.locator('.po-manifest-size').first();
   await row.locator('input[type="checkbox"]').check();
@@ -137,7 +137,7 @@ test('the manifest asks for a sticker per ticked pair, and marks the row it will
   await bar.getByRole('button', { name: 'Add' }).click();
   await expect(row.locator('.po-flag.id')).toHaveText('1ID 2/2');
   await expect(row).not.toHaveClass(/needs-fix/);
-  await expect(bar.locator('.rawvin-beat')).toContainText('Every ticked pair has its 1ID');
+  await expect(bar.locator('.rawvin-beat')).toContainText('Every pair has its 1ID');
 
   // Review now opens, and the pairs carry the numbers that are on the shoes — no
   // dated VIN was minted behind the scan.

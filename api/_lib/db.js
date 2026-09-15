@@ -1518,7 +1518,12 @@ export async function getBatchWithBoxes(id) {
   if (!b[0]) return null;
   const boxes = await listBatchBoxes(id);
   const items = await listItemsByBatch(id);
-  return { batch: b[0], boxes, items };
+  // What was wrong with the shipment, and the receiver's key notes — recorded on the
+  // Issues step and, until now, shown only under Receiving → Recent.
+  const issues = await db()`
+    SELECT id, type, description, expected_count, received_count, created_by, created_at
+      FROM shipment_issues WHERE batch_id = ${id} ORDER BY id`;
+  return { batch: b[0], boxes, items, issues };
 }
 
 // Open (resumable) multi-box batches, newest first, with progress counts.

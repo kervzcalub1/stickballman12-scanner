@@ -1,4 +1,4 @@
-// GET /api/batches/full?id=… -> { ok, batch, boxes, items }
+// GET /api/batches/full?id=… -> { ok, batch, boxes, items, issues }
 // Batch Page view: the batch row + its boxes (with received item counts) + every
 // item (grouped by box on the client, VIN → history). (Feature 7)
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
@@ -23,7 +23,7 @@ export default async function handler(req, res) {
     // itself something the PH team doesn't see.
     if (user.role === 'ph_team' && PH_EXCLUDED_KINDS.includes(found.batch?.kind))
       return send(res, 404, { ok: false, error: 'Batch not found.' });
-    return send(res, 200, { ok: true, batch: found.batch, boxes: found.boxes, items: found.items });
+    return send(res, 200, { ok: true, batch: found.batch, boxes: found.boxes, items: found.items, issues: found.issues || [] });
   } catch (e) {
     console.error('[batches/full]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load the batch.' });

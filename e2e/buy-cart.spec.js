@@ -799,6 +799,55 @@ test('the buyer builds a request, sees no call on it, and the desk sees both', a
   expect(cartId).toBeGreaterThan(0);
 });
 
+test('every row a reader produced has to be ticked by a person before the lines save', async ({ page }) => {
+  const cartId = Number((await pool.query(
+    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total)
+     VALUES ($1,$2,'E2E Store','E2E: ticking the receipt rows','funded',100,400) RETURNING id`,
+    [people.buyer.uid, people.buyer.name])).rows[0].id);
+  // The desk that funded it states what the receipt says (an approver's say is over
+  // once the request is funded).
+  await as(page, 'issuer');
+  await page.goto('/ph/gift-card-buying');
+  await page.locator('.bc-table-wrap tr.bc-row', { hasText: 'ticking the receipt rows' }).first().click();
+  const card = page.locator('.bc-receipt');
+  await expect(card).toBeVisible();
+
+  // Two lines read from pasted text: both land PENDING, and Save waits.
+  await card.locator('.bc-paste-box').fill('CT4838-004  8   1   195.00\nDD1391-100  10  1   195.00\nSubtotal 390.00\nTax 32.18\nTotal 422.18');
+  await card.getByRole('button', { name: 'Read it' }).click();
+  const rows = card.locator('.bc-review-table tbody tr');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toHaveClass(/bc-row-pending/);
+  await expect(card).toContainText('2 of 2 still to check');
+  const save = card.getByRole('button', { name: /Check 2 more rows to save/ });
+  await expect(save).toBeDisabled();
+
+  // Editing a field does not tick the row — the tick is a separate, deliberate act.
+  await rows.nth(0).locator('input').nth(1).fill('8.5');
+  await expect(rows.nth(0)).toHaveClass(/bc-row-pending/);
+
+  await rows.nth(0).locator('.bc-row-tick').click();
+  await expect(rows.nth(0)).toHaveClass(/bc-row-ok/);
+  await expect(card.getByRole('button', { name: /Check 1 more row to save/ })).toBeDisabled();
+  await rows.nth(1).locator('.bc-row-tick').click();
+  await expect(card).not.toContainText('still to check');
+  // A row somebody adds by hand is checked by construction.
+  await card.getByRole('button', { name: 'Add a row' }).click();
+  await expect(rows.nth(2)).toHaveClass(/bc-row-ok/);
+  await rows.nth(2).locator('input').first().fill('CW2288-111');
+  await rows.nth(2).locator('input').nth(1).fill('9');
+  await rows.nth(2).locator('input').nth(4).fill('10');
+
+  await card.getByRole('button', { name: 'Save these lines' }).click();
+  await expect(card.getByRole('button', { name: 'Re-read the receipt' })).toBeVisible();
+  const saved = await pool.query('SELECT sku, size, source FROM buy_cart_receipt_lines WHERE cart_id = $1 ORDER BY id', [cartId]);
+  expect(saved.rows.map((r) => `${r.sku}:${r.size}:${r.source}`)).toEqual(['CT4838-004:8.5:paste', 'DD1391-100:10:paste', 'CW2288-111:9:manual']);
+
+  await pool.query('DELETE FROM buy_cart_receipt_lines WHERE cart_id = $1', [cartId]);
+  await pool.query('DELETE FROM buy_cart_events WHERE cart_id = $1', [cartId]);
+  await pool.query('DELETE FROM buy_carts WHERE id = $1', [cartId]);
+});
+
 test('a request needs a purpose and a store before it can be sent', async ({ request }) => {
   const { body } = await call(request, 'buyer', 'cart/create', {});
   const cartId = Number(body.cart.id);

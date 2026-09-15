@@ -1354,7 +1354,7 @@ await sql(`
 `);
 await sql(`ALTER TABLE buy_cart_receipt_lines DROP CONSTRAINT IF EXISTS buy_cart_receipt_lines_source_check`);
 await sql(`ALTER TABLE buy_cart_receipt_lines ADD CONSTRAINT buy_cart_receipt_lines_source_check
-           CHECK (source IN ('pdf','ocr','paste','manual'))`);
+           CHECK (source IN ('pdf','ocr','paste','manual','email'))`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_receipt_lines_cart_idx ON buy_cart_receipt_lines (cart_id, id)`);
 
 // The trail. Append-only, never edited, never read by a list screen — the same shape

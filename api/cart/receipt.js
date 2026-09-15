@@ -42,7 +42,7 @@ export default async function handler(req, res) {
       qty: Number.isInteger(Number(l.qty)) && Number(l.qty) > 0 ? Math.min(Number(l.qty), 999) : 1,
       name: String(l.name ?? '').trim().slice(0, 200) || null,
       unitPrice: money(l.unitPrice), totalPrice: money(l.totalPrice),
-      source: ['pdf', 'ocr', 'paste', 'manual'].includes(l.source) ? l.source : 'manual',
+      source: ['pdf', 'ocr', 'paste', 'manual', 'email'].includes(l.source) ? l.source : 'manual',
     }));
     if (!lines.length) return send(res, 400, { ok: false, error: 'No receipt lines to record.' });
 

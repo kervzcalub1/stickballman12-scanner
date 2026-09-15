@@ -85,6 +85,8 @@ export function homeCardBadges(key, c) {
   if (key === 'inventory') return [['Needs shelf', c.needs_shelf]];
   if (key === 'nobox') return [['No box', c.no_box]];
   if (key === 'costs') return [['No cost', c.missing_cost]];
+  // Shipments received without a manifest that nobody has audited yet.
+  if (key === 'batches') return [['Audit', c.batches_to_audit]];
   if (key === 'rescale') return [['Restock', c.restock_pending]];
   // Pre-sell units still waiting for somebody to say which orders they cover. Amber:
   // nothing on that shipment can be listed until the question is answered.
@@ -215,6 +217,9 @@ export const HOME_ATTENTION = [
   { key: 'rescale', label: 'Restock', count: 'restock_pending' },
   { key: 'presell', label: 'Pre-sell to work', count: 'presell_pending' },
   { key: 'reconcile', label: 'PO reconcile', count: 'po_to_reconcile' },
+  // Shipments received without a manifest and not yet signed off. `query` opens the
+  // Batches page already filtered to them (Home writes it after go()).
+  { id: 'batches-audit', key: 'batches', label: 'No manifest — audit', count: 'batches_to_audit', query: { audit: 'pending' } },
   // Company money waiting on a person. Both ends of the gift-card process stall the
   // same way — a buyer stuck in a shop, or a spend nobody has verified.
   // Two rows, one destination — so they need an explicit `id`: `key` is the screen to

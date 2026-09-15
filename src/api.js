@@ -169,7 +169,7 @@ export const api = {
   previewBatchMerge: (source, target) => get(`/api/admin/merge-batches?source=${source}&target=${target}`),
   mergeBatches: (source, target) => post('/api/admin/merge-batches', { source, target }),
   batchFilterOptions: () => get('/api/batches/filter-options'),
-  batchList: ({ kind, q, page, excludeOpen, from, to, supplier, po } = {}) => {
+  batchList: ({ kind, q, page, excludeOpen, from, to, supplier, po, audit } = {}) => {
     const p = new URLSearchParams();
     if (kind) p.set('kind', kind);
     if (q) p.set('q', q);
@@ -179,9 +179,12 @@ export const api = {
     if (to) p.set('to', to);
     if (supplier) p.set('supplier', supplier);
     if (po) p.set('po', po);
+    if (audit) p.set('audit', audit);
     const qs = p.toString();
     return get(`/api/batches/list${qs ? `?${qs}` : ''}`);
   },
+  // Sign off the audit on a batch received without a manifest.
+  batchAudit: (batchId, note) => post('/api/batches/audit', { batchId, note }),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
   // Exact UPC/SKU match against our own stock (Box Labels asks this before the catalogue).

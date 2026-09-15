@@ -35,6 +35,7 @@ async function openItemsStep(page) {
   await expect(page.getByText('Shipment details')).toBeVisible();
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.track-field input').first().fill(`E2E-RAPID-${Date.now()}`);
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
   await page.getByRole('button', { name: 'Next →' }).click();
   await expect(page.locator('.scanbar')).toBeVisible();
 }

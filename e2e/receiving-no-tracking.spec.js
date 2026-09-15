@@ -80,6 +80,7 @@ test.describe('Receiving · no tracking number (wizard)', () => {
     // Ticking it disables the field (and its scan/photo buttons) so the checkbox and
     // the field can't disagree about what this shipment had.
     await page.locator('.no-track-check input').check();
+    await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
     const track = page.locator('.track-field input').first();
     await expect(track).toBeDisabled();
     await expect(track).toHaveAttribute('placeholder', 'No tracking number');

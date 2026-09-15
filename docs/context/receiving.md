@@ -467,3 +467,33 @@ race caused the black/stalled preview).
 
 ## Product lookup (fills name/sku/image/sizes/gender/colorway)
 `searchUpc` / `searchSku` — see `integrations.md`.
+
+## "Did this package come with a manifest?" + the audit flag (2026-09-15)
+Step 1 of every SHIPMENT receive (not rescale / in-store / existing, not box mode — the
+batch already answered) asks a **required** Yes/No (`header.manifestReceived`, checked in
+`goStep2`). `applyPo` pre-answers **Yes** when the PO has lines (the checklist IS the
+manifest), still changeable. Stored as `batches.manifest_received BOOLEAN` — **NULL =
+never asked** (pre-feature rows, non-shipment kinds), so nothing old is retroactively
+flagged. `commit.js` / `create-open.js` pass it through; `manifestFlag(h)` in db.js
+normalises the tri-state.
+
+**No = flagged for audit.** "Received blind" means nobody has checked the contents
+against anything, so until a named person signs it off:
+- it counts in `pendingCounts.batches_to_audit` → Home *Needs attention* card ("No
+  manifest — audit", opens `/batches?audit=pending` via `HOME_ATTENTION[].query`, which
+  `go(v, query)` writes after the path change) and the Batches card badge;
+- the Batches page has an **Audit** checkbox filter (`?audit=pending`, `listBatches` /
+  `searchBatches` `audit` option, and `inRange` for the open list) and an amber
+  `AuditChip` on the row ("No manifest · audit pending" → "· audited");
+- the Batch page shows a *Received without a manifest — audit pending* block. It points
+  at what to check against: the batch's own PO if linked; else `api.poLookup(tracking)`
+  once — if a PO carries that tracking number, "Open PO-xxx" (`onOpenPo` → reconcile);
+  else "confirm with the supplier". **Mark audited** opens a modal (optional note) →
+  `POST /api/batches/audit` → `auditBatch` sets `audited_at/by/note` **only if
+  manifest_received = false AND audited_at IS NULL** (a second signature is 409, never an
+  overwrite; a batch received WITH a manifest is 409 too).
+The commit confirm prints the flag before the person commits. Schema: four `ADD COLUMN IF
+NOT EXISTS` + a partial index — **run `db:setup` before deploying**. Guarded by
+`e2e/receiving-manifest-audit.spec.js`; every spec that walks Step 1 now answers the
+question (`.manifest-q` → Yes).
+

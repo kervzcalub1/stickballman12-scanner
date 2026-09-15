@@ -79,6 +79,7 @@ test('each shoe carries its own cost; blank stays blank and 0 is a real 0', asyn
   await expect(page.getByText('Shipment details')).toBeVisible();
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.track-field input').first().fill(`E2E-COST-${stamp}`);
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
   // No batch default on purpose — the card has to say so.
   await page.getByRole('button', { name: 'Next →' }).click();
   await expect(page.locator('.scanbar')).toBeVisible();

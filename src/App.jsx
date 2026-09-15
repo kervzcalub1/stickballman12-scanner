@@ -164,12 +164,15 @@ export default function App() {
   if (user.role === 'ph_team') return withAdvisor(<PHTeamApp user={user} onSignOut={signOut} />);
   if (user.role === 'superadmin' && phMode) return withAdvisor(<PHTeamApp user={user} onSignOut={signOut} onExit={exitPh} />);
 
-  const go = (v) => {
+  const go = (v, query = null) => {
     setView(v);
     // Changing page drops the old page's query — another screen's ?sku= is meaningless
     // and would read as state that failed to load.
     if (window.location.pathname !== pathForView(v)) window.history.pushState(null, '', pathForView(v));
     else clearQuery();
+    // …unless the caller is opening the page in a specific state (an attention card
+    // that lands on Batches already filtered to "needs audit").
+    if (query) for (const [k, val] of Object.entries(query)) writeParam(k, val);
   };
   const openItem = (vin) => { setOpenVin(vin); go('inventory'); };
   // Jump straight from "batch saved, but this PO is 2 short" into that PO's report.
@@ -196,7 +199,7 @@ export default function App() {
   // circuits to PHTeamApp above and never reaches this router.
   if (view === 'existing-stock') return withAdvisor(<ExistingStock navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
   // `box` is set when continuing an EXISTING pending box; absent = add a new one.
-  if (view === 'batches') return withAdvisor(<BatchPage initialBatchId={batchReturnId} onAddBox={(batch, box = null) => { setBatchContext({ ...batch, box }); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'batches') return withAdvisor(<BatchPage initialBatchId={batchReturnId} onAddBox={(batch, box = null) => { setBatchContext({ ...batch, box }); setBatchReturnId(batch.id); go('receiving'); }} onOpenItem={openItem} onOpenPo={openReconcile} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'inventory') return withAdvisor(<Inventory navBack={navBack} openVin={openVin} onConsumedVin={() => setOpenVin(null)} onOpenCosts={openCosts} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'report') return withAdvisor(<PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'deleted') return withAdvisor(<DeletedItems onHome={() => go('home')} onSignOut={signOut} />);
@@ -220,5 +223,5 @@ export default function App() {
   if (view === 'locations') return withAdvisor(<Locations onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'reconcile') return withAdvisor(<Reconciliation canReconcile={user.role === 'warehouse' || isPrivilegedRole(user.role)} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'sop') return withAdvisor(<Sop user={user} navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
-  return withAdvisor(<Home user={user} onPick={(v) => { setBatchContext(null); if (v === 'ph') return enterPh(); go(v); }} onSignOut={signOut} />);
+  return withAdvisor(<Home user={user} onPick={(v, query) => { setBatchContext(null); if (v === 'ph') return enterPh(); go(v, query); }} onSignOut={signOut} />);
 }

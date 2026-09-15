@@ -118,6 +118,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     buyer: 'stickballman12', supplier: '', tracking: batchContext?.box?.tracking_number || '', noTracking: false, dateReceived: today,
     defaultCost: '', notes: '', specialRules: '', origin: isInstore ? '' : 'returned', originOther: '',
     batchTag: '', expectedBoxes: '1', // V6 Feature 7: >1 → open multi-box batch
+    // "Did this package come with a manifest?" — null until answered. A shipment
+    // received WITHOUT one is flagged for an audit against its tracking number's order.
+    manifestReceived: null,
   });
   // The reason stored on the batch: the custom text when "Other" is picked.
   const effectiveOrigin = header.origin === 'other'
@@ -169,6 +172,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       batchTag: data.po.tag_code || h.batchTag,
       tracking: '',
       expectedBoxes: String(Math.max(1, boxes.length)),
+      // An order whose manifest is already in the app answers the question itself —
+      // the checklist on the next step IS the manifest. Still changeable: a PO can be
+      // raised with no lines at all, and that one is a blind receive like any other.
+      manifestReceived: (data.lines || []).length > 0 ? true : h.manifestReceived,
     }));
     // Every label becomes a box slot — receiving each is a manifest checklist. The slot
     // takes the LABEL'S number, not its position in the list: box 4 of the batch has to be
@@ -1405,6 +1412,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       setError('Enter the tracking # — or tick “No tracking number”.'); return;
     }
     if (isRescale && header.origin === 'other' && !String(header.originOther).trim()) { setError('Enter a custom reason.'); return; }
+    // The manifest question is the one Step-1 answer that decides whether this shipment
+    // gets audited afterwards, so it cannot be skipped past.
+    if (!noShipment && !isBoxMode && !isInstore && typeof header.manifestReceived !== 'boolean') {
+      setError('Say whether this package came with a manifest — Yes or No.'); return;
+    }
     // A new box needs its number BEFORE anything is scanned — after the commit it takes a
     // renumber on the Batch page to correct, and a wrong number here is what leaves box 6
     // of the shipment sitting in the system as box 10.
@@ -1571,7 +1583,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       setItems([]); setIssues([]); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1);
       // noTracking resets with the tracking # on purpose: left sticky, the NEXT
       // shipment would quietly commit as untracked too.
-      setHeader((h) => ({ ...h, tracking: '', noTracking: false, notes: '', specialRules: '' })); // keep buyer/supplier/date/cost
+      setHeader((h) => ({ ...h, tracking: '', noTracking: false, notes: '', specialRules: '', manifestReceived: null })); // keep buyer/supplier/date/cost
     } catch (err) {
       setShowConfirm(false);
       if (err.unauthorized) return onSignOut();
@@ -1814,6 +1826,23 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {!noShipment && !isBoxMode && expectedBoxesNum > 1 && (
                     <label className="batch-form-wide">Batch tag<input value={header.batchTag} maxLength={120}
                       placeholder="Code on the shipping label (e.g. Joey JP23 AJ40)" onChange={(e) => setH('batchTag', e.target.value)} /></label>
+                  )}
+                  {!noShipment && !isBoxMode && (
+                    <div className="batch-form-wide manifest-q" role="group" aria-label="Was this package received with a manifest?">
+                      <span className="manifest-q-lbl">Did this package come with a manifest / packing list? <b>*</b></span>
+                      <div className="seg sm">
+                        <button type="button" className={`seg-btn ${header.manifestReceived === true ? 'on yes' : ''}`} aria-pressed={header.manifestReceived === true}
+                          onClick={() => setH('manifestReceived', true)}>Yes</button>
+                        <button type="button" className={`seg-btn ${header.manifestReceived === false ? 'on no' : ''}`} aria-pressed={header.manifestReceived === false}
+                          onClick={() => setH('manifestReceived', false)}>No</button>
+                      </div>
+                      {header.manifestReceived === false && (
+                        <span className="manifest-q-note">No manifest — this shipment will be <b>flagged for an audit</b>: somebody confirms against the tracking number's order (or with the supplier) that everything expected arrived.</span>
+                      )}
+                      {header.manifestReceived === true && receivingPo && (receivingPo.lines || []).length > 0 && (
+                        <span className="manifest-q-note ok">The order's manifest is in the app — the checklist on the next step is it.</span>
+                      )}
+                    </div>
                   )}
                   {!noShipment && !isBoxMode && <label className="batch-form-wide">Special rules<input value={header.specialRules} onChange={(e) => setH('specialRules', e.target.value)} /></label>}
                   {!isBoxMode && <label className="batch-form-wide">Notes<input value={header.notes} onChange={(e) => setH('notes', e.target.value)} /></label>}
@@ -2451,6 +2480,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 : (<>
                     <div><b>{totalItems}</b> units ({items.length} shoe{items.length === 1 ? '' : 's'}) · total <b>${totalCost.toFixed(2)}</b></div>
                     {uncostedUnits > 0 && <div className="warn-line">{uncostedUnits} pair{uncostedUnits === 1 ? '' : 's'} with no cost — they’ll wait on the Costs page.</div>}
+                    {header.manifestReceived === false && <div className="warn-line">Received without a manifest — flagged for audit against {header.tracking?.trim() ? `tracking ${header.tracking.trim()}` : 'its tracking number'}.</div>}
                     <div className="muted">Supplier: {header.supplier || '—'} · Buyer: {header.buyer || '—'}</div>
                     {isMultiBoxNew && activeSlot != null
                       ? <div className="muted">Box {Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} of {boxSlots.length} · Tracking: {boxSlots[activeSlot]?.tracking || '—'}</div>

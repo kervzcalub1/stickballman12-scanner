@@ -888,11 +888,15 @@ export async function removeProductPhoto(sku, angle, source = 'warehouse') {
 
 /* ------------------------ v4: batches & items ------------------------- */
 
+// "Did this package come with a manifest?" as a tri-state: true / false / NULL (never
+// asked — rescale, in-store, existing, and everything from before the question).
+const manifestFlag = (h) => (h.manifestReceived === true ? true : h.manifestReceived === false ? false : null);
+
 export async function createBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, tracking_number, no_tracking, date_received,
-       default_cost, notes, special_rules, kind, origin, duplicate_of, po_id, pre_sell, status, created_by, committed_at)
+       default_cost, notes, special_rules, kind, origin, duplicate_of, po_id, pre_sell, manifest_received, status, created_by, committed_at)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null}, ${h.noTracking === true},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
@@ -902,7 +906,7 @@ export async function createBatch(h, createdBy) {
        -- always had it, which is the only reason this hadn't bitten.
        ${h.specialRules || null}, ${['receiving', 'rescale', 'instore', 'existing', 'boxes'].includes(h.kind) ? h.kind : 'receiving'},
        ${h.origin || null}, ${h.duplicateOf ?? null}, ${h.poId ?? null}, ${h.preSell === true},
-       'committed', ${createdBy || null}, now())
+       ${manifestFlag(h)}, 'committed', ${createdBy || null}, now())
     RETURNING id, batch_code
   `;
   return rows[0];
@@ -1196,12 +1200,14 @@ export async function insertIssues(batchId, issues, createdBy) {
 // `po`: a PO code, or the string 'none' for "not received against an order at all" —
 // which is a question worth asking now that a pair can say which order it came from.
 export async function listBatches(limit = 50, kind = null,
-  { phSafe = false, offset = 0, excludeOpen = false, from = null, to = null, supplier = null, po = null } = {}) {
+  { phSafe = false, offset = 0, excludeOpen = false, from = null, to = null, supplier = null, po = null, audit = null } = {}) {
   const poCode = po && po !== 'none' ? po : null;
   const poNone = po === 'none';
+  const auditPending = audit === 'pending';   // received with no manifest, not yet signed off
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
            b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.merged_into_batch_id,
+           b.manifest_received, b.audited_at, b.audited_by,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
            count(*) OVER ()::int AS total_count,
@@ -1223,6 +1229,7 @@ export async function listBatches(limit = 50, kind = null,
       AND (${poNone} = false OR b.po_id IS NULL)
       AND (${poCode}::text IS NULL
            OR b.po_id = (SELECT p.id FROM purchase_orders p WHERE p.po_code = ${poCode}))
+      AND (${auditPending} = false OR (b.manifest_received = false AND b.audited_at IS NULL))
     ORDER BY b.created_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `;
@@ -1263,15 +1270,17 @@ export async function batchFilterOptions({ phSafe = false } = {}) {
 //
 // Stripping to A-Z0-9 also means no `%` or `_` can reach LIKE — the wildcards are ours.
 export async function searchBatches(query,
-  { phSafe = false, limit = 25, offset = 0, from = null, to = null, supplier = null, po = null } = {}) {
+  { phSafe = false, limit = 25, offset = 0, from = null, to = null, supplier = null, po = null, audit = null } = {}) {
   const poCode = po && po !== 'none' ? po : null;
   const poNone = po === 'none';
+  const auditPending = audit === 'pending';
   const key = searchTrackKey(query);
   if (!key) return [];              // "----" normalises to nothing: match nothing, not everything
   const like = `%${key}%`;
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
            b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.merged_into_batch_id,
+           b.manifest_received, b.audited_at, b.audited_by,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
            count(*) OVER ()::int AS total_count,
@@ -1291,6 +1300,7 @@ export async function searchBatches(query,
       AND (${poNone} = false OR b.po_id IS NULL)
       AND (${poCode}::text IS NULL
            OR b.po_id = (SELECT p.id FROM purchase_orders p WHERE p.po_code = ${poCode}))
+      AND (${auditPending} = false OR (b.manifest_received = false AND b.audited_at IS NULL))
       AND (
         regexp_replace(upper(coalesce(b.batch_code, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
         OR regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
@@ -1330,12 +1340,12 @@ export async function createOpenBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, no_tracking, date_received, default_cost, notes, special_rules,
-       kind, batch_tag, expected_boxes, po_id, po_link_source, po_linked_at, pre_sell, status, created_by)
+       kind, batch_tag, expected_boxes, po_id, po_link_source, po_linked_at, pre_sell, manifest_received, status, created_by)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.noTracking === true}, ${h.dateReceived || null},
        ${h.defaultCost ?? null}, ${h.notes || null}, ${h.specialRules || null},
        ${h.kind === 'boxes' ? 'boxes' : 'receiving'}, ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null},
-       ${h.poId ? 'receiving' : null}, ${h.poId ? new Date() : null}, ${h.preSell === true},
+       ${h.poId ? 'receiving' : null}, ${h.poId ? new Date() : null}, ${h.preSell === true}, ${manifestFlag(h)},
        'open', ${createdBy || null})
     RETURNING id, batch_code
   `;
@@ -1503,6 +1513,18 @@ export async function listItemsByBatch(batchId) {
 }
 
 // Full batch view for the Batch Page: batch row + boxes (+counts) + items.
+// Sign off the audit on a batch received without a manifest: somebody has confirmed,
+// against the tracking number's order or with the supplier, that what was expected is
+// what arrived. Only a batch that IS awaiting one — re-running it must not overwrite
+// who signed the first time.
+export async function auditBatch(id, note, by) {
+  const rows = await db()`
+    UPDATE batches SET audited_at = now(), audited_by = ${by || null}, audit_note = ${note || null}
+     WHERE id = ${id} AND manifest_received = false AND audited_at IS NULL
+     RETURNING id, batch_code, audited_at, audited_by, audit_note`;
+  return rows[0] || null;
+}
+
 export async function getBatchWithBoxes(id) {
   // The PO facts ride along so the page can say whether this shipment came in against an
   // order — and, when we recorded it, whether it was received that way or attached later.
@@ -1525,6 +1547,7 @@ export async function getBatchWithBoxes(id) {
 export async function listOpenBatches() {
   return await db()`
     SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes, b.pre_sell,
+           b.manifest_received, b.audited_at, b.audited_by,
            b.tracking_number, b.no_tracking,
            b.date_received, b.created_by, b.created_at,
            (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
@@ -1862,6 +1885,11 @@ export async function pendingCounts() {
       -- a $0 is a claim on file, not a known gap — it's a review list, not a chore.
       count(*) FILTER (WHERE cost = 0 AND costable
         AND status NOT IN ('missing','issue'))::int                    AS zero_cost,
+      -- Shipments received WITHOUT a manifest and not yet audited (batches.manifest_received
+      -- = false, audited_at NULL). A per-batch fact, so it's a scalar subquery rather than a
+      -- FILTER over units — a 40-pair blind receive is one audit, not forty.
+      (SELECT count(*)::int FROM batches ab
+        WHERE ab.manifest_received = false AND ab.audited_at IS NULL)  AS batches_to_audit,
       -- SHOES waiting on a shelf. Empty boxes are shelved too, but they are counted
       -- separately below: a single carton of replacement boxes is a couple of hundred
       -- rows, and folding them in here would triple the warehouse's headline chore

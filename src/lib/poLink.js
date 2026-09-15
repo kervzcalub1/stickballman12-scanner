@@ -10,6 +10,8 @@ export function poHref(user, poId) {
   if (!poId) return '';
   const role = user?.role;
   if (role === 'supplier') return `/orders?po=${poId}`;
-  if (role === 'ph_team') return `${PH_PATHS.po}?po=${poId}`;
+  // `postatus` (PoOverview) is the screen that reads ?po=. `po` is the create-an-order
+  // form — a link there opened a blank "New batch" with the id silently ignored.
+  if (role === 'ph_team') return `${PH_PATHS.postatus}?po=${poId}`;
   return `/reconcile?po=${poId}`;
 }

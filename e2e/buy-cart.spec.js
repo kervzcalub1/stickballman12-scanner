@@ -425,6 +425,17 @@ test('a receipt found by its number in the mailbox lands in the same review tabl
   } finally { process.env.MAKE_RECEIPT_PARSER_URL = prev; }
 });
 
+test('a request links to its order on the screen that can open it, per role (pure)', async () => {
+  const { poHref } = await import('../src/lib/poLink.js');
+  // PH's order link used to go to /ph/purchase-orders — the CREATE form, which ignores
+  // ?po= and opened a blank "New batch". PO status is the screen that reads it.
+  expect(poHref({ role: 'ph_team' }, 39)).toBe('/ph/po-status?po=39');
+  expect(poHref({ role: 'supplier' }, 39)).toBe('/orders?po=39');
+  expect(poHref({ role: 'warehouse' }, 39)).toBe('/reconcile?po=39');
+  expect(poHref({ role: 'admin' }, 39)).toBe('/reconcile?po=39');
+  expect(poHref({ role: 'ph_team' }, null)).toBe('');
+});
+
 test('the receipt checks the reading against its own arithmetic', async () => {
   const { checkReceiptRead } = await import('../src/lib/receiptCheck.js');
   const real = [

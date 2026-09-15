@@ -1254,6 +1254,26 @@ did. Approvals **freeze** at `funded` — you cannot re-decide a line the money 
 already gone out against. Cancelling is only possible before any card exists; after that
 there is money to account for and it must be reconciled, not cancelled.
 
+## Deleting a request (2026-09-16)
+`POST /api/cart/delete { cartId, reason }` → `deleteBuyCart`. Distinct from **Cancel**
+(keeps the row, says why): delete removes the cart and everything under it (lines,
+cards, files + their bucket objects, receipt lines, tasks, trail — all `ON DELETE
+CASCADE`) after archiving the whole thing as ONE JSON row in **`deleted_buy_carts`**
+(`cart_json` = `getBuyCartFull` + the full trail + file metadata; card codes are never in
+it — `code_enc` is stripped, `code_last4` survives). Needs **`db:setup`** (new table).
+- **Who:** anyone who can reach the request — the buyer on their own, any staff on any —
+  **until money is on it.** Once a gift card has been issued (`gc_total > 0` or any
+  `buy_cart_gift_cards` row, voided included — a voided card still went out), only
+  someone with **`approve_buying`** (or admin) may delete it. The buyer gets a 403 that
+  names the approver; the issuing/auditing desks get the same 403. The button on the
+  request page is disabled with that sentence as its title; the server is the rule.
+- A request that **raised a purchase order** is refused (409): the order is the
+  supplier's shipment and has its own delete (`po/delete`, refused while a batch is
+  linked) — that is where the decision belongs.
+- Bucket objects are deleted AFTER the rows, best effort: a leftover object is a cost,
+  a missing one under a live row would be a bug. 20/min, like Remove pairs.
+- Tested in `buy-cart.spec.js` → "can be deleted by whoever can reach it".
+
 ## Trail
 `buy_cart_events` — append-only, never edited, never read by a list screen, the same
 shape as `po_comments`. Every approval, card, file, reveal, audit and close. Comments

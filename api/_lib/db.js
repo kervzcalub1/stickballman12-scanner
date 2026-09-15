@@ -2808,6 +2808,74 @@ export async function deleteItems(vins, reason, by) {
   return { deleted: doomed.map((r) => r.vin), blocked };
 }
 
+// Delete a whole batch (2026-09-16). Its pairs go through deleteItems — one
+// deleted_items tombstone each — and the batch row itself is archived here as JSON
+// with its boxes and shipment issues before the row goes (batch_boxes and
+// shipment_issues are ON DELETE CASCADE, so without the snapshot they would vanish).
+//
+// Nothing is deleted while a single pair is sold or shipped: that money already
+// happened and `sales` hangs off the item. The caller gets `{ blocked }` and nothing
+// has changed — checked BEFORE deleteItems, which would otherwise take the live pairs
+// and leave the sold ones in a batch that then cannot be removed.
+export async function deleteBatch(batchId, reason, by) {
+  const sql = db();
+  const [b] = await sql`SELECT * FROM batches WHERE id = ${batchId}`;
+  if (!b) return { ok: false, error: 'not_found' };
+  const units = await sql`SELECT vin, status FROM items WHERE batch_id = ${batchId}`;
+  const blocked = units.filter((u) => TERMINAL_STATUSES.includes(u.status)).map((u) => u.vin);
+  if (blocked.length) return { ok: false, error: 'blocked', blocked };
+  const [snap] = await sql`
+    SELECT to_jsonb(b) AS batch,
+           coalesce((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.box_number) FROM batch_boxes x WHERE x.batch_id = b.id), '[]'::jsonb) AS boxes,
+           coalesce((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM shipment_issues s WHERE s.batch_id = b.id), '[]'::jsonb) AS issues
+      FROM batches b WHERE b.id = ${batchId}`;
+  const { deleted } = await deleteItems(units.map((u) => u.vin), reason ? `Batch deleted: ${reason}` : 'Batch deleted', by);
+  const json = { batch: snap.batch, boxes: snap.boxes, issues: snap.issues, vins: deleted };
+  await sql.transaction([
+    sql`INSERT INTO deleted_batches (batch_id, batch_code, supplier, kind, po_id, unit_count, reason, batch_json, deleted_by)
+        VALUES (${b.id}, ${b.batch_code}, ${b.supplier || null}, ${b.kind || null}, ${b.po_id || null},
+                ${deleted.length}, ${reason || null}, ${JSON.stringify(json)}::jsonb, ${by || null})`,
+    // The references that do NOT cascade: an order that recorded this batch as where it
+    // was received into, and the two batch-to-batch links the merge tools leave.
+    sql`UPDATE purchase_orders SET received_batch_id = NULL WHERE received_batch_id = ${batchId}`,
+    sql`UPDATE batches SET merged_into_batch_id = NULL WHERE merged_into_batch_id = ${batchId}`,
+    sql`UPDATE batches SET duplicate_of = NULL WHERE duplicate_of = ${batchId}`,
+    sql`DELETE FROM batches WHERE id = ${batchId}`,
+  ]);
+  return { ok: true, batchCode: b.batch_code, units: deleted.length };
+}
+
+// Every card ever issued against a request, voided ones included — the delete rule
+// asks "did money go out", and a voided card is still a card that went out.
+export async function countBuyCartGiftCards(cartId) {
+  const [r] = await db()`SELECT count(*)::int AS n FROM buy_cart_gift_cards WHERE cart_id = ${cartId}`;
+  return r?.n || 0;
+}
+
+// Delete a buying request (2026-09-16). The whole request — lines, cards (last four
+// only, never a code), files' metadata, receipt lines, the full trail — is archived as
+// one JSON row, then the cart row goes and the tables under it cascade. The bucket
+// objects are returned so the endpoint can remove them AFTER the rows are gone: a file
+// that outlives its row is a dangling download; a row that outlives its file is a
+// broken one, and of the two the first is the one to risk.
+export async function deleteBuyCart(cartId, reason, actor) {
+  const sql = db();
+  const full = await getBuyCartFull(cartId);
+  if (!full) return null;
+  const events = await sql`SELECT * FROM buy_cart_events WHERE cart_id = ${cartId} ORDER BY id`;
+  const files = await sql`SELECT id, kind, r2_key, name FROM buy_cart_files WHERE cart_id = ${cartId}`;
+  const cards = await sql`SELECT count(*)::int AS n FROM buy_cart_gift_cards WHERE cart_id = ${cartId}`;
+  const json = { ...full, events, files: files.map((f) => ({ ...f })) };
+  await sql.transaction([
+    sql`INSERT INTO deleted_buy_carts (cart_id, cart_code, buyer_name, status, gc_total, card_count, reason, cart_json, deleted_by, deleted_by_id)
+        VALUES (${cartId}, ${full.cart_code}, ${full.buyer_name || null}, ${full.status}, ${Number(full.gc_total) || 0},
+                ${cards[0]?.n || 0}, ${reason || null}, ${JSON.stringify(json)}::jsonb,
+                ${actor?.name || actor?.username || null}, ${actor && Number(actor.uid) ? Number(actor.uid) : null})`,
+    sql`DELETE FROM buy_carts WHERE id = ${cartId}`,
+  ]);
+  return { cartCode: full.cart_code, r2Keys: files.map((f) => f.r2_key).filter(Boolean) };
+}
+
 // The Deleted page: what was removed, newest first. `q` matches SKU / VIN / name.
 export async function listDeletedItems({ q = null, from = null, to = null, limit = 500 } = {}) {
   const like = q ? `%${String(q).trim()}%` : null;

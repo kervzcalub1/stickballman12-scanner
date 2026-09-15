@@ -185,3 +185,19 @@ still opens the pair). Note for anyone writing tests here: **the detail view has
 - Roles: warehouse + PH team (admin/superadmin auto-allowed via `requireRole`).
   Rate limit is tighter than bulk-status (20/min vs 30) — this one can't be undone
   from the UI, so a stuck button costs real rows.
+
+### Deleting a whole batch (2026-09-16)
+**Delete batch…** on the Batch page (warehouse + PH; not read-only views) →
+`POST /api/batches/delete { batchId, reason }` → `deleteBatch`. Every pair goes through
+`deleteItems` (one `deleted_items` tombstone each, reason prefixed "Batch deleted: …",
+so the Deleted page shows them), then the batch row is archived as JSON in
+**`deleted_batches`** (`batch_json` = the row + its `batch_boxes` + `shipment_issues`,
+which cascade, + the VINs) and deleted. The references that do NOT cascade are cleared
+in the same transaction: `purchase_orders.received_batch_id`, `batches.merged_into_batch_id`,
+`batches.duplicate_of`. Needs **`db:setup`** (new table).
+- **Refused whole while any pair is sold/shipped** (409 naming the count), checked
+  BEFORE `deleteItems` — otherwise the live pairs would go and the sold ones would be
+  left in a batch that then could not be removed. Remove the unsold pairs instead.
+- Consequences are the same as a miscount fix, at batch scale: counts, the PO's
+  received total and reconciliation, and the pending queues all move.
+- `e2e/batch-delete.spec.js`.

@@ -862,6 +862,47 @@ three were already dependencies; none costs an API call.
   `qty_differs`. Approved and bought are different claims and both are kept; where they
   part is a finding for the audit, not something to tidy away.
 
+## The receipt found by its number (2026-09-15)
+`api/cart/receipt-email.js` · **`MAKE_RECEIPT_PARSER_URL`** · Make scenario 6282792
+"Receipt parser — API → email (Gmail+Yahoo) → JSON", built in the `Make.com Stickballman12`
+project (parser source: `~/Make.com Stickballman12/receipt-parser/parser.js`).
+
+The receipt is already in a mailbox — the shop emailed it the moment the buyer paid.
+So the receipt card asks for the **order / transaction number** first: the server POSTs
+`{transaction_id}` to the scenario, Make searches the ordering mailboxes (Gmail full-text,
+then Yahoo IMAP `Inbox`), parses Champs / Nike in-store / adidas receipts, enriches with
+the catalogue (Nike UPC → StockX style id; adidas via our own `sku-lookup`), and answers
+**synchronously** (~5–15 s; Make's ceiling is 40 s, our timeout 45 s).
+
+- **A fourth source into the same review table.** Rows come back in the `receipt-read`
+  shape (`sku` = style id, falling back to the store code — never a UPC), `source:
+  'email'`, and `checkReceiptRead` runs against the email's OWN printed `totals`
+  (subtotal/tax/total/item count, `null` when not printed — never computed). The review
+  step does not relax because the reading came from the shop itself.
+- **The email is filed as the receipt.** Its plain text (`email.text`, ≤64 KB) is
+  written to `buy-carts/<code>/receipt-<ts>.txt` through `addBuyCartFile`, which is what
+  stamps `receipt_at` — "a receipt was received" stays a closing condition on an
+  attached file the auditor can open, whichever way it arrived. Filing failure is a
+  warning, not a refusal: the lines still come back and the buyer can attach a screenshot.
+- **Which email was read is shown** (subject · from · date in EST · "filed as the
+  receipt") above the rows. A short numeric id can substring-match an unrelated email on
+  Yahoo (a tracking number); the scenario then answers 200 with `store: null` and no
+  items, which the screen reports as "found an email but nothing on it read as a
+  purchased item" rather than as an empty table.
+- **Answers:** `{found:false}` (scenario 404) → "no email with that number", still 200
+  from us; a scenario fault/timeout → 502/504 "try again or upload"; unconfigured → 503,
+  **after** the access checks, so a stranger gets 403 either way. Same guards as
+  `receipt-read` (buyer-scoped supplier, `requireBuyerAccess`, 12/min, finished requests
+  refused). Every call writes `receipt_email_read` to the trail — found or not, with the
+  check verdict and the scenario's `warnings`.
+- **Standing caveats on the Make side:** the Gmail connection was the expired `ordermail`
+  one at handover and Yahoo was a personal account — swap both in the scenario. Yahoo is
+  searched in `Inbox` only; receipts auto-filed into "Champs Sports"/"Orders" folders are
+  a 404 until those folders are added. Only Champs, Nike, adidas parse; other merchants
+  return no items. 5–6 Make operations per call.
+- The suite runs with the URL blanked (`playwright.config.js`) — a real run would search
+  the real mailboxes. `e2e/buy-cart.spec.js` covers the payload mapping and the gates.
+
 ## The receipt becomes the order (2026-09-11)
 `cart/raise-po` writes every receipt line onto the purchase order as an **order-level
 list** (`po_lines` with no box) and sets `manifest_scope='order+box'`; the buyer then

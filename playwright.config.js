@@ -72,6 +72,8 @@ export default defineConfig({
     // guarded in the code on APP_ENV, because that guard cannot tell this suite from a
     // developer's own `npm run dev` and silently swallowed a real person's cards for half
     // an hour.
-    env: { TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '' },
+    // MAKE_RECEIPT_PARSER_URL: the receipt-by-number lookup searches REAL ordering
+    // mailboxes and spends Make operations on every call.
+    env: { TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '' },
   },
 });

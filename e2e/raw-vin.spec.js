@@ -71,6 +71,7 @@ async function toItemsStep(page) {
   await page.goto('/receiving');
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.track-field input').first().fill(`E2E-RAWVIN-${Date.now()}`);
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
   await page.getByRole('button', { name: 'Next →' }).click();
 }
 

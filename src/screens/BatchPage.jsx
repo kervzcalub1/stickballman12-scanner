@@ -32,7 +32,16 @@ const OPEN_PAGE = 25;
 // the rows, and it is the one that decides what a page is.
 const PAGE_FALLBACK = 25;
 
-export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome, onSignOut, readOnly = false }) {
+// Received without a manifest: audit pending, or signed off by somebody. Nothing for a
+// batch that came with one, or was never asked (rescale, in-store, pre-feature rows).
+function AuditChip({ b }) {
+  if (b?.manifest_received !== false) return null;
+  return b.audited_at
+    ? <span className="audit-chip done" title={`Audited by ${b.audited_by || 'somebody'}`}>No manifest · audited</span>
+    : <span className="audit-chip" title="Received without a manifest — somebody has to confirm everything expected arrived">No manifest · audit pending</span>;
+}
+
+export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenPo = null, onHome, onSignOut, readOnly = false }) {
   const [open, setOpen] = useState(null);     // open batches
   const [recent, setRecent] = useState(null); // { batches, total, page, pageSize }
   // WHICH BATCH IS OPEN LIVES IN THE URL (?b=), and opening one PUSHES a history entry.
@@ -70,6 +79,8 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const [to, setToRaw] = useQueryParam('to');
   const [supplier, setSupplierRaw] = useQueryParam('supplier');
   const [po, setPoRaw] = useQueryParam('po');
+  // ?audit=pending — only the shipments received without a manifest and not signed off.
+  const [audit, setAuditRaw] = useQueryParam('audit');
   const [suppliers, setSuppliers] = useState([]);
   const [poCodes, setPoCodes] = useState([]);
   const [q, setQRaw] = useQueryParam('q');
@@ -82,8 +93,15 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
   const onPage1 = (set) => (v) => { set(v); if (page !== 1) setPageRaw(''); };
   const setFrom = onPage1(setFromRaw); const setTo = onPage1(setToRaw);
   const setSupplier = onPage1(setSupplierRaw); const setPo = onPage1(setPoRaw);
-  const filtering = !!(from || to || supplier || po);
-  const clearFilters = () => { setFromRaw(''); setToRaw(''); setSupplierRaw(''); setPoRaw(''); setPageRaw(''); };
+  const setAudit = onPage1(setAuditRaw);
+  const filtering = !!(from || to || supplier || po || audit);
+  const clearFilters = () => { setFromRaw(''); setToRaw(''); setSupplierRaw(''); setPoRaw(''); setAuditRaw(''); setPageRaw(''); };
+  // The audit sign-off dialog: { note } while open. Plus, for a batch that came in
+  // blind and was never linked to an order, the PO its tracking number belongs to —
+  // looked up once, so the auditor is pointed at the manifest to check against.
+  const [auditing, setAuditing] = useState(null);
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [trackedPo, setTrackedPo] = useState(null);
   const [found, setFound] = useState(null);    // server search results (null = not searching)
   const [searching, setSearching] = useState(false);
   const [openPageRaw, setOpenPageRaw] = useQueryParam('op');
@@ -94,7 +112,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     try {
       const [o, r] = await Promise.all([
         api.openBatches(),
-        api.batchList({ kind: 'receiving', page, excludeOpen: true, from, to, supplier, po }),
+        api.batchList({ kind: 'receiving', page, excludeOpen: true, from, to, supplier, po, audit }),
       ]);
       setOpen(o.batches || []);
       setRecent(r);
@@ -176,7 +194,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     setSearching(true);
     // Typing "1Z999AA10123456784" is 20 renders; wait for the pause before asking.
     const t = setTimeout(() => {
-      api.batchList({ kind: 'receiving', q: query, page, from, to, supplier, po })
+      api.batchList({ kind: 'receiving', q: query, page, from, to, supplier, po, audit })
         .then((r) => setFound(r))
         .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); setFound({ batches: [], total: 0 }); })
         .finally(() => setSearching(false));
@@ -184,6 +202,19 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     return () => clearTimeout(t);
   }, [q, page, from, to, supplier, po]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else { setDetail(null); setMergedFrom(null); } }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Audit pending on a batch with no order: does its tracking number belong to a PO?
+  // One lookup per batch, and only in that state — it is the auditor's pointer to the
+  // manifest they should be checking against.
+  useEffect(() => {
+    const b = detail?.batch;
+    setTrackedPo(null);
+    if (!b || b.manifest_received !== false || b.audited_at || b.po_id || !b.tracking_number) return;
+    let cancelled = false;
+    api.poLookup(b.tracking_number)
+      .then((r) => { if (!cancelled && r?.po?.id) setTrackedPo({ id: Number(r.po.id), po_code: r.po.po_code }); })
+      .catch(() => { /* no pointer — the text falls back to "confirm with the supplier" */ });
+    return () => { cancelled = true; };
+  }, [detail?.batch?.id, detail?.batch?.audited_at]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Put the number on the row back in step with the label on the carton. Boxes that
   // arrive out of order get whatever "+ Add box" had left (max+1) — box 6 of 9 landing a
@@ -268,7 +299,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
         <div className="card">
           <div className="batch-page-head">
             <div>
-              <div className="batch-page-code">{b.batch_code} {isOpen ? <span className="badge open">Open</span> : <span className="badge done">Done</span>} <PreSellChip on={b.pre_sell} /></div>
+              <div className="batch-page-code">{b.batch_code} {isOpen ? <span className="badge open">Open</span> : <span className="badge done">Done</span>} <PreSellChip on={b.pre_sell} /> <AuditChip b={b} /></div>
               {/* A stated "no tracking number" is worth showing — otherwise this batch
                   looks like one whose tracking simply never got typed in. */}
               <div className="muted sm">{b.supplier_name || '—'} · {shortDate(b.date_received || b.created_at)}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.tracking_number ? <> · {b.tracking_number}</> : b.no_tracking ? <> · no tracking #</> : ''}</div>
@@ -298,6 +329,44 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           {expected ? (
             <div className="progress-bar"><span style={{ width: `${Math.min(100, Math.round((received / expected) * 100))}%` }} /></div>
           ) : null}
+          {/* Received without a manifest. The receiver said so on Step 1; this is where
+              somebody confirms that everything expected actually arrived — against the
+              order the tracking number belongs to when there is one, or with the
+              supplier when there isn't — and signs it. */}
+          {b.manifest_received === false && (
+            <div className={`batch-audit ${b.audited_at ? 'done' : ''}`}>
+              {b.audited_at ? (
+                <div>
+                  <b className="batch-report-h">Audited</b>
+                  <p className="muted sm">Signed off by <b>{b.audited_by || 'somebody'}</b> on {shortDate(b.audited_at)}{b.audit_note ? <> — “{b.audit_note}”</> : ''}.</p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <b className="batch-report-h">Received without a manifest — audit pending</b>
+                    <p className="muted sm">
+                      Confirm everything expected arrived, then sign it off.{' '}
+                      {b.po_id
+                        ? <>It came in against <b>{b.po_code || `PO #${b.po_id}`}</b> — check the received count on its reconciliation.</>
+                        : trackedPo
+                          ? <>Tracking <b>{b.tracking_number}</b> belongs to <b>{trackedPo.po_code}</b> — its manifest is what to check against.</>
+                          : b.tracking_number
+                            ? <>No order carries tracking <b>{b.tracking_number}</b> — confirm the contents with the supplier.</>
+                            : <>No tracking number on this batch — confirm the contents with the supplier.</>}
+                    </p>
+                  </div>
+                  {!readOnly && (
+                    <div className="batch-report-btns">
+                      {!b.po_id && trackedPo && onOpenPo && (
+                        <button className="btn ghost sm" onClick={() => onOpenPo(trackedPo.id)}>Open {trackedPo.po_code}</button>
+                      )}
+                      <button className="btn primary sm" onClick={() => setAuditing({ note: '' })}>Mark audited</button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {/* What was wrong with it, and what the receiver wrote down. Recorded on the
               Issues step of every receive and, until now, visible only under Receiving →
               Recent — which is not where anybody looks when a supplier disputes a short
@@ -478,6 +547,21 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
             <button className="btn ghost" disabled={busy} onClick={() => setReopenBox(null)}>Cancel</button>
           </Modal>
         )}
+        {auditing && (
+          <Modal type="warn" title={`Audit ${b.batch_code} — everything expected arrived?`}
+            message="Sign this only after checking the contents against the order's manifest or with the supplier. Your name goes on it."
+            onClose={() => !auditBusy && setAuditing(null)}>
+            <textarea className="batch-audit-note" rows={3} maxLength={2000} placeholder="What you checked it against, and anything short (optional)"
+              value={auditing.note} onChange={(e) => setAuditing({ note: e.target.value })} />
+            <button className="btn primary" disabled={auditBusy} onClick={async () => {
+              setAuditBusy(true); setError('');
+              try { await api.batchAudit(Number(b.id), auditing.note); setAuditing(null); await loadDetail(Number(b.id)); }
+              catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+              finally { setAuditBusy(false); }
+            }}>{auditBusy ? 'Saving…' : 'Sign off the audit'}</button>
+            <button className="btn ghost" disabled={auditBusy} onClick={() => setAuditing(null)}>Cancel</button>
+          </Modal>
+        )}
         {reopenId != null && (
           <Modal type="warn" title={`Reopen ${b.batch_code}?`}
             message="This puts a finalized batch back to open so boxes/items can be added. Only reopen if you need to correct it."
@@ -503,6 +587,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
     // "none", and a named order is answered by the Recent list below.
     if (po === 'none' && b.po_id) return false;
     if (po && po !== 'none' && !b.po_id) return false;
+    if (audit === 'pending' && !(b.manifest_received === false && !b.audited_at)) return false;
     return true;
   };
   const openList = (open || []).filter(inRange);
@@ -534,6 +619,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
           {/* Shown on every list, not just Search: a pre-sell shipment's stock is not
               ours to list, and that has to be readable without opening the batch. */}
           <PreSellChip on={b.pre_sell} />
+          <AuditChip b={b} />
         </span>
         <span className="muted sm">{b.supplier_name || '—'}{b.batch_tag ? <> · <Icon name="tag" /> {b.batch_tag}</> : ''}{b.date_received || b.created_at ? ` · ${shortDate(b.date_received || b.created_at)}` : ''}</span>
         {/* The number that was searched for is the reason this row is here — show it,
@@ -577,6 +663,12 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onHome,
               <option value="none">Not against a PO</option>
               {poCodes.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
+          </label>
+          <label className="batch-filter-check"><span className="muted xs">Audit</span>
+            <span className="batch-filter-check-row">
+              <input type="checkbox" checked={audit === 'pending'} onChange={(e) => setAudit(e.target.checked ? 'pending' : '')} aria-label="Only shipments received without a manifest, not yet audited" />
+              <span>No manifest — needs audit</span>
+            </span>
           </label>
           {filtering && <button className="btn sm ghost" onClick={clearFilters}>Clear filters</button>}
         </div>

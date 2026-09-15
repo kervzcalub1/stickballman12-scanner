@@ -31,7 +31,7 @@ export function Home({ user, onPick, onSignOut }) {
           <h2 className="home-section-title">Needs attention</h2>
           <div className="home-grid">
             {attention.map((a) => (
-              <button className="home-card home-attention" key={a.id || a.key} onClick={() => onPick(a.key)}>
+              <button className="home-card home-attention" key={a.id || a.key} onClick={() => onPick(a.key, a.query)}>
                 <span className="home-attention-top">
                   <span className="home-card-icon"><NavIcon name={a.key} /></span>
                   <span className="home-attention-count">{counts[a.count]}</span>

@@ -66,6 +66,7 @@ test.describe.serial('Session QA · Receiving GOAT-only', () => {
     // Step 1 — pick a supplier (buyer/date are pre-filled) + a tracking # (required server-side).
     await page.locator('select').first().selectOption({ index: 1 });
     await page.getByPlaceholder('Type, scan, or upload a photo').fill(`QA-GOAT-${Date.now()}`);
+    await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
     await page.getByRole('button', { name: 'Next →' }).click();
     await expect(page.getByText('Items (0 units)')).toBeVisible();
 

@@ -939,6 +939,16 @@ await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_dim_idx
    released, and it has to flow into PH exactly like anything else afterwards.
    See docs/context/pre-sell.md. */
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS pre_sell BOOLEAN NOT NULL DEFAULT false`);
+/* "Did this package come with a manifest?" — asked on Step 1 of every receive
+   (2026-09-15). NULL = never asked (batches from before, rescale, in-store, existing).
+   false = received blind, which flags the batch for an AUDIT: somebody confirms, against
+   the tracking number's order or the supplier, that everything expected arrived. The
+   audit is signed off on the Batch page and stays on the row. docs/context/receiving.md */
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS manifest_received BOOLEAN`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS audited_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS audited_by TEXT`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS audit_note TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS batches_audit_pending_idx ON batches (id) WHERE manifest_received = false AND audited_at IS NULL`);
 // Inherited from the batch at intake, then cleared per unit on release. Per ITEM rather
 // than read off the batch every time, because release is per unit: half a shipment can be
 // spoken for and the other half listed, and the batch is one row.

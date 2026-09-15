@@ -317,6 +317,7 @@ test.describe('390x844 mobile functional', () => {
       await supplierSel.selectOption({ index: 1 }).catch(() => {});
       const trackInput = page.locator('input[placeholder="Type, scan, or upload a photo"]');
       await trackInput.fill(`MQA-WIZ-${TAG}`);
+      await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
       await page.getByRole('button', { name: 'Next →' }).click();
 
       // The scan bar is the primary path now — it's sticky, so it must not push the

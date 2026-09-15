@@ -32,6 +32,7 @@ test('a named problem and the key notes land on the batch, and the Batch page sh
   await page.goto('/receiving');
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.track-field input').first().fill(`E2E-ISSUE-${stamp}`);
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
   await page.getByRole('button', { name: 'Next →' }).click();
   await page.locator('.scanbar input').first().fill(SKU);
   await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();

@@ -50,6 +50,7 @@ test('a scanned cart commits real units: one VIN each, box status from the stick
   await page.goto('/receiving');
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.track-field input').first().fill(`E2E-QA-RAPID-${Date.now()}`);
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
   await page.getByRole('button', { name: 'Next →' }).click();
 
   // Two of the same shoe with a box…
@@ -160,6 +161,7 @@ test('the manual-add modal still works for a code nothing resolves', async ({ pa
   await page.goto('/receiving');
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.track-field input').first().fill(`E2E-QA-MANUAL-${Date.now()}`);
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
   await page.getByRole('button', { name: 'Next →' }).click();
 
   await page.getByRole('button', { name: '+ Add manually' }).click();
@@ -206,6 +208,7 @@ test('two sizeless scans of one shoe fold together once the same size is typed',
   await page.goto('/receiving');
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.track-field input').first().fill(`E2E-QA-MERGE-${Date.now()}`);
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click(); // the manifest question is required
   await page.getByRole('button', { name: 'Next →' }).click();
 
   await scan(page, SKU_A);

@@ -60,6 +60,8 @@ export default async function handler(req, res) {
     // batch can never disagree with the order it is being received against.
     kind: poKind,
     preSell: h.preSell === true,
+    // "Did this package come with a manifest?" — true / false / undefined (not asked).
+    manifestReceived: typeof h.manifestReceived === 'boolean' ? h.manifestReceived : null,
   };
 
   try {

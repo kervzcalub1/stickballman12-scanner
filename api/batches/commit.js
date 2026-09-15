@@ -167,6 +167,9 @@ export default async function handler(req, res) {
     origin: !isShipment ? (String(header.origin ?? '').trim().slice(0, 80) || null) : null,
     // Set by the client when staff proceed past the duplicate-tracking warning.
     duplicateOf: !isShipment ? null : (Number.isInteger(header.duplicateOf) ? header.duplicateOf : null),
+    // "Did this package come with a manifest?" — only a SHIPMENT is asked; rescale,
+    // in-store and existing stock have no manifest to have come with.
+    manifestReceived: isShipment && typeof header.manifestReceived === 'boolean' ? header.manifestReceived : null,
     poId,
     preSell,
   };

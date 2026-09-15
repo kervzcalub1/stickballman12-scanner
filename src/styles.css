@@ -2976,6 +2976,28 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-manifest-progress.done { color: var(--ok); background: rgba(46,204,113,0.12); border-color: rgba(46,204,113,0.35); }
 .po-check { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 140px; min-height: 40px; cursor: pointer; }
 .po-check input { width: 22px; height: 22px; flex: none; }
+/* The box against its label on Review (receiving against a PO). */
+.po-summary.clean { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); }
+.po-summary-totals { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 8px; }
+.po-summary-stat { color: var(--muted); font-size: 13px; }
+.po-summary-stat b { color: var(--text); font-size: 16px; margin-right: 4px; }
+.po-summary-stat.bad b { color: var(--err); }
+.po-summary-stat.warn b { color: #c6871a; }
+.po-summary-rows { display: flex; flex-direction: column; gap: 6px; }
+.po-summary-row { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+.po-summary-row.missing, .po-summary-row.short { border-color: rgba(213,69,63,0.35); }
+.po-summary-row.over, .po-summary-row.unexpected { border-color: rgba(198,135,26,0.35); }
+.po-summary-row-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.po-summary-sku { min-width: 0; overflow-wrap: anywhere; }
+.po-summary-row-nums { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.po-summary-row-nums b { color: var(--text); }
+.po-summary-name { flex-basis: 100%; }
+.po-summary-row-nums .neg b { color: var(--err); }
+.po-summary-row-nums .pos b { color: #c6871a; }
+.po-manifest-fields { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.po-manifest-fields input { min-width: 0; }
+.po-size-input { width: 3.5em; }
+.po-manifest-item.needs-fix { outline: 1px solid var(--err); border-radius: 8px; }
 .po-manifest .qty-stepper .step { min-width: 44px; min-height: 44px; }
 .po-size-lbl { font-size: 14px; }
 .po-flag { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }

@@ -14,8 +14,9 @@ Full detail: `in-store.md`.
 warehouse scans a **pre-printed sticker** onto each pair — scan the shoe, scan the
 sticker. Nothing is minted, and a pair without one can't be committed (it rides the same
 `isUnresolved` machinery as a missing size). **Receiving against a PO** works the same way
-with one beat instead of two — ticking the manifest row is the "scan the shoe" half, and a
-sticker bar sits above the checklist. Full rules: `docs/context/vin-stock.md`.
+the same way — scan the shoe (it lands on its manifest row, any order), then the sticker
+onto that pair; ticking a row by hand is the fallback. Full rules: `docs/context/vin-stock.md`
+and `purchase-orders.md` → "Scan-first, any order".
 
 ## 4-step wizard (receiving / in-store) / 2-step (rescale)
 1. **Shipment details** — buyer defaults to `stickballman12`; supplier + date

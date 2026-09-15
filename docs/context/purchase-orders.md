@@ -508,10 +508,29 @@ Tests: `e2e/po-wholeorder-1id.spec.js` — verified to fail without the fix.
     before letting it through (`emptyBoxAck`) — an all-short label is legitimate, just never
     silent. Nothing changed downstream: qty 0 already expanded to 0 units in `doCommit`, and
     the shortage is still inferred server-side by `getPoReconciliation`.
-  - **Raw 1ID stickers work here too** (2026-08-20): with `prefs.rawVins` on, a sticky
-    sticker-scan bar sits above the checklist and every ticked pair needs a `SBM-R-…`
-    scanned onto it before Review. See `docs/context/vin-stock.md` — the checklist is the
-    "scan the shoe" beat, so this screen only ever scans stickers.
+  - **Raw 1ID stickers work here too** (2026-08-20): with `prefs.rawVins` on, every
+    counted pair needs a `SBM-R-…` scanned onto it before Review. See
+    `docs/context/vin-stock.md`.
+  - **Scan-first, any order (2026-09-16).** The checklist is the SCOREBOARD, not the
+    input. A sticky scan bar (`.po-scan-bar`, always shown, `manifestScan`) takes the
+    shoe in hand: `matchManifestRow` (`src/lib/manifestScan.js`, pure) lands a UPC on
+    its exact size row (leading zeros ignored), a style code on the one size of that
+    shoe still open — or names the open sizes when several are, rather than guessing —
+    and steps the row up by one. Over the declared count is recorded and named. A code
+    on no row goes through `rapidScan` and lands BELOW the sheet as an unexpected line
+    (typeable name/SKU/size right there; expected rows keep their place — the manifest
+    is a fixed sheet, so PO mode never floats a shoe to the top). Undo steps a hit row
+    back. Ticking / the stepper still work for a barcode that won't read.
+    **Why:** the old screen refused a shoe scan ("use + Add unexpected") and made the
+    person find the row for every pair; with twenty SKUs in a box the floor read that as
+    "scan in the app's order" and went round it via the Batch page (box mode is never PO
+    mode — `isPoReceive = receivingPo && !isBoxMode`), which still reconciles server-side
+    but shows no on-screen list. `e2e/po-scan-any-order.spec.js`.
+  - **Review opens with the box against its label** (`ManifestSummary` ←
+    `manifestSummary`): expected · received (against the label — an undeclared pair is
+    *extra*, not a fourth of four) · missing · extra / not on PO, then only the rows that
+    differ, worst first (`missing` → `unexpected` → `short` → `over`). Same arithmetic
+    `getPoReconciliation` does after commit, shown while the box is still open.
   Reconciliation (received-vs-expected per SKU+size: shortage/overage/wrong-SKU) falls out of
   this at receipt; the full PO-level snapshot + PO→`reconciled` is Phase 3.
 - **Phase 3 (built, on branch `feat/po-phase3-reconcile` — not deployed):** reconciliation.

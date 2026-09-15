@@ -71,12 +71,15 @@ replaces the rapid-scan bar entirely, so raw mode used to block Review with "sca
 onto the 1 highlighted line" on a screen that had no scanner and no highlight — a dead end
 on the flow the stickers are most useful for (PO-100005). Now:
 
-- The shoe is already on the supplier's list, so **ticking a size IS the first beat**; the
-  sticky `.po-sticker-bar` above the checklist is the second. A scan there is only ever a
-  sticker — a UPC gets told to use **+ Add unexpected**, because a pair that isn't on the
-  PO changes the count.
-- Sizes are walked in **displayed** (sorted) order, not cart order, so ticking size 9 and
-  scanning its sticker can't file that number under the size 8.5 row above it.
+- The sticky `.po-sticker-bar` (also `.po-scan-bar`) above the checklist takes BOTH
+  beats since 2026-09-16: the shoe's UPC/SKU lands on its manifest row
+  (`manifestScan` → `matchManifestRow`), then the sticker. Ticking a size by hand is
+  still a first beat for a barcode that won't read.
+- **The sticker follows the pair just scanned or ticked** — `lastHitRef`, set by a scan
+  hit, a tick or a step up, and read first by `pickStickerSlot` — not the first short row
+  in display order. Scanning size 10 with size 9 sitting above it on the sheet must put
+  the sticker on the 10 (`e2e/po-scan-any-order.spec.js`). Display order is only the
+  fallback when the last hit already has its sticker.
 - Per row: a `1ID n/m` chip, red while short, and the ONE row the next scan lands on gets
   the blue ring the bar names.
 - **The field keeps focus by itself.** A Bluetooth gun types into whatever is focused and

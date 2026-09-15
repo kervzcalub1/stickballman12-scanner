@@ -15,6 +15,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { useUnsavedGuard } from '../hooks.js';
 import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
+import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineCost, unitCost } from '../lib/costs.js';
@@ -271,11 +272,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }
     return [...bySku.values()];
   }
+  // The row a hand last put a pair on — a scan hit, a tick, or a step up. The next
+  // sticker lands HERE, not on the first short row in display order: the person is
+  // holding that sticker over that shoe, whichever order the box came out in.
+  const lastHitRef = useRef(null);   // { itemKey, sizeKey }
   const setSizeQty = (itemKey, sizeKey, qty) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
     ...it,
     sizes: it.sizes.map((s) => {
       if (s.key !== sizeKey) return s;
       const q = Math.max(0, parseInt(qty, 10) || 0);
+      if (q > (Number(s.qty) || 0)) lastHitRef.current = { itemKey, sizeKey };
       // Never hold more 1ID stickers than pairs: unticking a size (or stepping it
       // down) hands the sticker back so it can be scanned onto the pair it is
       // actually on. Trimming from the end drops the last one scanned.
@@ -588,7 +594,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // sizes at four pairs each, so "1 line" would badly understate the work left.
   const stickersShort = !rawVins ? 0 : items.reduce((n, it) => (it.pending ? n : n + it.sizes.reduce(
     (a, s) => a + Math.max(0, (Number(s.qty) || 0) - (s.vins || []).length), 0)), 0);
-  const armStickerBar = rawVins && isPoReceive && activeSlot != null && !stickerTyping;
+  // The manifest bar is `inputMode="none"` whether or not stickers are in play, so
+  // re-arming it after a tick is safe on a phone in both modes (see vin-stock.md).
+  const armStickerBar = poBoxHasChecklist && !stickerTyping;
+  // Declared here, ahead of `totalItems`: a scan hit moves a count without moving
+  // `stickersShort` outside raw mode, and the field still has to come back.
+  const unitCount = items.reduce((n, it) => n + it.sizes.reduce((a, r) => a + Math.max(0, Number(r.qty) || 0), 0), 0);
   useEffect(() => {
     if (step !== 2 || scanCam || photoCam || showAdd || photoSku) return undefined;
     if (!hasFinePointer() && !armStickerBar) return undefined;
@@ -602,7 +613,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     return () => clearTimeout(t);
     // `stickersShort` moves on every bind, tick and stepper press — the three things
     // that take focus away — so it is what re-arms the field.
-  }, [step, scanCam, photoCam, showAdd, photoSku, items.length, armStickerBar, stickersShort]);
+  }, [step, scanCam, photoCam, showAdd, photoSku, items.length, armStickerBar, stickersShort, unitCount]);
   // While the listing-photo camera is open, drop focus so the mobile keyboard
   // closes — capturing a photo must never re-summon it via the hidden scan field.
   useEffect(() => { if (photoCam) document.activeElement?.blur?.(); }, [photoCam]);
@@ -877,7 +888,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       // Keyed on whether there IS a list, not on whether this is a PO: telling somebody
       // to tick a size off a checklist that doesn't exist is how they end up stuck.
       setFlash({ type: 'dup', text: poBoxHasChecklistRef.current
-        ? `Tick the size off first, then scan its 1ID — ${vin} has nothing to go on`
+        ? `Scan the shoe first (or tick its size), then its 1ID — ${vin} has nothing to go on`
         : `Scan the shoe first, then its 1ID — ${vin} has nothing to go on` });
       scanFeedback('dup');
       return;
@@ -924,16 +935,22 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     scanFeedback('added');
   }
 
-  // Raw 1ID mode on the PO manifest. There is no shoe-scan beat here — the pair is
-  // already on the supplier's list, ticked off as it comes out of the box — so a
-  // scan at this bar is only ever a sticker. Anything else is NAMED rather than
-  // silently swallowed: a UPC scanned here means a pair that isn't on the PO, and
-  // that has its own button ("+ Add unexpected") because it changes the count.
-  async function stickerScan(code, { fromCamera = false } = {}) {
+  // The scan bar on the PO manifest: the shoe in hand, in whatever order the box comes
+  // out. A scanned code is matched to the row it belongs to (`matchManifestRow`: the
+  // size's own UPC first, then the shoe's SKU) and that row's count goes up by one —
+  // the checklist is the scoreboard, not the input. Ticking a row by hand still works
+  // for a box with no readable barcodes. A code that is on no row at all goes through
+  // the ordinary rapid-scan resolution and lands as an unexpected line, flagged, rather
+  // than being refused: it changes the count, and the count is the point.
+  //
+  // Until 2026-09-16 a shoe scanned here was REJECTED ("use + Add unexpected") and the
+  // person had to find the row for every pair — with twenty SKUs in a box that read as
+  // "scan them in the app's order", and the floor found the back door instead.
+  async function manifestScan(code, { fromCamera = false } = {}) {
     const c = String(code).trim();
     if (!c) return;
-    // Same camera re-read guard as rapid scan: a live camera fires the same sticker
-    // many times a second. Never applied to a gun or a typed submit.
+    // Same camera re-read guard as rapid scan: a live camera fires the same code many
+    // times a second. Never applied to a gun or a typed submit.
     if (fromCamera) {
       const now = Date.now();
       if (isCameraReread(scanRecentRef.current, c, now)) return;
@@ -942,12 +959,36 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setScanInput(''); setError('');
     // Always, not just with a fine pointer: this bar exists for a gun on a phone.
     scanInputRef.current?.focus({ preventScroll: true });
-    // One hand-typed sticker doesn't mean the next one is typed too — go back to
-    // scan mode so the keyboard gets out of the way and the gun re-arms itself.
+    // One hand-typed code doesn't mean the next one is typed too — go back to scan
+    // mode so the keyboard gets out of the way and the gun re-arms itself.
     setStickerTyping(false);
-    if (isRollVin(c)) return bindSticker(c);
-    setFlash({ type: 'dup', text: `${c} isn’t a 1ID sticker — use “+ Add unexpected” for a pair that isn’t on the PO` });
-    scanFeedback('dup');
+    // Raw 1ID mode, second beat: a sticker, onto the pair just scanned.
+    if (rawVinsRef.current && isRollVin(c)) return bindSticker(c);
+
+    const hit = matchManifestRow(itemsRef.current, c);
+    if (hit && hit.by !== 'ambiguous') {
+      const got = Number(hit.size.qty) || 0;
+      const exp = hit.size.expectedQty;
+      setSizeQty(hit.item.key, hit.size.key, got + 1);
+      lastScanRef.current = { manifest: { itemKey: hit.item.key, sizeKey: hit.size.key } }; setCanUndo(true);
+      const over = exp != null && got + 1 > exp;
+      setFlash(over
+        ? { type: 'warn', text: `${hit.item.name || hit.item.sku} · size ${hit.size.size} — that's ${got + 1}, the label declared ${exp}. Recorded as an extra.` }
+        : { type: 'added', text: `✓ ${hit.item.name || hit.item.sku} · size ${hit.size.size} — ${got + 1} of ${exp ?? '?'}${rawVinsRef.current ? ' · now its 1ID' : ''}` });
+      scanFeedback(over ? 'dup' : 'added');
+      return;
+    }
+    if (hit) {
+      // A style code with no size on it. Naming the sizes is what lets the person tick
+      // the right one without hunting; the scan itself can't say which pair this is.
+      setFlash({ type: 'warn', text: `${hit.item.name || hit.item.sku} is on this label in size${hit.candidates.length === 1 ? '' : 's'} ${hit.candidates.map((z) => z.size).join(', ')} — tick the one you're holding, or scan the box's barcode` });
+      scanFeedback('dup');
+      return;
+    }
+    // Not on this label by code. The catalogue may still resolve it to an expected
+    // shoe (a UPC the manifest didn't carry); rapidScan merges by SKU + size into the
+    // manifest row when it does, and files an unexpected line when it doesn't.
+    return rapidScan(c);
   }
 
   async function rapidScan(code, { fromCamera = false } = {}) {
@@ -987,10 +1028,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const withBox = scanBoxModeRef.current;
     const lineKey = cartKey++;
     lastScanRef.current = { lineKey, vin: null }; setCanUndo(true);
-    setItems((arr) => [{
+    const placeholder = {
       key: lineKey, pending: true, code: c, name: '', sku: '', image: '', source: 'manual',
       upc: isUpc ? c : '', gender: null, colorway: '', withBox, goatOnly: false, sizes: [],
-    }, ...arr]);
+    };
+    // Newest on top when scanning free — below the sheet when working a manifest, so
+    // the expected rows keep their place and an unexpected pair reads as the exception.
+    setItems((arr) => (poBoxHasChecklistRef.current ? [...arr, placeholder] : [placeholder, ...arr]));
     setFlash({ type: 'added', text: `Scanning ${c}…` });
     scanFeedback('added');
 
@@ -1054,6 +1098,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         if (isUpc && !sizes[j].upc) sizes[j].upc = c;
       }
       const merged = { ...arr[i], sizes, image: arr[i].image || resolved.image };
+      // On a PO manifest the list is a fixed sheet read top to bottom, so the shoe
+      // stays where it is and the next sticker is aimed by the hit, not by position.
+      if (poBoxHasChecklistRef.current) {
+        const row = sizes[j === -1 ? sizes.length - 1 : j];
+        lastHitRef.current = { itemKey: arr[i].key, sizeKey: row.key };
+        return arr.filter((x) => x.key !== lineKey).map((x) => (x.key === arr[i].key ? merged : x));
+      }
       // Float the just-scanned shoe to the top and drop the pending placeholder.
       return [merged, ...arr.filter((x, idx) => idx !== i && x.key !== lineKey)];
     });
@@ -1068,6 +1119,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const last = lastScanRef.current;
     if (!last) return;
     lastScanRef.current = null; setCanUndo(false);
+    // A scan that landed on a manifest row is undone by stepping that row back one —
+    // the row itself stays, it was expected. setSizeQty trims the last sticker with it.
+    if (last.manifest) {
+      const it = itemsRef.current.find((x) => x.key === last.manifest.itemKey);
+      const sz = it?.sizes.find((z) => z.key === last.manifest.sizeKey);
+      if (sz) setSizeQty(it.key, sz.key, (Number(sz.qty) || 1) - 1);
+      setFlash({ type: 'warn', text: 'Last scan removed' });
+      return;
+    }
     setItems((arr) => arr.flatMap((it) => {
       if (it.key === last.lineKey) return [];
       if (!last.vin || !it.sizes.some((s) => (s.vins || []).includes(last.vin))) return [it];
@@ -1264,6 +1324,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // DISPLAYED: ticking size 9 and scanning its sticker must not quietly file that
   // number under the size 8.5 row sitting above it in cart order.
   function pickStickerSlot(list) {
+    // The pair just scanned or ticked, if it is still short a sticker — the manifest
+    // is worked in the order the box comes out, not the order the list is printed.
+    const hit = lastHitRef.current;
+    if (hit) {
+      const it = list.find((x) => x.key === hit.itemKey && !x.pending);
+      const size = it?.sizes.find((z) => z.key === hit.sizeKey);
+      if (size && (Number(size.qty) || 0) > (size.vins || []).length) return { item: it, size };
+    }
     for (const it of list) {
       if (it.pending) continue;
       const sizes = isPoReceive ? [...it.sizes].sort(compareSizes) : it.sizes;
@@ -1457,7 +1525,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         // Nothing to tick off on a whole-order PO, so the "as short" wording would be
         // wrong — there's no per-label expectation to fall short of.
         ? 'Nothing counted in this box — add each pair you pulled out. If the box really was empty, press Review again to record it as received with nothing in it.'
-        : `Nothing is checked off — tick each pair as you pull it from the box. If this label really arrived empty, press Review again to record all ${manifestExpected} pair${manifestExpected === 1 ? '' : 's'} as short.`);
+        : `Nothing has been scanned or checked off — scan each pair as you pull it from the box. If this label really arrived empty, press Review again to record all ${manifestExpected} pair${manifestExpected === 1 ? '' : 's'} as short.`);
       return;
     }
     // PO-manifest: reserve VINs for the received units so each shoe is flaggable.
@@ -1930,26 +1998,26 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   which can add a shoe AND take its 1ID. */}
               {isPoReceive && activeSlot != null && poBoxHasChecklist ? (
                 <>
-                  {/* Raw 1ID mode: one beat, not two. The shoe is already on the
-                      manifest, so ticking a size IS the first beat and this bar is
-                      the second. Sticky like the rapid-scan bar — the list runs
-                      well past a phone screen and the gun can't lose its aim
-                      halfway down the box. */}
-                  {rawVins && (
-                    <div className="scanbar po-sticker-bar">
-                      <form className="searchrow" onSubmit={(e) => { e.preventDefault(); stickerScan(scanInput); }}>
+                  {/* The scan bar, always: the shoe in hand goes up on its own row,
+                      whatever order the box comes out in; in raw 1ID mode the sticker
+                      follows it. Sticky like the rapid-scan bar — the list runs well
+                      past a phone screen and the gun can't lose its aim halfway down
+                      the box. Keeps the `po-sticker-bar` class the sticker tests drive. */}
+                  {(
+                    <div className="scanbar po-sticker-bar po-scan-bar">
+                      <form className="searchrow" onSubmit={(e) => { e.preventDefault(); manifestScan(scanInput); }}>
                         {/* inputMode="none" while scanning: the field keeps focus so a
                             Bluetooth gun types into it, WITHOUT iOS throwing the software
                             keyboard over half the manifest. "Type" is the way back in when
                             a sticker's barcode won't read. */}
                         <input ref={scanInputRef} autoCapitalize="characters" autoCorrect="off" autoComplete="off"
                           inputMode={stickerTyping ? 'text' : 'none'}
-                          placeholder={stickerTyping ? 'Type the 1ID'
-                            : awaitingSticker ? `1ID for size ${awaitingSticker.size.size}` : 'Scan a 1ID sticker'}
+                          placeholder={stickerTyping ? (rawVins ? 'Type the UPC, SKU or 1ID' : 'Type the UPC or SKU')
+                            : awaitingSticker ? `1ID for size ${awaitingSticker.size.size}` : 'Scan the shoe (UPC / SKU)'}
                           value={scanInput} onChange={(e) => setScanInput(e.target.value)} />
                         <button className="btn primary" type="submit">Add</button>
                         <button type="button" className={`btn ${stickerTyping ? 'primary' : 'ghost'} sticker-type`}
-                          aria-pressed={stickerTyping} title={stickerTyping ? 'Back to scanning' : 'Type a 1ID by hand'}
+                          aria-pressed={stickerTyping} title={stickerTyping ? 'Back to scanning' : 'Type a code by hand'}
                           onClick={() => {
                             const on = !stickerTyping;
                             setStickerTyping(on);
@@ -1961,32 +2029,36 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                         <button type="button" className={`btn ${scanCam ? 'primary' : 'ghost'}`} onClick={() => setScanCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
                       </form>
                       <div className={`rawvin-beat ${awaitingSticker ? 'awaiting' : ''}`} role="status" aria-live="polite">
-                        {awaitingSticker
+                        {rawVins ? (awaitingSticker
                           ? <><b>Scan a 1ID</b> onto <b>size {awaitingSticker.size.size}</b> of {awaitingSticker.item.name || awaitingSticker.item.sku || 'that pair'} — sticker {(awaitingSticker.size.vins || []).length + 1} of {Number(awaitingSticker.size.qty) || 0}{
                             // Only once the box holds more than this row's own pairs —
                             // otherwise it repeats the "of N" that's already been said.
                             stickersShort > (Number(awaitingSticker.size.qty) || 0) - (awaitingSticker.size.vins || []).length
                               ? ` · ${stickersShort} left in this box` : ''}</>
                           : totalItems > 0
-                            ? <>Every ticked pair has its 1ID ✓ — Review when the box is empty</>
-                            : <><b>Tick a size</b> as you pull it from the box, then scan its 1ID sticker onto it</>}
+                            ? <>Every pair has its 1ID ✓ — scan the next shoe, or Review when the box is empty</>
+                            : <><b>Scan each shoe</b> as you pull it from the box — any order — then scan its 1ID sticker onto it</>)
+                          : <><b>Scan each shoe</b> as you pull it from the box, in any order — it goes up on its own row. Tick a row by hand if the barcode won't read.</>}
                       </div>
                       {scanCam && (
                         <Suspense fallback={<p className="muted">Loading camera…</p>}>
-                          <CameraScanner continuous mode="vin" onDetected={(code) => stickerScan(code, { fromCamera: true })} onClose={() => setScanCam(false)}
+                          {/* 'rescale' is the one format set that reads a UPC AND a
+                              Code128 sticker — both land on this bar. */}
+                          <CameraScanner continuous mode="rescale" onDetected={(code) => manifestScan(code, { fromCamera: true })} onClose={() => setScanCam(false)}
                             zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
                         </Suspense>
                       )}
                       <div className="scan-flash-live" role="status" aria-live="polite">
                         {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
+                        {canUndo && <button type="button" className="scan-undo" onClick={undoLastScan}>↶ Undo last scan</button>}
                       </div>
                     </div>
                   )}
                   <ManifestChecklist boxNumber={Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
                     kind={boxSlots[activeSlot]?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
                     items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
-                    onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem}
-                    rawVins={rawVins && !isBoxesPo} awaiting={awaitingSticker}
+                    onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} onSetField={setItemField} onSetSize={setSizeValue} onMergeSize={mergeSizeRow}
+                    rawVins={rawVins && !isBoxesPo} awaiting={awaitingSticker} unresolved={isUnresolved}
                     boxesOrder={isBoxesPo} onCountAsDeclared={countAsDeclared} />
                 </>
               ) : (
@@ -2189,6 +2261,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
           {step === 3 && !isRescale && (
             <>
+              {/* The box against its label, before anything is committed: what was
+                  expected, what came out, what is missing, what wasn't declared. The
+                  reconciliation works this out after the fact; the person closing the
+                  box should see it while the box is still in front of them. */}
+              {isPoReceive && poBoxHasChecklist && (
+                <ManifestSummary summary={manifestSummary(items)} boxesOrder={isBoxesPo}
+                  boxNumber={Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} />
+              )}
               <div className="card">
                 <div className="step-head">
                   <h3 className="rows-title">Review <span className="muted">({totalItems} unit{totalItems === 1 ? '' : 's'} · {items.length} shoe{items.length === 1 ? '' : 's'})</span></h3>
@@ -2644,8 +2724,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
    list is the picking guide and whatever stays unticked is the shortage. Adjust the
    "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
    issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared }) {
-  const done = expectedUnits > 0 && totalItems >= expectedUnits;
+function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem, onSetField, onSetSize, onMergeSize, unresolved, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared }) {
+  // Progress is AGAINST the label: an undeclared pair doesn't make a 3-of-4 box a
+  // 4-of-4 one, and a third pair of a size that declared two counts as two.
+  const onLabel = items.reduce((n, it) => (!it.expected || it.pending ? n : n + it.sizes.reduce((a, r) => {
+    const e = r.expectedQty == null ? null : Math.max(0, Number(r.expectedQty) || 0);
+    const g = Math.max(0, Number(r.qty) || 0);
+    return a + (e == null ? 0 : Math.min(g, e));
+  }, 0)), 0);
+  const done = expectedUnits > 0 && onLabel >= expectedUnits;
   // An empty-box shipment counts BOXES, and a row is a size plus the carton it ships in.
   const unit = (n) => (boxesOrder ? `${n} ${n === 1 ? 'box' : 'boxes'}` : `${n}`);
   // On a whole-order PO there is no per-label expectation to count against, so "0 of 0
@@ -2660,7 +2747,7 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
         <h3 className="rows-title">
           {title} · {wholeOrder ? 'contents' : 'manifest'}{' '}
           <span className={`po-manifest-progress ${done ? 'done' : ''}`}>
-            {wholeOrder ? `${unit(totalItems)} counted` : `${totalItems} of ${expectedUnits} ${boxesOrder ? 'boxes ' : ''}checked`}
+            {wholeOrder ? `${unit(totalItems)} counted` : `${onLabel} of ${expectedUnits} ${boxesOrder ? 'boxes ' : ''}checked`}
           </span>
         </h3>
         <button className="btn sm" onClick={onAddUnexpected}>+ Add {wholeOrder ? 'item' : 'unexpected'}</button>
@@ -2688,10 +2775,23 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
       ) : (
         <div className="po-manifest-list">
           {items.map((it) => (
-            <div className={`po-manifest-item ${it.expected || (wholeOrder && onOrder(it.sku)) ? '' : 'overage'}`} key={it.key}>
+            <div className={`po-manifest-item ${it.expected || (wholeOrder && onOrder(it.sku)) ? '' : 'overage'} ${unresolved?.(it) ? 'needs-fix' : ''}`} key={it.key}>
               <div className="po-manifest-head">
-                <span className="po-manifest-name">{it.name} <span className="muted">— {it.sku || '—'}</span></span>
-                {it.expected ? null
+                {/* A scan the catalogue is still resolving, or couldn't: the line stays,
+                    typed in by hand, the same as the rapid-scan cart — a scan is never
+                    dropped because the lookup was slow. */}
+                {it.pending ? (
+                  <span className="po-manifest-name pendingline">Scanning <span className="vin">{it.code}</span>…</span>
+                ) : !it.expected && !String(it.name || '').trim() ? (
+                  <span className="cart-fields po-manifest-fields">
+                    <input className="cart-name" placeholder="Product name" value={it.name || ''} onChange={(e) => onSetField?.(it.key, { name: e.target.value })} />
+                    <input placeholder="SKU" value={it.sku || ''} onChange={(e) => onSetField?.(it.key, { sku: e.target.value })} />
+                    {it.failed && <span className="recv-item-failed">Nothing found for <b>{it.code}</b> — type the shoe in, or remove the line.</span>}
+                  </span>
+                ) : (
+                  <span className="po-manifest-name">{it.name} <span className="muted">— {it.sku || '—'}</span></span>
+                )}
+                {it.pending || it.expected ? null
                   : wholeOrder && onOrder(it.sku)
                     ? <span className="po-chip ok">On the order list</span>
                     : <span className="po-chip receiving">Overage · not on PO</span>}
@@ -2714,12 +2814,17 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                 const needsId = rawVins && got > ids;
                 const isNext = rawVins && awaiting?.size?.key === s.key;
                 return (
-                  <div className={`po-manifest-size ${got > 0 ? 'on' : 'off'} ${needsId ? 'needs-fix' : ''} ${isNext ? 'awaiting' : ''}`} key={s.key}>
+                  <div className={`po-manifest-size ${got > 0 ? 'on' : 'off'} ${needsId || (s.needsSize && !String(s.size || '').trim()) ? 'needs-fix' : ''} ${isNext ? 'awaiting' : ''}`} key={s.key}>
                     <label className="po-check">
                       <input type="checkbox" checked={got > 0}
                         onChange={(e) => onSetQty(it.key, s.key, e.target.checked ? (exp ?? 1) : 0)} />
                       <span className="po-size-lbl">
-                        size {s.size}
+                        {/* On the `needsSize` flag, never the live value — keyed on the
+                            value it would unmount on the first keystroke. */}
+                        size {s.needsSize
+                          ? <input className="qty po-size-input" placeholder="?" value={s.size || ''}
+                              onChange={(e) => onSetSize?.(it.key, s.key, e.target.value)} onBlur={() => onMergeSize?.(it.key, s.key)} />
+                          : s.size}
                         {/* The carton is what tells two rows of one size apart, so it is
                             part of the row's identity, not a footnote. */}
                         {s.dimensions ? <span className="po-size-dims"> · {s.dimensions}</span> : null}
@@ -2751,8 +2856,63 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
           different screen. */}
       <p className="muted sm">{boxesOrder
         ? 'Check each row off as you count it out of the carton. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for boxes that aren’t on the PO.'
-        : 'Check each size off as you pull it from the box. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for pairs that aren’t on the PO. Flag defects per shoe on the next screen.'}
+        : 'Scan each pair as you pull it from the box, in any order — its row counts up by itself. Anything still at 0 is recorded as a shortage; a pair that isn’t on the label is added as unexpected. Tick or step a row by hand if a barcode won’t read. Flag defects per shoe on the next screen.'}
         {rawVins ? ' Every ticked pair also needs a 1ID sticker scanned onto it — that sticker is the pair’s number, so no label gets printed for it.' : ''}</p>
+    </div>
+  );
+}
+
+// Expected vs received for one label, worst first. `manifestSummary` does the
+// arithmetic; this only says it. Every row is a SKU + size, the five totals are the
+// five questions the warehouse asked (expected · received · missing · extra · off-by).
+const SUMMARY_STATE = {
+  missing:    { label: 'Missing',    cls: 'short' },
+  short:      { label: 'Short',      cls: 'short' },
+  over:       { label: 'Extra',      cls: 'over' },
+  unexpected: { label: 'Not on PO',  cls: 'over' },
+  ok:         { label: 'OK',         cls: 'ok' },
+};
+function ManifestSummary({ summary, boxNumber, boxesOrder = false }) {
+  const { rows, totals } = summary;
+  const unit = boxesOrder ? 'boxes' : 'pairs';
+  const off = rows.filter((r) => r.state !== 'ok');
+  return (
+    <div className={`card po-summary ${totals.clean ? 'clean' : ''}`}>
+      <div className="step-head">
+        <h3 className="rows-title">Box {boxNumber} against its label</h3>
+        <span className={`po-manifest-progress ${totals.clean ? 'done' : ''}`}>
+          {totals.received} of {totals.expected} expected {unit} received
+        </span>
+      </div>
+      <div className="po-summary-totals">
+        <span className="po-summary-stat"><b>{totals.expected}</b> expected</span>
+        <span className="po-summary-stat"><b>{totals.received}</b> received</span>
+        <span className={`po-summary-stat ${totals.missing ? 'bad' : ''}`}><b>{totals.missing}</b> missing</span>
+        <span className={`po-summary-stat ${totals.extra ? 'warn' : ''}`}><b>{totals.extra}</b> extra / not on PO</span>
+      </div>
+      {totals.clean ? (
+        <p className="muted sm">Everything the label declared came out of the box, and nothing else did.</p>
+      ) : (
+        <>
+          <p className="muted sm">{off.length} row{off.length === 1 ? '' : 's'} differ{off.length === 1 ? 's' : ''} from the label. A missing pair is recorded as short; an undeclared one as an overage — the reconciliation carries both.</p>
+          <div className="po-summary-rows">
+            {off.map((r) => (
+              <div className={`po-summary-row ${r.state}`} key={r.key}>
+                <div className="po-summary-row-head">
+                  <span className="po-summary-sku"><b>{r.sku || '—'}</b> · size {r.size}{r.dimensions ? <span className="muted"> · {r.dimensions}</span> : null}</span>
+                  <span className={`po-flag ${SUMMARY_STATE[r.state].cls}`}>{SUMMARY_STATE[r.state].label}</span>
+                </div>
+                <div className="po-summary-row-nums muted sm">
+                  {r.name ? <span className="po-summary-name">{r.name}</span> : null}
+                  <span>expected <b>{r.expected ?? '—'}</b></span>
+                  <span>received <b>{r.received}</b></span>
+                  <span className={r.delta < 0 ? 'neg' : 'pos'}>off by <b>{r.delta > 0 ? `+${r.delta}` : r.delta}</b></span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

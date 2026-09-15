@@ -869,10 +869,12 @@ project (parser source: `~/Make.com Stickballman12/receipt-parser/parser.js`).
 
 The receipt is already in a mailbox — the shop emailed it the moment the buyer paid.
 So the receipt card asks for the **order / transaction number** first: the server POSTs
-`{transaction_id}` to the scenario, Make searches the ordering mailboxes (Gmail full-text,
-then Yahoo IMAP `Inbox`), parses Champs / Nike in-store / adidas receipts, enriches with
-the catalogue (Nike UPC → StockX style id; adidas via our own `sku-lookup`), and answers
-**synchronously** (~5–15 s; Make's ceiling is 40 s, our timeout 45 s).
+`{transaction_id}` to the scenario, Make searches the ordering mailboxes (Gmail **All
+Mail** full-text, and eight Yahoo IMAP folders in parallel through a helper scenario,
+6283660), parses Champs / Foot Locker / Kids Foot Locker / Nike in-store / adidas
+receipts, enriches with the catalogue (Nike UPC → StockX style id; adidas via our own
+`sku-lookup`), and answers **synchronously** (~15 s; Make's ceiling is 40 s, our timeout
+45 s). ~28 Make operations a call.
 
 - **A fourth source into the same review table.** Rows come back in the `receipt-read`
   shape (`sku` = style id, falling back to the store code — never a UPC), `source:
@@ -884,8 +886,8 @@ the catalogue (Nike UPC → StockX style id; adidas via our own `sku-lookup`), a
   stamps `receipt_at` — "a receipt was received" stays a closing condition on an
   attached file the auditor can open, whichever way it arrived. Filing failure is a
   warning, not a refusal: the lines still come back and the buyer can attach a screenshot.
-- **Which email was read is shown** (subject · from · date in EST · "filed as the
-  receipt") above the rows. A short numeric id can substring-match an unrelated email on
+- **Which email was read is shown** (subject · from · date in EST · the Yahoo folder it
+  was in · "filed as the receipt") above the rows. A short numeric id can substring-match an unrelated email on
   Yahoo (a tracking number); the scenario then answers 200 with `store: null` and no
   items, which the screen reports as "found an email but nothing on it read as a
   purchased item" rather than as an empty table.
@@ -895,11 +897,14 @@ the catalogue (Nike UPC → StockX style id; adidas via our own `sku-lookup`), a
   `receipt-read` (buyer-scoped supplier, `requireBuyerAccess`, 12/min, finished requests
   refused). Every call writes `receipt_email_read` to the trail — found or not, with the
   check verdict and the scenario's `warnings`.
-- **Standing caveats on the Make side:** the Gmail connection was the expired `ordermail`
-  one at handover and Yahoo was a personal account — swap both in the scenario. Yahoo is
-  searched in `Inbox` only; receipts auto-filed into "Champs Sports"/"Orders" folders are
-  a 404 until those folders are added. Only Champs, Nike, adidas parse; other merchants
-  return no items. 5–6 Make operations per call.
+- **Standing caveats on the Make side:** Gmail is `orderemail@stickballman12llc.com`
+  (re-authorised 2026-09-15, token to 2027-03). Yahoo is Alex's account, and IMAP
+  searches ONE folder per call with no folder listing, so the folders are a **fixed
+  list** — `YAHOO_FOLDERS` at the top of the Code module in 6282792: Inbox, Champs
+  Sports, Footlocker, Finishline, Jd sports folder, Dick's Sporting Goods, Orders,
+  Purchased for Supplier. **A new Yahoo folder has to be added there** (a missing one
+  yields nothing, never an error; each adds ~4.5 s to its chunk and 1 op). Merchants
+  outside the five parsed return 200 with no items.
 - The suite runs with the URL blanked (`playwright.config.js`) — a real run would search
   the real mailboxes. `e2e/buy-cart.spec.js` covers the payload mapping and the gates.
 

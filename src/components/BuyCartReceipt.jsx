@@ -463,6 +463,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
             <p className="muted sm bc-email-hit">
               Read from the email <b>{emailHit.subject || '(no subject)'}</b>
               {emailHit.from ? ` from ${emailHit.from}` : ''}{emailHit.date && !Number.isNaN(new Date(emailHit.date).getTime()) ? ` · ${estDate(emailHit.date)} ${estClock(emailHit.date)} EST` : ''}
+              {emailHit.folder && !/all mail/i.test(emailHit.folder) ? ` · in the ${emailHit.folder} folder` : ''}
               {emailHit.filed ? ' · filed as the receipt' : ''}. If that is not the receipt, cancel and check the number.
             </p>
           )}

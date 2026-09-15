@@ -78,6 +78,10 @@ export function readingFromPayload(p) {
     subject: str(p?.email?.subject, 300),
     from: str(p?.email?.from, 200),
     date: str(p?.email?.date_iso, 40) || str(p?.email?.date, 80),
+    // Where it was found — a Yahoo folder name, or "[Gmail]/All Mail". The buyer
+    // reads this as "it was in the Footlocker folder", which is how they know the
+    // right email was matched.
+    folder: str(p?.email?.folder ?? p?.folder, 120),
     text: str(p?.email?.text, MAX_TEXT),
   };
   return {
@@ -96,6 +100,7 @@ async function fileEmailAsReceipt({ cart, transactionId, email, actor }) {
     email.subject ? `Subject: ${email.subject}` : null,
     email.from ? `From: ${email.from}` : null,
     email.date ? `Date: ${email.date}` : null,
+    email.folder ? `Folder: ${email.folder}` : null,
     '',
   ].filter((l) => l != null).join('\n');
   const body = Buffer.from(`${header}\n${email.text}`, 'utf8');

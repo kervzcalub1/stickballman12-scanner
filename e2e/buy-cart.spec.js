@@ -377,7 +377,7 @@ test('a receipt found by its number in the mailbox lands in the same review tabl
   // line total after discounts, so the unit price is derived, not taken from list.
   const r = readingFromPayload({
     ok: true, transaction_id: '179364', store: 'nike', mailbox: 'gmail',
-    email: { subject: 'Your Nike Purchase', from: 'nike@notifications.nike.com', date: 'Mon, 14 Sep 2026 18:02:11 -0400', date_iso: '2026-09-14T18:02:11-04:00', text: 'Thanks for shopping…' },
+    email: { subject: 'Your Nike Purchase', from: 'nike@notifications.nike.com', date: 'Mon, 14 Sep 2026 18:02:11 -0400', date_iso: '2026-09-14T18:02:11-04:00', folder: 'Footlocker', text: 'Thanks for shopping…' },
     item_count: 3,
     items: [
       { name: 'Air Jordan 1 Low', sku: null, upc: '196604935555', style_id: 'FJ6245-106', size: '9.5', qty: 2, list_price: 115, discount: 30, final_price: 200, raw_code: 'x' },
@@ -389,7 +389,7 @@ test('a receipt found by its number in the mailbox lands in the same review tabl
   });
   expect(r.rows.map((x) => x.sku)).toEqual(['FJ6245-106', 'IH8223']);   // no code → no row, never a blank one
   expect(r.rows[0]).toMatchObject({ size: '9.5', qty: 2, totalPrice: 200, unitPrice: 100, source: 'email' });
-  expect(r.email).toMatchObject({ subject: 'Your Nike Purchase', date: '2026-09-14T18:02:11-04:00' });
+  expect(r.email).toMatchObject({ subject: 'Your Nike Purchase', date: '2026-09-14T18:02:11-04:00', folder: 'Footlocker' });
   expect(r.statedTotal).toBe(318);
   expect(r.check.ok).toBe(true);                       // 200 + 100 = the printed subtotal; 3 = the printed count
   expect(r.warnings).toEqual(['upc_not_found:1 (http 200)']);

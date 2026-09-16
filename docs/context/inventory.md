@@ -22,6 +22,31 @@
 Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 `queryItems` (per-VIN rows; returns upc/colorway/gender; ORDER BY vin).
 
+## Correcting a style code (2026-09-17)
+`api/items/set-sku.js` (GET preview + POST) · `findSkuSiblings` / `setItemsSku` in db.js ·
+`SkuEditModal` in `Inventory.jsx` (the ✎ beside SKU on the item detail, warehouse/admin/PH).
+E2E: `e2e/inventory-edit-sku.spec.js`.
+
+**Why:** a box UPC does not always name one style code forever. Jordan re-coded
+553558-100 → 553558-136 for size 10.5 in 2022 and kept the barcode (196149780863), so a
+scan of that box resolves to -100 through the catalogue while the box says -136. The
+warehouse can read the code on the box; the API cannot. Nothing else on the unit is wrong.
+- **One field.** VIN, UPC, size, cost, location, status all stay. The UPC stays on
+  purpose — the barcode is the truth about the box; the catalogue's answer was the error.
+- **Look up the new code first** (`sku-search`): the name / colorway / image travel with
+  it, each only when the catalogue returned one (`coalesce`) — a -136 under a -100's name
+  is half a fix. A code the catalogue does not know can still be saved; the name stays.
+- **Scope:** *just this pair*, or *this pair and the N others scanned in the same way* =
+  same old code **and** same size **and** same box UPC (a unit with no UPC matches on code
+  + size within its own batch). Never a different size — the 9 may genuinely still be
+  -100. The count is fetched (GET) before anyone commits.
+- **Listed pairs are corrected too**, and counted back (`listed` = any `synced_*` or
+  `added_to_intel_inv`): our record has to be right, but the listing on the store still
+  carries the old code and PH fixes that by hand. The modal and the notice both say so.
+- Every unit gets a `note` event: `SKU changed 553558-100 → 553558-136 (name) — reason`,
+  with `sku_from` / `sku_to` in `details` so it is queryable.
+- Same code → 400; a code that fails `SKU_RE` → 400. No schema change.
+
 ## SKU-merge
 - Rows are **merged by SKU + status** (regardless of size) via `groupPhRows`
   (shared with the PH report). Each row shows the size breakdown as **qty chips**

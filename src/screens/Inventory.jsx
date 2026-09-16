@@ -167,6 +167,110 @@ function StickerResult({ info, onOpenItem }) {
 // that on their own grid) — but NOT the physical-stock writes: status changes and
 // Move to shelf. Those endpoints stay warehouse-only server-side, so this flag hides
 // buttons that would 403 rather than granting anything (docs/context/inventory.md).
+// Correct the style code on a pair the catalogue resolved wrongly off its box UPC —
+// Jordan re-coded 553558-100 → -136 for some sizes in 2022 and kept the same barcode, so
+// a scan of 196149780863 (size 10.5) lands as -100 while the box says -136. Everything
+// else on the unit is right, so this is one field: the new code, looked up so the name
+// and colorway travel with it, applied to this pair or to every pair that was scanned in
+// the same wrong way (same old code + size + UPC — the count is fetched, not guessed).
+function SkuEditModal({ item, onClose, onSaved, onSignOut }) {
+  const [sku, setSku] = useState('');
+  const [product, setProduct] = useState(null);   // catalogue hit for the NEW code
+  const [lookedUp, setLookedUp] = useState('');    // the code `product` answers for
+  const [sibs, setSibs] = useState(null);          // other pairs scanned in the same way
+  const [scope, setScope] = useState('one');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+  const code = sku.trim().toUpperCase();
+
+  useEffect(() => {
+    api.skuSiblings(item.vin).then((r) => setSibs(r.siblings || [])).catch(() => setSibs([]));
+  }, [item.vin]);
+
+  async function lookUp() {
+    if (!code) return;
+    setBusy('look'); setErr(''); setProduct(null);
+    try {
+      const { product: p } = await api.searchSku(code);
+      setProduct(p || null); setLookedUp(code);
+      if (!p) setErr('The catalogue has nothing under that code. You can still save it — the name stays as it is.');
+    } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      setLookedUp(code); setErr(`${e.message} You can still save the code — the name stays as it is.`);
+    } finally { setBusy(''); }
+  }
+
+  async function save() {
+    setBusy('save'); setErr('');
+    try {
+      const r = await api.setItemSku({
+        vin: item.vin, sku: code, scope,
+        product: lookedUp === code && product ? product : null,
+        reason: reason.trim() || null,
+      });
+      onSaved(r);
+    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(''); }
+  }
+
+  const others = sibs || [];
+  const listedOthers = others.filter((o) => o.listed).length;
+  return (
+    <div className="modal-overlay" onClick={() => busy !== 'save' && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">Correct the style code</h3>
+        <p className="muted sm">
+          {item.vin} is on record as <b>{item.sku || '—'}</b>{item.size ? ` size ${item.size}` : ''}{item.upc ? ` · box UPC ${item.upc}` : ''}.
+          Type the code printed on the box.
+        </p>
+        <div className="sku-edit-row">
+          <input className="input" value={sku} onChange={(e) => setSku(e.target.value)} placeholder="e.g. 553558-136"
+            autoComplete="off" spellCheck={false} maxLength={40}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookUp(); } }} />
+          <button type="button" className="btn" disabled={busy === 'look' || !code} onClick={lookUp}>
+            {busy === 'look' ? 'Looking…' : 'Look up'}
+          </button>
+        </div>
+        {product && lookedUp === code && (
+          <div className="sku-edit-hit">
+            {product.image ? <img src={product.image} alt="" /> : null}
+            <div>
+              <b>{product.name}</b>
+              {product.colorway && <div className="muted sm">{product.colorway}</div>}
+              <div className="muted xs">The name and colorway above are saved with the code.</div>
+            </div>
+          </div>
+        )}
+        {others.length > 0 && (
+          <div className="sku-edit-scope">
+            <label className="check-pill sm"><input type="radio" name="sku-scope" checked={scope === 'one'} onChange={() => setScope('one')} /> Just this pair</label>
+            <label className="check-pill sm"><input type="radio" name="sku-scope" checked={scope === 'same_upc'} onChange={() => setScope('same_upc')} />
+              This pair and the {others.length} other{others.length === 1 ? '' : 's'} scanned in as {item.sku}{item.size ? ` size ${item.size}` : ''}{item.upc ? ' with this UPC' : ' in this batch'}
+            </label>
+          </div>
+        )}
+        {sibs === null && <p className="muted xs">Checking for other pairs scanned in the same way…</p>}
+        {(item.synced_alias || item.synced_stockx || item.synced_shopify || item.added_to_intel_inv || (scope === 'same_upc' && listedOthers > 0)) && (
+          <p className="notice sm">
+            {scope === 'same_upc' && listedOthers > 0 ? `${listedOthers + (item.synced_alias || item.synced_stockx || item.synced_shopify ? 1 : 0)} of these are` : 'This pair is'} already listed to a store under the old code.
+            Our record is corrected here; the store listing still says {item.sku} and PH has to fix it there.
+          </p>
+        )}
+        <input className="input sku-edit-why" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300}
+          placeholder="Why (optional) — e.g. box says -136; Jordan re-coded this size in 2022" />
+        {err && <div className="error sm">{err}</div>}
+        <div className="modal-actions">
+          <button type="button" className="btn ghost" onClick={onClose} disabled={busy === 'save'}>Cancel</button>
+          <button type="button" className="btn primary" disabled={busy === 'save' || !code || code === String(item.sku || '').toUpperCase()} onClick={save}>
+            {busy === 'save' ? 'Saving…' : scope === 'same_upc' ? `Change ${others.length + 1} pairs to ${code || '…'}` : `Change to ${code || '…'}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome, onSignOut, canEditStock = true }) {
   const today = estToday();
   const [mode, setMode] = useState('list'); // 'list' | 'detail'
@@ -193,6 +297,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(''); // transient confirmation (e.g. pairs removed)
+  const [skuEdit, setSkuEdit] = useState(false); // the "correct the style code" modal on the open item
   // A scanned UPC we hold no record of: the shoe the catalogue named, waiting on a
   // person to say it matches the box. Nothing is written until they do.
   const [upcCheck, setUpcCheck] = useState(null);
@@ -721,6 +826,15 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
           right={<button className="btn ghost sm" onClick={backToList}>← Back to list</button>} />
         {error && <div className="error mt">{error}</div>}
         {notice && <div className="notice mt">{notice}</div>}
+        {skuEdit && it && (
+          <SkuEditModal item={it} onClose={() => setSkuEdit(false)} onSignOut={onSignOut}
+            onSaved={(r) => {
+              setSkuEdit(false);
+              setDetail({ item: r.item, events: r.events, provenance: r.provenance });
+              loadDetailPhotos(r.item?.sku);
+              setNotice(`${r.updated} pair${r.updated === 1 ? '' : 's'} changed to ${r.item?.sku}.${r.listed ? ` ${r.listed} of them ${r.listed === 1 ? 'is' : 'are'} listed to a store under the old code — tell PH.` : ''}`);
+            }} />
+        )}
         {sticker ? <StickerResult info={sticker} onOpenItem={openDetail} />
           : !detail ? <p className="muted">Loading…</p> : (
           <>
@@ -734,7 +848,14 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                       {/* A SBM-R-… number came off a pre-printed roll sticker, so the sticker
                           itself is answered here too: it's on this pair, i.e. used. */}
                       {isRollVin(it.vin) ? <span className="sr-state used sm" title="Pre-printed 1ID sticker, in use on this pair">1ID · in use</span> : null}</dd></div>
-                    <div><dt>SKU</dt><dd><CopyText text={it.sku}>{it.sku || '—'}</CopyText></dd></div>
+                    <div><dt>SKU</dt><dd><CopyText text={it.sku}>{it.sku || '—'}</CopyText>
+                      {/* The code the catalogue chose off the box UPC is not always the
+                          code on the box (a re-coded colourway keeps its barcode). */}
+                      {canEditStock && (
+                        <button type="button" className="btn ghost sm inv-cost-edit" title="Correct the style code"
+                          onClick={() => setSkuEdit(true)}><Icon name="pencil" /></button>
+                      )}
+                    </dd></div>
                     <div><dt>UPC</dt><dd><CopyText text={it.upc}>{it.upc || '—'}</CopyText></dd></div>
                     <div><dt>Size</dt><dd>{it.size || '—'}</dd></div>
                     {/* Blank is "not known", never $0.00 (costs.md). The pencil hands the

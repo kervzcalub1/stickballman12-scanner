@@ -107,6 +107,9 @@ export const api = {
   // Product search + sheet
   searchUpc: (upc) => post('/api/upc-search', { upc }),
   setItemUpc: (vin, upc) => post('/api/items/set-upc', { vin, upc }),
+  // Correct a style code the catalogue got wrong off the box UPC (inventory.md).
+  skuSiblings: (vin) => get(`/api/items/set-sku?vin=${encodeURIComponent(vin)}`),
+  setItemSku: (body) => post('/api/items/set-sku', body),
   // Code only — the server resolves the style AND the size itself, because a UPC
   // belongs to ONE size's box and a client-supplied size is a guess. Two phases:
   // without `confirm` it just asks (nothing is written); `confirm` carries back the

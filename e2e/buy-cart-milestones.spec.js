@@ -25,7 +25,10 @@ test('ten stops, in the order the process runs', () => {
 test('the front half follows the request status', () => {
   expect(at({ status: 'draft' })).toBe('request');
   expect(at({ status: 'submitted' })).toBe('approval');
-  expect(at({ status: 'approved' })).toBe('cards');
+  expect(at({ status: 'approved', list_closed_at: '2026-09-16T00:00:00Z' })).toBe('cards');
+  // Approved line by line while the buyer is still adding: not at cards yet — the desk
+  // cannot fund a list that is still growing.
+  expect(at({ status: 'approved', list_closed_at: null })).toBe('approval');
   expect(at({ status: 'funded' })).toBe('receipt');
   // A receipt in but no order yet is still "sorting / packing" — the next thing to do is
   // start packing, and the order is raised by that.

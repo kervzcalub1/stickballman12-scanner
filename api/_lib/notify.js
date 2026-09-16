@@ -16,6 +16,7 @@
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
 import { getBuyCart, getBuyCartLine } from './db.js';
+import { fundingTarget, fundingTaxPct } from './buycart.js';
 import { stockForPair, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
 
@@ -39,6 +40,14 @@ import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js'
 // while someone waited. A control that cannot tell a test run from a human doing their
 // job is not a control, it is an outage with a rationale.
 export const notifyConfigured = () => !!String(process.env.MAKE_WEBHOOK_URL || '').trim();
+
+// WHICH INSTANCE SENT IT. Dev and prod share one bot, one group and one webhook; the
+// scenario carries this on every button's callback_data and posts the tap back to the
+// matching host, so a card from a dev tunnel is recorded on the dev server and never on
+// production. `vite.config.js` pins APP_ENV=dev for the dev server; server.mjs (Railway)
+// never sets it, so anything else reads as prod — the safe default, and what Make
+// assumes when the field is missing.
+export const notifyEnv = () => (process.env.APP_ENV === 'dev' ? 'dev' : 'prod');
 
 const money = (n) => (n == null || !Number.isFinite(Number(n)) ? null : Math.round(Number(n) * 100) / 100);
 const dollars = (n) => (money(n) == null ? '—' : `$${money(n).toFixed(2)}`);
@@ -195,6 +204,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
 
     const body = {
       event: 'buying_line_asked',
+      env: notifyEnv(),
       sent_at: new Date().toISOString(),
       request: {
         id: Number(cart.id),
@@ -264,6 +274,91 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
   } catch (e) {
     // Swallowed on purpose. See the header: the buyer must never pay for this.
     console.error('[notify] could not tell Make about the line:', e.message);
+    return { sent: false, reason: e.message };
+  }
+}
+
+/**
+ * A REQUEST-level event: the buyer closed their list, or opened it again.
+ *
+ * Same webhook, same `event` field; the scenario routes on it and posts the caption as
+ * a plain message — no photo, no buttons, nothing to decide. Plain text only: the Make
+ * side sends it with no parse mode, so a stray `*` or `<` would print, not format.
+ *
+ * Why the group hears about it at all: the desk funds a TOTAL, and a list that has just
+ * been closed is a total that is now final — while a list that has just been re-opened
+ * is a total about to move, possibly after cards have already gone out. Both change
+ * what the person holding the cards should do next.
+ *
+ * Fire-and-forget, like the line card: the buyer never waits on Make.
+ *
+ * @param {number} cartId
+ * @param {'buying_request_closed'|'buying_request_reopened'} event
+ * @param {object} [actor]  who pressed it (the caption names the buyer off the request)
+ */
+export async function notifyRequestEvent(cartId, event, actor = null) {
+  const url = String(process.env.MAKE_WEBHOOK_URL || '').trim();
+  if (!url) {
+    console.log(`[notify] cart ${cartId} ${event} — MAKE_WEBHOOK_URL is blank on this server, so nothing was sent`);
+    return { sent: false, reason: 'MAKE_WEBHOOK_URL is not set' };
+  }
+  try {
+    const cart = await getBuyCart(cartId);
+    if (!cart) return { sent: false, reason: 'cart is gone' };
+    const n = (v) => Number(v) || 0;
+    const target = fundingTarget(cart);
+    const tax = fundingTaxPct(cart);
+    const rejected = n(cart.line_count) - n(cart.approved_count) - n(cart.pending_count);
+    const pairs = (k) => `${k} pair${k === 1 ? '' : 's'}`;
+    const closed = event === 'buying_request_closed';
+    const caption = [
+      closed
+        ? `${cart.cart_code} — ${cart.buyer_name} closed the request`
+        : `${cart.cart_code} — ${cart.buyer_name} re-opened the request and is adding more pairs`,
+      `${pairs(n(cart.line_count))} asked · ${n(cart.approved_count)} approved · ${n(cart.pending_count)} still waiting${rejected > 0 ? ` · ${rejected} turned down` : ''}`,
+      closed
+        ? `Approved ${dollars(cart.approved_amount)}${tax ? ` + ${tax}% tax` : ''} = ${dollars(target)} to fund${n(cart.gc_total) > 0 ? ` · ${dollars(cart.gc_total)} in cards already issued` : ''}`
+        : n(cart.gc_total) > 0
+          ? `Cards issued so far: ${dollars(cart.gc_total)} — a top-up may be needed once the new lines are approved.`
+          : 'No cards issued yet.',
+      ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
+    ].join('\n');
+
+    const body = {
+      event,
+      env: notifyEnv(),
+      sent_at: new Date().toISOString(),
+      request: {
+        id: Number(cart.id),
+        code: cart.cart_code,
+        buyer: cart.buyer_name,
+        retailer: cart.retailer || null,
+        purpose: cart.purpose || null,
+        status: cart.status,
+        line_count: n(cart.line_count),
+        pending_count: n(cart.pending_count),
+        approved_count: n(cart.approved_count),
+        rejected_count: Math.max(0, rejected),
+        approved_amount: money(cart.approved_amount),
+        funding_target: money(target),
+        gc_total: money(cart.gc_total),
+      },
+      caption,
+    };
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.error(`[notify] ${cart.cart_code} ${event} — Make answered ${res.status}`);
+      return { sent: false, reason: `webhook ${res.status}` };
+    }
+    console.log(`[notify] ${cart.cart_code} ${event} → Make ${res.status}`);
+    return { sent: true };
+  } catch (e) {
+    console.error(`[notify] could not tell Make about ${event}:`, e.message);
     return { sent: false, reason: e.message };
   }
 }

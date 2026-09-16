@@ -1943,7 +1943,12 @@ export async function pendingCounts() {
       -- parcel: a buyer standing in a shop waiting to be told yes, and a spend nobody
       -- has independently verified. Company money is on the wrong side of both.
       (SELECT count(*) FROM buy_carts WHERE status = 'submitted')::int AS carts_to_approve,
-      (SELECT count(*) FROM buy_carts WHERE status = 'approved')::int  AS carts_to_fund,
+      -- Needs cards: approved AND the buyer has closed the list — the desk cannot issue
+      -- against a list still growing, so a request still being added to is not on the
+      -- desk's pile yet. (A funded request re-opened for more announces its top-up on
+      -- its own page and in the Telegram group rather than here — each queue count
+      -- matches the status filter the queue screen opens with.)
+      (SELECT count(*) FROM buy_carts WHERE status = 'approved' AND list_closed_at IS NOT NULL)::int AS carts_to_fund,
       (SELECT count(*) FROM buy_carts WHERE status = 'funded')::int    AS carts_awaiting_receipt,
       (SELECT count(*) FROM buy_carts WHERE status IN ('receipted','audited'))::int AS carts_to_audit
     FROM (
@@ -5820,6 +5825,9 @@ const cartMoney = (r) => ({
   gc_total: r.gc_total == null ? 0 : Number(r.gc_total),
   receipt_total: r.receipt_total == null ? null : Number(r.receipt_total),
   balance_remaining: r.balance_remaining == null ? null : Number(r.balance_remaining),
+  // What the cards must cover: approved sticker total + sales tax. Falls back to the
+  // sticker sum for a row written before the column existed (db:setup backfills it).
+  funding_target: r.funding_target == null ? (r.approved_amount == null ? 0 : Number(r.approved_amount)) : Number(r.funding_target),
 });
 const cartOut = (r) => (r ? { ...r, ...cartMoney(r) } : null);
 
@@ -5840,9 +5848,15 @@ const lineOut = (r) => (r ? {
 } : null);
 
 // Recompute the cart's money and counts FROM ITS ROWS. Called by every mutation that
-// can move them. The funding target is the SHELF price of every approved pair — the
-// sticker, with no discount assumed — so a card is never short at the till because the
-// buyer didn't get the promo they expected (docs/context/buy-cart.md).
+// can move them — the lines, the cards, AND the cost stack, because the funding target
+// reads the tax rate off it.
+//
+// `approved_amount` is the SHELF price of every approved pair — the sticker, with no
+// discount assumed. `funding_target` is that plus the sales tax on the request's cost
+// stack: the till charges tax on top of the sticker, and funding at the sticker alone
+// left every card short by exactly the tax (docs/context/buy-cart.md). Still no
+// discount assumed — a card that comes up short strands a buyer in a shop, while a
+// leftover balance is money still ours and step 10 accounts for it.
 async function recalcCartMoney(sql, cartId) {
   await sql`
     UPDATE buy_carts c SET
@@ -5850,6 +5864,7 @@ async function recalcCartMoney(sql, cartId) {
       approved_count = l.approved,
       pending_count  = l.pending,
       approved_amount = l.approved_amount,
+      funding_target  = round(l.approved_amount * (1 + coalesce(nullif(c.cost_stack->>'taxPct', '')::numeric, 0) / 100), 2),
       gc_total        = g.total,
       balance_remaining = CASE WHEN c.receipt_total IS NULL THEN NULL
                                ELSE g.total - c.receipt_total END,
@@ -5967,7 +5982,19 @@ export async function getBuyCartFull(id) {
   const cart = cartOut((await sql`SELECT * FROM buy_carts WHERE id = ${id}`)[0]);
   if (!cart) return null;
   const [lines, giftCards, files, receiptLines, events, po] = await Promise.all([
-    sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${id} ORDER BY id`,
+    // THE ORDER IS THE ORDER THE BUYER FOUND THEM, grouped by shoe. A style code sorts
+    // by when its FIRST size was asked about, and the sizes inside it run small to
+    // large — so a 9 added an hour after the 8 and the 10 lands between them, not at
+    // the bottom of the list under a different shoe. The numeric part of the size
+    // drives the order (`9.5W` → 9.5), sizes with no number sort last, and the id
+    // breaks every tie.
+    sql`SELECT l.* FROM buy_cart_lines l
+          JOIN (SELECT sku, min(id) AS first_id FROM buy_cart_lines WHERE cart_id = ${id} GROUP BY sku) s
+            ON s.sku = l.sku
+         WHERE l.cart_id = ${id}
+         ORDER BY s.first_id,
+                  (regexp_match(coalesce(l.size, ''), '\\d+(?:\\.\\d+)?'))[1]::numeric NULLS LAST,
+                  l.size, l.id`,
     sql`SELECT id, cart_id, code_last4, balance, retailer, label, spent_amount, remaining,
                issued_by, issued_at, voided_at, voided_reason,
                (pin_enc IS NOT NULL) AS has_pin
@@ -6169,8 +6196,11 @@ export async function setBuyCartCostStack(cartId, stack, calls, actor, note) {
         profit = ${c.profit}, roi = ${c.roi}, updated_at = now()
        WHERE id = ${c.id} AND cart_id = ${cartId}`;
   }
+  // The tax rate lives on the stack, and the funding target reads it — a corrected
+  // tax has to move what the cards must cover.
+  await recalcCartMoney(sql, cartId);
   await logCartEvent({ cartId, kind: 'costs_edited', actor, body: note });
-  return cartOut(rows[0]);
+  return getBuyCart(cartId);
 }
 
 export async function removeBuyCartLine(cartId, lineId, actor) {
@@ -6202,6 +6232,55 @@ export async function askBuyCart(cartId, actor) {
     WHERE id = ${cartId} AND status IN ('draft', 'submitted', 'approved', 'denied')
     RETURNING *`;
   if (!rows[0]) return null;
+  return getBuyCartFull(cartId);
+}
+
+// THE BUYER CLOSES THEIR LIST. Not the request — that word is the auditor's, at the far
+// end — the LIST: "I have nothing more to add; fund what you approved." A draft goes to
+// `submitted` on the way (a desk-entered list the buyer never asked about is asked about
+// now); anything further along keeps its status, since closing changes no decision.
+// Returns null when there was nothing to close (already closed, or finished).
+export async function closeBuyCartList(cartId, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET
+      list_closed_at = now(),
+      list_closed_by = ${actor.name || actor.username || null},
+      status = CASE WHEN status = 'draft' THEN 'submitted' ELSE status END,
+      submitted_at = coalesce(submitted_at, now()),
+      submitted_by = coalesce(submitted_by, ${actor.name || actor.username || null}),
+      updated_at = now()
+    WHERE id = ${cartId} AND list_closed_at IS NULL
+      AND status IN ('draft', 'submitted', 'approved', 'denied', 'funded')
+    RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({
+    cartId, kind: 'list_closed', actor,
+    body: `${rows[0].line_count} line${Number(rows[0].line_count) === 1 ? '' : 's'} · ${rows[0].pending_count} still to decide`,
+  });
+  return getBuyCartFull(cartId);
+}
+
+// …AND CAN OPEN IT AGAIN, until the receipt is in. A buyer who closed the list and then
+// found one more pair on the way out should not need a second request for it. The
+// cards already issued stay exactly where they are — the new lines, once approved,
+// raise the target and the desk records a top-up. `list_reopened_at` is what stops the
+// one-shot db:setup backfill from closing a re-opened list under them.
+export async function reopenBuyCartList(cartId, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET
+      list_closed_at = NULL, list_closed_by = NULL, list_reopened_at = now(), updated_at = now()
+    WHERE id = ${cartId} AND list_closed_at IS NOT NULL
+      AND status IN ('submitted', 'approved', 'denied', 'funded')
+    RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({
+    cartId, kind: 'list_reopened', actor,
+    body: Number(rows[0].gc_total) > 0
+      ? `to add more — $${Number(rows[0].gc_total).toFixed(2)} in cards already issued stays`
+      : 'to add more',
+  });
   return getBuyCartFull(cartId);
 }
 
@@ -6300,32 +6379,6 @@ export async function cartHasShoePhoto(cartId, sku) {
   return rows.length > 0;
 }
 
-export async function submitBuyCart(cartId, actor) {
-  const sql = db();
-  const rows = await sql`
-    UPDATE buy_carts SET status = 'submitted', submitted_at = now(),
-           submitted_by = ${actor.name || actor.username || null}, updated_at = now()
-     WHERE id = ${cartId} AND status = 'draft' RETURNING *`;
-  if (!rows[0]) return null;
-  await logCartEvent({ cartId, kind: 'submitted', actor });
-  return cartOut(rows[0]);
-}
-
-// Back to draft while nothing has been decided. Allowed only with no approved lines —
-// pulling a request somebody already said yes to would let the buyer swap the contents
-// of an approval.
-export async function withdrawBuyCart(cartId, actor) {
-  const sql = db();
-  const rows = await sql`
-    UPDATE buy_carts SET status = 'draft', submitted_at = NULL, submitted_by = NULL, updated_at = now()
-     WHERE id = ${cartId} AND status = 'submitted'
-       AND NOT EXISTS (SELECT 1 FROM buy_cart_lines WHERE cart_id = ${cartId} AND status <> 'pending')
-     RETURNING *`;
-  if (!rows[0]) return null;
-  await logCartEvent({ cartId, kind: 'withdrawn', actor });
-  return cartOut(rows[0]);
-}
-
 /**
  * Approve or reject lines — one, several, or every pending one.
  *
@@ -6386,7 +6439,7 @@ export async function linesAwaitingQty(cartId, lineIds, qtyById = {}, qtyAll = n
  * what the money was released against and nothing may move.
  */
 export async function decideBuyCartLines({
-  cartId, lineIds = null, action, reason = null, actor, qtyById = {}, qtyAll = null,
+  cartId, lineIds = null, action, reason = null, actor, qtyById = {}, qtyAll = null, pendingOnly = false,
 }) {
   const sql = db();
   const status = action === 'approve' ? 'approved' : 'rejected';
@@ -6396,9 +6449,16 @@ export async function decideBuyCartLines({
 
   // Read first, so an override can carry what it replaced. Includes already-decided
   // lines — the whole point — but never a line on a cart the caller has not passed.
+  //
+  // `pendingOnly` is the funded case: the cards went out against the approvals already
+  // on the request, so those are frozen, but a pair the buyer added AFTER re-opening
+  // the list is still a question and can be answered. Filtered in the query rather
+  // than by a later `if`, so an override can never slip through on a funded line.
   const targets = ids
-    ? await sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId} AND id = ANY(${ids}::bigint[])`
-    : await sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId}`;
+    ? await sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId} AND id = ANY(${ids}::bigint[])
+                 AND (NOT ${pendingOnly}::boolean OR status = 'pending')`
+    : await sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId}
+                 AND (NOT ${pendingOnly}::boolean OR status = 'pending')`;
 
   const rows = [];
   for (const t of targets) {
@@ -6583,6 +6643,13 @@ export async function deleteBuyCartFile(cartId, fileId) {
     DELETE FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId}
     RETURNING id, kind, r2_key, name`;
   return rows[0] || null;
+}
+
+// The last four of every card on a request (voided included), for the reader to flag
+// a likely re-read. Never the code.
+export async function listBuyCartCardTails(cartId) {
+  const rows = await db()`SELECT code_last4 FROM buy_cart_gift_cards WHERE cart_id = ${cartId}`;
+  return rows.map((r) => String(r.code_last4 || '')).filter(Boolean);
 }
 
 export async function getBuyCartFile(cartId, fileId) {

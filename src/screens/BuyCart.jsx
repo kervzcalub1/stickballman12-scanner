@@ -23,7 +23,7 @@ import { BuyCartTasks } from '../components/BuyCartTasks.jsx';
 import { estDate, estTime } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
-import { decisionsOpen, decisionsClosedBecause } from '../lib/buycartRules.js';
+import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable } from '../lib/buycartRules.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
 // `best_platform` stores the KEY ('alias'), and printing it raw read "92.7% ROI via
@@ -50,6 +50,17 @@ const STATUS = {
 function StatusChip({ status }) {
   const s = STATUS[status] || { label: status, cls: 'muted' };
   return <span className={`po-chip ${s.cls}`}>{s.label}</span>;
+}
+
+// Whether the buyer is STILL ADDING. The status column cannot say it — a request is
+// `submitted` from the first pair onward, whether the buyer is mid-aisle or has gone
+// home — and it is the one thing the gift-card desk has to know before funding a total.
+function ListChip({ cart }) {
+  if (['closed', 'cancelled', 'written_off', 'receipted', 'audited'].includes(cart.status)) return null;
+  if (cart.status === 'draft' && !Number(cart.line_count)) return null;
+  return listOpen(cart)
+    ? <span className="po-chip warn bc-list-chip" title="The buyer can still add pairs. Cards wait until they close it.">Buyer still adding</span>
+    : <span className="po-chip muted bc-list-chip" title={`Closed by ${cart.list_closed_by || 'the buyer'} ${estDate(cart.list_closed_at)} EST`}>List closed</span>;
 }
 
 // The closing checklist. Rendered whatever the state, because the useful question on
@@ -305,8 +316,15 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
   const setQtyFor = (id, v) => setQty((q) => ({ ...q, [id]: v }));
   const lines = cart.lines || [];
   const pending = lines.filter((l) => l.status === 'pending');
+  // The buyer's ✎ only ever made sense on a draft — after the first add the pair is in
+  // front of the desk with its price written into a Telegram card, and a price that is
+  // wrong after asking is a remove-and-re-add, not an edit.
   const editable = isBuyer && cart.status === 'draft';
-  const canFix = editable || canEditLines;
+  // The × is per LINE: a pending pair the buyer has not had an answer on is theirs to
+  // withdraw while their list is open. A decided one is part of an approval.
+  const canRemove = (l) => l.status === 'pending' && (
+    (isBuyer && buyerCanAdd(cart)) || (!isBuyer && canEditLines));
+  const canFix = editable || canEditLines || (lines.some(canRemove));
   // Kept in one place: the detail row has to span exactly the header, and a colSpan that
   // drifts from the columns leaves a ragged edge nobody notices in review.
   // A buyer has no "Buy call" column — the call is the approver's (`canSeeBuyCall` on
@@ -555,11 +573,14 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
                   </td>
                   {canFix && (
                     <td className="bc-line-actions" onClick={(e) => e.stopPropagation()}>
-                      <button type="button" className="btn sm ghost" onClick={() => setFixing(l)}
-                        aria-label={`Correct ${l.sku}`} title="Correct the size, quantity or shelf price">✎</button>
-                      {editable && (
+                      {(editable || canEditLines) && (
+                        <button type="button" className="btn sm ghost" onClick={() => setFixing(l)}
+                          aria-label={`Correct ${l.sku}`} title="Correct the size, quantity or shelf price">✎</button>
+                      )}
+                      {canRemove(l) && (
                         <button type="button" className="btn sm ghost" disabled={busy === 'rm'}
-                          onClick={() => remove(l.id)} aria-label={`Remove ${l.sku}`}>×</button>
+                          onClick={() => remove(l.id)} aria-label={`Remove ${l.sku}`}
+                          title="Withdraw this pair — nobody has decided on it yet">×</button>
                       )}
                     </td>
                   )}
@@ -615,6 +636,7 @@ function Audit({ cart, onChanged, onSignOut }) {
   }])));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [saved, setSaved] = useState(false);
 
   const spentSum = cards.reduce((n, c) => n + (Number(vals[c.id]?.spent) || 0), 0);
   const receipt = Number(cart.receipt_total) || 0;
@@ -628,11 +650,13 @@ function Audit({ cart, onChanged, onSignOut }) {
       await api.cartAudit(cart.id, cards.map((c) => ({
         id: Number(c.id), spent: Number(vals[c.id]?.spent), remaining: Number(vals[c.id]?.remaining),
       })));
+      setSaved(true);
       onChanged();
-    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    } catch (e) { if (e.unauthorized) return onSignOut(); setSaved(false); setErr(e.message); }
     finally { setBusy(false); }
   }
 
+  const recorded = !!cart.audited_at;
   return (
     <section className="card bc-audit">
       <h3 className="bc-h">Financial audit</h3>
@@ -640,6 +664,18 @@ function Audit({ cart, onChanged, onSignOut }) {
         Cards issued {money(cart.gc_total)} → receipt {money(receipt)}. Say what each card was
         actually spent and what is left sitting on it.
       </p>
+      {/* SAYS IT WAS RECORDED. Pressing the button used to save and then re-render the
+          same boxes with the same numbers — nothing on the panel moved, so it read as a
+          dead button. The gap is a finding, not a blocker: it is recorded as stated, and
+          the closing checklist below is what holds the request open over it. */}
+      {recorded && (
+        <p className="bc-audit-recorded">
+          Recorded by <b>{cart.audited_by}</b> {estDate(cart.audited_at)} {estTime(cart.audited_at)} EST.
+          {Math.abs(gap) > 0.01
+            ? ` The ${money(Math.abs(gap))} gap stays on the record — see “Gift card spending was reconciled” in the checklist. Correct the figures and record again if a card was misread.`
+            : ' The cards and the receipt agree.'}
+        </p>
+      )}
       <ul className="bc-audit-list">
         {cards.map((c) => (
           <li key={c.id}>
@@ -658,9 +694,10 @@ function Audit({ cart, onChanged, onSignOut }) {
           {Math.abs(gap) > 0.01 ? ` — a ${money(Math.abs(gap))} gap` : ' — balanced'}
         </span>
         <button type="button" className="btn primary" disabled={busy} onClick={save}>
-          {busy ? 'Saving…' : 'Record the audit'}
+          {busy ? 'Saving…' : recorded ? 'Record it again' : 'Record the audit'}
         </button>
       </div>
+      {saved && !err && <p className="bc-audit-saved">Saved — the figures above are what is on the record now.</p>}
       {err && <div className="error mt">{err}</div>}
     </section>
   );
@@ -772,7 +809,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
               {cart.buyer_name}{cart.retailer ? ` · ${cart.retailer}` : ''} · opened {estDate(cart.created_at)} EST
             </div>
           </div>
-          <StatusChip status={cart.status} />
+          <span className="bc-head-chips"><ListChip cart={cart} /><StatusChip status={cart.status} /></span>
         </div>
         {/* Where it is, as a row of dots. The status chip above says the column value;
             this says the STOP on the route, including the half that lives on the order. */}
@@ -784,6 +821,13 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         {cart.restrictions && <p className="muted sm"><b>Limits:</b> {cart.restrictions}</p>}
         <div className="bc-money">
           <span>Approved <b>{money(cart.approved_amount)}</b></span>
+          {/* What the cards must actually carry: the sticker total plus the tax the till
+              adds. The rate is shown only to whoever can read the stack it came from. */}
+          {cart.funding_method !== 'company_card' && Number(cart.funding_target) !== Number(cart.approved_amount) && (
+            <span title={cart.fundingTaxPct ? `${money(cart.approved_amount)} + ${cart.fundingTaxPct}% sales tax` : undefined}>
+              To fund <b>{money(cart.funding_target)}</b>{cart.fundingTaxPct ? <span className="muted xs"> incl. {cart.fundingTaxPct}% tax</span> : null}
+            </span>
+          )}
           {cart.funding_method === 'company_card'
             ? <span>Card charge <b>{money(cart.card_authorized)}</b></span>
             : <span>Cards <b>{money(cart.gc_total)}</b></span>}
@@ -805,13 +849,20 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         )}
 
         <div className="bc-head-actions">
-          {isBuyer && cart.status === 'draft' && (
-            <button className="btn primary" disabled={busy === 'sub'}
-              onClick={() => act(() => api.cartSubmit(cart.id), 'sub')}>Send for approval</button>
+          {/* No "send": adding a pair IS asking about it. What the buyer presses at the
+              end of the trip is CLOSE — the list is complete, fund what you approved.
+              Until then the desk decides pair by pair and the cards wait. */}
+          {isBuyer && listOpen(cart) && ['draft', 'submitted', 'approved', 'denied', 'funded'].includes(cart.status) && (
+            <button className="btn primary" disabled={busy === 'sub' || !buyerCanClose(cart)}
+              title={buyerCanClose(cart) ? 'Nothing more to add — send it for the gift cards' : 'Add at least one pair first'}
+              onClick={() => act(() => api.cartCloseList(cart.id), 'sub')}>
+              {busy === 'sub' ? 'Closing…' : 'Close the request'}
+            </button>
           )}
-          {isBuyer && cart.status === 'submitted' && (
-            <button className="btn ghost" disabled={busy === 'wd'}
-              onClick={() => act(() => api.cartWithdraw(cart.id), 'wd')}>Pull it back</button>
+          {isBuyer && cart.list_closed_at && (buyerCanReopen(cart) || reopenRefusedBecause(cart)) && (
+            <button className="btn ghost" disabled={busy === 'reopen' || !buyerCanReopen(cart)}
+              title={reopenRefusedBecause(cart) || 'The desk is told you are adding more'}
+              onClick={() => setAsking('reopen')}>Re-open to add more</button>
           )}
           {/* The BUYER can start their own shipment. They are the one standing over the
               pile with the receipt already read, and waiting for a desk to guess a box
@@ -879,6 +930,21 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
               hint: 'A guess is fine — you can add another box at any point while packing.' }]} />
         )}
 
+        {asking === 'reopen' && (
+          <FormModal
+            title="Re-open this request?"
+            message={Number(cart.gc_total) > 0
+              ? `The approvers are told you are adding more. The ${money(cart.gc_total)} in cards already issued stays yours to spend; if the new pairs are approved, the desk records a top-up.`
+              : 'The approvers are told you are adding more. Close it again when you are done, and the gift cards follow.'}
+            submitLabel="Re-open it"
+            onClose={() => setAsking(null)}
+            onSubmit={async () => {
+              await api.cartReopenList(cart.id);
+              setAsking(null); await load();
+            }}
+            fields={[]} />
+        )}
+
         {asking === 'cancel' && (
           <FormModal
             title="Cancel this request"
@@ -923,8 +989,18 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         )}
       </section>
 
-      {isBuyer && cart.status === 'draft' && (
+      {/* For as long as the buyer's LIST IS OPEN — every add goes straight to the desk,
+          and the list stays open through approvals and even funding until they close it
+          (or re-open it) themselves. */}
+      {isBuyer && buyerCanAdd(cart) && (
         <BuyCartAdd cart={cart} onAdded={load} onSignOut={onSignOut} />
+      )}
+      {isBuyer && cart.list_closed_at && ['submitted', 'approved', 'denied', 'funded'].includes(cart.status) && (
+        <p className="muted sm bc-list-note">
+          You closed this request {estDate(cart.list_closed_at)} EST — it is with the desk for
+          {cart.status === 'funded' ? ' the cards already issued' : Number(cart.pending_count) > 0 ? ' approval' : ' the gift cards'}.
+          Found one more pair? <b>Re-open to add more</b> above.
+        </p>
       )}
 
       {/* Before the lines, because it is what the cost-per-unit column on them means. Not
@@ -943,7 +1019,10 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         autoStock={(mayDecide || canAudit) && !['closed', 'cancelled', 'written_off'].includes(cart.status)}
         // Only shown to somebody who WOULD be deciding — telling a buyer their own
         // request has nothing to approve is noise.
-        whyNoDecide={mayDecide ? decisionsClosedBecause(cart.status) : null}
+        whyNoDecide={mayDecide ? (decisionsClosedBecause(cart.status)
+          || (decisionsPendingOnly(cart.status) && Number(cart.pending_count) > 0
+            ? 'The cards have already gone out against the decided lines, so those are frozen — only the pairs added since can be decided.'
+            : null)) : null}
         // `mayDecide`, not `canDecide`: correcting a misread shelf ticket is a cost-side
         // act and stays open through draft/submitted/approved. Gating it on the DECISION
         // window would have taken the ✎ away on a draft, which is the state where a
@@ -959,8 +1038,13 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         canPrice={(mayDecide || canAudit) && !['closed', 'cancelled'].includes(cart.status)}
         onChanged={load} onSignOut={onSignOut} />
 
+      {/* The cards, once there is something to fund — an approved request whose buyer
+          has closed the list. On a re-opened one the panel stays (the cards are still
+          out there) and just says why no more can be recorded yet. */}
       {cart.funding_method !== 'company_card'
-        && ['approved', 'funded', 'receipted', 'audited', 'closed', 'written_off'].includes(cart.status) && (
+        && ['approved', 'funded', 'receipted', 'audited', 'closed', 'written_off'].includes(cart.status)
+        && (cardsIssuable(cart) || (cart.giftCards || []).length > 0
+          || (cart.files || []).some((f) => f.kind === 'gift_card') || !['approved'].includes(cart.status)) && (
         <BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer}
           onChanged={load} onSignOut={onSignOut} />
       )}

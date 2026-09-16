@@ -13,6 +13,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { PriceInput, CopyText, ImageZoomModal, FormModal } from './common.jsx';
+import { cardsIssuable, cardsRefusedBecause } from '../lib/buycartRules.js';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -98,14 +99,27 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
   const [err, setErr] = useState('');
   const [viewing, setViewing] = useState(null); // { index, url }
   const [blobs, setBlobs] = useState({});
+  // A machine reading of one uploaded file, waiting for a person: { file, cards, source }.
+  const [reading, setReading] = useState(null);
 
   const cards = cart.giftCards || [];
   const live = cards.filter((c) => !c.voided_at);
   const images = (cart.files || []).filter((f) => f.kind === 'gift_card');
-  const target = Number(cart.approved_amount) || 0;
+  // What the cards must carry: the approved sticker total plus the sales tax the till
+  // adds to it (`funding_target`, computed server-side). The old target was the sticker
+  // alone, and every full-price purchase came up short by exactly the tax.
+  const target = Number(cart.funding_target ?? cart.approved_amount) || 0;
+  const approved = Number(cart.approved_amount) || 0;
   const total = Number(cart.gc_total) || 0;
   const short = Math.max(0, Math.round((target - total) * 100) / 100);
-  const canAdd = canIssue && ['approved', 'funded'].includes(cart.status);
+  // Only against a list the buyer has CLOSED, with every line decided — the same rule
+  // the endpoint enforces, so the form never leads to a 409.
+  const canAdd = canIssue && cardsIssuable(cart);
+  // Uploading a card image and READING it are preparation, not issuing: the desk can
+  // file what cardwell sent while the buyer is still adding. Recording stays gated.
+  const canPrep = canIssue && !['closed', 'cancelled', 'written_off'].includes(cart.status);
+  const whyNot = canIssue && !canAdd && !['closed', 'cancelled', 'written_off', 'receipted', 'audited'].includes(cart.status)
+    ? cardsRefusedBecause(cart) : null;
   // A card is only readable by the desk that issued it and the buyer who has to spend
   // it — and the buyer only once it has actually been released to them.
   const canReveal = canIssue || (isBuyer && ['funded', 'receipted', 'audited', 'closed'].includes(cart.status));
@@ -149,18 +163,69 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
   // The bytes are proxied and authorised, so there is no `src` to hand an <img>: fetch
   // the blob and hold an object URL for as long as the viewer is open. Cached per file
   // so paging back and forth doesn't re-download.
+  const pictures = images.filter((f) => String(f.content_type).startsWith('image/'));
+
+  async function blobFor(f) {
+    if (blobs[f.id]) return blobs[f.id];
+    const { blob } = await api.cartFileBlob(cart.id, f.id);
+    const url = URL.createObjectURL(blob);
+    setBlobs((b) => ({ ...b, [f.id]: url }));
+    return url;
+  }
+
+  // The viewer walks the IMAGES only (a PDF has no picture to page to), and warms the
+  // rest in the background so the thumbnail strip fills in as they land.
   async function openImage(idx) {
-    const f = images[idx];
+    const f = pictures[idx];
     if (!f) return;
-    if (blobs[f.id]) { setViewing({ index: idx, url: blobs[f.id] }); return; }
     setBusy('img'); setErr('');
     try {
-      const { blob } = await api.cartFileBlob(cart.id, f.id);
-      const url = URL.createObjectURL(blob);
-      setBlobs((b) => ({ ...b, [f.id]: url }));
+      const url = await blobFor(f);
       setViewing({ index: idx, url });
+      pictures.filter((o) => o.id !== f.id && !blobs[o.id]).forEach((o) => blobFor(o).catch(() => {}));
     } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
     finally { setBusy(''); }
+  }
+
+  // READ THE CARDS OFF THE FILE. The numbers come back for review, never recorded here.
+  async function readFile(f) {
+    setBusy(`read${f.id}`); setErr(''); setReading(null);
+    try {
+      const r = await api.cartGiftCardRead(cart.id, f.id);
+      if (!r.cards?.length) {
+        setErr(`Nothing on “${f.name || 'that file'}” read as a card number. Try a sharper shot with the card filling the frame, or type it in.`);
+        return;
+      }
+      setReading({
+        file: f, source: r.source,
+        cards: r.cards.map((c) => ({ ...c, balance: c.balance == null ? '' : String(c.balance), ok: !c.already })),
+      });
+    } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
+
+  const setRead = (i, patch) => setReading((r) => ({ ...r, cards: r.cards.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
+
+  // One `cart/gift-card` call per ticked row — the same path a pasted card takes, so the
+  // encryption, the last-four masking and the trail are the same code. Stops at the
+  // first refusal and keeps the rest on screen, so nothing is half-recorded silently.
+  async function recordRead() {
+    const rows = reading.cards.filter((c) => c.ok);
+    setBusy('record'); setErr('');
+    let done = 0;
+    try {
+      for (const c of rows) {
+        await api.cartAddGiftCard(cart.id, { code: c.number, pin: c.pin || '', balance: c.balance, label: reading.file.name || '' });
+        done++;
+        setReading((r) => ({ ...r, cards: r.cards.map((x) => (x.number === c.number ? { ...x, saved: true, ok: false } : x)) }));
+      }
+      setReading(null);
+      onChanged();
+    } catch (ex) {
+      if (ex.unauthorized) return onSignOut();
+      setErr(`${done} of ${rows.length} recorded. ${ex.message}`);
+      if (done) onChanged();
+    } finally { setBusy(''); }
   }
 
   async function download(f) {
@@ -184,25 +249,29 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
       <div className="bc-fund">
         <div className="bc-fund-nums">
           <span><b>{money(total)}</b> on {live.length} card{live.length === 1 ? '' : 's'}</span>
-          <span className="muted">against <b>{money(target)}</b> approved</span>
+          <span className="muted">
+            against <b>{money(target)}</b> to fund
+            {target !== approved && (
+              <span className="muted xs"> ({money(approved)} approved{cart.fundingTaxPct ? ` + ${cart.fundingTaxPct}% tax` : ' + tax'})</span>
+            )}
+          </span>
           {short > 0
             ? <span className="bc-short">{money(short)} short</span>
             : target > 0 && <span className="bc-covered">covered</span>}
         </div>
-        {/* The one hole in funding at sticker price, named where it matters rather than
-            discovered at a till: with a small discount and a high tax rate the register
-            asks for more than the shelf price adds up to. */}
-        {cart.tillWarning && (
-          <p className="bc-till-warn">
-            At this buyer’s cost stack the till can charge more than the sticker — up to{' '}
-            <b>{money(cart.tillWarning.amount)}</b> once {(((cart.tillWarning.factor - 1) * 100).toFixed(2))}% tax is added.
-            Consider funding to that.
-          </p>
-        )}
-        {canIssue && cart.status === 'approved' && (
+        {/* Why no card can be recorded yet, in the endpoint's own words — "the buyer is
+            still adding" is the one the desk most needs, because the total is not final. */}
+        {whyNot && <p className="bc-till-warn">{whyNot}</p>}
+        {canIssue && cart.status === 'approved' && canAdd && (
           <button type="button" className="btn primary" disabled={busy === 'fund' || short > 0} onClick={fund}>
             {busy === 'fund' ? 'Releasing…' : 'Release to the buyer'}
           </button>
+        )}
+        {/* A re-opened request that came back short: the cards already out are the
+            buyer's to spend; this says how much more to record once the list is closed
+            and the new lines decided. */}
+        {canIssue && cart.status === 'funded' && short > 0 && (
+          <p className="muted sm">Released {money(total)} so far — {money(short)} more to record for the pairs approved since.</p>
         )}
       </div>
 
@@ -236,7 +305,7 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
       <div className="bc-gc-files">
         <div className="bc-gc-files-h">
           <span className="muted sm">{images.length ? `${images.length} card image${images.length === 1 ? '' : 's'}` : 'No card images'}</span>
-          {canAdd && (
+          {canPrep && (
             <label className="btn sm ghost bc-upload">
               {busy === 'upload' ? 'Uploading…' : 'Add image / PDF'}
               <input type="file" accept="image/*,application/pdf" hidden onChange={upload} />
@@ -245,19 +314,78 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
         </div>
         {images.length > 0 && (
           <ul className="bc-file-list">
-            {images.map((f, i) => (
+            {images.map((f, i) => {
+              const isImg = String(f.content_type).startsWith('image/');
+              return (
               <li key={f.id}>
                 <span className="bc-file-name">{f.name || `Card ${i + 1}`}</span>
+                {/* Read the numbers off it — a card face, a screenshot, or a table of
+                    cards — into a review table below. Nothing is recorded until ticked. */}
+                {canPrep && (
+                  <button type="button" className="btn sm" disabled={busy === `read${f.id}` || busy === 'record'}
+                    title="Read the card numbers, PINs and balances off this file for review"
+                    onClick={() => readFile(f)}>{busy === `read${f.id}` ? 'Reading…' : 'Read the cards'}</button>
+                )}
                 {/* A PDF has no viewer here — it downloads, which is what a PDF is for. */}
-                {String(f.content_type).startsWith('image/')
-                  ? <button type="button" className="btn sm ghost" disabled={!canReveal} onClick={() => openImage(i)}>View</button>
+                {isImg
+                  ? <button type="button" className="btn sm ghost" disabled={!canReveal} onClick={() => openImage(pictures.findIndex((p) => p.id === f.id))}>View</button>
                   : null}
                 <button type="button" className="btn sm ghost" disabled={!canReveal} onClick={() => download(f)}>Download</button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </div>
+
+      {/* The reading, for a person to check. Rows tint amber until ticked, the same rule
+          the receipt table follows: a plausible wrong digit is a card that cannot be
+          spent, and only eyes catch it. A row whose last four match a card already on
+          the request starts UNTICKED — it is usually the same card read twice. */}
+      {reading && (
+        <div className="bc-gc-read">
+          <div className="bc-gc-read-h">
+            <b>{reading.cards.length} card{reading.cards.length === 1 ? '' : 's'} read from “{reading.file.name || 'file'}”</b>
+            <span className="muted xs">{reading.source === 'pdf' ? 'from the PDF text' : 'by the image reader'} · check every digit, fill any blank balance, tick, then record</span>
+            <span className="bc-gc-read-fill">
+              <PriceInput placeholder="Set every blank balance"
+                onChange={(e) => { const v = e.target.value; setReading((r) => ({ ...r, cards: r.cards.map((c) => (c.balance === '' ? { ...c, balance: v } : c)) })); }} />
+            </span>
+          </div>
+          <ul className="bc-gc-read-list">
+            {reading.cards.map((c, i) => (
+              <li key={c.number} className={c.saved ? 'saved' : c.ok ? 'ok' : 'pending'}>
+                <label className="bc-gc-read-tick">
+                  <input type="checkbox" checked={!!c.ok} disabled={c.saved} onChange={(e) => setRead(i, { ok: e.target.checked })} aria-label={`Record card ending ${c.number.slice(-4)}`} />
+                </label>
+                <input className="input bc-gc-read-num" value={c.number} inputMode="numeric" disabled={c.saved}
+                  onChange={(e) => setRead(i, { number: e.target.value.replace(/\D/g, '') })} aria-label="Card number" />
+                <input className="input bc-gc-read-pin" value={c.pin || ''} placeholder="PIN" inputMode="numeric" disabled={c.saved}
+                  onChange={(e) => setRead(i, { pin: e.target.value.replace(/\D/g, '') })} aria-label="PIN" />
+                <PriceInput value={c.balance} placeholder="Balance" disabled={c.saved}
+                  onChange={(e) => setRead(i, { balance: e.target.value })} />
+                {c.saved ? <span className="bc-covered xs">recorded</span>
+                  : c.already ? <span className="bc-short xs" title="A card ending in these four digits is already on this request">already on this request?</span>
+                    : c.retailer ? <span className="muted xs">{c.retailer}</span> : null}
+              </li>
+            ))}
+          </ul>
+          <div className="bc-gc-read-foot">
+            <button type="button" className="btn ghost sm" disabled={busy === 'record'} onClick={() => setReading(null)}>Discard</button>
+            {(() => {
+              const ticked = reading.cards.filter((c) => c.ok);
+              const blank = ticked.filter((c) => !(Number(c.balance) > 0) || c.number.length < 8).length;
+              return (
+                <button type="button" className="btn primary sm" disabled={busy === 'record' || !ticked.length || blank > 0 || !canAdd}
+                  title={!canAdd ? (cardsRefusedBecause(cart) || '') : blank ? `${blank} ticked card${blank === 1 ? ' has' : 's have'} no balance or a short number` : ''}
+                  onClick={recordRead}>
+                  {busy === 'record' ? 'Recording…' : `Record ${ticked.length} card${ticked.length === 1 ? '' : 's'}`}
+                </button>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {err && <div className="error mt">{err}</div>}
 
@@ -267,10 +395,14 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
       {viewing && (
         <ImageZoomModal
           url={viewing.url}
-          label={images[viewing.index]?.name || `Card ${viewing.index + 1} of ${images.length}`}
+          label={`${pictures[viewing.index]?.name || `Card ${viewing.index + 1}`} · ${viewing.index + 1} of ${pictures.length}`}
           onClose={() => setViewing(null)}
           onPrev={viewing.index > 0 ? () => openImage(viewing.index - 1) : undefined}
-          onNext={viewing.index < images.length - 1 ? () => openImage(viewing.index + 1) : undefined}
+          onNext={viewing.index < pictures.length - 1 ? () => openImage(viewing.index + 1) : undefined}
+          thumbs={pictures.map((f) => ({ url: blobs[f.id] || null, label: f.name }))}
+          index={viewing.index}
+          onSelect={openImage}
+          onDownload={() => download(pictures[viewing.index])}
         />
       )}
     </section>

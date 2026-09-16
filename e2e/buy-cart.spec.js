@@ -161,9 +161,13 @@ async function newRequest(request, { lines = [], submit = true, linesBy = 'appro
   // through the endpoint made unrelated tests 429 at the end of a run. The tests that
   // are actually ABOUT sending — a blank purpose, a missing store, a shoe with no photo
   // — call the endpoint directly and are unaffected.
+  // The stamp CLOSES THE LIST as well as marking it submitted — that is what a buyer's
+  // "Close the request" does, and the gift-card desk records nothing against a list
+  // still open. A test about the open list says `submit: false` and closes it itself.
   if (submit) {
     await pool.query(
-      `UPDATE buy_carts SET status = 'submitted', submitted_at = now(), submitted_by = $2, updated_at = now()
+      `UPDATE buy_carts SET status = 'submitted', submitted_at = now(), submitted_by = $2,
+              list_closed_at = now(), list_closed_by = $2, updated_at = now()
         WHERE id = $1 AND status = 'draft'`,
       [cartId, people[who].name]);
   }
@@ -187,18 +191,27 @@ test('a buyer cannot approve their own request', async ({ request }) => {
   expect(body.cart.approved_amount).toBe(0);
 });
 
-test('gift cards must cover the approved total before anything is released', async ({ request }) => {
-  const cartId = await newRequest(request, { lines: [LINE] });          // 2 × $50 = $100
+test('gift cards must cover the approved total PLUS TAX before anything is released', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });          // 2 × $50 = $100 approved
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+
+  // The till charges tax on top of the sticker. Funding at the sticker alone came up
+  // short by exactly the tax on every full-price purchase — the receipt would read
+  // $108.25 against $100 of cards. So the target is sticker + the stack's tax rate.
+  const { body: g } = await read_(request, 'issuer', `cart/get?id=${cartId}`);
+  expect(g.cart.approved_amount).toBe(100);
+  expect(g.cart.funding_target).toBeCloseTo(108.25, 2);
+  expect(g.cart.fundingTaxPct).toBe(8.25);
 
   await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '1111222233334444', balance: 60 } });
   const short = await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
   expect(short.status).toBe(409);
   // The shortfall is NAMED — "not enough" without a number sends somebody to a
-  // spreadsheet to work out what to add.
-  expect(short.body.error).toContain('$40.00 short');
+  // spreadsheet to work out what to add — and so is where the number came from.
+  expect(short.body.error).toContain('$48.25 short');
+  expect(short.body.error).toContain('$100.00 approved + 8.25% tax');
 
-  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '5555666677778888', balance: 40 } });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '5555666677778888', balance: 48.25 } });
   const ok = await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
   expect(ok.status).toBe(200);
   expect(ok.body.cart.status).toBe('funded');
@@ -552,7 +565,7 @@ test('a draft offers no approve controls, and says which kind of "not now" it is
   // set of controls was a red line underneath them.
   await expect(page.locator('.bc-decide')).toHaveCount(0);
   await expect(page.locator('.bc-lines input[type="checkbox"]')).toHaveCount(0);
-  await expect(page.locator('.bc-no-decide')).toContainText('hasn’t sent this yet');
+  await expect(page.locator('.bc-no-decide')).toContainText('hasn’t asked about anything yet');
 
   // Correcting a misread shelf ticket is a COST-side act and stays open on a draft —
   // which is the state where a typo is most likely still to be there.
@@ -561,7 +574,7 @@ test('a draft offers no approve controls, and says which kind of "not now" it is
   // And the endpoint still refuses, in the same words, for a stale tab.
   const r = await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
   expect(r.status).toBe(409);
-  expect(r.body.error).toMatch(/hasn’t sent this yet/);
+  expect(r.body.error).toMatch(/hasn’t asked about anything yet/);
 });
 
 test('the queue filters by buyer, and a buyer cannot use it to widen their own scope', async ({ request }) => {
@@ -798,8 +811,11 @@ test('the buyer builds a request, sees no call on it, and the desk sees both', a
   await expect(page.locator('.bc-lines thead')).not.toContainText('Lands at');
   // What IS theirs: the price they read off the ticket.
   await expect(page.locator('.bc-lines thead')).toContainText('Shelf');
-  await page.getByRole('button', { name: 'Send for approval' }).click();
-  await expect(page.locator('.bc-head .po-chip')).toContainText('Waiting on approval');
+  // No "send": every add already went to the desk. The buyer CLOSES the list.
+  await expect(page.locator('.bc-head-chips')).toContainText('Buyer still adding');
+  await page.getByRole('button', { name: 'Close the request' }).click();
+  await expect(page.locator('.bc-head-chips')).toContainText('Waiting on approval');
+  await expect(page.locator('.bc-head-chips')).toContainText('List closed');
 
   // The same two lines, opened by the desk.
   await as(page, 'approver');
@@ -863,9 +879,11 @@ test('every row a reader produced has to be ticked by a person before the lines 
 // delete it — until money is on it. From then the buyer who asked for the money cannot
 // erase the record; only an approver can. Both halves are the server's, not a button's.
 test('a request can be deleted by whoever can reach it — until cards are issued, then only an approver', async ({ request }) => {
+  // `list_closed_at` is stamped because the carded case issues a card, and the desk
+  // records nothing against a list the buyer has not closed.
   const seed = async (purpose, status = 'submitted') => Number((await pool.query(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total)
-     VALUES ($1,$2,'E2E Store',$3,$4,100,0) RETURNING id`,
+    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total, list_closed_at)
+     VALUES ($1,$2,'E2E Store',$3,$4,100,0,now()) RETURNING id`,
     [people.buyer.uid, people.buyer.name, purpose, status])).rows[0].id);
 
   // No money on it: the buyer deletes their own, and a tombstone is left.
@@ -922,17 +940,25 @@ test('a request needs a purpose and a store before it can be sent', async ({ req
   expect(r.body.error).toMatch(/what you are buying/i);
 });
 
-test('the till-overrun warning fires when tax outruns the discount', async ({ request }) => {
+test('the funding target carries the tax, and the buyer sees the number but not the rate', async ({ request }) => {
   const cartId = await newRequest(request, { lines: [LINE] });
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
   const { body } = await read_(request, 'issuer', `cart/get?id=${cartId}`);
-  // Funding at the sticker is generous almost always — but not when the discount is
-  // small and the tax isn't. This buyer's stack is 0% off + 8.25% tax, so the register
-  // asks $108.25 against the $100 approved, and the screen has to say so rather than
-  // let somebody find out at a till.
+  // This buyer's stack is 0% off + 8.25% tax, so the register asks $108.25 against the
+  // $100 approved. That used to be a warning beside the target; now it IS the target.
   expect(body.cart.approved_amount).toBe(100);
-  expect(body.cart.tillWarning).not.toBeNull();
-  expect(body.cart.tillWarning.amount).toBeCloseTo(108.25, 2);
+  expect(body.cart.funding_target).toBeCloseTo(108.25, 2);
+  expect(body.cart.fundingTaxPct).toBe(8.25);
+  // The buyer's cards will carry $108.25, so they see that figure — but the rate is the
+  // cost stack's, which they cannot read.
+  const mine = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+  expect(mine.body.cart.funding_target).toBeCloseTo(108.25, 2);
+  expect(mine.body.cart.fundingTaxPct).toBeNull();
+  expect(mine.body.cart.cost_stack).toBeNull();
+  // Correcting the tax moves the target with it — the stack is what the target reads.
+  await call(request, 'approver', 'cart/costs', { cartId, stack: { taxPct: 6, giftPct: 8, tipAmt: 5, shippingAmt: 8.25 } });
+  const after = await read_(request, 'issuer', `cart/get?id=${cartId}`);
+  expect(after.body.cart.funding_target).toBeCloseTo(106, 2);
 });
 
 // window.prompt was doing real work here, and it could not validate, could not hold two
@@ -1964,4 +1990,204 @@ test('a supplier not switched on for buying sees no card, and every cart call is
   } finally {
     await pool.query(`UPDATE users SET privileges = $2 WHERE id = $1`, [people.buyer.uid, people.buyer.privileges]);
   }
+});
+
+// ---------------------------------------------------------------------------
+// The buyer's list is OPEN until they close it (2026-09-16).
+//
+// Every add is its own question — the desk decides pair by pair — and "Close the
+// request" is what says the list is complete. The gift-card desk funds nothing against a
+// list still growing; the buyer can re-open it (the group is told) until the receipt is
+// in, and a re-opened, funded request keeps its cards and takes a top-up.
+test.describe('the list stays open until the buyer closes it', () => {
+  test('cards wait for the close; the close is the send; re-opening lets the buyer add again', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE], submit: false });
+    // The staff-added line is data entry; the request is still a draft. The buyer's
+    // own add is the question — it goes to `submitted` with no button pressed.
+    await shoePhotos(cartId, ['DD1391-100']);
+    const add = await call(request, 'buyer', 'cart/line', { cartId, line: { sku: 'DD1391-100', size: '10', shelfPrice: 130 } });
+    expect(add.status).toBe(200);
+    expect(add.body.cart.status).toBe('submitted');
+    expect(add.body.cart.list_closed_at).toBeNull();
+
+    // Approved line by line while the list is open…
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 1 });
+    let { body } = await read_(request, 'issuer', `cart/get?id=${cartId}`);
+    expect(body.cart.status).toBe('approved');
+    // …but the desk cannot fund a total that is still growing, and is told why.
+    const early = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '1212121212121212', balance: 500 } });
+    expect(early.status).toBe(409);
+    expect(early.body.error).toMatch(/still adding/i);
+
+    // The buyer closes the list. Same checks as the old send (purpose, store, photos).
+    const closed = await call(request, 'buyer', 'cart/submit', { cartId });
+    expect(closed.status).toBe(200);
+    expect(closed.body.cart.list_closed_at).not.toBeNull();
+    expect(closed.body.cart.list_closed_by).toBe(people.buyer.name);
+    // Closing twice is a no-op refusal, not a second event.
+    expect((await call(request, 'buyer', 'cart/submit', { cartId })).status).toBe(409);
+    // Adding to a closed list is refused in the buyer's own words.
+    const late = await call(request, 'buyer', 'cart/line', { cartId, line: { sku: 'DD1391-100', size: '11', shelfPrice: 130 } });
+    expect(late.status).toBe(409);
+    expect(late.body.error).toMatch(/re-open/i);
+
+    // Now the desk can.
+    const card = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '1212121212121212', balance: 500 } });
+    expect(card.status).toBe(200);
+
+    // The buyer re-opens — the cards already recorded stay — and adds one more.
+    const reopened = await call(request, 'buyer', 'cart/submit', { cartId, reopen: true });
+    expect(reopened.status).toBe(200);
+    expect(reopened.body.cart.list_closed_at).toBeNull();
+    expect(reopened.body.cart.giftCards).toHaveLength(1);
+    const more = await call(request, 'buyer', 'cart/line', { cartId, line: { sku: 'DD1391-100', size: '11', shelfPrice: 130 } });
+    expect(more.status).toBe(200);
+    // Something undecided again: the request is honest about it, and the desk is
+    // refused a further card until the list is closed AND the new line decided.
+    ({ body } = await read_(request, 'issuer', `cart/get?id=${cartId}`));
+    expect(body.cart.status).toBe('submitted');
+    expect(body.cart.pending_count).toBe(1);
+    const again = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '3434343434343434', balance: 10 } });
+    expect(again.status).toBe(409);
+
+    // The trail says both things happened, under the buyer's name.
+    const kinds = body.cart.events.map((e) => e.kind);
+    expect(kinds).toContain('list_closed');
+    expect(kinds).toContain('list_reopened');
+    expect(body.cart.events.find((e) => e.kind === 'list_reopened').actor_name).toBe(people.buyer.name);
+  });
+
+  test('a funded request can be re-opened for more: the cards stay, the new line is decided, the target grows', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });          // $100 + 8.25% = $108.25
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '5656565656565656', balance: 108.25 } });
+    expect((await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true })).body.cart.status).toBe('funded');
+
+    // Short at the till — the buyer re-opens and asks about one more pair.
+    expect((await call(request, 'buyer', 'cart/submit', { cartId, reopen: true })).status).toBe(200);
+    const more = await call(request, 'buyer', 'cart/line', { cartId, line: { sku: LINE.sku, size: '8', shelfPrice: 50 } });
+    expect(more.status).toBe(200);
+    let { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+    // Still FUNDED — the money that went out is still out — with one line pending.
+    expect(body.cart.status).toBe('funded');
+    expect(body.cart.pending_count).toBe(1);
+    const newId = Number(body.cart.lines.find((l) => l.status === 'pending').id);
+    const oldId = Number(body.cart.lines.find((l) => l.status === 'approved').id);
+
+    // The approvals the cards were issued against are FROZEN — an override is refused —
+    // while the new line can be decided.
+    const override = await call(request, 'approver', 'cart/decide', { cartId, lineIds: [oldId], action: 'reject', reason: 'changed my mind' });
+    expect(override.status).toBe(409);
+    expect(override.body.error).toMatch(/frozen/i);
+    const decided = await call(request, 'approver', 'cart/decide', { cartId, lineIds: [newId], action: 'approve', qty: { [newId]: 1 } });
+    expect(decided.status).toBe(200);
+    ({ body } = await read_(request, 'approver', `cart/get?id=${cartId}`));
+    expect(body.cart.status).toBe('funded');
+    expect(body.cart.approved_amount).toBe(150);
+    expect(body.cart.funding_target).toBeCloseTo(162.38, 2);
+    expect(body.cart.lines.find((l) => Number(l.id) === oldId).status).toBe('approved');
+
+    // The desk records the top-up once the buyer closes the list again; the first
+    // card is untouched and the funding check reads the sum.
+    expect((await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '7878787878787878', balance: 54.13 } })).status).toBe(409);
+    expect((await call(request, 'buyer', 'cart/submit', { cartId })).status).toBe(200);
+    const topUp = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '7878787878787878', balance: 54.13 } });
+    expect(topUp.status).toBe(200);
+    expect(topUp.body.short).toBe(0);
+    ({ body } = await read_(request, 'approver', `cart/get?id=${cartId}`));
+    expect(body.cart.giftCards).toHaveLength(2);
+    expect(body.cart.checks.find((c) => c.key === 'cards_recorded').ok).toBe(true);
+  });
+
+  test('once the receipt is in, the list cannot be re-opened', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await pool.query(`UPDATE buy_carts SET status = 'receipted' WHERE id = $1`, [cartId]);
+    const r = await call(request, 'buyer', 'cart/submit', { cartId, reopen: true });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatch(/receipt is already in/i);
+  });
+
+  test('a pending pair is the buyer’s to withdraw while the list is open; a decided one is not', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE, { ...LINE, size: '8' }], submit: false });
+    const { body: b } = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    const [first, second] = b.cart.lines.map((l) => Number(l.id));
+    // A draft takes no decisions; the buyer's own add is what opens it to the desk.
+    await call(request, 'buyer', 'cart/line', { cartId, line: { sku: LINE.sku, size: '7', shelfPrice: 50 } });
+    expect((await call(request, 'approver', 'cart/decide', { cartId, lineIds: [first], action: 'approve', qty: { [first]: 1 } })).status).toBe(200);
+
+    const noGo = await call(request, 'buyer', 'cart/line', { cartId, lineId: first, remove: true });
+    expect(noGo.status).toBe(409);
+    expect(noGo.body.error).toMatch(/already been approved/);
+    const ok = await call(request, 'buyer', 'cart/line', { cartId, lineId: second, remove: true });
+    expect(ok.status).toBe(200);
+    // Closed list: withdrawing is refused until it is re-opened.
+    await call(request, 'buyer', 'cart/submit', { cartId });
+    const { body: c } = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    const pendingId = Number(c.cart.lines.find((l) => l.status === 'pending').id);
+    const closedNoGo = await call(request, 'buyer', 'cart/line', { cartId, lineId: pendingId, remove: true });
+    expect(closedNoGo.status).toBe(409);
+    expect(closedNoGo.body.error).toMatch(/re-open/i);
+  });
+
+  test('lines come back grouped by the shoe in the order it was first asked about, sizes small to large', async ({ request }) => {
+    const cartId = await newRequest(request, { submit: false });
+    const add = (sku, size) => call(request, 'approver', 'cart/line', { cartId, line: { sku, size, shelfPrice: 50 } });
+    await add('CW2288-111', '10');
+    await add('DD1391-100', '9.5W');
+    await add('CW2288-111', '8');
+    await add('DD1391-100', '7');
+    await add('CW2288-111', '9');
+    await add('DD1391-100', '10.5W');
+    const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+    expect(body.cart.lines.map((l) => `${l.sku} ${l.size}`)).toEqual([
+      'CW2288-111 8', 'CW2288-111 9', 'CW2288-111 10',
+      'DD1391-100 7', 'DD1391-100 9.5W', 'DD1391-100 10.5W',
+    ]);
+  });
+
+  test('closing and re-opening each tell the group, in plain text, and never make the buyer wait', async () => {
+    // Same rule as the line card: a blank webhook refuses and says so, rather than
+    // going quiet — the suite runs with it blanked (playwright.config.js).
+    const { notifyRequestEvent } = await import('../api/_lib/notify.js');
+    const keep = process.env.MAKE_WEBHOOK_URL;
+    try {
+      process.env.MAKE_WEBHOOK_URL = '';
+      const r = await notifyRequestEvent(1, 'buying_request_closed');
+      expect(r.sent).toBe(false);
+      expect(r.reason).toMatch(/MAKE_WEBHOOK_URL/);
+    } finally { process.env.MAKE_WEBHOOK_URL = keep; }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gift cards read off a file (2026-09-17). The image path costs a model call and is
+// exercised by hand against real cardwell cards; what is pinned here is the text
+// parser the PDF path runs, the gate, and that nothing is ever recorded by the read.
+test.describe('gift cards read off a file', () => {
+  test('a table of cards parses one card a row: balance, number, PIN', async () => {
+    const { cardsFromText } = await import('../api/cart/gift-card-read.js');
+    const rows = cardsFromText([
+      'Balance Card number PIN',
+      '$200.00 6060108832351571987 081658',
+      '$200.00   6060104712351572009   129060',
+      'Nike 6060102302351241112 241909',       // no balance printed
+      'nothing here 1234',                     // no long run → skipped
+    ]);
+    expect(rows).toEqual([
+      { number: '6060108832351571987', pin: '081658', balance: 200, retailer: '' },
+      { number: '6060104712351572009', pin: '129060', balance: 200, retailer: '' },
+      { number: '6060102302351241112', pin: '241909', balance: null, retailer: '' },
+    ]);
+  });
+
+  test('only the issuing desk may read, and a file that is not a card image is refused', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const [receipt] = (await pool.query(
+      `INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type, size_bytes, uploaded_by)
+       VALUES ($1,'receipt',$2,'r.jpg','image/jpeg',10,'E2E') RETURNING id`, [cartId, `buy-carts/e2e/${cartId}-r.jpg`])).rows;
+    expect((await call(request, 'approver', 'cart/gift-card-read', { cartId, fileId: Number(receipt.id) })).status).toBe(403);
+    const wrong = await call(request, 'issuer', 'cart/gift-card-read', { cartId, fileId: Number(receipt.id) });
+    expect(wrong.status).toBe(404);
+    expect(wrong.body.error).toMatch(/not on this request/);
+  });
 });

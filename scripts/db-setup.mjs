@@ -1479,6 +1479,38 @@ await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_at TIMESTA
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_by TEXT`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS write_off_reason TEXT`);
 
+// THE BUYER'S LIST IS OPEN UNTIL THEY CLOSE IT (2026-09-16).
+//
+// A buyer works a shop for an hour and asks about pairs as they find them — every add
+// goes straight to the approvers and to Telegram. There is no "send"; there is "Close
+// the request", which says the list is complete and the desk may fund it. `list_closed_at`
+// NULL means the buyer is still adding; the gift-card desk refuses to record a card
+// until it is set. Re-opening clears it (and tells the group), and a re-opened request
+// keeps whatever cards were already issued — a top-up is recorded against the new
+// approved total.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_closed_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_closed_by TEXT`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_reopened_at TIMESTAMPTZ`);
+// What the cards must cover: the approved sticker total PLUS the sales tax off the cost
+// stack. `approved_amount` stays the sticker sum (what was approved); this is what the
+// till will actually ask for. Recomputed by recalcCartMoney with every change to the
+// lines or the stack.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS funding_target NUMERIC(12,2)`);
+// ONE-SHOT backfill, guarded by a marker row: every request that had already been sent
+// in under the old flow is treated as a closed list, so nothing already approved is
+// suddenly refused a card. It must run exactly once — under the new flow a submitted
+// request with a NULL list_closed_at is a buyer STILL ADDING, and re-running this on
+// the next deploy would close their list under them.
+const listBackfill = await sql(`SELECT 1 FROM app_settings WHERE key = 'migr_buy_carts_list_closed'`);
+if (!listBackfill.rows.length) {
+  await sql(`UPDATE buy_carts SET list_closed_at = coalesce(submitted_at, updated_at), list_closed_by = submitted_by
+              WHERE list_closed_at IS NULL AND status <> 'draft'`);
+  await sql(`INSERT INTO app_settings (key, value) VALUES ('migr_buy_carts_list_closed', 'done') ON CONFLICT (key) DO NOTHING`);
+}
+await sql(`UPDATE buy_carts
+              SET funding_target = round(approved_amount * (1 + coalesce(nullif(cost_stack->>'taxPct','')::numeric, 0) / 100), 2)
+            WHERE funding_target IS NULL`);
+
 // Every open task, in ONE table rather than a return-case table beside a follow-up
 // table. The deck's rule is a single sentence — "owner + next action + due date +
 // evidence" — and two mechanisms that both half-satisfy it is how a queue ends up with

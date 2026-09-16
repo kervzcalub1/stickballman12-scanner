@@ -276,8 +276,9 @@ export const api = {
   // What we ALREADY hold of every shoe on the request — Shopify's live figure for the
   // pairs we have listed, plus our own units it cannot see. One press, every line.
   cartStock: (cartId) => post('/api/cart/stock', { cartId }),
-  cartSubmit: (cartId) => post('/api/cart/submit', { cartId }),
-  cartWithdraw: (cartId) => post('/api/cart/submit', { cartId, withdraw: true }),
+  // "Close the request": the buyer's list is complete. Same route as the old send.
+  cartCloseList: (cartId) => post('/api/cart/submit', { cartId }),
+  cartReopenList: (cartId) => post('/api/cart/submit', { cartId, reopen: true }),
   // Approving CARRIES the quantity: the buyer reports what they found, and how many to
   // buy is the decision. `qty` is a { lineId: n } map; `qtyAll` covers an approve-all.
   cartDecide: (cartId, payload) => post('/api/cart/decide', { cartId, ...payload }),
@@ -292,6 +293,8 @@ export const api = {
   // Read an uploaded receipt with the vision model. Server-side: the key never reaches
   // the browser, and the image is pulled from our own bucket rather than posted twice.
   cartReceiptRead: (cartId, fileId) => post('/api/cart/receipt-read', { cartId, fileId }),
+  // Read card numbers / PINs / balances off an uploaded card image or PDF (review first).
+  cartGiftCardRead: (cartId, fileId) => post('/api/cart/gift-card-read', { cartId, fileId }),
   cartReceiptEmail: (cartId, transactionId) => post('/api/cart/receipt-email', { cartId, transactionId }),
   // The bytes are PROXIED — the bucket never serves a card photo or a receipt by URL,
   // so there is no `src` an <img> could point at. Both of these fetch WITH the session

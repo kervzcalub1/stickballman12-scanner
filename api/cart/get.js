@@ -11,7 +11,7 @@
 // from the event trail — see `canSeeBuyCall` in api/_lib/buycart.js.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getBuyCartFull, dbConfigured } from '../_lib/db.js';
-import { cartVisibleTo, cartCloseChecks, tillOverrunWarning, canSeeBuyCall, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
+import { cartVisibleTo, cartCloseChecks, fundingTaxPct, canSeeBuyCall, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -36,11 +36,11 @@ export default async function handler(req, res) {
     // verdict in plain words. Stripped here, at the read boundary, rather than left to
     // the screen: a hidden column is not a control (`canSeeBuyCall`).
     const forViewer = redactCartForViewer(cart, user);
-    // The till-overrun warning is derived from the cost stack, so it goes with it: it
-    // is a note for whoever funds the request, and to a buyer it would be an unexplained
-    // number computed from rates they cannot see.
-    const till = canSeeBuyCall(user) ? tillOverrunWarning(cart) : null;
-    return send(res, 200, { ok: true, cart: { ...forViewer, checks, tillWarning: till } });
+    // The tax rate behind `funding_target` goes only to whoever can read the stack it
+    // came from. The target itself travels to everyone — it is the number the buyer's
+    // cards will actually carry.
+    const fundingTax = canSeeBuyCall(user) ? fundingTaxPct(cart) : null;
+    return send(res, 200, { ok: true, cart: { ...forViewer, checks, fundingTaxPct: fundingTax } });
   } catch (e) {
     console.error('[cart/get]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load that buying request.' });

@@ -2440,6 +2440,57 @@ export async function setItemUpc(itemId, upc) {
   await sql`UPDATE items SET upc = ${upc}, updated_at = now() WHERE id = ${itemId}`;
 }
 
+// The units that were scanned in the same wrong way as this one: same style code, same
+// size, same box UPC — the set one bad catalogue answer produced. The unit itself is in
+// the list. A unit with no UPC on record matches on code + size within its own batch
+// instead (the same delivery, the same scan). `listed` = pushed to any store, which the
+// SKU fix cannot reach and the caller has to say out loud.
+export async function findSkuSiblings(item) {
+  const sql = db();
+  // The shim can't nest fragments, so the `listed` expression is written out twice.
+  const rows = item.upc
+    ? await sql`SELECT i.id, i.vin, i.status,
+                       (i.synced_alias OR i.synced_stockx OR i.synced_shopify OR i.added_to_intel_inv) AS listed
+                  FROM items i
+                 WHERE i.sku IS NOT DISTINCT FROM ${item.sku} AND i.size IS NOT DISTINCT FROM ${item.size}
+                   AND i.upc = ${item.upc} ORDER BY i.id`
+    : await sql`SELECT i.id, i.vin, i.status,
+                       (i.synced_alias OR i.synced_stockx OR i.synced_shopify OR i.added_to_intel_inv) AS listed
+                  FROM items i
+                 WHERE i.sku IS NOT DISTINCT FROM ${item.sku} AND i.size IS NOT DISTINCT FROM ${item.size}
+                   AND i.upc IS NULL AND i.batch_id IS NOT DISTINCT FROM ${item.batch_id} ORDER BY i.id`;
+  return rows.map((r) => ({ ...r, id: Number(r.id), listed: !!r.listed }));
+}
+
+// Change the style code on a set of units, carrying the catalogue's name / colorway /
+// image for the NEW code when the caller looked it up (each field only when given —
+// a lookup that found nothing must not blank a name we had). Every unit gets a `note`
+// event saying what it was and what it is now, because a code that changed with no
+// trace is a code nobody can trust either way.
+export async function setItemsSku(itemIds, { from, to, product, reason }, by) {
+  const ids = (itemIds || []).map(Number).filter(Number.isInteger);
+  if (!ids.length) return [];
+  const sql = db();
+  const rows = product
+    ? await sql`
+        UPDATE items SET sku = ${to},
+               name = coalesce(${product.name}, name),
+               colorway = coalesce(${product.colorway}, colorway),
+               gender = coalesce(${product.gender}, gender),
+               image_url = coalesce(${product.image_url}, image_url),
+               updated_at = now()
+         WHERE id = ANY(${ids}::bigint[]) RETURNING id, vin, sku`
+    : await sql`
+        UPDATE items SET sku = ${to}, updated_at = now()
+         WHERE id = ANY(${ids}::bigint[]) RETURNING id, vin, sku`;
+  const text = `SKU changed ${from || '—'} → ${to}${product?.name ? ` (${product.name})` : ''}${reason ? ` — ${reason}` : ''}`;
+  for (const r of rows) {
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${r.id}, 'note', ${JSON.stringify({ text, sku_from: from || null, sku_to: to })}::jsonb, ${by || null})`;
+  }
+  return rows;
+}
+
 // Strict on purpose, unlike the reconciliation's `rcSizeNum` — that one strips a
 // trailing W/Y so a supplier writing "7.5W" still matches "7.5". A UPC can't be
 // that generous: a men's 10 and a women's 10 are different boxes with different

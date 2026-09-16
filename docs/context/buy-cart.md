@@ -790,6 +790,34 @@ stored `v1:<iv>:<tag>:<ct>` so a key rotation stays possible.
   a photo of a card is as spendable as the digits. Same rule as the courier labels.
   `Cache-Control: private, no-store`, and the client holds an object URL it revokes.
 
+### Reading the cards off the file (2026-09-17)
+`api/cart/gift-card-read.js` · **Read the cards** beside each uploaded card file ·
+review table in `BuyCartGiftCards.jsx`. The cards arrive three ways and all three land
+here: a cardwell.fund card face (CARD NUMBER · PIN · barcode), a phone screenshot of one,
+or a table — a spreadsheet screenshot or PDF listing a batch, one card a row
+(balance · number · PIN). An **image** goes to the same vision model as the receipt
+(`gpt-5.4-mini`, ~3 s, ~$0.003); a **PDF** is text already, read with pdfjs
+(`legacy/build/pdf.mjs`, server-side) and `cardsFromText` (the long digit run is the
+number, a 4–8 digit run beside it the PIN, a `$` amount the balance). Measured on the
+real samples: one card face, one screenshot and a six-row table all read every digit.
+- **The reader records nothing.** Rows come back to a review table — full number, PIN,
+  balance, each editable, ticked per row like the receipt rows — and *Record N cards*
+  posts each ticked row through the ordinary `cart/gift-card` add, so the encryption,
+  the masking and the trail are the same code. It stops at the first refusal and says
+  how many landed. A blank balance (a card face prints none) blocks the button; *Set
+  every blank balance* fills them at once. A row whose last four match a card already on
+  the request starts UNTICKED and says so (`already`, from `listBuyCartCardTails`) — a
+  hint, never a refusal.
+- **Issuing desk only** (`issue_gift_cards`), 12/min, `kind='gift_card'` files only;
+  the event `gc_read` records how many were read from which file by what — **never a
+  digit**. R2 is checked *after* the access checks.
+- **Upload + read are preparation and open before the list is closed** (`canPrep`);
+  recording stays behind `cardsIssuable`, and the button says why.
+- **Viewing is a gallery**: `ImageZoomModal` gained `thumbs` / `index` / `onSelect` /
+  `onDownload` — ‹ › paging, a thumbnail strip under the image (other images are fetched
+  in the background as the viewer opens), and a download button in the bar. The panel
+  is drawn whenever card files exist, even before cards can be recorded.
+
 ## The receipt
 ### Attaching it and reading it are two different permissions
 - **Anyone who can reach the request may ATTACH one** — the buyer on their own request,

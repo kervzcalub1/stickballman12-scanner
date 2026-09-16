@@ -536,7 +536,11 @@ export function ShoeThumb({ url, onOpen, size = 36 }) {
 // (so panning is native scroll/touch on every device); double-click toggles 1x↔2x.
 // Esc / +/- are wired; click the backdrop to close.
 // Optional `onPrev`/`onNext` (falsy = hidden) add left/right browsing through a set.
-export function ImageZoomModal({ url, label, onClose, onPrev, onNext }) {
+// `thumbs` (optional) draws a strip of thumbnails under the image — `[{ url, label }]`
+// with `index` marking the one on screen and `onSelect(i)` jumping to another. For a
+// pile of gift-card photos that is the difference between "next, next, next" and
+// picking the one you want. `onDownload` adds a download button to the bar.
+export function ImageZoomModal({ url, label, onClose, onPrev, onNext, thumbs = null, index = -1, onSelect, onDownload }) {
   const [scale, setScale] = useState(1);
   const MIN = 1; const MAX = 4; const STEP = 0.5;
   const zoomIn = () => setScale((s) => Math.min(MAX, +(s + STEP).toFixed(2)));
@@ -566,6 +570,7 @@ export function ImageZoomModal({ url, label, onClose, onPrev, onNext }) {
             <span className="izm-scale">{Math.round(scale * 100)}%</span>
             <button type="button" className="btn icon ghost" onClick={zoomIn} disabled={scale >= MAX} title="Zoom in" aria-label="Zoom in">+</button>
             <button type="button" className="btn icon ghost" onClick={reset} disabled={scale === 1} title="Reset zoom" aria-label="Reset zoom">⤢</button>
+            {onDownload && <button type="button" className="btn icon ghost" onClick={onDownload} title="Download" aria-label="Download">⤓</button>}
             <button type="button" className="btn icon ghost" onClick={onClose} title="Close" aria-label="Close">×</button>
           </div>
         </div>
@@ -575,6 +580,17 @@ export function ImageZoomModal({ url, label, onClose, onPrev, onNext }) {
             style={scale > 1 ? { width: `${scale * 100}%` } : undefined} draggable={false} />
           {onNext && <button type="button" className="izm-nav next" onClick={onNext} title="Next" aria-label="Next">›</button>}
         </div>
+        {thumbs && thumbs.length > 1 && (
+          <div className="izm-thumbs" role="tablist" aria-label="Images">
+            {thumbs.map((t, i) => (
+              <button key={i} type="button" role="tab" aria-selected={i === index}
+                className={`izm-thumb${i === index ? ' current' : ''}`}
+                title={t.label || `Image ${i + 1}`} onClick={() => onSelect?.(i)}>
+                {t.url ? <img src={t.url} alt="" draggable={false} /> : <span className="izm-thumb-ph">{t.label?.slice(0, 3) || '…'}</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>,
     document.body,

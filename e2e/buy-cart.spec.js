@@ -2158,3 +2158,36 @@ test.describe('the list stays open until the buyer closes it', () => {
     } finally { process.env.MAKE_WEBHOOK_URL = keep; }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gift cards read off a file (2026-09-17). The image path costs a model call and is
+// exercised by hand against real cardwell cards; what is pinned here is the text
+// parser the PDF path runs, the gate, and that nothing is ever recorded by the read.
+test.describe('gift cards read off a file', () => {
+  test('a table of cards parses one card a row: balance, number, PIN', async () => {
+    const { cardsFromText } = await import('../api/cart/gift-card-read.js');
+    const rows = cardsFromText([
+      'Balance Card number PIN',
+      '$200.00 6060108832351571987 081658',
+      '$200.00   6060104712351572009   129060',
+      'Nike 6060102302351241112 241909',       // no balance printed
+      'nothing here 1234',                     // no long run → skipped
+    ]);
+    expect(rows).toEqual([
+      { number: '6060108832351571987', pin: '081658', balance: 200, retailer: '' },
+      { number: '6060104712351572009', pin: '129060', balance: 200, retailer: '' },
+      { number: '6060102302351241112', pin: '241909', balance: null, retailer: '' },
+    ]);
+  });
+
+  test('only the issuing desk may read, and a file that is not a card image is refused', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const [receipt] = (await pool.query(
+      `INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type, size_bytes, uploaded_by)
+       VALUES ($1,'receipt',$2,'r.jpg','image/jpeg',10,'E2E') RETURNING id`, [cartId, `buy-carts/e2e/${cartId}-r.jpg`])).rows;
+    expect((await call(request, 'approver', 'cart/gift-card-read', { cartId, fileId: Number(receipt.id) })).status).toBe(403);
+    const wrong = await call(request, 'issuer', 'cart/gift-card-read', { cartId, fileId: Number(receipt.id) });
+    expect(wrong.status).toBe(404);
+    expect(wrong.body.error).toMatch(/not on this request/);
+  });
+});

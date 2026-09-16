@@ -1043,7 +1043,8 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           out there) and just says why no more can be recorded yet. */}
       {cart.funding_method !== 'company_card'
         && ['approved', 'funded', 'receipted', 'audited', 'closed', 'written_off'].includes(cart.status)
-        && (cardsIssuable(cart) || (cart.giftCards || []).length > 0 || !['approved'].includes(cart.status)) && (
+        && (cardsIssuable(cart) || (cart.giftCards || []).length > 0
+          || (cart.files || []).some((f) => f.kind === 'gift_card') || !['approved'].includes(cart.status)) && (
         <BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer}
           onChanged={load} onSignOut={onSignOut} />
       )}

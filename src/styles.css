@@ -1581,6 +1581,15 @@ body {
   transition: background 0.12s;
 }
 .izm-nav:hover { background: rgba(0,0,0,0.75); }
+/* Thumbnail strip under the image: pick a card instead of stepping to it */
+.izm-thumbs { display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; border-top: 1px solid var(--border);
+  background: var(--panel); flex: none; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+.izm-thumb { flex: none; width: 72px; height: 52px; padding: 0; border-radius: 8px; overflow: hidden; cursor: pointer;
+  border: 2px solid transparent; background: #0b0d12; opacity: 0.7; transition: opacity .12s, border-color .12s; }
+.izm-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.izm-thumb-ph { display: grid; place-items: center; width: 100%; height: 100%; font-size: 11px; color: var(--muted); }
+.izm-thumb:hover { opacity: 1; }
+.izm-thumb.current { opacity: 1; border-color: var(--accent, #6b8cff); }
 .izm-nav.prev { left: 12px; }
 .izm-nav.next { right: 12px; }
 .izm-nav:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
@@ -4676,6 +4685,21 @@ button.bc-cost-chip { font-family: inherit; line-height: inherit; }
 .bc-covered { color: var(--ok); font-weight: 700; }
 /* The one gap in funding at sticker price. Amber, not red: it is a caution about what
    the till MIGHT ask for, not a failure that has happened. */
+/* Cards read off an uploaded file, awaiting a person (BuyCartGiftCards) */
+.bc-gc-read { margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); }
+.bc-gc-read-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 8px; }
+.bc-gc-read-fill { margin-left: auto; }
+.bc-gc-read-fill .ph-price { width: 200px; }
+.bc-gc-read-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bc-gc-read-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
+  background: rgba(233,196,106,0.10); border: 1px solid rgba(233,196,106,0.35); }
+.bc-gc-read-list li.ok { background: rgba(80,200,120,0.08); border-color: rgba(80,200,120,0.35); }
+.bc-gc-read-list li.saved { opacity: 0.6; }
+.bc-gc-read-tick input { width: 18px; height: 18px; }
+.bc-gc-read-num { flex: 1 1 220px; min-width: 0; font-family: ui-monospace, Menlo, monospace; font-size: 15px; letter-spacing: 0.04em; }
+.bc-gc-read-pin { width: 110px; font-family: ui-monospace, Menlo, monospace; }
+.bc-gc-read-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+@media (max-width: 767px) { .bc-gc-read-fill { margin-left: 0; width: 100%; } }
 .bc-head-chips { display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .bc-list-chip { margin-left: 6px; }
 .bc-list-note { margin: 0 0 12px; }

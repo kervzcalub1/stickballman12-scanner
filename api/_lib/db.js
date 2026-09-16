@@ -6645,6 +6645,13 @@ export async function deleteBuyCartFile(cartId, fileId) {
   return rows[0] || null;
 }
 
+// The last four of every card on a request (voided included), for the reader to flag
+// a likely re-read. Never the code.
+export async function listBuyCartCardTails(cartId) {
+  const rows = await db()`SELECT code_last4 FROM buy_cart_gift_cards WHERE cart_id = ${cartId}`;
+  return rows.map((r) => String(r.code_last4 || '')).filter(Boolean);
+}
+
 export async function getBuyCartFile(cartId, fileId) {
   const sql = db();
   return (await sql`SELECT * FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId}`)[0] || null;

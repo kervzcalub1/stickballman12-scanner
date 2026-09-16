@@ -53,7 +53,9 @@ export function milestoneFor(cart) {
   else if (allPacked) index = 5;
   else if (['receipted', 'audited'].includes(status) || cart?.po_id) index = 4;
   else if (status === 'funded') index = 3;
-  else if (status === 'approved') index = 2;
+  // Every line approved but the buyer has NOT closed the list yet: the desk cannot fund
+  // a total that is still growing, so the request is still at approval, not at cards.
+  else if (status === 'approved') index = cart?.list_closed_at ? 2 : 1;
   else if (status === 'submitted') index = 1;
   else index = 0;
 

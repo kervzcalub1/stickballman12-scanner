@@ -3,9 +3,11 @@
 //   { cartId, lineId, patch:{ qty?, shelfPrice?, size? } }        -> edit
 //   { cartId, lineId, remove:true }                               -> remove
 //
-// The request's contents are the BUYER'S to write, and only while it is a draft. Once
-// it is submitted the list is what people are approving, so a line that could still
-// change would let the contents of an approval be swapped after the fact.
+// The request's LIST is the buyer's to grow until they close it (`list_closed_at`) —
+// every add is its own question to the desk, and a request with cards already out can
+// be re-opened for more. What the buyer can never do is change a line somebody has
+// decided on: a decided line is part of an approval, and removing or editing it would
+// swap the contents of that approval after the fact.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import {
   getBuyCart, getBuyCartLine, addBuyCartLine, updateBuyCartLine, removeBuyCartLine,
@@ -13,6 +15,7 @@ import {
 } from '../_lib/db.js';
 import { notifyLineAsked } from '../_lib/notify.js';
 import { cartVisibleTo, hasCostPrivilege, canSeeBuyCall, redactLineForViewer, redactCartForViewer, shelfPricesEditable, repriceLine, requireBuyerAccess } from '../_lib/buycart.js';
+import { buyerCanAdd, listOpen } from '../../src/lib/buycartRules.js';
 import { readMarketForLine } from '../_lib/lineMarket.js';
 
 const MAX_LINES = 200;
@@ -66,24 +69,42 @@ export default async function handler(req, res) {
           error: 'The gift cards have already been issued against these prices — record what was actually paid on the receipt instead.',
         });
     } else if (body.remove) {
-      // REMOVING still needs a draft. A line somebody has already decided on is part of
-      // an approval, and taking it out from under them would change what was agreed.
-      if (cart.status !== 'draft')
-        return send(res, 409, { ok: false, error: 'This request has been sent in — ask for it back before removing anything.' });
-    } else if (!['draft', 'submitted', 'approved'].includes(cart.status)) {
-      // ADDING is different, and this used to refuse it for the same reason as removing.
-      // A buyer works a shop for an hour: they find a pair, ask about it, keep hunting,
-      // find another. Freezing the list at the first question meant either sitting on
-      // everything until the trip was over — which is when the first shoe has usually
-      // gone — or opening a second request for the same run.
+      // REMOVING is allowed only while the line is still a QUESTION. A line somebody has
+      // already decided on is part of an approval, and taking it out from under them
+      // would change what was agreed. A pending one is the buyer's to withdraw while
+      // their list is open (they asked, nobody has answered, they changed their mind),
+      // and the desk's to remove on a draft as before.
+      const was = await getBuyCartLine(cartId, Number(body.lineId));
+      if (!was) return send(res, 404, { ok: false, error: 'That line is already gone.' });
+      if (was.status !== 'pending')
+        return send(res, 409, { ok: false, error: `${was.sku}${was.size ? ` size ${was.size}` : ''} has already been ${was.status} — it is part of a decision now and can’t be removed.` });
+      const mayRemove = cart.status === 'draft'
+        || (isOwnBuyer(user, cart) && listOpen(cart) && buyerCanAdd(cart))
+        || (!isOwnBuyer(user, cart) && await hasCostPrivilege(user));
+      if (!mayRemove)
+        return send(res, 409, {
+          ok: false,
+          error: isOwnBuyer(user, cart) && cart.list_closed_at
+            ? 'You closed this request — re-open it before removing anything.'
+            : 'Only the buyer (while the request is open) or a buying desk can remove a line.',
+        });
+    } else if (!buyerCanAdd(cart)) {
+      // ADDING is allowed for as long as the buyer's LIST IS OPEN. A buyer works a shop
+      // for an hour: they find a pair, ask about it, keep hunting, find another. Each
+      // add is a question in its own right and changes nothing already decided.
       //
-      // A NEW line is pending and changes nothing that was already decided, so nothing
-      // is at risk. It stops at `funded`: from there the approved total is what the
-      // cards were issued against, and a pair added afterwards would move the target
-      // the money was already released to cover.
+      // It no longer stops at `funded` either: a buyer who finds the cards short, or one
+      // more pair on the way out, re-opens the list and adds. The approvals the money
+      // went out against are frozen (decisions become pending-only); the new lines,
+      // once approved, raise the target and the desk records a top-up. What ends it is
+      // the RECEIPT — from there the purchase has happened.
       return send(res, 409, {
         ok: false,
-        error: 'The gift cards for this request have already gone out — open a new request for anything else.',
+        error: cart.list_closed_at && ['submitted', 'approved', 'denied', 'funded'].includes(cart.status)
+          ? (isOwnBuyer(user, cart)
+            ? 'You closed this request — re-open it to add more.'
+            : 'The buyer has closed this request — they can re-open it to add more.')
+          : 'This request is past the point of adding to it — open a new request for anything else.',
       });
     }
 
@@ -239,6 +260,8 @@ export default async function handler(req, res) {
     // Only for the BUYER. A desk adding a line on somebody's behalf is data entry, not a
     // question being asked, and flipping the request's state under them would be a
     // surprise. Their add leaves the status exactly as it was.
+    // On a FUNDED request `askBuyCart` matches no row and the status stays put — the
+    // new line is pending on a funded request, which is exactly what it is.
     const asked = isOwnBuyer(user, cart) ? await askBuyCart(cartId, user) : null;
     // The line goes back to whoever added it as THEY may see it — a buyer's copy has
     // never carried a call, and must not start carrying one on the way out of the add.

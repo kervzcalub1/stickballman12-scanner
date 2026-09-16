@@ -129,29 +129,28 @@ holds both.
 - **buyer** — supplier portal → *Buying Requests* (`/buying`).
 
 ## The money
-**Funding target = Σ (shelf_price × qty) over APPROVED lines.** The sticker, no
-discounts assumed. It over-funds deliberately: a card that comes up short strands a
-buyer in a shop, while a leftover balance is money still ours — and step 10 makes us
-account for it either way. That last part is a real benefit rather than a consolation:
-funding at sticker guarantees a remainder on nearly every request, so "any remaining
-gift card balance is accounted for" is a live number every time instead of a box nobody
-ticks.
+**Funding target = Σ (shelf_price × qty) over APPROVED lines, PLUS the sales tax on the
+request's cost stack** — `buy_carts.funding_target`, recomputed by `recalcCartMoney` with
+every change to the lines, the cards *or the stack* (`setBuyCartCostStack` now calls it).
+`approved_amount` stays the sticker sum (what was approved); `fundingTarget(cart)` in
+`buycart.js` reads the taxed figure and every consumer — the gift-card release check, the
+`cards_recorded` closing condition, the panel, the Telegram summary — goes through it.
 
-**The one hole, and it is named on screen** (`tillOverrunWarning`). Tax is charged on
-top of the sticker, and the discounts that normally swallow it come off the same base.
-With a small discount and a high tax rate the till asks for more than the sticker:
+**Why the tax went in (2026-09-16).** The target was the sticker alone, with an amber
+"till overrun" warning beside it. On a full-price purchase that meant every request came
+up short by exactly the tax — $400 of cards against a $422.18 receipt — and the audit
+then had a gap to explain on every one. The warning is gone; the number it warned about
+IS the target. Still no discount assumed: it over-funds deliberately on a discounted
+purchase, because a card that comes up short strands a buyer in a shop while a leftover
+balance is money still ours, and step 10 accounts for it either way.
 
-```
-$150 shelf, 0% off, 8.25% tax   → till wants $162.38, funded $150.00 → $12.38 SHORT
-$150 shelf, 30% off, 8.25% tax  → till wants $113.66, funded $150.00 → fine
-```
-
-The gift-card panel shows an amber note with the number when the request's own cost
-stack makes `(1−store%)(1−promo%)(1+tax%) > 1`. It **warns rather than changing the
-figure somebody approved**. The gift-card discount is deliberately excluded from that
-factor — that 8% is what *we* save buying the card, not a discount the register gives —
-and so is the coupon, which is a flat amount off one transaction and would understate
-every line if spread across a request (the same reason batch analysis refuses it).
+- `cart/get` adds `fundingTaxPct` for anyone who can read the stack (`canSeeBuyCall`);
+  the buyer's copy carries `funding_target` (the number their cards will hold) and
+  `null` for the rate, since the stack is redacted for them.
+- The strip reads **Approved $390.00 · To fund $422.18 incl. 8.25% tax**; the gift-card
+  panel says *against $422.18 to fund ($390.00 approved + 8.25% tax)*; the 409 on release
+  names both.
+- `db:setup` backfills `funding_target` for existing rows. **Needs `db:setup`.**
 
 ## The cost stack — and who may write it
 A request's stack is snapshotted from the **buyer's** payout preset when it is opened
@@ -232,6 +231,10 @@ Make.com is the middle. Full build guide, including the Make module wiring and t
 Gemini question: the **Telegram Approval Loop** artifact.
 
 ### What our system does
+- **Every payload carries `env: "dev" | "prod"`** (`notifyEnv`, off `APP_ENV`, which
+  `vite.config.js` pins to `dev` and Railway never sets). Dev and prod share one bot, group
+  and webhook; Make appends the env to each button's `callback_data` and posts the tap to
+  the dev tunnel or to `stickballman12.com` accordingly. Missing = prod.
 - **Out:** `api/_lib/notify.js` POSTs one event per line to `MAKE_WEBHOOK_URL`. Fired by
   the BUYER's add only (a desk adding on their behalf is data entry, not a question), and
   fired **after** the market read so the card carries the buy call rather than "not
@@ -290,6 +293,27 @@ Store: E2E Store
   through `calcPayout`, the same function the calculator and the screen run, so they
   cannot drift from either; `call.platforms` carries the money per platform. `Profit:` is
   the winner's and is deliberately not repeated beside its own ROI.
+
+### Request-level events on the same webhook (2026-09-16)
+`notifyRequestEvent(cartId, event)` posts `buying_request_closed` / `buying_request_reopened`
+to the same `MAKE_WEBHOOK_URL` — `{ event, sent_at, request:{ id, code, buyer, retailer,
+purpose, status, line_count, pending_count, approved_count, rejected_count,
+approved_amount, funding_target, gc_total }, caption }`, no `line`, no `photo`, no
+`decide`. Make scenario 6231985 routes on `event`: the line event (or a missing field)
+takes the photo card + buttons; these two take a plain `sendMessage` with the caption
+verbatim (**no parse mode — keep the caption plain text**); anything else is dropped
+silently. The caption is built here for the same reason the line card's is:
+
+```
+BC-2400 — Test Supplier closed the request
+7 pairs asked · 4 approved · 2 still waiting · 1 turned down
+Approved $390.00 + 8.25% tax = $422.18 to fund
+Store: Champs
+```
+
+Fire-and-forget after the write, logged either way, and a blank URL refuses out loud
+like the line card. The desk funds a TOTAL: a closed list is a total that is now final,
+a re-opened one is a total about to move — possibly after cards went out.
 
 ### `kind='shoe'` and nothing else
 A static key plus a numeric id is enumerable. That is a fair trade for photographs of
@@ -390,25 +414,62 @@ localhost origin and says why in `photo.unavailable`.
 
 ## The floor's actual workflow (2026-09-11)
 
-### Adding a pair IS asking about it
-There is no separate "send for approval" for a buyer. `cart/line` marks the request
-`submitted` on their add (`askBuyCart`) — a trip that ends with the buyer remembering to
-press Send is a trip where the first pair sat unasked for an hour, and by then it has
-usually gone.
+### Adding a pair IS asking about it — and the list stays open until the buyer closes it (2026-09-16)
+There is no "send for approval" for a buyer. `cart/line` marks the request `submitted`
+on their add (`askBuyCart`) and posts the Telegram card — a trip that ends with the buyer
+remembering to press Send is a trip where the first pair sat unasked for an hour, and by
+then it has usually gone.
 
-- **Only the buyer's add does this.** A desk adding a line on somebody's behalf is data
-  entry, not a question being asked, and flipping the state under them would be a
-  surprise. Their add leaves the status alone.
-- **Adds are allowed while `draft`, `submitted` or `approved`** — they used to require a
-  draft, which froze the list at the first question. A buyer works a shop for an hour: a
-  NEW line is pending and changes nothing already decided, so nothing is at risk.
-  **Removing** still needs a draft, and everything stops at `funded`: from there the
-  approved total is what the cards were issued against.
-- Adding to a fully-decided request pulls it **back to `submitted`**, which is the honest
-  state — there is something undecided on it again, and the desk must not fund a total
-  that is about to move.
-- **The photo is checked on the add**, not only at submit, because for a buyer the add is
-  the submit.
+What the buyer presses at the end of the trip is **Close the request** (`cart/submit`,
+same route name; `closeBuyCartList` → `buy_carts.list_closed_at` / `list_closed_by`).
+It carries the old send's checks — a purpose, a store, ≥1 line, a photo per SKU — and
+it is what lets the gift-card desk act: **no card can be recorded against a list still
+growing** (`cardsIssuable` in `src/lib/buycartRules.js` = list closed AND status
+approved/funded AND no pending line; `cardsRefusedBecause` is the 409 text and the
+panel's note). The group is told (`buying_request_closed`, below).
+
+- **Adds are allowed while the list is open** on `draft` / `submitted` / `approved` /
+  `denied` / **`funded`** (`buyerCanAdd`). `funded` is new: a buyer who finds the cards
+  short, or one more pair on the way out, **re-opens** the list (`{ reopen:true }`,
+  `reopenBuyCartList`, `list_reopened_at`) and adds. The cards already issued are never
+  touched; the new lines raise the target once approved, and the desk records a **top-up
+  card** after the buyer closes the list again. The group is told
+  (`buying_request_reopened`). Re-opening stops at `receipted` — the purchase has
+  happened; anything else is a new request (`reopenRefusedBecause`).
+- **Decisions on a funded request are pending-only** (`decisionsPendingOnly`,
+  `DECISIONS_PENDING_ONLY = funded/receipted/audited`): the approvals the cards went out
+  against are frozen, overrides included — `decideBuyCartLines({ pendingOnly })` filters
+  the targets in the query — while a pair added since can be approved or turned down.
+  The cart's status stays `funded` (the settle `WHERE status IN (submitted, approved,
+  denied)` leaves it alone). The no-decide note says which.
+- **Removing a line** (`cart/line { remove }`): only a **pending** one, ever. The buyer
+  may withdraw their own pending pair while the list is open (the × on the row); a desk
+  with a cost privilege may remove a pending line too; a decided line is part of an
+  approval and answers 409 by name. The old "Pull it back" (withdraw to draft) is gone
+  with the send button — `withdrawBuyCart` / `submitBuyCart` were deleted.
+- A desk adding a line on somebody's behalf is data entry, not a question — it leaves
+  the status alone, and a draft stays a draft (no decisions) until the buyer either adds
+  a pair themselves or closes the list, which moves `draft → submitted`.
+- Adding to a fully-decided request pulls it **back to `submitted`** (below `funded`).
+- **The photo is checked on the add**, because for a buyer the add is the close.
+- **Screen:** `ListChip` beside the status — *Buyer still adding* (amber) or *List
+  closed*; the queue rows carry the same. The buyer sees the add form for as long as
+  `buyerCanAdd`, a *Close the request* button (disabled with no lines), and after
+  closing a note + *Re-open to add more* (a `FormModal` that says the desk is told and
+  the cards stay). The gift-card panel appears only once `cardsIssuable` or cards exist.
+  The milestone bar keeps an `approved` request with an open list at *Waiting for
+  approval* — the desk cannot fund it yet. `carts_to_fund` counts `approved` **and**
+  list closed, so a request still being added to is not on the desk's pile.
+- **Lines are ordered by shoe, in the order each shoe was first asked about, sizes small
+  to large** (`getBuyCartFull`: `ORDER BY min(id) per sku, numeric part of size, size,
+  id`). A 9 added an hour after the 8 and the 10 lands between them.
+- **`db:setup` one-shot backfill** (`app_settings.migr_buy_carts_list_closed`): every
+  request already past `draft` is stamped closed, so nothing already approved is
+  refused a card. Guarded by the marker because under the new flow a `submitted` row
+  with a NULL `list_closed_at` is a buyer still adding, and a re-run would close it
+  under them. **Needs `db:setup`.**
+
+Tested in `buy-cart.spec.js` → "the list stays open until the buyer closes it".
 
 ### Several sizes in one ask
 The size chips multi-select. One press creates one line per size, sent in sequence — each
@@ -426,7 +487,7 @@ It is done BEFORE the add, not after, and that is the whole reason it lives in t
 **adding a line posts a Telegram card with the price written into its caption.** Re-pricing
 afterwards would leave the group holding a card that quotes a number the request no longer
 carries, and the group is where the decision gets made. A price that is wrong after
-sending is a `Pull it back`, not an edit.
+sending is a remove-and-re-add (the × on a pending row), not an edit.
 
 ### The cost stack is the desk's too (2026-09-11)
 It moved the same way the buy call did, and for the same reason: **the stack is what turns
@@ -1141,6 +1202,13 @@ around. Both take `requireAuditPrivilege`, so the approver still cannot sign off
 | Manifest → received | `getPoReconciliation` — the one we already ran |
 | **Receipt → received** | `receipt_vs_received` — new; reconciliation checks the buyer's own account of what they packed, this one takes nobody's word |
 
+**"Record the audit does nothing" (2026-09-16).** It did: the save went through and the
+panel re-rendered the same boxes with the same numbers, so nothing moved and the button
+read as dead. The panel now prints *Recorded by … at … EST* with a note that a gap
+stays on the record (and where in the checklist it is holding the request open), a
+"Saved" line under the button, and the button reads *Record it again*. A gap is a
+finding, not a blocker — `spend_reconciled` is what refuses the close over it.
+
 ## The closing conditions are now twelve, in two groups
 `cartCloseChecks` tags each with `scope`. The count **moves with the funding route** — a
 card-funded request has no cards to reconcile — so never assert on a number.
@@ -1251,8 +1319,11 @@ persisted in the URL like the other filtered lists.
 `cancelled` and `written_off`. The cart's own status **follows its lines** rather than being set by
 hand: once nothing is pending it is `approved` if anything survived, `denied` if nothing
 did. Approvals **freeze** at `funded` — you cannot re-decide a line the money has
-already gone out against. Cancelling is only possible before any card exists; after that
-there is money to account for and it must be reconciled, not cancelled.
+already gone out against — but a line added after a re-open is pending on a funded
+request and can still be decided. **`list_closed_at` is a second axis**, not a status:
+whether the buyer is still adding (see the floor workflow). Cancelling is only possible
+before any card exists; after that there is money to account for and it must be
+reconciled, not cancelled.
 
 ## Deleting a request (2026-09-16)
 `POST /api/cart/delete { cartId, reason }` → `deleteBuyCart`. Distinct from **Cancel**
@@ -1284,6 +1355,8 @@ one of the process — has somewhere to happen that can be audited later.
 - **`BUY_GC_KEY` must be set on every environment**, or the desk can only upload photos.
 - **`buy_cart_tasks` + eleven `buy_carts` columns (funding, custody, goods audit,
   write-off) → `db:setup`** on local and prod, on top of the original tables.
+- **`list_closed_at` / `list_closed_by` / `list_reopened_at` / `funding_target` + the
+  one-shot list backfill → `db:setup`** (2026-09-16).
 - **`cart/create` is rate limited to 30 a minute and the e2e suite sits exactly on it.**
   Adding one more request-creating test pushed two unrelated tests at the end of the run
   into a 429, which surfaced as `Cannot read properties of undefined` and pointed at the

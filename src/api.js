@@ -273,8 +273,9 @@ export const api = {
   // What we ALREADY hold of every shoe on the request — Shopify's live figure for the
   // pairs we have listed, plus our own units it cannot see. One press, every line.
   cartStock: (cartId) => post('/api/cart/stock', { cartId }),
-  cartSubmit: (cartId) => post('/api/cart/submit', { cartId }),
-  cartWithdraw: (cartId) => post('/api/cart/submit', { cartId, withdraw: true }),
+  // "Close the request": the buyer's list is complete. Same route as the old send.
+  cartCloseList: (cartId) => post('/api/cart/submit', { cartId }),
+  cartReopenList: (cartId) => post('/api/cart/submit', { cartId, reopen: true }),
   // Approving CARRIES the quantity: the buyer reports what they found, and how many to
   // buy is the decision. `qty` is a { lineId: n } map; `qtyAll` covers an approve-all.
   cartDecide: (cartId, payload) => post('/api/cart/decide', { cartId, ...payload }),

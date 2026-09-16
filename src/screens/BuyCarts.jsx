@@ -15,6 +15,11 @@ import { BuyCart } from './BuyCart.jsx';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
+// "Still adding" beside the status: a request is `submitted` from its first pair
+// onward, whether the buyer is mid-aisle or done — and the queue is where the desk
+// decides what to pick up next. Only while it matters (before the cards are out).
+const stillAdding = (c) => !c.list_closed_at && ['submitted', 'approved', 'denied'].includes(c.status) && Number(c.line_count) > 0;
+
 const STATUS = {
   draft: { label: 'Being written', cls: 'draft' },
   submitted: { label: 'Waiting on approval', cls: 'warn' },
@@ -183,6 +188,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                   <span className="bc-card-top">
                     <b>{c.cart_code}</b>
                     <span className={`po-chip ${s.cls}`}>{s.label}</span>
+                    {stillAdding(c) && <span className="po-chip warn">Buyer still adding</span>}
                   </span>
                   <span className="bc-card-purpose">{c.purpose || <i className="muted">No purpose written</i>}</span>
                   <span className="bc-card-meta">
@@ -223,7 +229,10 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                     <td className="bc-purpose-cell">{c.purpose || <span className="muted">—</span>}</td>
                     <td className="num">{money(c.approved_amount)}</td>
                     <td className="num">{money(c.gc_total)}</td>
-                    <td><span className={`po-chip ${s.cls}`}>{s.label}</span></td>
+                    <td>
+                      <span className={`po-chip ${s.cls}`}>{s.label}</span>
+                      {stillAdding(c) && <span className="po-chip warn bc-list-chip">Still adding</span>}
+                    </td>
                     <td>{c.po_code ? <a className="bc-po-link" href={poHref(user, c.po_id)} onClick={(e) => e.stopPropagation()}>{c.po_code}</a> : '—'}</td>
                     <td className="muted sm">{estDate(c.created_at)}</td>
                   </tr>

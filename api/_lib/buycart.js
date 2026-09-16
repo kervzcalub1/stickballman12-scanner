@@ -8,7 +8,7 @@
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
 import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty } from './db.js';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
-import { decisionsOpen, decisionsClosedBecause } from '../../src/lib/buycartRules.js';
+import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly } from '../../src/lib/buycartRules.js';
 
 // ---------------------------------------------------------------------------
 // Privileges — separation of duties
@@ -161,37 +161,25 @@ export function cartVisibleTo(user, cart) {
 // ---------------------------------------------------------------------------
 // Money
 //
-// The funding target is the SHELF price of every approved pair — the sticker, with no
-// discount assumed. It over-funds on purpose: a gift card that comes up short at the
-// till strands a buyer in a shop, while a leftover balance is simply money still ours,
-// and step 10 makes us account for it either way.
-export const fundingTarget = (cart) => Number(cart?.approved_amount) || 0;
+// The funding target is the SHELF price of every approved pair PLUS THE SALES TAX on
+// the request's cost stack — `buy_carts.funding_target`, recomputed with the lines and
+// the stack (recalcCartMoney). The sticker, no discount assumed, and the tax the till
+// will add to it: funding at the sticker alone over-funded on a discounted purchase and
+// came up short by exactly the tax on a full-price one, which is the common case. It
+// still over-funds on purpose where a discount applies — a gift card that comes up
+// short at the till strands a buyer in a shop, while a leftover balance is simply money
+// still ours, and step 10 makes us account for it either way.
+export const fundingTarget = (cart) => {
+  const t = Number(cart?.funding_target);
+  if (Number.isFinite(t) && cart?.funding_target != null) return t;
+  return Number(cart?.approved_amount) || 0;
+};
 
-/**
- * The one case where the sticker is NOT enough: tax is charged on top of it, and the
- * discounts that normally swallow that come off the same base. With a small discount
- * and a high tax rate the till asks for more than the shelf price.
- *
- *   $150 shelf, 0% off, 8.25% tax  → till wants $162.38, funded $150.00 → $12.38 short
- *   $150 shelf, 30% off, 8.25% tax → till wants $113.66, funded $150.00 → fine
- *
- * Returns the amount the till could actually ask for when that is MORE than the
- * sticker, else null. The screen shows it as a warning beside the target rather than
- * silently changing the number somebody approved.
- */
-export function tillOverrunWarning(cart) {
-  const s = cart?.cost_stack || {};
-  const f = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
-  // The gift-card discount is deliberately absent: that is what WE save buying the
-  // card, not a discount the register gives. The coupon is absent too — it is a flat
-  // amount off one transaction, and spreading it over a whole request would understate
-  // every line (the same reason batch analysis refuses to apply it).
-  const factor = (1 - f(s.storePct) / 100) * (1 - f(s.promoPct) / 100) * (1 + f(s.taxPct) / 100);
-  if (!(factor > 1)) return null;
-  const target = fundingTarget(cart);
-  if (target <= 0) return null;
-  return { factor, amount: Math.round(target * factor * 100) / 100 };
-}
+/** The tax rate the target was built with, as a percentage, off the cost stack. */
+export const fundingTaxPct = (cart) => {
+  const n = Number(cart?.cost_stack?.taxPct);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
 
 const money = (v) => (v == null ? null : Number(v));
 const near = (a, b, tol = 0.01) => Math.abs(Number(a) - Number(b)) <= tol;
@@ -382,13 +370,21 @@ export async function decideLines({ cart, action, lineIds, all, qtyById, qtyAll,
       };
   }
 
+  // Once the cards are out, only a line added SINCE (still pending) can be decided —
+  // the approvals the money was released against are frozen, overrides included.
+  const pendingOnly = decisionsPendingOnly(cart.status);
   const out = await decideBuyCartLines({
     cartId: cart.id, lineIds: all ? null : lineIds, action,
     reason: String(reason ?? '').trim().slice(0, 500) || null,
-    actor, qtyById, qtyAll,
+    actor, qtyById, qtyAll, pendingOnly,
   });
   if (!out.decided)
-    return { error: 'Nothing was still awaiting a decision — someone may have got there first.', code: 409 };
+    return {
+      error: pendingOnly
+        ? 'Nothing was still awaiting a decision — the cards have already gone out against the lines that were decided, so those are frozen.'
+        : 'Nothing was still awaiting a decision — someone may have got there first.',
+      code: 409,
+    };
   return out;
 }
 
@@ -534,7 +530,7 @@ export async function cartCloseChecks(full) {
         detail: cards.length === 0
           ? 'No gift cards recorded.'
           : Number(c.gc_total) < target
-            ? `Cards total $${Number(c.gc_total).toFixed(2)} against $${target.toFixed(2)} approved — $${(target - Number(c.gc_total)).toFixed(2)} short.`
+            ? `Cards total $${Number(c.gc_total).toFixed(2)} against $${target.toFixed(2)} to fund ($${Number(c.approved_amount).toFixed(2)} approved${fundingTaxPct(c) ? ` + ${fundingTaxPct(c)}% tax` : ''}) — $${(target - Number(c.gc_total)).toFixed(2)} short.`
             : null,
       }
       : {

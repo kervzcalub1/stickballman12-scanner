@@ -13,14 +13,18 @@
 // outcome the encryption is there to prevent, and it would be invisible until it
 // mattered.
 //
-// Cards can only go against an APPROVED request. That is the process's first rule
-// stated as code: no known purchase and no approval means no gift cards.
+// Cards can only go against an APPROVED request whose buyer has CLOSED THE LIST. That
+// is the process's first rule stated as code: no known purchase and no approval means
+// no gift cards — and a list the buyer is still adding to is not yet a known purchase.
+// A re-opened, funded request takes a top-up card once its new lines are approved and
+// the list is closed again; the cards already issued are never touched.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import {
   getBuyCart, addBuyCartGiftCard, voidBuyCartGiftCard, fundBuyCart, dbConfigured,
 } from '../_lib/db.js';
 import { encryptSecret, maskTail, secretsConfigured } from '../_lib/secrets.js';
-import { requirePrivilege, fundingTarget, redactCartForViewer } from '../_lib/buycart.js';
+import { requirePrivilege, fundingTarget, fundingTaxPct, redactCartForViewer } from '../_lib/buycart.js';
+import { cardsIssuable, cardsRefusedBecause } from '../../src/lib/buycartRules.js';
 
 const money = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
 
@@ -54,14 +58,16 @@ export default async function handler(req, res) {
     if (body.fund) {
       if (cart.status !== 'approved')
         return send(res, 409, { ok: false, error: 'Only an approved request can be released.' });
+      if (!cardsIssuable(cart))
+        return send(res, 409, { ok: false, error: cardsRefusedBecause(cart) });
       const target = fundingTarget(cart);
-      // The check the whole step turns on: the cards have to cover what was approved.
-      // Named with the shortfall, because "not enough" without a number sends somebody
-      // back to a spreadsheet to work out what to add.
+      // The check the whole step turns on: the cards have to cover what was approved,
+      // tax included. Named with the shortfall, because "not enough" without a number
+      // sends somebody back to a spreadsheet to work out what to add.
       if (Number(cart.gc_total) < target) {
         return send(res, 409, {
           ok: false,
-          error: `The cards total $${Number(cart.gc_total).toFixed(2)} against $${target.toFixed(2)} approved — $${(target - Number(cart.gc_total)).toFixed(2)} short. Add another card first.`,
+          error: `The cards total $${Number(cart.gc_total).toFixed(2)} against $${target.toFixed(2)} to fund ($${Number(cart.approved_amount).toFixed(2)} approved${fundingTaxPct(cart) ? ` + ${fundingTaxPct(cart)}% tax` : ''}) — $${(target - Number(cart.gc_total)).toFixed(2)} short. Add another card first.`,
         });
       }
       const out = await fundBuyCart(cartId, user);
@@ -70,14 +76,7 @@ export default async function handler(req, res) {
     }
 
     // ---- record a card -----------------------------------------------------
-    if (!['approved', 'funded'].includes(cart.status)) {
-      return send(res, 409, {
-        ok: false,
-        error: cart.status === 'submitted'
-          ? 'This request has not been approved yet — no approval, no gift cards.'
-          : 'Gift cards can only go against an approved request.',
-      });
-    }
+    if (!cardsIssuable(cart)) return send(res, 409, { ok: false, error: cardsRefusedBecause(cart) });
     if (!secretsConfigured()) {
       return send(res, 503, {
         ok: false,

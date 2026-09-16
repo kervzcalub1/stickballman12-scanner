@@ -13,6 +13,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { PriceInput, CopyText, ImageZoomModal, FormModal } from './common.jsx';
+import { cardsIssuable, cardsRefusedBecause } from '../lib/buycartRules.js';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -102,10 +103,18 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
   const cards = cart.giftCards || [];
   const live = cards.filter((c) => !c.voided_at);
   const images = (cart.files || []).filter((f) => f.kind === 'gift_card');
-  const target = Number(cart.approved_amount) || 0;
+  // What the cards must carry: the approved sticker total plus the sales tax the till
+  // adds to it (`funding_target`, computed server-side). The old target was the sticker
+  // alone, and every full-price purchase came up short by exactly the tax.
+  const target = Number(cart.funding_target ?? cart.approved_amount) || 0;
+  const approved = Number(cart.approved_amount) || 0;
   const total = Number(cart.gc_total) || 0;
   const short = Math.max(0, Math.round((target - total) * 100) / 100);
-  const canAdd = canIssue && ['approved', 'funded'].includes(cart.status);
+  // Only against a list the buyer has CLOSED, with every line decided — the same rule
+  // the endpoint enforces, so the form never leads to a 409.
+  const canAdd = canIssue && cardsIssuable(cart);
+  const whyNot = canIssue && !canAdd && !['closed', 'cancelled', 'written_off', 'receipted', 'audited'].includes(cart.status)
+    ? cardsRefusedBecause(cart) : null;
   // A card is only readable by the desk that issued it and the buyer who has to spend
   // it — and the buyer only once it has actually been released to them.
   const canReveal = canIssue || (isBuyer && ['funded', 'receipted', 'audited', 'closed'].includes(cart.status));
@@ -184,25 +193,29 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
       <div className="bc-fund">
         <div className="bc-fund-nums">
           <span><b>{money(total)}</b> on {live.length} card{live.length === 1 ? '' : 's'}</span>
-          <span className="muted">against <b>{money(target)}</b> approved</span>
+          <span className="muted">
+            against <b>{money(target)}</b> to fund
+            {target !== approved && (
+              <span className="muted xs"> ({money(approved)} approved{cart.fundingTaxPct ? ` + ${cart.fundingTaxPct}% tax` : ' + tax'})</span>
+            )}
+          </span>
           {short > 0
             ? <span className="bc-short">{money(short)} short</span>
             : target > 0 && <span className="bc-covered">covered</span>}
         </div>
-        {/* The one hole in funding at sticker price, named where it matters rather than
-            discovered at a till: with a small discount and a high tax rate the register
-            asks for more than the shelf price adds up to. */}
-        {cart.tillWarning && (
-          <p className="bc-till-warn">
-            At this buyer’s cost stack the till can charge more than the sticker — up to{' '}
-            <b>{money(cart.tillWarning.amount)}</b> once {(((cart.tillWarning.factor - 1) * 100).toFixed(2))}% tax is added.
-            Consider funding to that.
-          </p>
-        )}
-        {canIssue && cart.status === 'approved' && (
+        {/* Why no card can be recorded yet, in the endpoint's own words — "the buyer is
+            still adding" is the one the desk most needs, because the total is not final. */}
+        {whyNot && <p className="bc-till-warn">{whyNot}</p>}
+        {canIssue && cart.status === 'approved' && canAdd && (
           <button type="button" className="btn primary" disabled={busy === 'fund' || short > 0} onClick={fund}>
             {busy === 'fund' ? 'Releasing…' : 'Release to the buyer'}
           </button>
+        )}
+        {/* A re-opened request that came back short: the cards already out are the
+            buyer's to spend; this says how much more to record once the list is closed
+            and the new lines decided. */}
+        {canIssue && cart.status === 'funded' && short > 0 && (
+          <p className="muted sm">Released {money(total)} so far — {money(short)} more to record for the pairs approved since.</p>
         )}
       </div>
 

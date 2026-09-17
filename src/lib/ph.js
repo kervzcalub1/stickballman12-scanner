@@ -1,6 +1,6 @@
 // PH grid domain logic: SKU+status grouping (flat + per-size), pricing,
 // frozen-column geometry, /ph/* routing, and edit-lock timings.
-import { sizeNum } from './codes.js';
+import { compareSizes } from './codes.js';
 import { getMarkupMult } from './config.js';
 import { estDate } from './format.js';
 
@@ -142,7 +142,7 @@ export function groupPhRows(list) {
     priceMixed: g._prices.size > 1,
     globalMixed: g._globals.size > 1,
     costMixed: g._costs.size > 1,
-    sizes: Object.entries(g._sizeMap).sort((a, b) => (sizeNum(a[0]) - sizeNum(b[0])) || String(a[0]).localeCompare(b[0])).map(([size, qty]) => ({ size, qty })),
+    sizes: Object.entries(g._sizeMap).sort((a, b) => compareSizes(a[0], b[0])).map(([size, qty]) => ({ size, qty })),
   }));
 }
 
@@ -294,7 +294,7 @@ export function groupPhSized(list, isLocked, rescaleIdFor) {
     ...g, ...g._flags, flagCounts: g._counts, priceChanged: g._drift,
     days: [...g._days].sort(), // ≥2 only on a merged pending row; drives the Date cell
     sizes: [...g._sizes.values()]
-      .sort((a, b) => (sizeNum(a.size) - sizeNum(b.size)) || String(a.size).localeCompare(b.size))
+      .sort((a, b) => compareSizes(a.size, b.size))
       .map((s) => ({
         size: s.size, vins: s.vins, qty: s.qty,
         cost: s.cost, costMixed: s._costs.size > 1,

@@ -120,18 +120,45 @@ export function sizeLabel(size, gender, name) {
 // Numeric value of a size string ("9.5W" -> 9.5) for sorting; NaN if none.
 export const sizeNum = (s) => { const m = String(s).match(/[\d.]+/); return m ? parseFloat(m[0]) : NaN; };
 
-// Order sizes smallest→largest for display. Numeric value drives the order
-// (handles "8.5W" / "10Y"); non-numeric / not-yet-typed custom sizes sort last.
+// Apparel sizes have an order that is neither alphabetical nor numeric, and BOTH naive
+// readings get it wrong in a way that looks like a bug on screen: alphabetically it is
+// L, M, S, XL, XS, and `sizeNum` reads the 2 hiding inside "2XL" and files a garment
+// among the toddler shoes. Nike writes them both ways ("XXL" and "2XL"), so both spell
+// the same rank here. Returns null for anything that isn't an apparel size.
+const APPAREL_RANK = {
+  XXXS: -3, '3XS': -3, XXS: -2, '2XS': -2, XS: -1,
+  S: 0, M: 1, L: 2,
+  XL: 3, XXL: 4, '2XL': 4, XXXL: 5, '3XL': 5, XXXXL: 6, '4XL': 6, XXXXXL: 7, '5XL': 7,
+};
+export const apparelRank = (s) => {
+  const k = String(s ?? '').trim().toUpperCase().replace(/[\s-]+/g, '');
+  return Object.prototype.hasOwnProperty.call(APPAREL_RANK, k) ? APPAREL_RANK[k] : null;
+};
+
+// Order sizes smallest→largest for display. Apparel sizes go by their own scale;
+// otherwise numeric value drives the order (handles "8.5W" / "10Y"), and non-numeric /
+// not-yet-typed custom sizes sort last.
 export function compareSizes(a, b) {
-  const na = sizeNum(a?.size ?? a);
-  const nb = sizeNum(b?.size ?? b);
+  const sa = String(a?.size ?? a);
+  const sb = String(b?.size ?? b);
+  // Apparel first, and checked BEFORE sizeNum — "2XL" parses as 2 and would otherwise
+  // sort between a kid's 1.5 and a 3.
+  const ra = apparelRank(sa);
+  const rb = apparelRank(sb);
+  if (ra !== null && rb !== null) return ra - rb;
+  // One of each shouldn't happen (a product is a shoe or a garment), but be
+  // deterministic rather than order-dependent: letters after numbers, as ever.
+  if (ra !== null) return 1;
+  if (rb !== null) return -1;
+  const na = sizeNum(sa);
+  const nb = sizeNum(sb);
   const aNaN = Number.isNaN(na);
   const bNaN = Number.isNaN(nb);
-  if (aNaN && bNaN) return String(a?.size ?? a).localeCompare(String(b?.size ?? b));
+  if (aNaN && bNaN) return sa.localeCompare(sb);
   if (aNaN) return 1;
   if (bNaN) return -1;
   if (na !== nb) return na - nb;
-  return String(a?.size ?? a).localeCompare(String(b?.size ?? b));
+  return sa.localeCompare(sb);
 }
 
 // --- Scan de-duplication ---------------------------------------------------

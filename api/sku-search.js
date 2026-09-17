@@ -59,8 +59,23 @@ function normalize(c, querySku) {
     colorway: c.colorway || null,
     sizes: sortSizes(c.sizes || []),
     gender: normalizeGender(c.gender, { size: c.sizes?.[0] || '', title: c.name || '' }),
+    sizeKind: 'shoe', // Alias is a sneaker catalogue — a hit here is footwear by construction
     source: 'alias',
   };
+}
+
+// What kind of thing this is, in the one word the scan screens need: a size chip list
+// is a US shoe ladder for footwear and XS–XXL for a garment, and there is no answer that
+// serves both. Nike's feed says `FOOTWEAR` / `APPAREL` outright; everything else here is
+// a sneaker catalogue, so a hit from one is footwear by construction.
+//
+// `null` means genuinely unknown, and the client must keep its existing behaviour there
+// rather than guess — an unlisted sneaker is far more common than an unlisted garment.
+function kindOf(productType) {
+  const t = String(productType || '').toUpperCase();
+  if (t === 'APPAREL') return 'apparel';
+  if (t === 'FOOTWEAR') return 'shoe';
+  return null;
 }
 
 // The SKU to report back, given what the user typed. Identical rule to normalize()
@@ -97,7 +112,11 @@ export function fromStockx(p, querySku) {
     image: null,
     brand: 'Nike',
     colorway: p.colorway || null,
+    // Both filled from Nike by the enrichment step in the handler when the code is a
+    // Nike one: StockX keeps sizes on variants (another call) and never says whether it
+    // is looking at a shoe or a shirt.
     sizes: [],
+    sizeKind: null,
     gender: null,
     source: 'stockx',
   };
@@ -119,7 +138,12 @@ export function fromNike(p, querySku) {
     image: p.hero || null,
     brand: p.brand || 'Nike',
     colorway: null,
-    sizes: [],
+    // Nike's own run, in Nike's own order — 'XS, S, M, L, XL' for a garment, '5, 5.5,
+    // 6 …' for a shoe. NOT sorted numerically the way the Alias mapper sorts its sizes:
+    // letter sizes have an order that isn't alphabetical and isn't numeric, and the feed
+    // already lists them correctly. See sizeKind below for why this matters.
+    sizes: Array.isArray(p.sizes) ? p.sizes.map(String) : [],
+    sizeKind: kindOf(p.productType),
     gender: null,
     source: 'nike',
   };
@@ -164,16 +188,29 @@ export default async function handler(req, res) {
   if (!product && looksLikeNikeSku(sku)) {
     try { product = fromNike(await nikeImagesBySku(sku), sku); } catch { /* out of sources */ }
   }
-  // StockX has the fullest TITLE and no image; Nike has the image. Borrow it, so an
-  // apparel line in Receiving or on a label shows a picture instead of a grey box —
-  // a photo is how somebody checks the name against the thing in their hands.
-  // Only ever on a StockX hit (an Alias hit already carries its own image), so this
-  // costs one extra call on apparel lookups alone and never on the sneaker path.
-  if (product && product.source === 'stockx' && !product.image && looksLikeNikeSku(sku)) {
+  // StockX has the fullest TITLE and neither a picture, a size run nor any idea whether
+  // it is looking at a shoe or a shirt. Nike's feed has all three. Borrow them.
+  //
+  // The size run is the one that bites: with no sizes the scan screens fall back to a US
+  // shoe ladder, so receiving a jersey offered chips reading 6 … 16 and the only honest
+  // size was "+ Custom". Nike answers 'XS, S, M, L, XL' and the chips become the sizes
+  // the garment actually comes in.
+  //
+  // Only ever on a StockX hit (an Alias hit already carries all of this), and gated on
+  // the code looking like a Nike one, so this costs one extra call on apparel lookups
+  // alone and never a single one on the sneaker path.
+  if (product && product.source === 'stockx' && looksLikeNikeSku(sku)) {
     try {
       const n = await nikeImagesBySku(sku);
-      if (n?.hero) product = { ...product, image: n.hero };
-    } catch { /* the name is the answer; the picture is a bonus */ }
+      if (n) {
+        product = {
+          ...product,
+          image: product.image || n.hero || null,
+          sizes: product.sizes?.length ? product.sizes : (n.sizes || []).map(String),
+          sizeKind: product.sizeKind || kindOf(n.productType),
+        };
+      }
+    } catch { /* the name is the answer; the rest is enrichment */ }
   }
 
   if (product) {

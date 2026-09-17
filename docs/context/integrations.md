@@ -43,14 +43,22 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
     Auto-filling that files a garment as a shoe under a name nobody typed, which is worse
     than the blank field this endpoint used to return. Pinned by
     `e2e/sku-search-fallback.spec.js`.
-  - **Apparel carries no sizes and no `catalog_id`.** StockX keeps sizes on variants (a
-    second call, on the scan path) and the catalog id is Alias's. The pricing paths must
-    keep failing honestly rather than pricing against something we didn't match — so
-    **apparel has no GI, no hierarchy and no Payout Calculator answer**, and its price is
-    entered by hand.
-  - A **StockX hit borrows Nike's hero image** (one extra call, on apparel lookups only)
-    — StockX has the fullest title and no image, and a photo is how somebody checks a name
-    against the thing in their hands.
+  - **Apparel carries no `catalog_id`** — that is Alias's, and the pricing paths must keep
+    failing honestly rather than pricing against something we didn't match. So **apparel
+    has no GI, no hierarchy and no Payout Calculator answer**, and its price is entered by
+    hand.
+  - **A StockX hit borrows Nike's image, size run and category** — one extra call, on
+    apparel lookups only, never on the sneaker path. StockX has the fullest title and none
+    of the other three.
+  - **`sizeKind`: `'shoe'` | `'apparel'` | `null`.** Alias is a sneaker catalogue so its
+    hits are `'shoe'` by construction; Nike's feed says `FOOTWEAR`/`APPAREL` outright.
+    `null` means genuinely unknown and the client must keep its existing default there —
+    an unlisted sneaker is far more commmon than an unlisted garment.
+  - **Real size runs matter more than they look.** `sizePool` (PoScanModal, Receiving)
+    falls back to a **US shoe ladder** whenever the lookup returns fewer than two sizes,
+    so before this a jersey offered chips reading `6 … 16` and the only honest answer was
+    "+ Custom". Nike's `skus[].nikeSize` is the actual run (`XS, S, M, L, XL`), which is
+    why the fallbacks fetch it rather than leaving `sizes` empty.
   - **An Alias failure no longer blocks the fallbacks.** Its error is held, the other two
     are tried, and it is only re-raised (504 timeout / 502) if nothing else answered
     either: a timeout means we don't know, not that the code is unknown.

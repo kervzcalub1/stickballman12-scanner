@@ -10,7 +10,7 @@ import { EST_FMT, PH_DATETIME, estDate, periodLabel, shiftAnchor } from '../lib/
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
-import { sizeNum, compareSizes } from '../lib/codes.js';
+import { compareSizes } from '../lib/codes.js';
 import { priceBasisChip } from '../lib/ph.js';
 import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint, canSharePdf, isChunkLoadError } from '../lib/labelPdf.js';
 
@@ -1045,7 +1045,7 @@ export function PreferencesModal({ prefs, onCameraZoom, onRawVins, onSoftKeypad,
 // Rescale reported-vs-actual comparison table (size columns + totals).
 export function RescaleCompare({ reported, actual }) {
   const sizes = [...new Set([...(reported || []).map((s) => String(s.size)), ...(actual || []).map((s) => String(s.size))])]
-    .sort((a, b) => (sizeNum(a) - sizeNum(b)) || a.localeCompare(b));
+    .sort((a, b) => compareSizes(a, b));
   const rep = Object.fromEntries((reported || []).map((s) => [String(s.size), s.qty]));
   const act = actual ? Object.fromEntries(actual.map((s) => [String(s.size), s.qty])) : null;
   return (

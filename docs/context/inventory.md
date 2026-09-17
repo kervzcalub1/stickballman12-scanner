@@ -81,7 +81,22 @@ warehouse can read the code on the box; the API cannot. Nothing else on the unit
   unescaped `_` matches any character). Tokens may match *different* columns, so
   a short numeric one ("1") tends to match every VIN and effectively drops out.
 - **Day/Week/Month + Custom** date filter (`DateRangeBar` for day/week/month;
-  Inventory also keeps a Custom from/to). The **Supplier** dropdown is the LIVE
+  Inventory also keeps a Custom from/to).
+  - **A search and a date range compose — the server has always taken both at once**
+    (`load` merges `q` with `from`/`to` into one `queryItems` call). Searching still
+    **widens** the window to all dates, because a SKU scoped to today usually finds
+    nothing and the empty result would read as "we don't have it". Picking a date range
+    afterwards is a deliberate *narrowing* and keeps the search (2026-09-18) — the
+    Day/Week/Month buttons and the ‹ › steppers all run through `gotoPeriod`, which used
+    to clear `q` and so threw away what the user had just typed the moment they tried to
+    narrow it. **`Today` is the exception and still clears everything**: it resets
+    supplier / status / intake too, so it is a "back to the default view" button rather
+    than a date control. Guarded by `e2e/inventory-search-date.spec.js`.
+  - The empty state's two remedies both RUN, rather than only staging a filter: **Try
+    this month** goes through `gotoPeriod` (it used to set the segment alone, so it lit
+    up Month and handed back the same empty table) and **Show all dates** loads its own
+    cleared range instead of waiting for Apply.
+  The **Supplier** dropdown is the LIVE
   list (`GET /api/suppliers` → `listSuppliers`), not the static `SUPPLIERS`
   constant — that constant is only the fallback if the fetch fails. A vendor
   added during receiving has to be filterable here the same day, so `listSuppliers`

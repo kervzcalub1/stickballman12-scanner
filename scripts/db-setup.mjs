@@ -1310,6 +1310,11 @@ await sql(`ALTER TABLE buy_cart_lines ALTER COLUMN qty DROP NOT NULL`);
 // An override keeps what it replaced. One approver reversing another's call is a real
 // thing on this floor, and a system that refuses it moves the conversation somewhere
 // unauditable — but the last write must not be able to present itself as the only one.
+// How many of THIS SIZE the buyer counted on the shop floor (2026-09-17). Nullable and
+// deliberately optional: blank means "didn't count", which is a different and more
+// honest answer than a guessed number the approver can't tell apart from a real one.
+// It is the buyer's observation, never a decision — `qty` above stays the approver's.
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS available_qty INT`);
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_by TEXT`);
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_status TEXT`);
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_qty INT`);

@@ -1334,6 +1334,19 @@ body {
 /* Closed is the terminal state of a request that ran its course — the violet of the
    Rescale bucket rather than the green of "audited", which is still work to finish. */
 .rc-pill.closed { background: rgba(165,149,255,.16); color: #a595ff; }
+
+/* Buying request — how many the shop has, per size (the buyer's count).
+   Reuses .bc-size-prices-grid for the boxes so the two per-size blocks on the add form
+   line up rather than each inventing a layout. */
+.bc-size-avail { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.bc-size-avail-head { display: block; }
+.bc-size-avail-note { margin: 0; }
+/* On a decided/pending line: the count under the size, and the flag when an approver
+   goes above it. Amber, not red — over-approving is allowed on purpose (stock moves),
+   so this is something to notice, not an error. */
+.bc-avail { margin-top: 2px; }
+.bc-over-avail { margin-top: 3px; font-size: 11px; font-weight: 600; line-height: 1.2; color: #e0a458; }
+.input.bc-qty-in.over { border-color: rgba(224, 164, 88, .65); }
 .rcmp { border-collapse: collapse; margin: 12px 0; font-size: 15px; }
 .rcmp td { border: 1px solid var(--border); padding: 9px 16px; text-align: center; min-width: 48px; }
 .rcmp .rcmp-head td { color: var(--muted); font-size: 12px; font-weight: 700; background: rgba(255,255,255,.03); }

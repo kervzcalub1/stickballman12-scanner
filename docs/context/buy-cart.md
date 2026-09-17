@@ -542,6 +542,38 @@ and how many to buy is the decision being asked for, not part of the question.
 - The funding target is unchanged — shelf × qty over approved lines — and now every
   approved line has a quantity a person chose.
 
+### …but they DO state how many the shop has (2026-09-17)
+`buy_cart_lines.available_qty`, nullable. `qty` is what we decide to buy; this is what is
+sitting on the shelf. They are different questions with different owners, and until now
+the approver choosing a number had no way to tell *"there are two left"* from *"there is
+a wall of them"*.
+
+- **Entered per SIZE on the add form** (`BuyCartAdd`, `.bc-size-avail`), beside the
+  per-size price overrides and cleared with its size for the same reason — a stale count
+  would come back on the next tap and report a shelf the buyer counted for another shoe.
+- **Optional, and the form says so.** A buyer on a shop floor cannot always get a reliable
+  count, and a required field is answered with a guess the approver cannot tell apart from
+  a real number. **Blank means "didn't count", never "the shop has none"** — only one of
+  those argues against buying. `0` is not a meaningful answer (nobody adds a line for a
+  size the shop hasn't got) and is stored as NULL.
+- **NULL stays NULL** through `lineOut`, exactly as `qty` does, and for the same reason:
+  `Number(null) || 0` printed a 0 that made an unanswered question look answered.
+- **Shown where the decision is made:** under the size on the line row, and as
+  `In store: N` on the **Telegram card** — most approvals are a tap on that card, so a
+  number only in the app is a number the approver never sees. Omitted from both when
+  uncounted.
+- **Approving above the count WARNS, it does not block** (user's call). Stock moves
+  between the buyer walking the aisle and the desk deciding, and refusing would strand a
+  legitimate *"take more if they restock"*. But the funding target is shelf × qty, so an
+  over-approval really is funded — hence amber on the quantity box and *"more than the N
+  counted"* under it. The count is never rewritten to match the decision: the gap between
+  what was seen and what was bought is the thing worth reading afterwards.
+- **Correctable, and clearable.** `cart/line`'s patch takes `availableQty`; an explicit
+  **empty string unsets it**, because every other field there follows the coalesce rule
+  (absent = leave alone) which has no way to say "make it empty" — and empty is a real
+  value for this one. The change is named in the trail (`in store 3 → 6`,
+  `in store 3 → not counted`).
+
 ### One approver can override another
 `overrode_by` / `overrode_status` / `overrode_qty` on the line. A decided line can be
 re-decided while `decisionsOpen` (so never after the cards are out), and the row keeps

@@ -163,11 +163,27 @@ than the listing blue — it is a different KIND of bucket, not a fourth stage o
   Written by `create.js` from the VINs the **row modal** sends; a request typed on the
   standalone form names no pairs and stays unlinked, so it chips but moves nothing.
 - **ALL-OR-NOTHING.** A row moves only when EVERY pair on it is linked to the same
-  request. A partly-linked row would drag pairs nobody asked about out of Pending, and
-  splitting the row by linked-vs-not would add a fourth dimension to a group key that
-  already carries three split rules plus the edit-lock freeze. A row is all-linked by
-  construction when raised off the grid; rule 2 can make it partial later (a new
-  delivery of the same SKU merges in), and then it stays put and keeps the chip.
+  request (`rescaleRequestFor`). A partly-linked row would drag pairs nobody asked about
+  out of Pending.
+- **A row is all-linked or wholly unlinked BY CONSTRUCTION** — `groupPhSized` **rule 4**
+  puts the request id in the group key, so linked and unlinked pairs of one SKU can
+  never share a row (`ph-report.md`). `rescaleRequestFor`'s `every` is the assertion that
+  keeps the two in step, not a case that fires in normal use.
+  - **It used to fire, and it cost an audit (2026-09-18).** Rule 4 didn't exist, so rule 2
+    merged the next delivery of the same SKU into the requested row (both untouched, so
+    the scan day is omitted from the key). The moment one unlinked pair joined,
+    `rescaleRequestFor` returned null and the row **silently lost everything the request
+    gave it**: the chip, its place in the ⟳ Rescale tab, the audit worksheet, and
+    **✓ Rescale done** — which was the only way to close a request. It didn't move the
+    request's pairs into someone else's work; it made the request *invisible*.
+    - Prod, request #41 on `IQ5085-102-`: first scan 09-15 (5 pairs), request 09-15,
+      audit 09-16, **second scan 09-16** → one 19-pair Pending row holding 5 linked pairs,
+      nothing on New Inventory pointing at the count. Four more requests (#17, #20, #24,
+      #26) were stuck the same way. The blue `⟳ Rescale requested` chip was no help
+      either: `openReqs` holds only `open` requests, and #41 was `audited`.
+    - **The lesson generalises past rescale:** the group key and the things keyed OFF a
+      group have to agree. Any future all-or-nothing property of a row needs a matching
+      component in the key, or the next merge quietly revokes it.
 - Two states, one tab: **⟳ Awaiting count · Nd** (nothing to do yet — the day count is
   the only thing on screen saying a request nobody audits has parked its pairs) and
   **✓ Counted** (+ `N short` / `N extra`), which IS the work.
@@ -175,6 +191,14 @@ than the listing blue — it is a different KIND of bucket, not a fourth stage o
   never had. `audited` was terminal, so the green home badge counted up forever and the
   linked pairs never left the tab. `POST /api/rescale-requests/close`, PH-only, from
   `audited` only.
+  - **Closeable from BOTH screens.** The grid's button rides on a row, and a request
+    whose pairs have been merged, sold, shelved or removed has no row to ride on — which
+    is how prod collected five audited requests nobody could finish. The request's own
+    card on **Rescale Requests** carries the same one-click **✓ Rescale done** (PH only,
+    `audited` only), disabled while the listing plan above it has unsaved edits, since
+    closing reloads the list. A **Closed** filter tab (PH) shows them afterwards with
+    their saved plan read-only — `closed` used to fall through to the "Open" pill, so a
+    finished request read as outstanding work.
 
 ### The listing worksheet — the count IS the guide
 After an audit, what PH must list is the **warehouse's count, not ours**: the shelf held

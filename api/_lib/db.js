@@ -2019,6 +2019,9 @@ export async function listRescaleRequests(status = 'open', from = null, to = nul
            r.price, r.reason, r.note, r.status,
            r.listing, r.listed_by, r.listed_at, r.edited_by, r.edited_at,
            r.requested_by, r.resolved_by, r.resolved_at, r.created_at,
+           -- Who ended the loop and when. The Rescale Requests page closes a request
+           -- too (not just the PH grid's row button), so it has to be able to say so.
+           r.closed_by, r.closed_at,
            -- The pairs this request was raised for, as VINs (the grid keys on VIN).
            -- Empty for a request typed on the standalone form, which names no pairs.
            coalesce((

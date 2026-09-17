@@ -1331,6 +1331,9 @@ body {
 /* Cancelled reads as neutral-grey, not red: PH withdrawing its own request is a
    normal outcome, not a failure or an error state. */
 .rc-pill.cancelled { background: rgba(150,160,175,.16); color: var(--muted); text-decoration: line-through; }
+/* Closed is the terminal state of a request that ran its course — the violet of the
+   Rescale bucket rather than the green of "audited", which is still work to finish. */
+.rc-pill.closed { background: rgba(165,149,255,.16); color: #a595ff; }
 .rcmp { border-collapse: collapse; margin: 12px 0; font-size: 15px; }
 .rcmp td { border: 1px solid var(--border); padding: 9px 16px; text-align: center; min-width: 48px; }
 .rcmp .rcmp-head td { color: var(--muted); font-size: 12px; font-weight: 700; background: rgba(255,255,255,.03); }
@@ -1344,6 +1347,9 @@ body {
 .rc-listing-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .rc-listing-plan { font-weight: 700; font-size: 13px; }
 .rc-listing-note { margin: 0; padding: 6px 10px; background: rgba(224, 164, 88, 0.08); border: 1px solid rgba(224, 164, 88, 0.25); border-radius: 8px; color: #e0a458; }
+/* The close action sits below the plan table, set off from it — it ends the request
+   rather than editing it, so it shouldn't read as one more control on the table. */
+.rc-listing-close { margin-top: 2px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .rc-listing-tablewrap { overflow-x: auto; }
 .rc-listing-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .rc-listing-table th { text-align: center; font-weight: 600; color: var(--muted); padding: 4px 8px; white-space: nowrap; }

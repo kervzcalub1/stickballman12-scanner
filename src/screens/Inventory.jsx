@@ -550,11 +550,19 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   }
   // Calendar-style navigation: switch period (day/week/month) or step ‹ / › and
   // immediately load that range — no Apply needed.
+  //
+  // **The search survives.** This used to clear `q`, on the theory that searching and
+  // browsing-by-date are separate modes — but the server has always taken both at once
+  // (`load` merges them into one query), so all the clearing did was throw away what
+  // the user had typed the moment they tried to narrow it by date. Searching still
+  // widens the date window to "all dates" (see the text-search path above), which is
+  // the half of that idea worth keeping: a SKU scoped to today usually finds nothing.
+  // Going the other way is a deliberate narrowing and has to be honoured.
   function gotoPeriod(mode, a) {
     const [s, e] = periodRange(mode, a);
     const fs = ymd(s); const es = ymd(e);
-    setPeriodMode(mode); setAnchor(a); setFrom(fs); setTo(es); setQ('');
-    load({ q: '', from: fs, to: es });
+    setPeriodMode(mode); setAnchor(a); setFrom(fs); setTo(es);
+    load({ from: fs, to: es });
   }
 
   async function openDetail(vin) {
@@ -1185,10 +1193,15 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
             </span>
           </div>
           <div className="card">
+            {/* The empty state's two remedies both have to actually RUN. "Try this month"
+                only set the segment — it never recomputed from/to or reloaded, so it lit
+                up Month and handed back the same empty table. It routes through
+                gotoPeriod like every other date control now, and "Show all dates" loads
+                its own cleared range instead of waiting for Apply. */}
             {!rows.length ? (
               <p className="muted inv-empty">No items in this range.{' '}
-                {periodMode !== 'month' && <button className="btn ghost sm" onClick={() => setPeriodMode('month')}>Try this month</button>}{' '}
-                <button className="btn ghost sm" onClick={() => { setPeriodMode('custom'); setFrom(''); setTo(''); }}>Show all dates</button>
+                {periodMode !== 'month' && <button className="btn ghost sm" onClick={() => gotoPeriod('month', anchor)}>Try this month</button>}{' '}
+                <button className="btn ghost sm" onClick={() => { setPeriodMode('custom'); setFrom(''); setTo(''); load({ from: '', to: '' }); }}>Show all dates</button>
                 {' '}— or search a VIN / SKU above.
               </p>
             ) : isMobile ? (

@@ -14,12 +14,50 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
   - The **scanned size drives receiving's auto-fill + auto-increment**, so it must
     come from the UPC lookup (only StockX provides it). A `W`/`Y` suffix on the
     scanned size is carried onto the size run so women's/youth runs line up.
-- **SKU** (`api/sku-search.js`): **official Alias catalog** (`aliasCatalogBySku` →
-  `GET api.alias.org/api/v1/catalog?query=<sku>`, `ALIAS_API_KEY`) →
-  `source:'alias'`, canonical title + colorway + image + full size run + the
-  `catalog_id`. **KicksDB is retired** (Alias has more accurate titles). `upc` is
-  null (catalog is per-SKU). Allowed for warehouse + ph_team.
+- **SKU** (`api/sku-search.js`): **three sources in order — Alias → StockX → Nike**
+  (2026-09-18). This is the ONE lookup behind Receiving, the PO scan modal, Box Labels,
+  Existing Stock, Buy Cart, the Payout Calculator, Price Inquiry, Inventory and the
+  rescale-request form, so whatever it can't answer, none of them can.
+  1. **Official Alias catalog** (`aliasCatalogBySku` →
+     `GET api.alias.org/api/v1/catalog?query=<sku>`, `ALIAS_API_KEY`) → `source:'alias'`,
+     canonical title + colorway + image + full size run + the `catalog_id`. Still first,
+     and still the only source with a `catalog_id` or a size run, so **nothing about an
+     ordinary sneaker reaches the fallbacks or changes**. **KicksDB is retired** (Alias
+     has more accurate titles).
+  2. **StockX** (`stockxProductBySku`) → `source:'stockx'`. **EXACT STYLE-ID MATCHES
+     ONLY** — see the warning below.
+  3. **Nike** (`nikeImagesBySku`, gated on `looksLikeNikeSku`) → `source:'nike'`. Queried
+     directly on `styleColor(...)`, so a hit is Nike's own catalogue confirming the code;
+     it never echoes an unmatched input back. Name + image only.
+  - **Why**: Alias and KicksDB are SNEAKER catalogues, and a code for anything else
+    dead-ended at "No product found" on all nine screens at once. A Nike x Stüssy hoodie
+    (`FJ9175-261`), a PSG match jersey (`HJ4547-411`) and an Off-White jersey
+    (`FQ0997-389`) were each unresolvable while Nike's own catalogue had all three — so a
+    manifest carrying one had its title typed from memory, with nothing to check it
+    against.
+  - ⚠️ **A non-exact StockX hit is REFUSED.** `stockxProductBySku` falls back to the
+    closest search result when nothing matches the style id and flags it `exact:false` —
+    deliberate there (a near hit is usually the right shoe in another colourway, and the
+    screen can say so), ruinous here. Asked for `FJ9175-261` StockX answers with
+    `FJ4195-201` "Nike Waffle Nav": a different product in a different category.
+    Auto-filling that files a garment as a shoe under a name nobody typed, which is worse
+    than the blank field this endpoint used to return. Pinned by
+    `e2e/sku-search-fallback.spec.js`.
+  - **Apparel carries no sizes and no `catalog_id`.** StockX keeps sizes on variants (a
+    second call, on the scan path) and the catalog id is Alias's. The pricing paths must
+    keep failing honestly rather than pricing against something we didn't match — so
+    **apparel has no GI, no hierarchy and no Payout Calculator answer**, and its price is
+    entered by hand.
+  - A **StockX hit borrows Nike's hero image** (one extra call, on apparel lookups only)
+    — StockX has the fullest title and no image, and a photo is how somebody checks a name
+    against the thing in their hands.
+  - **An Alias failure no longer blocks the fallbacks.** Its error is held, the other two
+    are tried, and it is only re-raised (504 timeout / 502) if nothing else answered
+    either: a timeout means we don't know, not that the code is unknown.
+  - `upc` is null (catalog is per-SKU). Allowed for warehouse + ph_team + supplier.
 - Both return `{ name, sku, upc, image, brand, colorway, sizes[], gender, source }`.
+  `source` is carried through Receiving onto `items.source`, so the record keeps saying
+  which catalogue named the pair.
 
 ### Multi-code style ids
 The StockX UPC proxy's `styleId` can carry EVERY code a shoe was sold under

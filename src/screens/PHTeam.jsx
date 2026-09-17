@@ -685,6 +685,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // "awaiting count" has nothing to do yet, "counted" IS the work.
   const [closingKey, setClosingKey] = useState(null);
   const rescaleReq = (g) => rescaleRequestFor(g, reqByVin);
+  // Split rule 4: the pairs a request was raised for keep their own row, so a later
+  // delivery of the same SKU can't merge in and disarm the request (see ph.js).
+  const rescaleIdOf = (vin) => reqByVin[vin]?.id || '';
   // "Guide mode": the row is under an AUDITED request, so the listing controls live on
   // the count above (the shelf's real sizes) and the per-size table below drops them
   // rather than showing a second, narrower set of the same fields against stale counts.
@@ -987,7 +990,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     : (cls ? <span className={cls}>{node}</span> : node));
 
   // Consolidate per SKU+status (with per-size detail), then sort by scan date.
-  const allGroups = groupPhSized(rows || [], isLockedVin);
+  const allGroups = groupPhSized(rows || [], isLockedVin, rescaleIdOf);
   allGroups.sort((a, b) => (sortDir === 'desc' ? (a.created_at < b.created_at ? 1 : -1) : (a.created_at < b.created_at ? -1 : 1)));
   // New Inventory only: narrow to the selected listing-status buckets.
   // Rescale outranks the listing state (see phTabOf). Counts come off the SAME

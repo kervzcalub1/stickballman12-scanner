@@ -30,7 +30,8 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   "on" only if **all** units have it).
 - **Rows split by listing state, and by scan day once a pair has been touched.** The
   group key is `sku | item status | store-flag signature | scan day (untouched pairs:
-  omitted)`, plus a `|#|new` suffix on arrivals blocked by rule 3. Three rules:
+  omitted) | rescale request id (unlinked pairs: empty)`, plus a `|#|new` suffix on
+  arrivals blocked by rule 3. Four rules:
   1. **The flag signature always splits.** II+AL+SX+SH, plus `goat_only` (it decides
      whether SX/SH are required at all, so the same four ticks mean "done" for a
      GOAT-only pair and "half done" for a normal one). The moment ONE tick lands the
@@ -61,6 +62,24 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
      *pending and unlocked* still merges, deliberately: two same-state deliveries of one
      SKU are one worklist line. What must never happen is a **done** row regressing —
      it can't, because its flag signature (rule 1) differs from an untouched pair's.
+  4. **The pairs a RESCALE REQUEST was raised for keep their own row** (2026-09-18).
+     The request id is a component of the group key, so a later delivery of the same SKU
+     lands on its own row instead of merging in. Without it, rule 2 merged the new
+     arrival into the requested row, `rescaleRequestFor` (all-or-nothing) stopped
+     matching, and the row silently lost its chip, fell out of the ⟳ Rescale tab back
+     into Pending, and took the **✓ Rescale done** button with it — leaving an audited
+     count nobody could see or close. Found on prod: request #41 on `IQ5085-102-` held
+     5 linked pairs inside a 19-pair Pending row, and four more requests were stuck the
+     same way.
+     Unlike rule 3 this puts the id **in every member's key** rather than pushing the
+     late arrival to a `|#|new` row, because two requests can be open against one SKU at
+     once (raise one, take a delivery, raise a second against *that* row) and a single
+     "unlinked" bucket would merge those two sets back together under a key matching
+     neither. It is safe here precisely where it wasn't for the edit lock: a pair's link
+     is written once when the request is raised and only changes when the request is
+     created, closed or cancelled, so it can't re-key a row out from under its editor.
+     Rows are therefore all-linked or wholly unlinked **by construction** — see
+     `rescale.md`.
 
   Every row has exactly ONE listing status (`unitListingStatus` per unit →
   `g.listingState`, which `phListingStatus` short-circuits on), so rows line up 1:1

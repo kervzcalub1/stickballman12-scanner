@@ -162,22 +162,26 @@ export function unitListingStatus(r) {
 // signature**, so a row only ever holds pairs that are at the same point in the
 // listing process. `lockTagFor(vin)` is optional: it returns a stable tag for a unit
 // currently held by an edit lock (see rule 3 below), and nothing when it isn't.
+// `rescaleIdFor(vin)` is optional too: the id of the open/audited rescale request a
+// pair was raised for, and nothing when it wasn't (see rule 4).
 // Cost / global indicator / final price are tracked PER SIZE (each can differ).
 // `sizes[]` carries each size's vins, qty and its own cost/global_indicator/price
 // (+ *Mixed flags when units within a size differ).
-export function groupPhSized(list, isLocked) {
+export function groupPhSized(list, isLocked, rescaleIdFor) {
   const map = new Map();
   // Rule 3 needs to know, BEFORE grouping, which natural keys are being edited —
   // see the note at the key below for why the lock can't just go into the key.
   const naturalKey = (r) => {
     const lstate = unitListingStatus(r);
     const sig = FLAG_KEYS.map((f) => (r[f] ? '1' : '0')).join('') + (r.goat_only ? 'G' : '-');
-    return `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : estDate(r.created_at)}`;
+    // Rule 4 — the pairs a rescale request was raised for keep their own row.
+    const req = rescaleIdFor ? (rescaleIdFor(r.vin) || '') : '';
+    return `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : estDate(r.created_at)}|#|${req}`;
   };
   const lockedKeys = new Set();
   if (isLocked) for (const r of list) if (isLocked(r.vin)) lockedKeys.add(naturalKey(r));
   for (const r of list) {
-    // What shares a row, in three rules:
+    // What shares a row, in four rules:
     //
     // 1. The store-flag signature always splits — II, AL, SX, SH, plus goat_only
     //    (which decides whether SX/SH are required at all, so the same four ticks
@@ -209,6 +213,25 @@ export function groupPhSized(list, isLocked) {
     //    a row locked: putting the lock in every member's key re-keyed the row the
     //    instant editing began, so `editing.has(g.key)` went false and the per-size
     //    editor vanished as it opened. (Caught by the PH grid e2e suite.)
+    //
+    // 4. The pairs a RESCALE REQUEST was raised for keep their own row (the `req`
+    //    component of naturalKey above). Rule 2 merges untouched pairs across scan
+    //    days, so a later delivery of the same SKU used to fold straight into the row
+    //    a request had been raised against — and `rescaleRequestFor` is all-or-nothing,
+    //    so the moment one unlinked pair joined, the row stopped matching the request:
+    //    it lost its chip, fell out of the Rescale tab back into Pending, and the
+    //    "✓ Rescale done" button went with it, leaving an audited request nobody could
+    //    see or close. (Prod, 2026-09: request #41 on IQ5085-102- held 5 linked pairs
+    //    inside a 19-pair Pending row; four more requests were stuck the same way.)
+    //
+    //    The request ID goes in the key rather than pushing the late arrival to a
+    //    `|#|new` row the way rule 3 does, because two requests can be open against
+    //    one SKU at once — raise one, take a delivery, raise a second against THAT
+    //    row — and a single "unlinked" bucket would merge those two sets back
+    //    together under a key that matches neither request. A pair's link is stable
+    //    (it is written once when the request is raised and only changes when the
+    //    request is created, closed or cancelled), so unlike an edit lock it can sit
+    //    in the key without re-keying a row out from under the editor.
     const key = (isLocked && !isLocked(r.vin) && lockedKeys.has(base)) ? `${base}|#|new` : base;
     let g = map.get(key);
     if (!g) {
@@ -322,15 +345,20 @@ export const PH_TABS = [
 // Is this row in the Rescale bucket, and which request put it there?
 //
 // `byVin` maps VIN -> an open/audited request. The rule is deliberately ALL-OR-NOTHING:
-// a row moves only when EVERY pair on it is linked to the same request.
-//   · A partly-linked row would otherwise drag pairs nobody asked about out of Pending.
-//   · The alternative — splitting the row by linked-vs-not — would add a fourth
-//     dimension to a group key that already carries three split rules plus the
-//     edit-lock freeze, which is the most intricate logic in the app.
-// A row raised straight off the grid is all-linked by construction. It can become
-// partial later (rule 2 merges a new delivery of the same SKU into a pending row); when
-// that happens the row stays where it is and keeps the chip, which is honest — it now
-// holds pairs the warehouse isn't counting.
+// a row moves only when EVERY pair on it is linked to the same request. A partly-linked
+// row would otherwise drag pairs nobody asked about out of Pending.
+//
+// Rows are all-linked or wholly unlinked BY CONSTRUCTION — `groupPhSized` rule 4 puts
+// the request id in the group key, so linked and unlinked pairs of the same SKU can
+// never share a row. This function therefore returns a request for every row that has
+// one, and null for every row that doesn't; the `every` below is the assertion that
+// keeps the two in step rather than a case that fires in normal use.
+//
+// It used to fire: rule 4 didn't exist, rule 2 merged a later delivery of the same SKU
+// into the row a request had been raised against, and this returned null the moment it
+// did — silently dropping an AUDITED request out of the Rescale tab along with the only
+// button that could close it. An unlinked pair must move to its own row, not quietly
+// disarm the request.
 export function rescaleRequestFor(g, byVin) {
   const vins = (g && g.vins) || [];
   if (!byVin || !vins.length) return null;

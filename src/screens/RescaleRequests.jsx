@@ -165,8 +165,10 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
       const { requests: r } = await api.rescaleRequestList(statusF, from, to);
       setRequests(r);
       // Seed an inline listing draft for every audited request (from its saved
-      // listing, else the audited size counts).
-      setListDrafts(Object.fromEntries((r || []).filter((x) => x.status === 'audited').map((x) => [x.id, buildListRows(x)])));
+      // listing, else the audited size counts) — and for closed ones too, which are
+      // browsable on their own filter tab and whose saved plan is the record of what
+      // was done. Closed renders read-only; only `audited` is still editable.
+      setListDrafts(Object.fromEntries((r || []).filter((x) => x.status === 'audited' || x.status === 'closed').map((x) => [x.id, buildListRows(x)])));
       setListDirty(false);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
@@ -281,6 +283,25 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
     finally { setBusyId(null); }
   }
 
+  // Closing: the end of the loop, PH only, `audited` only. The PH grid's Rescale tab
+  // has carried this button since the tab shipped, but that button rides on a ROW —
+  // and a request whose pairs have been merged, sold, shelved or removed has no row to
+  // ride on, which left five audited requests on prod that nobody could close and that
+  // counted toward the green home badge forever. The request's own card always exists,
+  // so the affordance belongs here too.
+  const [closeId, setCloseId] = useState(null);
+  async function submitClose(r) {
+    setBusyId(r.id); setCloseId(r.id); setError('');
+    try { await api.rescaleRequestClose(r.id); setCloseId(null); load(); }
+    catch (err) {
+      if (err.unauthorized) return onSignOut();
+      // 409 = somebody closed it from the PH grid while this was open on screen.
+      setError(err.message);
+      if (err.conflict) { setCloseId(null); load(); }
+    }
+    finally { setBusyId(null); setCloseId(null); }
+  }
+
   async function submitAudit(r) {
     const actual = auditRows.filter((x) => String(x.size).trim()).map((x) => ({ size: String(x.size).trim(), qty: Math.max(0, Number(x.qty) || 0) }));
     if (!actual.length) { setError('Enter the actual count for at least one size.'); return; }
@@ -362,7 +383,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
           right={(
             <span className="ph-edit-actions">
               <span className="seg">
-                {[['open', 'Open'], ['audited', 'Audited'], ...(canCreate ? [['cancelled', 'Cancelled']] : []), ['all', 'All']].map(([v, l]) =>
+                {[['open', 'Open'], ['audited', 'Audited'], ...(canCreate ? [['closed', 'Closed'], ['cancelled', 'Cancelled']] : []), ['all', 'All']].map(([v, l]) =>
                   <button key={v} type="button" className={`seg-btn ${statusF === v ? 'on' : ''}`} onClick={() => setStatusF(v)}>{l}</button>)}
               </span>
               {canCreate && <button className="btn sm primary" onClick={() => setMode('new')}>+ New request</button>}
@@ -378,8 +399,14 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                     <div className="rc-title">{r.name || r.sku}</div>
                     <div className="muted sm">{r.sku} · {r.reason}{r.price != null ? ` · $${fmtPrice(r.price)}` : ''}</div>
                   </div>
+                  {/* Every status names itself. `closed` used to fall through to the
+                      "Open" default, so a finished request read as outstanding work —
+                      which now reaches the eye, because Closed is a filter tab and the
+                      button below puts requests into that state from this page. */}
                   <span className={`rc-pill ${r.status}`}>
-                    {r.status === 'audited' ? 'Audited' : r.status === 'cancelled' ? 'Cancelled' : 'Open'}
+                    {r.status === 'audited' ? 'Audited'
+                      : r.status === 'cancelled' ? 'Cancelled'
+                        : r.status === 'closed' ? 'Closed' : 'Open'}
                   </span>
                 </div>
                 <RescaleCompare reported={r.sizes} actual={r.actual_sizes} />
@@ -398,6 +425,9 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                       morning. Same EST stamp as the request itself. */}
                   {r.status === 'audited' && r.resolved_by ? ` · audited by ${r.resolved_by}${r.resolved_at ? ` on ${PH_DATETIME.format(new Date(r.resolved_at))} EST` : ''}` : ''}
                   {r.status === 'cancelled' && r.resolved_by ? ` · cancelled by ${r.resolved_by}${r.resolved_at ? ` on ${PH_DATETIME.format(new Date(r.resolved_at))} EST` : ''}` : ''}
+                  {/* A closed request keeps its audit stamp above — who counted the
+                      shelf is still the useful fact — and adds who called it finished. */}
+                  {r.status === 'closed' && r.closed_by ? ` · closed by ${r.closed_by}${r.closed_at ? ` on ${PH_DATETIME.format(new Date(r.closed_at))} EST` : ''}` : ''}
                   {/* Said out loud to BOTH teams: the warehouse may be looking at a
                       printed or stale copy of numbers that have since changed. */}
                   {r.edited_by ? ` · edited by ${r.edited_by}${r.edited_at ? ` on ${PH_DATETIME.format(new Date(r.edited_at))} EST` : ''}` : ''}
@@ -501,10 +531,14 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
 
                 {/* PH listing — shown INLINE once the warehouse has audited it
                     (feedback received). Editable for PH (canCreate); read-only for
-                    others, with GI/Final hidden from warehouse (showPricing). */}
-                {r.status === 'audited' && (() => {
+                    others, with GI/Final hidden from warehouse (showPricing).
+                    A CLOSED request still shows its plan, read-only: that plan is the
+                    record of what was listed, and the Closed tab exists to look at it.
+                    `editable` is what gates the close button below, so a closed request
+                    correctly offers no way to close itself again. */}
+                {(r.status === 'audited' || r.status === 'closed') && (() => {
                   const rows = listDrafts[r.id] || buildListRows(r);
-                  const editable = canCreate;
+                  const editable = canCreate && r.status === 'audited';
                   return (
                     <div className="rc-listing">
                       <div className="rc-listing-head">
@@ -543,6 +577,28 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                           </tbody>
                         </table>
                       </div>
+                      {/* The end of the loop. One click, the same violet button and the
+                          same words as the PH grid's row action — the same act deserves
+                          the same control, and a confirm step here only would teach that
+                          the two buttons do different things.
+                          Disabled while the plan above is dirty: closing reloads the
+                          list, which would throw away what was typed. That is this
+                          page's version of the grid's "not while a row is being edited". */}
+                      {editable && (
+                        <div className="ph-edit-actions rc-listing-close">
+                          <button className="btn sm violet" disabled={busyId === r.id || listDirty}
+                            title={listDirty
+                              ? 'Save the listing plan first — closing reloads the list.'
+                              : 'The pairs are listed and the count is settled — close the request'}
+                            onClick={() => submitClose(r)}>
+                            {busyId === r.id && closeId === r.id ? '…' : '✓ Rescale done'}
+                          </button>
+                          <span className="muted sm">
+                            Closing ends the request: it stops counting toward the green <b>Audited</b> badge
+                            and its pairs go back to the normal worklist.
+                          </span>
+                        </div>
+                      )}
                     </div>
                   );
                 })()}

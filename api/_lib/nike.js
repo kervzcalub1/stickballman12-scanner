@@ -148,6 +148,14 @@ export async function nikeImagesBySku(sku) {
     images,
     labels,
     suggestions,
+    // The feed also knows WHAT KIND of product this is and what it comes in. Both
+    // matter to /api/sku-search: Alias and StockX are sneaker-first, so for a garment
+    // they're the wrong shape of answer, and without a real size run the scan screens
+    // fall back to a US shoe ladder and offer a 10.5 for a hoodie.
+    //   · productType is Nike's own word — 'FOOTWEAR' | 'APPAREL' | …
+    //   · skus[].nikeSize is the actual run ('XS, S, M, L, XL' / '5, 5.5, 6, …')
+    productType: merch.productType || null,
+    sizes: (obj?.productInfo?.[0]?.skus || []).map((x) => x?.nikeSize).filter(Boolean),
   };
 }
 

@@ -71,6 +71,13 @@ warehouse can read the code on the box; the API cannot. Nothing else on the unit
   "No item found" — the detail view says whether it's **still on the roll, in use,
   voided, or not one of ours**, and a pair wearing one carries a `1ID · in use` chip
   by its VIN. `docs/context/vin-stock.md`.
+- **Apparel sizes sort by their own scale** (`apparelRank` / `compareSizes` in
+  `src/lib/codes.js`). Both naive readings are wrong in a way that looks like a bug:
+  alphabetically it is `L, M, S, XL, XS`, and `sizeNum` reads the **2 inside "2XL"** and
+  files a garment among the toddler shoes. Nike writes `XXL` and `2XL` interchangeably, so
+  both spell the same rank. Every size list — the PH grid rows and per-size drawer, the
+  Costs page, `SizesQty` — goes through `compareSizes` rather than its own `sizeNum`
+  sort, so one rule orders them all. Pinned by `e2e/sku-search-fallback.spec.js`.
 - **Keyword search, not phrase search.** The query is split on whitespace
   (`searchTokens` in `db.js`) and **every** token must match somewhere — any of
   vin / sku / name / upc / colorway / location_code — so "Kobe Air Force" (or

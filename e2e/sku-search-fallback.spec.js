@@ -11,6 +11,7 @@
 // identically whether or not CI has an Alias/StockX key.
 import { test, expect } from '@playwright/test';
 import { fromStockx, fromNike } from '../api/sku-search.js';
+import { compareSizes, apparelRank } from '../src/lib/codes.js';
 
 test.describe('sku-search fallbacks', () => {
   // THE guard. stockxProductBySku falls back to the closest search result when nothing
@@ -58,6 +59,30 @@ test.describe('sku-search fallbacks', () => {
     expect(fromStockx(null, 'FJ9175-261')).toBeNull();
   });
 
+  // A garment's chips used to read 6, 6.5 … 16. `sizePool` falls back to a US shoe
+  // ladder whenever the lookup returns fewer than two sizes, so receiving a jersey
+  // offered a 10.5 and the only honest answer was "+ Custom". Nike's feed has the real
+  // run AND says what kind of product it is, in one call we already make.
+  test('Nike supplies the real size run and says it is apparel', () => {
+    const p = fromNike({
+      title: 'Nike x Stüssy', sku: 'FJ9175-261', brand: 'Nike', hero: 'x',
+      productType: 'APPAREL', sizes: ['XS', 'S', 'M', 'L', 'XL'],
+    }, 'FJ9175-261');
+    expect(p.sizes).toEqual(['XS', 'S', 'M', 'L', 'XL']);
+    expect(p.sizeKind).toBe('apparel');
+  });
+
+  test('a Nike FOOTWEAR hit is not mistaken for apparel', () => {
+    const p = fromNike({ title: 'Sabrina 3', sku: 'IQ5085-102', hero: 'x', productType: 'FOOTWEAR', sizes: ['5', '5.5'] }, 'IQ5085-102');
+    expect(p.sizeKind).toBe('shoe');
+  });
+
+  // Unknown must stay unknown: the client keeps its shoe-ladder default there, because
+  // an unlisted sneaker is far more common than an unlisted garment.
+  test('an absent productType is null, not a guess', () => {
+    expect(fromNike({ title: 'Something', sku: 'AA1111-001', hero: 'x' }, 'AA1111-001').sizeKind).toBeNull();
+  });
+
   // Same rule the Alias mapper has always had: the upstream searched on the FIRST code
   // and answers with that one alone, so trusting its reply would quietly halve a dual
   // code the user typed.
@@ -70,5 +95,29 @@ test.describe('sku-search fallbacks', () => {
       expect(p.sku).toBe(typed);
       expect(p.skuOptions).toEqual(['315122-111', 'CW2288-111']);
     }
+  });
+});
+
+// Ordering apparel sizes: neither naive reading works, and both look like a bug on
+// screen. Alphabetically it is L, M, S, XL, XS; by `sizeNum` the 2 inside "2XL" files a
+// garment among the toddler shoes.
+test.describe('apparel size ordering', () => {
+  test('letter sizes sort by their own scale, not alphabetically', () => {
+    expect(['XL', 'S', 'XXL', 'XS', 'M', 'L'].sort(compareSizes))
+      .toEqual(['XS', 'S', 'M', 'L', 'XL', 'XXL']);
+  });
+
+  test('"2XL" is not the number 2', () => {
+    expect(['2XL', 'M', 'XS', '3XL'].sort(compareSizes)).toEqual(['XS', 'M', '2XL', '3XL']);
+    // …and it ranks with the spelling Nike uses interchangeably for it.
+    expect(apparelRank('2XL')).toBe(apparelRank('XXL'));
+    expect(apparelRank('3XL')).toBe(apparelRank('XXXL'));
+  });
+
+  test('shoe sizes are untouched', () => {
+    expect(['10.5', '9', '11', '9.5'].sort(compareSizes)).toEqual(['9', '9.5', '10.5', '11']);
+    expect(['8.5W', '7W', '10W'].sort(compareSizes)).toEqual(['7W', '8.5W', '10W']);
+    expect(apparelRank('10.5')).toBeNull();
+    expect(apparelRank('8.5W')).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 // Costs page domain logic. `items.cost` is written once, at intake — suppliers
 // routinely leave cost off a manifest, so pairs land with nothing on file and
 // nothing in the app could fill it in afterwards.
-import { sizeNum } from './codes.js';
+import { sizeNum, compareSizes } from './codes.js';
 
 // Group flat item rows into one card per BATCH + SKU, with a row per size inside.
 //
@@ -52,7 +52,7 @@ export function groupCostRows(rows) {
     ...g,
     missing: [...g._sizes.values()].reduce((n, s) => n + (s.cost == null ? s.qty : 0), 0),
     sizes: [...g._sizes.values()]
-      .sort((a, b) => (sizeNum(a.size) - sizeNum(b.size)) || String(a.size).localeCompare(b.size))
+      .sort((a, b) => compareSizes(a.size, b.size))
       .map((s) => ({
         size: s.size, gender: s.gender, vins: s.vins, qty: s.qty,
         cost: s.cost, costMixed: s._costs.size > 1,

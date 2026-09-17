@@ -313,6 +313,13 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
   // reported what they found — so this starts empty and approving without it is refused
   // by name rather than defaulted to a number nobody chose.
   const [qty, setQty] = useState({});
+  // Is this quantity above what the buyer counted on the shelf? Only ever true when they
+  // ACTUALLY counted — a blank `available_qty` means "didn't count", and treating that as
+  // zero would flag every uncounted line as an over-approval.
+  const overAvail = (l, n) => {
+    const want = Number(n);
+    return l?.available_qty != null && Number.isFinite(want) && want > l.available_qty;
+  };
   const setQtyFor = (id, v) => setQty((q) => ({ ...q, [id]: v }));
   const lines = cart.lines || [];
   const pending = lines.filter((l) => l.status === 'pending');
@@ -525,18 +532,46 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
                       </span>
                     )}
                   </td>
-                  <td>{l.size || '—'}</td>
+                  <td>
+                    {l.size || '—'}
+                    {/* What the BUYER counted on the shelf. Sits under the size because
+                        it is a fact about this size, and because the quantity box beside
+                        it is the decision it informs. Absent means they didn't count —
+                        printed as nothing rather than as a 0, which would read as "the
+                        shop has none" and argue against a purchase nobody argued against. */}
+                    {l.available_qty != null && (
+                      <div className="muted xs bc-avail">{l.available_qty} in store</div>
+                    )}
+                  </td>
                   {/* HOW MANY. Empty on a line nobody has decided yet, because the buyer
                       never said — an approver types it here and approving carries it.
                       A decided line prints the number that was approved. */}
                   <td className="num" onClick={(e) => e.stopPropagation()}>
                     {canDecide && l.status === 'pending' ? (
-                      <input className="input bc-qty-in" type="number" min="1" max="999"
-                        inputMode="numeric" placeholder="?"
-                        aria-label={`How many ${l.sku}${l.size ? ` size ${l.size}` : ''} to buy`}
-                        value={qty[id] ?? ''}
-                        onChange={(e) => setQtyFor(id, e.target.value)} />
-                    ) : (l.qty ?? <span className="muted xs">—</span>)}
+                      <>
+                        <input className={`input bc-qty-in${overAvail(l, qty[id]) ? ' over' : ''}`}
+                          type="number" min="1" max="999"
+                          inputMode="numeric" placeholder="?"
+                          aria-label={`How many ${l.sku}${l.size ? ` size ${l.size}` : ''} to buy`}
+                          value={qty[id] ?? ''}
+                          onChange={(e) => setQtyFor(id, e.target.value)} />
+                        {/* Warned, never blocked. Stock moves between the buyer walking
+                            the aisle and the desk deciding, and refusing here would
+                            strand a legitimate "take more if they restock". But the
+                            funding target is shelf × qty, so approving above the count
+                            funds pairs that may not exist — it has to be visible. */}
+                        {overAvail(l, qty[id]) && (
+                          <div className="bc-over-avail">more than the {l.available_qty} counted</div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {l.qty ?? <span className="muted xs">—</span>}
+                        {overAvail(l, l.qty) && (
+                          <div className="bc-over-avail">over the {l.available_qty} counted</div>
+                        )}
+                      </>
+                    )}
                   </td>
                   <td className="num">{money(l.shelf_price)}</td>
                   {!isBuyer && <td className="num">{money(l.final_cost)}</td>}

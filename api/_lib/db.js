@@ -5841,6 +5841,10 @@ const lineOut = (r) => (r ? {
   // worse, made "does it have a quantity" look answered when it is the question being
   // asked. `receiptLines` below keeps the coercion: a receipt line always has a count.
   qty: r.qty == null ? null : Number(r.qty),
+  // NULL stays NULL here too, and for the same reason: blank means the buyer did not
+  // count, which is a different answer from "the store has none" — and only one of the
+  // two is an argument against buying.
+  available_qty: r.available_qty == null ? null : Number(r.available_qty),
   shelf_price: r.shelf_price == null ? null : Number(r.shelf_price),
   final_cost: r.final_cost == null ? null : Number(r.final_cost),
   best_payout: r.best_payout == null ? null : Number(r.best_payout),
@@ -6090,10 +6094,10 @@ export async function addBuyCartLine(cartId, line, actor) {
   const sql = db();
   const rows = await sql`
     INSERT INTO buy_cart_lines
-      (cart_id, sku, size, qty, name, colorway, gender, upc, shelf_price, verdict,
+      (cart_id, sku, size, qty, available_qty, name, colorway, gender, upc, shelf_price, verdict,
        final_cost, best_platform, best_payout, profit, roi, alias_price, stockx_price,
        liquidity, basis, quoted_at)
-    VALUES (${cartId}, ${line.sku}, ${line.size || null}, ${line.qty}, ${line.name || null},
+    VALUES (${cartId}, ${line.sku}, ${line.size || null}, ${line.qty}, ${line.availableQty ?? null}, ${line.name || null},
             ${line.colorway || null}, ${line.gender || null}, ${line.upc || null},
             ${line.shelfPrice}, ${line.verdict || null}, ${line.finalCost ?? null},
             ${line.bestPlatform || null}, ${line.bestPayout ?? null}, ${line.profit ?? null},
@@ -6106,7 +6110,9 @@ export async function addBuyCartLine(cartId, line, actor) {
     // No "×null". The buyer states no quantity — it is the decision being asked for — so
     // the line simply does not carry one yet, and printing the absence as a number made
     // the trail read like a request for zero pairs.
-    body: `${line.sku}${line.size ? ` size ${line.size}` : ''}${Number(line.qty) > 0 ? ` ×${line.qty}` : ''} @ $${Number(line.shelfPrice || 0).toFixed(2)}${line.verdict ? ` — ${line.verdict}` : ''}`,
+    // The in-store count belongs in the trail beside the price: it is half of what the
+    // buyer reported, and the approver's quantity is judged against it.
+    body: `${line.sku}${line.size ? ` size ${line.size}` : ''}${Number(line.qty) > 0 ? ` ×${line.qty}` : ''} @ $${Number(line.shelfPrice || 0).toFixed(2)}${line.availableQty != null ? ` · ${line.availableQty} in store` : ''}${line.verdict ? ` — ${line.verdict}` : ''}`,
   });
   return lineOut(rows[0]);
 }
@@ -6123,10 +6129,17 @@ export async function getBuyCartLine(cartId, lineId) {
 // the trail records that something changed and nothing about what.
 export async function updateBuyCartLine(cartId, lineId, patch, actor, call = null, note = null) {
   const sql = db();
+  // `available_qty` is the one field here that can be UNSET. Everything else follows the
+  // coalesce rule (null = leave it alone), which has no way to say "make it empty" — and
+  // blank is a real value for this one: it means the buyer did not count, as distinct
+  // from any number they might type. `clearAvailable` is that instruction.
+  const clearAvail = patch.clearAvailable === true;
   const rows = call
     ? await sql`
       UPDATE buy_cart_lines SET
         qty = coalesce(${patch.qty ?? null}::int, qty),
+        available_qty = CASE WHEN ${clearAvail}::boolean THEN NULL
+                             ELSE coalesce(${patch.availableQty ?? null}::int, available_qty) END,
         shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
         size = coalesce(${patch.size ?? null}::text, size),
         final_cost = ${call.finalCost}, verdict = ${call.verdict},
@@ -6138,6 +6151,8 @@ export async function updateBuyCartLine(cartId, lineId, patch, actor, call = nul
     : await sql`
       UPDATE buy_cart_lines SET
         qty = coalesce(${patch.qty ?? null}::int, qty),
+        available_qty = CASE WHEN ${clearAvail}::boolean THEN NULL
+                             ELSE coalesce(${patch.availableQty ?? null}::int, available_qty) END,
         shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
         size = coalesce(${patch.size ?? null}::text, size),
         updated_at = now()

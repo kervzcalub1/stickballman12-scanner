@@ -84,6 +84,12 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   // So `shelf` is what every selected size costs, and this map holds the ones that don't.
   // Keyed by the size label; blank means "use the shelf price".
   const [sizePrice, setSizePrice] = useState({});
+  // HOW MANY THE SHOP HAS, per size. The buyer states no quantity to buy — that is the
+  // approver's decision — but how many are actually on the shelf is the observation the
+  // approver was missing when they chose one, and only the person standing there can
+  // make it. Keyed by size label like `sizePrice`; blank means "didn't count", which is
+  // a different answer from any number and is left as one.
+  const [sizeAvail, setSizeAvail] = useState({});
   const [shooting, setShooting] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -154,6 +160,12 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
       if (!(v in cur)) return cur;
       const next = { ...cur }; delete next[v]; return next;
     });
+    // …and its count with it, for the same reason: a stale one would come back the next
+    // time that size was tapped and report a shelf the buyer counted for another shoe.
+    setSizeAvail((cur) => {
+      if (!(v in cur)) return cur;
+      const next = { ...cur }; delete next[v]; return next;
+    });
     setError('');
   }
 
@@ -163,6 +175,13 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
     return own > 0 ? own : shelfNum;
   }
   const differing = sizes.filter((sz) => priceFor(sz) !== shelfNum).length;
+  // How many of this size the shop has, or null for "didn't count". Never defaulted to a
+  // number: a 1 nobody typed would read to the approver exactly like a 1 somebody did.
+  function availFor(sz) {
+    const n = Number(String(sizeAvail[String(sz ?? '')] ?? '').trim());
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }
+  const counted = (sizes.length ? sizes : [null]).filter((sz) => availFor(sz) != null).length;
 
   // A photo of the SHOE, hung off its style code. Required before the request can be
   // sent — the approver is deciding on something they cannot see, in a shop they are not
@@ -202,6 +221,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
         await api.cartAddLine(cart.id, {
           // The price this SIZE is ticketed at, not the one at the top of the form.
           sku: product.sku, size: sz, shelfPrice: sz == null ? shelfNum : priceFor(sz),
+          availableQty: availFor(sz),
           name: product.name || null, colorway: product.colorway || null,
           gender: product.gender || null, upc: product.upc || null,
           basis: 'with_you',
@@ -209,7 +229,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
       }
       // Clear the pair, keep the shoe: the next size of the same style is the common
       // next action in a shop, and re-looking it up would spend another call.
-      setSizes([]); setShelf(''); setSizePrice({});
+      setSizes([]); setShelf(''); setSizePrice({}); setSizeAvail({});
       onAdded();
     } catch (err) {
       if (err.unauthorized) return onSignOut();
@@ -300,6 +320,42 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                   </label>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* HOW MANY THE SHOP HAS. The buyer still states no quantity to BUY — that is the
+              decision being asked for — but "there are only two left" and "there is a
+              wall of them" are different requests, and until now the approver setting a
+              number could not tell them apart.
+
+              Optional, and it says so. A buyer on a shop floor cannot always get a
+              reliable count, and a required field would be answered with a guess the
+              approver could not distinguish from a real number — which is worse than a
+              blank, because a blank is honest. */}
+          {!!product.sku && (
+            <div className="bc-size-avail">
+              <span className="field-label bc-size-avail-head">
+                How many are in the store? <span className="muted xs">· optional, per size</span>
+              </span>
+              <div className="bc-size-prices-grid">
+                {(sizes.length ? sizes : [null]).map((sz) => (
+                  <label key={sz ?? '_'} className="bc-size-price">
+                    <span className="bc-size-price-sz">{sz ?? 'In store'}</span>
+                    <input
+                      className="input" type="number" min="1" max="999" inputMode="numeric"
+                      placeholder="—"
+                      aria-label={sz ? `Units in store for size ${sz}` : 'Units in store'}
+                      value={sizeAvail[String(sz ?? '')] ?? ''}
+                      onChange={(e) => setSizeAvail((cur) => ({ ...cur, [String(sz ?? '')]: e.target.value }))}
+                    />
+                  </label>
+                ))}
+              </div>
+              <p className="muted xs bc-size-avail-note">
+                {counted > 0
+                  ? `The desk sees this beside each line when they decide how many to buy — ${counted} of ${(sizes.length || 1)} counted.`
+                  : 'Leave it blank if you didn’t count — that reads as “not counted”, not as “none”.'}
+              </p>
             </div>
           )}
 

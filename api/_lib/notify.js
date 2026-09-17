@@ -169,6 +169,12 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
       // the cost stack — it exists whether or not Alias and StockX answered, and an
       // approver looking at an unpriced pair still wants to know what it would cost.
       `Shelf ${dollars(line.shelf_price)}${money(line.final_cost) != null ? ` · costs us ${dollars(line.final_cost)}/unit` : ''}`,
+      // HOW MANY THE SHOP HAS, when the buyer counted. Most approvals happen from this
+      // card rather than the screen, and the tap IS the decision — so the number the
+      // quantity is chosen against has to be on the card, not only in the app. Omitted
+      // entirely when uncounted: a "0 in store" line would argue against a purchase
+      // nobody argued against.
+      ...(line.available_qty != null ? [`In store: ${line.available_qty}`] : []),
       '',
       'Payout Engine Result:',
       // No market is not a bad call, and must never render as one. "We didn't look" and
@@ -224,6 +230,9 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
         // The buyer states no quantity — it is the decision being asked for, and the
         // approve call below will not be accepted without one.
         qty: null,
+        // What they DID state: how many are on the shelf. null means they didn't count,
+        // which Make must not render as a zero.
+        available_qty: line.available_qty == null ? null : Number(line.available_qty),
       },
       call,
       stock,

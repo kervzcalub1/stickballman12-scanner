@@ -1,6 +1,6 @@
 // POST /api/cart/line
-//   { cartId, line:{ sku, size, qty, shelfPrice, verdict, … } }  -> add
-//   { cartId, lineId, patch:{ qty?, shelfPrice?, size? } }        -> edit
+//   { cartId, line:{ sku, size, availableQty, shelfPrice, verdict, … } }  -> add
+//   { cartId, lineId, patch:{ qty?, availableQty?, shelfPrice?, size? } }  -> edit
 //   { cartId, lineId, remove:true }                               -> remove
 //
 // The request's LIST is the buyer's to grow until they close it (`list_closed_at`) —
@@ -115,8 +115,14 @@ export default async function handler(req, res) {
     }
 
     if (body.patch) {
+      // An explicit empty string is how the in-store count gets UNSET — the buyer
+      // guessed and would rather say nothing than say a number. Absent (undefined) still
+      // means "leave it alone", which is what every other field here means by null.
+      const availSent = body.patch.availableQty;
       const patch = {
         qty: Number.isInteger(Number(body.patch.qty)) && Number(body.patch.qty) > 0 ? Number(body.patch.qty) : null,
+        availableQty: Number.isInteger(Number(availSent)) && Number(availSent) > 0 ? Number(availSent) : null,
+        clearAvailable: availSent === '' || availSent === null,
         shelfPrice: blank(body.patch.shelfPrice) ? null : money(body.patch.shelfPrice),
         size: body.patch.size == null ? null : String(body.patch.size).trim().slice(0, 20) || null,
       };
@@ -130,6 +136,8 @@ export default async function handler(req, res) {
       const bits = [];
       if (patch.size != null && String(patch.size) !== String(was.size ?? '')) bits.push(`size ${was.size || '—'} → ${patch.size}`);
       if (patch.qty != null && patch.qty !== Number(was.qty)) bits.push(`qty ${was.qty} → ${patch.qty}`);
+      if (patch.clearAvailable && was.available_qty != null) bits.push(`in store ${was.available_qty} → not counted`);
+      else if (patch.availableQty != null && patch.availableQty !== was.available_qty) bits.push(`in store ${was.available_qty ?? 'not counted'} → ${patch.availableQty}`);
       const shelfMoved = patch.shelfPrice != null && patch.shelfPrice !== Number(was.shelf_price);
       if (shelfMoved) bits.push(`shelf $${Number(was.shelf_price ?? 0).toFixed(2)} → $${patch.shelfPrice.toFixed(2)}`);
       // Nothing actually moved: return the line and write nothing. An "edited" row in
@@ -157,6 +165,14 @@ export default async function handler(req, res) {
     // it belongs to whoever approves it (`cart/decide`). Defaulting to 1 here would put
     // a number nobody stated into the funding total.
     const qty = null;
+    // HOW MANY THE SHOP HAS, which is NOT the same question and is the buyer's to answer.
+    // `qty` above is what we decide to buy; this is what is sitting on the shelf, and it
+    // is the number the approver was missing when they chose one. Optional on purpose —
+    // blank means "didn't count", and a guessed number the approver cannot tell apart
+    // from a counted one is worse than no number at all. 0 is not a meaningful answer
+    // (nobody adds a line for a size the shop hasn't got), so it reads as blank.
+    const availableQty = Number.isInteger(Number(l.availableQty)) && Number(l.availableQty) > 0
+      ? Math.min(Number(l.availableQty), 999) : null;
     const shelfPrice = money(l.shelfPrice);
     if (!sku) return send(res, 400, { ok: false, error: 'A SKU is required.' });
     // The shelf price is the funding target for this line. Without it a request can be
@@ -212,7 +228,7 @@ export default async function handler(req, res) {
       });
 
     const line = await addBuyCartLine(cartId, {
-      sku, size, qty, shelfPrice, upc,
+      sku, size, qty, availableQty, shelfPrice, upc,
       name: String(l.name ?? '').trim().slice(0, 200) || null,
       colorway: String(l.colorway ?? '').trim().slice(0, 120) || null,
       gender: String(l.gender ?? '').trim().slice(0, 20) || null,

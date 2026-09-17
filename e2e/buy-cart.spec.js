@@ -2191,3 +2191,72 @@ test.describe('gift cards read off a file', () => {
     expect(wrong.body.error).toMatch(/not on this request/);
   });
 });
+
+// ── How many the shop has, per size ──────────────────────────────────────────────
+// The buyer states no quantity to BUY — that is the decision being asked for — but
+// "there are two left" and "there is a wall of them" are different requests, and the
+// approver setting a number could not tell them apart. `available_qty` is the buyer's
+// COUNT, deliberately optional: a blank means they didn't count, which must never be
+// read as "the shop has none" (only one of those argues against buying).
+test('the buyer states how many the shop has, and blank stays blank', async ({ request }) => {
+  const cartId = await newRequest(request, {
+    submit: false,
+    lines: [
+      { sku: 'CW2288-111', size: '9', shelfPrice: 50, availableQty: 3 },
+      { sku: 'CW2288-111', size: '10', shelfPrice: 50 },                 // didn't count
+      { sku: 'CW2288-111', size: '11', shelfPrice: 50, availableQty: 0 }, // 0 is not an answer
+    ],
+  });
+  const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const bySize = Object.fromEntries(body.cart.lines.map((l) => [l.size, l]));
+
+  expect(bySize['9'].available_qty).toBe(3);
+  // NULL, not 0. `Number(null) || 0` is exactly the coercion that makes "nobody counted"
+  // look like an answer, and it is the same trap `qty` was fixed for.
+  expect(bySize['10'].available_qty).toBeNull();
+  expect(bySize['11'].available_qty).toBeNull();
+
+  // And it never becomes the quantity: that is still the approver's, still NULL here.
+  expect(bySize['9'].qty).toBeNull();
+});
+
+test('the count is the buyer’s observation — approving above it is allowed, not blocked', async ({ request }) => {
+  const cartId = await newRequest(request, {
+    lines: [{ sku: 'CW2288-111', size: '9', shelfPrice: 50, availableQty: 2 }],
+  });
+  // Deliberately more than the shelf held. Stock moves between the buyer walking the
+  // aisle and the desk deciding, and refusing here would strand a legitimate "take more
+  // if they restock" — the screen and the Telegram card flag it instead.
+  const r = await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 5 });
+  expect(r.status).toBe(200);
+
+  const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const line = body.cart.lines[0];
+  expect(line.qty).toBe(5);
+  // The count is NOT rewritten to match the decision: it is what the buyer saw, and the
+  // gap between the two is the thing worth being able to read afterwards.
+  expect(line.available_qty).toBe(2);
+  // Funding still follows the approved quantity, so the over-approval is really funded —
+  // which is exactly why it has to be visible rather than silent. 5 × $50 = $250.
+  expect(body.cart.approved_amount).toBe(250);
+});
+
+test('the count can be corrected, and cleared back to "didn’t count"', async ({ request }) => {
+  const cartId = await newRequest(request, {
+    submit: false,
+    lines: [{ sku: 'CW2288-111', size: '9', shelfPrice: 50, availableQty: 3 }],
+  });
+  const { body: before } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+  const lineId = before.cart.lines[0].id;
+
+  const fixed = await call(request, 'approver', 'cart/line', { cartId, lineId, patch: { availableQty: 6 } });
+  expect(fixed.status).toBe(200);
+  expect(fixed.body.line.available_qty).toBe(6);
+
+  // An explicit empty string UNSETS it. Every other field here follows the coalesce rule
+  // (absent = leave alone), which has no way to say "make it empty" — and empty is a
+  // real value for this one.
+  const cleared = await call(request, 'approver', 'cart/line', { cartId, lineId, patch: { availableQty: '' } });
+  expect(cleared.status).toBe(200);
+  expect(cleared.body.line.available_qty).toBeNull();
+});

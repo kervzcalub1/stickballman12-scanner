@@ -130,6 +130,9 @@ test.describe('Box Labels · our own stock comes first', () => {
 
       await expect(page.locator('.error')).toHaveCount(0);
       await expect(page.locator('.card').last()).toContainText('From your inventory');
+      // Folded by default — scanning the VIN is the fast path; the list is the net.
+      await expect(page.locator('.boxlbl-units')).toContainText(/scan it to reprint/);
+      await page.getByRole('button', { name: 'Show the list' }).click();
       await expect(page.locator('.boxlbl-unit').filter({ hasText: vin })).toBeVisible();
 
       // …and the matching unit is one click from its own box label.
@@ -169,7 +172,8 @@ test.describe('Box Labels · our own stock comes first', () => {
       expect(options).toContain('US 12');
       expect(options).toContain('US 9.5');
       // The list says it is a page, and how to reach a pair that is not on it.
-      await expect(page.locator('.boxlbl-units')).toContainText('27 already in inventory');
+      await expect(page.locator('.boxlbl-units')).toContainText('27 of this style already in inventory');
+      await page.getByRole('button', { name: 'Show the list' }).click();
       await expect(page.locator('.boxlbl-units')).toContainText(/newest 25 are listed/);
       expect(await page.locator('.boxlbl-unit').count()).toBe(25);
     } finally {

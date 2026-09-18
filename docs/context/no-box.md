@@ -152,7 +152,10 @@ floor, both about the same dropdown:
   page, so anything older than the 25th pair lost its size. `findStockSizesByCode`
   now reads the sizes (and the total) across *every* unit under the code; the unit
   list stays a page of 25 and says so ("the newest 25 are listed — for an older one,
-  scan its VIN sticker").
+  scan its VIN sticker"). **The list is folded by default** behind *Show the list*: the
+  user's point — scanning the VIN sticker IS the fast path for a pair that has one, so
+  the list is a net for a SKU scanned on such a pair, not the first thing to read past
+  on the way to the size.
 - **A size we don't hold couldn't be typed.** The dropdown is there because a pick
   can't be mistyped, not to stop a size — a label for the first 12.5 of a style is a
   normal job. **Other size…** at the bottom of the list opens the free box (sizes print

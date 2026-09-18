@@ -25,6 +25,10 @@ const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 export function BoxLabels({ navBack, onHome, onSignOut }) {
   const [input, setInput] = useState('');
   const [found, setFound] = useState(null);   // { kind:'item'|'product', … }
+  // The "pairs we already hold" list, folded by default: scanning the VIN sticker on
+  // the pair IS the fast path, so the list is a safety net (a SKU scanned on a pair
+  // that has a VIN) rather than the first thing to read past on the way to the size.
+  const [showUnits, setShowUnits] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [showCam, setShowCam] = useState(false);
@@ -72,7 +76,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
     return () => { if (navBack) navBack.current = null; };
   }, [navBack, showCam, found]);
 
-  function reset() { setFound(null); setInput(''); setError(''); }
+  function reset() { setFound(null); setInput(''); setError(''); setShowUnits(false); }
 
   // A VIN goes straight to the unit. Any other code is checked against OUR OWN
   // stock first (api/items/find) and only then against the third-party catalogue:
@@ -338,22 +342,34 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
             ? <CopyText text={upcDigits(p.upc)}>UPC {upcDigits(p.upc)}</CopyText>
             : 'No UPC — we’ll ask for it before printing.'}</div>
 
-          {/* Already in stock: pick the actual pair rather than minting a duplicate. */}
+          {/* Already in stock. One line, not a list: the fast path for a pair that has a
+              VIN is to SCAN the VIN — the list is here for the pair that turns out to
+              have one after a SKU was scanned, so nobody mints a duplicate. */}
           {p.units?.length > 0 && (
             <div className="boxlbl-units">
               <div className="muted sm mt">
-                <b>{p.total || p.units.length}</b> already in inventory — pick the pair in your hand to reprint its labels
-                {p.total > p.units.length ? <> (the newest {p.units.length} are listed — for an older one, scan its VIN sticker)</> : null}:
+                <b>{p.total || p.units.length}</b> of this style already in inventory — if the pair in your hand
+                has a VIN sticker, scan it to reprint its labels.{' '}
+                <button type="button" className="btn sm ghost" onClick={() => setShowUnits((v) => !v)}>
+                  {showUnits ? 'Hide the list' : 'Show the list'}
+                </button>
               </div>
-              {p.units.map((u) => (
-                <div className="boxlbl-unit" key={u.vin}>
-                  <span className="vin">{u.vin}</span>
-                  <span>{u.size ? `US ${sizeLabel(u.size, p.gender, p.name)}` : '—'}</span>
-                  <StatusPill status={u.status} />
-                  <span className="muted sm">{u.locationCode || 'unshelved'}</span>
-                  <button className="btn sm ghost" disabled={busy} onClick={() => useUnit(u.vin)}>Use this VIN</button>
-                </div>
-              ))}
+              {showUnits && (
+                <>
+                  {p.total > p.units.length && (
+                    <div className="muted xs">The newest {p.units.length} are listed — for an older one, scan its VIN sticker.</div>
+                  )}
+                  {p.units.map((u) => (
+                    <div className="boxlbl-unit" key={u.vin}>
+                      <span className="vin">{u.vin}</span>
+                      <span>{u.size ? `US ${sizeLabel(u.size, p.gender, p.name)}` : '—'}</span>
+                      <StatusPill status={u.status} />
+                      <span className="muted sm">{u.locationCode || 'unshelved'}</span>
+                      <button className="btn sm ghost" disabled={busy} onClick={() => useUnit(u.vin)}>Use this VIN</button>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           )}
           <div className="dcard-line mt">

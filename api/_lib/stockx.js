@@ -180,11 +180,35 @@ export async function stockxVariants(productId) {
   const { ok, data } = await sxGet(`/catalog/products/${encodeURIComponent(productId)}/variants`);
   if (!ok) return [];
   const rows = Array.isArray(data) ? data : [];
+  // `gtins` is the variant's barcodes — `[{ type: 'UPC'|'EAN', identifier }]`. Kept
+  // (UPC first) because it answers "what is the UPC of this size" for a pair we have
+  // never held: the Box Labels tool used to ask a person to read it off the tongue
+  // label, and StockX had it all along. Verified live on 305381-007: size 12 →
+  // 198965021212, the same number already on our own SBM-R-004922.
+  const gtin = (v) => {
+    const list = Array.isArray(v?.gtins) ? v.gtins : [];
+    const pick = list.find((g) => /upc/i.test(g?.type)) || list.find((g) => /ean/i.test(g?.type)) || list[0];
+    const digits = String(pick?.identifier || '').replace(/\D/g, '');
+    return /^\d{8,14}$/.test(digits) ? digits : null;
+  };
   const variants = rows
-    .map((v) => ({ id: v?.variantId, size: variantSize(v) }))
+    .map((v) => ({ id: v?.variantId, size: variantSize(v), upc: gtin(v) }))
     .filter((v) => v.id);
   cacheSet(key, variants, PRODUCT_TTL);
   return variants;
+}
+
+// The UPC of ONE size of a style, off the catalogue — for a label on a pair we have
+// no record of. Two cached requests (product, variants); the size is matched the same
+// way the price lookup matches it. Returns `{ upc, product }` with `upc` null when the
+// size is not in the run or carries no barcode, and null when the style is unknown.
+export async function stockxUpcForSkuSize(sku, size) {
+  const product = await stockxProductBySku(sku);
+  if (!product) return null;
+  const want = normSize(size);
+  const variants = await stockxVariants(product.id);
+  const v = variants.find((x) => x.size === want) || null;
+  return { upc: v?.upc || null, product };
 }
 
 // Live money for one size.

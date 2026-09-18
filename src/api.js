@@ -106,6 +106,7 @@ export const api = {
   setShipTo: (shipTo) => post('/api/settings', { shipTo }),
   // Product search + sheet
   searchUpc: (upc) => post('/api/upc-search', { upc }),
+  upcForSize: (sku, size) => get(`/api/upc-for-size?sku=${encodeURIComponent(sku)}&size=${encodeURIComponent(size)}`),
   setItemUpc: (vin, upc) => post('/api/items/set-upc', { vin, upc }),
   // Correct a style code the catalogue got wrong off the box UPC (inventory.md).
   skuSiblings: (vin) => get(`/api/items/set-sku?vin=${encodeURIComponent(vin)}`),

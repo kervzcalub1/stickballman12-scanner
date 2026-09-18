@@ -64,6 +64,9 @@ All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
     either: a timeout means we don't know, not that the code is unknown.
   - `upc` is null (catalog is per-SKU). Allowed for warehouse + ph_team + supplier.
 - Both return `{ name, sku, upc, image, brand, colorway, sizes[], gender, source }`.
+- **SKU + size → UPC** (`api/upc-for-size.js`, `stockxUpcForSkuSize`): the official
+  StockX API's variants carry a barcode per size (`gtins`); exact style match only.
+  Used by Box Labels for a size we have no record of (`docs/context/no-box.md`).
   `source` is carried through Receiving onto `items.source`, so the record keeps saying
   which catalogue named the pair.
 

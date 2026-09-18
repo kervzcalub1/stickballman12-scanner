@@ -13,20 +13,29 @@ export function BuyCartProgress({ cart }) {
     if (m.complete) return 'done';
     return i < m.index ? 'done' : i === m.index ? 'active' : 'todo';
   };
+  // On a phone the labels are hidden and this line is all the words there are, so it
+  // names the last stop that is BEHIND as well as the one it is on — "Approved ✓ · Step 3
+  // of 10 · Waiting for gift card" — otherwise a buyer never sees the completed wording.
+  const behind = !m.stopped && !m.complete && m.index > 0 ? `${MILESTONES[m.index - 1].done} \u2713 · ` : '';
   const caption = m.stopped
     ? `${m.stopped} at step ${m.index + 1} of ${MILESTONES.length} · ${m.label}`
     : m.complete
       ? `Done — all ${MILESTONES.length} steps`
-      : `Step ${m.index + 1} of ${MILESTONES.length} · ${m.label}`;
+      : `${behind}Step ${m.index + 1} of ${MILESTONES.length} · ${m.label}`;
   return (
     <div className={`bc-progress ${m.stopped ? 'stopped' : ''}`} aria-label={caption}>
       <ol className="bc-steps">
-        {MILESTONES.map((s, i) => (
-          <li key={s.key} className={`bc-step ${stateOf(i)}`} aria-current={!m.stopped && !m.complete && i === m.index ? 'step' : undefined}>
-            <span className="bc-step-dot" aria-hidden="true" />
-            <span className="bc-step-label">{s.label}</span>
-          </li>
-        ))}
+        {MILESTONES.map((s, i) => {
+          const state = stateOf(i);
+          return (
+            <li key={s.key} className={`bc-step ${state}`} aria-current={!m.stopped && !m.complete && i === m.index ? 'step' : undefined}>
+              <span className="bc-step-dot" aria-hidden="true" />
+              {/* A stop that is behind reads as what happened ("Approved"), not as what
+                  it was waiting for — the dot says done, so the words must too. */}
+              <span className="bc-step-label">{state === 'done' ? s.done : s.label}</span>
+            </li>
+          );
+        })}
       </ol>
       <p className="bc-steps-caption sm">{caption}</p>
     </div>

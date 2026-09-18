@@ -8,6 +8,7 @@ import { TopBar, StatusPill, DateRangeBar, LabelSheet } from '../components/comm
 import { Icon } from '../components/NavIcons.jsx';
 import { useMediaQuery } from '../hooks.js';
 import { rangeOf } from '../lib/format.js';
+import { useQueryDateRange } from '../lib/urlstate.js';
 import { upcDigits, sizeLabel } from '../lib/codes.js';
 
 export function NoBoxReport({ user, onHome, onSignOut }) {
@@ -22,7 +23,8 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
   const [upcBusy, setUpcBusy] = useState(false);
   // Default to Month, not Day — this is a pending backlog queue, so a Day filter
   // lands on "all clear" while Home shows real no-box units. Month surfaces the backlog.
-  const [dr, setDr] = useState(() => ({ mode: 'month', anchor: new Date() }));
+  // In the URL (?dm=&da=), like the PH grid, so a refresh keeps the month.
+  const [dr, setDr] = useQueryDateRange('month');
   const isMobile = useMediaQuery('(max-width: 768px)');
 
   async function load() {

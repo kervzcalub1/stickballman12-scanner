@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
-import { poMatchesSearch, expectsAtOrderLevel, hasOrderedList } from '../lib/postatus.js';
+import { poMatchesSearch, reconcileChipOf, expectsAtOrderLevel, hasOrderedList } from '../lib/postatus.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { isBoxesOrder } from '../lib/postatus.js';
@@ -40,25 +40,9 @@ function flagText(r) {
   return FLAG[r.flag]?.label || r.flag;
 }
 
-// What the chip should actually SAY. "To reconcile" on a 13-of-13 all-matched PO is
-// noise — it reads as a chore when there's nothing to decide. So name the real state:
-// what's wrong, or what's still on its way, or that it's done.
-//   rc = { clean, no_manifest, shortage, overage, wrong_size, wrong_sku,
-//          expected_units, received_units, intake_done, awaiting_boxes }
-export function poChip(status, rc) {
-  if (status === 'reconciled') return { cls: 'ok', label: 'Reconciled' };
-  if (status === 'closed') return { cls: 'muted', label: 'Archived' };
-  if (!rc) return { cls: 'receiving', label: 'To reconcile' };
-  if (!rc.intake_done) return { cls: 'receiving', label: 'Receiving' };
-  if (rc.no_manifest) return { cls: 'warn', label: 'Received blind' };
-  const issues = (rc.shortage || 0) + (rc.overage || 0) + (rc.wrong_size || 0)
-    + (rc.wrong_sku || 0) + (rc.unpacked || 0);
-  if (issues) return { cls: 'bad', label: `${issues} discrepanc${issues === 1 ? 'y' : 'ies'}` };
-  // Clean, but auto-reconcile held off because a label hasn't left the supplier yet —
-  // more units are still due, so closing now would freeze an incomplete picture.
-  if (rc.awaiting_boxes) return { cls: 'receiving', label: 'Boxes still out' };
-  return { cls: 'ok', label: 'Matched · ready to close' };
-}
+// The reconciliation chip moved to `postatus.js` (`reconcileChipOf`) so the PO list can
+// search by what it says; `poChip` here is the same function under its old name.
+const poChip = reconcileChipOf;
 
 // The PO tag is usually just the supplier's name again — printing both gives you
 // "Andrew · Andrew". Only show it when it actually says something new.
@@ -340,8 +324,8 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
           </div>
           <div className="rcn-search">
             <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
-              placeholder="Paste or scan a tracking number — or a PO code"
-              aria-label="Search by tracking number or PO code" />
+              placeholder="Shoe, SKU, tracking number, PO code, or a state — “2 discrepancies”"
+              aria-label="Search by shoe name, SKU, tracking number, PO code or state" />
             {q ? <button className="btn sm ghost" onClick={() => setQ('')}>Clear</button> : null}
             {q && all ? <span className="muted sm">{list.length} of {all.length}</span> : null}
           </div>
@@ -349,7 +333,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
             : list.length === 0 ? (
               <div className="card empty-state">
                 {q ? (
-                  <>No {archived ? 'archived ' : ''}order carries a tracking number or PO code matching <b>{q}</b>.
+                  <>No {archived ? 'archived ' : ''}order matches <b>{q}</b> — not a shoe, style code, tracking number, PO code or state. Every word has to match, so try fewer.
                     {!archived && ' It may be under Archived.'}
                     {' '}<button className="btn sm ghost" onClick={() => setQ('')}>Clear search</button></>
                 ) : archived

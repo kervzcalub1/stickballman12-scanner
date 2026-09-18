@@ -158,6 +158,18 @@ PH-team users route separately under `/ph/*` inside `PHTeamApp` (its own
 `ph_team` short-circuits before the warehouse/admin `view` routing. `onAuthed`
 skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
 
+**Page state lives in the query string** (`src/lib/urlstate.js`, `useQueryParam(key)` /
+`useQueryDateRange(defaultMode)` for a DateRangeBar's `{mode, anchor}` as `?dm=&da=`).
+The path is the page; anything that makes the page reproducible after a refresh or in a
+pasted link — an open record's id, a search, a filter, a tab, a date range — is a query
+param. Established keys: `po` `request` `b` `vin` `sku` `size` `q` `from` `to` `supplier`
+`status` `tab` `period` `anchor` `dm` `da` `st` `basis` `buyer` `p` `audit` `due`
+`intake` `done` `needs` `role` `a`. Read the URL as a pointer only (coerce ids, fall back
+on an unknown value, re-fetch the record). Never put drafts, scan carts, held edit locks,
+File handles, temp passwords, or anything whose restore spends money in it. `onAuthed`
+keeps a known landing path exactly as it was (query + Locations' drill path) so a deep
+link survives sign-in; only an unknown path is normalised to `/`.
+
 ## Screens (entry points; `src/screens/*`)
 - `Home` / `PHTeam` (`PHTeamApp`) — role-based home screens (cards). The
   admin/warehouse `Home` is grouped **by lifecycle** (Intake → Stock/Locate →

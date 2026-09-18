@@ -3850,7 +3850,14 @@ export async function listPos({ uid, supplierScope }) {
         -- on the parcel, in the courier email, in the supplier's message) and it was the
         -- one identifier none of the three lists could find an order by.
         coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
-                  WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers
+                  WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers,
+        -- What is ON the order, so the list can be searched by shoe: the style codes and
+        -- the product names off its manifest lines, distinct. "Which order had the
+        -- Chicagos" is asked of this list far more often than any tracking number is.
+        coalesce((SELECT array_agg(DISTINCT l.sku) FROM po_lines l
+                  WHERE l.po_id = p.id AND coalesce(l.sku, '') <> ''), '{}') AS skus,
+        coalesce((SELECT array_agg(DISTINCT l.name) FROM po_lines l
+                  WHERE l.po_id = p.id AND coalesce(l.name, '') <> ''), '{}') AS shoe_names
       FROM purchase_orders p
       WHERE p.supplier_user_id = ${uid}
       ORDER BY p.created_at DESC
@@ -3882,7 +3889,12 @@ export async function listPos({ uid, supplierScope }) {
       -- on the parcel, in the courier email, in the supplier's message) and it was the
       -- one identifier none of the three lists could find an order by.
       coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
-                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers
+                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers,
+      -- What is ON the order (see the supplier branch above).
+      coalesce((SELECT array_agg(DISTINCT l.sku) FROM po_lines l
+                WHERE l.po_id = p.id AND coalesce(l.sku, '') <> ''), '{}') AS skus,
+      coalesce((SELECT array_agg(DISTINCT l.name) FROM po_lines l
+                WHERE l.po_id = p.id AND coalesce(l.name, '') <> ''), '{}') AS shoe_names
     FROM purchase_orders p
     ORDER BY p.created_at DESC
   `;
@@ -4830,7 +4842,12 @@ export async function listReconcilePos() {
       -- on the parcel, in the courier email, in the supplier's message) and it was the
       -- one identifier none of the three lists could find an order by.
       coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
-                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers
+                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers,
+      -- What is ON the order, so the list can be searched by shoe (see listPos).
+      coalesce((SELECT array_agg(DISTINCT l.sku) FROM po_lines l
+                WHERE l.po_id = p.id AND coalesce(l.sku, '') <> ''), '{}') AS skus,
+      coalesce((SELECT array_agg(DISTINCT l.name) FROM po_lines l
+                WHERE l.po_id = p.id AND coalesce(l.name, '') <> ''), '{}') AS shoe_names
     FROM purchase_orders p
     WHERE p.status IN ('receiving', 'reconciled')
     ORDER BY (p.status = 'receiving') DESC, p.reconciled_at DESC NULLS LAST, p.created_at DESC`;
@@ -5684,7 +5701,12 @@ export async function listArchivedPos({ limit = 100 } = {}) {
       -- on the parcel, in the courier email, in the supplier's message) and it was the
       -- one identifier none of the three lists could find an order by.
       coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
-                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers
+                WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers,
+      -- What is ON the order, so the list can be searched by shoe (see listPos).
+      coalesce((SELECT array_agg(DISTINCT l.sku) FROM po_lines l
+                WHERE l.po_id = p.id AND coalesce(l.sku, '') <> ''), '{}') AS skus,
+      coalesce((SELECT array_agg(DISTINCT l.name) FROM po_lines l
+                WHERE l.po_id = p.id AND coalesce(l.name, '') <> ''), '{}') AS shoe_names
     FROM purchase_orders p
     WHERE p.status = 'closed'
     ORDER BY p.reconciled_at DESC NULLS LAST, p.created_at DESC

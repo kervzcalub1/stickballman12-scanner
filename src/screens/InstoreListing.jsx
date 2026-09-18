@@ -9,6 +9,7 @@ import { api } from '../api.js';
 import { TopBar, DateRangeBar, ShoeThumb, StatusPill } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { rangeOf } from '../lib/format.js';
+import { useQueryParam, useQueryDateRange } from '../lib/urlstate.js';
 
 const STORES = [['alias', 'Alias'], ['stockx', 'StockX'], ['shopify', 'Shopify']];
 
@@ -43,10 +44,13 @@ function groupBySku(rows) {
 export function InstoreListing({ onHome, onSignOut }) {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
-  const [dr, setDr] = useState(() => ({ mode: 'month', anchor: new Date() }));
+  // Month + the checkbox ride in the URL: a refresh mid-listing keeps the same view.
+  const [dr, setDr] = useQueryDateRange('month');
   // Default OFF so staff see ALL in-store buys (and their statuses) at a glance;
   // ticking it narrows to only pairs still needing store listing.
-  const [needsOnly, setNeedsOnly] = useState(false);
+  const [needsRaw, setNeedsRaw] = useQueryParam('needs');
+  const needsOnly = needsRaw === '1';
+  const setNeedsOnly = (v) => setNeedsRaw(v ? '1' : '');
   const [savingSku, setSavingSku] = useState(null);
 
   async function load() {

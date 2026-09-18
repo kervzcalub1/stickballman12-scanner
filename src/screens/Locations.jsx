@@ -15,6 +15,7 @@ import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox, Modal, I
 import { Icon } from '../components/NavIcons.jsx';
 import { WAREHOUSES, LOCATION_AREAS } from '../lib/constants.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
+import { useQueryParam } from '../lib/urlstate.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -79,8 +80,12 @@ function resolve(sites, segs, multiSite) {
 }
 
 export function Locations({ onHome, onSignOut }) {
-  const [active, setActive] = useState('');
-  const [q, setQ] = useState('');
+  // The Show filter (?status=active|inactive) and the shoe search (?q=) survive a
+  // refresh; the drill path is the pathname (/locations/site/area/…), as before.
+  const [statusRaw, setStatusRaw] = useQueryParam('status');
+  const active = statusRaw === 'active' ? 'true' : statusRaw === 'inactive' ? 'false' : '';
+  const setActive = (v) => setStatusRaw(v === 'true' ? 'active' : v === 'false' ? 'inactive' : '');
+  const [q, setQ] = useQueryParam('q');
   const [results, setResults] = useState(null);     // shoe-search hits | null (browse mode)
   const [searchedFor, setSearchedFor] = useState('');
   const [expandedSkus, setExpandedSkus] = useState(() => new Set()); // which result groups are open
@@ -120,7 +125,8 @@ export function Locations({ onHome, onSignOut }) {
   const navigate = (newSegs, { replace = false } = {}) => {
     setSegs(newSegs); setEditShelf(null);
     const path = pathFromSegs(newSegs);
-    if (window.location.pathname !== path) window.history[replace ? 'replaceState' : 'pushState'](null, '', path);
+    // Keep the query (?q=, ?status=) — drilling is the same page, so its filters stay.
+    if (window.location.pathname !== path) window.history[replace ? 'replaceState' : 'pushState'](null, '', path + window.location.search);
   };
   useEffect(() => {
     const onPop = () => setSegs(segsFromPath());
@@ -145,6 +151,8 @@ export function Locations({ onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Arrived with ?q= (a refresh mid-search, or a pasted link): run the search.
+  useEffect(() => { if (q.trim()) runLocate(q); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Locate a shoe: search items by name / SKU / VIN → which shelf each is on.
   async function runLocate(query) {

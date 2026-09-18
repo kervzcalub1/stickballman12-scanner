@@ -17,7 +17,8 @@
 // server-staged cutout URLs, "already committed" flags, held edit locks, unsaved
 // drafts, and anything secret (e.g. a one-time temp password). Restoring those is
 // either impossible, silently stale, or would spend money on re-render.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { estCivil, estCivilFromYmd, ymd } from './format.js';
 
 export function readParam(key) {
   try { return new URLSearchParams(window.location.search).get(key) || ''; }
@@ -64,4 +65,25 @@ export function useQueryParam(key, initial = '') {
   }, [key]);
 
   return [value, set];
+}
+
+// The DateRangeBar's `{ mode, anchor }` pair, mirrored into `?dm=` / `?da=` (the keys
+// the PH grid established). `anchor` is a Date in memory and a YYYY-MM-DD in the URL;
+// it is read back as an EST civil date (estCivilFromYmd), never a local-midnight
+// parse — see format.js for why a Manila viewer's clock makes that a day off. A
+// missing or hand-mangled `da` falls back to today rather than poisoning the range.
+export function useQueryDateRange(defaultMode = 'month') {
+  const [mode, setMode] = useQueryParam('dm', defaultMode);
+  const [anchorYmd, setAnchorYmd] = useQueryParam('da', '');
+  const dr = useMemo(
+    () => ({ mode, anchor: anchorYmd ? estCivilFromYmd(anchorYmd) : estCivil() }),
+    [mode, anchorYmd],
+  );
+  const setDr = useCallback((next) => {
+    const v = typeof next === 'function' ? next(dr) : next;
+    setMode(v.mode);
+    const a = v.anchor instanceof Date ? v.anchor : new Date(v.anchor);
+    setAnchorYmd(Number.isNaN(a.getTime()) ? '' : ymd(estCivil(a)));
+  }, [dr, setMode, setAnchorYmd]);
+  return [dr, setDr];
 }

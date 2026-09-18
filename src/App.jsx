@@ -73,7 +73,10 @@ export default function App() {
     // Honor a deep link the user landed on before signing in (e.g. /inventory).
     const v = viewForPath(window.location.pathname);
     setView(v);
-    window.history.replaceState(null, '', pathForView(v));
+    // Only normalise an UNKNOWN path to home. A known one is kept exactly as landed —
+    // its query (?po=, ?sku=, ?vin=) and Locations' drill path are the page's own
+    // state, and rewriting to the bare path here threw them away on sign-in.
+    if (v === 'home') window.history.replaceState(null, '', pathForView(v));
   }
   function signOut() { clearAuth(); setUserState(null); setView('home'); window.history.replaceState(null, '', '/'); }
 

@@ -227,9 +227,12 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
           basis: 'with_you',
         });
       }
-      // Clear the pair, keep the shoe: the next size of the same style is the common
-      // next action in a shop, and re-looking it up would spend another call.
-      setSizes([]); setShelf(''); setSizePrice({}); setSizeAvail({});
+      // Clear the WHOLE form — the code, the shoe, the sizes, the prices, the count, and
+      // with the shoe its photos (they hang off `product.sku`). The first version kept
+      // the shoe, on the theory that the next size of the same style was the common
+      // next action; the buyer said otherwise: every add is a fresh shoe, and a form
+      // still showing the last one's code and photo count was being re-sent by mistake.
+      setProduct(null); setSkuInput(''); setSizes([]); setShelf(''); setSizePrice({}); setSizeAvail({});
       onAdded();
     } catch (err) {
       if (err.unauthorized) return onSignOut();

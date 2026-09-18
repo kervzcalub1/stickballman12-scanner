@@ -10,17 +10,21 @@
 // Pure. Takes the `cart` as `cart/get` returns it (with `po`, `pack`, the audit stamps)
 // and never touches the clock.
 
+// Two words per stop. `label` is the stop while the request is ON it or short of it —
+// what it is waiting for. `done` is the same stop once it is behind — what happened.
+// A dot that is filled green and still reads "Waiting for approval" says two opposite
+// things at once, and the buyer reading it from a shop floor believed the words.
 export const MILESTONES = [
-  { key: 'request',   label: 'Purchase request' },
-  { key: 'approval',  label: 'Waiting for approval' },
-  { key: 'cards',     label: 'Waiting for gift card' },
-  { key: 'receipt',   label: 'Waiting for receipt' },
-  { key: 'packing',   label: 'Sorting / packing' },
-  { key: 'manifest',  label: 'Waiting for manifest' },
-  { key: 'labels',    label: 'Waiting for labels' },
-  { key: 'shipping',  label: 'Shipping' },
-  { key: 'delivered', label: 'Delivered' },
-  { key: 'audited',   label: 'Audited' },
+  { key: 'request',   label: 'Purchase request',     done: 'Requested' },
+  { key: 'approval',  label: 'Waiting for approval', done: 'Approved' },
+  { key: 'cards',     label: 'Waiting for gift card', done: 'Gift card issued' },
+  { key: 'receipt',   label: 'Waiting for receipt',  done: 'Receipt in' },
+  { key: 'packing',   label: 'Sorting / packing',    done: 'Packed' },
+  { key: 'manifest',  label: 'Waiting for manifest', done: 'Manifest in' },
+  { key: 'labels',    label: 'Waiting for labels',   done: 'Labels sent' },
+  { key: 'shipping',  label: 'Shipping',             done: 'Shipped' },
+  { key: 'delivered', label: 'Delivered',            done: 'Delivered' },
+  { key: 'audited',   label: 'Audited',              done: 'Audited' },
 ];
 
 const STOPPED = { denied: 'Denied', cancelled: 'Cancelled', written_off: 'Written off' };

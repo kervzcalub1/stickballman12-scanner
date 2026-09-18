@@ -1287,6 +1287,33 @@ identifier none of the PO lists could search by.
 - Reconciliation's empty state says **"It may be under Archived"** when a search finds
   nothing on Active — an old parcel's order is exactly where that will be.
 
+### …and by everything else a person knows about it (2026-09-18)
+The same box now takes what is in a person's HEAD, not only what is in their hand: the
+**shoe name**, the **style code**, the **status** and the **reconciliation state**. One
+box rather than a row of dropdowns — status × reconciliation × kind is a form, and this
+is a search. `e2e/po-search.spec.js` pins it.
+
+- All four list queries also return **`skus`** and **`shoe_names`** — distinct, off the
+  order's `po_lines`. An order with no manifest yet has nothing to match a shoe against.
+- **Per WORD, two kinds of match.** Codes (PO code, tracking numbers, SKUs) go through
+  `trackKey` — so `dz5485-612`, `DZ5485612` and `5485` find the same style. Words (shoe
+  names, supplier, tag, the status vocabulary) are lowercase substrings. **Every word
+  must land somewhere on the order**, so `chicago shipped` narrows to shipped orders
+  carrying the Chicagos. The whole query is still tried first as ONE code, so a spaced
+  tracking number pasted from an email keeps matching as the single number it is.
+- **The status words are the chip labels, exactly as printed** (`poSearchWords`):
+  `poChipOf` (*Filling · Labels requested · 2/3 shipped · Delivered · to reconcile ·
+  Receiving · Reconciled · Closed*), the kind chip (*Shoes · Empty boxes*), the raw column
+  value, plus **`to reconcile`** for any `receiving` order and **`received blind`** when
+  `unit_count = 0 AND received_units > 0`. A person searches for what they can read on
+  the screen; `draft` is not on the screen and "labels requested" is.
+- **The reconciliation chip moved to `postatus.js` as `reconcileChipOf(status, rc)`**
+  (the Reconciliation screen's `poChip` is now an alias) so its words — *2 discrepancies
+  · Received blind · Boxes still out · Matched · ready to close · Archived* — are
+  searchable wherever a row carries `rc` (the Reconciliation list; the PO list has no
+  `rc`, since computing it is a `getPoReconcileState` per open order). `resolution
+  open` / `resolved` come off `resolution_state`.
+
 ## The dev server never registers with 17TRACK (2026-08-27)
 Registration is a **write to a live, shared, metered account, and it is permanent**: the
 number sits in the dashboard and stays on auto-tracking long after whatever created it is

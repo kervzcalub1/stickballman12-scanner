@@ -140,6 +140,63 @@ test.describe('Box Labels · our own stock comes first', () => {
     });
   }
 
+  // The report: 305381-007 held a 12 and the tool could not print one. `items/find`
+  // caps its unit list at the 25 newest rows, and the size list was read off that page
+  // — so the sizes of anything older than the 25th pair were simply not offered.
+  test('every size we hold is offered, not only the sizes of the 25 newest pairs', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    const sku = 'E2E-BOXLBL-MANY';
+    const stamp = Date.now().toString(36).toUpperCase();
+    await q('DELETE FROM items WHERE sku = $1', [sku]);
+    // Seeded straight into the table (27 commits through the API trip its rate limit
+    // and starve the tests after this one): one 12, then 26 newer 9.5s — the 12 is the
+    // 27th-newest row, past the 25 the lookup lists.
+    const [b] = await q(`INSERT INTO batches (batch_code, supplier_name, status, kind, date_received)
+      VALUES ($1, 'E2E box label', 'committed', 'existing', current_date) RETURNING id`, [`E2E-BLMANY-${stamp}`]);
+    const rows = [['12', 0], ...Array.from({ length: 26 }, (_, i) => ['9.5', i + 1])];
+    for (const [size, i] of rows) {
+      await q(`INSERT INTO items (vin, batch_id, sku, size, name, status, with_box, created_at)
+               VALUES ($1, $2, $3, $4, 'E2E Many Sizes', 'needs_shelf', true, now() + ($5 || ' seconds')::interval)`,
+        [`SBM-E2EBM${stamp}${String(i).padStart(2, '0')}`, b.id, sku, size, String(i)]);
+    }
+    await page.goto('/box-labels');
+    try {
+      await page.route('**/api/sku-search', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'No product found for that SKU.' } }));
+      await page.getByPlaceholder(/Scan a VIN or box UPC/i).fill(sku);
+      await page.getByRole('button', { name: 'Find', exact: true }).click();
+      await expect(page.locator('.card').last()).toContainText('From your inventory');
+      const options = await page.locator('select').first().locator('option').allTextContents();
+      expect(options).toContain('US 12');
+      expect(options).toContain('US 9.5');
+      // The list says it is a page, and how to reach a pair that is not on it.
+      await expect(page.locator('.boxlbl-units')).toContainText('27 already in inventory');
+      await expect(page.locator('.boxlbl-units')).toContainText(/newest 25 are listed/);
+      expect(await page.locator('.boxlbl-unit').count()).toBe(25);
+    } finally {
+      await q('DELETE FROM items WHERE sku = $1', [sku]);
+      await q('DELETE FROM batches WHERE id = $1', [b.id]);
+    }
+  });
+
+  // A size that is in neither our stock nor the catalogue's run: the first 12.5 we
+  // have had of a style still needs a box label. The dropdown was the only way in.
+  test('a size we do not hold can be typed with "Other size…"', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    await page.goto('/box-labels');
+    await mintUnit(page, { upc: UPC });   // one 9.5 in stock → the dropdown offers 9.5 only
+    await page.route('**/api/sku-search', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'No product found for that SKU.' } }));
+    await page.getByPlaceholder(/Scan a VIN or box UPC/i).fill(SKU);
+    await page.getByRole('button', { name: 'Find', exact: true }).click();
+    await expect(page.locator('.card').last()).toContainText('From your inventory');
+    const select = page.locator('select').first();
+    expect(await select.locator('option').allTextContents()).not.toContain('US 12.5');
+    await select.selectOption('__other');
+    await page.locator('.sz-input').fill('12.5');
+    await expect(page.getByRole('button', { name: /Print box label only/i })).toBeEnabled();
+    await page.getByRole('button', { name: /Print box label only/i }).click();
+    await expectPrintDialog(page, 'Print box labels');
+  });
+
   test('a code in neither place says what to try next', async ({ page }) => {
     await loginAs(page, 'warehouse');
     await page.route('**/api/upc-search', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'No product found for that UPC.' } }));

@@ -9,7 +9,7 @@
 // the real pairs behind it, so the user can jump straight to a VIN instead of
 // minting a duplicate.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { findStockByCode, dbConfigured } from '../_lib/db.js';
+import { findStockByCode, findStockSizesByCode, dbConfigured } from '../_lib/db.js';
 
 // Sizes ascending, same as the catalogue endpoints (handles "9.5" / "10Y" / "8W").
 function sortSizes(list) {
@@ -35,13 +35,15 @@ export default async function handler(req, res) {
   if (!code) return send(res, 400, { ok: false, error: 'Provide a code.' });
 
   try {
-    const rows = await findStockByCode(code);
-    if (!rows.length) return send(res, 200, { ok: true, product: null, units: [] });
+    const [rows, held] = await Promise.all([findStockByCode(code), findStockSizesByCode(code)]);
+    if (!rows.length) return send(res, 200, { ok: true, product: null, units: [], total: 0 });
 
     // Newest row wins for the descriptive fields, but fall back across the set —
     // an older row may carry a colorway or UPC the newest one never got.
     const first = (pick) => rows.map(pick).find((v) => v != null && String(v).trim() !== '') ?? null;
-    const sizes = sortSizes([...new Set(rows.map((r) => String(r.size || '').trim()).filter(Boolean))]);
+    // Sizes from EVERY unit under the code, not from the 25 newest rows below — a
+    // style with more pairs than that in the system lost its older sizes here.
+    const sizes = sortSizes([...new Set([...held.sizes, ...rows.map((r) => String(r.size || '').trim())].filter(Boolean))]);
 
     return send(res, 200, {
       ok: true,
@@ -54,6 +56,8 @@ export default async function handler(req, res) {
         sizes,
         source: 'inventory',
       },
+      // How many units the code has in all; `units` below is the newest 25 of them.
+      total: held.total,
       units: rows.map((r) => ({
         vin: r.vin, size: r.size, status: r.status, upc: r.upc,
         name: r.name, sku: r.sku, colorway: r.colorway,

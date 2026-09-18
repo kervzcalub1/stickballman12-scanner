@@ -104,6 +104,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
           size: p.sizes?.length === 1 ? p.sizes[0] : '',
           sizeOptions: (p.sizes || []).slice().sort(compareSizes),
           units: local.units || [],
+          total: Number(local.total) || (local.units || []).length,
         });
         pulse('vin', `${p.name || p.sku} — ${local.units.length} in your inventory.`);
         askUpcCheck(code, upc);
@@ -166,6 +167,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
           size: p.sizes?.length === 1 ? p.sizes[0] : '',
           sizeOptions: (p.sizes || []).slice().sort(compareSizes),
           units: local.units || [],
+          total: Number(local.total) || (local.units || []).length,
         });
       }
     } catch (err) {
@@ -339,7 +341,10 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
           {/* Already in stock: pick the actual pair rather than minting a duplicate. */}
           {p.units?.length > 0 && (
             <div className="boxlbl-units">
-              <div className="muted sm mt"><b>{p.units.length}</b> already in inventory — pick the pair in your hand to reprint its labels:</div>
+              <div className="muted sm mt">
+                <b>{p.total || p.units.length}</b> already in inventory — pick the pair in your hand to reprint its labels
+                {p.total > p.units.length ? <> (the newest {p.units.length} are listed — for an older one, scan its VIN sticker)</> : null}:
+              </div>
               {p.units.map((u) => (
                 <div className="boxlbl-unit" key={u.vin}>
                   <span className="vin">{u.vin}</span>
@@ -352,17 +357,34 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
             </div>
           )}
           <div className="dcard-line mt">
+            {/* The dropdown lists the sizes the lookup knows — our own stock for an
+                inventory hit, the catalogue's run otherwise — because a pick can't be
+                mistyped. But a label is sometimes for a size that is in NEITHER list
+                (the pair in hand is the first 12.5 we've had), so "Other size…" opens
+                the free box. Not a guard: the size printed is the size in hand. */}
             <label className="sm">Size&nbsp;
-              {p.sizeOptions?.length ? (
-                <select value={p.size} onChange={(e) => setFound((f) => ({ ...f, size: e.target.value }))}>
+              {p.sizeOptions?.length && !p.customSize ? (
+                <select value={p.size} onChange={(e) => {
+                  if (e.target.value === '__other') setFound((f) => ({ ...f, size: '', customSize: true }));
+                  else setFound((f) => ({ ...f, size: e.target.value }));
+                }}>
                   <option value="">— pick —</option>
                   {p.sizeOptions.map((s) => <option key={s} value={s}>US {sizeLabel(s, p.gender, p.name)}</option>)}
+                  <option value="__other">Other size…</option>
                 </select>
               ) : (
-                <input className="sz-input" value={p.size} placeholder="US"
-                  onChange={(e) => setFound((f) => ({ ...f, size: e.target.value }))} />
+                <>
+                  <input className="sz-input" value={p.size} placeholder="US" autoFocus={!!p.customSize && !isMobile}
+                    onChange={(e) => setFound((f) => ({ ...f, size: e.target.value }))} />
+                  {p.customSize && (
+                    <button type="button" className="btn sm ghost" onClick={() => setFound((f) => ({ ...f, size: '', customSize: false }))}>
+                      Pick from the list
+                    </button>
+                  )}
+                </>
               )}
             </label>
+            {p.customSize && <span className="muted xs">Typed sizes print as written — 12.5, 8W, 6Y.</span>}
           </div>
           {needSize && <p className="muted sm">Pick the size — a box label without one can’t be shelved or sold from.</p>}
           <div className="nobox-actions mt">

@@ -145,4 +145,18 @@ the shelf). This tool is the one exception — the pair is in hand being re-boxe
 so it sends `noShelf: true` with no `locationCode`. The guard still fires for
 everything else, and a *bad* shelf code is still a 404 even with `noShelf`.
 
+**The size list, and typing one that isn't on it (2026-09-19).** Two reports from the
+floor, both about the same dropdown:
+- **A size we hold was missing** — 305381-007 had a 12 and the tool would not offer
+  it. `items/find` lists the **25 newest** units and the size list was read off that
+  page, so anything older than the 25th pair lost its size. `findStockSizesByCode`
+  now reads the sizes (and the total) across *every* unit under the code; the unit
+  list stays a page of 25 and says so ("the newest 25 are listed — for an older one,
+  scan its VIN sticker").
+- **A size we don't hold couldn't be typed.** The dropdown is there because a pick
+  can't be mistyped, not to stop a size — a label for the first 12.5 of a style is a
+  normal job. **Other size…** at the bottom of the list opens the free box (sizes print
+  as written: 12.5, 8W, 6Y); *Pick from the list* goes back. Never auto-focused on
+  mobile (iOS keyboard trap).
+
 No schema change. Covered by `e2e/box-labels.spec.js`.

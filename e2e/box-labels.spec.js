@@ -197,8 +197,68 @@ test.describe('Box Labels · our own stock comes first', () => {
     await select.selectOption('__other');
     await page.locator('.sz-input').fill('12.5');
     await expect(page.getByRole('button', { name: /Print box label only/i })).toBeEnabled();
+    // A size we have never held has no UPC on file: the print asks the catalogue for
+    // it (stubbed here) and pre-fills the prompt — the 9.5's barcode is never reused.
+    await page.route('**/api/upc-for-size*', (r) => r.fulfill({ json: { ok: true, upc: '333333333333', product: { name: 'E2E Catalogue Shoe', styleId: SKU, exact: true } } }));
     await page.getByRole('button', { name: /Print box label only/i }).click();
+    await expect(page.locator('.modal-msg')).toContainText(/Found on StockX/);
+    expect(await page.locator('.nobox-upc-input').inputValue()).toBe('333333333333');
+    await page.getByRole('button', { name: 'Save & print' }).click();
     await expectPrintDialog(page, 'Print box labels');
+  });
+
+  // A UPC names ONE size. The card used to carry "the first UPC any unit had", so a
+  // label for a size we held without a UPC printed straight away with another size's
+  // barcode on it — and never asked.
+  test('the UPC follows the size: another size\'s barcode is never printed', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    const sku = 'E2E-BOXLBL-PERSIZE';
+    await q('DELETE FROM items WHERE sku = $1', [sku]);
+    const [b] = await q(`INSERT INTO batches (batch_code, supplier_name, status, kind, date_received)
+      VALUES ($1, 'E2E box label', 'committed', 'existing', current_date) RETURNING id`, [`E2E-BLPS-${Date.now()}`]);
+    await q(`INSERT INTO items (vin, batch_id, sku, size, name, status, with_box, upc) VALUES
+      ($1, $3, $4, '11', 'E2E Per Size', 'needs_shelf', true, '111111111111'),
+      ($2, $3, $4, '12', 'E2E Per Size', 'needs_shelf', true, NULL)`,
+      [`SBM-E2EPS${Date.now().toString(36).toUpperCase()}A`, `SBM-E2EPS${Date.now().toString(36).toUpperCase()}B`, b.id, sku]);
+    // The catalogue answers for the 12 — stubbed, so the test is about the wiring and
+    // not about whether StockX is awake in CI.
+    await page.route('**/api/upc-for-size*', (r) => r.fulfill({ json: { ok: true, upc: '222222222222', product: { name: 'E2E Catalogue Shoe', styleId: sku, exact: true } } }));
+    await page.route('**/api/sku-search', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'No product found for that SKU.' } }));
+    try {
+      await page.goto('/box-labels');
+      await page.getByPlaceholder(/Scan a VIN or box UPC/i).fill(sku);
+      await page.getByRole('button', { name: 'Find', exact: true }).click();
+      await expect(page.locator('.card').last()).toContainText('From your inventory');
+      // The 11 has a UPC on file → it is shown and prints straight away.
+      await page.locator('select').first().selectOption('11');
+      await expect(page.locator('.card').last()).toContainText('UPC 111111111111');
+      // The 12 has none → the card says so, and printing asks — pre-filled from the
+      // catalogue, saying where the number came from, never with the 11's barcode.
+      await page.locator('select').first().selectOption('12');
+      await expect(page.locator('.card').last()).toContainText('No UPC');
+      await page.getByRole('button', { name: /Print box label only/i }).click();
+      await expect(page.locator('.modal-msg')).toContainText(/Found on StockX/);
+      await expect(page.locator('.modal-msg')).toContainText('E2E Catalogue Shoe');
+      expect(await page.locator('.nobox-upc-input').inputValue()).toBe('222222222222');
+      await page.getByRole('button', { name: 'Save & print' }).click();
+      await expectPrintDialog(page, 'Print box labels');
+    } finally {
+      await q('DELETE FROM items WHERE sku = $1', [sku]);
+      await q('DELETE FROM batches WHERE id = $1', [b.id]);
+    }
+  });
+
+  test('when the catalogue has no barcode for the size, the prompt asks as before', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    await stubCatalogue(page);
+    await page.route('**/api/upc-for-size*', (r) => r.fulfill({ json: { ok: true, upc: null, product: null } }));
+    await page.goto('/box-labels');
+    await page.getByPlaceholder(/Scan a VIN or box UPC/i).fill(SKU);
+    await page.getByRole('button', { name: 'Find', exact: true }).click();
+    await page.locator('select').first().selectOption('9.5');
+    await page.getByRole('button', { name: /Print box label only/i }).click();
+    await expect(page.locator('.modal-msg')).toContainText(/tongue label/);
+    expect(await page.locator('.nobox-upc-input').inputValue()).toBe('');
   });
 
   test('a code in neither place says what to try next', async ({ page }) => {

@@ -162,4 +162,22 @@ floor, both about the same dropdown:
   as written: 12.5, 8W, 6Y); *Pick from the list* goes back. Never auto-focused on
   mobile (iOS keyboard trap).
 
+**The UPC comes from the catalogue before it comes from a person (2026-09-19).**
+`GET /api/upc-for-size?sku=&size=` → `stockxUpcForSkuSize` (`api/_lib/stockx.js`): the
+official StockX API's variants carry `gtins` (`[{ type:'UPC'|'EAN', identifier }]`) per
+size, which the pricing code had been dropping. Verified live on 305381-007 before
+building: size 12 → `198965021212`, the number already on our own `SBM-R-004922`;
+all 18 sizes answered. `stockxVariants` now keeps `upc`; two cached requests; the
+style must match EXACTLY (`product.exact`) or `upc` is null — never a barcode off
+another colourway. When a print finds no UPC on the record, the prompt opens
+*"Checking the catalogue…"*, then pre-filled **"Found on StockX for this size"** with
+one *Save & print* — the tap that prints is also the look that checks it; a miss or
+a 503 falls back to the tongue-label ask exactly as before.
+
+**The UPC follows the SIZE.** Found while testing: on an inventory hit the card carried
+"the first UPC any unit had", so a label for a 12 we held without a UPC printed
+straight away with the 11's barcode and never asked. `found.upcBySize` keeps them per
+size; `pickSize` sets `upc` from it; a scanned UPC stays with the size it came back
+with; a typed/confirmed one is remembered under its size. Two tests pin it.
+
 No schema change. Covered by `e2e/box-labels.spec.js`.

@@ -77,6 +77,9 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
   }, [navBack, showCam, found]);
 
   function reset() { setFound(null); setInput(''); setError(''); setShowUnits(false); }
+  // The size picks the UPC: the one we hold for that size, or none (→ the print asks
+  // the catalogue, then a person). A UPC scanned on the way in stays only with its size.
+  const pickSize = (size, extra = {}) => setFound((f) => ({ ...f, ...extra, size, upc: f.upcBySize?.[size] || '' }));
 
   // A VIN goes straight to the unit. Any other code is checked against OUR OWN
   // stock first (api/items/find) and only then against the third-party catalogue:
@@ -101,11 +104,17 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       const local = await api.itemsFind(code).catch(() => null);
       if (local?.product) {
         const p = local.product;
+        // A UPC names ONE size. The card used to carry "the first UPC any unit had",
+        // so a label for the 12 printed with the 11's barcode and never asked. Keep
+        // them per size and let the size pick the UPC (`pickSize`).
+        const upcBySize = {};
+        for (const u of local.units || []) if (u.size && upcDigits(u.upc) && !upcBySize[u.size]) upcBySize[u.size] = upcDigits(u.upc);
+        const size = p.sizes?.length === 1 ? p.sizes[0] : '';
         setFound({
           kind: 'product', from: 'inventory', name: p.name || code, sku: p.sku || (upc ? '' : code),
-          upc: p.upc || (upc ? code : ''), colorway: p.colorway || '', gender: p.gender || '', image: '',
+          upcBySize, upc: upcBySize[size] || '', colorway: p.colorway || '', gender: p.gender || '', image: '',
           // One size in stock → it's almost certainly the pair in hand; preselect it.
-          size: p.sizes?.length === 1 ? p.sizes[0] : '',
+          size,
           sizeOptions: (p.sizes || []).slice().sort(compareSizes),
           units: local.units || [],
           total: Number(local.total) || (local.units || []).length,
@@ -120,7 +129,11 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       const { product: p } = upc ? await api.searchUpc(code) : await api.searchSku(code);
       setFound({
         kind: 'product', from: 'catalogue', name: p.name || code, sku: p.sku || (upc ? '' : code),
-        upc: upc ? code : '', colorway: p.colorway || '', gender: p.gender || '', image: p.image || '',
+        // A scanned UPC belongs to the size it came back with — changing the size
+        // drops it (the catalogue will be asked for the new size's at print time).
+        upcBySize: upc && p.scannedSize ? { [p.scannedSize]: code } : {},
+        upc: upc && p.scannedSize ? code : (upc ? code : ''),
+        colorway: p.colorway || '', gender: p.gender || '', image: p.image || '',
         size: p.scannedSize || '', sizeOptions: (p.sizes || []).slice().sort(compareSizes),
         units: [],
       });
@@ -167,8 +180,10 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
         const p = local.product;
         setFound({
           kind: 'product', from: 'inventory', name: p.name || c.upc, sku: p.sku || '',
-          upc: p.upc || c.upc, colorway: p.colorway || '', gender: p.gender || '', image: '',
-          size: p.sizes?.length === 1 ? p.sizes[0] : '',
+          // The UPC just confirmed belongs to exactly one size; carry it under that size.
+          upcBySize: c.size ? { [c.size]: upcDigits(c.upc) } : {},
+          upc: c.size ? upcDigits(c.upc) : '', colorway: p.colorway || '', gender: p.gender || '', image: '',
+          size: c.size || (p.sizes?.length === 1 ? p.sizes[0] : ''),
           sizeOptions: (p.sizes || []).slice().sort(compareSizes),
           units: local.units || [],
           total: Number(local.total) || (local.units || []).length,
@@ -196,9 +211,23 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
   // ---- printing -------------------------------------------------------------
   // A box label without a UPC has no barcode, which defeats the point — so when the
   // record has none, ask for it before printing (skippable).
-  function printBox(target) {
+  // No UPC on the record → ask the CATALOGUE for this size's barcode before asking a
+  // person: StockX carries one per size, and on the first check it matched the number
+  // already on our own pair. The prompt still opens, pre-filled and saying where the
+  // number came from, so the one tap that prints is also the one look that checks it.
+  async function printBox(target) {
     if (upcDigits(target.upc)) { setLabels({ items: [target], mode: 'upc' }); return; }
-    setUpcPrompt(target); setUpcInput(''); setNoUpcFound(false); setError('');
+    setUpcPrompt({ ...target, lookingUp: !!(target.sku && target.size), fromCatalogue: null });
+    setUpcInput(''); setNoUpcFound(false); setError('');
+    if (!target.sku || !target.size) return;
+    try {
+      const r = await api.upcForSize(target.sku, target.size);
+      setUpcPrompt((cur) => (cur ? { ...cur, lookingUp: false, fromCatalogue: r.upc ? r : null } : cur));
+      if (r.upc) setUpcInput(r.upc);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setUpcPrompt((cur) => (cur ? { ...cur, lookingUp: false } : cur)); // fall back to asking
+    }
   }
   async function confirmUpc() {
     const t = upcPrompt;
@@ -216,7 +245,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
         const updated = { ...t, upc: digits };
         setFound((f) => (f?.kind === 'item'
           ? { ...f, item: { ...f.item, upc: digits } }
-          : { ...f, upc: digits }));
+          : { ...f, upc: digits, upcBySize: { ...(f.upcBySize || {}), ...(f.size ? { [f.size]: digits } : {}) } }));
         setLabels({ items: [updated], mode: 'upc' });
       }
       setUpcPrompt(null);
@@ -381,8 +410,8 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
             <label className="sm">Size&nbsp;
               {p.sizeOptions?.length && !p.customSize ? (
                 <select value={p.size} onChange={(e) => {
-                  if (e.target.value === '__other') setFound((f) => ({ ...f, size: '', customSize: true }));
-                  else setFound((f) => ({ ...f, size: e.target.value }));
+                  if (e.target.value === '__other') pickSize('', { customSize: true });
+                  else pickSize(e.target.value);
                 }}>
                   <option value="">— pick —</option>
                   {p.sizeOptions.map((s) => <option key={s} value={s}>US {sizeLabel(s, p.gender, p.name)}</option>)}
@@ -391,9 +420,9 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
               ) : (
                 <>
                   <input className="sz-input" value={p.size} placeholder="US" autoFocus={!!p.customSize && !isMobile}
-                    onChange={(e) => setFound((f) => ({ ...f, size: e.target.value }))} />
+                    onChange={(e) => pickSize(e.target.value)} />
                   {p.customSize && (
-                    <button type="button" className="btn sm ghost" onClick={() => setFound((f) => ({ ...f, size: '', customSize: false }))}>
+                    <button type="button" className="btn sm ghost" onClick={() => pickSize('', { customSize: false })}>
                       Pick from the list
                     </button>
                   )}
@@ -436,7 +465,11 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
             <h3 className="modal-title">Box label — UPC needed</h3>
             <p className="modal-msg">
               <b>{upcPrompt.name || upcPrompt.sku || upcPrompt.vin}</b>{upcPrompt.size ? ` · US ${sizeLabel(upcPrompt.size, upcPrompt.gender, upcPrompt.name)}` : ''} has no UPC on file.
-              Read it off the <b>tongue label inside the shoe</b> (or the old box) so the new label scans normally.
+              {upcPrompt.lookingUp
+                ? ' Checking the catalogue for this size…'
+                : upcPrompt.fromCatalogue
+                  ? <> <b>Found on StockX</b> for this size ({upcPrompt.fromCatalogue.product?.name}). Check it against the tongue label if you can, then print.</>
+                  : <> Read it off the <b>tongue label inside the shoe</b> (or the old box) so the new label scans normally.</>}
               {upcPrompt.vin ? ' It’s saved to this pair for next time.' : ''}
             </p>
             <input className="nobox-upc-input" autoFocus={!isMobile} inputMode="numeric" autoComplete="off"

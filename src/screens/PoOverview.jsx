@@ -103,8 +103,8 @@ export function PoOverview({ onHome, onSignOut }) {
                   "shipped", "labels requested", "received blind", "to reconcile"). */}
               <label className="po-ov-search"><span className="muted xs">Search</span>
                 <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
-                  placeholder="Shoe, SKU, tracking number, PO code, or a status — “chicago shipped”"
-                  aria-label="Search by shoe name, SKU, tracking number, PO code or status" /></label>
+                  placeholder="Shoe, SKU, UPC, tracking number, PO code, or a status — “chicago shipped”"
+                  aria-label="Search by shoe name, SKU, UPC, tracking number, PO code or status" /></label>
               <label><span className="muted xs">Supplier</span>
                 <select value={supplier} onChange={(e) => setSupplier(e.target.value)}>
                   <option value="">All suppliers</option>
@@ -132,7 +132,7 @@ export function PoOverview({ onHome, onSignOut }) {
           : shown.length === 0 ? (
             <div className="card empty-state">
               {q
-                ? <>Nothing matches <b>{q}</b> — not a shoe, style code, tracking number, PO code or status on any order. Every word has to match, so try fewer. A label the supplier has not created yet has no number to find.</>
+                ? <>Nothing matches <b>{q}</b> — not a shoe, style code, UPC, tracking number, PO code or status on any order. The words of a shoe have to land on the same line, so try fewer. A label the supplier has not created yet has no number to find.</>
                 : 'No purchase order matches these filters.'}
               {' '}<button className="btn sm ghost" onClick={clearAll}>Clear filters</button>
             </div>

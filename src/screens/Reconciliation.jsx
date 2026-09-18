@@ -326,8 +326,8 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
           </div>
           <div className="rcn-search">
             <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
-              placeholder="Shoe, SKU, tracking number, PO code, or a state — “2 discrepancies”"
-              aria-label="Search by shoe name, SKU, tracking number, PO code or state" />
+              placeholder="Shoe, SKU, UPC, tracking number, PO code, or a state — “2 discrepancies”"
+              aria-label="Search by shoe name, SKU, UPC, tracking number, PO code or state" />
             {q ? <button className="btn sm ghost" onClick={() => setQ('')}>Clear</button> : null}
             {q && all ? <span className="muted sm">{list.length} of {all.length}</span> : null}
           </div>
@@ -335,7 +335,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
             : list.length === 0 ? (
               <div className="card empty-state">
                 {q ? (
-                  <>No {archived ? 'archived ' : ''}order matches <b>{q}</b> — not a shoe, style code, tracking number, PO code or state. Every word has to match, so try fewer.
+                  <>No {archived ? 'archived ' : ''}order matches <b>{q}</b> — not a shoe, style code, UPC, tracking number, PO code or state. The words of a shoe have to land on the same line, so try fewer.
                     {!archived && ' It may be under Archived.'}
                     {' '}<button className="btn sm ghost" onClick={() => setQ('')}>Clear search</button></>
                 ) : archived

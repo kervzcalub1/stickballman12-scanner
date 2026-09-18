@@ -10,9 +10,9 @@ const po = (over = {}) => ({
   box_count: 3, shipped_count: 0, delivered_count: 0, unit_count: 12, received_units: 0,
   tracking_numbers: ['1Z999AA10123456784'],
   lines: [
-    { sku: 'DZ5485-612', name: "Air Jordan 1 Retro High OG 'Chicago'", qty: 6 },
-    { sku: 'IQ5085-102', name: 'Nike Dunk Low Panda', qty: 4 },
-    { sku: 'HV4091-006', name: null, qty: 2 },
+    { sku: 'DZ5485-612', name: "Air Jordan 1 Retro High OG 'Chicago'", qty: 6, upcs: ['194272681941', '194272681958'] },
+    { sku: 'IQ5085-102', name: 'Nike Dunk Low Panda', qty: 4, upcs: ['19759605950'] },
+    { sku: 'HV4091-006', name: null, qty: 2, upcs: [] },
   ],
   ...over,
 });
@@ -67,7 +67,40 @@ test('reconciliation: from the counts on the PO list, and from rc on the reconci
   expect(poMatchesSearch(po({ status: 'closed' }), 'archived')).toBe(true);
 });
 
-test('every word must land somewhere — a shoe AND a state narrows, not widens', () => {
+test('a UPC finds the order, whole or by its tail, and marks the style it belongs to', () => {
+  expect(poMatchesSearch(po(), '194272681941')).toBe(true);
+  expect(poMatchesSearch(po(), '1958')).toBe(true);           // the tail of the second size's UPC
+  expect(poMatchesSearch(po(), '194 272 681 941')).toBe(true); // spaced, as a scanner or an email gives it
+  expect(poMatchesSearch(po(), '999999999999')).toBe(false);
+  const hits = poSearchHits(po(), '19759605950');
+  expect(hits.lines[0]).toMatchObject({ sku: 'IQ5085-102', hit: true });
+  expect(hits.lines.filter((l) => l.hit)).toHaveLength(1);
+});
+
+// The user's report: "nike dunk low" showed every order with a Nike anything, because
+// each word only had to land SOMEWHERE on the order. The content words must now land on
+// the same line; only a word about the order as a whole (a state, the supplier) may
+// come from elsewhere.
+test('the words of a shoe name must land on the SAME line', () => {
+  const split = po({ lines: [
+    { sku: 'CW2288-111', name: 'Nike Air Force 1 Low White', qty: 5 },
+    { sku: 'DD1391-100', name: 'Adidas Dunk Low Panda', qty: 3 },
+  ] });
+  expect(poMatchesSearch(split, 'nike dunk low')).toBe(false);   // nike on one line, dunk on another
+  expect(poMatchesSearch(split, 'nike air force')).toBe(true);
+  expect(poMatchesSearch(split, 'dunk low')).toBe(true);
+  expect(poMatchesSearch(split, 'low')).toBe(true);
+  expect(poMatchesSearch(po(), 'nike dunk low')).toBe(true);     // one line carries all three
+  expect(poMatchesSearch(po(), 'low dunk nike')).toBe(true);     // order of words is not enforced
+  // A name AND its code, on the same line, is fine; across two lines it is not.
+  expect(poMatchesSearch(po(), 'panda IQ5085')).toBe(true);
+  expect(poMatchesSearch(po(), 'panda DZ5485')).toBe(false);
+  // And the preview marks only the line that satisfied the search.
+  const hits = poSearchHits(po(), 'nike dunk low');
+  expect(hits.lines.map((l) => [l.sku, l.hit])).toEqual([['IQ5085-102', true], ['DZ5485-612', false], ['HV4091-006', false]]);
+});
+
+test('a state or the supplier still counts from the order as a whole', () => {
   expect(poMatchesSearch(po({ status: 'draft', shipped_count: 3 }), 'chicago shipped')).toBe(true);
   expect(poMatchesSearch(po({ status: 'draft' }), 'chicago shipped')).toBe(false);
   expect(poMatchesSearch(po({ status: 'draft', shipped_count: 3 }), 'yeezy shipped')).toBe(false);

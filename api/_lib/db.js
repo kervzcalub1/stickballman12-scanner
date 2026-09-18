@@ -3855,9 +3855,10 @@ export async function listPos({ uid, supplierScope }) {
         -- list can be SEARCHED by shoe and each row can PREVIEW its contents under a
         -- search. "Which order had the Chicagos" is asked of this list far more often
         -- than any tracking number is. Biggest line first: that is the order's headline.
-        coalesce((SELECT json_agg(json_build_object('sku', x.sku, 'name', x.name, 'qty', x.qty)
+        coalesce((SELECT json_agg(json_build_object('sku', x.sku, 'name', x.name, 'qty', x.qty, 'upcs', x.upcs)
                                   ORDER BY x.qty DESC, x.sku)
-                    FROM (SELECT l.sku, max(l.name) AS name, sum(l.qty_expected)::int AS qty
+                    FROM (SELECT l.sku, max(l.name) AS name, sum(l.qty_expected)::int AS qty,
+                                   array_remove(array_agg(DISTINCT l.upc), NULL) AS upcs
                             FROM po_lines l
                            WHERE l.po_id = p.id AND (coalesce(l.sku, '') <> '' OR coalesce(l.name, '') <> '')
                            GROUP BY l.sku) x), '[]') AS lines
@@ -3894,9 +3895,10 @@ export async function listPos({ uid, supplierScope }) {
       coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
                 WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers,
       -- What is ON the order (see the supplier branch above).
-      coalesce((SELECT json_agg(json_build_object('sku', x.sku, 'name', x.name, 'qty', x.qty)
+      coalesce((SELECT json_agg(json_build_object('sku', x.sku, 'name', x.name, 'qty', x.qty, 'upcs', x.upcs)
                                 ORDER BY x.qty DESC, x.sku)
-                  FROM (SELECT l.sku, max(l.name) AS name, sum(l.qty_expected)::int AS qty
+                  FROM (SELECT l.sku, max(l.name) AS name, sum(l.qty_expected)::int AS qty,
+                                 array_remove(array_agg(DISTINCT l.upc), NULL) AS upcs
                           FROM po_lines l
                          WHERE l.po_id = p.id AND (coalesce(l.sku, '') <> '' OR coalesce(l.name, '') <> '')
                          GROUP BY l.sku) x), '[]') AS lines
@@ -4849,9 +4851,10 @@ export async function listReconcilePos() {
       coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
                 WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers,
       -- What is ON the order, so the list can be searched by shoe (see listPos).
-      coalesce((SELECT json_agg(json_build_object('sku', x.sku, 'name', x.name, 'qty', x.qty)
+      coalesce((SELECT json_agg(json_build_object('sku', x.sku, 'name', x.name, 'qty', x.qty, 'upcs', x.upcs)
                                 ORDER BY x.qty DESC, x.sku)
-                  FROM (SELECT l.sku, max(l.name) AS name, sum(l.qty_expected)::int AS qty
+                  FROM (SELECT l.sku, max(l.name) AS name, sum(l.qty_expected)::int AS qty,
+                                 array_remove(array_agg(DISTINCT l.upc), NULL) AS upcs
                           FROM po_lines l
                          WHERE l.po_id = p.id AND (coalesce(l.sku, '') <> '' OR coalesce(l.name, '') <> '')
                          GROUP BY l.sku) x), '[]') AS lines
@@ -5710,9 +5713,10 @@ export async function listArchivedPos({ limit = 100 } = {}) {
       coalesce((SELECT array_agg(b.tracking_number) FROM po_boxes b
                 WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL), '{}') AS tracking_numbers,
       -- What is ON the order, so the list can be searched by shoe (see listPos).
-      coalesce((SELECT json_agg(json_build_object('sku', x.sku, 'name', x.name, 'qty', x.qty)
+      coalesce((SELECT json_agg(json_build_object('sku', x.sku, 'name', x.name, 'qty', x.qty, 'upcs', x.upcs)
                                 ORDER BY x.qty DESC, x.sku)
-                  FROM (SELECT l.sku, max(l.name) AS name, sum(l.qty_expected)::int AS qty
+                  FROM (SELECT l.sku, max(l.name) AS name, sum(l.qty_expected)::int AS qty,
+                                 array_remove(array_agg(DISTINCT l.upc), NULL) AS upcs
                           FROM po_lines l
                          WHERE l.po_id = p.id AND (coalesce(l.sku, '') <> '' OR coalesce(l.name, '') <> '')
                          GROUP BY l.sku) x), '[]') AS lines

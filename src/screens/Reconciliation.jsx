@@ -9,6 +9,7 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { poMatchesSearch, reconcileChipOf, expectsAtOrderLevel, hasOrderedList } from '../lib/postatus.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
+import { PoSearchPreview } from '../components/PoSearchPreview.jsx';
 import { isBoxesOrder } from '../lib/postatus.js';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoResolution } from '../components/PoResolution.jsx';
@@ -286,6 +287,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
               {tagOf(p) && <span>{tagOf(p)}</span>}
               <span>{units}</span>
             </div>
+            <PoSearchPreview po={p} query={q} />
             {(p.resolution_state === 'open' || p.comment_count > 0) && (
               <div className="rcn-card-foot">
                 {p.resolution_state === 'open' && <span className="po-flag warn">Resolution open</span>}

@@ -21,6 +21,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoOriginChip } from '../components/PoOriginChip.jsx';
+import { PoSearchPreview } from '../components/PoSearchPreview.jsx';
 import { PoDetail } from './PoDetail.jsx';
 
 export function PoOverview({ onHome, onSignOut }) {
@@ -168,6 +169,10 @@ export function PoOverview({ onHome, onSignOut }) {
                       </span>
                       {p.received_units > 0 && <span>{p.received_units} received</span>}
                     </div>
+                    {/* Under a search only: the part of the order the search landed on,
+                        so the person can tell which of five matching orders is the one
+                        without opening each. */}
+                    <PoSearchPreview po={p} query={q} />
                   </button>
                   <span className="po-ov-caret" aria-hidden="true">›</span>
                 </div>

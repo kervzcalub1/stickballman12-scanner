@@ -210,71 +210,84 @@ export function poSearchWords(p) {
   return words.filter(Boolean).map((w) => String(w).toLowerCase());
 }
 
-// `lines` on a list row: one entry per style — `{ sku, name, qty }` — off the order's
-// manifest (`listPos` and friends). The SKUs are codes, the names are words.
+// `lines` on a list row: one entry per style — `{ sku, name, qty, upcs }` — off the
+// order's manifest (`listPos` and friends). The name is words; the SKU and the UPCs
+// (one per size the manifest declared) are codes.
 const poLines = (p) => (p?.lines || []).filter((l) => l && (l.sku || l.name));
+
+// One WORD against one piece of text / one code — the two comparisons in the header.
+const hitText = (text, w) => { const t = String(text ?? '').toLowerCase(); const l = String(w || '').toLowerCase(); return !!t && !!l && t.includes(l); };
+const hitCode = (code, w) => { const c = trackKey(code); const k = trackKey(w); return !!c && !!k && c.includes(k); };
+
+// The THINGS a word can land on. An ITEM is one line of the manifest (its name, its
+// style code, its UPCs) or one tracking number; the GLOBALS are facts about the order
+// as a whole — its code, its supplier, and the status words the chips print.
+const lineItem = (l) => ({ line: l, name: l.name, codes: [l.sku, ...(l.upcs || [])].filter(Boolean) });
+const trackItem = (t) => ({ tracking: t, name: '', codes: [t] });
+const itemHit = (item, w) => hitText(item.name, w) || item.codes.some((c) => hitCode(c, w));
+const globalHit = (p, w) => hitCode(p?.po_code, w) || hitText(p?.supplier_name, w) || hitText(p?.tag_code, w)
+  || poSearchWords(p).some((s) => hitText(s, w));
+
+// THE RULE: every word must land on the SAME item, or on the order as a whole.
+// "nike dunk low" used to match any order with a Nike SOMETHING on one line and a
+// Dunk on another — each word landed somewhere, and "somewhere" was the whole order.
+// Now the content words have to land on one line (or one tracking number), while a
+// word about the order — "shipped", the supplier's name — still counts from anywhere,
+// so "chicago shipped" keeps narrowing to shipped orders carrying the Chicagos.
+const itemSatisfies = (p, item, words) => words.every((w) => (item && itemHit(item, w)) || globalHit(p, w));
 
 export function poMatchesSearch(p, query) {
   const raw = String(query || '').trim();
   if (!raw) return true;
   const lines = poLines(p);
-  const codes = [p?.po_code, ...(p?.tracking_numbers || []), ...lines.map((l) => l.sku)]
-    .map(trackKey).filter(Boolean);
+  const items = [...lines.map(lineItem), ...(p?.tracking_numbers || []).map(trackItem)];
   // The whole query as ONE code first: a tracking number pasted out of an email arrives
   // as "1Z 999 AA1 01 2345 6784", and splitting that into words must not stop it
   // matching as the single number it is.
-  const whole = trackKey(raw);
-  if (whole && codes.some((c) => c.includes(whole))) return true;
-  const text = [...lines.map((l) => l.name), p?.supplier_name, p?.tag_code, ...poSearchWords(p)]
-    .filter(Boolean).map((t) => String(t).toLowerCase());
-  return raw.split(/\s+/).every((w) => {
-    const k = trackKey(w);
-    const l = w.toLowerCase();
-    return (k && codes.some((c) => c.includes(k))) || text.some((t) => t.includes(l));
-  });
+  if (hitCode(p?.po_code, raw) || items.some((it) => it.codes.some((c) => hitCode(c, raw)))) return true;
+  const words = raw.split(/\s+/);
+  // `null` stands for "no item" — an order with nothing inside can still match on its
+  // own code, supplier or status.
+  return [null, ...items].some((it) => itemSatisfies(p, it, words));
 }
 
 // ── What a matched row should SHOW, before it is opened ─────────────────────────
 // A list of PO codes that all "match chicago" is a list you still have to open one by
 // one. So each row previews the part of itself the search landed on: the manifest lines
-// whose shoe or style code matched (first), the tracking number that matched, and the
-// status word that matched — each marked up by `segmentsFor` so the eye goes straight to
-// the hit. When the search landed on nothing INSIDE the order (a PO code, the supplier),
-// the row still previews its biggest lines: the person is asking what is in these
-// orders, and "nothing matched inside" is not an answer to that.
+// the search satisfied (first), the tracking number it satisfied, and the status word
+// it landed on — each marked up by `segmentsFor` so the eye goes straight to the hit.
+// When the search landed on nothing INSIDE the order (a PO code, the supplier), the row
+// still previews its biggest lines: the person is asking what is in these orders, and
+// "nothing matched inside" is not an answer to that.
 //
 // Pure, no clock. `words` is the query split into words PLUS the whole query, so a
-// spaced tracking number is tried as the one code it is — the same rule as the filter.
+// spaced tracking number is marked as the one code it is — the same rule as the filter.
 export function poSearchHits(p, query, { maxLines = 3 } = {}) {
   const raw = String(query || '').trim();
   if (!raw) return null;
-  const words = [...new Set([raw, ...raw.split(/\s+/)])];
+  const words = raw.split(/\s+/);
   const lines = poLines(p);
-  const hitLines = lines.filter((l) => wordsHit(l.name, words) || wordsHit(l.sku, words, true));
+  // A line is a hit when the SEARCH is satisfied on it — same rule as the filter — and
+  // at least one word actually landed on the line itself rather than on the order.
+  const satisfied = (item) => (item.codes.some((c) => hitCode(c, raw)))
+    || (itemSatisfies(p, item, words) && words.some((w) => itemHit(item, w)));
+  const hitLines = lines.filter((l) => satisfied(lineItem(l)));
   const rest = lines.filter((l) => !hitLines.includes(l));
   const shown = [...hitLines, ...rest].slice(0, Math.max(maxLines, hitLines.length));
-  const tracking = (p?.tracking_numbers || []).filter((t) => wordsHit(t, words, true));
+  const tracking = (p?.tracking_numbers || []).filter((t) => satisfied(trackItem(t)));
   // Status words as the chips print them; only the ones the search landed on — and one
   // chip for a state, not two: the raw column value ("shipped") sits inside the chip's
   // own label ("2/2 shipped") and printing both said the same thing twice.
-  const landed = [...new Set(poSearchWords(p).filter((w) => words.some((q) => w.includes(q.toLowerCase()))))];
+  const landed = [...new Set(poSearchWords(p).filter((s) => words.some((w) => hitText(s, w))))];
   const status = landed.filter((w) => !landed.some((o) => o !== w && o.includes(w)));
   return {
-    words,
+    words: [...new Set([raw, ...words])],
     lines: shown.map((l) => ({ ...l, hit: hitLines.includes(l) })),
     more: Math.max(0, lines.length - shown.length),
     tracking,
     status,
     insideHit: hitLines.length > 0 || tracking.length > 0 || status.length > 0,
   };
-}
-
-function wordsHit(text, words, code = false) {
-  const t = String(text ?? '');
-  if (!t) return false;
-  if (code) { const key = trackKey(t); return words.some((w) => { const k = trackKey(w); return k && key.includes(k); }); }
-  const low = t.toLowerCase();
-  return words.some((w) => { const l = String(w).toLowerCase(); return l && low.includes(l); });
 }
 
 // The same question asked of a receiving BATCH: "which batch is this parcel?"

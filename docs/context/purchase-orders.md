@@ -1293,15 +1293,25 @@ The same box now takes what is in a person's HEAD, not only what is in their han
 box rather than a row of dropdowns — status × reconciliation × kind is a form, and this
 is a search. `e2e/po-search.spec.js` pins it.
 
-- All four list queries also return **`lines`** — one `{ sku, name, qty }` per style off
-  the order's `po_lines`, qty summed over sizes, biggest first. An order with no
-  manifest yet has nothing to match a shoe against.
-- **Per WORD, two kinds of match.** Codes (PO code, tracking numbers, SKUs) go through
-  `trackKey` — so `dz5485-612`, `DZ5485612` and `5485` find the same style. Words (shoe
-  names, supplier, tag, the status vocabulary) are lowercase substrings. **Every word
-  must land somewhere on the order**, so `chicago shipped` narrows to shipped orders
-  carrying the Chicagos. The whole query is still tried first as ONE code, so a spaced
-  tracking number pasted from an email keeps matching as the single number it is.
+- All four list queries also return **`lines`** — one `{ sku, name, qty, upcs }` per
+  style off the order's `po_lines`, qty summed over sizes, the UPCs of every size the
+  manifest declared, biggest first. An order with no manifest yet has nothing to match
+  a shoe against.
+- **Per WORD, two kinds of match.** Codes (PO code, tracking numbers, SKUs, UPCs) go
+  through `trackKey` — so `dz5485-612`, `DZ5485612` and `5485` find the same style, and
+  the last four digits of a UPC work. Words (shoe names, supplier, tag, the status
+  vocabulary) are lowercase substrings. The whole query is tried first as ONE code, so
+  a spaced tracking number pasted from an email keeps matching as the single number it
+  is.
+- **Every word must land on the SAME item, or on the order as a whole (2026-09-19).**
+  An item is one manifest line (name + SKU + UPCs) or one tracking number; the order's
+  globals are its code, supplier, tag and status words. The first version let each word
+  land *anywhere* on the order, so `nike dunk low` matched every order with a Nike
+  something on one line and a Dunk on another — the user's report. Now the content
+  words have to sit on one line (`nike dunk low` → *Nike Dunk Low Panda*; `panda
+  DZ5485` fails because the name and the code are on different lines), while a word
+  about the order still counts from anywhere, so `chicago shipped` keeps narrowing to
+  shipped orders carrying the Chicagos. Word order is not enforced.
 - **The status words are the chip labels, exactly as printed** (`poSearchWords`):
   `poChipOf` (*Filling · Labels requested · 2/3 shipped · Delivered · to reconcile ·
   Receiving · Reconciled · Closed*), the kind chip (*Shoes · Empty boxes*), the raw column

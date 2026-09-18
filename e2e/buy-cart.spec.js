@@ -1940,6 +1940,20 @@ test.describe('one price for the run, and the sizes that break it', () => {
 
     // And the button still speaks in sizes, not prices.
     await expect(page.getByRole('button', { name: 'Ask about 2 sizes' })).toBeEnabled();
+
+    // SENDING CLEARS THE WHOLE FORM — code, shoe, sizes, price, photo count. The first
+    // version kept the shoe for "the next size of the same style"; the buyer's report
+    // was the opposite: a form still showing the last shoe was getting re-sent.
+    await page.getByRole('button', { name: 'Ask about 2 sizes' }).click();
+    await expect(page.locator('.bc-add-body')).toHaveCount(0);
+    expect(await page.getByPlaceholder('SKU or style code').inputValue()).toBe('');
+    await expect(page.locator(".bc-lines").filter({ hasText: "HV4091-006" })).toBeVisible();
+
+    // The open request rides in the URL: a refresh inside it stays inside it, rather
+    // than landing back on the queue.
+    expect(page.url()).toContain(`request=${cartId}`);
+    await page.reload();
+    await expect(page.locator('.bc-code')).toHaveText(`BC-${cartId}`);
   });
 
   test('the endpoint takes a different price per size on one request', async ({ request }) => {

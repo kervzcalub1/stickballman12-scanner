@@ -16,8 +16,8 @@ import { useQueryParam } from '../lib/urlstate.js';
 
 export function DeletedItems({ onHome, onSignOut }) {
   const [q, setQ] = useQueryParam('q', '');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [from, setFrom] = useQueryParam('from');
+  const [to, setTo] = useQueryParam('to');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

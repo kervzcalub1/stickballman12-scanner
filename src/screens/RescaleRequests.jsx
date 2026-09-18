@@ -10,6 +10,7 @@ import { rangeOf, fmtPrice, PH_DATETIME } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
 import { SkuCodePicker } from '../components/SkuCodePicker.jsx';
 import { markupSuffix } from '../lib/config.js';
+import { useQueryParam, useQueryDateRange } from '../lib/urlstate.js';
 import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
 
 // Monotonic key source for this screen's React lists (unique among siblings).
@@ -144,8 +145,12 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   const [mode, setMode] = useState('list'); // 'list' | 'new'
   const [requests, setRequests] = useState(null);
   const [error, setError] = useState('');
-  const [statusF, setStatusF] = useState(canAudit ? 'open' : 'all');
-  const [dr, setDr] = useState(() => ({ mode: 'day', anchor: new Date() }));
+  // Status tab + date range in the URL (?status=&dm=&da=): the warehouse refreshes
+  // this page between shelf trips, and PH hands links to "the audited ones". A bogus
+  // ?status= falls back to the role's default rather than reaching the server.
+  const [statusRaw, setStatusF] = useQueryParam('status', canAudit ? 'open' : 'all');
+  const statusF = ['open', 'audited', 'closed', 'cancelled', 'all'].includes(statusRaw) ? statusRaw : (canAudit ? 'open' : 'all');
+  const [dr, setDr] = useQueryDateRange('day');
   const [auditId, setAuditId] = useState(null);
   const [auditRows, setAuditRows] = useState([]);
   const [auditNote, setAuditNote] = useState('');

@@ -96,10 +96,14 @@ export function PoOverview({ onHome, onSignOut }) {
         {pos != null && pos.length > 0 && (
           <>
             <div className="po-ov-filters">
-              <label className="po-ov-search"><span className="muted xs">Tracking number</span>
+              {/* One box, every handle a person has on an order: what is in it (shoe
+                  name, style code), what identifies it (PO code, tracking number), and
+                  where it is (the status and reconciliation words the chips print —
+                  "shipped", "labels requested", "received blind", "to reconcile"). */}
+              <label className="po-ov-search"><span className="muted xs">Search</span>
                 <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
-                  placeholder="Paste or scan a tracking number — or a PO code"
-                  aria-label="Search by tracking number or PO code" /></label>
+                  placeholder="Shoe, SKU, tracking number, PO code, or a status — “chicago shipped”"
+                  aria-label="Search by shoe name, SKU, tracking number, PO code or status" /></label>
               <label><span className="muted xs">Supplier</span>
                 <select value={supplier} onChange={(e) => setSupplier(e.target.value)}>
                   <option value="">All suppliers</option>
@@ -127,7 +131,7 @@ export function PoOverview({ onHome, onSignOut }) {
           : shown.length === 0 ? (
             <div className="card empty-state">
               {q
-                ? <>No order carries a tracking number or PO code matching <b>{q}</b>. A label the supplier has not created yet has no number to find.</>
+                ? <>Nothing matches <b>{q}</b> — not a shoe, style code, tracking number, PO code or status on any order. Every word has to match, so try fewer. A label the supplier has not created yet has no number to find.</>
                 : 'No purchase order matches these filters.'}
               {' '}<button className="btn sm ghost" onClick={clearAll}>Clear filters</button>
             </div>

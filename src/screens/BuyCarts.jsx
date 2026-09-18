@@ -11,6 +11,7 @@ import { poHref } from '../lib/poLink.js';
 import { TopBar, FormModal } from '../components/common.jsx';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { useLiveRefresh } from '../hooks.js';
 import { BuyCart } from './BuyCart.jsx';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -49,7 +50,10 @@ export function BuyCarts({ user, onHome, onSignOut }) {
   // In the URL, like the other filtered lists: "look at Eric's requests" is a link
   // somebody sends, and it has to survive the refresh you do after approving one.
   const [buyer, setBuyer] = useQueryParam('buyer');
-  const [open, setOpen] = useState(null);
+  // The open request rides in `?request=`, like `?po=` on the order pages: a refresh
+  // inside BC-2400 used to land back on the queue, and a link to one could not be sent.
+  const [openRaw, setOpen] = useQueryParam('request');
+  const open = /^\d+$/.test(openRaw) ? Number(openRaw) : null;
   const [err, setErr] = useState('');
   const [asking, setAsking] = useState(false);
 
@@ -70,6 +74,12 @@ export function BuyCarts({ user, onHome, onSignOut }) {
   // the loaded page would quietly show a fraction of somebody's requests and read as
   // though that were all of them.
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter, buyer]);
+  // The queue counts and the status chips move when somebody else acts — a buyer closing
+  // a list, a tap in the group — so the desk's pile is re-read quietly rather than on F5.
+  useLiveRefresh(async () => {
+    const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined);
+    setCarts(c); setCounts(n); if (b) setBuyers(b);
+  }, { every: 20_000, paused: !!asking || !!open });
 
   // Both questions in ONE modal. As two chained prompts, answering the first and then
   // cancelling the second threw the first answer away with nothing on screen to say so.
@@ -83,7 +93,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
 
   if (open) {
     return <BuyCart user={user} cartId={open} onSignOut={onSignOut}
-      onBack={() => { setOpen(null); load(); }} />;
+      onBack={() => { setOpen(''); load(); }} />;
   }
 
   return (

@@ -4,7 +4,7 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { api } from '../api.js';
-import { useQueryParam } from '../lib/urlstate.js';
+import { useQueryParam, readParam, writeParam } from '../lib/urlstate.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
 import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip, CopyText, RemoveUnitsModal, Provenance } from '../components/common.jsx';
@@ -500,6 +500,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   useEffect(() => {
     if (openVin) { openDetail(openVin); onConsumedVin?.(); }
   }, [openVin]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A refresh inside a pair's detail comes back to that pair, not the list: the open
+  // VIN rides in `?vin=` (written by openDetail, cleared by backToList). Read once on
+  // mount; it is only a pointer — the record is re-fetched, never trusted from the URL.
+  useEffect(() => {
+    const v = readParam('vin');
+    if (v && !openVin) openDetail(v);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Device Back button: close a modal/camera, else leave the detail view, else
   // fall through to the app (→ home).
@@ -569,6 +576,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     const v = String(vin).trim();
     if (!v) return;
     setMode('detail'); setDetail(null); setDetailPhotos(null); setError(''); setShowCam(false); setSticker(null);
+    writeParam('vin', v);
     setDetailStatusDraft(null); setCustomTag(''); setStatusNote(''); // reset staged status for the new item
     try { const d = await api.itemLookup(v); setDetail(d); loadDetailPhotos(d.item?.sku); }
     catch (err) {
@@ -612,7 +620,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setPhotoDl(false); }
   }
-  function backToList() { setMode('list'); setDetail(null); setSticker(null); setError(''); load(); }
+  function backToList() { setMode('list'); setDetail(null); setSticker(null); setError(''); writeParam('vin', ''); load(); }
 
   // Report: status edits are staged in statusDrafts and only persisted on Save.
   const setStatusDraft = (vin, status) => setStatusDrafts((d) => ({ ...d, [vin]: status }));

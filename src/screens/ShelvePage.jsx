@@ -11,6 +11,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { isVinCode, isLocationCode } from '../lib/codes.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
+import { useQueryParam } from '../lib/urlstate.js';
 import { ShelfPicker } from '../components/ShelfPicker.jsx';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -125,7 +126,11 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
   const noBoxCount = rows.filter((r) => r.with_box === false && !r.nowHasBox).length;
 
   // ---- "Pick from list" put-away: select pending-shelf shoes, assign a shelf ----
-  const [mode, setMode] = useState('scan'); // 'scan' (classic) | 'list'
+  // ?tab=list keeps the person on the pick-from-list view across a refresh; the
+  // scanned shelf + rows are a cart and are deliberately not restored.
+  const [tabRaw, setTabRaw] = useQueryParam('tab');
+  const mode = tabRaw === 'list' ? 'list' : 'scan'; // 'scan' (classic) | 'list'
+  const setMode = (m) => setTabRaw(m === 'list' ? 'list' : '');
   const [pending, setPending] = useState(null);
   const [pendSel, setPendSel] = useState(() => new Set());
   const [pickerOpen, setPickerOpen] = useState(false);

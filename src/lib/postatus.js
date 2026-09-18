@@ -155,11 +155,78 @@ export function poChipOf(p) {
 // Case-insensitive throughout: `1z999…` off a phone keyboard is the same parcel.
 export const trackKey = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
+// ── The reconciliation chip: what the RECONCILIATION of an order should actually SAY ──
+// "To reconcile" on a 13-of-13 all-matched PO is noise — it reads as a chore when there
+// is nothing to decide. So name the real state: what's wrong, or what's still on its
+// way, or that it's done.
+//   rc = { clean, no_manifest, shortage, overage, wrong_size, wrong_sku, unpacked,
+//          expected_units, received_units, intake_done, awaiting_boxes }
+// Lives here (not on the Reconciliation screen) because the PO list searches by it.
+export function reconcileChipOf(status, rc) {
+  if (status === 'reconciled') return { cls: 'ok', label: 'Reconciled' };
+  if (status === 'closed') return { cls: 'muted', label: 'Archived' };
+  if (!rc) return { cls: 'receiving', label: 'To reconcile' };
+  if (!rc.intake_done) return { cls: 'receiving', label: 'Receiving' };
+  if (rc.no_manifest) return { cls: 'warn', label: 'Received blind' };
+  const issues = (rc.shortage || 0) + (rc.overage || 0) + (rc.wrong_size || 0)
+    + (rc.wrong_sku || 0) + (rc.unpacked || 0);
+  if (issues) return { cls: 'bad', label: `${issues} discrepanc${issues === 1 ? 'y' : 'ies'}` };
+  // Clean, but auto-reconcile held off because a label hasn't left the supplier yet —
+  // more units are still due, so closing now would freeze an incomplete picture.
+  if (rc.awaiting_boxes) return { cls: 'receiving', label: 'Boxes still out' };
+  return { cls: 'ok', label: 'Matched · ready to close' };
+}
+
+// ── One search box for everything a person knows about an order ─────────────────
+// The box started as "tracking number or PO code" and that was the identifier people had
+// in HAND. What they have in their HEAD is different: the shoe ("which order had the
+// Chicagos"), a style code, or where it is ("the ones still shipping", "anything with a
+// discrepancy"). All of it goes through the one box, because a row of dropdowns for
+// status × reconciliation × kind is a form, and this is a search.
+//
+// Two kinds of match, chosen per WORD:
+//   · CODES (PO code, tracking numbers, SKUs) match through `trackKey` — punctuation and
+//     case stripped, substring — so `dz5485-612`, `DZ5485612` and `5485` all find the
+//     same style, and the last four digits of a tracking number still work.
+//   · WORDS (shoe names, supplier, and the status/reconciliation vocabulary the chips
+//     print) match as lowercase substrings.
+// Every word must land somewhere on the order, so `chicago shipped` narrows to shipped
+// orders carrying the Chicagos rather than everything that is either.
+//
+// The status words are the CHIP LABELS, exactly as the list prints them (`poChipOf`,
+// `reconcileChipOf`, the kind chip), plus the raw column value — a person searches for
+// what they can read on the screen, and "labels requested" is on the screen while
+// `draft` is not. A reconciliation state is only searchable where the row carries `rc`
+// (the Reconciliation page); the PO list knows "received blind" and "to reconcile" from
+// its own counts.
+export function poSearchWords(p) {
+  const words = [p?.status, PO_STATUS[p?.status]?.label, poChipOf(p || {}).label, orderKindChip(p).label];
+  if (awaitingLabels(p)) words.push('labels requested');
+  if (p?.status === 'receiving') words.push('to reconcile');
+  if (Number(p?.unit_count) === 0 && Number(p?.received_units) > 0) words.push('received blind');
+  if (p?.rc || ['reconciled', 'closed'].includes(p?.status)) words.push(reconcileChipOf(p.status, p.rc).label);
+  if (p?.resolution_state === 'open') words.push('resolution open');
+  if (p?.resolution_state === 'settled') words.push('resolved');
+  return words.filter(Boolean).map((w) => String(w).toLowerCase());
+}
+
 export function poMatchesSearch(p, query) {
-  const q = trackKey(query);
-  if (!q) return true;
-  if (trackKey(p?.po_code).includes(q)) return true;
-  return (p?.tracking_numbers || []).some((t) => trackKey(t).includes(q));
+  const raw = String(query || '').trim();
+  if (!raw) return true;
+  const codes = [p?.po_code, ...(p?.tracking_numbers || []), ...(p?.skus || [])]
+    .map(trackKey).filter(Boolean);
+  // The whole query as ONE code first: a tracking number pasted out of an email arrives
+  // as "1Z 999 AA1 01 2345 6784", and splitting that into words must not stop it
+  // matching as the single number it is.
+  const whole = trackKey(raw);
+  if (whole && codes.some((c) => c.includes(whole))) return true;
+  const text = [...(p?.shoe_names || []), p?.supplier_name, p?.tag_code, ...poSearchWords(p)]
+    .filter(Boolean).map((t) => String(t).toLowerCase());
+  return raw.split(/\s+/).every((w) => {
+    const k = trackKey(w);
+    const l = w.toLowerCase();
+    return (k && codes.some((c) => c.includes(k))) || text.some((t) => t.includes(l));
+  });
 }
 
 // The same question asked of a receiving BATCH: "which batch is this parcel?"

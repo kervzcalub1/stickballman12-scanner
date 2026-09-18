@@ -81,8 +81,14 @@ function DueTile({ k, plan, on, onClick }) {
 export function Inbound({ onHome, onSignOut, onOpenPo }) {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
-  const [filter, setFilter] = useState('');      // state: investigate / delayed / …
-  const [showDone, setShowDone] = useState(false);
+  // The travelling-state chip (?status=) and the "show fully delivered" fold (?done=1)
+  // ride in the URL with the rest of the filters below. A value that isn't a known
+  // state is treated as no filter — the URL is a pointer, not data.
+  const [filterRaw, setFilter] = useQueryParam('status');
+  const filter = Object.hasOwn(INBOUND_STATES, filterRaw) ? filterRaw : '';
+  const [doneRaw, setDoneRaw] = useQueryParam('done');
+  const showDone = doneRaw === '1';
+  const setShowDone = (v) => setDoneRaw(v ? '1' : '');
   // Supplier, the date window and the day filter live in the URL, like the other
   // filtered pages: a narrowed feed is something you send to somebody ("look at what
   // lands today"), and it has to survive the refresh you do after chasing a carrier.

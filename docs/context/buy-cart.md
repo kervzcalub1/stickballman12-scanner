@@ -1212,6 +1212,33 @@ Replacement boxes (`kind='replacement'`) are ignored — a reship is not "did th
 arrive". `denied` pins to "Waiting for approval"; `cancelled`/`written_off` stop wherever
 the evidence had reached.
 
+**A stop that is behind reads as what happened, not what it waited for (2026-09-18).**
+Each milestone carries two labels — `label` while the request is on or short of it
+(*Waiting for approval*) and `done` once it is behind (*Approved · Gift card issued ·
+Receipt in · Packed · Manifest in · Labels sent · Shipped*). A green dot under the words
+"Waiting for approval" said two opposite things and the buyer believed the words. The
+derivation is unchanged; only the rendered label switches on the step's state.
+
+### Live without a refresh, and the open request in the URL (2026-09-18)
+- **`useLiveRefresh` (`src/hooks.js`)** re-reads `cart/get` every 15s on the request
+  screen and `cart/list` every 20s on the queue, plus once the moment the tab comes back
+  to the front — on a phone the buyer's tab is backgrounded between the shop and the
+  group chat, and coming back is exactly when they want the desk's answer. Skipped while
+  the tab is hidden, while one of the page's own actions is in flight (`act()` reloads
+  on its own), while a modal is up, and once a request is `closed`/`cancelled`/
+  `written_off`. The cart is replaced only when the JSON actually changed, so nothing
+  re-renders on a quiet tick; a failed tick is silent (the next one tries again) except
+  a 401, which signs out like everywhere else. Every input on the page already kept its
+  own draft state — it had to, for the reload after each write — so a refresh never
+  disturbs what somebody is typing.
+- **`?request=<id>`** on the queue (`BuyCarts.jsx`, `useQueryParam`), the way the order
+  pages carry `?po=`: a refresh inside BC-2400 used to land on the queue, and a request
+  could not be linked to. The id is a pointer only — the detail is re-fetched.
+- **The add form clears completely after a send** — code, shoe, sizes, prices, count and
+  (with the shoe) its photo count. The first version kept the shoe for "the next size of
+  the same style"; the buyer's report was the opposite — a form still showing the last
+  shoe was being re-sent. Pinned in the *one price for the run* browser test.
+
 ### The handoff: what happens when every pair is boxed (2026-09-12)
 "Every pair on the receipt is in a box. The order can ship." used to be the last thing the
 panel said, and it was a dead end. The next steps — ask for labels, print each box's

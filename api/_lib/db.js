@@ -1637,17 +1637,46 @@ export async function reopenBatchBox(batchId, boxId) {
 // authoritative record (and the one the catalogue is least likely to know about:
 // old stock, in-store buys, anything hand-entered). Newest first, and never more
 // than a screenful. Returns the raw units; the caller folds them into a product.
-export async function findStockByCode(code, limit = 25) {
+// The two spellings of a stock code, shared by the lookups below.
+function stockCodeKey(code) {
   const raw = String(code || '').trim();
-  if (!raw) return [];
-  const lim = Math.min(100, Math.max(1, Number(limit) || 25));
+  if (!raw) return null;
   // UPC only if the code is digits END TO END — deriving it from "digits found
   // anywhere" would read a SKU like "MQA-NOBOX-1785906559725" as a 13-digit UPC.
   const bare = raw.replace(/\s/g, '');
   const upc = /^\d{8,14}$/.test(bare) ? bare : null;
   // A SKU is written both "DQ8426-109" and "DQ8426 109" depending on the source;
   // compare with spaces and dashes stripped so either form matches either form.
-  const sku = upc ? null : raw.toUpperCase().replace(/[\s-]/g, '');
+  return { upc, sku: upc ? null : raw.toUpperCase().replace(/[\s-]/g, '') };
+}
+
+// Every size we hold under a code, plus how many units — across ALL of them, not the
+// newest page. `findStockByCode` caps its rows at 25 and the Box Labels size list used
+// to be read off that page, so a style with more than 25 pairs in the system lost its
+// older sizes from the dropdown: 305381-007 held a 12 that the tool could not print.
+export async function findStockSizesByCode(code) {
+  const key = stockCodeKey(code);
+  if (!key) return { sizes: [], total: 0 };
+  const rows = key.upc
+    ? await db()`
+      SELECT i.size, count(*)::int AS n FROM items i
+       WHERE regexp_replace(coalesce(i.upc, ''), '\\D', '', 'g') = ${key.upc}
+       GROUP BY i.size`
+    : await db()`
+      SELECT i.size, count(*)::int AS n FROM items i
+       WHERE upper(replace(replace(coalesce(i.sku, ''), ' ', ''), '-', '')) = ${key.sku}
+       GROUP BY i.size`;
+  return {
+    sizes: rows.map((r) => String(r.size || '').trim()).filter(Boolean),
+    total: rows.reduce((a, r) => a + r.n, 0),
+  };
+}
+
+export async function findStockByCode(code, limit = 25) {
+  const key = stockCodeKey(code);
+  if (!key) return [];
+  const lim = Math.min(100, Math.max(1, Number(limit) || 25));
+  const { upc, sku } = key;
   if (upc) {
     return await db()`
       SELECT i.vin, i.name, i.sku, i.size, i.upc, i.colorway, i.gender, i.status,

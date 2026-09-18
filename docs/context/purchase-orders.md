@@ -1293,8 +1293,9 @@ The same box now takes what is in a person's HEAD, not only what is in their han
 box rather than a row of dropdowns — status × reconciliation × kind is a form, and this
 is a search. `e2e/po-search.spec.js` pins it.
 
-- All four list queries also return **`skus`** and **`shoe_names`** — distinct, off the
-  order's `po_lines`. An order with no manifest yet has nothing to match a shoe against.
+- All four list queries also return **`lines`** — one `{ sku, name, qty }` per style off
+  the order's `po_lines`, qty summed over sizes, biggest first. An order with no
+  manifest yet has nothing to match a shoe against.
 - **Per WORD, two kinds of match.** Codes (PO code, tracking numbers, SKUs) go through
   `trackKey` — so `dz5485-612`, `DZ5485612` and `5485` find the same style. Words (shoe
   names, supplier, tag, the status vocabulary) are lowercase substrings. **Every word
@@ -1313,6 +1314,20 @@ is a search. `e2e/po-search.spec.js` pins it.
   searchable wherever a row carries `rc` (the Reconciliation list; the PO list has no
   `rc`, since computing it is a `getPoReconcileState` per open order). `resolution
   open` / `resolved` come off `resolution_state`.
+
+**Each matching row previews what the search landed on** (`PoSearchPreview.jsx`,
+`poSearchHits` in `postatus.js`, `segmentsFor` in `src/lib/highlight.js`), so five
+orders that all "match chicago" can be told apart without opening each. Under the
+row's meta line: the manifest lines that matched (shoe name · style code · N pairs,
+accent-edged, matched lines first), then the tracking number and the status word if
+that is what matched — the exact characters marked with `<mark>`. When nothing INSIDE
+matched (a PO code, the supplier name), the row still shows its three biggest lines —
+the person is asking what is in these orders. Code highlighting runs the SAME
+punctuation-blind comparison as the filter and maps the hit back onto the characters
+as written, so `5485612` lights up `5485-612`; word highlighting is case-blind. One
+chip per state: the raw column value ("shipped") is dropped when the chip's own label
+("2/2 shipped") already carries it. Drawn only while a query is typed. Pinned by the
+last two tests in `e2e/po-search.spec.js`.
 
 ## The dev server never registers with 17TRACK (2026-08-27)
 Registration is a **write to a live, shared, metered account, and it is permanent**: the

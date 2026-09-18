@@ -210,23 +210,71 @@ export function poSearchWords(p) {
   return words.filter(Boolean).map((w) => String(w).toLowerCase());
 }
 
+// `lines` on a list row: one entry per style — `{ sku, name, qty }` — off the order's
+// manifest (`listPos` and friends). The SKUs are codes, the names are words.
+const poLines = (p) => (p?.lines || []).filter((l) => l && (l.sku || l.name));
+
 export function poMatchesSearch(p, query) {
   const raw = String(query || '').trim();
   if (!raw) return true;
-  const codes = [p?.po_code, ...(p?.tracking_numbers || []), ...(p?.skus || [])]
+  const lines = poLines(p);
+  const codes = [p?.po_code, ...(p?.tracking_numbers || []), ...lines.map((l) => l.sku)]
     .map(trackKey).filter(Boolean);
   // The whole query as ONE code first: a tracking number pasted out of an email arrives
   // as "1Z 999 AA1 01 2345 6784", and splitting that into words must not stop it
   // matching as the single number it is.
   const whole = trackKey(raw);
   if (whole && codes.some((c) => c.includes(whole))) return true;
-  const text = [...(p?.shoe_names || []), p?.supplier_name, p?.tag_code, ...poSearchWords(p)]
+  const text = [...lines.map((l) => l.name), p?.supplier_name, p?.tag_code, ...poSearchWords(p)]
     .filter(Boolean).map((t) => String(t).toLowerCase());
   return raw.split(/\s+/).every((w) => {
     const k = trackKey(w);
     const l = w.toLowerCase();
     return (k && codes.some((c) => c.includes(k))) || text.some((t) => t.includes(l));
   });
+}
+
+// ── What a matched row should SHOW, before it is opened ─────────────────────────
+// A list of PO codes that all "match chicago" is a list you still have to open one by
+// one. So each row previews the part of itself the search landed on: the manifest lines
+// whose shoe or style code matched (first), the tracking number that matched, and the
+// status word that matched — each marked up by `segmentsFor` so the eye goes straight to
+// the hit. When the search landed on nothing INSIDE the order (a PO code, the supplier),
+// the row still previews its biggest lines: the person is asking what is in these
+// orders, and "nothing matched inside" is not an answer to that.
+//
+// Pure, no clock. `words` is the query split into words PLUS the whole query, so a
+// spaced tracking number is tried as the one code it is — the same rule as the filter.
+export function poSearchHits(p, query, { maxLines = 3 } = {}) {
+  const raw = String(query || '').trim();
+  if (!raw) return null;
+  const words = [...new Set([raw, ...raw.split(/\s+/)])];
+  const lines = poLines(p);
+  const hitLines = lines.filter((l) => wordsHit(l.name, words) || wordsHit(l.sku, words, true));
+  const rest = lines.filter((l) => !hitLines.includes(l));
+  const shown = [...hitLines, ...rest].slice(0, Math.max(maxLines, hitLines.length));
+  const tracking = (p?.tracking_numbers || []).filter((t) => wordsHit(t, words, true));
+  // Status words as the chips print them; only the ones the search landed on — and one
+  // chip for a state, not two: the raw column value ("shipped") sits inside the chip's
+  // own label ("2/2 shipped") and printing both said the same thing twice.
+  const landed = [...new Set(poSearchWords(p).filter((w) => words.some((q) => w.includes(q.toLowerCase()))))];
+  const status = landed.filter((w) => !landed.some((o) => o !== w && o.includes(w)));
+  return {
+    words,
+    lines: shown.map((l) => ({ ...l, hit: hitLines.includes(l) })),
+    more: Math.max(0, lines.length - shown.length),
+    tracking,
+    status,
+    insideHit: hitLines.length > 0 || tracking.length > 0 || status.length > 0,
+  };
+}
+
+function wordsHit(text, words, code = false) {
+  const t = String(text ?? '');
+  if (!t) return false;
+  if (code) { const key = trackKey(t); return words.some((w) => { const k = trackKey(w); return k && key.includes(k); }); }
+  const low = t.toLowerCase();
+  return words.some((w) => { const l = String(w).toLowerCase(); return l && low.includes(l); });
 }
 
 // The same question asked of a receiving BATCH: "which batch is this parcel?"

@@ -159,8 +159,8 @@ async function newRequest(request, { lines = [], submit = true, linesBy = 'appro
   // The SEND is stamped, not posted, for the same reason the cart row is seeded: this
   // helper runs forty-odd times and `cart/submit` is capped at 30 a minute, so going
   // through the endpoint made unrelated tests 429 at the end of a run. The tests that
-  // are actually ABOUT sending — a blank purpose, a missing store, a shoe with no photo
-  // — call the endpoint directly and are unaffected.
+  // are actually ABOUT sending — a missing store, a shoe with no photo — call the
+  // endpoint directly and are unaffected.
   // The stamp CLOSES THE LIST as well as marking it submitted — that is what a buyer's
   // "Close the request" does, and the gift-card desk records nothing against a list
   // still open. A test about the open list says `submit: false` and closes it itself.
@@ -930,14 +930,24 @@ test('a request can be deleted by whoever can reach it — until cards are issue
   await pool.query('DELETE FROM deleted_buy_carts WHERE cart_id = ANY($1)', [[mine, carded]]);
 });
 
-test('a request needs a purpose and a store before it can be sent', async ({ request }) => {
+test('a request needs a store before it can be closed, but no written purpose', async ({ request }) => {
   const { body } = await call(request, 'buyer', 'cart/create', {});
   const cartId = Number(body.cart.id);
   await call(request, 'approver', 'cart/line', { cartId, line: LINE });
   const r = await call(request, 'buyer', 'cart/submit', { cartId });
   expect(r.status).toBe(400);
-  // "I'm just buying stuff" is the exact answer the written process refuses.
-  expect(r.body.error).toMatch(/what you are buying/i);
+  // The store is still required — the cards have to be for the right retailer.
+  expect(r.body.error).toMatch(/which store/i);
+
+  // With the store answered it closes, with the purpose column never filled in. What is
+  // being bought is not knowable before the trip; the lines are what say it.
+  await pool.query('UPDATE buy_carts SET retailer = $2 WHERE id = $1', [cartId, 'E2E Store']);
+  await shoePhotos(cartId, [LINE.sku]);
+  const ok = await call(request, 'buyer', 'cart/submit', { cartId });
+  expect(ok.status).toBe(200);
+  const row = (await pool.query('SELECT purpose, list_closed_at FROM buy_carts WHERE id = $1', [cartId])).rows[0];
+  expect(row.purpose).toBeNull();
+  expect(row.list_closed_at).not.toBeNull();
 });
 
 test('the funding target carries the tax, and the buyer sees the number but not the rate', async ({ request }) => {
@@ -961,31 +971,32 @@ test('the funding target carries the tax, and the buyer sees the number but not 
   expect(after.body.cart.funding_target).toBeCloseTo(106, 2);
 });
 
-// window.prompt was doing real work here, and it could not validate, could not hold two
-// questions at once, and threw the first answer away if you cancelled the second.
-test('a request is started in one modal, and it will not accept a blank purpose', async ({ page }) => {
+// Opening a request asks ONE question: which store. "What are you buying, and why?" was
+// asked here and is gone — a buyer works that out standing in the shop, so before the
+// trip it was answered with a guess or not at all, and the lines say it better.
+test('a request is started in one modal that asks only for the store', async ({ page }) => {
   await as(page, 'buyer');
   await page.goto('/buying');
   await page.getByRole('button', { name: 'New request' }).click();
 
   const modal = page.locator('.modal.form-modal');
   await expect(modal).toBeVisible();
-  // Both questions in ONE dialog — as two chained prompts, cancelling the second binned
-  // the first answer with nothing on screen to say so.
-  await expect(modal.getByRole('textbox')).toHaveCount(2);
+  // One field, and it is the store — no purpose textarea to fill in before the trip.
+  await expect(modal.getByRole('textbox')).toHaveCount(1);
+  await expect(modal).not.toContainText(/what are you buying/i);
 
-  // Blank is refused in the modal, not by the server after the fact.
+  // The store is still required, and blank is refused in the modal, not by the server
+  // after the fact.
   await modal.getByRole('button', { name: 'Start the request' }).click();
   await expect(modal.locator('.error')).toContainText(/needed/i);
   await expect(modal).toBeVisible();
 
-  await modal.getByRole('textbox').first().fill('E2E: modal purpose');
-  await modal.getByRole('textbox').nth(1).fill('E2E Modal Store');
+  await modal.getByRole('textbox').first().fill('E2E Modal Store');
   await modal.getByRole('button', { name: 'Start the request' }).click();
 
   // It lands on the new request, opened and ready for lines.
   await expect(page.locator('.bc-lines')).toBeVisible();
-  await expect(page.locator('.app')).toContainText('E2E: modal purpose');
+  await expect(page.locator('.app')).toContainText('E2E Modal Store');
 });
 
 // ---------------------------------------------------------------------------
@@ -2033,7 +2044,7 @@ test.describe('the list stays open until the buyer closes it', () => {
     expect(early.status).toBe(409);
     expect(early.body.error).toMatch(/still adding/i);
 
-    // The buyer closes the list. Same checks as the old send (purpose, store, photos).
+    // The buyer closes the list. Same checks as the old send (store, lines, photos).
     const closed = await call(request, 'buyer', 'cart/submit', { cartId });
     expect(closed.status).toBe(200);
     expect(closed.body.cart.list_closed_at).not.toBeNull();

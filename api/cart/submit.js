@@ -9,10 +9,13 @@
 //
 // The route keeps its old name so nothing that links to it moves.
 //
-// The process is explicit that closing is where "what are you buying?" has to have been
-// answered — "I'm just buying stuff" is the exact answer it exists to refuse — so a
-// purpose, a store, at least one line and a photo of every shoe are required here, the
-// same as they were to send.
+// Closing is where "what are you buying?" has to have been answered — and the LINES are
+// that answer: a store, at least one line and a photo of every shoe are required here.
+// A written purpose is no longer asked for or required. It was collected before the trip
+// began, which is the one moment the buyer cannot know — they work it out in the shop —
+// so it was either a guess or a blocker, and the SKUs, photos and counts say more than
+// the sentence ever did. Requests raised before this still carry theirs, and it still
+// shows; nothing reads it as a gate.
 //
 // RE-OPENING is the buyer changing their mind on the way out: one more pair, or the
 // cards came up short. Allowed until the receipt is in. The group is told either way —
@@ -58,8 +61,6 @@ export default async function handler(req, res) {
       return send(res, 409, { ok: false, error: 'This request is past the point of closing its list.' });
     if (!Number(cart.line_count))
       return send(res, 400, { ok: false, error: 'Add at least one pair before closing the request.' });
-    if (!String(cart.purpose || '').trim())
-      return send(res, 400, { ok: false, error: 'Say what you are buying and why — a request without that can’t be approved.' });
     if (!String(cart.retailer || '').trim())
       return send(res, 400, { ok: false, error: 'Say which store this is for — the gift cards have to be for the right retailer.' });
 

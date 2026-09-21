@@ -81,11 +81,13 @@ export function BuyCarts({ user, onHome, onSignOut }) {
     setCarts(c); setCounts(n); if (b) setBuyers(b);
   }, { every: 20_000, paused: !!asking || !!open });
 
-  // Both questions in ONE modal. As two chained prompts, answering the first and then
-  // cancelling the second threw the first answer away with nothing on screen to say so.
-  async function newRequest({ purpose, retailer }) {
+  // Opening a request asks ONE thing: which store. What is being bought is not known
+  // yet — a buyer often works that out standing in the shop — and a field that has to be
+  // filled before the trip starts gets filled with a guess. The lines themselves are the
+  // answer: a SKU, a photo and a count per pair, added as they are found.
+  async function newRequest({ retailer }) {
     try {
-      const { cart } = await api.cartCreate({ purpose: purpose.trim(), retailer: retailer.trim() });
+      const { cart } = await api.cartCreate({ retailer: retailer.trim() });
       setAsking(false);
       setOpen(cart.id);
     } catch (e) { if (e.unauthorized) return onSignOut(); throw e; }
@@ -107,14 +109,11 @@ export function BuyCarts({ user, onHome, onSignOut }) {
       {asking && (
         <FormModal
           title="New buying request"
-          message="An approver sees only what you write here, so write it for someone who isn't in the shop with you."
+          message="Just the store to start. Add each pair as you find it — that is what the approver sees."
           submitLabel="Start the request"
           onClose={() => setAsking(false)}
           onSubmit={newRequest}
           fields={[
-            { name: 'purpose', label: 'What are you buying, and why?', type: 'textarea', required: true,
-              placeholder: 'e.g. Restocking Jordan 1 lows — Nike outlet has them at $90',
-              hint: 'An approver has to be able to tell from this alone.' },
             { name: 'retailer', label: 'Which store?', required: true, maxLength: 80,
               placeholder: 'e.g. Nike Outlet — Orlando' },
           ]} />
@@ -200,7 +199,12 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                     <span className={`po-chip ${s.cls}`}>{s.label}</span>
                     {stillAdding(c) && <span className="po-chip warn">Buyer still adding</span>}
                   </span>
-                  <span className="bc-card-purpose">{c.purpose || <i className="muted">No purpose written</i>}</span>
+                  {/* A purpose is no longer asked for, so its absence is not a fault to
+                      report — older requests still have one and it still shows. With none,
+                      the pairs themselves are the answer, so say how many there are. */}
+                  <span className="bc-card-purpose">{c.purpose || <i className="muted">
+                    {Number(c.line_count) ? `${c.line_count} pair${Number(c.line_count) === 1 ? '' : 's'} so far` : 'No pairs added yet'}
+                  </i>}</span>
                   <span className="bc-card-meta">
                     <span>{c.retailer || '—'}</span>
                     {!isBuyer && c.buyer_name && <span>· {c.buyer_name}</span>}

@@ -422,7 +422,7 @@ then it has usually gone.
 
 What the buyer presses at the end of the trip is **Close the request** (`cart/submit`,
 same route name; `closeBuyCartList` → `buy_carts.list_closed_at` / `list_closed_by`).
-It carries the old send's checks — a purpose, a store, ≥1 line, a photo per SKU — and
+It carries the old send's checks — a store, ≥1 line, a photo per SKU — and
 it is what lets the gift-card desk act: **no card can be recorded against a list still
 growing** (`cardsIssuable` in `src/lib/buycartRules.js` = list closed AND status
 approved/funded AND no pending line; `cardsRefusedBecause` is the 409 text and the
@@ -1117,14 +1117,25 @@ is missing, because a gate that only says no teaches people to route around it.
 
 **No `window.prompt` anywhere in this flow.** Six of them were doing real work on the
 money screens, and a native prompt is the wrong tool three ways: it can't be styled, it
-can't hold two questions at once, and it can't validate — a blank purpose or an empty
+can't hold two questions at once, and it can't validate — a blank store or an empty
 reason reached the server looking exactly like a real one. `FormModal`
 (`src/components/common.jsx`) replaces all six: a floating modal with labelled fields,
 required-checking, and the failure held *inside* the modal with the text still in the box.
 
-- **Starting a request asks both questions at once.** As two chained prompts, answering
-  "what are you buying" and then cancelling "which store" threw the first answer away
-  with nothing on screen to say it had happened.
+- **Starting a request asks ONE question: which store (2026-09-22).** It used to ask
+  "What are you buying, and why?" as a required textarea first. That is the one thing a
+  buyer cannot answer before the trip — they work it out standing in the shop — so it was
+  filled with a guess or it blocked the request from opening at all. The field is gone
+  from the modal, `cart/submit` no longer requires `buy_carts.purpose` to close a list,
+  and the LINES are the answer instead: a SKU, a photo and a count per pair, added as
+  each one is found, which is what the approver decides on anyway.
+  - The column stays and the endpoint still accepts it, so every request raised before
+    this keeps its sentence and still shows it — on the request header, in the queue's
+    *Buying* column, and on the Telegram card (`notify.js` already sent `purpose || null`).
+  - With none, the queue card says how many pairs are on the request rather than
+    "No purpose written" — an absence that is now normal is not a fault to report.
+  - Nothing else gated on it: the ten closing conditions never read it, and
+    `cartCloseChecks` is unchanged.
 - **It is deliberately not auto-focused.** On iOS Safari a programmatic `focus()` sets DOM
   focus but suppresses the keyboard, and the people using this are standing in a shop on a
   phone. See the same rule on Receiving.

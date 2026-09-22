@@ -90,6 +90,18 @@ and `purchase-orders.md` → "Scan-first, any order".
    all — using it to continue a pending box is what left staff with an empty box
    beside the one they meant to fill. Received boxes get **Reopen box** instead (below) —
    the box-commit CAS refuses a submitted box, so "Add items" would 409.
+   **Continuing a box shows what is already in it** (2026-09-23). A reopened or pending
+   box keeps its pairs — `commitBoxItems` only ever appends — but the Items step opened
+   EMPTY, so a row reading "11 items" led straight to a cart reading "0 units". From the
+   floor that reads as *reopening wiped the box*, and worse it leaves nothing to check the
+   pair in your hand against, so one gets scanned twice or skipped. Box mode now loads the
+   box's own units (`api.batchFull` filtered on `box_id`, which the effect used to skip
+   whenever `boxTarget` was set) and lists them **read-only** above the cart
+   (`.box-existing`, grouped shoe → size, collapsible): *"Already in Box 3 · 11 pairs —
+   these stay exactly where they are; scanning now adds to them."* Read-only is the point:
+   those units exist with their own VINs, and re-committing them would double the box. The
+   step header counts **new** units for the same reason, and the title says **Box 3**
+   rather than "Add box". Guarded by `e2e/batch-continue-box.spec.js`.
    **A size declared wrong is corrected in place, not re-received** (2026-09-22): the ✎
    on each row of a box's contents (and beside **Size** on the item detail) changes the
    size on the pair, clears the UPC and re-prices it — `Reopen box` is for *adding*

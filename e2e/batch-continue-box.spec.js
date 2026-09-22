@@ -190,3 +190,48 @@ test('reopening a box that is not submitted is refused', async ({ request }) => 
   expect(r.status()).toBe(409);
   expect((await r.json()).error).toMatch(/already open/);
 });
+
+// "I reopened the box — it says 11 items — but adding items shows nothing in there."
+//
+// The pairs were never gone: commitBoxItems only ever appends. But this step opened
+// EMPTY, so a box row reading "11 items" led straight to a cart reading "0 units". That
+// reads as "reopening wiped the box", and it leaves nothing to check the pair in your
+// hand against — so the same pair gets scanned twice, or skipped because somebody
+// assumed it was already in.
+test('continuing a box shows what is already in it, read-only', async ({ page, request }) => {
+  // Box 2 is received with 3 pairs by now (2 sizes). Reopen it through the UI, the way
+  // it was reported.
+  await loginAs(page, 'warehouse');
+  await openBatch(page);
+  const row2 = page.locator('.box-row-wrap').filter({ hasText: 'Box 2' });
+  await row2.getByRole('button', { name: 'Reopen box' }).click();
+  await page.getByRole('button', { name: 'Reopen & add items' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+
+  // The three pairs that are already in the box, named and counted per size.
+  const panel = page.locator('.box-existing');
+  await expect(panel).toContainText('Already in Box 2');
+  await expect(panel).toContainText('3 pairs');
+  await expect(panel).toContainText(SKU);
+  await expect(panel.locator('.box-existing-size')).toHaveCount(3);   // 9, 9.5, 10 — one each
+  // Said out loud, because "adds to them" is the bit that decides whether you re-scan.
+  await expect(panel).toContainText(/adds/i);
+
+  // The cart is still empty — these are existing units with their own VINs and must not
+  // be re-committed — and the count now says what it is counting.
+  await expect(page.locator('.recv-item')).toHaveCount(0);
+  await expect(page.locator('.step-head .rows-title').first()).toContainText('0 new units');
+  // And the screen says which box you are in, rather than "Add box".
+  await expect(page.locator('.topbar')).toContainText('Box 2');
+
+  // Collapsible, for a box with a lot in it.
+  await panel.getByRole('button', { name: 'Hide' }).click();
+  await expect(panel.locator('.box-existing-rows')).toHaveCount(0);
+
+  // Put the box back as it was.
+  const box2 = (await q('SELECT id FROM batch_boxes WHERE batch_id = $1 AND box_number = 2', [batchId]))[0];
+  const back = await request.post('/api/batches/box-commit', {
+    headers: authHeaders(), data: { batchId, boxId: Number(box2.id), items: [] },
+  });
+  expect([200, 400]).toContain(back.status());
+});

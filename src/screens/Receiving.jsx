@@ -1,7 +1,7 @@
 // Batch intake: fill shipment details, scan many items into a cart (lookups
 // resolve in the background so scanning never blocks), add shipment issues,
 // then commit once → DB (one VIN per item). Also drives Rescale intake (mode).
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
@@ -85,11 +85,40 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // is a guess, and that guess is what filed box 6 of 9 as "box 10".
   const [poLabels, setPoLabels] = useState(null);
   const [poCostLines, setPoCostLines] = useState(null); // box mode: the PO's lines, for cost only
+  // What is ALREADY in the box being continued. A reopened box keeps its pairs —
+  // `commitBoxItems` only ever appends — but the Items step opened empty, so a row
+  // reading "11 items" led straight to a cart saying "0 units". From the floor that
+  // reads as "reopening wiped the box", and worse, it leaves nothing to check the pair
+  // in your hand against: the same pair gets scanned a second time, or skipped because
+  // somebody assumed it was already in. Read-only on purpose — these units exist, with
+  // their own VINs; re-committing them would double the box.
+  const [boxExisting, setBoxExisting] = useState(null);
+  const [showExisting, setShowExisting] = useState(true);
+  // Grouped the way the cart is — shoe, then size — so the two lists can be read
+  // against each other at a glance.
+  const boxExistingGroups = useMemo(() => {
+    const m = new Map();
+    for (const it of boxExisting || []) {
+      const k = `${it.sku || ''}|${it.name || ''}`;
+      if (!m.has(k)) m.set(k, { key: k, name: it.name, sku: it.sku, sizes: new Map() });
+      const g = m.get(k);
+      const sz = it.size || '—';
+      g.sizes.set(sz, (g.sizes.get(sz) || 0) + 1);
+    }
+    return [...m.values()].map((g) => ({
+      ...g,
+      sizes: [...g.sizes.entries()].map(([size, qty]) => ({ size, qty })).sort((a, b) => compareSizes(a.size, b.size)),
+    }));
+  }, [boxExisting]);
   useEffect(() => {
-    if (!isBoxMode || boxTarget) return;
+    if (!isBoxMode) return;
     let cancelled = false;
     api.batchFull(batchContext.id).then((r) => {
       if (cancelled) return;
+      if (boxTarget) {
+        setBoxExisting((r.items || []).filter((it) => String(it.box_id) === String(boxTarget.id)));
+        return;
+      }
       const list = r.boxes || [];
       setBatchBoxes(list);
       const next = list.reduce((n, b) => Math.max(n, Number(b.box_number) || 0), 0) + 1;
@@ -1665,7 +1694,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   return (
     <div className="app">
       <TopBar
-        title={isRescale ? 'Rescale Stock' : isInstore ? 'In-Store Buying' : isBoxMode ? 'Add box' : 'Receiving'}
+        title={isRescale ? 'Rescale Stock' : isInstore ? 'In-Store Buying'
+          : boxTarget ? `Box ${boxTarget.box_number}` : isBoxMode ? 'Add box' : 'Receiving'}
         onHome={onHome}
         onSignOut={onSignOut}
         right={<button className="btn ghost sm" onClick={() => setShowPrefs(true)} title="Preferences"><Icon name="gear" /></button>}
@@ -2064,7 +2094,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               ) : (
               <div className="card">
                 <div className="step-head">
-                  <h3 className="rows-title">{isRescale ? 'New / unlabeled stock' : 'Items'} <span className="muted">({totalItems} unit{totalItems === 1 ? '' : 's'})</span></h3>
+                  <h3 className="rows-title">{isRescale ? 'New / unlabeled stock' : 'Items'} <span className="muted">
+                    {/* "0 units" over a box that holds eleven is what made a reopened box
+                        look emptied. The count here is what you are ADDING. */}
+                    ({totalItems}{boxTarget && boxExisting?.length ? ' new' : ''} unit{totalItems === 1 ? '' : 's'})</span></h3>
                   <button className="btn ghost sm" onClick={openAddItem}>+ Add manually</button>
                 </div>
                 {/* Why this label has no checklist. Without it the screen looks like the
@@ -2119,6 +2152,42 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   </div>
                 </div>
 
+                {/* WHAT IS ALREADY IN THIS BOX. A reopened / continued box keeps its pairs,
+                    but this step used to open empty — so a row reading "11 items" led to a
+                    cart saying "0 units", which reads as "reopening wiped the box" and,
+                    worse, leaves nothing to check the pair in your hand against. */}
+                {boxTarget && boxExisting === null && <p className="muted sm">Checking what is already in this box…</p>}
+                {boxTarget && boxExisting && boxExisting.length > 0 && (
+                  <div className="box-existing">
+                    <div className="box-existing-head">
+                      <b>Already in Box {boxTarget.box_number}</b>
+                      <span className="muted sm">{boxExisting.length} pair{boxExisting.length === 1 ? '' : 's'}</span>
+                      <button type="button" className="btn ghost sm box-existing-toggle"
+                        onClick={() => setShowExisting((v) => !v)} aria-expanded={showExisting}>
+                        {showExisting ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                    <p className="muted xs">
+                      These stay exactly where they are — scanning now <b>adds</b> to them. Check this
+                      list before you scan, or the same pair goes in twice.
+                    </p>
+                    {showExisting && (
+                      <div className="box-existing-rows">
+                        {boxExistingGroups.map((g) => (
+                          <div className="box-existing-row" key={g.key}>
+                            <span className="box-existing-name">{g.name || g.sku || 'Unknown'}</span>
+                            <span className="muted sm">{g.sku || '—'}</span>
+                            <span className="box-existing-sizes">
+                              {g.sizes.map((sz) => (
+                                <span className="box-existing-size" key={sz.size}>{sz.size}<i>×{sz.qty}</i></span>
+                              ))}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {!items.length ? <p className="muted">{isRescale ? 'No new stock — scan a UPC/SKU above for unlabeled stock, or scan VINs to rescan existing units.' : 'No items yet — scan a box above. Keep scanning; each one drops straight into this list.'}</p> : (
                   <div className="recv-items">
                     {items.map((it) => (

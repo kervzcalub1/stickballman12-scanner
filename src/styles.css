@@ -2771,6 +2771,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .presell-n { text-align: right; font-variant-numeric: tabular-nums; }
 .presell-sold input { width: 100%; text-align: center; padding: 6px 8px; }
 .presell-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+/* What is ALREADY in the box being continued (Receiving box mode). Quiet, because it
+   is context rather than the job — but present, because a cart reading "0 units" over a
+   box row reading "11 items" is what made a reopened box look emptied. */
+.box-existing { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--panel-2, rgba(255,255,255,.04)); border: 1px solid var(--border); }
+.box-existing-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.box-existing-head .muted { margin-right: auto; }
+.box-existing-toggle { flex: none; }
+.box-existing p { margin: 4px 0 0; }
+.box-existing-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.box-existing-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px;
+  padding-top: 6px; border-top: 1px solid var(--border); }
+.box-existing-name { font-weight: 600; }
+.box-existing-sizes { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.box-existing-size { font-size: 12px; padding: 2px 7px; border-radius: 999px;
+  background: rgba(255,255,255,.06); border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.box-existing-size i { font-style: normal; color: var(--muted); margin-left: 3px; }
 /* The receiving toggle's explanation, once it's on. */
 .presell-field .presell-note { display: block; margin-top: 6px; color: #b9a3e8; }
 /* "Is ALL of this shipment pre-sold?" — the follow-up question, which has no answer

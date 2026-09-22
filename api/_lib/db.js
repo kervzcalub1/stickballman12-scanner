@@ -9,7 +9,7 @@
 
 import pg from 'pg';
 import { TERMINAL_STATUSES } from './statuses.js';
-import { ROLL_VIN_RE } from './vins.js';
+import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 // The LOOSE search normaliser (strips every non-alphanumeric), shared with the PO
 // search so both find one parcel the same way. Deliberately imported under another
 // name: this file already has a `trackKey` further down that only strips whitespace,
@@ -891,12 +891,17 @@ export async function removeProductPhoto(sku, angle, source = 'warehouse') {
 // "Did this package come with a manifest?" as a tri-state: true / false / NULL (never
 // asked — rescale, in-store, existing, and everything from before the question).
 const manifestFlag = (h) => (h.manifestReceived === true ? true : h.manifestReceived === false ? false : null);
+// 'all' | 'some', and NULL whenever the shipment isn't pre-sell at all. The scope is what
+// the BOX COMMIT reads to decide whether a later box may stamp pre_sell onto every pair
+// in it, so a missing value has to mean 'all' — that is what the old checkbox meant, and
+// a batch raised before this existed must keep behaving the way it was received.
+const preSellScope = (h) => (h.preSell === true ? (h.preSellScope === 'some' ? 'some' : 'all') : null);
 
 export async function createBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, tracking_number, no_tracking, date_received,
-       default_cost, notes, special_rules, kind, origin, duplicate_of, po_id, pre_sell, manifest_received, status, created_by, committed_at)
+       default_cost, notes, special_rules, kind, origin, duplicate_of, po_id, pre_sell, pre_sell_scope, manifest_received, status, created_by, committed_at)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.tracking || null}, ${h.noTracking === true},
        ${h.dateReceived || null}, ${h.defaultCost ?? null}, ${h.notes || null},
@@ -905,7 +910,7 @@ export async function createBatch(h, createdBy) {
        -- front of the PH team as sellable stock. The multi-box path (createOpenBatch)
        -- always had it, which is the only reason this hadn't bitten.
        ${h.specialRules || null}, ${['receiving', 'rescale', 'instore', 'existing', 'boxes'].includes(h.kind) ? h.kind : 'receiving'},
-       ${h.origin || null}, ${h.duplicateOf ?? null}, ${h.poId ?? null}, ${h.preSell === true},
+       ${h.origin || null}, ${h.duplicateOf ?? null}, ${h.poId ?? null}, ${h.preSell === true}, ${preSellScope(h)},
        ${manifestFlag(h)}, 'committed', ${createdBy || null}, now())
     RETURNING id, batch_code
   `;
@@ -1206,7 +1211,7 @@ export async function listBatches(limit = 50, kind = null,
   const auditPending = audit === 'pending';   // received with no manifest, not yet signed off
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.merged_into_batch_id,
+           b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.pre_sell_scope, b.merged_into_batch_id,
            b.manifest_received, b.audited_at, b.audited_by,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
@@ -1279,7 +1284,7 @@ export async function searchBatches(query,
   const like = `%${key}%`;
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
-           b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.merged_into_batch_id,
+           b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.pre_sell_scope, b.merged_into_batch_id,
            b.manifest_received, b.audited_at, b.audited_by,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
            b.origin, b.date_received, b.created_by, b.created_at,
@@ -1340,12 +1345,12 @@ export async function createOpenBatch(h, createdBy) {
   const rows = await db()`
     INSERT INTO batches
       (buyer_name, supplier_name, no_tracking, date_received, default_cost, notes, special_rules,
-       kind, batch_tag, expected_boxes, po_id, po_link_source, po_linked_at, pre_sell, manifest_received, status, created_by)
+       kind, batch_tag, expected_boxes, po_id, po_link_source, po_linked_at, pre_sell, pre_sell_scope, manifest_received, status, created_by)
     VALUES
       (${h.buyer || null}, ${h.supplier || null}, ${h.noTracking === true}, ${h.dateReceived || null},
        ${h.defaultCost ?? null}, ${h.notes || null}, ${h.specialRules || null},
        ${h.kind === 'boxes' ? 'boxes' : 'receiving'}, ${h.batchTag || null}, ${h.expectedBoxes ?? null}, ${h.poId ?? null},
-       ${h.poId ? 'receiving' : null}, ${h.poId ? new Date() : null}, ${h.preSell === true}, ${manifestFlag(h)},
+       ${h.poId ? 'receiving' : null}, ${h.poId ? new Date() : null}, ${h.preSell === true}, ${preSellScope(h)}, ${manifestFlag(h)},
        'open', ${createdBy || null})
     RETURNING id, batch_code
   `;
@@ -1551,7 +1556,7 @@ export async function getBatchWithBoxes(id) {
 // Open (resumable) multi-box batches, newest first, with progress counts.
 export async function listOpenBatches() {
   return await db()`
-    SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes, b.pre_sell,
+    SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes, b.pre_sell, b.pre_sell_scope,
            b.manifest_received, b.audited_at, b.audited_by,
            b.tracking_number, b.no_tracking,
            b.date_received, b.created_by, b.created_at,
@@ -1793,7 +1798,16 @@ export async function phListItems(from, to, kind = null) {
     `;
   }
   return await db()`
-    SELECT i.vin, i.created_at, i.created_by, i.name, i.sku, i.size, i.gender,
+    SELECT i.vin,
+           -- A pair FREED from pre-sell is dated by the day it was freed, not the day it
+           -- arrived. That day is when it became PH's work, and this list is filtered by
+           -- date: a pair off a three-week-old shipment, freed today, would otherwise sit
+           -- outside the window anyone is looking at and be seen by nobody. The Rescale
+           -- tab takes exactly this reading of its own rescaled event, for the same
+           -- reason (pre-sell.md). NULL on everything that was never held, so ordinary
+           -- stock is unaffected.
+           coalesce(i.presell_freed_at, i.created_at) AS created_at,
+           i.created_by, i.name, i.sku, i.size, i.gender,
            i.status, i.cost, i.price, i.global_indicator, i.gi_basis,
            i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.goat_only, i.listed_price,
            i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
@@ -1803,8 +1817,8 @@ export async function phListItems(from, to, kind = null) {
               ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
-    WHERE (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
-      AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+    WHERE (${from}::date IS NULL OR (coalesce(i.presell_freed_at, i.created_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR (coalesce(i.presell_freed_at, i.created_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
       -- In-store buys and existing (old) stock never enter the PH team's world
       -- (New Inventory OR the admin Report): in-store is listed to Alias by hand
       -- off the In-Store Listing page, and existing stock was already synced to II
@@ -1812,7 +1826,7 @@ export async function phListItems(from, to, kind = null) {
       AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
       -- Pre-sell: sold before it landed, so it is NOT listed to II or the stores. It
       -- leaves this world only when somebody has said which orders the arrivals cover
-      -- and released the rest for rescale, which clears the flag.
+      -- and freed the rest for listing, which clears the flag.
       AND NOT i.pre_sell
       AND (${kind}::text IS NULL OR b.kind = 'receiving' OR b.kind IS NULL)
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
@@ -1827,7 +1841,7 @@ export async function phListItems(from, to, kind = null) {
       -- restock_pending). Same shape as the no-box rule above: the admin Report
       -- (kind IS NULL) still sees everything.
       AND (${kind}::text IS NULL OR NOT i.restock_pending)
-    ORDER BY i.created_at, i.id
+    ORDER BY coalesce(i.presell_freed_at, i.created_at), i.id
     LIMIT 5000
   `;
 }
@@ -2067,6 +2081,68 @@ export async function listRescaleRequests(status = 'open', from = null, to = nul
 
 // Warehouse audit: record the actual qty per size counted on the shelf and close
 // the request (status 'audited'). Both roles then see reported-vs-actual.
+// One scanned code, resolved against ONE rescale request — the audit's scan path.
+//
+// Brent counts a shelf by scanning, not by typing a number into a box, and the two are
+// not the same act: a typed 3 is a claim, while three scans are three pairs that were
+// each in somebody's hand. It also makes the two mistakes a shelf count actually makes
+// impossible to miss — counting the same pair twice (the VIN is already in the list) and
+// counting a pair of a DIFFERENT shoe that shares the shelf (its style code doesn't
+// match the request).
+//
+// A 1ID/VIN names a UNIT, so it carries its own size and can be de-duplicated. A box UPC
+// names a SIZE and nothing more: two boxes of a size 9 are two legitimate scans of the
+// same code, so a repeat is never refused there.
+export async function resolveAuditScan({ requestId, code }) {
+  const sql = db();
+  const [reqRow] = await sql`SELECT id, sku, sku_all, name FROM rescale_requests WHERE id = ${requestId}`;
+  if (!reqRow) return { error: 'That request no longer exists.' };
+  // Both columns: `sku` is what the warehouse was asked to count, `sku_all` the full
+  // dual code a re-released shoe carries. Either spelling on the pair is a match.
+  const want = new Set([...rcCodes(reqRow.sku_all || ''), ...rcCodes(reqRow.sku || '')]
+    .map((c) => c.replace(/[^A-Z0-9]/g, '')).filter(Boolean));
+  const matches = (sku) => rcCodes(sku).some((c) => want.has(c.replace(/[^A-Z0-9]/g, '')));
+
+  const raw = String(code || '').trim().toUpperCase();
+  if (!raw) return { error: 'Nothing scanned.' };
+
+  if (VIN_RE.test(raw)) {
+    const found = await getItemByVin(raw);
+    if (!found) return { error: `No pair wears ${raw}. Check the sticker, or count it by hand.` };
+    const it = found.item;
+    if (!matches(it.sku)) {
+      return { error: `${raw} is ${it.sku || 'another shoe'} — this request is for ${reqRow.sku}. Leave it on the shelf.` };
+    }
+    // A pair that is sold or shipped is not stock, but it IS standing on the shelf in
+    // front of somebody — which is the single most useful thing an audit can find. It
+    // counts, and it says so.
+    const gone = ['sold', 'shipped'].includes(String(it.status || ''));
+    return {
+      kind: 'vin', vin: it.vin, size: it.size || '', name: it.name, status: it.status,
+      warn: gone ? `${raw} is marked ${it.status} — it should not be on this shelf. Counted; say so in the note.` : null,
+    };
+  }
+
+  if (/^\d{8,14}$/.test(raw)) {
+    const units = await findStockByCode(raw, 100);
+    const mine = units.filter((u) => matches(u.sku));
+    if (!mine.length) {
+      return { error: units.length
+        ? `That barcode is ${units[0].sku} — this request is for ${reqRow.sku}.`
+        : 'That barcode is on nothing we hold. Scan the 1ID on the pair instead.' };
+    }
+    const sizes = [...new Set(mine.map((u) => String(u.size || '').trim()).filter(Boolean))];
+    // One UPC is one size's box. More than one size answering to it means our own
+    // records disagree, and guessing which size to add to would bury that.
+    if (sizes.length !== 1) {
+      return { error: `That barcode is on ${sizes.length || 'no'} different sizes here — scan the 1ID on the pair instead.` };
+    }
+    return { kind: 'upc', size: sizes[0], name: mine[0].name, upc: raw };
+  }
+
+  return { error: 'That looks like a style code. Scan the 1ID sticker on the pair, or the barcode on its box.' };
+}
+
 export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
   const rows = await db()`
     UPDATE rescale_requests
@@ -3213,29 +3289,102 @@ export async function markPreSoldByVin(vin, createdBy) {
   return { ok: true, item: it };
 }
 
-// Release what is left over for listing.
+// Free held units — the leftovers of a fulfilled pre-sale, or a shoe that was marked
+// pre-sell by mistake.
 //
-// Clearing `pre_sell` and setting `restock_pending` puts the units on PH's Rescale Stock
-// worklist — the existing place where stock gets priced and pushed to II and the stores.
-// Nothing new had to be invented for "subject for upload"; that worklist already is it.
+// WHERE THEY LAND (changed 2026-09-23): New Inventory, not Rescale Stock. Clearing
+// `pre_sell` and leaving `restock_pending` false puts them on PH's New Inventory tab,
+// which is what they always were — ordinary arrivals that were held back for a while.
+// Release used to set `restock_pending` instead, for one reason: New Inventory is
+// filtered by date, so a pair freed weeks after it arrived fell outside the window PH
+// looks at and would have been seen by nobody. That is now fixed at the source —
+// `presell_freed_at` dates the pair on that list by the day it was FREED (see
+// phListItems) — so the detour through the rescale worklist is no longer buying
+// anything. Units released BEFORE this change keep `restock_pending = true` and stay on
+// Rescale Stock exactly where PH left them; nothing moves under their feet.
 //
-// Units already marked pre_sold are LEFT ALONE: they are spoken for, and listing them
-// would offer somebody else's pair for sale.
-export async function releasePreSell({ batchId, createdBy }) {
+// `sku` / `size` narrow it to one shoe (or one size of it). That is what makes "only
+// this shoe was ever pre-sell" fixable: whole-batch release could free the 14 shoes
+// marked in error, but not without freeing the 1 that is genuinely spoken for.
+//
+// Units already marked pre_sold are LEFT ALONE whatever the scope: they are spoken for,
+// and listing one would offer somebody else's pair for sale.
+export async function releasePreSell({ batchId, sku = null, size = null, reason = null, createdBy }) {
+  const sql = db();
+  // The shim can't nest fragments, so the scope is three separate statements rather
+  // than one built up from pieces.
+  const rows = sku && size
+    ? await sql`
+      UPDATE items SET pre_sell = false, presell_freed_at = now(), updated_at = now()
+       WHERE batch_id = ${batchId} AND pre_sell AND sku IS NOT DISTINCT FROM ${sku} AND size IS NOT DISTINCT FROM ${size}
+         AND status NOT IN ('pre_sold', 'sold', 'shipped', 'missing', 'issue')
+       RETURNING id`
+    : sku
+      ? await sql`
+        UPDATE items SET pre_sell = false, presell_freed_at = now(), updated_at = now()
+         WHERE batch_id = ${batchId} AND pre_sell AND sku IS NOT DISTINCT FROM ${sku}
+           AND status NOT IN ('pre_sold', 'sold', 'shipped', 'missing', 'issue')
+         RETURNING id`
+      : await sql`
+        UPDATE items SET pre_sell = false, presell_freed_at = now(), updated_at = now()
+         WHERE batch_id = ${batchId} AND pre_sell
+           AND status NOT IN ('pre_sold', 'sold', 'shipped', 'missing', 'issue')
+         RETURNING id`;
+  const ids = rows.map((r) => r.id);
+  if (ids.length) {
+    // Why it was freed is worth keeping: "the order was fulfilled and this is the
+    // overage" and "this was never pre-sell" are different stories about the same pair,
+    // and the second one is the warehouse correcting itself.
+    const note = reason === 'not_presell'
+      ? 'Not pre-sell after all — marked in error at receiving; freed for listing'
+      : 'Released from pre-sell — free to list';
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+              SELECT unnest(${ids}::bigint[]), 'note',
+                     ${JSON.stringify({ text: note })}::jsonb, ${createdBy || null}`;
+  }
+  return { released: ids.length };
+}
+
+// Hold a shoe that SHOULD have been marked pre-sell and wasn't.
+//
+// The mirror of releasePreSell, and the reason it has to exist: once pre-sell is
+// declared per shoe rather than per shipment, it can be got wrong in both directions.
+// Over-holding is visible and annoying (fifteen shoes on the Pre-sell page when one is
+// spoken for). UNDER-holding is invisible and expensive — the pair goes to PH, gets
+// listed, and can be sold to a second buyer. So the page has to be able to put a shoe
+// back, not only take one out.
+//
+// Only units that are still ours to hold move: a pair already sold or shipped has left,
+// and claiming it now would say something false about a closed sale. `presell_freed_at`
+// is cleared with it, so a re-held pair is dated by its arrival again if it is later
+// freed for real.
+export async function holdPreSell({ batchId, sku, createdBy }) {
   const sql = db();
   const rows = await sql`
-    UPDATE items SET pre_sell = false, restock_pending = true, updated_at = now()
-    WHERE batch_id = ${batchId} AND pre_sell
-      AND status NOT IN ('pre_sold', 'sold', 'shipped', 'missing', 'issue')
-    RETURNING id
-  `;
+    UPDATE items SET pre_sell = true, presell_freed_at = NULL, restock_pending = false, updated_at = now()
+     WHERE batch_id = ${batchId} AND sku IS NOT DISTINCT FROM ${sku} AND NOT pre_sell
+       AND status NOT IN ('sold', 'shipped', 'missing', 'issue')
+     RETURNING id`;
   const ids = rows.map((r) => r.id);
   if (ids.length) {
     await sql`INSERT INTO item_events (item_id, type, details, created_by)
-              SELECT unnest(${ids}::bigint[]), 'rescaled',
-                     ${JSON.stringify({ note: 'Released from pre-sell — sent for rescale and listing' })}::jsonb, ${createdBy || null}`;
+              SELECT unnest(${ids}::bigint[]), 'note',
+                     ${JSON.stringify({ text: 'Held as pre-sell — missed at receiving' })}::jsonb, ${createdBy || null}`;
   }
-  return { released: ids.length };
+  return { held: ids.length };
+}
+
+// Every shoe on a shipment with how many of it are held and how many are free, so the
+// Pre-sell page can offer the ones that are NOT held for holding. Sold/shipped units are
+// counted out of `free` for the same reason holdPreSell refuses them.
+export async function listBatchShoes(batchId) {
+  const rows = await db()`
+    SELECT i.sku, max(i.name) AS name,
+           count(*) FILTER (WHERE i.pre_sell)::int AS held,
+           count(*) FILTER (WHERE NOT i.pre_sell AND i.status NOT IN ('sold','shipped','missing','issue'))::int AS free
+      FROM items i WHERE i.batch_id = ${batchId}
+     GROUP BY i.sku ORDER BY max(i.name), i.sku`;
+  return rows.map((r) => ({ ...r, held: Number(r.held), free: Number(r.free) }));
 }
 
 // Mark units restocked — clears restock_pending so they drop off the Rescale

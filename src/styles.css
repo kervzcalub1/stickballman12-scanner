@@ -1360,6 +1360,25 @@ body {
 .rc-audit { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
 .rc-cancel { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
 .rc-auditnote { width: 100%; }
+/* Counting a shelf by scanning (rescale audit). Same visual language as the other scan
+   benches — a search row, a live flash line, and a kept list of what didn't count. */
+.rc-audit-mode { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rc-audit-mode .seg { flex: 1; min-width: 200px; max-width: 340px; }
+.rc-audit-scan { width: 100%; }
+.rc-audit-scan input { flex: 1; min-width: 0; font-size: 16px; }
+.rc-audit-hint { line-height: 1.45; }
+/* How much of a row's number came off a scanner, so a hand-typed correction over the
+   top of it stays distinguishable. */
+/* `.size-line` is a nowrap flex row whose size box is the only flexible child, so an
+   extra chip on the end squeezed it to nothing — the size input vanished on a phone.
+   The row wraps here instead, and the size box keeps a floor. */
+.rc-audit .size-line { flex-wrap: wrap; }
+.rc-audit .size-line .sz { flex: 1 1 70px; min-width: 64px; }
+.rc-audit-scanned { flex: none; font-size: 11px; color: var(--muted); white-space: nowrap; padding: 2px 7px;
+  border-radius: 999px; background: rgba(255,255,255,.06); border: 1px solid var(--border); }
+.rc-audit-fails { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 10px;
+  background: rgba(198,84,84,.08); border: 1px solid rgba(198,84,84,.30); }
+.rc-audit-fail { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
 .rc-listing { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
 .rc-listing-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .rc-listing-plan { font-weight: 700; font-size: 13px; }
@@ -2780,6 +2799,29 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-summary-how { margin: 2px 0 10px; line-height: 1.45; }
 /* The receiving toggle's explanation, once it's on. */
 .presell-field .presell-note { display: block; margin-top: 6px; color: #b9a3e8; }
+/* "Is ALL of this shipment pre-sold?" — the follow-up question, which has no answer
+   pre-selected on purpose (the old checkbox silently meant "all of it"). */
+.presell-scope { display: block; margin-top: 8px; }
+.presell-scope-q { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+.presell-scope .seg { max-width: 420px; }
+/* The per-SHOE chip on a cart / review card, beside "GOAT only". Amber when on, because
+   what it means is "hold this one back from listing" — the one state worth seeing from
+   across the bench. */
+.presell-chip-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted);
+  cursor: pointer; white-space: nowrap; padding: 3px 8px; border-radius: 999px; border: 1px solid transparent; }
+.presell-chip-toggle input { width: 16px; height: 16px; accent-color: #8a63e0; }
+.presell-chip-toggle.on { color: #b9a3e8; border-color: rgba(155,120,230,0.45); background: rgba(155,120,230,0.12); }
+/* The running count. 15 of 15 held, when one shoe was meant to be, is exactly what
+   nobody could see last time — so it is stated on the step where the marking happens
+   and again on Review. */
+.presell-tally { margin: 0 0 10px; padding: 8px 12px; border-radius: 10px; font-size: 13px;
+  background: rgba(155,120,230,0.10); border: 1px solid rgba(155,120,230,0.30); color: var(--muted); }
+.presell-tally.on { color: #b9a3e8; }
+/* Freeing one shoe of a shipment, or putting one back — the row actions on the
+   Pre-sell page's shoe header (which already lays out as a flex row above). */
+.presell-shoe-act { flex: none; margin-left: auto; }
+.presell-hold-pick { display: flex; flex-direction: column; gap: 6px; width: 100%; max-height: 40vh; overflow-y: auto; }
+.presell-hold-pick .btn { justify-content: space-between; width: 100%; }
 .po-chip.kind.shoes { background: transparent; color: var(--muted); border-color: var(--border); }
 .po-chip.kind.boxes { background: rgba(155,120,230,0.14); color: #8a63e0; border-color: rgba(155,120,230,0.45); }
 .po-chip.kind.supplier { background: rgba(61,107,255,0.10); color: #7f9dff; border-color: rgba(61,107,255,0.38); }

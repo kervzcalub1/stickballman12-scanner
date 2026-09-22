@@ -990,6 +990,19 @@ await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_dim_idx
    released, and it has to flow into PH exactly like anything else afterwards.
    See docs/context/pre-sell.md. */
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS pre_sell BOOLEAN NOT NULL DEFAULT false`);
+/* HOW MUCH of the shipment was sold before it landed: 'all' or 'some' ('some' = the
+   warehouse marks which shoes while scanning). NULL on every batch that isn't pre-sell,
+   and on the ones received before this was asked — which are all 'all' by construction,
+   since that was the only thing the old checkbox could mean.
+
+   It exists because `pre_sell` alone cannot answer the question the BOX-COMMIT asks.
+   `batches.pre_sell` means "this shipment was a pre-sell one", which stays true when
+   only one shoe in it is spoken for — so a multi-box batch would go on stamping
+   pre_sell onto every pair in boxes 2..9 after the warehouse had carefully marked one
+   shoe in box 1. That is the bug this column closes (docs/context/pre-sell.md). */
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS pre_sell_scope TEXT`);
+await sql(`ALTER TABLE batches DROP CONSTRAINT IF EXISTS batches_pre_sell_scope_check`);
+await sql(`ALTER TABLE batches ADD CONSTRAINT batches_pre_sell_scope_check CHECK (pre_sell_scope IN ('all','some'))`);
 /* "Did this package come with a manifest?" — asked on Step 1 of every receive
    (2026-09-15). NULL = never asked (batches from before, rescale, in-store, existing).
    false = received blind, which flags the batch for an AUDIT: somebody confirms, against
@@ -1005,6 +1018,13 @@ await sql(`CREATE INDEX IF NOT EXISTS batches_audit_pending_idx ON batches (id) 
 // spoken for and the other half listed, and the batch is one row.
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS pre_sell BOOLEAN NOT NULL DEFAULT false`);
 await sql(`CREATE INDEX IF NOT EXISTS items_pre_sell_idx ON items (batch_id, sku, size) WHERE pre_sell`);
+/* WHEN the unit stopped being pre-sell. A freed pair goes onto PH's New Inventory, and
+   that list is filtered by date — so a pair freed today off a shipment received three
+   weeks ago would land outside the window PH is looking at and be seen by nobody. It is
+   therefore dated on that list by the day it was FREED, which is the day it became PH's
+   work. Exactly the reading the Rescale tab already takes of its `rescaled` event.
+   NULL for everything that was never held. */
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS presell_freed_at TIMESTAMPTZ`);
 
 /* ---- Supplier-raised orders: the manifest comes BEFORE the labels ----
    The original flow was labels-first: PH bought courier labels, raised the order around

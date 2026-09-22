@@ -48,8 +48,13 @@ export default async function handler(req, res) {
     if (box.status === 'received') return send(res, 409, { ok: false, error: 'This box was already submitted.' });
 
     const defaultCost = toCost(found.batch.default_cost);
-    // The batch decides, not the box: pre-sell is declared once for the whole shipment.
-    const items = normalizeItems(rawItems, { defaultCost, noBoxVins, preSell: found.batch.pre_sell === true });
+    // The batch decides how MUCH, not the box — but "this shipment is a pre-sell one"
+    // is not the same claim as "every pair in it is spoken for". A batch received as
+    // 'some' marks its held shoes on the cart, box by box; only 'all' (and every batch
+    // raised before the question existed, which is what a NULL scope means) stamps the
+    // flag onto everything that lands in the box.
+    const preSellAll = found.batch.pre_sell === true && found.batch.pre_sell_scope !== 'some';
+    const items = normalizeItems(rawItems, { defaultCost, noBoxVins, preSellAll });
     const { created, vins, autoCompleted } = await commitBoxItems({
       batchId, boxId, items, createdBy, dateReceived: found.batch.date_received,
     });

@@ -206,8 +206,21 @@ await sql(`
 // stores, so it also bypasses PH entirely; `origin` = where it was counted from).
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS kind   TEXT NOT NULL DEFAULT 'receiving'`);
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS origin TEXT`);
-await sql(`ALTER TABLE batches DROP CONSTRAINT IF EXISTS batches_kind_check`);
-await sql(`ALTER TABLE batches ADD CONSTRAINT batches_kind_check CHECK (kind IN ('receiving','rescale','instore','existing'))`);
+// `batches_kind_check` IS DEFINED ONCE, AND NOT HERE — see the empty-shoe-boxes block
+// further down, which is the only place that drops and re-adds it.
+//
+// It used to be re-added here too, with the kind list as it stood in V5
+// ('receiving','rescale','instore','existing'). That statement is not a no-op on a
+// database that has moved on: once a real `kind='boxes'` batch existed (empty shoe box
+// orders), re-adding the OLD list aborted the whole migration with
+//   check constraint "batches_kind_check" of relation "batches" is violated by some row
+// — so db:setup could never finish again on prod, and every later ADD COLUMN in this
+// file stopped running with it. Nothing caught it locally because a dev database with
+// no boxes batch passes the check happily.
+//
+// A constraint that enumerates values therefore gets ONE definition, at the point where
+// the newest value is added. Re-stating an old list earlier is a time bomb, not a
+// belt-and-braces.
 
 await sql(`
   CREATE TABLE IF NOT EXISTS items (

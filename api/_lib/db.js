@@ -2528,6 +2528,65 @@ export async function setItemsSku(itemIds, { from, to, product, reason }, by) {
   return rows;
 }
 
+// The units that were received the same way as this one: same style code, same size,
+// in the same BOX of the same batch — the set one wrong size declaration produced when
+// the person scanned several pairs onto the one line. Narrower than the SKU version on
+// purpose: a size is typed per line at intake, so the blast radius of getting it wrong
+// is that scan, not every pair of that code ever received. The unit itself is in the
+// list. `box_id` matches with IS NOT DISTINCT FROM, so the ordinary receive (every pair
+// at box_id NULL — see `batch-page-shows-unboxed-items`) groups within its batch.
+export async function findSizeSiblings(item) {
+  if (item?.batch_id == null) return [{ id: Number(item.id), vin: item.vin, status: item.status, listed: false }];
+  const rows = await db()`
+    SELECT i.id, i.vin, i.status,
+           (i.synced_alias OR i.synced_stockx OR i.synced_shopify OR i.added_to_intel_inv) AS listed
+      FROM items i
+     WHERE i.sku IS NOT DISTINCT FROM ${item.sku} AND i.size IS NOT DISTINCT FROM ${item.size}
+       AND i.batch_id = ${item.batch_id} AND i.box_id IS NOT DISTINCT FROM ${item.box_id ?? null}
+     ORDER BY i.id`;
+  return rows.map((r) => ({ ...r, id: Number(r.id), listed: !!r.listed }));
+}
+
+// Change the size on a set of units. Two other facts on the unit are SIZE facts and
+// cannot survive the change:
+//   · the box UPC. A UPC names ONE size's box (`upc-is-per-size`), so the code on
+//     record belongs to the size that just turned out to be wrong. It is cleared, not
+//     kept — the Box Labels / No-Box flow puts the real one back from the box itself.
+//   · the Global Indicator and the Final price, which Alias quotes PER SIZE. Left alone,
+//     a 9 that is really a 9.5 would be listed at the 9's price. They are cleared only
+//     where a fresh price is still wanted — NOT on a pair already on a store (the number
+//     on record is what the live listing says, and PH has to correct that by hand
+//     anyway), and NOT on a sold or shipped one, the same closed-sale rule
+//     `getItemsForGiRefresh` and `recomputeUnlistedPrices` already follow.
+// `last_edit_*` is bumped for the same reason `refreshItemGi` bumps it: a PH draft
+// opened before this write must lose the optimistic-concurrency check rather than
+// quietly putting the old size's price back.
+export async function setItemsSize(itemIds, { from, to, reason }, by) {
+  const ids = (itemIds || []).map(Number).filter(Number.isInteger);
+  if (!ids.length) return [];
+  const sql = db();
+  const rows = await sql`
+    UPDATE items SET size = ${to},
+           upc = NULL,
+           global_indicator = CASE WHEN keep_price THEN global_indicator ELSE NULL END,
+           price            = CASE WHEN keep_price THEN price ELSE NULL END,
+           gi_basis         = CASE WHEN keep_price THEN gi_basis ELSE NULL END,
+           updated_at = now(), last_edit_at = now(), last_edit_by = ${by || null}
+      FROM (SELECT id AS keep_id,
+                   (synced_alias OR synced_stockx OR synced_shopify OR added_to_intel_inv) AS listed,
+                   (synced_alias OR synced_stockx OR synced_shopify OR added_to_intel_inv
+                    OR status IN ('sold','shipped')) AS keep_price
+              FROM items WHERE id = ANY(${ids}::bigint[])) k
+     WHERE items.id = k.keep_id
+     RETURNING items.id, items.vin, items.size, items.upc, k.listed, k.keep_price AS kept_price`;
+  const text = `Size changed ${from || '—'} → ${to}${reason ? ` — ${reason}` : ''}`;
+  for (const r of rows) {
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+      VALUES (${r.id}, 'note', ${JSON.stringify({ text, size_from: from || null, size_to: to })}::jsonb, ${by || null})`;
+  }
+  return rows.map((r) => ({ ...r, id: Number(r.id), listed: !!r.listed, kept_price: !!r.kept_price }));
+}
+
 // Strict on purpose, unlike the reconciliation's `rcSizeNum` — that one strips a
 // trailing W/Y so a supplier writing "7.5W" still matches "7.5". A UPC can't be
 // that generous: a men's 10 and a women's 10 are different boxes with different

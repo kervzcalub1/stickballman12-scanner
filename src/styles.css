@@ -1232,19 +1232,23 @@ body {
 .inv-metrics dd { margin: 0; word-break: break-word; }
 /* The pencil beside a cost: sits inline with the figure, hands off to /costs?q=. */
 .inv-cost-edit { flex: none; padding: 2px 6px; line-height: 1; margin-left: 6px; vertical-align: middle; }
-/* Correct-the-style-code modal (Inventory detail) */
-.sku-edit-row { display: flex; gap: 8px; margin: 10px 0; }
-.sku-edit-row .input { flex: 1; min-width: 0; font-size: 16px; }
+/* Correct-the-style-code modal (Inventory detail), and its twin for the size —
+   same shape, so one set of rules dresses both (a class with no rule at all reads as a
+   styling choice and silently does nothing). */
+.sku-edit-row, .size-edit-row { display: flex; gap: 8px; margin: 10px 0; }
+.sku-edit-row .input, .size-edit-row .input { flex: 1; min-width: 0; font-size: 16px; }
 .sku-edit-hit { display: flex; gap: 12px; align-items: center; padding: 10px; border-radius: 10px;
   background: var(--panel-2, rgba(255,255,255,.04)); margin-bottom: 10px; }
 .sku-edit-hit img { width: 56px; height: 56px; object-fit: contain; border-radius: 8px; background: #fff; flex: none; }
-.sku-edit-scope { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.sku-edit-scope, .size-edit-scope { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 /* The "this pair and the N others…" option is a sentence, and `.check-pill` is nowrap by
    default — on a phone that pushed the whole modal off the left edge. */
-.sku-edit-scope .check-pill { justify-content: flex-start; white-space: normal; border-radius: 12px; line-height: 1.3; align-items: flex-start; }
-.sku-edit-scope .check-pill input { flex: none; margin-top: 1px; }
+.sku-edit-scope .check-pill, .size-edit-scope .check-pill { justify-content: flex-start; white-space: normal; border-radius: 12px; line-height: 1.3; align-items: flex-start; }
+.sku-edit-scope .check-pill input, .size-edit-scope .check-pill input { flex: none; margin-top: 1px; }
 .modal .notice.sm { font-size: 13px; margin: 0 0 10px; text-align: left; }
-.sku-edit-why { width: 100%; margin-bottom: 4px; font-size: 16px; }
+.sku-edit-why, .size-edit-why { width: 100%; margin-bottom: 4px; font-size: 16px; }
+/* The size modal's plain-language lines sit under each other, not in a paragraph block. */
+.modal.size-edit .muted.xs, .modal.size-edit .muted.sm { font-size: 12px; margin: 0 0 8px; text-align: left; line-height: 1.4; }
 .inv-history-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 8px; }
 .inv-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
 .inv-status-edit { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }

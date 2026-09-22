@@ -119,7 +119,11 @@ test('the matching rule and the summary arithmetic (pure)', async () => {
     'IH8223:7.5:missing:-1', 'ZZZ-1:8:unexpected:1', 'DD1391-100:9:over:1', 'DD1391-100:10:ok:0',
   ]);
   // received is AGAINST the label: 2 (capped) + 1 + 0; the stray is extra.
-  expect(totals).toEqual({ expected: 4, received: 3, missing: 1, extra: 2, rows: 4, clean: false });
+  // `scanned`/`byHand` split by HOW the count was made, and they count PAIRS HANDLED,
+  // not pairs-against-the-label: `received` caps an over-count at what was declared,
+  // while somebody still had all five of these in their hands. None of these rows
+  // carries a `scanned` count, so all five read as by hand.
+  expect(totals).toEqual({ expected: 4, received: 3, missing: 1, extra: 2, scanned: 0, byHand: 5, rows: 4, clean: false });
 });
 
 test('the box is scanned in the order it comes out, and Review says what differs from the label', async ({ page }) => {
@@ -186,8 +190,16 @@ test('the box is scanned in the order it comes out, and Review says what differs
   await stray.locator('.po-size-input').blur();
 
   // Take shoe B back out (its pair went back in the wrong box, say): a row at 0 on
-  // Review is a MISSING pair, said as one.
-  await rowFor(page, SKU_B, '8').locator('input[type="checkbox"]').uncheck();
+  // Review is a MISSING pair, said as one. Clearing a row that holds a SCANNED pair
+  // asks first — the tick sits a thumb's width from the stepper, and un-ticking used to
+  // throw away pairs somebody had physically scanned.
+  await rowFor(page, SKU_B, '8').locator('input[type="checkbox"]').click();
+  await expect(page.locator('.modal')).toContainText(/1 pair was scanned/);
+  await page.getByRole('button', { name: 'Keep the count' }).click();
+  await expect(qtyOf(rowFor(page, SKU_B, '8'))).toHaveValue('1');
+  await rowFor(page, SKU_B, '8').locator('input[type="checkbox"]').click();
+  await page.getByRole('button', { name: 'Clear the row' }).click();
+  await expect(qtyOf(rowFor(page, SKU_B, '8'))).toHaveValue('0');
 
   await page.getByRole('button', { name: /Review →/ }).click();
   const sum = page.locator('.po-summary');

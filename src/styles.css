@@ -2788,6 +2788,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .box-existing-size { font-size: 12px; padding: 2px 7px; border-radius: 999px;
   background: rgba(255,255,255,.06); border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .box-existing-size i { font-style: normal; color: var(--muted); margin-left: 3px; }
+/* Where a manifest row's count came from: a scan is a pair that was in a hand, a tick
+   is a claim about the whole row at once. They wrote the same number and looked the
+   same, which is the one thing a verification sheet cannot afford. */
+.po-flag.scanned { background: rgba(58,160,110,.14); color: #3aa06e; border-color: rgba(58,160,110,.35); }
+.po-flag.byhand { background: rgba(198,135,26,.12); color: #c6871a; border-color: rgba(198,135,26,.32); }
+/* Part-counted is its own state: the tick is indeterminate, so the row should not read
+   as finished either. */
+.po-manifest-size.part { border-color: rgba(198,135,26,.35); }
+.po-summary-how { margin: 2px 0 10px; line-height: 1.45; }
 /* The receiving toggle's explanation, once it's on. */
 .presell-field .presell-note { display: block; margin-top: 6px; color: #b9a3e8; }
 /* "Is ALL of this shipment pre-sold?" — the follow-up question, which has no answer

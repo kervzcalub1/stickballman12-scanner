@@ -94,6 +94,12 @@ export function manifestSummary(items) {
         key: `${it.key}:${s.key}`, sku: it.sku || it.code || '', name: it.name || '', size: String(s.size || ''),
         dimensions: s.dimensions || null,
         expected: e, received: g, delta: e == null ? g : g - e, state,
+        // How the count was made. A scan is a pair that was in a hand; a tick claims a
+        // whole row in one tap. They produce the same number, so the difference has to
+        // travel with the row or it is lost at exactly the moment somebody is deciding
+        // whether to believe it (docs/context/purchase-orders.md).
+        scanned: Math.min(g, Number(s.scanned) || 0),
+        byHand: Math.max(0, g - Math.min(g, Number(s.scanned) || 0)),
       });
     }
   }
@@ -101,7 +107,7 @@ export function manifestSummary(items) {
     || a.sku.localeCompare(b.sku) || compareSizes(a.size, b.size));
   // `received` is what came in AGAINST the label — an undeclared pair is `extra`, not a
   // fourth of four. Over-counts on an expected row are likewise capped at the row.
-  const t = { expected: 0, received: 0, missing: 0, extra: 0, rows: rows.length, clean: true };
+  const t = { expected: 0, received: 0, missing: 0, extra: 0, scanned: 0, byHand: 0, rows: rows.length, clean: true };
   for (const r of rows) {
     t.expected += r.expected || 0;
     if (r.state !== 'unexpected') t.received += Math.min(r.received, r.expected);
@@ -109,6 +115,8 @@ export function manifestSummary(items) {
     if (r.state === 'over') t.extra += r.delta;
     if (r.state === 'unexpected') t.extra += r.received;
     if (r.state !== 'ok') t.clean = false;
+    t.scanned += r.scanned;
+    t.byHand += r.byHand;
   }
   return { rows, totals: t };
 }

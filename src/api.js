@@ -383,7 +383,12 @@ export const api = {
   // Pre-sell: shipments sold before they landed. Not listed until released.
   presellList: (batchId) => get(`/api/presell/list${batchId ? `?batchId=${batchId}` : ''}`),
   presellMarkSold: (payload) => post('/api/presell/mark-sold', payload),
-  presellRelease: (batchId) => post('/api/presell/release', { batchId }),
+  // Free held pairs: the whole shipment, or one shoe of it (`sku`, optionally one
+  // `size`). `reason: 'not_presell'` says it was marked in error rather than fulfilled.
+  presellRelease: (batchId, opts = {}) => post('/api/presell/release', { batchId, ...opts }),
+  // The mirror: put a shoe BACK on hold, and the shipment's shoes to choose from.
+  presellShoes: (batchId) => get(`/api/presell/hold?batchId=${batchId}`),
+  presellHold: (batchId, sku) => post('/api/presell/hold', { batchId, sku }),
   poAssignLabels: (poId, assignments) => post('/api/po/assign-labels', { poId, assignments }),
   poLabelUpdate: (boxId, patch) => post('/api/po/label-update', { boxId, ...patch }),
   poLabelRemove: (boxId, confirm) => post('/api/po/label-remove', { boxId, confirm }),

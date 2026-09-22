@@ -90,6 +90,12 @@ and `purchase-orders.md` → "Scan-first, any order".
    all — using it to continue a pending box is what left staff with an empty box
    beside the one they meant to fill. Received boxes get **Reopen box** instead (below) —
    the box-commit CAS refuses a submitted box, so "Add items" would 409.
+   **Pre-sell is asked in two halves** (2026-09-23): ticking *Pre-sell shipment* then asks
+   whether **all** of it is pre-sold or only some — unanswered by default, and Step 1
+   refuses to move on. "Only some" puts a **Pre-sell** toggle on every cart row (beside
+   Box / No box and GOAT only) and a running count on Items and Review; the shipment's
+   answer is stored as `batches.pre_sell_scope` because every later BOX commit re-reads
+   it. Full rules: `docs/context/pre-sell.md`.
    **A size declared wrong is corrected in place, not re-received** (2026-09-22): the ✎
    on each row of a box's contents (and beside **Size** on the item detail) changes the
    size on the pair, clears the UPC and re-prices it — `Reopen box` is for *adding*

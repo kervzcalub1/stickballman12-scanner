@@ -6,14 +6,21 @@
 // the GI refresh and the repricer) and surfaces only here.
 //
 // The job on this page is one question per row — how many of these are covered by an
-// order? — and then one button. What is left over is released for listing by clearing
-// `pre_sell` and setting `restock_pending`, which puts it on the Rescale Stock worklist:
-// the place stock already gets priced and pushed to the stores. Nothing new had to be
-// invented for "subject for upload"; that worklist is it.
+// order? — and then one button. What is left over is freed for listing by clearing
+// `pre_sell`, which puts it on PH's New Inventory dated by the day it was freed
+// (pre-sell.md: that date is what stops a pair off an older shipment landing outside the
+// window PH is looking at).
 //
-// The WAREHOUSE answers it, not PH: the team holding the shipment is the one that knows
-// which pairs an order covers. PH's part starts after release, when the leftovers appear
-// on Rescale Stock to be priced and listed to II and the platforms.
+// The page also carries the two CORRECTIONS, because pre-sell is declared per shoe at
+// receiving and can therefore be got wrong in both directions:
+//   · "Not pre-sell" frees one shoe of a shipment — the fix for a batch where one SKU of
+//     fifteen was spoken for and all fifteen were held.
+//   · "Hold another shoe" puts one back, which is the expensive mistake: a held pair
+//     that nobody marked reaches PH, gets listed, and can be sold to a second buyer.
+//
+// The WAREHOUSE answers all of it, not PH: the team holding the shipment is the one that
+// knows which pairs an order covers. PH's part starts after release, when the freed pairs
+// appear on New Inventory to be priced and listed to II and the platforms.
 //
 // Two ways to answer the question, because the warehouse works both ways: type the count
 // for a row of identical pairs, or scan the 1ID of a specific one. Both end at the same
@@ -22,7 +29,7 @@
 // pair has shipped would strand it if the pre-sale fell through.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar } from '../components/common.jsx';
+import { TopBar, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { compareSizes } from '../lib/codes.js';
 import { estDate } from '../lib/format.js';
@@ -34,6 +41,8 @@ export function PreSell({ onHome, onSignOut }) {
   const [flash, setFlash] = useState(null);
   const [scan, setScan] = useState('');
   const scanRef = useRef(null);
+  const [confirm, setConfirm] = useState(null); // { kind:'release'|'not_presell', ship, shoe?, n }
+  const [holdPick, setHoldPick] = useState(null); // { ship, shoes|null }
 
   const load = () => api.presellList()
     .then((r) => setRows(r.rows || []))
@@ -85,15 +94,35 @@ export function PreSell({ onHome, onSignOut }) {
     } finally { scanRef.current?.focus(); }
   }
 
-  async function release(ship, remaining) {
-    if (!window.confirm(
-      `Send ${remaining} unit${remaining === 1 ? '' : 's'} from ${ship.code} for rescale?\n\n`
-      + 'They stop being pre-sell and land on Rescale Stock, where you price and list them. '
-      + 'Anything already marked sold stays put.')) return;
-    setBusy(true); setError('');
+  // Free held pairs: the whole shipment, or one shoe of it. Same endpoint, same end
+  // state — `reason` only decides what the unit's history says about why.
+  async function doFree({ kind, ship, shoe }) {
+    setConfirm(null); setBusy(true); setError('');
     try {
-      const r = await api.presellRelease(ship.id);
-      pulse('ok', `${r.released} unit${r.released === 1 ? '' : 's'} sent for rescale — price them on Rescale Stock.`);
+      const r = await api.presellRelease(ship.id, shoe
+        ? { sku: shoe.sku, reason: kind === 'not_presell' ? 'not_presell' : null }
+        : {});
+      pulse('ok', `${r.released} pair${r.released === 1 ? '' : 's'} freed — the PH team picks them up on New Inventory.`);
+      await load();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // The way back. Opening the picker fetches the shipment's shoes so the unheld ones can
+  // be offered by name — nobody should have to type a style code to correct a tick.
+  async function openHoldPick(ship) {
+    setHoldPick({ ship, shoes: null }); setError('');
+    try {
+      const r = await api.presellShoes(ship.id);
+      setHoldPick((h) => (h && h.ship.id === ship.id ? { ...h, shoes: r.shoes || [] } : h));
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); setHoldPick(null); }
+  }
+
+  async function hold(ship, shoe) {
+    setHoldPick(null); setBusy(true); setError('');
+    try {
+      const r = await api.presellHold(ship.id, shoe.sku);
+      pulse('ok', `${r.held} pair${r.held === 1 ? '' : 's'} of ${shoe.name || shoe.sku} held as pre-sell.`);
       await load();
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
@@ -105,8 +134,9 @@ export function PreSell({ onHome, onSignOut }) {
       <div className="wrap-narrow">
         <p className="muted sm">
           Shipments sold <b>before</b> they arrived. Nothing here is listed to II or the stores — it is
-          already spoken for. Say how many of each size an order covers, then send the rest for rescale:
-          that hands them to the PH team to price and list.
+          already spoken for. Say how many of each size an order covers, then free the rest: that hands
+          them to the PH team on <b>New Inventory</b> to price and list. A shoe that was never pre-sell
+          can be freed on its own, and one that was missed can be put back.
         </p>
         {error && <div className="po-err">{error}</div>}
         <div className="scan-flash-live" role="status" aria-live="polite">
@@ -148,6 +178,13 @@ export function PreSell({ onHome, onSignOut }) {
                     <div className="presell-shoe-head">
                       <span className="po-line-name">{sh.name || sh.sku}</span>
                       <span className="po-line-meta">{sh.sku}</span>
+                      {/* One shoe out of the hold, which whole-batch release cannot do:
+                          freeing the fourteen marked in error would otherwise free the
+                          one that is genuinely spoken for with them. */}
+                      <button className="btn ghost sm presell-shoe-act" disabled={busy}
+                        onClick={() => setConfirm({ kind: 'not_presell', ship, shoe: sh, n: sh.sizes.reduce((a, r) => a + Number(r.remains), 0) })}>
+                        Not pre-sell
+                      </button>
                     </div>
                     <div className="presell-rows">
                       <div className="presell-row head" aria-hidden="true">
@@ -174,14 +211,56 @@ export function PreSell({ onHome, onSignOut }) {
                 ))}
 
                 <div className="presell-actions">
-                  <button className="btn primary" disabled={busy || remaining < 1} onClick={() => release(ship, remaining)}>
-                    <Icon name="refresh" /> Send the {remaining} remaining for rescale
+                  <button className="btn primary" disabled={busy || remaining < 1}
+                    onClick={() => setConfirm({ kind: 'release', ship, n: remaining })}>
+                    <Icon name="refresh" /> Free the {remaining} remaining for listing
+                  </button>
+                  {/* The mirror of "Not pre-sell". Under-holding is the expensive
+                      direction: an unmarked pair reaches PH, gets listed, and can be
+                      sold to a second buyer while the first order still stands. */}
+                  <button className="btn ghost" disabled={busy} onClick={() => openHoldPick(ship)}>
+                    ＋ Hold another shoe
                   </button>
                   {remaining < 1 && <span className="muted sm">Every unit on this shipment is spoken for.</span>}
                 </div>
               </div>
             );
           })}
+
+        {confirm && (
+          <Modal type="warn"
+            title={confirm.kind === 'not_presell'
+              ? `${confirm.shoe.name || confirm.shoe.sku} — not pre-sell?`
+              : `Free ${confirm.n} pair${confirm.n === 1 ? '' : 's'} from ${confirm.ship.code}?`}
+            message={confirm.kind === 'not_presell'
+              ? `${confirm.n} pair${confirm.n === 1 ? '' : 's'} of this shoe stop being held and go to the PH team on New Inventory to price and list. The rest of ${confirm.ship.code} stays exactly as it is, and anything already marked sold stays put.`
+              : 'They stop being pre-sell and land on New Inventory, where the PH team prices and lists them. Anything already marked sold stays put.'}
+            onClose={() => setConfirm(null)}>
+            <button className="btn primary" disabled={busy} onClick={() => doFree(confirm)}>
+              {confirm.kind === 'not_presell' ? 'Free this shoe' : 'Free them'}
+            </button>
+            <button className="btn ghost" disabled={busy} onClick={() => setConfirm(null)}>Cancel</button>
+          </Modal>
+        )}
+
+        {holdPick && (
+          <Modal type="warn" title={`Hold a shoe from ${holdPick.ship.code}`}
+            message="Pick the shoe that was sold before it landed. Every pair of it still on our floor is held back from listing; pairs already sold or shipped are left alone."
+            onClose={() => setHoldPick(null)}>
+            <div className="presell-hold-pick">
+              {holdPick.shoes === null ? <p className="muted sm">Loading the shipment…</p>
+                : holdPick.shoes.filter((sh) => sh.free > 0).length === 0
+                  ? <p className="muted sm">Every shoe on this shipment is already held.</p>
+                  : holdPick.shoes.filter((sh) => sh.free > 0).map((sh) => (
+                    <button className="btn ghost sm" key={sh.sku} disabled={busy} onClick={() => hold(holdPick.ship, sh)}>
+                      <span>{sh.name || sh.sku} <span className="muted">— {sh.sku}</span></span>
+                      <span className="muted sm">{sh.free} free{sh.held ? ` · ${sh.held} held` : ''}</span>
+                    </button>
+                  ))}
+            </div>
+            <button className="btn ghost" onClick={() => setHoldPick(null)}>Cancel</button>
+          </Modal>
+        )}
       </div>
     </div>
   );

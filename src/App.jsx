@@ -189,7 +189,7 @@ export default function App() {
   const openCosts = (q) => { go('costs'); writeParam('q', q); };
   if (view === 'receiving') return withAdvisor(<Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onOpenReconcile={openReconcile} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />);
   // Pre-sell lives with the warehouse, not PH: the team holding the shipment is the one
-  // that knows which pairs an order covers. PH's part comes after release, on Rescale Stock.
+  // that knows which pairs an order covers. PH's part comes after freeing, on New Inventory.
   if (view === 'inbound') return withAdvisor(<Inbound onHome={() => go('home')} onSignOut={signOut}
     onOpenPo={openReconcile} />);
   if (view === 'presell') return withAdvisor(<PreSell onHome={() => go('home')} onSignOut={signOut} />);

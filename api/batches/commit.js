@@ -145,10 +145,20 @@ export default async function handler(req, res) {
   // while working everywhere else: an unrecognised VIN is nulled, and insertItems then
   // mints a dated one, so the shoe left the bench wearing a number that wasn't on it.
   // One implementation, shared with box-commit (intake.js).
-  // Pre-sell is a property of the SHIPMENT, declared once at intake, and it only makes
-  // sense on a real inbound — rescale and in-store are stock we already had.
+  // Pre-sell only makes sense on a real inbound — rescale and in-store are stock we
+  // already had. `preSellScope` says how much of the shipment it covers: 'all' holds
+  // every pair (the old behaviour, and still the common one), 'some' holds only the
+  // shoes the warehouse marked on the cart.
   const preSell = isShipment && header.preSell === true;
-  const items = normalizeItems(rawItems, { defaultCost, noBoxVins, preSell });
+  const preSellScope = preSell ? (header.preSellScope === 'some' ? 'some' : 'all') : null;
+  const items = normalizeItems(rawItems, { defaultCost, noBoxVins, preSellAll: preSellScope === 'all' });
+  // Saying "only some of it" and then marking nothing is not a shipment with no pre-sell
+  // in it — it is a half-finished answer, and committing it would file the whole thing as
+  // ordinary stock and list somebody else's pairs. The client blocks it at Review; this
+  // is the same refusal at the door.
+  if (preSellScope === 'some' && !items.some((it) => it.preSell)) {
+    return send(res, 400, { ok: false, error: 'You said only part of this shipment is pre-sell — mark which shoes before submitting.' });
+  }
 
   // Only a real shipment (receiving) carries buyer/supplier/tracking. Rescale and
   // in-store drop those; in-store keeps `origin` (the store name) like rescale.
@@ -172,6 +182,7 @@ export default async function handler(req, res) {
     manifestReceived: isShipment && typeof header.manifestReceived === 'boolean' ? header.manifestReceived : null,
     poId,
     preSell,
+    preSellScope,
   };
 
   try {

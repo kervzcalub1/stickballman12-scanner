@@ -27,6 +27,58 @@ to II and the platforms. PH has no Pre-sell page and cannot mark a pair sold.
   boxes. It is a checkbox next to the tracking field
   (`.presell-field` in `src/screens/Receiving.jsx`), carried on the commit body as
   `batch.preSell` through `createBatch` / `createOpenBatch` / `box-commit`.
+- **`batches.pre_sell_scope`** — `'all'` | `'some'` | NULL (not a pre-sell shipment).
+
+## All of it, or only some (2026-09-23)
+
+**What went wrong.** Nine boxes, fifteen SKUs, **one** of them actually sold before it
+landed — and all fifteen came out held, invisible to PH. The checkbox asked about the
+*shipment*, `insertItems` copied that one answer onto every unit, and in a multi-box
+batch `box-commit` re-read `batches.pre_sell` for boxes 2..9 and stamped everything that
+landed in them too. Nothing on any screen said how many shoes were being held.
+
+**The question now has two halves.** Ticking *Pre-sell shipment* opens a second,
+unanswered question — *Is **all** of this shipment pre-sold?* — with the same shape and
+the same reasoning as the manifest Yes/No beside it: **nothing is pre-selected**, and
+`goStep2` refuses to move on until it is answered. The old checkbox silently meant "all
+of it", which is exactly the assumption that did the damage.
+- **All of it** → today's behaviour, unchanged. Every pair is held.
+- **Only some** → the batch keeps `pre_sell = true` (it *was* a pre-sell shipment, and the
+  chips and this page are keyed on that), and each **cart row** carries a **Pre-sell**
+  toggle beside the Box / No box and GOAT-only controls it already had. It is a property
+  of the shoe, like those two — not a mode you are in.
+
+**Why not two scanning passes.** The floor's own proposal was to scan the pre-sell pairs
+first and the rest after, per box. That adds a second sticky mode on top of "Scanning as:
+With box / No box" (four combinations), makes somebody sort every carton into two piles
+before scanning — nine times — against the one rule rapid scan is built on, and still
+leaves a pair scanned in the wrong pass looking identical on screen. The chip needs no
+sort, no mode and no order, and it is visible on the row for the rest of the session.
+
+**The count is stated, twice.** `.presell-tally` on the Items step and again on Review:
+*"1 of 15 shoes marked pre-sell"*. Fifteen of fifteen held, when one was meant to be, is
+what nobody could see last time.
+
+**Half an answer is refused.** "Only some" with nothing marked is not a shipment with no
+pre-sell in it — committing it would list somebody else's pairs. `goStep3` blocks it on
+the single-box path and `api/batches/commit.js` refuses it at the door (400). A **box** of
+a multi-box shipment may legitimately hold none: eight of the nine did.
+
+**Where the scope is read, and why it is on the batch.** `box-commit` has no header to
+read — it re-reads the batch row for every box. `preSellAll = batch.pre_sell === true &&
+batch.pre_sell_scope !== 'some'` is what stops box 7 holding its own contents. A **NULL**
+scope therefore has to mean *all*: that is what every batch received before this existed
+carries, and it must keep behaving the way it was received.
+
+**`normalizeItems` reads the two as an OR** (`preSellAll === true || it.preSell === true`),
+so the shipment answer and the line answer can never fight. The option was renamed from
+`preSell` to `preSellAll`; it is passed by all three intake paths.
+
+**Both directions are correctable, and the second one matters more.** Over-holding is
+visible and merely annoying — fifteen shoes sitting on this page. **Under**-holding is
+invisible and expensive: an unmarked pair reaches PH, gets listed, and can be sold to a
+second buyer while the first order still stands. So the Pre-sell page carries both
+corrections — see **Freeing and holding** below.
 
 ## What the flag holds back
 
@@ -84,7 +136,10 @@ one closes the string and the whole module fails to parse.
 Warehouse (admin auto-allowed), in the warehouse app — a card in **Receiving
 Shipment Orders**, plus a Needs-attention tile keyed on `presell_pending`. Rows are
 grouped shipment → shoe → size
-(`listPreSellGroups`), each showing **arrived / sold / remains**.
+(`listPreSellGroups`), each showing **arrived / sold / remains**. Each **shoe** header
+carries **Not pre-sell** and each shipment carries **＋ Hold another shoe** — the two
+corrections, see *Freeing and holding*. Both confirm through `<Modal>` rather than
+`window.confirm`, which can't be styled and reads badly on a phone.
 
 Two ways to say a pair is spoken for, both ending in status **`pre_sold`**:
 
@@ -102,31 +157,56 @@ Two ways to say a pair is spoken for, both ending in status **`pre_sold`**:
 scan-out when it actually leaves. Claiming it early would strand the unit if the
 order collapsed.
 
-## Release → listing
+## Freeing and holding (was "Release → listing")
 
-**Send the N remaining for rescale** → `POST /api/presell/release` →
-`releasePreSell` sets `pre_sell = false, restock_pending = true` on every unit of
-that batch that is **not** `pre_sold`/`sold`/`shipped`/`missing`/`issue`, and logs a
-`rescaled` event.
+**Free the remaining** → `POST /api/presell/release` → `releasePreSell` clears `pre_sell`
+and stamps **`items.presell_freed_at = now()`** on every unit of that batch that is
+**not** `pre_sold`/`sold`/`shipped`/`missing`/`issue`, and logs a `note` event.
 
-**Rescale Stock, and only Rescale Stock.** Releasing clears `pre_sell`, which is
-what used to let those units back onto **New Inventory** as well — they were
-received days ago, so they sit inside its date window, and the moment the warehouse
-released a shipment its remainder appeared on *both* PH tabs. `phListItems`'
-receiving branch therefore carries `AND (${kind} IS NULL OR NOT i.restock_pending)`:
-a unit on the rescale worklist is rescale work. Two lists claiming the same pair is
-how it gets listed twice — or left, because each side assumed the other had it. The
-admin **Report** (`kind IS NULL`) still sees the released pairs, the same carve-out
-no-box has; the ones still spoken for stay hidden there too, because pre-sell hides
-a pair from every PH surface until it is released. Pinned by `e2e/presell.spec.js`.
+**They land on NEW INVENTORY (changed 2026-09-23), not Rescale Stock.** Freed pairs are
+what they always were — ordinary arrivals that were held back for a while — so
+`restock_pending` is left false and PH picks them up on the tab that means "new stock to
+price and list". Release used to set `restock_pending` instead, for exactly one reason:
+New Inventory is filtered by date, and a pair freed weeks after it arrived fell outside
+the window PH looks at, so it would have been seen by nobody.
 
-`restock_pending` is the PH **Rescale Stock** worklist (`docs/context/rescale.md`)
-— the existing home for "stock that needs pricing and pushing to the stores".
-Nothing new was invented for "subject for upload"; that worklist already is it.
+**That reason is now fixed at the source.** `phListItems`' receiving branch selects,
+filters and orders on `coalesce(i.presell_freed_at, i.created_at)`: a freed pair is dated
+by **the day it was freed**, which is the day it became PH's work. The Rescale tab already
+takes exactly this reading of its own `rescaled` event, for the same reason. Ordinary
+stock has a NULL `presell_freed_at` and is unaffected.
 
-**Units already `pre_sold` are left alone** — they keep `pre_sell = true` and stay
-on the Pre-sell page. This is why `phListItems` tests the *item* flag: releasing
-frees part of a batch while the rest stays held.
+**Nothing moves under PH's feet.** Units released *before* this change keep
+`restock_pending = true` and stay on Rescale Stock exactly where they were left. The
+change applies to what is freed from now on.
+
+**One worklist still owns the pair.** The receiving branch keeps
+`AND (${kind} IS NULL OR NOT i.restock_pending)`, so the old released units stay on
+Rescale and the new ones stay on New Inventory — never both. Two lists claiming the same
+pair is how it gets listed twice, or left because each side assumed the other had it.
+
+**Units already `pre_sold` are left alone** — they keep `pre_sell = true` and stay on the
+Pre-sell page. This is why `phListItems` tests the *item* flag: freeing part of a batch
+leaves the rest held.
+
+### The two corrections
+
+Pre-sell is declared per shoe now, so it can be got wrong in both directions. Both fixes
+live on the Pre-sell page, and both are warehouse-only.
+
+| | Where | Does |
+|---|---|---|
+| **Not pre-sell** | the ✎-style button on each **shoe header** | `POST /api/presell/release { batchId, sku, reason: 'not_presell' }` — frees that one shoe. Whole-batch release could free the fourteen marked in error only by freeing the one that is genuinely spoken for with them. |
+| **＋ Hold another shoe** | the shipment's actions | `POST /api/presell/hold { batchId, sku }` → `holdPreSell` — puts a missed shoe back. `GET /api/presell/hold?batchId=` (`listBatchShoes`) lists the shipment's shoes with held/free counts, so the picker offers them by name rather than asking anyone to type a style code. |
+
+`reason` is recorded in the unit's event text: *"Not pre-sell after all — marked in error
+at receiving"* vs *"Released from pre-sell — free to list"*. Two different stories about
+the same pair, and the first one is the warehouse correcting itself.
+
+`holdPreSell` refuses `sold`/`shipped`/`missing`/`issue` units — a pair that has left is
+not ours to hold, and claiming it now would say something false about a closed sale. It
+clears `presell_freed_at` with the hold, so a re-held pair is dated by its arrival again
+if it is later freed for real.
 
 ## Endpoints
 
@@ -134,9 +214,11 @@ frees part of a batch while the rest stays held.
 |---|---|---|
 | `GET /api/presell/list` | warehouse (admin auto) | `listPreSellGroups` |
 | `POST /api/presell/mark-sold` | warehouse (admin auto) | count path or VIN path |
-| `POST /api/presell/release` | warehouse (admin auto) | `releasePreSell` |
+| `POST /api/presell/release` | warehouse (admin auto) | `releasePreSell` — whole batch, or one `sku` (optionally one `size`) |
+| `GET /api/presell/hold?batchId=` | warehouse (admin auto) | `listBatchShoes` — the shipment's shoes, held/free |
+| `POST /api/presell/hold` | warehouse (admin auto) | `holdPreSell` — put a missed shoe back |
 
-All three use `requireRole`, which auto-allows admin. **PH gets 403 on all three** —
+All of them use `requireRole`, which auto-allows admin. **PH gets 403 on every one** —
 guarded by `e2e/presell.spec.js`, because "PH can still see the rows" and "PH can
 declare a pair sold" are different failures and only the second one matters.
 
@@ -169,12 +251,21 @@ is deliberately listed nowhere, so four greyed badges say nothing), the same cal
 
 ## Tests
 
-`e2e/presell.spec.js` — 7 tests: the flag lands on every unit; **the multi-box path
-inherits it** (that path reads `pre_sell` off the batch row, not its own request
-body, so the single-shot test does not cover it); **PH is refused** on mark-sold and
-release; a pre-sell batch stays off PH New Inventory and out of its badges; the count
-path and the scan path both reach `pre_sold`; lowering a count hands units back;
-release moves only the remainder onto Rescale Stock.
+`e2e/presell.spec.js` — 13 tests. The original seven: the flag lands on every unit;
+**the multi-box path inherits it** (that path reads `pre_sell` off the batch row, not its
+own request body, so the single-shot test does not cover it); **PH is refused** on
+mark-sold and release; a pre-sell batch stays off PH New Inventory and out of its badges;
+the count path and the scan path both reach `pre_sold`; lowering a count hands units back;
+freeing moves only the remainder (now onto **New Inventory**). Six more for part pre-sell:
+- only the **marked** shoes are held, and the unmarked ones are PH's work at once;
+- **"only some" with nothing marked is a 400**, not a shipment filed as ordinary stock;
+- **the nine-box bug**: box 2 of a part pre-sell shipment does not hold its own contents;
+- a **NULL scope still holds everything**, so batches received before this keep behaving;
+- **both corrections**: one shoe freed on its own (leaving the really-sold one held, with
+  "marked in error" on its history), then put back — and PH 403s on the hold;
+- **a freed pair is dated by the day it was freed**: a shipment aged 30 days, freed today,
+  appears on *today's* New Inventory and not on the window it arrived in. That date is the
+  whole reason freed pairs can go to New Inventory at all.
 
 ## Gotchas
 
@@ -190,4 +281,12 @@ release moves only the remainder onto Rescale Stock.
   `e2e/receiving-no-tracking.spec.js` selects the no-tracking checkbox by; two
   elements then matched and the spec failed in strict mode. Share styling by adding
   to a CSS selector list, never by reusing a class e2e keys on.
-- Needs `db:setup` (`batches.pre_sell`, `items.pre_sell`, the partial index).
+- Needs `db:setup` (`batches.pre_sell`, `batches.pre_sell_scope` + its CHECK,
+  `items.pre_sell`, `items.presell_freed_at`, the partial index).
+- **A backtick in a SQL comment inside `db.js` closes the template literal** and the whole
+  module fails to parse. The `presell_freed_at` comment in `phListItems` was written with
+  one around a column name and took the server down on the spot.
+- The per-shoe chip is a property of the CART ROW, so it belongs in the **merge keys**
+  (`x.preSell === item.preSell`, beside `withBox` and `goatOnly`) in both places a scan
+  can merge into an existing line. Without it, scanning an unmarked pair of a shoe you had
+  marked would silently fold the two together and hold — or free — the wrong pairs.

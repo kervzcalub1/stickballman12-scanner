@@ -122,12 +122,21 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // "Did this package come with a manifest?" — null until answered. A shipment
     // received WITHOUT one is flagged for an audit against its tracking number's order.
     manifestReceived: null,
+    // How much of a pre-sell shipment is actually spoken for: 'all' | 'some'. Null until
+    // answered, and Step 1 refuses to move on while it is — see goStep2.
+    preSellScope: null,
   });
   // The reason stored on the batch: the custom text when "Other" is picked.
   const effectiveOrigin = header.origin === 'other'
     ? (String(header.originOther || '').trim() || 'Other')
     : header.origin;
   const setH = (k, v) => setHeader((h) => ({ ...h, [k]: v }));
+  // Is this a shipment where only SOME shoes are spoken for? In box mode the answer
+  // belongs to the batch (it was given on Step 1 of the first box and every later box
+  // has to obey it), which is why `pre_sell_scope` rides along on every batch row.
+  const preSellSome = isBoxMode
+    ? (batchContext?.pre_sell === true && batchContext?.pre_sell_scope === 'some')
+    : (!noShipment && header.preSell === true && header.preSellScope === 'some');
   // "No tracking number" clears whatever was typed. The checkbox and the field must
   // never disagree about what this shipment had — the server drops the field when the
   // flag is set, so a value left on screen would be a lie about what got recorded.
@@ -433,6 +442,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const rawVins = !!prefs.rawVins && !isRescale;
 
   const [items, setItems] = useState([]);     // completed shoes (each: name,sku,…,withBox,sizes[])
+  // How many shoes are being held back. Declared HERE and not up with `preSellSome`:
+  // `items` is a useState below that point, and reading it earlier is a temporal-dead-zone
+  // crash at render that no build step catches.
+  const preSellCount = preSellSome ? items.filter((it) => it.preSell === true).length : 0;
   // Rescale only: EXISTING units re-scanned by VIN — each updates its own record
   // (no new VIN). { key, vin, name, sku, size, image, statusSel, custom }.
   const [rescanned, setRescanned] = useState([]);
@@ -461,6 +474,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }
   const setItemBox = (itemKey, withBox) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, withBox } : it)));
   const setItemGoat = (itemKey, goatOnly) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, goatOnly } : it)));
+  // Pre-sell per SHOE. A shipment where one of fifteen SKUs is spoken for used to hold
+  // all fifteen, because the only question anyone was asked was about the shipment
+  // (docs/context/pre-sell.md). Lives beside the box status and GOAT toggles because it
+  // is the same kind of fact: something true of this shoe, not of the parcel.
+  const setItemPreSell = (itemKey, preSell) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, preSell } : it)));
   // Cost per SHOE, typed on the card. Kept as the raw string so a half-typed "12."
   // survives a re-render; blank means "use the PO line / batch default", never $0.
   const setItemCost = (itemKey, cost) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, cost } : it)));
@@ -822,7 +840,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // stays separate (boxed vs no-box are tracked apart).
   function addOrMergeItem(item) {
     setItems((arr) => {
-      const i = arr.findIndex((x) => x.withBox === item.withBox && x.goatOnly === item.goatOnly && sameSku(x.sku, item.sku));
+      const i = arr.findIndex((x) => x.withBox === item.withBox && x.goatOnly === item.goatOnly
+        && (x.preSell === true) === (item.preSell === true) && sameSku(x.sku, item.sku));
       // Newest scanned shoe shows on top (Feature 3) — prepend new lines.
       if (i === -1) return [item, ...arr];
       const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
@@ -1086,7 +1105,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       // Fold into the same shoe already in the cart (same product AND same box /
       // GOAT status — boxed and no-box pairs are tracked apart).
       const i = arr.findIndex((x) => x.key !== lineKey && !x.pending && !x.failed
-        && x.withBox === withBox && !!x.goatOnly === false && sameSku(x.sku, resolved.sku));
+        && x.withBox === withBox && !!x.goatOnly === false && !!x.preSell === false && sameSku(x.sku, resolved.sku));
       if (i === -1) return arr.map((it) => (it.key === lineKey ? resolved : it));
       const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
       // A blank size always starts its OWN row — two unknown sizes are not one
@@ -1500,6 +1519,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (!noShipment && !isBoxMode && !isInstore && typeof header.manifestReceived !== 'boolean') {
       setError('Say whether this package came with a manifest — Yes or No.'); return;
     }
+    // "Pre-sell" on its own is half an answer, and the half that is missing is the one
+    // that caused the damage: ticking the box used to hold EVERY pair in the shipment.
+    if (!noShipment && !isBoxMode && header.preSell === true && header.preSellScope !== 'all' && header.preSellScope !== 'some') {
+      setError('Say how much of this shipment was pre-sold — all of it, or only some.'); return;
+    }
     // A new box needs its number BEFORE anything is scanned — after the commit it takes a
     // renumber on the Batch page to correct, and a wrong number here is what leaves box 6
     // of the shipment sitting in the system as box 10.
@@ -1516,6 +1540,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setError('');
     if (!items.length) { setError('Add at least one item first.'); return; }
     if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; }
+    // "Only some of it" and nothing marked is a half-finished answer, not a shipment
+    // with no pre-sell in it — and committing it would list somebody else's pairs. Only
+    // on the single-box path, where this one commit IS the whole shipment: a box of a
+    // multi-box one may genuinely hold none (8 of the 9 boxes did, in the case that
+    // prompted all this). The server refuses the same thing at the door.
+    if (preSellSome && !isBoxMode && !isMultiBoxNew && preSellCount === 0) {
+      setError('You said only some of this shipment is pre-sold — tick the shoes that are.'); return;
+    }
     // The PO checklist now starts fully unchecked, so "nothing ticked" is also what an
     // untouched screen looks like. Say so once before letting it through — an empty box
     // IS a legitimate outcome (the whole label came up short), just never a silent one.
@@ -1549,7 +1581,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), withBox: it.withBox, goatOnly: it.goatOnly, vin: r.vins?.[n] || null });
+            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), withBox: it.withBox, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null });
           }
         }
       }
@@ -1650,9 +1682,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         reconcile: batchRes?.reconcile || null,
       });
       setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1);
-      // noTracking resets with the tracking # on purpose: left sticky, the NEXT
-      // shipment would quietly commit as untracked too.
-      setHeader((h) => ({ ...h, tracking: '', noTracking: false, notes: '', specialRules: '', manifestReceived: null })); // keep buyer/supplier/date/cost
+      // noTracking and pre-sell reset with the tracking # for the same reason: left
+      // sticky, the NEXT shipment would quietly commit untracked, or with every pair in
+      // it held back from listing.
+      setHeader((h) => ({ ...h, tracking: '', noTracking: false, notes: '', specialRules: '', manifestReceived: null, preSell: false, preSellScope: null })); // keep buyer/supplier/date/cost
     } catch (err) {
       setShowConfirm(false);
       if (err.unauthorized) return onSignOut();
@@ -1841,16 +1874,33 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           what e2e selects the no-tracking checkbox by. */}
                       <span className="presell-check">
                         <input type="checkbox" checked={header.preSell === true}
-                          onChange={(e) => setHeader((h) => ({ ...h, preSell: e.target.checked }))} />
+                          onChange={(e) => setHeader((h) => ({ ...h, preSell: e.target.checked, preSellScope: e.target.checked ? h.preSellScope : null }))} />
                         <b>Pre-sell shipment</b>
                         <span className="muted sm">— these were sold before they arrived; don’t list them</span>
                       </span>
+                      {/* HOW MUCH of it, asked as a real question with no answer
+                          pre-selected — the same shape as the manifest Yes/No above, and
+                          for the same reason. The checkbox on its own used to mean "all
+                          of it", so a shipment with one spoken-for shoe in it held all
+                          fifteen back from listing (docs/context/pre-sell.md). */}
                       {header.preSell && (
-                        <span className="presell-note sm">
-                          Nothing in this shipment goes to II or the stores. It lands on the
-                          <b> Pre-sell</b> page, where you say how many of each size an order covers
-                          and send the rest for rescale — that is what puts them in front of the
-                          PH team to list.
+                        <span className="presell-scope">
+                          <span className="presell-scope-q">Is <b>all</b> of this shipment pre-sold?</span>
+                          <span className="seg sm" role="group" aria-label="How much of this shipment is pre-sold">
+                            <button type="button" className={`seg-btn ${header.preSellScope === 'all' ? 'on yes' : ''}`}
+                              aria-pressed={header.preSellScope === 'all'} onClick={() => setH('preSellScope', 'all')}>
+                              Yes — all of it
+                            </button>
+                            <button type="button" className={`seg-btn ${header.preSellScope === 'some' ? 'on no' : ''}`}
+                              aria-pressed={header.preSellScope === 'some'} onClick={() => setH('preSellScope', 'some')}>
+                              No — only some shoes
+                            </button>
+                          </span>
+                          <span className="presell-note sm">
+                            {header.preSellScope === 'some'
+                              ? <>Mark the spoken-for shoes as you scan them — each one gets a <b>Pre-sell</b> chip on its card. Everything you don’t mark is ordinary stock and goes to the PH team to list.</>
+                              : <>Nothing in this shipment goes to II or the stores. It lands on the <b>Pre-sell</b> page, where you say how many of each size an order covers and free the rest for listing.</>}
+                          </span>
                         </span>
                       )}
                     </label>
@@ -2119,6 +2169,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   </div>
                 </div>
 
+                {preSellSome && (
+                  <div className={`presell-tally ${preSellCount ? 'on' : ''}`} role="status" aria-live="polite">
+                    <b>{preSellCount}</b> of {items.length} shoe{items.length === 1 ? '' : 's'} marked <b>pre-sell</b>
+                    {preSellCount === 0 ? ' — tick the spoken-for shoes on their cards.' : ' — the rest go to the PH team to list.'}
+                  </div>
+                )}
                 {!items.length ? <p className="muted">{isRescale ? 'No new stock — scan a UPC/SKU above for unlabeled stock, or scan VINs to rescan existing units.' : 'No items yet — scan a box above. Keep scanning; each one drops straight into this list.'}</p> : (
                   <div className="recv-items">
                     {items.map((it) => (
@@ -2149,6 +2205,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                 <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
                                   <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
                                 </label>
+                                {preSellSome && (
+                                  <label className={`presell-chip-toggle ${it.preSell === true ? 'on' : ''}`} title="This shoe was sold before it landed — hold it back from listing">
+                                    <input type="checkbox" checked={it.preSell === true} onChange={(e) => setItemPreSell(it.key, e.target.checked)} /> Pre-sell
+                                  </label>
+                                )}
                                 {costField(it)}
                               </div>
                             )}
@@ -2275,6 +2336,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   {flaggedCount > 0 && <span className="review-flagged">⚠ {flaggedCount} flagged</span>}
                 </div>
                 <p className="muted sm">Scanning is deliberately not interrupted, so this is the check: confirm each shoe really is what the scan said it was — the name and SKU are editable — then check counts, box status, and flag any defects. Sizes are sorted smallest→largest.</p>
+                {preSellSome && (
+                  <div className={`presell-tally ${preSellCount ? 'on' : ''}`} role="status" aria-live="polite">
+                    <b>{preSellCount}</b> of {items.length} shoe{items.length === 1 ? '' : 's'} marked <b>pre-sell</b>
+                    {preSellCount === 0 ? ' — tick the spoken-for shoes on their cards.' : ' — the rest go to the PH team to list.'}
+                  </div>
+                )}
                 {!items.length ? <p className="muted">Nothing to review — go back and add items.</p> : (
                   <div className="recv-items review">
                     {items.map((it) => (
@@ -2295,6 +2362,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                 <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>
                                 <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
                               </div>
+                              {preSellSome && (
+                                <label className={`presell-chip-toggle ${it.preSell === true ? 'on' : ''}`} title="This shoe was sold before it landed — hold it back from listing">
+                                  <input type="checkbox" checked={it.preSell === true} onChange={(e) => setItemPreSell(it.key, e.target.checked)} /> Pre-sell
+                                </label>
+                              )}
                               <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
                                 <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
                               </label>

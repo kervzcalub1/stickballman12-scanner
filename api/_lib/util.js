@@ -58,7 +58,24 @@ export function applySecurity(req, res) {
 
 const buckets = new Map();
 
+// The E2E suite is ~660 tests from ONE address inside eight minutes, which is not the
+// traffic this guard exists for — and it has been quietly eating them. `qa-targeted` and
+// `smoke` already carry `test.skip(status === 429, 'rate-limited')` lines; smoke says it
+// out loud: "a 429 is an environment condition, not a product failure". The specs
+// WITHOUT that guard just fail instead, and which ones they are depends on how the 60s
+// windows happen to line up with the run — so the suite goes red on an unrelated PR for
+// adding a test file.
+//
+// Skipping around it hides coverage as the suite grows. The cause goes instead, for the
+// E2E server only: `playwright.config.js` sets E2E_NO_RATE_LIMIT on the dev server it
+// starts, and it is refused outright under NODE_ENV=production so it cannot be turned on
+// where it matters. The startup line is deliberate — a limiter that is off must never be
+// off silently.
+const RATE_LIMIT_OFF = process.env.E2E_NO_RATE_LIMIT === '1' && process.env.NODE_ENV !== 'production';
+if (RATE_LIMIT_OFF) console.warn('[rateLimit] DISABLED — E2E_NO_RATE_LIMIT is set. Never set this outside the test suite.');
+
 export function rateLimit(req, { windowMs = 60_000, max = 30 } = {}) {
+  if (RATE_LIMIT_OFF) return true;
   const ip = clientIp(req); // spoof-resistant (see clientIp) — not raw X-Forwarded-For
   // Scope the bucket per (ip, route) — a shared IP-only bucket let unrelated
   // endpoint traffic exhaust a strict per-route budget (e.g. ph/refresh-gi).

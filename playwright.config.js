@@ -74,6 +74,13 @@ export default defineConfig({
     // an hour.
     // MAKE_RECEIPT_PARSER_URL: the receipt-by-number lookup searches REAL ordering
     // mailboxes and spends Make operations on every call.
-    env: { TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '' },
+    //
+    // E2E_NO_RATE_LIMIT: the per-(ip, route) limiter is 30/min, and this suite is ~660
+    // tests from one address in eight minutes. It was silently eating commits — hence
+    // the `test.skip(status === 429)` lines dotted through qa-targeted and smoke — and
+    // which specs it ate depended on how the 60s windows lined up with the run, so an
+    // unrelated PR could go red just for adding a test file. It is refused under
+    // NODE_ENV=production (api/_lib/util.js), and the server logs a line when it is off.
+    env: { TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', E2E_NO_RATE_LIMIT: '1' },
   },
 });

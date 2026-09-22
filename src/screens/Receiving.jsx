@@ -115,23 +115,32 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     let cancelled = false;
     api.batchFull(batchContext.id).then((r) => {
       if (cancelled) return;
-      if (boxTarget) {
-        setBoxExisting((r.items || []).filter((it) => String(it.box_id) === String(boxTarget.id)));
-        return;
+      // What is already in the box being continued — and [] for a box that isn't in the
+      // batch yet, which is a real answer ("nothing"), not a missing one.
+      const mine = boxTarget
+        ? (r.items || []).filter((it) => String(it.box_id) === String(boxTarget.id))
+        : [];
+      setBoxExisting(mine);
+      if (!boxTarget) {
+        const list = r.boxes || [];
+        setBatchBoxes(list);
+        const next = list.reduce((n, b) => Math.max(n, Number(b.box_number) || 0), 0) + 1;
+        setNewBoxNumber((v) => v || String(next));
       }
-      const list = r.boxes || [];
-      setBatchBoxes(list);
-      const next = list.reduce((n, b) => Math.max(n, Number(b.box_number) || 0), 0) + 1;
-      setNewBoxNumber((v) => v || String(next));
       if (r.batch?.po_id) {
         api.poGet(Number(r.batch.po_id))
           .then((po) => {
             if (cancelled) return;
             setPoLabels(po.boxes || []);
-            // Box mode never links the PO as `receivingPo` (that would re-run the
-            // Step 1 prefill), but the lines still carry what the supplier said each
-            // size cost — keep them so a box added later inherits it too.
+            // The lines carry what the supplier said each size cost, so a box added
+            // later inherits it too.
             setPoCostLines(po.lines || []);
+            // …and the order itself, so THIS box gets the supplier's list to check the
+            // carton against. It is set directly rather than through `applyPo`, which
+            // also re-runs the Step-1 prefill (supplier, tag, a box slot per label) —
+            // that belongs to starting a shipment, not to continuing one.
+            // Only for a box with nothing in it yet: see `boxModePo`.
+            if (!mine.length) setReceivingPo({ po: po.po || po, boxes: po.boxes || [], lines: po.lines || [] });
           })
           .catch(() => { /* fall back to the typed number */ });
       }
@@ -275,7 +284,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // pair comes out. Pre-checking made "I received everything" the default and turned
   // the screen into something you skim past — a shortage only got caught if someone
   // remembered to untick it.
-  const manifestLinesFor = (poBoxId) => (receivingPo?.lines || []).filter((l) => Number(l.po_box_id) === Number(poBoxId));
+  const manifestLinesFor = (poBoxId) => (poBoxId == null ? []
+    : (receivingPo?.lines || []).filter((l) => Number(l.po_box_id) === Number(poBoxId)));
   // A WHOLE-ORDER (Path C) PO declares one list against the purchase, not per label — so
   // every label legitimately has an empty checklist and everything comes out of the box
   // "unexpected". Without knowing that, the screen chips every single pair "not on PO"
@@ -409,12 +419,41 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const expectedBoxesNum = Math.max(1, parseInt(header.expectedBoxes, 10) || 1);
   // Receiving against a PO always uses the per-box (box-list) flow — even a
   // single-label PO — so every label goes through its manifest checklist.
-  const isPoReceive = !!receivingPo && !isBoxMode && !noShipment;
+  //
+  // BOX MODE COUNTS TOO (2026-09-23). It used to be excluded outright, and the cost was
+  // exactly what the note in purchase-orders.md predicted: box 1 gets the supplier's
+  // list to check the carton against, and box 2 — added later from the Batch page, which
+  // is how any box that arrives a day after the rest is received — gets a bare scan
+  // field and no list at all. Same order, same label, same manifest; the only difference
+  // was which screen it was reached from.
+  //
+  // Only for a box that is still EMPTY. A reopened box already holds pairs that are NOT
+  // in this cart, so a checklist here would score 0 received against a box with eleven in
+  // it — and seeding the rows from them would re-commit pairs that already have VINs.
+  // Those keep the plain scan flow, with their contents listed above it.
+  const boxModePo = isBoxMode && !!receivingPo && (boxExisting == null ? false : boxExisting.length === 0);
+  const isPoReceive = !!receivingPo && !noShipment && (!isBoxMode || boxModePo);
   // Receiving a shipment of EMPTY shoe boxes. It is the same wizard, the same labels and
   // the same per-box commit — what changes is that nobody scans two hundred identical
   // cartons, so step 2 is the manifest as a counting checklist and nothing here mints a
   // sticker, asks for a photo, or offers a "with box" toggle.
   const isBoxesPo = isPoReceive && receivingPo?.po?.order_kind === 'boxes';
+  // In box mode there is no box LIST — there is one box, the one this screen was opened
+  // for. It stands in for a slot so the manifest checklist, the scan bar and the review
+  // summary can read it exactly as they read a slot in the box-list flow. Which label it
+  // is comes from the carton's tracking number first (the number IS the label) and its
+  // box number second.
+  const boxModeSlot = React.useMemo(() => {
+    if (!isBoxMode) return null;
+    const tracking = boxTarget?.tracking_number || header.tracking || '';
+    const num = boxTarget?.box_number ?? (Number(newBoxNumber) || null);
+    const labels = poLabels || [];
+    const label = labels.find((l) => normTrack(l.tracking_number) && normTrack(l.tracking_number) === normTrack(tracking))
+      || (num != null ? labels.find((l) => Number(l.box_number) === Number(num)) : null)
+      || null;
+    return { boxNumber: num, tracking, poBoxId: label?.id ?? null, kind: label?.kind || null };
+  }, [isBoxMode, boxTarget, header.tracking, newBoxNumber, poLabels]);
+  const activeBox = isBoxMode ? boxModeSlot : boxSlots[activeSlot];
   // Does the box being scanned have a list to TICK OFF?
   //
   // Raw-1ID mode on a PO shows a sticker-only bar, because the pair is already on the
@@ -428,8 +467,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // On those there is nothing to tick, so the sticker bar has no row to bind to and the
   // shoe cannot be scanned at all — the warehouse is locked out of the flow they use
   // every day. Fall back to the normal two-beat bar: scan the shoe, then its 1ID.
-  const activeBoxLines = activeSlot != null && isPoReceive
-    ? manifestLinesFor(boxSlots[activeSlot]?.poBoxId).length : 0;
+  const activeBoxLines = (isBoxMode || activeSlot != null) && isPoReceive
+    ? manifestLinesFor(activeBox?.poBoxId).length : 0;
   const poBoxHasChecklist = isPoReceive && activeBoxLines > 0;
   // Read inside async scan handlers, which close over the render they were created in.
   const poBoxHasChecklistRef = useRef(poBoxHasChecklist);
@@ -686,11 +725,23 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   //
   // Only ever fills an EMPTY cart. Once a size has been ticked or a pair added, the cart
   // is the person's work and a late-arriving manifest must not touch it.
+  // Which label's list the cart currently holds. In BOX MODE the label is not settled
+  // when the screen opens — the box number starts as a guess (max + 1) and follows the
+  // tracking number once it is scanned — so a cart built for label 4 has to become
+  // label 6's when the carton turns out to be box 6. Rebuilt only while the sheet is
+  // untouched (every expected row still at 0, nothing added): after that it is the
+  // person's work, and a list swapping under them would lose a count.
+  const builtForRef = useRef(null);
+  const sheetUntouched = () => items.every((it) => it.expected && (it.sizes || []).every((z) => !(Number(z.qty) > 0)));
   useEffect(() => {
-    if (!isPoReceive || activeSlot == null || items.length) return;
-    const rebuilt = buildManifestItems(boxSlots[activeSlot]?.poBoxId);
+    if (!isPoReceive || (!isBoxMode && activeSlot == null)) return;
+    const poBoxId = activeBox?.poBoxId ?? null;
+    if (items.length && (builtForRef.current === poBoxId || !sheetUntouched())) return;
+    const rebuilt = buildManifestItems(poBoxId);
+    if (!rebuilt.length && items.length) return;   // no list for this label — keep what's there
+    builtForRef.current = poBoxId;
     if (rebuilt.length) setItems(rebuilt);
-  }, [receivingPo, activeSlot]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [receivingPo, activeSlot, activeBox?.poBoxId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 1800); return () => clearTimeout(t); }, [flash]);
 
@@ -1421,7 +1472,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // has no default; the server falls back to the batch's own (box-commit.js), so a
   // blank here is sent as null on purpose and the card shows that fallback instead.
   const costLines = receivingPo?.lines || poCostLines || [];
-  const activePoBoxId = boxSlots[activeSlot]?.poBoxId ?? null;
+  const activePoBoxId = activeBox?.poBoxId ?? null;
   const batchDefaultCost = isBoxMode ? costOrNull(batchContext?.default_cost) : defaultCostNum;
   const sizeCost = (it, s) => unitCost(it.cost, poLineCost(costLines, it.sku, s.size, activePoBoxId), batchDefaultCost);
   // What the card shows when nothing is typed: the PO's figure for the shoe (one
@@ -2076,7 +2127,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   A whole-order manifest, or a label the supplier never declared, has
                   nothing to tick — so it falls through to the normal scan flow below,
                   which can add a shoe AND take its 1ID. */}
-              {isPoReceive && activeSlot != null && poBoxHasChecklist ? (
+              {isPoReceive && (isBoxMode || activeSlot != null) && poBoxHasChecklist ? (
                 <>
                   {/* The scan bar, always: the shoe in hand goes up on its own row,
                       whatever order the box comes out in; in raw 1ID mode the sticker
@@ -2134,8 +2185,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       </div>
                     </div>
                   )}
-                  <ManifestChecklist boxNumber={Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} tracking={boxSlots[activeSlot]?.tracking}
-                    kind={boxSlots[activeSlot]?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
+                  <ManifestChecklist boxNumber={Number(activeBox?.boxNumber) || (isBoxMode ? null : activeSlot + 1)} tracking={activeBox?.tracking}
+                    kind={activeBox?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
                     items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
                     onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} onSetField={setItemField} onSetSize={setSizeValue} onMergeSize={mergeSizeRow}
                     rawVins={rawVins && !isBoxesPo} awaiting={awaitingSticker} unresolved={isUnresolved}
@@ -2157,7 +2208,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   <p className="muted sm po-manifest-whole">
                     {isWholeOrderPo
                       ? <>This order was manifested as <b>one whole-order list</b>, not box by box — so there is nothing to tick off per label. Scan everything you pull out of this box; it&rsquo;s checked against the supplier&rsquo;s list for the order as a whole once every box is in.</>
-                      : <>The supplier declared nothing for this label, so there is nothing to tick off. Scan everything you pull out of the box — it all counts, and reads as an overage against a label that promised nothing.</>}
+                      : isBoxMode && activeBox?.poBoxId == null
+                        // Box mode resolves the label from the carton's tracking number,
+                        // then its box number. Neither matched, so there is no list to
+                        // show — saying which is the difference between a screen that
+                        // looks broken and one that tells you to check the label.
+                        ? <>This carton doesn&rsquo;t match any label on <b>{receivingPo?.po?.po_code || 'the order'}</b> — its tracking number and box number are both unknown to it. Scan everything you pull out; it still counts against the order. If the label on the carton says otherwise, fix the box number on the Batch page.</>
+                        : <>The supplier declared nothing for this label, so there is nothing to tick off. Scan everything you pull out of the box — it all counts, and reads as an overage against a label that promised nothing.</>}
                   </p>
                 )}
 
@@ -2397,7 +2454,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   box should see it while the box is still in front of them. */}
               {isPoReceive && poBoxHasChecklist && (
                 <ManifestSummary summary={manifestSummary(items)} boxesOrder={isBoxesPo}
-                  boxNumber={Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} />
+                  boxNumber={Number(activeBox?.boxNumber) || (isBoxMode ? null : activeSlot + 1)} />
               )}
               <div className="card">
                 <div className="step-head">

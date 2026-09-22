@@ -552,6 +552,31 @@ Tests: `e2e/po-wholeorder-1id.spec.js` — verified to fail without the fix.
     - `receivingPo` is set **directly**, not through `applyPo` — that also re-runs the
       Step-1 prefill (supplier, tag, a slot per label), which belongs to *starting* a
       shipment, not continuing one. `e2e/po-box-mode-manifest.spec.js`.
+  - **A TICK AND A SCAN ARE NOT THE SAME CLAIM (2026-09-23).** Asked from the floor:
+    *"so scanning them will mark them as check? isn't it a bit confusing?"* It was, in
+    three ways — and all three matter because the reason to check a box against its label
+    is to **verify** it:
+    - **The tick now means the row is DONE**, not "something landed on it". It was
+      `checked={got > 0}`, so one scan of an expected two showed a ticked row whose own
+      **short 1** flag contradicted it. Part-counted is its own state — the checkbox goes
+      **indeterminate** (`.po-manifest-size.part`), which is the honest answer while a
+      box is half unpacked.
+    - **Where the count came from rides on the row**: `s.scanned` counts the units that
+      arrived by scan (`setSizeQty(..., { scanDelta })`; +1 on a manifest hit or a
+      catalogue-resolved merge, −1 on undo, clamped to the count otherwise), and the row
+      shows **`N scanned`** / **`N by hand`**. Ticking claims a whole row in one tap;
+      scanning is a pair that was in somebody's hand. They wrote the same number and
+      looked identical, which is the one thing a verification sheet cannot afford.
+    - **Clearing a row that holds scanned pairs asks first.** The tick sits a thumb's
+      width from the stepper on a phone, and un-ticking used to zero the row silently —
+      scanned pairs and all.
+    - **It survives to Review**: `manifestSummary` carries `scanned` / `byHand` per row
+      and in the totals, and `.po-summary-how` names the rows counted by hand — *including
+      rows that are otherwise fine*, because "expected 3, received 3, none of them
+      scanned" is exactly the row worth a second look. Note the two count **pairs
+      handled**, not pairs-against-the-label: `received` caps an over-count at what was
+      declared, while somebody still had every one of them in their hands.
+      `e2e/po-scanned-vs-ticked.spec.js`.
   - **Review opens with the box against its label** (`ManifestSummary` ←
     `manifestSummary`): expected · received (against the label — an undeclared pair is
     *extra*, not a fourth of four) · missing · extra / not on PO, then only the rows that

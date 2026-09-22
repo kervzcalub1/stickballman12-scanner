@@ -198,6 +198,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [poSuggest, setPoSuggest] = useState(null);     // { code, tracking, data } — a typed/scanned tracking matched an open PO
   const poSuggestDismiss = useRef(new Set());           // trackings the user chose to receive plainly
   const emptyBoxAck = useRef(false);                    // "yes, this PO box really is empty" — see goStep3
+  // Clearing a manifest row that holds SCANNED pairs — asked, not done. The tick sits a
+  // thumb's width from the stepper on a phone, and un-ticking used to zero the row
+  // silently, throwing away pairs somebody had physically scanned.
+  const [clearAsk, setClearAsk] = useState(null); // { item, size, scanned }
   function applyPo(data) {
     const boxes = data.boxes || [];
     setReceivingPo(data);
@@ -315,16 +319,28 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // sticker lands HERE, not on the first short row in display order: the person is
   // holding that sticker over that shoe, whichever order the box came out in.
   const lastHitRef = useRef(null);   // { itemKey, sizeKey }
-  const setSizeQty = (itemKey, sizeKey, qty) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
+  // `scanDelta` is how the row's SCANNED count moves: +1 when a scan lands on it, -1
+  // when that scan is undone, 0 for the stepper / the number box / the tick.
+  //
+  // Why the row keeps the number at all: a tick and a scan write the same figure but
+  // are not the same claim. Ticking a row expecting three says "all three are here" in
+  // one tap; three scans are three pairs that were each in a hand. Brent's reason for
+  // checking a PO box is to verify the pre-listed items against what is physically in
+  // the carton — and if the two look identical afterwards, the sheet cannot tell him
+  // which pairs were actually seen (docs/context/purchase-orders.md).
+  const setSizeQty = (itemKey, sizeKey, qty, { scanDelta = 0 } = {}) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
     ...it,
     sizes: it.sizes.map((s) => {
       if (s.key !== sizeKey) return s;
       const q = Math.max(0, parseInt(qty, 10) || 0);
       if (q > (Number(s.qty) || 0)) lastHitRef.current = { itemKey, sizeKey };
+      // Clamped to the count: stepping a row down below what was scanned can only mean
+      // those pairs went back in the box.
+      const scanned = Math.max(0, Math.min(q, (Number(s.scanned) || 0) + scanDelta));
       // Never hold more 1ID stickers than pairs: unticking a size (or stepping it
       // down) hands the sticker back so it can be scanned onto the pair it is
       // actually on. Trimming from the end drops the last one scanned.
-      return { ...s, qty: q, vins: (s.vins || []).slice(0, q) };
+      return { ...s, qty: q, scanned, vins: (s.vins || []).slice(0, q) };
     }),
   })));
   // Reserve real VINs for the current manifest counts so every received unit shows
@@ -1049,7 +1065,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (hit && hit.by !== 'ambiguous') {
       const got = Number(hit.size.qty) || 0;
       const exp = hit.size.expectedQty;
-      setSizeQty(hit.item.key, hit.size.key, got + 1);
+      setSizeQty(hit.item.key, hit.size.key, got + 1, { scanDelta: 1 });
       lastScanRef.current = { manifest: { itemKey: hit.item.key, sizeKey: hit.size.key } }; setCanUndo(true);
       const over = exp != null && got + 1 > exp;
       setFlash(over
@@ -1161,7 +1177,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         // one already in the cart must not lend it around.
         upc: (isUpc ? c : '') || p.upc || '', gender: p.gender || null, colorway: p.colorway || '',
         sizeOptions: p.sizes || [], withBox, goatOnly: false,
-        sizes: [{ key: cartKey++, size, qty: 1, needsSize: !size, upc: isUpc ? c : '', vins: vin ? [vin] : [] }],
+        sizes: [{ key: cartKey++, size, qty: 1, scanned: 1, needsSize: !size, upc: isUpc ? c : '', vins: vin ? [vin] : [] }],
       };
       // Fold into the same shoe already in the cart (same product AND same box /
       // GOAT status — boxed and no-box pairs are tracked apart).
@@ -1172,9 +1188,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       // A blank size always starts its OWN row — two unknown sizes are not one
       // size scanned twice.
       const j = size ? sizes.findIndex((z) => z.size === size) : -1;
-      if (j === -1) sizes.push({ key: cartKey++, size, qty: 1, needsSize: !size, upc: isUpc ? c : '', vins: vin ? [vin] : [] });
+      if (j === -1) sizes.push({ key: cartKey++, size, qty: 1, scanned: 1, needsSize: !size, upc: isUpc ? c : '', vins: vin ? [vin] : [] });
       else {
         sizes[j].qty += 1; if (vin) sizes[j].vins.push(vin);
+        // It reached this row off a SCAN, even though the manifest didn't carry the
+        // code — the catalogue resolved it to this shoe and size. Counts as scanned.
+        sizes[j].scanned = (Number(sizes[j].scanned) || 0) + 1;
         if (isUpc && !sizes[j].upc) sizes[j].upc = c;
       }
       const merged = { ...arr[i], sizes, image: arr[i].image || resolved.image };
@@ -1204,7 +1223,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (last.manifest) {
       const it = itemsRef.current.find((x) => x.key === last.manifest.itemKey);
       const sz = it?.sizes.find((z) => z.key === last.manifest.sizeKey);
-      if (sz) setSizeQty(it.key, sz.key, (Number(sz.qty) || 1) - 1);
+      // -1 on the scanned count too: undoing a SCAN must not leave the row claiming
+      // that pair was seen. Clamping alone would keep it when the row also holds
+      // hand-counted pairs.
+      if (sz) setSizeQty(it.key, sz.key, (Number(sz.qty) || 1) - 1, { scanDelta: -1 });
       setFlash({ type: 'warn', text: 'Last scan removed' });
       return;
     }
@@ -2138,7 +2160,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   <ManifestChecklist boxNumber={Number(activeBox?.boxNumber) || (isBoxMode ? null : activeSlot + 1)} tracking={activeBox?.tracking}
                     kind={activeBox?.kind} wholeOrder={isWholeOrderPo} orderSkus={orderManifestSkus}
                     items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
-                    onSetQty={setSizeQty} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} onSetField={setItemField} onSetSize={setSizeValue} onMergeSize={mergeSizeRow}
+                    onSetQty={setSizeQty} onAskClear={(it, sz, n) => setClearAsk({ item: it, size: sz, scanned: n })} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} onSetField={setItemField} onSetSize={setSizeValue} onMergeSize={mergeSizeRow}
                     rawVins={rawVins && !isBoxesPo} awaiting={awaitingSticker} unresolved={isUnresolved}
                     boxesOrder={isBoxesPo} onCountAsDeclared={countAsDeclared} />
                 </>
@@ -2813,6 +2835,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         </div>
       )}
 
+      {clearAsk && (
+        <Modal type="warn" title={`Clear size ${clearAsk.size.size}?`}
+          message={`${clearAsk.scanned} pair${clearAsk.scanned === 1 ? ' was' : 's were'} scanned onto this row${clearAsk.item?.sku ? ` of ${clearAsk.item.sku}` : ''}. Clearing it puts the count back to 0 — the row then reads as a shortage against the label.`}
+          onClose={() => setClearAsk(null)}>
+          <button className="btn primary" onClick={() => { setSizeQty(clearAsk.item.key, clearAsk.size.key, 0); setClearAsk(null); }}>Clear the row</button>
+          <button className="btn ghost" onClick={() => setClearAsk(null)}>Keep the count</button>
+        </Modal>
+      )}
+
       {showPoPicker && (
         <PoPickerModal onPick={applyPo} onClose={() => setShowPoPicker(false)} onSignOut={onSignOut} />
       )}
@@ -2850,7 +2881,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
    list is the picking guide and whatever stays unticked is the shortage. Adjust the
    "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
    issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onRemoveSize, onRemoveItem, onSetField, onSetSize, onMergeSize, unresolved, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared }) {
+function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onAskClear, onRemoveSize, onRemoveItem, onSetField, onSetSize, onMergeSize, unresolved, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared }) {
   // Progress is AGAINST the label: an undeclared pair doesn't make a 3-of-4 box a
   // 4-of-4 one, and a third pair of a size that declared two counts as two.
   const onLabel = items.reduce((n, it) => (!it.expected || it.pending ? n : n + it.sizes.reduce((a, r) => {
@@ -2939,11 +2970,25 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                 const ids = rawVins ? (s.vins || []).length : 0;
                 const needsId = rawVins && got > ids;
                 const isNext = rawVins && awaiting?.size?.key === s.key;
+                // The tick means THIS ROW IS DONE, not "something landed on it". It used
+                // to be `got > 0`, so scanning one of an expected two showed a ticked row
+                // that was still short — the row's own "short 1" flag contradicting its
+                // own checkbox. Part-counted is its own state (indeterminate), which is
+                // the honest answer while a box is half unpacked.
+                const full = exp != null ? got >= exp : got > 0;
+                const part = got > 0 && !full;
+                const scanned = Number(s.scanned) || 0;
+                const byHand = Math.max(0, got - scanned);
                 return (
-                  <div className={`po-manifest-size ${got > 0 ? 'on' : 'off'} ${needsId || (s.needsSize && !String(s.size || '').trim()) ? 'needs-fix' : ''} ${isNext ? 'awaiting' : ''}`} key={s.key}>
+                  <div className={`po-manifest-size ${got > 0 ? 'on' : 'off'} ${part ? 'part' : ''} ${needsId || (s.needsSize && !String(s.size || '').trim()) ? 'needs-fix' : ''} ${isNext ? 'awaiting' : ''}`} key={s.key}>
                     <label className="po-check">
-                      <input type="checkbox" checked={got > 0}
-                        onChange={(e) => onSetQty(it.key, s.key, e.target.checked ? (exp ?? 1) : 0)} />
+                      <input type="checkbox" checked={full}
+                        ref={(el) => { if (el) el.indeterminate = part; }}
+                        onChange={(e) => (e.target.checked
+                          ? onSetQty(it.key, s.key, exp ?? 1)
+                          // Clearing a row throws away pairs somebody physically scanned,
+                          // and the tick sits a thumb's width from the stepper.
+                          : (scanned > 0 ? onAskClear?.(it, s, scanned) : onSetQty(it.key, s.key, 0)))} />
                       <span className="po-size-lbl">
                         {/* On the `needsSize` flag, never the live value — keyed on the
                             value it would unmount on the first keystroke. */}
@@ -2965,6 +3010,11 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                     {rawVins && got > 0 && (
                       <span className={`po-flag id ${needsId ? 'need' : 'ok'}`}>1ID {ids}/{got}</span>
                     )}
+                    {/* A scan is a pair that was in a hand; a tick is a claim about all
+                        of them at once. They wrote the same number and looked identical,
+                        which is the one thing a verification sheet cannot afford. */}
+                    {scanned > 0 && <span className="po-flag scanned" title="Counted by scanning">{scanned} scanned</span>}
+                    {byHand > 0 && <span className="po-flag byhand" title="Counted by hand — no barcode was read for these">{scanned > 0 ? `+${byHand}` : byHand} by hand</span>}
                     {pending && <span className="po-flag pending">to pull {exp}</span>}
                     {short && <span className="po-flag short">short {exp - got}</span>}
                     {over && <span className="po-flag over">+{got - exp}</span>}
@@ -3002,6 +3052,9 @@ function ManifestSummary({ summary, boxNumber, boxesOrder = false }) {
   const { rows, totals } = summary;
   const unit = boxesOrder ? 'boxes' : 'pairs';
   const off = rows.filter((r) => r.state !== 'ok');
+  // Named even when the row itself is fine: "expected 3, received 3" with none of them
+  // scanned is exactly the row worth a second look.
+  const byHandRows = rows.filter((r) => r.byHand > 0);
   return (
     <div className={`card po-summary ${totals.clean ? 'clean' : ''}`}>
       <div className="step-head">
@@ -3016,6 +3069,18 @@ function ManifestSummary({ summary, boxNumber, boxesOrder = false }) {
         <span className={`po-summary-stat ${totals.missing ? 'bad' : ''}`}><b>{totals.missing}</b> missing</span>
         <span className={`po-summary-stat ${totals.extra ? 'warn' : ''}`}><b>{totals.extra}</b> extra / not on PO</span>
       </div>
+      {/* HOW the box was counted, not just what came out of it. A scanned pair was in
+          somebody's hand; a ticked row is a claim about all of it at once. The whole
+          point of checking a carton against its label is to verify it, so the part that
+          was taken on trust has to survive to the person reading this. */}
+      {(totals.scanned > 0 || totals.byHand > 0) && (
+        <p className="po-summary-how muted sm">
+          <b>{totals.scanned}</b> scanned{totals.byHand > 0 ? <> · <b>{totals.byHand}</b> counted by hand</> : ' — every pair was read off a barcode'}
+          {byHandRows.length > 0 && (
+            <>: {byHandRows.map((r) => `${r.sku || '?'} size ${r.size}${r.byHand > 1 ? ` ×${r.byHand}` : ''}`).join(', ')}</>
+          )}
+        </p>
+      )}
       {totals.clean ? (
         <p className="muted sm">Everything the label declared came out of the box, and nothing else did.</p>
       ) : (

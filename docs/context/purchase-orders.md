@@ -523,9 +523,35 @@ Tests: `e2e/po-wholeorder-1id.spec.js` — verified to fail without the fix.
     back. Ticking / the stepper still work for a barcode that won't read.
     **Why:** the old screen refused a shoe scan ("use + Add unexpected") and made the
     person find the row for every pair; with twenty SKUs in a box the floor read that as
-    "scan in the app's order" and went round it via the Batch page (box mode is never PO
-    mode — `isPoReceive = receivingPo && !isBoxMode`), which still reconciles server-side
-    but shows no on-screen list. `e2e/po-scan-any-order.spec.js`.
+    "scan in the app's order" and went round it via the Batch page, which still
+    reconciles server-side but showed no on-screen list. `e2e/po-scan-any-order.spec.js`.
+  - **BOX MODE IS PO MODE TOO (2026-09-23).** That parenthetical above used to end
+    "box mode is never PO mode — `isPoReceive = receivingPo && !isBoxMode`", and it cost
+    exactly what it predicted. Reported from the floor: *box 1 was received in the wizard
+    and got the list; box 2, added afterwards from the Batch page — which is how any box
+    that lands a day after the rest is received — got a bare scan field and no list at
+    all.* Same order, same label, same manifest; the only difference was which screen it
+    was reached from. Now `isPoReceive = receivingPo && !noShipment && (!isBoxMode ||
+    boxModePo)`.
+    - **Which label is this carton?** `boxModeSlot` stands in for a box-list slot:
+      **tracking number first** (the number *is* the label), **box number second**. It
+      feeds the checklist, the scan bar and the Review summary unchanged — they read
+      `activeBox`, which is the slot in box-list mode and this in box mode.
+    - **Only a box with nothing in it yet** (`boxModePo`). A reopened box already holds
+      pairs that are NOT in this cart, so a checklist would score 0 received against a
+      box with eleven in it — and seeding the rows from them would re-commit pairs that
+      already have VINs. Those keep the plain scan flow, with their contents listed above
+      it (`receiving.md` → "Continuing a box shows what is already in it").
+    - **The sheet re-aims when the label does.** In box mode the box number starts as a
+      guess (max + 1) and follows the tracking once it is scanned, so a cart built for
+      label 4 becomes label 6's — but only while the sheet is **untouched** (every
+      expected row still 0, nothing added). After that it is the person's work.
+    - **A carton that matches no label says so** rather than showing an empty sheet or,
+      worse, the whole order's lines: `manifestLinesFor(null)` now returns `[]` —
+      `Number(null) === 0` used to match the order-level `po_box_id IS NULL` rows.
+    - `receivingPo` is set **directly**, not through `applyPo` — that also re-runs the
+      Step-1 prefill (supplier, tag, a slot per label), which belongs to *starting* a
+      shipment, not continuing one. `e2e/po-box-mode-manifest.spec.js`.
   - **Review opens with the box against its label** (`ManifestSummary` ←
     `manifestSummary`): expected · received (against the label — an undeclared pair is
     *extra*, not a fourth of four) · missing · extra / not on PO, then only the rows that

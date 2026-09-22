@@ -1,7 +1,7 @@
 // Rescale requests: the PH form (flag a SKU for the warehouse to recount/rescan)
 // and the shared report (reported vs actual on shelf; warehouse audits, PH views
 // + creates).
-import React, { useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, DateRangeBar, RescaleCompare, YesNo, PriceInput, BasisChip } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
@@ -12,6 +12,10 @@ import { SkuCodePicker } from '../components/SkuCodePicker.jsx';
 import { markupSuffix } from '../lib/config.js';
 import { useQueryParam, useQueryDateRange } from '../lib/urlstate.js';
 import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
+import { normalizeSize } from '../lib/codes.js';
+import { loadPrefs, savePrefs } from '../prefs.js';
+
+const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
 // Monotonic key source for this screen's React lists (unique among siblings).
 let cartKey = 1;
@@ -154,6 +158,20 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   const [auditId, setAuditId] = useState(null);
   const [auditRows, setAuditRows] = useState([]);
   const [auditNote, setAuditNote] = useState('');
+  // Counting a shelf by SCANNING rather than typing a number (Brent, 2026-09-23). A
+  // typed 3 is somebody's claim; three scans are three pairs that were each in a hand —
+  // and scanning is the only version that can catch the same pair counted twice, or a
+  // pair of a different shoe that shares the shelf. Typing stays: some pairs have no
+  // readable sticker, and a mis-scan has to be correctable by hand.
+  const [auditMode, setAuditMode] = useState('scan');   // 'scan' | 'type'
+  const [auditScan, setAuditScan] = useState('');
+  const [auditFlash, setAuditFlash] = useState(null);   // { kind, text }
+  const [auditVins, setAuditVins] = useState([]);       // [{ vin, size }] in scan order
+  const [auditFails, setAuditFails] = useState([]);     // kept: a refused scan is a finding
+  const [auditCam, setAuditCam] = useState(false);
+  const auditScanRef = useRef(null);
+  const [prefs, setPrefs] = useState(loadPrefs);
+  const setCameraZoom = (z) => setPrefs((p) => savePrefs({ ...p, cameraZoom: z }));
   const [busyId, setBusyId] = useState(null);
   // PH listing (per-size GI/Final + II/AL/SX/SH) shown INLINE on every audited
   // request — a draft per request id, editable for PH (canCreate).
@@ -179,11 +197,73 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   }
   useEffect(() => { if (mode === 'list') load(); }, [dr, statusF, mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Scanning starts every size at ZERO. Seeding the counts from what PH reported and
+  // then adding scans on top would produce an "actual" that is the reported number plus
+  // the shelf — which is the one number an audit must never be.
+  const seedAuditRows = (r, mode) => (r.sizes || []).map((s) => ({
+    key: cartKey++, size: String(s.size), qty: mode === 'scan' ? 0 : s.qty, scanned: 0,
+  }));
   function startAudit(r) {
     setError(''); setAuditId(r.id);
-    setAuditRows((r.sizes || []).map((s) => ({ key: cartKey++, size: String(s.size), qty: s.qty })));
-    setAuditNote('');
+    setAuditMode('scan');
+    setAuditRows(seedAuditRows(r, 'scan'));
+    setAuditNote(''); setAuditScan(''); setAuditVins([]); setAuditFails([]); setAuditFlash(null); setAuditCam(false);
   }
+  function switchAuditMode(r, mode) {
+    setAuditMode(mode);
+    setAuditRows(seedAuditRows(r, mode));
+    setAuditVins([]); setAuditFails([]); setAuditFlash(null);
+  }
+  const auditPulse = (kind, text) => { setAuditFlash({ kind, text }); setTimeout(() => setAuditFlash(null), 2600); };
+  // Sizes are compared the way the rest of the app spells them, so a shelf scan that
+  // resolves to "9" lands on the row PH raised as "9 " or "US 9".
+  const sizeKey = (v) => normalizeSize(v) || String(v ?? '').trim().toUpperCase();
+  function bumpAuditSize(size) {
+    setAuditRows((rows) => {
+      const k = sizeKey(size);
+      const i = rows.findIndex((x) => sizeKey(x.size) === k);
+      // A size nobody asked about is exactly what an audit is for — it gets its own row
+      // rather than being dropped for not being on the request.
+      if (i === -1) return [...rows, { key: cartKey++, size: String(size), qty: 1, scanned: 1 }];
+      const next = [...rows];
+      next[i] = { ...next[i], qty: (Number(next[i].qty) || 0) + 1, scanned: (next[i].scanned || 0) + 1 };
+      return next;
+    });
+  }
+  async function auditScanCode(r, raw) {
+    const code = String(raw || '').trim();
+    if (!code) return;
+    setAuditScan('');
+    // A 1ID names a UNIT, so the same one twice is a double-count — refused here,
+    // before the server is even asked. A box UPC names a SIZE: two boxes of a 9 are two
+    // real pairs, so a repeat there is never refused.
+    if (auditVins.some((v) => v.vin === code.toUpperCase())) {
+      auditPulse('dup', `Already counted · ${code.toUpperCase()}`);
+      return;
+    }
+    try {
+      const res = await api.rescaleAuditScan(r.id, code);
+      if (!res.size) { auditPulse('dup', `${code} has no size on record — count it by hand.`); return; }
+      bumpAuditSize(res.size);
+      if (res.kind === 'vin') setAuditVins((a) => [...a, { vin: res.vin, size: res.size }]);
+      if (res.warn) { auditPulse('dup', res.warn); setAuditFails((f) => [{ code: res.vin || code, reason: res.warn, counted: true }, ...f]); }
+      else auditPulse('ok', `✓ size ${res.size}${res.kind === 'vin' ? ` · ${res.vin}` : ''}`);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      // Kept, not just flashed: "it wouldn't scan" is answerable from a list, and a
+      // refused scan is usually the finding ("that shelf has someone else's shoe").
+      auditPulse('err', err.message);
+      setAuditFails((f) => [{ code: code.toUpperCase(), reason: err.message }, ...f].slice(0, 50));
+    } finally { auditScanRef.current?.focus(); }
+  }
+  const undoLastScan = () => {
+    const last = auditVins[auditVins.length - 1];
+    if (!last) return;
+    setAuditVins((a) => a.slice(0, -1));
+    setAuditRows((rows) => rows.map((x) => (sizeKey(x.size) === sizeKey(last.size)
+      ? { ...x, qty: Math.max(0, (Number(x.qty) || 0) - 1), scanned: Math.max(0, (x.scanned || 0) - 1) } : x)));
+    auditPulse('dup', `Removed ${last.vin}`);
+  };
   const setAuditRow = (k, patch) => setAuditRows((a) => a.map((x) => (x.key === k ? { ...x, ...patch } : x)));
   const addAuditRow = () => setAuditRows((a) => [...a, { key: cartKey++, size: '', qty: 0 }]);
   const rmAuditRow = (k) => setAuditRows((a) => a.filter((x) => x.key !== k));
@@ -308,7 +388,20 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   }
 
   async function submitAudit(r) {
-    const actual = auditRows.filter((x) => String(x.size).trim()).map((x) => ({ size: String(x.size).trim(), qty: Math.max(0, Number(x.qty) || 0) }));
+    // WHICH pairs were counted, not just how many. The VINs ride along per size, so an
+    // audit somebody disputes later can be re-walked pair by pair instead of re-counted
+    // from scratch. Typed rows simply carry none.
+    const vinsBySize = new Map();
+    for (const v of auditVins) {
+      const k = sizeKey(v.size);
+      if (!vinsBySize.has(k)) vinsBySize.set(k, []);
+      vinsBySize.get(k).push(v.vin);
+    }
+    const actual = auditRows.filter((x) => String(x.size).trim()).map((x) => ({
+      size: String(x.size).trim(),
+      qty: Math.max(0, Number(x.qty) || 0),
+      vins: vinsBySize.get(sizeKey(x.size)) || [],
+    }));
     if (!actual.length) { setError('Enter the actual count for at least one size.'); return; }
     setBusyId(r.id); setError('');
     try { await api.rescaleRequestAudit(r.id, actual, auditNote.trim()); setAuditId(null); load(); }
@@ -439,6 +532,50 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                 </div>
                 {canAudit && r.status === 'open' && (auditId === r.id ? (
                   <div className="rc-audit">
+                    {/* Count by scanning, or by typing. Scanning is the default because a
+                        typed number is a claim and a scan is a pair that was in a hand —
+                        and only scanning can catch the same pair counted twice or a
+                        different shoe sharing the shelf. */}
+                    <div className="rc-audit-mode">
+                      <span className="muted sm">Count by</span>
+                      <div className="seg sm" role="group" aria-label="How to count this shelf">
+                        <button type="button" className={`seg-btn ${auditMode === 'scan' ? 'on yes' : ''}`}
+                          aria-pressed={auditMode === 'scan'} onClick={() => auditMode !== 'scan' && switchAuditMode(r, 'scan')}>
+                          <Icon name="camera" /> Scanning
+                        </button>
+                        <button type="button" className={`seg-btn ${auditMode === 'type' ? 'on yes' : ''}`}
+                          aria-pressed={auditMode === 'type'} onClick={() => auditMode !== 'type' && switchAuditMode(r, 'type')}>
+                          Typing
+                        </button>
+                      </div>
+                    </div>
+                    {auditMode === 'scan' && (
+                      <>
+                        <form className="searchrow rc-audit-scan" onSubmit={(e) => { e.preventDefault(); auditScanCode(r, auditScan); }}>
+                          <input ref={auditScanRef} autoFocus autoCapitalize="characters" autoCorrect="off" autoComplete="off"
+                            placeholder="Scan each pair — 1ID sticker or box barcode" value={auditScan}
+                            onChange={(e) => setAuditScan(e.target.value)} />
+                          <button className="btn primary" type="submit">Add</button>
+                          <button type="button" className={`btn ${auditCam ? 'primary' : 'ghost'}`} title="Scan with camera"
+                            onClick={() => setAuditCam((v) => !v)}><Icon name="camera" /></button>
+                        </form>
+                        {auditCam && (
+                          <Suspense fallback={<p className="muted sm">Loading camera…</p>}>
+                            <CameraScanner continuous mode="product" onDetected={(c) => auditScanCode(r, c)} onClose={() => setAuditCam(false)}
+                              zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
+                          </Suspense>
+                        )}
+                        <div className="scan-flash-live" role="status" aria-live="polite">
+                          {auditFlash && <div className={`scan-flash ${auditFlash.kind === 'ok' ? 'added' : 'dup'}`}>{auditFlash.text}</div>}
+                          {auditVins.length > 0 && <button type="button" className="scan-undo" onClick={undoLastScan}>↶ Undo last scan</button>}
+                        </div>
+                        <div className="muted xs rc-audit-hint">
+                          Every size starts at <b>0</b> — what you scan is what is on the shelf. A pair
+                          scanned twice is refused, and a pair of another shoe is turned away by its
+                          style code. Anything without a readable sticker: type it in below.
+                        </div>
+                      </>
+                    )}
                     <div className="muted sm">Actual on shelf (per size):</div>
                     {auditRows.map((row) => (
                       <div className="size-line" key={row.key}>
@@ -448,10 +585,24 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                           <input className="qty" type="number" min="0" value={row.qty} onChange={(e) => setAuditRow(row.key, { qty: e.target.value })} />
                           <button type="button" className="btn icon ghost step" onClick={() => setAuditRow(row.key, { qty: (Number(row.qty) || 0) + 1 })}>+</button>
                         </div>
+                        {/* How many of this row's count came off a scanner, so a number
+                            somebody typed over the top is still distinguishable. */}
+                        {row.scanned ? <span className="rc-audit-scanned" title="Counted by scanning">{row.scanned} scanned</span> : null}
                         <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => rmAuditRow(row.key)}>×</button>
                       </div>
                     ))}
                     <button type="button" className="btn sm ghost" onClick={addAuditRow}>+ Add size</button>
+                    {auditFails.length > 0 && (
+                      <div className="rc-audit-fails">
+                        <b className="sm">Scans that didn’t count ({auditFails.length})</b>
+                        {auditFails.map((f, i) => (
+                          <div className="rc-audit-fail" key={`${f.code}-${i}`}>
+                            <span className="vin">{f.code}</span>
+                            <span className="muted sm">{f.reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <input className="rc-auditnote" placeholder="Audit note (optional)" value={auditNote} onChange={(e) => setAuditNote(e.target.value)} />
                     <div className="ph-edit-actions">
                       <button className="btn sm primary" disabled={busyId === r.id} onClick={() => submitAudit(r)}>{busyId === r.id ? '…' : 'Submit audit'}</button>

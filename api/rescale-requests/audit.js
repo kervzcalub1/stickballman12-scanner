@@ -1,8 +1,9 @@
-// POST /api/rescale-requests/audit { id, actualSizes:[{size,qty}], note? } -> { ok }
+// POST /api/rescale-requests/audit { id, actualSizes:[{size,qty,vins?}], note? } -> { ok }
 // Warehouse records the ACTUAL qty per size counted on the shelf and closes the
 // request. Both roles then see reported-vs-actual.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { auditRescaleRequest, dbConfigured } from '../_lib/db.js';
+import { VIN_RE } from '../_lib/vins.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -17,9 +18,27 @@ export default async function handler(req, res) {
   const id = Number(body.id) || 0;
   if (!id) return send(res, 400, { ok: false, error: 'Missing request id.' });
 
-  // Sanitize actual counts: [{ size, qty }] — qty 0 is allowed (none on shelf).
+  // Sanitize actual counts: [{ size, qty, vins? }] — qty 0 is allowed (none on shelf).
+  //
+  // `vins` is WHICH pairs were scanned for that size, when the count was made by
+  // scanning rather than typing (docs/context/rescale.md). It is evidence, not the
+  // count: `qty` still decides, because a row can be corrected by hand afterwards and a
+  // pair with no readable sticker is typed in with no VIN at all. Kept deduped and
+  // capped so a stuck gun can't write a megabyte of JSONB.
   const actualSizes = (Array.isArray(body.actualSizes) ? body.actualSizes : [])
-    .map((s) => ({ size: String(s.size ?? '').trim().slice(0, 24), qty: Math.max(0, Math.min(9999, Number(s.qty) || 0)) }))
+    .map((s) => {
+      const vins = [...new Set((Array.isArray(s.vins) ? s.vins : [])
+        .map((v) => String(v ?? '').trim().toUpperCase())
+        .filter((v) => VIN_RE.test(v)))].slice(0, 500);
+      const row = {
+        size: String(s.size ?? '').trim().slice(0, 24),
+        qty: Math.max(0, Math.min(9999, Number(s.qty) || 0)),
+      };
+      // Omitted when empty, rather than written as []. A typed count then stores exactly
+      // what it always stored, so nothing that reads `actual_sizes` — the compare grid,
+      // the PH listing seed, the advisor — sees a shape it has not seen before.
+      return vins.length ? { ...row, vins } : row;
+    })
     .filter((s) => s.size)
     .slice(0, 100);
   if (!actualSizes.length) return send(res, 400, { ok: false, error: 'Enter the actual count for at least one size.' });

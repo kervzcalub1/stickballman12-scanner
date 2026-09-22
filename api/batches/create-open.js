@@ -60,6 +60,10 @@ export default async function handler(req, res) {
     // batch can never disagree with the order it is being received against.
     kind: poKind,
     preSell: h.preSell === true,
+    // Which question was answered at Step 1. A multi-box batch needs this on the BATCH:
+    // every later box commit reads it to decide whether it may stamp pre_sell onto
+    // everything in that box (pre-sell.md).
+    preSellScope: h.preSellScope === 'some' ? 'some' : 'all',
     // "Did this package come with a manifest?" — true / false / undefined (not asked).
     manifestReceived: typeof h.manifestReceived === 'boolean' ? h.manifestReceived : null,
   };

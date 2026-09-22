@@ -911,8 +911,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   };
   // Pre-sell provenance on a PH row. It only ever shows on RELEASED pairs: a pair still
   // held is invisible to every PH surface by design, so there is no row to chip.
-  // Without this, the remainder of a pre-sell shipment arrives on Rescale Stock looking
-  // like any other restock, and the reason half the shipment never appears is unfindable.
+  // Without this, the remainder of a pre-sell shipment arrives on New Inventory looking
+  // like any other arrival, and the reason half the shipment never appears is unfindable.
   const preSellChip = (g) => (g.wasPreSell ? <PreSellChip was count={g.wasPreSellCount} /> : null);
   const goatConfirmModal = goatConfirm ? (
     <Modal

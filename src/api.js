@@ -233,6 +233,9 @@ export const api = {
   rescaleRequestCreate: (payload) => post('/api/rescale-requests/create', payload),
   rescaleRequestList: (status, from, to) => get(`/api/rescale-requests/list?${new URLSearchParams({ ...(status ? { status } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}`),
   rescaleRequestAudit: (id, actualSizes, note) => post('/api/rescale-requests/audit', { id, actualSizes, note }),
+  // One scanned 1ID / box barcode, resolved against THIS request (its style code, its
+  // sizes, our own stock). Reads only — the count is still submitted in one go.
+  rescaleAuditScan: (id, code) => post('/api/rescale-requests/audit-scan', { id, code }),
   rescaleRequestListUpdate: (id, listing, baseListedAt) => post('/api/rescale-requests/list-update', { id, listing, baseListedAt }),
   // PH-only (the server refuses anyone else, admin included).
   rescaleRequestCancel: (id, note) => post('/api/rescale-requests/cancel', { id, note }),
@@ -383,7 +386,12 @@ export const api = {
   // Pre-sell: shipments sold before they landed. Not listed until released.
   presellList: (batchId) => get(`/api/presell/list${batchId ? `?batchId=${batchId}` : ''}`),
   presellMarkSold: (payload) => post('/api/presell/mark-sold', payload),
-  presellRelease: (batchId) => post('/api/presell/release', { batchId }),
+  // Free held pairs: the whole shipment, or one shoe of it (`sku`, optionally one
+  // `size`). `reason: 'not_presell'` says it was marked in error rather than fulfilled.
+  presellRelease: (batchId, opts = {}) => post('/api/presell/release', { batchId, ...opts }),
+  // The mirror: put a shoe BACK on hold, and the shipment's shoes to choose from.
+  presellShoes: (batchId) => get(`/api/presell/hold?batchId=${batchId}`),
+  presellHold: (batchId, sku) => post('/api/presell/hold', { batchId, sku }),
   poAssignLabels: (poId, assignments) => post('/api/po/assign-labels', { poId, assignments }),
   poLabelUpdate: (boxId, patch) => post('/api/po/label-update', { boxId, ...patch }),
   poLabelRemove: (boxId, confirm) => post('/api/po/label-remove', { boxId, confirm }),

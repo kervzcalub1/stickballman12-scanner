@@ -111,6 +111,10 @@ export const api = {
   // Correct a style code the catalogue got wrong off the box UPC (inventory.md).
   skuSiblings: (vin) => get(`/api/items/set-sku?vin=${encodeURIComponent(vin)}`),
   setItemSku: (body) => post('/api/items/set-sku', body),
+  // Correct a size declared wrong at receiving (inventory.md). GET previews how many
+  // pairs went in on the same line; POST normalizes the size server-side.
+  sizeSiblings: (vin) => get(`/api/items/set-size?vin=${encodeURIComponent(vin)}`),
+  setItemSize: (body) => post('/api/items/set-size', body),
   // Code only — the server resolves the style AND the size itself, because a UPC
   // belongs to ONE size's box and a client-supplied size is a guess. Two phases:
   // without `confirm` it just asks (nothing is written); `confirm` carries back the

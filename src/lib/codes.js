@@ -135,6 +135,33 @@ export const apparelRank = (s) => {
   return Object.prototype.hasOwnProperty.call(APPAREL_RANK, k) ? APPAREL_RANK[k] : null;
 };
 
+// The one spelling of a size, for a size a PERSON typed (correcting one that was
+// declared wrong at receiving, `docs/context/inventory.md`). Stock is grouped by
+// `sku + size` everywhere — the PH grid, the Costs page, the PO reconciliation — so a
+// size that is merely *readable* is not good enough: "9 M", "US9" and "9" have to end
+// up as the same string or one pair silently becomes its own row that nothing matches.
+//   · a trailing **M** is dropped. The bare men's run is written "9", never "9M", and
+//     `upcSizeKey` in db.js already reads the two as one size; storing "9M" would split
+//     a size in half on every screen that groups by it.
+//   · a decimal must be .0 or .5 ("9.0" → "9"). Sneakers have no .3.
+//   · apparel sizes (XS … 5XL, both spellings) pass through uppercased, and so does OS.
+// Returns null for anything else — the caller refuses it rather than storing a typo,
+// because nothing downstream can tell "99" from a size later on.
+export function normalizeSize(raw) {
+  const t = String(raw ?? '').trim().toUpperCase().replace(/[\s-]+/g, '').replace(/^(?:US|SIZE)/, '');
+  if (!t) return null;
+  if (apparelRank(t) !== null) return t;
+  if (t === 'OS' || t === 'ONESIZE') return 'OS';
+  const m = t.match(/^(\d{1,2})(?:\.(\d))?([WYMC])?$/);
+  if (!m) return null;
+  const [, whole, dec, suffix] = m;
+  if (dec !== undefined && dec !== '0' && dec !== '5') return null;
+  const num = Number(whole) + (dec === '5' ? 0.5 : 0);
+  if (num <= 0 || num > 30) return null;
+  // 'M' is the men's run, which is written bare (see above); W/Y/C stay.
+  return `${num}${suffix && suffix !== 'M' ? suffix : ''}`;
+}
+
 // Order sizes smallest→largest for display. Apparel sizes go by their own scale;
 // otherwise numeric value drives the order (handles "8.5W" / "10Y"), and non-numeric /
 // not-yet-typed custom sizes sort last.

@@ -90,6 +90,10 @@ and `purchase-orders.md` → "Scan-first, any order".
    all — using it to continue a pending box is what left staff with an empty box
    beside the one they meant to fill. Received boxes get **Reopen box** instead (below) —
    the box-commit CAS refuses a submitted box, so "Add items" would 409.
+   **A size declared wrong is corrected in place, not re-received** (2026-09-22): the ✎
+   on each row of a box's contents (and beside **Size** on the item detail) changes the
+   size on the pair, clears the UPC and re-prices it — `Reopen box` is for *adding*
+   pairs, not for editing one. Rules: `docs/context/inventory.md` → "Correcting a size".
    **Reopening a submitted box** (2026-09-12): *"I submitted box 3, then found two more
    pairs in it"* had no route but `+ Add box`, which filed those pairs under a box number
    that isn't on the carton. Now every received row (warehouse, batch open OR done) has

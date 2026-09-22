@@ -9,6 +9,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES, statusLabel } from '../statuses.js';
 import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal, HistoryLine, PhotoLightbox, ShoeThumb, IntakeChip, CopyText, RemoveUnitsModal, Provenance } from '../components/common.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
+import { SizeEditModal } from '../components/SizeEdit.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
@@ -298,6 +299,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(''); // transient confirmation (e.g. pairs removed)
   const [skuEdit, setSkuEdit] = useState(false); // the "correct the style code" modal on the open item
+  const [sizeEdit, setSizeEdit] = useState(false); // the "correct the size" modal on the open item
   // A scanned UPC we hold no record of: the shoe the catalogue named, waiting on a
   // person to say it matches the box. Nothing is written until they do.
   const [upcCheck, setUpcCheck] = useState(null);
@@ -851,6 +853,17 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
               setNotice(`${r.updated} pair${r.updated === 1 ? '' : 's'} changed to ${r.item?.sku}.${r.listed ? ` ${r.listed} of them ${r.listed === 1 ? 'is' : 'are'} listed to a store under the old code — tell PH.` : ''}`);
             }} />
         )}
+        {sizeEdit && it && (
+          <SizeEditModal item={it} onClose={() => setSizeEdit(false)} onSignOut={onSignOut}
+            onSaved={(r) => {
+              setSizeEdit(false);
+              setDetail({ item: r.item, events: r.events, provenance: r.provenance });
+              setNotice(`${r.updated} pair${r.updated === 1 ? '' : 's'} now size ${r.item?.size}.`
+                + (r.upcCleared ? ' The box UPC was the old size’s and has been cleared.' : '')
+                + (r.listed ? ` ${r.listed} of them ${r.listed === 1 ? 'is' : 'are'} listed to a store at the old size — tell PH.` : '')
+                + ' Re-print the label.');
+            }} />
+        )}
         {sticker ? <StickerResult info={sticker} onOpenItem={openDetail} />
           : !detail ? <p className="muted">Loading…</p> : (
           <>
@@ -873,7 +886,15 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                       )}
                     </dd></div>
                     <div><dt>UPC</dt><dd><CopyText text={it.upc}>{it.upc || '—'}</CopyText></dd></div>
-                    <div><dt>Size</dt><dd>{it.size || '—'}</dd></div>
+                    {/* The size is the one fact at intake nobody can scan — a `size?` row is
+                        typed off the tongue label. Correcting it here beats removing the
+                        pair and receiving it again (inventory.md). */}
+                    <div><dt>Size</dt><dd>{it.size || '—'}
+                      {canEditStock && (
+                        <button type="button" className="btn ghost sm inv-cost-edit" title="Correct the size"
+                          onClick={() => setSizeEdit(true)}><Icon name="pencil" /></button>
+                      )}
+                    </dd></div>
                     {/* Blank is "not known", never $0.00 (costs.md). The pencil hands the
                         whole SKU to the Costs page — cost is set per size per shipment there. */}
                     <div><dt>Cost</dt><dd>

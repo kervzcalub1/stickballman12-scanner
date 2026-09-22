@@ -47,6 +47,59 @@ warehouse can read the code on the box; the API cannot. Nothing else on the unit
   with `sku_from` / `sku_to` in `details` so it is queryable.
 - Same code → 400; a code that fails `SKU_RE` → 400. No schema change.
 
+## Correcting a size (2026-09-22)
+`api/items/set-size.js` (GET preview + POST) · `findSizeSiblings` / `setItemsSize` in
+db.js · `normalizeSize` in `src/lib/codes.js` · `SizeEditModal` in
+`src/components/SizeEdit.jsx`, opened from the ✎ beside **Size** on the item detail
+**and** from the ✎ on each row of a batch's box contents (`BatchPage`).
+E2E: `e2e/inventory-edit-size.spec.js`.
+
+**Why:** the size is the one fact at intake **nobody can scan**. A UPC names a size's
+box, but plenty of pairs arrive with no readable barcode, a SKU scan answers for whichever
+size the catalogue chose, and a `size?` row is typed off the tongue label. "Opened the
+box, received the shoe, declared a 9, it's a 9.5" is an ordinary Tuesday — and the only
+route back was to **remove the pair and receive it again**, burning its VIN, its shelf and
+its history over one character.
+- **The pencil is on the batch too, not only the item detail.** The mistake is found by
+  the person standing in front of the box they just submitted; making them go looking for
+  the pair on another screen is how it doesn't get fixed. `readOnly` (PH's view of the
+  batch page) and `canEditStock=false` (PH's Inventory) both hide it; the endpoint itself
+  takes warehouse + ph_team, like `set-sku`.
+- **Nothing is reopened.** A received box does not have to go back to `pending` to correct
+  a size — `Reopen box` is for *adding pairs* (`receiving.md`). One field on the unit.
+- **The size is normalized server-side** (`normalizeSize`): `US 9.5` → `9.5`, `9 M` → `9`
+  (the men's run is written bare, the same reading `upcSizeKey` already takes), apparel
+  passes through uppercased. Stock is grouped by `sku + size` on every screen, so a second
+  spelling of one size is a row that nothing else matches. A decimal that isn't `.0`/`.5`,
+  or anything unrecognisable, is a **400** rather than a stored typo — the modal shows
+  what will be saved before anyone commits.
+- **Scope:** *just this pair*, or *this pair and the N others received on the same line* =
+  same style code **and** same (wrong) size **and** **same box** of the same batch. That
+  is the set one typed size produced. Narrower than the SKU version on purpose: a size is
+  typed per line at intake, so the same code+size in a *different* box is a different
+  declaration and stays put. The count is fetched (GET) first.
+- **The box UPC is cleared.** A UPC identifies ONE size's box (`upc-is-per-size`,
+  `receiving.md`), so the code on record belongs to the size that just turned out to be
+  wrong — keeping it would re-teach the wrong size to everything that reads it. Blank is
+  the honest answer; Box Labels / the No-Box prompt put the real one back from the box.
+- **GI + Final price are cleared, except where a number is already a claim someone
+  else can see**: a pair on a store keeps them (that IS what the listing says, and PH has
+  to fix the listing by hand anyway) and so does a **sold/shipped** pair — the same
+  closed-sale rule `getItemsForGiRefresh` and `recomputeUnlistedPrices` follow. Everything
+  else re-prices at its real size on the next refresh. Alias quotes **per size**: left
+  alone, a 9 that is really a 9.5 gets listed at the 9's price.
+- **`last_edit_at`/`by` are bumped** so a PH draft opened before the change loses the
+  optimistic-concurrency check instead of quietly putting the old size's price back
+  (same reason `refreshItemGi` bumps it — `ph-report.md`).
+- Every unit gets a `note` event: `Size changed 9 → 9.5 — reason`, with `size_from` /
+  `size_to` in `details`. The modal also says out loud that **the label on the box still
+  shows the old size** — re-print it.
+- **A PO-linked batch's reconciliation moves with it**, by design: the manifest said 9 and
+  the box holds a 9.5, so the order really is one short on 9 and one over on 9.5
+  (`purchase-orders.md`). The `products` cache is untouched — if the *catalogue* is what
+  mis-sized the UPC, the next scan of that barcode still answers the old way.
+- No schema change.
+
 ## SKU-merge
 - Rows are **merged by SKU + status** (regardless of size) via `groupPhRows`
   (shared with the PH report). Each row shows the size breakdown as **qty chips**

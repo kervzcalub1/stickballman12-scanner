@@ -8,6 +8,7 @@ import { api } from '../api.js';
 import { TopBar, StatusPill, Modal, Pager, FormModal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
+import { SizeEditModal } from '../components/SizeEdit.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { batchMatchesSearch } from '../lib/postatus.js';
 import { estTime } from '../lib/format.js';
@@ -68,6 +69,8 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   // The SUBMITTED box being reopened for more pairs — "I submitted box 3, then found
   // two more pairs in it". Confirmed, it goes straight into scanning that box.
   const [reopenBox, setReopenBox] = useState(null); // { box, err? }
+  const [sizeEdit, setSizeEdit] = useState(null); // the pair whose size is being corrected
+  const [sizeNotice, setSizeNotice] = useState('');
   const [deleting, setDeleting] = useState(false);   // the "Delete this batch" modal
   // The box whose number is being corrected, + the number typed for it.
   const [renumber, setRenumber] = useState(null); // { box, value }
@@ -278,13 +281,22 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
     // of 190 batches on prod (984 pairs), showing "Boxes (0) · No boxes yet" over a
     // batch that plainly has 13 shoes in it. Anything without a box is listed on its own.
     const unboxed = itemsByBox.get('') || [];
+    // The size is declared by hand at intake and is the one thing here nobody can scan,
+    // so the pencil sits where the mistake is found: on the box's own contents, in the
+    // batch just submitted — not only on the item detail two screens away
+    // (docs/context/inventory.md).
     const itemRow = (it) => (
       <div className="batch-detail-row" key={it.id}>
         {onOpenItem
           ? <button className="vin vin-link" onClick={() => onOpenItem(it.vin)} title="View full shoe detail + history">{it.vin}</button>
           : <span className="vin">{it.vin}</span>}
         <span className="batch-row-name">{it.name}</span>
-        <span className="muted sm">{it.sku || '—'} · size {it.size || '—'}</span>
+        <span className="muted sm">{it.sku || '—'} · size {it.size || '—'}
+          {!readOnly && (
+            <button type="button" className="btn ghost sm inv-cost-edit" title={`Correct the size on ${it.vin}`}
+              onClick={() => setSizeEdit(it)}><Icon name="pencil" /></button>
+          )}
+        </span>
         <StatusPill status={it.status} />
       </div>
     );
@@ -534,6 +546,18 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
         )}
 
         {error && <div className="error mt">{error}</div>}
+        {sizeNotice && <div className="notice mt">{sizeNotice}</div>}
+        {sizeEdit && (
+          <SizeEditModal item={sizeEdit} onClose={() => setSizeEdit(null)} onSignOut={onSignOut}
+            onSaved={async (r) => {
+              setSizeEdit(null);
+              setSizeNotice(`${r.updated} pair${r.updated === 1 ? '' : 's'} now size ${r.item?.size}.`
+                + (r.upcCleared ? ' The box UPC was the old size’s and has been cleared.' : '')
+                + (r.listed ? ` ${r.listed} of them ${r.listed === 1 ? 'is' : 'are'} listed to a store at the old size — tell PH.` : '')
+                + ' Re-print the label.');
+              await loadDetail(Number(b.id));
+            }} />
+        )}
         <div className="batch-bar">
           <button className="btn ghost" onClick={closeBatch}>← Back</button>
           {!readOnly && (isOpen

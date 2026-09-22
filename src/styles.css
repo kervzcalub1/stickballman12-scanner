@@ -1360,6 +1360,25 @@ body {
 .rc-audit { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
 .rc-cancel { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
 .rc-auditnote { width: 100%; }
+/* Counting a shelf by scanning (rescale audit). Same visual language as the other scan
+   benches — a search row, a live flash line, and a kept list of what didn't count. */
+.rc-audit-mode { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rc-audit-mode .seg { flex: 1; min-width: 200px; max-width: 340px; }
+.rc-audit-scan { width: 100%; }
+.rc-audit-scan input { flex: 1; min-width: 0; font-size: 16px; }
+.rc-audit-hint { line-height: 1.45; }
+/* How much of a row's number came off a scanner, so a hand-typed correction over the
+   top of it stays distinguishable. */
+/* `.size-line` is a nowrap flex row whose size box is the only flexible child, so an
+   extra chip on the end squeezed it to nothing — the size input vanished on a phone.
+   The row wraps here instead, and the size box keeps a floor. */
+.rc-audit .size-line { flex-wrap: wrap; }
+.rc-audit .size-line .sz { flex: 1 1 70px; min-width: 64px; }
+.rc-audit-scanned { flex: none; font-size: 11px; color: var(--muted); white-space: nowrap; padding: 2px 7px;
+  border-radius: 999px; background: rgba(255,255,255,.06); border: 1px solid var(--border); }
+.rc-audit-fails { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 10px;
+  background: rgba(198,84,84,.08); border: 1px solid rgba(198,84,84,.30); }
+.rc-audit-fail { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
 .rc-listing { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
 .rc-listing-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .rc-listing-plan { font-weight: 700; font-size: 13px; }

@@ -17,9 +17,40 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
   returned | relisting | other), note. → `api/rescale-requests/create.js`
   (`createRescaleRequest`). Status `open`.
 - **Warehouse** opens **Rescale Requests** (`RescaleRequestsReport` with
-  `canAudit`), clicks **🔍 Audit shelf**, enters the **actual** qty per size
-  (pre-filled from reported; can add sizes / set 0) + audit note →
-  `api/rescale-requests/audit.js` (`auditRescaleRequest`). Status → `audited`.
+  `canAudit`), clicks **🔍 Audit shelf**, records the **actual** count per size + an
+  audit note → `api/rescale-requests/audit.js` (`auditRescaleRequest`). Status →
+  `audited`. Two ways to count, chosen on the panel (**Count by · Scanning | Typing**):
+  - **Scanning is the default** (2026-09-23, Brent's ask). A typed 3 is a claim; three
+    scans are three pairs that were each in a hand — and scanning is the only version
+    that can catch the two mistakes a shelf count actually makes: **the same pair counted
+    twice** (its 1ID is already in the list, refused client-side before the server is
+    asked) and **a pair of a different shoe sharing the shelf** (its style code doesn't
+    match the request, refused by `resolveAuditScan`).
+  - **Every size starts at 0 in scan mode.** Seeding the counts from what PH reported and
+    then adding scans on top would make "actual" = reported + shelf, which is the one
+    number an audit must never be. Switching to **Typing** re-seeds from reported (today's
+    behaviour) and clears the scan session.
+  - `POST /api/rescale-requests/audit-scan { id, code }` → `resolveAuditScan` in db.js.
+    **A 1ID/VIN names a UNIT**, so it carries its own size and can be de-duplicated. **A
+    box UPC names a SIZE** and nothing more — two boxes of a 9 are two real pairs, so a
+    repeat there is never refused. It resolves against our own stock, matches the
+    request's `sku` **and** `sku_all` (a re-released shoe's dual code), and **writes
+    nothing**: the count is still submitted in one go, because a scan that
+    half-committed would leave a shelf count nobody could re-do.
+  - **A size nobody asked about gets its own row** instead of being dropped — a shelf
+    holding a size the request never mentioned is exactly what an audit is for.
+  - A pair marked **sold/shipped** still counts, with a warning: it should not be on that
+    shelf, and that is the most useful thing a count can find.
+  - **Refused scans are kept on screen** (`.rc-audit-fails`), not just flashed — "it
+    wouldn't scan" is answerable from a list, and the refusal is usually the finding.
+  - **Which pairs were counted is stored**: `actual_sizes[].vins`, deduped, VIN-shaped
+    only, capped at 500 per size — so a disputed audit can be re-walked pair by pair. It
+    is **evidence, not the count**: `qty` still decides, because a row is correctable by
+    hand and a pair with no readable sticker is typed in with no VIN at all. **`vins` is
+    omitted when empty**, so a typed audit stores exactly what it always stored.
+  - Manual entry never goes away: `+ Add size`, the ± steppers and the number box all
+    still work, and a row shows **"N scanned"** so a hand-typed correction over the top
+    of a scan stays distinguishable. E2E: `e2e/rescale-audit-scan.spec.js`.
 - **Shared report** (both roles): `RescaleCompare` renders a grid —
   **Reported (top) / Actual (bottom)** per size. Cell highlight: **red** =
   mismatch (`rcmp-diff`), **green** = match (`rcmp-match`). Filter Open /

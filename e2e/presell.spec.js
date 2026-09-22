@@ -6,13 +6,17 @@
 // says how many of each size an order covers. What is left over is released for listing.
 //
 // The invariants:
-//   1. The flag is declared once, for the SHIPMENT, and lands on every unit.
+//   1. The flag is declared for the SHIPMENT ('all') or per SHOE ('some'), and a 'some'
+//      shipment never stamps itself onto pairs nobody marked — including in boxes 2..9,
+//      which is where it actually went wrong: nine boxes, fifteen SKUs, one pre-sold.
 //   2. Pre-sell is invisible to PH's listing world — the grid AND the badge counts, which
 //      is the half that gets forgotten.
 //   3. Sold units become `pre_sold`, never `sold`: the pair hasn't shipped, and `sold` is
 //      terminal, so claiming it early would strand it if the pre-sale fell through.
-//   4. Release puts the REMAINDER on the Rescale Stock worklist and leaves the spoken-for
-//      units alone.
+//   4. Freeing puts the remainder on NEW INVENTORY, dated by the day it was freed so an
+//      older shipment's pairs can't land outside the window PH is looking at, and leaves
+//      the spoken-for units alone.
+//   5. Both corrections work: one shoe out of the hold, and one shoe back into it.
 import { test, expect } from '@playwright/test';
 import { signToken } from '../api/_lib/util.js';
 import { loadEnv } from './helpers/auth.js';
@@ -36,12 +40,13 @@ test.afterAll(async () => {
 });
 
 // Receive a shipment through the real commit endpoint, pre-sell or not.
-async function receive(request, { preSell, sku, sizes }) {
+async function receive(request, { preSell, preSellScope, sku, sizes, extra = [] }) {
   const items = sizes.flatMap(({ size, n }) =>
-    Array.from({ length: n }, () => ({ name: 'E2E PreSell Runner', sku, size, cost: 90, withBox: true })));
+    Array.from({ length: n }, () => ({ name: 'E2E PreSell Runner', sku, size, cost: 90, withBox: true, preSell: preSellScope === 'some' ? true : undefined })))
+    .concat(extra);
   const r = await request.post('/api/batches/commit', {
     headers: wh(),
-    data: { kind: 'receiving', batch: { supplier: SUPPLIER, tracking: `E2E-PS-${Date.now()}-${Math.random()}`, preSell }, items, issues: [] },
+    data: { kind: 'receiving', batch: { supplier: SUPPLIER, tracking: `E2E-PS-${Date.now()}-${Math.random()}`, preSell, preSellScope }, items, issues: [] },
   });
   expect(r.ok(), await r.text()).toBeTruthy();
   const { batchCode } = await r.json();
@@ -88,6 +93,9 @@ test('the flag is declared for the shipment and lands on every unit', async ({ r
   const sku = nextSku();
   const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 6 }, { size: '10', n: 4 }] });
   expect(b.pre_sell).toBe(true);
+  // Ticked with no scope given is 'all' — which is the only thing the old checkbox could
+  // mean, so every batch received before the question existed keeps behaving as received.
+  expect(b.pre_sell_scope).toBe('all');
   const rows = await q('SELECT pre_sell FROM items WHERE batch_id = $1', [b.id]);
   expect(rows).toHaveLength(10);
   expect(rows.every((r) => r.pre_sell)).toBe(true);
@@ -169,7 +177,7 @@ test('lowering the count hands units back — a pre-sale can fall through', asyn
   expect(row.sold).toBe(2);
 });
 
-test('release sends the remainder to Rescale Stock and leaves the spoken-for alone', async ({ request }) => {
+test('freeing sends the remainder to New Inventory and leaves the spoken-for alone', async ({ request }) => {
   const sku = nextSku();
   const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 6 }, { size: '10', n: 4 }] });
   await request.post('/api/presell/mark-sold', { headers: wh(), data: { batchId: Number(b.id), sku, size: '9', qty: 3 } });
@@ -178,27 +186,27 @@ test('release sends the remainder to Rescale Stock and leaves the spoken-for alo
   expect(rel.ok(), await rel.text()).toBeTruthy();
   expect((await rel.json()).released).toBe(7);
 
-  const rows = await q('SELECT status, pre_sell, restock_pending FROM items WHERE batch_id = $1', [b.id]);
+  const rows = await q('SELECT status, pre_sell, restock_pending, presell_freed_at FROM items WHERE batch_id = $1', [b.id]);
   const spoken = rows.filter((r) => r.status === 'pre_sold');
   const freed = rows.filter((r) => r.status !== 'pre_sold');
   expect(spoken).toHaveLength(3);
   // Left alone: still pre-sell, never queued for listing. Listing one would sell
   // somebody else's pair.
   expect(spoken.every((r) => r.pre_sell && !r.restock_pending)).toBe(true);
-  expect(freed.every((r) => !r.pre_sell && r.restock_pending)).toBe(true);
+  // Freed pairs are ordinary arrivals again — NOT queued as rescale work. They were
+  // routed through Rescale Stock until 2026-09-23 for one reason only: New Inventory is
+  // date-filtered and a pair freed weeks after it arrived fell outside the window. That
+  // is fixed at the source now (presell_freed_at), so they go where they belong.
+  expect(freed.every((r) => !r.pre_sell && !r.restock_pending && r.presell_freed_at)).toBe(true);
 
-  // And they are now on the worklist where PH prices and lists — which is what
-  // "subject for upload" means here; no new mechanism was needed.
-  const resc = await (await request.get('/api/ph/list?kind=rescale&from=2020-01-01&to=2035-01-01', { headers: ph() })).json();
-  expect((resc.rows || []).filter((r) => r.sku === sku).length).toBe(7);
-
-  // ONE worklist, not two. Releasing clears `pre_sell`, which is what used to let
-  // these units back onto New Inventory — and they were received days ago, so they
-  // sit inside its date window and appeared on both tabs at once. Two lists claiming
-  // the same pair is how it gets listed twice, or left because each side assumed the
-  // other had it.
   const fresh = await (await request.get('/api/ph/list?kind=receiving&from=2020-01-01&to=2035-01-01', { headers: ph() })).json();
-  expect((fresh.rows || []).filter((r) => r.sku === sku)).toHaveLength(0);
+  expect((fresh.rows || []).filter((r) => r.sku === sku).length).toBe(7);
+
+  // ONE worklist, not two: they are new-inventory work, so the rescale tab must not
+  // also claim them. Two lists claiming the same pair is how it gets listed twice, or
+  // left because each side assumed the other had it.
+  const resc = await (await request.get('/api/ph/list?kind=rescale&from=2020-01-01&to=2035-01-01', { headers: ph() })).json();
+  expect((resc.rows || []).filter((r) => r.sku === sku)).toHaveLength(0);
 
   // The admin Report is oversight, not a worklist, so being on Rescale doesn't hide a
   // unit from it — same carve-out no-box already has. All 7 released pairs are there.
@@ -211,9 +219,147 @@ test('release sends the remainder to Rescale Stock and leaves the spoken-for alo
   // release, so without the shipment's own flag riding along a freed pair is
   // indistinguishable from ordinary restock — and the reason half the shipment never
   // shows up is unfindable. The held ones keep the live flag.
-  expect((resc.rows || []).filter((r) => r.sku === sku).every((r) => r.from_pre_sell && !r.pre_sell)).toBe(true);
+  expect((fresh.rows || []).filter((r) => r.sku === sku).every((r) => r.from_pre_sell && !r.pre_sell)).toBe(true);
 
   // Releasing again has nothing left to do.
   const twice = await request.post('/api/presell/release', { headers: wh(), data: { batchId: Number(b.id) } });
   expect(twice.status()).toBe(409);
+});
+
+// ---------------------------------------------------------------------------
+// Part of a shipment (2026-09-23). The case that prompted it: nine boxes, fifteen
+// SKUs, ONE of them actually sold before it landed — and all fifteen came out held,
+// because the only question anyone was asked was about the shipment.
+// ---------------------------------------------------------------------------
+
+test('"only some" with nothing marked is refused, not filed as ordinary stock', async ({ request }) => {
+  const r = await request.post('/api/batches/commit', {
+    headers: wh(),
+    data: {
+      kind: 'receiving',
+      batch: { supplier: SUPPLIER, tracking: `E2E-PS-NONE-${Date.now()}`, preSell: true, preSellScope: 'some' },
+      items: [{ name: 'E2E PreSell Runner', sku: nextSku(), size: '9', cost: 90, withBox: true }],
+      issues: [],
+    },
+  });
+  expect(r.status()).toBe(400);
+  expect(await r.text()).toContain('mark which shoes');
+});
+
+// THE NINE-BOX BUG. A later box must not stamp the flag onto everything in it just
+// because the shipment is a pre-sell one — that is how fifteen SKUs got held.
+test('multi-box: a part pre-sell shipment does not hold whatever lands in box 2', async ({ request }) => {
+  const sold = nextSku();
+  const ordinary = nextSku();
+  const open = await request.post('/api/batches/create-open', {
+    headers: wh(),
+    data: { batch: { supplier: SUPPLIER, tracking: `E2E-PS-SOME-${Date.now()}`, expectedBoxes: 2, preSell: true, preSellScope: 'some' } },
+  });
+  test.skip(open.status() === 429, 'rate-limited');
+  expect(open.ok(), await open.text()).toBeTruthy();
+  const { id: batchId } = await open.json();
+
+  const commitBox = async (boxNumber, items) => {
+    const box = await request.post('/api/batches/add-box', {
+      headers: wh(), data: { batchId, trackingNumber: `E2E-PS-SOME-${Date.now()}-${boxNumber}`, boxNumber },
+    });
+    expect(box.ok(), await box.text()).toBeTruthy();
+    const commit = await request.post('/api/batches/box-commit', {
+      headers: wh(), data: { batchId, boxId: (await box.json()).box.id, items },
+    });
+    expect(commit.ok(), await commit.text()).toBeTruthy();
+  };
+  // Box 1 carries the one shoe that really was sold before it landed.
+  await commitBox(1, [{ name: 'E2E PreSell Runner', sku: sold, size: '9', cost: 90, withBox: true, preSell: true }]);
+  // Box 2 is ordinary stock. Nothing in it was marked.
+  await commitBox(2, [{ name: 'E2E Ordinary', sku: ordinary, size: '10', cost: 90, withBox: true }]);
+
+  const rows = await q('SELECT sku, pre_sell FROM items WHERE batch_id = $1', [batchId]);
+  expect(rows.find((r) => r.sku === sold).pre_sell).toBe(true);
+  expect(rows.find((r) => r.sku === ordinary).pre_sell).toBe(false);
+});
+
+test('only the marked shoes are held, one can be freed on its own, and one can be put back', async ({ request }) => {
+  const wrong = nextSku();     // marked in error — the fourteen of fifteen
+  const real = nextSku();      // genuinely spoken for
+  const ordinary = nextSku();  // never marked at all
+  const b = await receive(request, {
+    preSell: true, preSellScope: 'some', sku: real, sizes: [{ size: '9', n: 2 }],
+    extra: [
+      ...Array.from({ length: 3 }, (_, i) => ({ name: 'E2E Wrongly Held', sku: wrong, size: String(9 + i), cost: 90, withBox: true, preSell: true })),
+      ...Array.from({ length: 4 }, (_, i) => ({ name: 'E2E Ordinary', sku: ordinary, size: String(8 + i), cost: 90, withBox: true })),
+    ],
+  });
+  // The BATCH still says it was a pre-sell shipment — that is what it was, and the chips
+  // and the Pre-sell page are keyed on it.
+  expect(b.pre_sell).toBe(true);
+  expect(b.pre_sell_scope).toBe('some');
+
+  // Only the marked shoes are held. The unmarked four are PH's work straight away, as
+  // they always should have been — this is the whole bug.
+  const heldRows = await q('SELECT sku, pre_sell FROM items WHERE batch_id = $1', [b.id]);
+  expect(heldRows.filter((r) => r.sku === ordinary).some((r) => r.pre_sell)).toBe(false);
+  expect(heldRows.filter((r) => r.sku !== ordinary).every((r) => r.pre_sell)).toBe(true);
+  const fresh0 = await (await request.get('/api/ph/list?kind=receiving&from=2020-01-01&to=2035-01-01', { headers: ph() })).json();
+  expect((fresh0.rows || []).filter((r) => r.sku === ordinary).length).toBe(4);
+  expect((fresh0.rows || []).filter((r) => r.sku === real)).toHaveLength(0);
+
+  // "Not pre-sell" — the fix for the reported batch, and the thing whole-batch release
+  // could never do: free those three WITHOUT freeing the two that are really sold.
+  const freed = await request.post('/api/presell/release', {
+    headers: wh(), data: { batchId: Number(b.id), sku: wrong, reason: 'not_presell' },
+  });
+  expect(freed.ok(), await freed.text()).toBeTruthy();
+  expect((await freed.json()).released).toBe(3);
+
+  const after = await q('SELECT sku, pre_sell FROM items WHERE batch_id = $1', [b.id]);
+  expect(after.filter((r) => r.sku === wrong).every((r) => !r.pre_sell)).toBe(true);
+  expect(after.filter((r) => r.sku === real).every((r) => r.pre_sell)).toBe(true);
+  // It says WHY on each unit — "marked in error" and "the order was fulfilled" are
+  // different stories about the same pair.
+  const ev = await q(
+    `SELECT e.details->>'text' AS text FROM item_events e JOIN items i ON i.id = e.item_id
+      WHERE i.batch_id = $1 AND i.sku = $2 AND e.type = 'note'`, [b.id, wrong]);
+  expect(ev.every((r) => /Not pre-sell after all/.test(r.text))).toBe(true);
+
+  // The way back, which has to exist because a missed shoe is the expensive direction:
+  // it reaches PH, gets listed, and can be sold to a second buyer.
+  const shoes = await (await request.get(`/api/presell/hold?batchId=${b.id}`, { headers: wh() })).json();
+  expect(shoes.shoes.find((x) => x.sku === wrong).free).toBe(3);
+  const held = await request.post('/api/presell/hold', { headers: wh(), data: { batchId: Number(b.id), sku: wrong } });
+  expect(held.ok(), await held.text()).toBeTruthy();
+  expect((await held.json()).held).toBe(3);
+  const back = await q('SELECT pre_sell, presell_freed_at FROM items WHERE batch_id = $1 AND sku = $2', [b.id, wrong]);
+  expect(back.every((r) => r.pre_sell && r.presell_freed_at === null)).toBe(true);
+
+  // PH is warehouse work here, as everywhere else on this page.
+  expect((await request.post('/api/presell/hold', { headers: ph(), data: { batchId: Number(b.id), sku: wrong } })).status()).toBe(403);
+});
+
+// The reason freed pairs can go to New Inventory at all. That list is filtered by date,
+// so a pair freed today off a three-week-old shipment would land outside the window PH
+// is looking at and be seen by nobody — which is why release used to divert everything
+// through Rescale Stock instead.
+test('a freed pair is dated by the day it was freed, not the day it arrived', async ({ request }) => {
+  const sku = nextSku();
+  const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 2 }] });
+  await q(`UPDATE items SET created_at = now() - interval '30 days' WHERE batch_id = $1`, [b.id]);
+
+  const today = (await q(`SELECT (now() AT TIME ZONE 'America/New_York')::date::text AS d`))[0].d;
+  // Before freeing: held, so invisible whatever the window.
+  const before = await (await request.get(`/api/ph/list?kind=receiving&from=${today}&to=${today}`, { headers: ph() })).json();
+  expect((before.rows || []).filter((r) => r.sku === sku)).toHaveLength(0);
+
+  const rel = await request.post('/api/presell/release', { headers: wh(), data: { batchId: Number(b.id) } });
+  expect(rel.ok(), await rel.text()).toBeTruthy();
+
+  // After: on TODAY's New Inventory, though the pairs arrived a month ago.
+  const after = await (await request.get(`/api/ph/list?kind=receiving&from=${today}&to=${today}`, { headers: ph() })).json();
+  expect((after.rows || []).filter((r) => r.sku === sku).length).toBe(2);
+
+  // And they are NOT hiding back on the day they arrived, which is the window nobody
+  // is looking at any more.
+  const old = (await q(`SELECT ((now() - interval '30 days') AT TIME ZONE 'America/New_York')::date::text AS d`))[0].d;
+  const thirtyDaysAgo = await (await request.get(`/api/ph/list?kind=receiving&from=${old}&to=${old}`, { headers: ph() })).json();
+  expect((thirtyDaysAgo.rows || []).filter((r) => r.sku === sku)).toHaveLength(0);
 });

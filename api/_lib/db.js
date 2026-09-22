@@ -9,7 +9,7 @@
 
 import pg from 'pg';
 import { TERMINAL_STATUSES } from './statuses.js';
-import { ROLL_VIN_RE } from './vins.js';
+import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 // The LOOSE search normaliser (strips every non-alphanumeric), shared with the PO
 // search so both find one parcel the same way. Deliberately imported under another
 // name: this file already has a `trackKey` further down that only strips whitespace,
@@ -2081,6 +2081,68 @@ export async function listRescaleRequests(status = 'open', from = null, to = nul
 
 // Warehouse audit: record the actual qty per size counted on the shelf and close
 // the request (status 'audited'). Both roles then see reported-vs-actual.
+// One scanned code, resolved against ONE rescale request — the audit's scan path.
+//
+// Brent counts a shelf by scanning, not by typing a number into a box, and the two are
+// not the same act: a typed 3 is a claim, while three scans are three pairs that were
+// each in somebody's hand. It also makes the two mistakes a shelf count actually makes
+// impossible to miss — counting the same pair twice (the VIN is already in the list) and
+// counting a pair of a DIFFERENT shoe that shares the shelf (its style code doesn't
+// match the request).
+//
+// A 1ID/VIN names a UNIT, so it carries its own size and can be de-duplicated. A box UPC
+// names a SIZE and nothing more: two boxes of a size 9 are two legitimate scans of the
+// same code, so a repeat is never refused there.
+export async function resolveAuditScan({ requestId, code }) {
+  const sql = db();
+  const [reqRow] = await sql`SELECT id, sku, sku_all, name FROM rescale_requests WHERE id = ${requestId}`;
+  if (!reqRow) return { error: 'That request no longer exists.' };
+  // Both columns: `sku` is what the warehouse was asked to count, `sku_all` the full
+  // dual code a re-released shoe carries. Either spelling on the pair is a match.
+  const want = new Set([...rcCodes(reqRow.sku_all || ''), ...rcCodes(reqRow.sku || '')]
+    .map((c) => c.replace(/[^A-Z0-9]/g, '')).filter(Boolean));
+  const matches = (sku) => rcCodes(sku).some((c) => want.has(c.replace(/[^A-Z0-9]/g, '')));
+
+  const raw = String(code || '').trim().toUpperCase();
+  if (!raw) return { error: 'Nothing scanned.' };
+
+  if (VIN_RE.test(raw)) {
+    const found = await getItemByVin(raw);
+    if (!found) return { error: `No pair wears ${raw}. Check the sticker, or count it by hand.` };
+    const it = found.item;
+    if (!matches(it.sku)) {
+      return { error: `${raw} is ${it.sku || 'another shoe'} — this request is for ${reqRow.sku}. Leave it on the shelf.` };
+    }
+    // A pair that is sold or shipped is not stock, but it IS standing on the shelf in
+    // front of somebody — which is the single most useful thing an audit can find. It
+    // counts, and it says so.
+    const gone = ['sold', 'shipped'].includes(String(it.status || ''));
+    return {
+      kind: 'vin', vin: it.vin, size: it.size || '', name: it.name, status: it.status,
+      warn: gone ? `${raw} is marked ${it.status} — it should not be on this shelf. Counted; say so in the note.` : null,
+    };
+  }
+
+  if (/^\d{8,14}$/.test(raw)) {
+    const units = await findStockByCode(raw, 100);
+    const mine = units.filter((u) => matches(u.sku));
+    if (!mine.length) {
+      return { error: units.length
+        ? `That barcode is ${units[0].sku} — this request is for ${reqRow.sku}.`
+        : 'That barcode is on nothing we hold. Scan the 1ID on the pair instead.' };
+    }
+    const sizes = [...new Set(mine.map((u) => String(u.size || '').trim()).filter(Boolean))];
+    // One UPC is one size's box. More than one size answering to it means our own
+    // records disagree, and guessing which size to add to would bury that.
+    if (sizes.length !== 1) {
+      return { error: `That barcode is on ${sizes.length || 'no'} different sizes here — scan the 1ID on the pair instead.` };
+    }
+    return { kind: 'upc', size: sizes[0], name: mine[0].name, upc: raw };
+  }
+
+  return { error: 'That looks like a style code. Scan the 1ID sticker on the pair, or the barcode on its box.' };
+}
+
 export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
   const rows = await db()`
     UPDATE rescale_requests

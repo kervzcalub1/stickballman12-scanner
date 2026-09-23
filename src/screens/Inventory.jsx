@@ -11,7 +11,7 @@ import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal,
 import { PreSellChip } from '../components/PreSellChip.jsx';
 import { SizeEditModal } from '../components/SizeEdit.jsx';
 import { Icon } from '../components/NavIcons.jsx';
-import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
+import { useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
 import { isCameraReread, isLocationCode, isRollVin, isUpcCode, isVinCode } from '../lib/codes.js';
 import UpcCheck from '../components/UpcCheck.jsx';
@@ -446,6 +446,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     if (f.supplier) params.supplier = f.supplier;
     if (f.status) params.status = f.status;
     if (f.intake) params.kind = f.intake;
+    lastParams.current = params;
     try {
       const res = await api.itemsQuery(params);
       setData(res);
@@ -488,6 +489,28 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     } finally { setUpcBusy(false); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // LIVE (docs/context/live-updates.md). The list re-reads the search that is ON SCREEN
+  // (`lastParams`, not the half-typed box) whenever a unit or its batch is written, and
+  // swaps rows only when they changed — selection, open accordions, size chips and
+  // staged status drafts are all keyed by VIN and survive it. Held while this person has
+  // anything in flight or a modal open over the list, so nothing moves under a decision.
+  const lastParams = useRef(null);
+  const listBusy = loading || bulkOpen || bulkBusy || !!removing || !!shelveFor || !!upcCheck
+    || !!savingStatusVin || Object.keys(statusDrafts).length > 0 || !!labels;
+  useLive(['items', 'batches', 'product_photos'], async () => {
+    if (!lastParams.current) return;
+    const res = await api.itemsQuery(lastParams.current);
+    setData((cur) => (JSON.stringify(cur) === JSON.stringify(res) ? cur : res));
+  }, { mount: false, minGap: 5000, paused: mode !== 'list' || listBusy });
+  // The open unit's detail (status, shelf, history) — held while a status is staged or
+  // the SKU/size correction is open, so a draft is never replaced under the person.
+  useLive(['items', 'item_events', 'locations', 'batches'], async () => {
+    const v = detail?.item?.vin;
+    if (!v) return;
+    const d = await api.itemLookup(v);
+    setDetail((cur) => (cur?.item?.vin !== v || JSON.stringify(cur) === JSON.stringify(d) ? cur : d));
+  }, { mount: false, paused: mode !== 'detail' || !detail?.item?.vin || !!detailStatusDraft || busy || skuEdit || sizeEdit });
   useEffect(() => {
     let cancelled = false;
     api.suppliers()

@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { api } from '../api.js';
+import { useLive } from '../hooks.js';
 import { compressImage } from '../lib/image.js';
 import { ImageZoomModal, ProgressBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
@@ -62,6 +63,22 @@ export function EditedPhotosPanel({ sku, onSignOut, reloadKey, onBuildFromTempla
   }
   // Reload whenever the parent's SKU changes or asks for a refresh (e.g. after Brand & Fill saves).
   useEffect(() => { load(); }, [sku, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live (docs/context/live-updates.md): another PH user saving this SKU's photos, or the
+  // warehouse shooting originals, shows here without a reload. NOT load() — that clears
+  // staged uploads and the Replace mode — only the two photo sets, swapped when changed,
+  // and never while this session is uploading or has files staged.
+  useLive(['product_photos'], async () => {
+    const s = String(sku || '').trim();
+    if (!s) return;
+    const { photos } = await api.photoList(s);
+    const ed = {}; const og = [];
+    for (const p of photos || []) {
+      if (p.source === 'ph_edited') ed[p.angle] = p.url;
+      else og.push(p);
+    }
+    setEdited((cur) => (JSON.stringify(cur) === JSON.stringify(ed) ? cur : ed));
+    setOriginals((cur) => (JSON.stringify(cur) === JSON.stringify(og) ? cur : og));
+  }, { mount: false, paused: loading || busySlot != null || bulkBusy || staged.length > 0 });
 
   // Compress + presign + PUT to R2 + attach. Shared by single-slot and bulk upload.
   async function putPhoto(angle, file) {

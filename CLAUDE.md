@@ -61,6 +61,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |
 | In-app SOP & Help: article/FAQ data model, search, SVG schematics, screenshot capture | `docs/context/sop.md` |
 | Failed scans: what a bad scan SAYS, and the `scan_failures` record behind it | `docs/context/scan-failures.md` |
+| **Live updates**: DB triggers → `/api/live` stream → `useLive` re-reads; no refresh needed | `docs/context/live-updates.md` |
 
 Current work log / next steps: `june22-progress.md`. Full feature history:
 `version-5.md`. Team SOPs: `SOP-WAREHOUSE.md`, `SOP-PH-TEAM.md`.
@@ -109,6 +110,9 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
   on a warehouse floor; the sticker's real state is one call away (`stickerState`), and
   every failure writes to `scan_failures` so "it keeps failing" is answerable from data
   rather than from a phone video (`docs/context/scan-failures.md`).
+- **Screens update live** (`useLive` in `src/hooks.js`). A NEW table a screen reads must
+  be added to `LIVE_TABLES` in `scripts/db-setup.mjs` (+ `db:setup`), or that screen
+  only catches up on the 60 s fallback (`docs/context/live-updates.md`).
 - After a rebuild, hard-refresh the browser (stale cached bundle).
 
 ## Working agreements

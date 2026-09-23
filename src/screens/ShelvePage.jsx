@@ -8,7 +8,7 @@ import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { TopBar, StatusPill, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
-import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
+import { useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { isVinCode, isLocationCode } from '../lib/codes.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -142,6 +142,17 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { if (mode === 'list' && pending == null) loadPending(); }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  // LIVE (docs/context/live-updates.md) — the "needs a shelf" list follows the floor:
+  // pairs received on another bench appear, pairs somebody else shelved drop out (and
+  // out of the selection, so Assign never re-shelves a pair that has already moved).
+  // Only the list mode: the scan session's rows are this person's draft.
+  useLive(['items', 'batches', 'product_photos'], async () => {
+    const { rows: r } = await api.itemsQuery({ status: 'needs_shelf' });
+    const next = r || [];
+    setPending((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+    const still = new Set(next.map((x) => x.vin));
+    setPendSel((s) => ([...s].every((v) => still.has(v)) ? s : new Set([...s].filter((v) => still.has(v)))));
+  }, { mount: false, minGap: 5000, paused: mode !== 'list' || pending == null || pickerOpen || listCam || assignBusy });
 
   const pendGroups = React.useMemo(() => {
     const m = new Map();

@@ -14,6 +14,7 @@ import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useQueryParam } from '../lib/urlstate.js';
+import { useLive } from '../hooks.js';
 import { compareSizes } from '../lib/codes.js';
 
 export function BoxStock({ onHome, onSignOut }) {
@@ -30,6 +31,13 @@ export function BoxStock({ onHome, onSignOut }) {
       .then((r) => setRows(r.rows || []))
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   }, [sku, size]); // eslint-disable-line react-hooks/exhaustive-deps
+  // LIVE (docs/context/live-updates.md) — boxes received, shelved or put on a pair
+  // elsewhere change the counts here without a refresh.
+  useLive(['items', 'batches', 'locations'], async () => {
+    const r = await api.boxStock({ sku, size });
+    const next = r.rows || [];
+    setRows((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+  }, { mount: false, paused: rows == null });
 
   // Free-text narrowing over what's on screen — the server filter is the exact one
   // (SKU / size); this is for "show me the Dunks" without typing a style code.

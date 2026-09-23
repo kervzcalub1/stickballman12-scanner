@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { useLive } from '../hooks.js';
 import { poMatchesSearch, reconcileChipOf, expectsAtOrderLevel, hasOrderedList } from '../lib/postatus.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
@@ -141,6 +142,46 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   };
   useEffect(loadList, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (archived && archivedPos == null) loadArchived(); }, [archived]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live (docs/context/live-updates.md). The list's chips, the open order's rows, its
+  // checklist and its thread all move when somebody else acts — a box received, a step
+  // logged, a comment — so they are re-read quietly rather than on F5. Only what changed
+  // is swapped; the note being typed is never overwritten (see below), and nothing moves
+  // while this person's own write is in flight.
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const PO_TABLES = ['purchase_orders', 'po_boxes', 'po_lines', 'po_resolutions', 'po_comments', 'items', 'batches'];
+  useLive(PO_TABLES, async () => {
+    try {
+      const r = await api.poReconcileList();
+      const n = r.pos || [];
+      setPos((cur) => (same(cur, n) ? cur : n));
+      if (archived) {
+        const a = (await api.poArchived()).pos || [];
+        setArchivedPos((cur) => (same(cur, a) ? cur : a));
+      }
+      const id = openId;
+      if (!id) return;
+      const d = await api.poReconciliation(id);
+      setDetail((cur) => {
+        if (!cur || Number(cur.po?.id) !== Number(id)) return cur;   // a different order opened meanwhile
+        const next = {
+          ...cur, po: d.po, rows: d.rows, summary: d.summary,
+          intakeDone: d.intake_done, awaitingBoxes: d.awaiting_boxes,
+          resolution: d.resolution, steps: d.steps, comments: d.comments || [],
+          receivedBoxes: d.received_boxes || [], boxDiffs: d.box_diffs || [],
+        };
+        return same(cur, next) ? cur : next;
+      });
+      // Somebody else saved the supplier-facing note. Take it only if this person is not
+      // mid-way through editing their own — their unsaved draft wins on screen.
+      const serverNote = d.po?.reconcile_note || '';
+      setNoteSaved((saved) => {
+        if (saved === serverNote) return saved;
+        setNote((draft) => (draft === saved ? serverNote : draft));
+        return serverNote;
+      });
+    } catch (e) { if (e.unauthorized) onSignOut(); }
+  }, { mount: false, minGap: 5000, paused: busy || noteBusy });
 
   const doUnarchive = async (poId, poCode) => {
     if (!window.confirm(`Bring ${poCode} back? It returns to Reconciled — the frozen count is unchanged.`)) return;

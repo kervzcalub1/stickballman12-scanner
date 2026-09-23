@@ -7,11 +7,11 @@
 //
 // One amount covers every pair of that size in that shipment — the same granularity
 // as po_lines.unit_cost, and the same as the PH grid's per-size layout.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, DateRangeBar, PriceInput } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
-import { usePendingCounts } from '../hooks.js';
+import { usePendingCounts, useLive } from '../hooks.js';
 import { rangeOf, PH_DATE } from '../lib/format.js';
 import { sizeLabel } from '../lib/codes.js';
 import { groupCostRows, costFieldValue, costChanged } from '../lib/costs.js';
@@ -91,6 +91,7 @@ export function ItemCosts({ onHome, onSignOut }) {
         const raw = String(draftFor(g, s)).trim();
         await api.setItemsCost(s.vins, raw === '' ? null : raw);
         saved.push(s);
+        for (const v of s.vins) keptVins.current.add(v);
       }
       const pairs = saved.reduce((n, s) => n + s.qty, 0);
       setNotice(`Saved ${saved.length} size${saved.length === 1 ? '' : 's'} · ${pairs} pair${pairs === 1 ? '' : 's'} — ${g.name || g.sku}.`);
@@ -115,6 +116,28 @@ export function ItemCosts({ onHome, onSignOut }) {
         : err.message);
     } finally { setSavingKey(null); }
   }
+
+  // LIVE (docs/context/live-updates.md) — costs typed on another device, and new pairs
+  // arriving without one, show up here. Two rules protect the person working the list:
+  // it holds while anything is typed and unsaved (or saving), and a pair THIS person
+  // just costed is kept on screen even though the backlog no longer returns it — the
+  // same reason saveGroup updates in place instead of refetching (a card that vanishes
+  // mid-scroll loses your place and hides what you just typed).
+  const keptVins = useRef(new Set());
+  useLive(['items', 'batches'], async () => {
+    let r;
+    if (searched) ({ rows: r } = await api.costsSearch(searched));
+    else {
+      const [from, to] = rangeOf(dr.mode, dr.anchor);
+      ({ rows: r } = await api.costsList(from, to, tab === 'zero' ? 'zero' : null));
+    }
+    setRows((cur) => {
+      if (!cur) return cur;
+      const have = new Set(r.map((x) => x.vin));
+      const next = [...r, ...cur.filter((x) => !have.has(x.vin) && keptVins.current.has(x.vin))];
+      return JSON.stringify(cur) === JSON.stringify(next) ? cur : next;
+    });
+  }, { mount: false, paused: rows == null || !!savingKey || Object.keys(drafts).length > 0 });
 
   const totalPairs = groups ? groups.reduce((n, g) => n + g.qty, 0) : 0;
   const totalMissing = groups ? groups.reduce((n, g) => n + g.missing, 0) : 0;

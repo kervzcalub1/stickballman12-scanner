@@ -1358,7 +1358,7 @@ async function lint(wanted) {
     const misses = [];
     try {
       await signIn(page, v.role);
-      await page.goto(`${BASE}${v.path}`, { waitUntil: 'networkidle', timeout: 20_000 });
+      await page.goto(`${BASE}${v.path}`, { waitUntil: 'load' /* never 'networkidle': the live-update stream stays open */, timeout: 20_000 });
       await wait(page, 1200);
       for (const sel of v.prep || []) {
         try {
@@ -1452,7 +1452,7 @@ async function main() {
     const track = makeTrack(clips.slice(1)); // clips[0] is the title card
     try {
       await signIn(page, v.role);
-      await page.goto(`${BASE}${v.path}`, { waitUntil: 'networkidle', timeout: 20_000 });
+      await page.goto(`${BASE}${v.path}`, { waitUntil: 'load' /* never 'networkidle': the live-update stream stays open */, timeout: 20_000 });
       await wait(page, 1400);
       // `prep` runs BEFORE the first caption and is not narrated: it puts the screen into
       // the state the procedure is about. Mostly widening a date filter — several pages

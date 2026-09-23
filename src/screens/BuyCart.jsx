@@ -11,7 +11,7 @@
 // A gate that lives in the UI is a gate a stale tab walks straight through.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { useLiveRefresh } from '../hooks.js';
+import { useLive } from '../hooks.js';
 import { poHref } from '../lib/poLink.js';
 import { BuyCartProgress } from '../components/BuyCartProgress.jsx';
 import { TopBar, PriceInput, FormModal } from '../components/common.jsx';
@@ -823,18 +823,18 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
 
   // LIVE, without a refresh. The buyer is in a shop watching for the desk's answer and
   // the desk is watching for the buyer's next pair — both used to be an F5 away. A quiet
-  // re-read every 15s (and the moment the tab comes back to the front) keeps the dots,
+  // re-read the moment anything on it is written (live-updates.md), and when the tab comes back to the front, keeps the dots,
   // the chips and the lines current. Only the cart is replaced, and only when it actually
   // changed, so a form somebody is mid-way through typing into is never disturbed — every
   // input on this page keeps its own draft state, exactly as it already had to for the
   // reload `act()` does after each write. A request that can no longer move is left alone.
   const settled = ['closed', 'cancelled', 'written_off'].includes(cart?.status);
-  useLiveRefresh(async () => {
+  useLive(['buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards', 'buy_cart_receipt_lines', 'buy_cart_tasks', 'purchase_orders', 'po_boxes', 'po_lines', 'items'], async () => {
     try {
       const { cart: c } = await api.cartGet(cartId);
       setCart((cur) => (JSON.stringify(cur) === JSON.stringify(c) ? cur : c));
-    } catch (e) { if (e.unauthorized) onSignOut(); /* anything else: next tick */ }
-  }, { every: cart && !settled ? 15_000 : 0, paused: !!busy });
+    } catch (e) { if (e.unauthorized) onSignOut(); /* anything else: next change */ }
+  }, { every: cart && !settled ? 60_000 : 0, paused: !!busy, mount: false });
 
   async function act(fn, key) {
     setBusy(key); setErr('');

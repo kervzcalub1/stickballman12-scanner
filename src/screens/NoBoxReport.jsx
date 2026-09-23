@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { STATUSES } from '../statuses.js';
 import { TopBar, StatusPill, DateRangeBar, LabelSheet } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
-import { useMediaQuery } from '../hooks.js';
+import { useMediaQuery, useLive } from '../hooks.js';
 import { rangeOf } from '../lib/format.js';
 import { useQueryDateRange } from '../lib/urlstate.js';
 import { upcDigits, sizeLabel } from '../lib/codes.js';
@@ -63,6 +63,14 @@ export function NoBoxReport({ user, onHome, onSignOut }) {
   // Opening the picker asks the server which boxes actually fit THIS pair (same SKU and
   // size), so the answer is stock we hold rather than a list to hunt through.
   const [boxPick, setBoxPick] = useState(null);   // { row, boxes, loading, error }
+  // LIVE (docs/context/live-updates.md) — a box found or a pair resolved on another
+  // device drops out of the queue here; new no-box arrivals appear. Held while a dialog
+  // or a save of this person's is open, so a row never vanishes from under a decision.
+  useLive(['items', 'batches'], async () => {
+    const [from, to] = rangeOf(dr.mode, dr.anchor);
+    const { rows: r } = await api.noBoxList(from, to);
+    setRows((cur) => (JSON.stringify(cur) === JSON.stringify(r) ? cur : r));
+  }, { mount: false, paused: rows == null || !!savingVin || !!labels || !!upcPrompt || upcBusy || !!boxPick });
   async function openBoxPicker(r) {
     setBoxPick({ row: r, boxes: [], loading: true, error: '' });
     try {

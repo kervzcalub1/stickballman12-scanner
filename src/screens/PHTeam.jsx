@@ -9,7 +9,7 @@ import { api } from '../api.js';
 import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText, Modal, RemoveUnitsModal } from '../components/common.jsx';
 import { RescaleRequestModal } from '../components/RescaleRequestModal.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
-import { usePendingCounts, useUnsavedGuard, useMediaQuery } from '../hooks.js';
+import { usePendingCounts, useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { skuCodes } from '../lib/sku.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges, hasAnyPriv } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
@@ -443,10 +443,17 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     } catch { /* transient — try again next tick */ }
     finally { pollBusyRef.current = false; }
   }
-  useEffect(() => {
-    const t = setInterval(quietRefresh, LIST_POLL_MS);
-    return () => clearInterval(t);
-  }, [dr, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Pushed, not only polled (docs/context/live-updates.md): any write to what the grid
+  // is built from re-reads it within seconds. Paused while this session edits or saves,
+  // so the useLive dirty flag carries the change until the edit is done instead of it
+  // being dropped by quietRefresh's own guard. The grid is the heaviest read in the app,
+  // so a floor scanning at speed triggers it at most every 5s. LIST_POLL_MS stays as the
+  // slow fallback in case a notice is ever missed.
+  useLive(['items', 'batches', 'item_events', 'product_photos'], quietRefresh,
+    { mount: false, every: LIST_POLL_MS, minGap: 5000, paused: editing.size > 0 || savingKey != null || loading });
+  // The rescale chip on each row. An explicit reload re-reads it; so does any change to a
+  // request — which is rare, so this is cheap, unlike re-reading it every tick.
+  useLive(['rescale_requests', 'rescale_request_items'], loadOpenRequests, { mount: false, every: 0 });
   // Release my locks when leaving the page.
   useEffect(() => () => { releaseAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

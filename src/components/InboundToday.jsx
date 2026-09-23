@@ -15,6 +15,7 @@
 // counts them at all.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { useLive } from '../hooks.js';
 import { arrivalPlan, inboundProgress } from '../lib/inbound.js';
 import { estToday } from '../lib/format.js';
 
@@ -30,6 +31,14 @@ export function InboundToday({ onOpen }) {
     api.inbound().then((r) => { if (on) setRows(r.boxes || []); }).catch(() => {});
     return () => { on = false; };
   }, []);
+  // Live (docs/context/live-updates.md): a box shipping, a tracking status landing or a
+  // box being received moves the headline and the bar without a reload. `items` changes
+  // on every scan, so this re-reads at most every 5s while the floor is busy.
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'batches', 'items'], async () => {
+    const r = await api.inbound();
+    const next = r.boxes || [];
+    setRows((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+  }, { mount: false, minGap: 5000 });
 
   // Nothing to say until it has loaded, and nothing to say when every order is
   // reconciled. A card reading "0 boxes" every day is a card people stop seeing.

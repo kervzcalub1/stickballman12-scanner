@@ -13,6 +13,7 @@ import { statusLabel } from '../statuses.js';
 import { PH_DATETIME } from '../lib/format.js';
 import { eventLabel, dedupeEvents } from '../lib/history.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { useLive } from '../hooks.js';
 
 export function DeletedItems({ onHome, onSignOut }) {
   const [q, setQ] = useQueryParam('q', '');
@@ -38,6 +39,13 @@ export function DeletedItems({ onHome, onSignOut }) {
     const t = setTimeout(load, 300);
     return () => clearTimeout(t);
   }, [q, from, to]); // eslint-disable-line react-hooks/exhaustive-deps
+  // LIVE (docs/context/live-updates.md) — a pair removed elsewhere lands in the archive
+  // here with the current search applied; the expanded history stays open (keyed by VIN).
+  useLive(['deleted_items'], async () => {
+    const { rows: r } = await api.deletedItems(q.trim(), from, to);
+    const next = r || [];
+    setRows((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+  }, { mount: false, paused: loading });
 
   const total = rows.length;
 

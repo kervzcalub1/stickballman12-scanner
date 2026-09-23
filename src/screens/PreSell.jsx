@@ -34,6 +34,12 @@ import { Icon } from '../components/NavIcons.jsx';
 import { compareSizes } from '../lib/codes.js';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { useLive, afterTyping } from '../hooks.js';
+
+// A live re-read waits for whoever is typing a count to leave the box. Those inputs are
+// uncontrolled and KEYED on the server's count, so a re-read landing mid-number would
+// remount the box and throw the half-typed figure away. The scan field is deliberately
+// outside this selector: it holds focus all the time and must never block updates.
 
 export function PreSell({ onHome, onSignOut }) {
   const [rows, setRows] = useState(null);
@@ -56,6 +62,16 @@ export function PreSell({ onHome, onSignOut }) {
   // Wrapped, NOT `useEffect(load, [])`: `load` returns a promise, and React treats
   // anything an effect returns as its cleanup function — "destroy is not a function".
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live (docs/context/live-updates.md): a pair marked sold at another desk, a shoe freed,
+  // a pre-sold pair scanned out — the rows, the To work / Done split and the totals move
+  // without F5. Held while a confirm or the hold picker is open or a save is in flight.
+  useLive(['items', 'batches'], async () => {
+    await afterTyping('.presell-rows');
+    try {
+      const n = (await api.presellList()).rows || [];
+      setRows((cur) => (JSON.stringify(cur) === JSON.stringify(n) ? cur : n));
+    } catch (e) { if (e.unauthorized) onSignOut(); }
+  }, { mount: false, paused: busy || !!confirm || !!holdPick });
 
   const pulse = (kind, text) => { setFlash({ kind, text }); setTimeout(() => setFlash(null), 2200); };
 

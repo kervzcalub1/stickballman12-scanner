@@ -4,6 +4,7 @@
 // SKUs load their photos in (dedupe — no re-shooting). Uploads go straight to R2.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { useLive } from '../hooks.js';
 import { SHOE_ANGLES, ShoeAngleIcon } from './ShoeAngleIcons.jsx';
 import { PhotoCamera } from './PhotoCamera.jsx';
 import { Icon } from './NavIcons.jsx';
@@ -69,6 +70,18 @@ export function ListingPhotos({ sku, onSignOut, onCameraToggle }) {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [sku]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live (docs/context/live-updates.md): PH uploading edited photos for this SKU raises the
+  // "PH edited on file" banner while the panel is open, and another device's shots appear.
+  // Held while the camera is open — its own save reloads what it changed.
+  useLive(['product_photos'], async () => {
+    if (!sku) return;
+    const { photos: rows } = await api.photoList(sku);
+    const map = {};
+    for (const r of rows || []) if (r.source !== 'ph_edited') map[r.angle] = r.url;
+    setPhotos((cur) => (JSON.stringify(cur) === JSON.stringify(map) ? cur : map));
+    setHasPhEdited((rows || []).some((r) => r.source === 'ph_edited'));
+  }, { mount: false, paused: !!camera || loading });
 
   // Tell the parent (Receiving) when the full-screen camera is open so it can
   // stop re-focusing the hidden scan field (which pops the mobile keyboard).

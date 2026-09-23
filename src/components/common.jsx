@@ -10,6 +10,7 @@ import { EST_FMT, PH_DATETIME, estDate, periodLabel, shiftAnchor } from '../lib/
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
 import { Icon } from './NavIcons.jsx';
+import { onLiveState } from '../lib/live.js';
 import { compareSizes } from '../lib/codes.js';
 import { priceBasisChip } from '../lib/ph.js';
 import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint, canSharePdf, isChunkLoadError } from '../lib/labelPdf.js';
@@ -19,7 +20,20 @@ import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint, canSharePdf, is
 export function EstClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
-  return <span className="topbar-clock" title="US Eastern time">{EST_FMT.format(now)} EST</span>;
+  // The live-update stream's state (live-updates.md), as a dot beside the clock: green
+  // while this page updates itself, amber while it is reconnecting — the one case where
+  // what is on screen may be behind, which is worth knowing before acting on it.
+  const [live, setLive] = useState('off');
+  useEffect(() => onLiveState(setLive), []);
+  const liveTitle = live === 'live' ? 'Live — this page updates by itself'
+    : live === 'down' ? 'Reconnecting — this page may be behind until it is back'
+      : live === 'connecting' ? 'Connecting for live updates…' : '';
+  return (
+    <span className="topbar-clock" title="US Eastern time">
+      {live !== 'off' && <span className={`live-dot live-dot--${live}`} title={liveTitle} aria-label={liveTitle} role="img" />}
+      {EST_FMT.format(now)} EST
+    </span>
+  );
 }
 
 // Item-status pill driven by the central status map (soft colors).

@@ -17,6 +17,7 @@
 // about the supplier rather than about the phone it was typed on.
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, ShoeThumb, NumField } from '../components/common.jsx';
 import { BatchAnalysis } from '../components/BatchAnalysis.jsx';
@@ -386,6 +387,15 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Live (docs/context/live-updates.md): the office changing a supplier's stack updates the
+  // list here. Only the LIST — nothing is re-applied to the numbers on screen; if the
+  // applied preset moved, the chip reads "edited", which is then the truth. Held while the
+  // manager is open (it saves and reloads on its own).
+  useLive(['payout_presets'], async () => {
+    const { presets: list } = await api.payoutPresets();
+    const next = list || [];
+    setPresets((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+  }, { mount: false, paused: manageOpen });
 
   const activePreset = presets.find((p) => p.id === presetId) || null;
   // Derived, never a flag: the moment a number diverges from the supplier the chip

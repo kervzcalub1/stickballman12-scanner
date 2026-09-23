@@ -9,7 +9,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, Modal, CopyText, FormModal } from '../components/common.jsx';
 import { STAFF_PRIVILEGES, BUYER_PRIVILEGES, isAdminRole } from '../lib/constants.js';
-import { useMediaQuery } from '../hooks.js';
+import { useMediaQuery, useLive } from '../hooks.js';
 
 export function CheckAccess({ onHome, onSignOut }) {
   const [users, setUsers] = useState(null);
@@ -30,6 +30,16 @@ export function CheckAccess({ onHome, onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live (docs/context/live-updates.md): a sign-up waiting for approval, or another admin's
+  // change to a role or privilege, shows without a reload. Held while this admin has an
+  // action or a dialog open, so a row never moves out from under a decision. The Telegram
+  // "waiting" list is not announced; the 60s fallback catches it.
+  useLive(['users'], async () => {
+    const { users: u, telegramWaiting } = await api.adminListUsers();
+    setUsers((cur) => (JSON.stringify(cur) === JSON.stringify(u) ? cur : u));
+    const w = telegramWaiting || [];
+    setWaiting((cur) => (JSON.stringify(cur) === JSON.stringify(w) ? cur : w));
+  }, { mount: false, paused: busyId != null || !!confirm || !!linking || !!tempPw });
 
   async function review(id, decision) {
     setBusyId(id); setConfirm(null);

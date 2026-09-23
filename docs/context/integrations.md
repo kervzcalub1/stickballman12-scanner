@@ -162,9 +162,16 @@ location); those stay behind a session or an API key.
   `products` table (`getProductByUpc` / `getCatalogIdBySku`):
   - **by UPC** — `aliasProductByUpc` (bypass UPC-search). Preferred when scanned by UPC.
   - **by SKU** — `aliasCatalogBySku` → official `GET api.alias.org/api/v1/catalog?query=<sku>`
-    (`ALIAS_API_KEY` bearer), returns `catalog_items[0].catalog_id`. This is how
-    **SKU-scanned units (no UPC) still get a GI** (KicksDB returns no UPC). SKU match
-    is fuzzy (dash or space). SKU-only catalog rows are stored with `upc = NULL`.
+    (`ALIAS_API_KEY` bearer), returns the matching item's `catalog_id`. This is how
+    **SKU-scanned units (no UPC) still get a GI** (KicksDB returns no UPC). SKU-only
+    catalog rows are stored with `upc = NULL`.
+  - **The catalogue SEARCH is fuzzy — the MATCH is exact.** Alias and KicksDB both
+    answer a code they don't carry with its nearest neighbour (`KI4559` → `KI7559`, a
+    different shoe), and taking `[0]` unchecked put another shoe's photos/colourway
+    (and could put its catalog_id → GI) under the scanned code. Both clients now ask for
+    5 results and keep only one whose style code matches (`sameSku` in `util.js`:
+    letters+digits only, so `DQ8426-109` = Alias's `DQ8426 109`; dual codes match on
+    any code). No match = not found.
   - **DUAL-CODE SKUs price off the FIRST code.** Some pairs carry two style codes in
     one field — `315121-115/CW2290-111` (re-issued or double-labelled). The catalog
     knows each code and **never the pair**, so the combined string returned nothing and

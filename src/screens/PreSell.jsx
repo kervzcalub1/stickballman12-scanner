@@ -33,6 +33,7 @@ import { TopBar, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { compareSizes } from '../lib/codes.js';
 import { estDate } from '../lib/format.js';
+import { useQueryParam } from '../lib/urlstate.js';
 
 export function PreSell({ onHome, onSignOut }) {
   const [rows, setRows] = useState(null);
@@ -43,6 +44,11 @@ export function PreSell({ onHome, onSignOut }) {
   const scanRef = useRef(null);
   const [confirm, setConfirm] = useState(null); // { kind:'release'|'not_presell', ship, shoe?, n }
   const [holdPick, setHoldPick] = useState(null); // { ship, shoes|null }
+  // To work / Done. A shipment whose every pair is spoken for has nothing left to answer,
+  // so it leaves the worklist — but stays one tap away, because a pre-sale that falls
+  // through is normal and lowering its count is how the pair comes back. In the URL so
+  // a refresh keeps the tab.
+  const [view, setView] = useQueryParam('view', 'work');
 
   const load = () => api.presellList()
     .then((r) => setRows(r.rows || []))
@@ -64,9 +70,16 @@ export function PreSell({ onHome, onSignOut }) {
       if (!ship.shoes.has(k)) ship.shoes.set(k, { sku: r.sku, name: r.name, sizes: [] });
       ship.shoes.get(k).sizes.push(r);
     }
-    for (const s of m.values()) for (const sh of s.shoes.values()) sh.sizes.sort((a, b) => compareSizes(a.size, b.size));
+    for (const s of m.values()) {
+      for (const sh of s.shoes.values()) sh.sizes.sort((a, b) => compareSizes(a.size, b.size));
+      s.remaining = [...s.shoes.values()].flatMap((sh) => sh.sizes).reduce((n, r) => n + Number(r.remains), 0);
+    }
     return [...m.values()];
   }, [rows]);
+  const toWork = shipments.filter((s) => s.remaining > 0);
+  const done = shipments.filter((s) => s.remaining < 1);
+  const showDone = view === 'done';
+  const shown = showDone ? done : toWork;
 
   async function setSold(row, qty) {
     const n = Math.max(0, Math.min(Number(row.arrived) || 0, parseInt(qty, 10) || 0));
@@ -152,13 +165,28 @@ export function PreSell({ onHome, onSignOut }) {
           <button className="btn primary" disabled={busy}>Mark sold</button>
         </form>
 
+        {rows != null && shipments.length > 0 && (
+          <div className="seg presell-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={!showDone} className={`seg-btn ${!showDone ? 'on' : ''}`}
+              onClick={() => setView('work')}>To work<span className="seg-n">{toWork.length}</span></button>
+            <button type="button" role="tab" aria-selected={showDone} className={`seg-btn ${showDone ? 'on' : ''}`}
+              onClick={() => setView('done')}>Done<span className="seg-n">{done.length}</span></button>
+          </div>
+        )}
+
         {rows == null ? <p className="muted">Loading…</p>
           : shipments.length === 0 ? (
             <div className="card empty-state">
               No pre-sell shipments waiting. A shipment lands here when it is ticked
               <b> Pre-sell</b> at receiving.
             </div>
-          ) : shipments.map((ship) => {
+          ) : shown.length === 0 ? (
+            <div className="card empty-state">
+              {showDone
+                ? 'No shipment is fully spoken for yet.'
+                : <>Nothing to work — every pair on a pre-sell shipment is marked sold. Those shipments are under <b>Done</b>.</>}
+            </div>
+          ) : shown.map((ship) => {
             const all = [...ship.shoes.values()].flatMap((sh) => sh.sizes);
             const arrived = all.reduce((n, r) => n + Number(r.arrived), 0);
             const sold = all.reduce((n, r) => n + Number(r.sold), 0);
@@ -221,7 +249,7 @@ export function PreSell({ onHome, onSignOut }) {
                   <button className="btn ghost" disabled={busy} onClick={() => openHoldPick(ship)}>
                     ＋ Hold another shoe
                   </button>
-                  {remaining < 1 && <span className="muted sm">Every unit on this shipment is spoken for.</span>}
+                  {remaining < 1 && <span className="muted sm">Every pair is spoken for — nothing to send to the PH team. They leave through the normal scan-out; lower a count here if a sale falls through.</span>}
                 </div>
               </div>
             );

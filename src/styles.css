@@ -2757,6 +2757,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .presell-scan { margin-bottom: 14px; }
 .presell-ship { margin-bottom: 14px; }
 .presell-totals { margin: 2px 0 10px; }
+.presell-tabs { margin: 12px 0; }
 .presell-shoe { margin: 12px 0; }
 .presell-shoe-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 6px; }
 .presell-rows { display: flex; flex-direction: column; gap: 4px; }

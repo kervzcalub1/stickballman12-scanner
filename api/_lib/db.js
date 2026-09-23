@@ -1948,7 +1948,10 @@ export async function pendingCounts() {
       count(*) FILTER (WHERE is_box AND status = 'in_stock')::int        AS boxes_on_hand,
       -- Pre-sell units still waiting for somebody to say which orders they cover. They
       -- are not in ANY listing backlog, so without their own count the work is invisible.
-      count(*) FILTER (WHERE is_presell AND status NOT IN ('sold','shipped'))::int AS presell_pending,
+      -- A pre_sold pair is ANSWERED — it leaves through the ordinary scan-out, not from
+      -- the Pre-sell page — so counting it kept a fully sold shipment (47 of 47) on the
+      -- home page as work forever. missing/issue are off the page too.
+      count(*) FILTER (WHERE is_presell AND status NOT IN ('pre_sold','sold','shipped','missing','issue'))::int AS presell_pending,
       count(*) FILTER (WHERE status = 'no_box' AND NOT is_box)::int    AS no_box,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
       -- Sold but not yet handed to the carrier — the scan-out backlog. This is the

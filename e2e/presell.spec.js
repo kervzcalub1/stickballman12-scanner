@@ -19,7 +19,7 @@
 //   5. Both corrections work: one shoe out of the hold, and one shoe back into it.
 import { test, expect } from '@playwright/test';
 import { signToken } from '../api/_lib/util.js';
-import { loadEnv } from './helpers/auth.js';
+import { loadEnv, loginAs } from './helpers/auth.js';
 import pg from 'pg';
 
 loadEnv();
@@ -362,4 +362,26 @@ test('a freed pair is dated by the day it was freed, not the day it arrived', as
   const old = (await q(`SELECT ((now() - interval '30 days') AT TIME ZONE 'America/New_York')::date::text AS d`))[0].d;
   const thirtyDaysAgo = await (await request.get(`/api/ph/list?kind=receiving&from=${old}&to=${old}`, { headers: ph() })).json();
   expect((thirtyDaysAgo.rows || []).filter((r) => r.sku === sku)).toHaveLength(0);
+});
+
+test('a shipment whose every pair is sold is done: off the home count, under Done', async ({ page, request }) => {
+  const sku = nextSku();
+  const b = await receive(request, { preSell: true, sku, sizes: [{ size: '9', n: 3 }] });
+  const pending = async () => (await (await request.get('/api/items/pending-counts', { headers: wh() })).json()).counts.presell_pending;
+
+  // Counts are global, so measure the CHANGE this shipment makes rather than a total.
+  const held = await pending();
+  await request.post('/api/presell/mark-sold', { headers: wh(), data: { batchId: Number(b.id), sku, size: '9', qty: 2 } });
+  expect(await pending()).toBe(held - 2);   // a pair spoken for is answered
+  await request.post('/api/presell/mark-sold', { headers: wh(), data: { batchId: Number(b.id), sku, size: '9', qty: 3 } });
+  expect(await pending()).toBe(held - 3);   // all three: nothing left to work
+
+  // The page: off To work, one tap away under Done — a sale can still fall through.
+  await loginAs(page, 'warehouse');
+  await page.goto('/presell');
+  await expect(page.getByRole('tab', { name: /To work/ })).toBeVisible();
+  await expect(page.getByText(b.batch_code, { exact: true })).toHaveCount(0);
+  await page.getByRole('tab', { name: /Done/ }).click();
+  await expect(page.getByText(b.batch_code, { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/view=done/);
 });

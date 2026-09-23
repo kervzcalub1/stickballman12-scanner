@@ -98,8 +98,11 @@ A pre-sell unit is therefore invisible to PH's New Inventory, contributes to no
 listing badge, and is never priced by a GI refresh — while staying perfectly
 ordinary everywhere else (Inventory, shelving, labels, locations, costs, the PO).
 
-The pending-counts query also returns **`presell_pending`** — pre-sell units not yet
-`sold`/`shipped` — which badges the PH home card.
+The pending-counts query also returns **`presell_pending`** — pre-sell units still
+waiting for an answer: not `pre_sold`/`sold`/`shipped`/`missing`/`issue` — which badges
+the home card. **`pre_sold` is answered (2026-09-23).** It used to count, so a shipment
+sold 47 of 47 stayed on the home page as "Pre-sell to work" with nothing left to do: a
+spoken-for pair leaves through the ordinary scan-out, never from the Pre-sell page.
 
 ## The chip (`src/components/PreSellChip.jsx`)
 
@@ -134,7 +137,10 @@ one closes the string and the whole module fails to parse.
 ## The Pre-sell page (`/presell`, `src/screens/PreSell.jsx`)
 
 Warehouse (admin auto-allowed), in the warehouse app — a card in **Receiving
-Shipment Orders**, plus a Needs-attention tile keyed on `presell_pending`. Rows are
+Shipment Orders**, plus a Needs-attention tile keyed on `presell_pending`. The page has two tabs, **To work** and **Done**
+(`?view=done`): a shipment with nothing left to free (every pair `pre_sold`) moves to
+Done. It is still editable there — lowering a count is how a sale that fell through
+hands a pair back. Rows are
 grouped shipment → shoe → size
 (`listPreSellGroups`), each showing **arrived / sold / remains**. Each **shoe** header
 carries **Not pre-sell** and each shipment carries **＋ Hold another shoe** — the two

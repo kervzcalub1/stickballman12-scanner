@@ -1103,6 +1103,15 @@ is missing, because a gate that only says no teaches people to route around it.
 | 9 | Expected matches received | `getPoReconciliation().summary.clean` **and not** `no_manifest` |
 | 10 | Remaining balance accounted for | `balance_remaining` + every card's `remaining` |
 
+- **A card can be recorded after the receipt and after the money audit (2026-09-23).**
+  `cardsIssuable` (`src/lib/buycartRules.js`, `CARDS_RECORDABLE`) now takes `receipted`
+  and `audited` as well as `approved`/`funded`. The case: $400 of cards against a
+  $422.18 receipt — the buyer spent a card nobody recorded, the desk was locked out once
+  the receipt was in, and #5 could only be satisfied by misstating a card's spend. A card
+  recorded then lands with no spend, so #5 goes red again and the audit panel names it
+  ("•••• 1234 was recorded after this audit") until the auditor records it again.
+  `closed`/`cancelled`/`written_off` still refuse. Test: "a card the buyer spent can
+  still be recorded after the receipt and the audit" in `e2e/buy-cart.spec.js`.
 - **#5 needs both halves.** Matching totals with blank cards says nothing about *which*
   card the money left; per-card figures that don't sum to the receipt mean something was
   bought this receipt doesn't cover.

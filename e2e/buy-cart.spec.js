@@ -217,6 +217,43 @@ test('gift cards must cover the approved total PLUS TAX before anything is relea
   expect(ok.body.cart.status).toBe('funded');
 });
 
+test('a card the buyer spent can still be recorded after the receipt and the audit', async ({ request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });          // $108.25 to fund
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '4000400040004000', balance: 108.25 } });
+  expect((await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true })).status).toBe(200);
+
+  // The till came to more than the card on file — a second card was spent that nobody
+  // recorded. Stamped straight onto the row: this test is about the desk, not the reader.
+  await pool.query(`UPDATE buy_carts SET status = 'receipted', receipt_total = 130.43 WHERE id = $1`, [cartId]);
+  const first = (await read_(request, 'issuer', `cart/get?id=${cartId}`)).body.cart.giftCards[0];
+  const audit1 = await call(request, 'auditor', 'cart/audit', { cartId, cards: [{ id: first.id, spent: 108.25, remaining: 0 }] });
+  expect(audit1.status).toBe(200);
+  expect(audit1.body.cart.status).toBe('audited');
+  const gap = (checks) => checks.find((c) => c.key === 'spend_reconciled');
+  expect(gap(audit1.body.checks).ok).toBe(false);
+
+  // After the audit the desk can still record it — that was the dead end.
+  const late = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '4111411141114111', balance: 25 } });
+  expect(late.status).toBe(200);
+
+  // It lands with no spend, so the audit on file no longer covers every card…
+  const { body: g } = await read_(request, 'auditor', `cart/get?id=${cartId}`);
+  expect(g.cart.giftCards.find((c) => c.id === late.body.card.id).spent_amount).toBeNull();
+  // …and recording it again with both cards closes the gap.
+  const audit2 = await call(request, 'auditor', 'cart/audit', { cartId, cards: [
+    { id: first.id, spent: 108.25, remaining: 0 },
+    { id: late.body.card.id, spent: 22.18, remaining: 2.82 },
+  ] });
+  expect(audit2.status).toBe(200);
+  expect(gap(audit2.body.checks).ok).toBe(true);
+
+  // A finished request still takes nothing.
+  await pool.query(`UPDATE buy_carts SET status = 'closed' WHERE id = $1`, [cartId]);
+  const closed = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '4222422242224222', balance: 5 } });
+  expect(closed.status).toBe(409);
+});
+
 test('no card issues before an approval exists', async ({ request }) => {
   const cartId = await newRequest(request, { lines: [LINE] });
   const r = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '9999000011112222', balance: 200 } });

@@ -2792,6 +2792,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .box-existing-size { font-size: 12px; padding: 2px 7px; border-radius: 999px;
   background: rgba(255,255,255,.06); border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .box-existing-size i { font-style: normal; color: var(--muted); margin-left: 3px; }
+/* Edit box: a size chip is the button that fixes that size. */
+button.box-existing-size { color: var(--text); cursor: pointer; font: inherit; font-size: 12px; }
+button.box-existing-size:hover { border-color: var(--primary); }
+.box-existing-acts { display: inline-flex; gap: 6px; }
+.box-existing .notice { margin-top: 8px; }
 /* Where a manifest row's count came from: a scan is a pair that was in a hand, a tick
    is a claim about the whole row at once. They wrote the same number and looked the
    same, which is the one thing a verification sheet cannot afford. */
@@ -2803,11 +2808,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-summary-how { margin: 2px 0 10px; line-height: 1.45; }
 /* The receiving toggle's explanation, once it's on. */
 .presell-field .presell-note { display: block; margin-top: 6px; color: #b9a3e8; }
-/* "Is ALL of this shipment pre-sold?" — the follow-up question, which has no answer
-   pre-selected on purpose (the old checkbox silently meant "all of it"). */
-.presell-scope { display: block; margin-top: 8px; }
-.presell-scope-q { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
-.presell-scope .seg { max-width: 420px; }
 /* The per-SHOE chip on a cart / review card, beside "GOAT only". Amber when on, because
    what it means is "hold this one back from listing" — the one state worth seeing from
    across the bench. */

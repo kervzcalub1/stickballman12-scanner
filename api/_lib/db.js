@@ -2578,6 +2578,22 @@ export async function findSkuSiblings(item) {
   return rows.map((r) => ({ ...r, id: Number(r.id), listed: !!r.listed }));
 }
 
+// Every pair of this shoe (same style code, any size) in the SAME BOX of the same batch —
+// the "Edit box" scope: a carton whose one shoe was scanned in under the wrong code is
+// wrong for every size in it, and fixing it size by size was the long way round.
+// Loose units (no box) have no box to scope to, so they get only themselves.
+export async function findSkuBoxSiblings(item) {
+  if (item?.batch_id == null || item?.box_id == null) return [];
+  const rows = await db()`
+    SELECT i.id, i.vin, i.status,
+           (i.synced_alias OR i.synced_stockx OR i.synced_shopify OR i.added_to_intel_inv) AS listed
+      FROM items i
+     WHERE i.sku IS NOT DISTINCT FROM ${item.sku}
+       AND i.batch_id = ${item.batch_id} AND i.box_id = ${item.box_id}
+     ORDER BY i.id`;
+  return rows.map((r) => ({ ...r, id: Number(r.id), listed: !!r.listed }));
+}
+
 // Change the style code on a set of units, carrying the catalogue's name / colorway /
 // image for the NEW code when the caller looked it up (each field only when given —
 // a lookup that found nothing must not blank a name we had). Every unit gets a `note`

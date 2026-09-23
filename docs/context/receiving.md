@@ -88,7 +88,7 @@ and `purchase-orders.md` → "Scan-first, any order".
    the commit passes `boxNumber = box.box_number`, so `addBatchBox`'s find-or-create
    **reuses that row**. `+ Add box` (no `box`) still means a box that isn't listed at
    all — using it to continue a pending box is what left staff with an empty box
-   beside the one they meant to fill. Received boxes get **Reopen box** instead (below) —
+   beside the one they meant to fill. A box with pairs in it gets **Edit box** instead (below) —
    the box-commit CAS refuses a submitted box, so "Add items" would 409.
    **Continuing a box shows what is already in it** (2026-09-23). A reopened or pending
    box keeps its pairs — `commitBoxItems` only ever appends — but the Items step opened
@@ -102,17 +102,27 @@ and `purchase-orders.md` → "Scan-first, any order".
    those units exist with their own VINs, and re-committing them would double the box. The
    step header counts **new** units for the same reason, and the title says **Box 3**
    rather than "Add box". Guarded by `e2e/batch-continue-box.spec.js`.
-   **Pre-sell is asked in two halves** (2026-09-23): ticking *Pre-sell shipment* then asks
-   whether **all** of it is pre-sold or only some — unanswered by default, and Step 1
-   refuses to move on. "Only some" puts a **Pre-sell** toggle on every cart row (beside
-   Box / No box and GOAT only) and a running count on Items and Review; the shipment's
-   answer is stored as `batches.pre_sell_scope` because every later BOX commit re-reads
-   it. Full rules: `docs/context/pre-sell.md`.
+   **EDIT BOX (2026-09-23).** *"Re-opening a batch does not allow the user to edit the
+   contents."* The **Already in Box N** list is no longer read-only: tap a **size chip**
+   → `SizeEditModal` opened on that group (`defaultScope="same_group"` = every pair of
+   that code + size in this box); **SKU…** → `SkuEditModal` (moved to
+   `src/components/SkuEdit.jsx`) on the whole shoe (`defaultScope="same_box"`, a new
+   `set-sku` scope — `findSkuBoxSiblings`: same code, same batch, same box, every size);
+   **Remove…** → `RemoveUnitsModal` (per-size keep counts → `items/delete`, archived to
+   Deleted). Same endpoints and guards as Inventory (sold/shipped can't be removed; a
+   listed pair is corrected and PH is told). Adding is still scanning. The Batch page's
+   **Reopen box** and a pending box-with-pairs' **Add items** both read **Edit box**; an
+   empty pending box keeps **Add items**. The units are still never re-committed.
+   Guarded by `e2e/batch-continue-box.spec.js` ("Edit box: …").
+   **Pre-sell: every shoe starts ticked** (2026-09-23): ticking *Pre-sell shipment* puts a
+   ticked **Pre-sell** toggle on every cart row (beside Box / No box and GOAT only) — the
+   ones that weren't pre-sold are unticked — and a running count on Items and Review. The
+   old "all of it / only some" question is gone. Full rules: `docs/context/pre-sell.md`.
    **A size declared wrong is corrected in place, not re-received** (2026-09-22): the ✎
    on each row of a box's contents (and beside **Size** on the item detail) changes the
-   size on the pair, clears the UPC and re-prices it — `Reopen box` is for *adding*
-   pairs, not for editing one. Rules: `docs/context/inventory.md` → "Correcting a size".
-   **Reopening a submitted box** (2026-09-12): *"I submitted box 3, then found two more
+   size on the pair, clears the UPC and re-prices it — and the same fix opens off a size
+   chip in **Edit box**. Rules: `docs/context/inventory.md` → "Correcting a size".
+   **Reopening a submitted box** (2026-09-12; the button reads **Edit box** since 2026-09-23): *"I submitted box 3, then found two more
    pairs in it"* had no route but `+ Add box`, which filed those pairs under a box number
    that isn't on the carton. Now every received row (warehouse, batch open OR done) has
    **Reopen box** → confirm → `POST /api/batches/reopen-box` → `reopenBatchBox`: the box

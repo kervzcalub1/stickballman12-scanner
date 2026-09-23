@@ -66,7 +66,8 @@ its history over one character.
   batch page) and `canEditStock=false` (PH's Inventory) both hide it; the endpoint itself
   takes warehouse + ph_team, like `set-sku`.
 - **Nothing is reopened.** A received box does not have to go back to `pending` to correct
-  a size — `Reopen box` is for *adding pairs* (`receiving.md`). One field on the unit.
+  a size — one field on the unit. (**Edit box** in Receiving opens this same dialog off a
+  size chip, `receiving.md`.)
 - **The size is normalized server-side** (`normalizeSize`): `US 9.5` → `9.5`, `9 M` → `9`
   (the men's run is written bare, the same reading `upcSizeKey` already takes), apparel
   passes through uppercased. Stock is grouped by `sku + size` on every screen, so a second

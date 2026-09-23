@@ -1,10 +1,10 @@
-// The intake half of part pre-sell, on the actual screen (2026-09-23).
+// The intake half of pre-sell, on the actual screen.
 //
-// The API tests in presell.spec.js pin what the server does with the answers. This pins
-// that the question can be answered at all — and that the wizard refuses to carry a half
-// answer forward, which is where the damage came from: ticking "Pre-sell shipment" used
-// to mean "all of it" silently, so a shipment with one spoken-for shoe in it held all
-// fifteen back from listing with nothing on screen saying so.
+// 2026-09-23 (Brent): there is no "all of it / only some" question any more. Ticking
+// "Pre-sell shipment" makes every shoe START pre-sell, and the ones that weren't sold
+// are unticked on their cards. The API tests in presell.spec.js pin what the server does
+// with the per-shoe flags; this pins the screen — the default, the untick, the stated
+// count, and that what was unticked really lands unheld.
 import { test, expect } from '@playwright/test';
 import { loadEnv, loginAs } from './helpers/auth.js';
 import pg from 'pg';
@@ -21,21 +21,11 @@ async function step1(page) {
   await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click();
 }
 
-test('ticking pre-sell asks how much, and Next is blocked until it is answered', async ({ page }) => {
+test('ticking pre-sell asks nothing more — Next goes straight to scanning', async ({ page }) => {
   await step1(page);
-  // Not asked at all until the shipment is a pre-sell one.
-  await expect(page.locator('.presell-scope')).toHaveCount(0);
-
   await page.locator('.presell-check input').check();
-  await expect(page.locator('.presell-scope')).toContainText('Is all of this shipment pre-sold?');
-  // NOTHING is pre-selected — the old checkbox's silent "all of it" is the bug.
-  await expect(page.locator('.presell-scope .seg-btn.on')).toHaveCount(0);
-
-  await page.getByRole('button', { name: 'Next →' }).click();
-  await expect(page.locator('.error')).toContainText(/all of it, or only some/i);
-  await expect(page.locator('.batch-form')).toBeVisible();      // still on step 1
-
-  await page.getByRole('button', { name: 'No — only some shoes' }).click();
+  await expect(page.locator('.presell-scope')).toHaveCount(0);
+  await expect(page.locator('.presell-note')).toContainText('starts marked Pre-sell');
   await page.getByRole('button', { name: 'Next →' }).click();
   await expect(page.locator('.scanbar')).toBeVisible();
 });
@@ -64,45 +54,61 @@ async function addShoe(page, sku) {
   await expect(modal).toHaveCount(0);
 }
 
-test('on "only some" the cart carries a per-shoe chip and a running count', async ({ page }) => {
+test('every shoe starts pre-sell; unticking one frees it, and the commit says so', async ({ page }) => {
   await stubCatalogue(page);
   await step1(page);
   await page.locator('.presell-check input').check();
-  await page.getByRole('button', { name: 'No — only some shoes' }).click();
   await page.getByRole('button', { name: 'Next →' }).click();
 
-  await addShoe(page, 'E2E-PSW-SOLD-100');
-  await addShoe(page, 'E2E-PSW-PLAIN-200');
+  const stamp = Date.now().toString(36).toUpperCase();
+  const SOLD = `E2E-PSW-SOLD-${stamp}`, PLAIN = `E2E-PSW-PLAIN-${stamp}`;
+  await addShoe(page, SOLD);
+  await addShoe(page, PLAIN);
   await expect(page.locator('.recv-item')).toHaveCount(2);
 
-  // The count is stated before anything is marked — 15 of 15 held, when one was meant
-  // to be, is exactly what nobody could see last time.
-  await expect(page.locator('.presell-tally')).toContainText('0 of 2 shoes marked');
+  // Both start ticked — and the count says so before anybody touches anything.
+  await expect(page.locator('.recv-item .presell-chip-toggle input:checked')).toHaveCount(2);
+  await expect(page.locator('.presell-tally')).toContainText('2 of 2 shoes marked');
 
-  // Mark ONE of them. The chip lives on the row, beside Box / No box and GOAT only.
-  const sold = page.locator('.recv-item', { hasText: 'E2E-PSW-SOLD-100' });
-  await sold.locator('.presell-chip-toggle input').check();
+  await page.locator('.recv-item', { hasText: PLAIN }).locator('.presell-chip-toggle input').uncheck();
   await expect(page.locator('.presell-tally')).toContainText('1 of 2 shoes marked');
-  await expect(page.locator('.recv-item', { hasText: 'E2E-PSW-PLAIN-200' })
-    .locator('.presell-chip-toggle input')).not.toBeChecked();
+
+  await page.getByRole('button', { name: 'Review →' }).click();
+  await expect(page.locator('.presell-tally')).toContainText('1 of 2 shoes marked');
+  await page.getByRole('button', { name: 'Next →' }).click();
+  await page.getByRole('button', { name: 'Finish batch' }).click();
+  await page.getByRole('button', { name: 'Yes, commit' }).click();
+  await expect(page.getByText(/^Batch .* saved$/)).toBeVisible({ timeout: 15_000 });
+
+  const rows = (await pool.query(
+    `SELECT sku, pre_sell FROM items WHERE sku = ANY($1) ORDER BY sku`, [[SOLD, PLAIN]])).rows;
+  expect(rows).toEqual([{ sku: PLAIN, pre_sell: false }, { sku: SOLD, pre_sell: true }]);
+  await pool.query(`DELETE FROM items WHERE sku = ANY($1)`, [[SOLD, PLAIN]]);
 });
 
-test('"only some" with nothing marked cannot reach Review', async ({ page }) => {
+test('a SCANNED shoe starts pre-sell too — the rapid-scan path, which is how the floor works', async ({ page }) => {
   await stubCatalogue(page);
   await step1(page);
   await page.locator('.presell-check input').check();
-  await page.getByRole('button', { name: 'No — only some shoes' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+  const code = `E2E-PSW-SCAN-${Date.now().toString(36).toUpperCase()}`;
+  await page.locator('.scanbar input').first().fill(code);
+  await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+  const line = page.locator(`.recv-item[data-sku="${code}"]`);
+  await expect(line).toBeVisible({ timeout: 10_000 });
+  await expect(line.locator('.presell-chip-toggle input')).toBeChecked();
+  await expect(page.locator('.presell-tally')).toContainText('1 of 1 shoe marked');
+});
+
+test('every shoe unticked cannot reach Review — it says to untick the shipment instead', async ({ page }) => {
+  await stubCatalogue(page);
+  await step1(page);
+  await page.locator('.presell-check input').check();
   await page.getByRole('button', { name: 'Next →' }).click();
   await addShoe(page, 'E2E-PSW-NONE-300');
+  await page.locator('.recv-item .presell-chip-toggle input').first().uncheck();
 
   await page.getByRole('button', { name: 'Review →' }).click();
-  await expect(page.locator('.error')).toContainText(/tick the shoes that are/i);
+  await expect(page.locator('.error')).toContainText(/untick “Pre-sell shipment”/i);
   await expect(page.locator('.scanbar')).toBeVisible();   // still on the Items step
-
-  // Ticking it lets the step through — the refusal is about the missing answer, not
-  // about pre-sell shipments being harder to receive.
-  await page.locator('.recv-item .presell-chip-toggle input').first().check();
-  await page.getByRole('button', { name: 'Review →' }).click();
-  await expect(page.locator('.recv-items.review')).toBeVisible();
-  await expect(page.locator('.presell-tally')).toContainText('1 of 1 shoe marked');
 });

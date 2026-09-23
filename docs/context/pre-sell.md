@@ -29,7 +29,22 @@ to II and the platforms. PH has no Pre-sell page and cannot mark a pair sold.
   `batch.preSell` through `createBatch` / `createOpenBatch` / `box-commit`.
 - **`batches.pre_sell_scope`** — `'all'` | `'some'` | NULL (not a pre-sell shipment).
 
-## All of it, or only some (2026-09-23)
+## Every shoe starts pre-sell; untick the rest (2026-09-23, Brent)
+
+**The "all of it / only some" question below is gone.** Ticking *Pre-sell shipment* now
+always means per-shoe (`pre_sell_scope = 'some'`), and **every shoe added starts ticked
+Pre-sell** — scanned, added manually, or seeded from a PO manifest (`preSellDefaultRef` in
+`Receiving.jsx`). The ones that weren't sold before landing are unticked on their cards.
+Brent's shipments are mostly spoken for, so ticking each one was the long way round.
+Ticking or unticking the shipment box also flips every shoe already in the cart.
+
+What the question was protecting is kept: the tally (*"14 of 15 shoes marked
+pre-sell"*) on Items and Review, and **every shoe unticked is refused** at Review
+("…untick *Pre-sell shipment* on Step 1") — and at the server, unchanged. The server
+side is untouched: `'all'` is still honoured for batches received with it, and a NULL
+scope still means all (older batches). Tests: `e2e/presell-partial-wizard.spec.js`.
+
+## All of it, or only some (2026-09-23 — superseded the same day, see above)
 
 **What went wrong.** Nine boxes, fifteen SKUs, **one** of them actually sold before it
 landed — and all fifteen came out held, invisible to PH. The checkbox asked about the

@@ -175,14 +175,14 @@ export const FAQ = [
   {
     id: 'faq-continue-batch',
     q: 'How do I continue a batch? I open it and the boxes just say "pending".',
-    a: 'Tap "Add items" on the row of the box you are holding. "Pending" means that box is recorded but nothing has been scanned into it yet, and that button drops you into the receiving wizard aimed at that exact box — its number and tracking number come with it, so everything you scan lands in it. Use "+ Add box" only for a box that is not listed at all (a late arrival, or one nobody recorded); it creates the NEXT box number, so using it to continue a pending box leaves you with an empty box beside the one you meant to fill. Received boxes show "Reopen box" instead — see the next question.',
+    a: 'Tap "Add items" on the row of the box you are holding. "Pending" means that box is recorded but nothing has been scanned into it yet, and that button drops you into the receiving wizard aimed at that exact box — its number and tracking number come with it, so everything you scan lands in it. Use "+ Add box" only for a box that is not listed at all (a late arrival, or one nobody recorded); it creates the NEXT box number, so using it to continue a pending box leaves you with an empty box beside the one you meant to fill. A box with pairs already in it shows "Edit box" instead — see the next question.',
     area: 'intake', roles: WH, see: 'batches-manage',
-    keywords: ['continue', 'resume', 'pending', 'batch', 'add items', 'add box', 'stuck', 'no way to'],
+    keywords: ['continue', 'resume', 'pending', 'batch', 'add items', 'add box', 'edit box', 'stuck', 'no way to'],
   },
   {
     id: 'faq-reopen-box',
-    q: 'I submitted a box, then found two more pairs in it. How do I add them?',
-    a: 'Batches → open the batch → "Reopen box" on that box\'s row → "Reopen & add items". You go straight to scanning that box; what was already in it stays, and the new pairs land in the same box. Submit the box again when you are done. This works after the batch says Done as well — the batch opens again with the box. Do not use "+ Add box" for this: it files the pairs as a box that is not on any carton.',
+    q: 'I submitted a box and something in it is wrong — a size, a style code, one pair too many, or more pairs found. How do I fix it?',
+    a: 'Batches → open the batch → "Edit box" on that box\'s row → "Reopen & edit". The box opens with its pairs listed under "Already in Box N": tap a size to change it (all pairs of that size, or just one), "SKU…" to correct the style code, "Remove…" to take pairs out (they go to the Deleted archive), or keep scanning to add pairs. Submit the box again when you are done. This works after the batch says Done as well — the batch opens again with the box. Do not use "+ Add box" for this: it files the pairs as a box that is not on any carton.',
     area: 'intake', roles: WH, see: 'batches-manage',
     keywords: ['reopen', 'submitted', 'received', 'more pairs', 'forgot', 'missed', 'edit box', 'add to box'],
   },

@@ -12,10 +12,12 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { normalizeSize } from '../lib/codes.js';
 
-export function SizeEditModal({ item, onClose, onSaved, onSignOut }) {
+export function SizeEditModal({ item, onClose, onSaved, onSignOut, defaultScope = 'one' }) {
   const [size, setSize] = useState('');
   const [info, setInfo] = useState(null);   // { item, siblings } from the server
-  const [scope, setScope] = useState('one');
+  // Edit box opens it from a size CHIP, which stands for every pair of that size in the
+  // box — so it starts on the group ('same_group' is exactly that set).
+  const [scope, setScope] = useState(defaultScope);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');

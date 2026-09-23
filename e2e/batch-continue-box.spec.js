@@ -45,8 +45,9 @@ test.beforeAll(async ({ request }) => {
 });
 
 test.afterAll(async () => {
-  await q('DELETE FROM item_events WHERE item_id IN (SELECT id FROM items WHERE sku = $1)', [SKU]);
-  await q('DELETE FROM items WHERE sku = $1', [SKU]);
+  await q("DELETE FROM item_events WHERE item_id IN (SELECT id FROM items WHERE sku LIKE 'E2E-CONTBOX-%')");
+  await q("DELETE FROM items WHERE sku LIKE 'E2E-CONTBOX-%'");
+  await q("DELETE FROM deleted_items WHERE sku LIKE 'E2E-CONTBOX-%'");
   // Sweep the supplier, not just this run's batch — a spec that fails midway would
   // otherwise leave an open batch behind in the dev DB on every attempt.
   await q('DELETE FROM batch_boxes WHERE batch_id IN (SELECT id FROM batches WHERE supplier_name = $1)', [SUPPLIER]);
@@ -108,13 +109,13 @@ test('a pending box offers "Add items", and scans land in THAT box', async ({ pa
   expect(boxes.filter((b) => b.box_number !== 2).every((b) => b.n === 0)).toBe(true);
 });
 
-test('a received box has no "Add items" — it offers "Reopen box" instead', async ({ page }) => {
+test('a received box has no "Add items" — it offers "Edit box" instead', async ({ page }) => {
   await loginAs(page, 'warehouse');
   await openBatch(page);
   const row2 = page.locator('.box-row-wrap').filter({ hasText: 'Box 2' });
   await expect(row2).toContainText('received');
   await expect(row2.getByRole('button', { name: 'Add items' })).toHaveCount(0);
-  await expect(row2.getByRole('button', { name: 'Reopen box' })).toHaveCount(1);
+  await expect(row2.getByRole('button', { name: 'Edit box' })).toHaveCount(1);
   // …while the ones still waiting keep theirs, and don't get a reopen.
   await expect(page.locator('.box-row-add')).toHaveCount(2);
   await expect(page.locator('.box-row-reopen')).toHaveCount(1);
@@ -134,10 +135,10 @@ test('a submitted box can be reopened, and the extra pairs land in THAT box', as
   await openBatch(page);
   await expect(page.locator('.batch-page-code')).toContainText('Done');
   const row2 = page.locator('.box-row-wrap').filter({ hasText: 'Box 2' });
-  await row2.getByRole('button', { name: 'Reopen box' }).click();
+  await row2.getByRole('button', { name: 'Edit box' }).click();
   await expect(page.locator('.modal')).toContainText(/submitted with 1 pair/);
   await expect(page.locator('.modal')).toContainText(/batch opens again/);
-  await page.getByRole('button', { name: 'Reopen & add items' }).click();
+  await page.getByRole('button', { name: 'Reopen & edit' }).click();
 
   // Straight into scanning box 2 — no second tap on "Add items".
   await expect(page.locator('.box-context')).toContainText('Box 2');
@@ -198,14 +199,14 @@ test('reopening a box that is not submitted is refused', async ({ request }) => 
 // reads as "reopening wiped the box", and it leaves nothing to check the pair in your
 // hand against — so the same pair gets scanned twice, or skipped because somebody
 // assumed it was already in.
-test('continuing a box shows what is already in it, read-only', async ({ page, request }) => {
+test('continuing a box shows what is already in it', async ({ page, request }) => {
   // Box 2 is received with 3 pairs by now (2 sizes). Reopen it through the UI, the way
   // it was reported.
   await loginAs(page, 'warehouse');
   await openBatch(page);
   const row2 = page.locator('.box-row-wrap').filter({ hasText: 'Box 2' });
-  await row2.getByRole('button', { name: 'Reopen box' }).click();
-  await page.getByRole('button', { name: 'Reopen & add items' }).click();
+  await row2.getByRole('button', { name: 'Edit box' }).click();
+  await page.getByRole('button', { name: 'Reopen & edit' }).click();
   await page.getByRole('button', { name: 'Next →' }).click();
 
   // The three pairs that are already in the box, named and counted per size.
@@ -234,4 +235,49 @@ test('continuing a box shows what is already in it, read-only', async ({ page, r
     headers: authHeaders(), data: { batchId, boxId: Number(box2.id), items: [] },
   });
   expect([200, 400]).toContain(back.status());
+});
+
+// EDIT BOX: "re-opening a batch does not allow the user to edit the contents". The pairs
+// already in the box are fixable straight off its list — a size from its chip, the style
+// code for the whole shoe, a pair removed — each through the same endpoint Inventory uses.
+test('Edit box: a size, the style code and a pair too many are fixed off the box list', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await openBatch(page);
+  const row2 = page.locator('.box-row-wrap').filter({ hasText: 'Box 2' });
+  await row2.getByRole('button', { name: 'Edit box' }).click();
+  // A received box confirms the reopen first; a pending one goes straight in.
+  const reopen = page.getByRole('button', { name: 'Reopen & edit' });
+  if (await reopen.count()) await reopen.click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+  const panel = page.locator('.box-existing');
+  await expect(panel.locator('.box-existing-size')).toHaveCount(3);   // 9, 9.5, 10
+
+  // 1. The 9.5 is really an 11 — tap its chip.
+  await panel.locator('.box-existing-size').filter({ hasText: '9.5' }).click();
+  await page.locator('.modal').getByPlaceholder('e.g. 9.5').fill('11');
+  await page.locator('.modal').getByRole('button', { name: /to 11$/ }).click();
+  await expect(panel.locator('.notice')).toContainText('changed to size 11');
+  await expect(panel.locator('.box-existing-size').filter({ hasText: '11' })).toHaveCount(1);
+
+  // 2. The whole shoe went in under the wrong code — every size of it in this box.
+  const NEW = 'E2E-CONTBOX-B';
+  await panel.getByRole('button', { name: 'SKU…' }).click();
+  await page.locator('.modal').getByPlaceholder('e.g. 553558-136').fill(NEW);
+  await page.locator('.modal').getByRole('button', { name: `Change 3 pairs to ${NEW}` }).click();
+  await expect(panel.locator('.notice')).toContainText(`3 pairs changed to ${NEW}`);
+  await expect(panel).toContainText(NEW);
+
+  // 3. One pair too many in size 10.
+  await panel.getByRole('button', { name: 'Remove…' }).click();
+  const rm = page.locator('.rm-sizes .rm-size').filter({ hasText: 'US 10' });
+  await rm.locator('input[type=number]').fill('0');
+  await page.locator('.rm-reason input').fill('E2E miscount');
+  await page.getByRole('button', { name: /^Remove 1 pair$/ }).click();
+  await expect(panel.locator('.notice')).toContainText('1 pair removed');
+
+  const left = await q(`SELECT i.sku, i.size FROM items i JOIN batch_boxes bx ON bx.id = i.box_id
+                         WHERE bx.batch_id = $1 AND bx.box_number = 2 ORDER BY i.size`, [batchId]);
+  expect(left).toEqual([{ sku: NEW, size: '11' }, { sku: NEW, size: '9' }]);
+  const gone = await q(`SELECT size FROM deleted_items WHERE sku = $1`, [NEW]);
+  expect(gone.map((r) => r.size)).toEqual(['10']);
 });

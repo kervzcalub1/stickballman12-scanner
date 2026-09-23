@@ -5,7 +5,9 @@ import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'rea
 import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { STATUSES } from '../statuses.js';
-import { TopBar, Modal, LabelSheet, PreferencesModal, Pager, PriceInput } from '../components/common.jsx';
+import { TopBar, Modal, LabelSheet, PreferencesModal, Pager, PriceInput, RemoveUnitsModal } from '../components/common.jsx';
+import { SizeEditModal } from '../components/SizeEdit.jsx';
+import { SkuEditModal } from '../components/SkuEdit.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
@@ -90,8 +92,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // reading "11 items" led straight to a cart saying "0 units". From the floor that
   // reads as "reopening wiped the box", and worse, it leaves nothing to check the pair
   // in your hand against: the same pair gets scanned a second time, or skipped because
-  // somebody assumed it was already in. Read-only on purpose — these units exist, with
-  // their own VINs; re-committing them would double the box.
+  // somebody assumed it was already in. Never re-committed — these units exist, with
+  // their own VINs, and re-committing them would double the box — but each one is
+  // fixable in place (Edit box, below).
   const [boxExisting, setBoxExisting] = useState(null);
   const [showExisting, setShowExisting] = useState(true);
   // Grouped the way the cart is — shoe, then size — so the two lists can be read
@@ -100,16 +103,36 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const m = new Map();
     for (const it of boxExisting || []) {
       const k = `${it.sku || ''}|${it.name || ''}`;
-      if (!m.has(k)) m.set(k, { key: k, name: it.name, sku: it.sku, sizes: new Map() });
+      if (!m.has(k)) m.set(k, { key: k, name: it.name, sku: it.sku, units: [], sizes: new Map() });
       const g = m.get(k);
+      g.units.push(it);
       const sz = it.size || '—';
-      g.sizes.set(sz, (g.sizes.get(sz) || 0) + 1);
+      if (!g.sizes.has(sz)) g.sizes.set(sz, []);
+      g.sizes.get(sz).push(it);
     }
     return [...m.values()].map((g) => ({
       ...g,
-      sizes: [...g.sizes.entries()].map(([size, qty]) => ({ size, qty })).sort((a, b) => compareSizes(a.size, b.size)),
+      sizes: [...g.sizes.entries()].map(([size, units]) => ({ size, qty: units.length, units })).sort((a, b) => compareSizes(a.size, b.size)),
     }));
   }, [boxExisting]);
+  // EDIT BOX (2026-09-23). The pairs already in a reopened box used to be read-only here,
+  // so a wrong size, a wrong style code or one pair too many could only be fixed by
+  // hunting each VIN down on Inventory. The three fixes that already exist for a unit —
+  // size, style code, remove to the Deleted archive — now open straight off this list,
+  // each one the same dialog and the same endpoint Inventory uses (so the same guards:
+  // a sold/shipped pair can't be removed, a listed one is corrected and PH is told).
+  // Adding is what scanning already does.
+  const [boxSizeFix, setBoxSizeFix] = useState(null);   // a unit — opens SizeEditModal on its group
+  const [boxSkuFix, setBoxSkuFix] = useState(null);     // a unit — opens SkuEditModal on the whole shoe
+  const [boxRemove, setBoxRemove] = useState(null);     // { name, sku, units }
+  const [boxEditNote, setBoxEditNote] = useState('');
+  function reloadBoxExisting() {
+    if (!isBoxMode || !boxTarget) return Promise.resolve();
+    return api.batchFull(batchContext.id)
+      .then((r) => setBoxExisting((r.items || []).filter((it) => String(it.box_id) === String(boxTarget.id))))
+      .catch((e) => { if (e.unauthorized) onSignOut(); });
+  }
+  const boxEdited = (text) => { setBoxEditNote(text); reloadBoxExisting(); };
   useEffect(() => {
     if (!isBoxMode) return;
     let cancelled = false;
@@ -160,8 +183,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // "Did this package come with a manifest?" — null until answered. A shipment
     // received WITHOUT one is flagged for an audit against its tracking number's order.
     manifestReceived: null,
-    // How much of a pre-sell shipment is actually spoken for: 'all' | 'some'. Null until
-    // answered, and Step 1 refuses to move on while it is — see goStep2.
+    // 'some' whenever Pre-sell is ticked (per-shoe checkboxes, every shoe ticked to start),
+    // null otherwise. 'all' is no longer offered, but batches received with it keep it.
     preSellScope: null,
   });
   // The reason stored on the batch: the custom text when "Other" is picked.
@@ -309,7 +332,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (!bySku.has(key)) bySku.set(key, {
         key: cartKey++, name: l.name || l.sku || 'Unknown', sku: l.sku || '', image: '',
         source: 'manual', upc: l.upc || '', gender: l.gender || null, colorway: l.colorway || null,
-        withBox: true, expected: true, sizes: [],
+        withBox: true, expected: true, preSell: preSellSome, sizes: [],
       });
       // On an EMPTY-BOX order a line is a size AND a carton, so both ride on the row —
       // the same shoe in a 13x9x5 and a 15x10x6 is two things to count, not one.
@@ -530,6 +553,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // `items` is a useState below that point, and reading it earlier is a temporal-dead-zone
   // crash at render that no build step catches.
   const preSellCount = preSellSome ? items.filter((it) => it.preSell === true).length : 0;
+  // On a pre-sell shipment every shoe STARTS pre-sell and the ones that aren't are
+  // unticked (Brent, 2026-09-23): the spoken-for shoes are usually most of the shipment,
+  // so ticking them one by one was the long way round. Read through a ref by the scan
+  // paths, which run outside render.
+  const preSellDefaultRef = useRef(preSellSome); preSellDefaultRef.current = preSellSome;
   // Rescale only: EXISTING units re-scanned by VIN — each updates its own record
   // (no new VIN). { key, vin, name, sku, size, image, statusSel, custom }.
   const [rescanned, setRescanned] = useState([]);
@@ -928,7 +956,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const vs = vins.slice(idx, idx + qty); idx += qty;
       return { key: r.key, size: r.size, qty, upc: r.upc || '', vins: vs };
     });
-    return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, colorway: d.colorway || null, withBox: d.withBox !== false, goatOnly: d.goatOnly === true, sizes };
+    return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, colorway: d.colorway || null, withBox: d.withBox !== false, goatOnly: d.goatOnly === true, preSell: preSellDefaultRef.current, sizes };
   }
   // Add a completed item to the cart, MERGING into an existing item when it's the
   // same product + same box status (so the same shoe scanned in two sessions
@@ -1145,7 +1173,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     lastScanRef.current = { lineKey, vin: null }; setCanUndo(true);
     const placeholder = {
       key: lineKey, pending: true, code: c, name: '', sku: '', image: '', source: 'manual',
-      upc: isUpc ? c : '', gender: null, colorway: '', withBox, goatOnly: false, sizes: [],
+      upc: isUpc ? c : '', gender: null, colorway: '', withBox, goatOnly: false, preSell: preSellDefaultRef.current, sizes: [],
     };
     // Newest on top when scanning free — below the sheet when working a manifest, so
     // the expected rows keep their place and an unexpected pair reads as the exception.
@@ -1195,13 +1223,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         // box — a SKU lookup's UPC is some other size's and merging this line into
         // one already in the cart must not lend it around.
         upc: (isUpc ? c : '') || p.upc || '', gender: p.gender || null, colorway: p.colorway || '',
-        sizeOptions: p.sizes || [], withBox, goatOnly: false,
+        sizeOptions: p.sizes || [], withBox, goatOnly: false, preSell: preSellDefaultRef.current,
         sizes: [{ key: cartKey++, size, qty: 1, scanned: 1, needsSize: !size, upc: isUpc ? c : '', vins: vin ? [vin] : [] }],
       };
       // Fold into the same shoe already in the cart (same product AND same box /
       // GOAT status — boxed and no-box pairs are tracked apart).
       const i = arr.findIndex((x) => x.key !== lineKey && !x.pending && !x.failed
-        && x.withBox === withBox && !!x.goatOnly === false && !!x.preSell === false && sameSku(x.sku, resolved.sku));
+        && x.withBox === withBox && !!x.goatOnly === false && !!x.preSell === !!resolved.preSell && sameSku(x.sku, resolved.sku));
       if (i === -1) return arr.map((it) => (it.key === lineKey ? resolved : it));
       const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
       // A blank size always starts its OWN row — two unknown sizes are not one
@@ -1621,11 +1649,6 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (!noShipment && !isBoxMode && !isInstore && typeof header.manifestReceived !== 'boolean') {
       setError('Say whether this package came with a manifest — Yes or No.'); return;
     }
-    // "Pre-sell" on its own is half an answer, and the half that is missing is the one
-    // that caused the damage: ticking the box used to hold EVERY pair in the shipment.
-    if (!noShipment && !isBoxMode && header.preSell === true && header.preSellScope !== 'all' && header.preSellScope !== 'some') {
-      setError('Say how much of this shipment was pre-sold — all of it, or only some.'); return;
-    }
     // A new box needs its number BEFORE anything is scanned — after the commit it takes a
     // renumber on the Batch page to correct, and a wrong number here is what leaves box 6
     // of the shipment sitting in the system as box 10.
@@ -1648,7 +1671,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // multi-box one may genuinely hold none (8 of the 9 boxes did, in the case that
     // prompted all this). The server refuses the same thing at the door.
     if (preSellSome && !isBoxMode && !isMultiBoxNew && preSellCount === 0) {
-      setError('You said only some of this shipment is pre-sold — tick the shoes that are.'); return;
+      setError('Every shoe is unticked. Tick the pre-sold ones — or, if none of this shipment was pre-sold, untick “Pre-sell shipment” on Step 1.'); return;
     }
     // The PO checklist now starts fully unchecked, so "nothing ticked" is also what an
     // untouched screen looks like. Say so once before letting it through — an empty box
@@ -1977,33 +2000,24 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           what e2e selects the no-tracking checkbox by. */}
                       <span className="presell-check">
                         <input type="checkbox" checked={header.preSell === true}
-                          onChange={(e) => setHeader((h) => ({ ...h, preSell: e.target.checked, preSellScope: e.target.checked ? h.preSellScope : null }))} />
+                          onChange={(e) => {
+                            const on = e.target.checked;
+                            setHeader((h) => ({ ...h, preSell: on, preSellScope: on ? 'some' : null }));
+                            // Shoes already in the cart follow the tick, so the tally never
+                            // says 0 of 12 on a shipment somebody just declared pre-sell.
+                            setItems((arr) => arr.map((it) => ({ ...it, preSell: on })));
+                          }} />
                         <b>Pre-sell shipment</b>
                         <span className="muted sm">— these were sold before they arrived; don’t list them</span>
                       </span>
-                      {/* HOW MUCH of it, asked as a real question with no answer
-                          pre-selected — the same shape as the manifest Yes/No above, and
-                          for the same reason. The checkbox on its own used to mean "all
-                          of it", so a shipment with one spoken-for shoe in it held all
-                          fifteen back from listing (docs/context/pre-sell.md). */}
+                      {/* No "all of it / only some" question any more (Brent, 2026-09-23).
+                          Every shoe starts ticked Pre-sell on its card and the ones that
+                          aren't are unticked there — the tally on Items and Review says how
+                          many are held, which is what the question was protecting. */}
                       {header.preSell && (
-                        <span className="presell-scope">
-                          <span className="presell-scope-q">Is <b>all</b> of this shipment pre-sold?</span>
-                          <span className="seg sm" role="group" aria-label="How much of this shipment is pre-sold">
-                            <button type="button" className={`seg-btn ${header.preSellScope === 'all' ? 'on yes' : ''}`}
-                              aria-pressed={header.preSellScope === 'all'} onClick={() => setH('preSellScope', 'all')}>
-                              Yes — all of it
-                            </button>
-                            <button type="button" className={`seg-btn ${header.preSellScope === 'some' ? 'on no' : ''}`}
-                              aria-pressed={header.preSellScope === 'some'} onClick={() => setH('preSellScope', 'some')}>
-                              No — only some shoes
-                            </button>
-                          </span>
-                          <span className="presell-note sm">
-                            {header.preSellScope === 'some'
-                              ? <>Mark the spoken-for shoes as you scan them — each one gets a <b>Pre-sell</b> chip on its card. Everything you don’t mark is ordinary stock and goes to the PH team to list.</>
-                              : <>Nothing in this shipment goes to II or the stores. It lands on the <b>Pre-sell</b> page, where you say how many of each size an order covers and free the rest for listing.</>}
-                          </span>
+                        <span className="presell-note sm">
+                          Every shoe you add starts marked <b>Pre-sell</b>. Untick the ones that weren’t sold
+                          before they arrived — those go to the PH team to list.
                         </span>
                       )}
                     </label>
@@ -2286,6 +2300,32 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     cart saying "0 units", which reads as "reopening wiped the box" and,
                     worse, leaves nothing to check the pair in your hand against. */}
                 {boxTarget && boxExisting === null && <p className="muted sm">Checking what is already in this box…</p>}
+                {boxSizeFix && (
+                  <SizeEditModal item={boxSizeFix} defaultScope="same_group" onSignOut={onSignOut}
+                    onClose={() => setBoxSizeFix(null)}
+                    onSaved={(r) => {
+                      setBoxSizeFix(null);
+                      boxEdited(`${r.updated} pair${r.updated === 1 ? '' : 's'} changed to size ${r.item?.size}.${r.listed ? ` ${r.listed} ${r.listed === 1 ? 'is' : 'are'} already listed to a store — tell PH.` : ''}`);
+                    }} />
+                )}
+                {boxSkuFix && (
+                  <SkuEditModal item={boxSkuFix} defaultScope="same_box" onSignOut={onSignOut}
+                    onClose={() => setBoxSkuFix(null)}
+                    onSaved={(r) => {
+                      setBoxSkuFix(null);
+                      boxEdited(`${r.updated} pair${r.updated === 1 ? '' : 's'} changed to ${r.item?.sku}.${r.listed ? ` ${r.listed} ${r.listed === 1 ? 'is' : 'are'} already listed to a store under the old code — tell PH.` : ''}`);
+                    }} />
+                )}
+                {boxRemove && (
+                  <RemoveUnitsModal title={boxRemove.name || boxRemove.sku} sku={boxRemove.sku} units={boxRemove.units}
+                    onClose={() => setBoxRemove(null)}
+                    onDone={(res) => {
+                      setBoxRemove(null);
+                      const n = res?.deleted?.length || 0;
+                      const blocked = (res?.blocked || []).length;
+                      boxEdited(`${n} pair${n === 1 ? '' : 's'} removed from this box — kept in the Deleted archive.${blocked ? ` ${blocked} could not be removed (already sold or shipped).` : ''}`);
+                    }} />
+                )}
                 {boxTarget && boxExisting && boxExisting.length > 0 && (
                   <div className="box-existing">
                     <div className="box-existing-head">
@@ -2297,9 +2337,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       </button>
                     </div>
                     <p className="muted xs">
-                      These stay exactly where they are — scanning now <b>adds</b> to them. Check this
-                      list before you scan, or the same pair goes in twice.
+                      Scanning now <b>adds</b> to these — check the list first, or the same pair goes in
+                      twice. To fix one: tap a <b>size</b> to change it, <b>SKU…</b> to correct the style
+                      code, or <b>Remove…</b> to take pairs out.
                     </p>
+                    {boxEditNote && <div className="notice sm">{boxEditNote}</div>}
                     {showExisting && (
                       <div className="box-existing-rows">
                         {boxExistingGroups.map((g) => (
@@ -2308,8 +2350,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             <span className="muted sm">{g.sku || '—'}</span>
                             <span className="box-existing-sizes">
                               {g.sizes.map((sz) => (
-                                <span className="box-existing-size" key={sz.size}>{sz.size}<i>×{sz.qty}</i></span>
+                                <button type="button" className="box-existing-size" key={sz.size}
+                                  title={`Change the size of the ${sz.qty} pair${sz.qty === 1 ? '' : 's'} in size ${sz.size}`}
+                                  onClick={() => { setBoxEditNote(''); setBoxSizeFix(sz.units[0]); }}>
+                                  {sz.size}<i>×{sz.qty}</i>
+                                </button>
                               ))}
+                            </span>
+                            <span className="box-existing-acts">
+                              <button type="button" className="btn ghost sm" onClick={() => { setBoxEditNote(''); setBoxSkuFix(g.units[0]); }}>SKU…</button>
+                              <button type="button" className="btn ghost sm" onClick={() => { setBoxEditNote(''); setBoxRemove({ name: g.name, sku: g.sku, units: g.units }); }}>Remove…</button>
                             </span>
                           </div>
                         ))}
@@ -2320,7 +2370,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 {preSellSome && (
                   <div className={`presell-tally ${preSellCount ? 'on' : ''}`} role="status" aria-live="polite">
                     <b>{preSellCount}</b> of {items.length} shoe{items.length === 1 ? '' : 's'} marked <b>pre-sell</b>
-                    {preSellCount === 0 ? ' — tick the spoken-for shoes on their cards.' : ' — the rest go to the PH team to list.'}
+                    {preSellCount === 0 ? ' — tick the spoken-for shoes on their cards.' : preSellCount === items.length ? ' — untick any shoe that wasn’t pre-sold.' : ' — the rest go to the PH team to list.'}
                   </div>
                 )}
                 {!items.length ? <p className="muted">{isRescale ? 'No new stock — scan a UPC/SKU above for unlabeled stock, or scan VINs to rescan existing units.' : 'No items yet — scan a box above. Keep scanning; each one drops straight into this list.'}</p> : (
@@ -2487,7 +2537,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 {preSellSome && (
                   <div className={`presell-tally ${preSellCount ? 'on' : ''}`} role="status" aria-live="polite">
                     <b>{preSellCount}</b> of {items.length} shoe{items.length === 1 ? '' : 's'} marked <b>pre-sell</b>
-                    {preSellCount === 0 ? ' — tick the spoken-for shoes on their cards.' : ' — the rest go to the PH team to list.'}
+                    {preSellCount === 0 ? ' — tick the spoken-for shoes on their cards.' : preSellCount === items.length ? ' — untick any shoe that wasn’t pre-sold.' : ' — the rest go to the PH team to list.'}
                   </div>
                 )}
                 {!items.length ? <p className="muted">Nothing to review — go back and add items.</p> : (

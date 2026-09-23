@@ -479,10 +479,10 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
             {isOpen && !readOnly && <button className="btn primary sm" onClick={() => onAddBox(b)}>+ Add box</button>}
           </div>
           {isOpen && !readOnly && boxes.some((x) => x.status !== 'received') && (
-            <p className="muted sm">“Pending” means the box is recorded but nothing has been scanned into it yet — tap <b>Add items</b> on its row to continue it. <b>+ Add box</b> is for a box that isn’t listed here at all.</p>
+            <p className="muted sm">“Pending” means the box is recorded but nothing has been scanned into it yet — tap <b>Add items</b> on its row to continue it (<b>Edit box</b> once it has pairs in it). <b>+ Add box</b> is for a box that isn’t listed here at all.</p>
           )}
           {!readOnly && boxes.some((x) => x.status === 'received') && (
-            <p className="muted sm">Found more pairs in a box you already submitted? <b>Reopen box</b> on its row — what’s in it stays, and the new pairs land in the same box.</p>
+            <p className="muted sm">Need to fix a box you already submitted — a wrong size or style code, a pair too many, or more pairs found? <b>Edit box</b> on its row.</p>
           )}
           {boxes.length > 1 && !readOnly && (
             <p className="muted sm">Boxes that arrive out of order are numbered as they land — use the <Icon name="pencil" /> on a row to put its number back in step with the label on the carton.</p>
@@ -537,14 +537,20 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
                           <Icon name="pencil" />
                         </button>
                       )}
+                      {/* EDIT BOX (2026-09-23): a box with pairs in it is edited, not just
+                          added to — the box opens with its pairs listed, each size, style
+                          code and count fixable there, and scanning still adds. An empty
+                          pending box has nothing to edit, so it keeps "Add items". */}
                       {isOpen && !readOnly && bx.status !== 'received' && (
                         <button className="btn primary sm box-row-add" onClick={() => onAddBox(b, bx)}
-                          title={`Scan shoes into box ${bx.box_number}`}>Add items</button>
+                          title={Number(bx.item_count) > 0 ? `Fix or add to what is in box ${bx.box_number}` : `Scan shoes into box ${bx.box_number}`}>
+                          {Number(bx.item_count) > 0 ? 'Edit box' : 'Add items'}
+                        </button>
                       )}
                       {!readOnly && bx.status === 'received' && (
                         <button className="btn ghost sm box-row-reopen" disabled={busy}
                           onClick={() => { setError(''); setReopenBox({ box: bx }); }}
-                          title={`Reopen box ${bx.box_number} to scan more pairs into it`}>Reopen box</button>
+                          title={`Reopen box ${bx.box_number} to fix or add to what is in it`}>Edit box</button>
                       )}
                     </div>
                     {isBoxOpen && (
@@ -617,11 +623,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
           </Modal>
         )}
         {reopenBox && (
-          <Modal type="warn" title={`Reopen box ${reopenBox.box.box_number}?`}
-            message={`Box ${reopenBox.box.box_number} was submitted with ${reopenBox.box.item_count} pair${reopenBox.box.item_count === 1 ? '' : 's'}. Reopening it lets you scan more pairs into the same box — what's already in it stays. You'll go straight to scanning; submit the box again when you're done.${isOpen ? '' : ' The batch opens again with it.'}`}
+          <Modal type="warn" title={`Edit box ${reopenBox.box.box_number}?`}
+            message={`Box ${reopenBox.box.box_number} was submitted with ${reopenBox.box.item_count} pair${reopenBox.box.item_count === 1 ? '' : 's'}. It reopens with those pairs listed: tap a size to change it, correct a style code, remove pairs, or scan more in. Submit the box again when you're done.${isOpen ? '' : ' The batch opens again with it.'}`}
             onClose={() => setReopenBox(null)}>
             {reopenBox.err && <div className="error">{reopenBox.err}</div>}
-            <button className="btn primary" disabled={busy} onClick={confirmReopenBox}>Reopen & add items</button>
+            <button className="btn primary" disabled={busy} onClick={confirmReopenBox}>Reopen & edit</button>
             <button className="btn ghost" disabled={busy} onClick={() => setReopenBox(null)}>Cancel</button>
           </Modal>
         )}

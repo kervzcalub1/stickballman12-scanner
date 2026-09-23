@@ -303,6 +303,18 @@ export function skuCodes(raw) {
     });
 }
 
+// Do two SKU strings name the same product? True when any style code of one IS a style
+// code of the other, compared on letters+digits only ("KI4559" = "KI-4559" = "ki 4559").
+// Exists because the catalogue searches we lean on (Alias, KicksDB) are FUZZY text
+// searches: for a code they don't carry they return the nearest one (KI4559 → KI7559, a
+// different shoe), and taking that top hit unchecked put another shoe's photos, colourway
+// — and, through Alias, catalog_id and price — under the code that was actually scanned.
+const skuKey = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+export function sameSku(a, b) {
+  const want = new Set(skuCodes(a).map(skuKey).filter(Boolean));
+  return skuCodes(b).some((c) => want.has(skuKey(c)));
+}
+
 export function cleanSku(raw) {
   // Allow letters, digits, spaces and dashes; trim and cap length.
   const s = String(raw || '').trim().slice(0, 64);

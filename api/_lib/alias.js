@@ -7,7 +7,7 @@
 //   if (!r.ok) throw new Error(...); use r.data
 //
 // Credentials come from env (ALIAS_EMAIL / ALIAS_PASSWORD) — never hardcode them.
-import { fetchWithTimeout, primarySku } from './util.js';
+import { fetchWithTimeout, primarySku, sameSku } from './util.js';
 import { hasPrice, resolveFromInsights } from './pricing.js';
 
 export const ALIAS_BASE = 'https://bypass-alias-host-railway-alias.up.railway.app';
@@ -159,6 +159,7 @@ export async function aliasCatalogId(upc) {
 // product lookup (replacing KicksDB — Alias has canonical titles) and how
 // SKU-scanned units resolve a catalog_id. Match is fuzzy on the SKU (dash or
 // space both work). null if not found / no key.
+const ALIAS_MATCH_WINDOW = 5;
 export async function aliasCatalogBySku(query) {
   const apiKey = process.env.ALIAS_API_KEY;
   // A dual-code SKU ("315121-115/CW2290-111") matches nothing here — the catalog
@@ -172,15 +173,21 @@ export async function aliasCatalogBySku(query) {
   // three samples on 2026-09-03 died before it sent a byte), so a second attempt is
   // nearly free. A TIMEOUT is deliberately never retried: it already spent 45s, and
   // doubling that to 90s would hang the scan far longer than an honest "try again".
+  // The search is FUZZY: a code Alias doesn't carry comes back as its nearest neighbour,
+  // which would hand that other shoe's catalog_id — and so its GI price — to this code.
+  // Take a few results and keep only one whose style code actually matches (sameSku);
+  // no match is an honest "not found", same as an empty result.
+  const qs = { query: q, limit: String(ALIAS_MATCH_WINDOW) };
   let r;
   try {
-    r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query: q, limit: '1' }, timeoutMs: ALIAS_CATALOG_TIMEOUT_MS });
+    r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: qs, timeoutMs: ALIAS_CATALOG_TIMEOUT_MS });
   } catch (e) {
     if (e?.name === 'AbortError' || e?.name === 'TimeoutError') throw e;
-    r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query: q, limit: '1' }, timeoutMs: ALIAS_CATALOG_TIMEOUT_MS });
+    r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: qs, timeoutMs: ALIAS_CATALOG_TIMEOUT_MS });
   }
   if (!r.ok) return null;
-  const c = r.data?.catalog_items?.[0];
+  const items = Array.isArray(r.data?.catalog_items) ? r.data.catalog_items : [];
+  const c = items.find((it) => sameSku(q, it?.sku));
   if (!c?.catalog_id) return null;
   return {
     catalogId: c.catalog_id,

@@ -8,7 +8,7 @@
 // maps to the same physical angle across silhouettes. That's what lets us suggest
 // the 5 listing angles below by index. (Top-down + outsole are NOT in a horizontal
 // spin — those stay manual on the Edited-Photos page.)
-import { fetchWithTimeout, cacheGet, cacheSet } from './util.js';
+import { fetchWithTimeout, cacheGet, cacheSet, sameSku } from './util.js';
 
 const GOAT_BASE = 'https://api.kicks.dev/v3/goat/products';
 const STOCKX_BASE = 'https://api.kicks.dev/v3/stockx/products';
@@ -112,11 +112,17 @@ const uniq = (arr) => [...new Set(arr.filter(Boolean))];
 // `null` is representable) to stop a SKU KicksDB doesn't carry from being re-asked all day.
 const CATALOG_TTL_MS = 12 * 60 * 60 * 1000;
 
-// GET one KicksDB catalog and return its first product, or null. Best-effort: walks the
-// key list, failing over to the backup when a key comes back spent (see KEY_FAILURE_STATUS).
+// KicksDB's `query` is a FUZZY text search, not a SKU lookup — a code it doesn't carry
+// comes back as the nearest one (see sameSku). So only a product whose style code matches
+// counts; ask for a few because the exact code isn't always ranked first.
+const MATCH_WINDOW = 5;
+
+// GET one KicksDB catalog and return the product whose SKU matches the query, or null.
+// Best-effort: walks the key list, failing over to the backup when a key comes back spent
+// (see KEY_FAILURE_STATUS).
 async function fetchProduct(base, query, extraQs = '') {
   if (!query) return null;
-  const url = `${base}?query=${encodeURIComponent(String(query))}${extraQs}&limit=1`;
+  const url = `${base}?query=${encodeURIComponent(String(query))}${extraQs}&limit=${MATCH_WINDOW}`;
   const ck = `kicksdb:${url}`;
   const hit = cacheGet(ck);
   if (hit) return hit.product;
@@ -138,7 +144,10 @@ async function fetchProduct(base, query, extraQs = '') {
     // failure, not a fact about the SKU — caching it would blank the shoe for the next 12 h.
     if (!r.ok) return null;
     let product = null;
-    try { product = (await r.json())?.data?.[0] || null; } catch { return null; }
+    try {
+      const rows = (await r.json())?.data;
+      product = (Array.isArray(rows) ? rows : []).find((p) => sameSku(query, p?.sku)) || null;
+    } catch { return null; }
     spentKeys.delete(key);  // it answered — clear any stale cooldown
     cacheSet(ck, { product }, CATALOG_TTL_MS);
     return product;

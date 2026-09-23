@@ -127,8 +127,11 @@ test.describe('Existing Stock · intake', () => {
   test('existing stock is invisible to the PH team', async ({ page }) => {
     test.skip(!vins.length, 'commit test did not run');
     await loginAs(page, 'ph_team');
+    // The grid's own read, not 'networkidle': every page now holds its live-update stream
+    // open (docs/context/live-updates.md), so the network is never idle.
+    const listed = page.waitForResponse((r) => r.url().includes('/api/ph/list') && r.ok());
     await page.goto('/ph/new-inventory');
-    await page.waitForLoadState('networkidle');
+    await listed;
     // The SKU counted in above must not appear anywhere on the PH worklist.
     await expect(page.locator('body')).not.toContainText('E2E-EXIST-A');
   });

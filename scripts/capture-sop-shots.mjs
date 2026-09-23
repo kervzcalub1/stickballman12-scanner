@@ -356,7 +356,7 @@ async function main() {
     try {
       if (shot.role === 'supplier') await loginSupplier(page);
       else await loginAs(page, shot.role);
-      await page.goto(`${BASE}${shot.path}`, { waitUntil: 'networkidle', timeout: 20_000 });
+      await page.goto(`${BASE}${shot.path}`, { waitUntil: 'load' /* never 'networkidle': the live-update stream stays open */, timeout: 20_000 });
       // `prep` widens a date filter, opens a panel, or fills a field so the frame shows
       // real state. A step is a selector to click, or { sel, fill, wait } to type into
       // one — some screens only reveal the thing the article is about once a field is

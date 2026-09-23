@@ -327,8 +327,11 @@ test.describe('Box Labels · workflow 1 — no box, no VIN', () => {
 
   test('the pair is invisible to the PH team', async ({ page }) => {
     await loginAs(page, 'ph_team');
+    // The grid's own read, not 'networkidle': every page now holds its live-update stream
+    // open (docs/context/live-updates.md), so the network is never idle.
+    const listed = page.waitForResponse((r) => r.url().includes('/api/ph/list') && r.ok());
     await page.goto('/ph/new-inventory');
-    await page.waitForLoadState('networkidle');
+    await listed;
     await expect(page.locator('body')).not.toContainText(SKU);
   });
 });

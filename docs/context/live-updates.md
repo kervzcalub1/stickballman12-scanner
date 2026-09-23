@@ -91,3 +91,10 @@ loop (row freeze, edit locks); `useLive` just calls it sooner.
   reconnecting (what is on screen may be behind), none = nothing on this page is live.
 - `LISTEN` needs a real session: a transaction-mode pooler (pgbouncer) in front of
   Postgres would silently break it. Railway's Postgres is direct.
+
+## Testing gotcha: never wait for `networkidle`
+
+Every page holds its live stream open, so Playwright's `networkidle` never arrives and the
+wait times out (CI failed two specs on exactly this on the first push). Wait for the
+response the assertion actually depends on (`page.waitForResponse(r => r.url().includes('/api/ph/list'))`),
+or an element. The SOP screenshot scripts use `waitUntil: 'load'` for the same reason.

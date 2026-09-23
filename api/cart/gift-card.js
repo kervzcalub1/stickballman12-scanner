@@ -18,6 +18,10 @@
 // no gift cards — and a list the buyer is still adding to is not yet a known purchase.
 // A re-opened, funded request takes a top-up card once its new lines are approved and
 // the list is closed again; the cards already issued are never touched.
+//
+// Recording stays open past the till — `receipted` and `audited` — for the card the
+// buyer spent that nobody recorded (the receipt came to more than the cards on file).
+// It lands with no spend, so the money audit has to be recorded again with it in.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import {
   getBuyCart, addBuyCartGiftCard, voidBuyCartGiftCard, fundBuyCart, dbConfigured,

@@ -74,15 +74,25 @@ export function reopenRefusedBecause(cart) {
  * May the gift-card desk record a card against this request? The list has to be closed
  * — a card issued against a list still growing is a card issued against an unknown
  * total — and every line decided, so the target is the final one.
+ *
+ * Still open once the receipt is in and after the money audit (2026-09-23). A receipt
+ * the recorded cards don't cover — $400 of cards against a $422.18 till — means a card
+ * was spent that nobody recorded, and with the desk locked out the only way to close
+ * the request was to misstate a card's spend. Recording it adds a card with no spend
+ * yet, which re-opens "Gift card spending was reconciled" until the auditor records it.
  */
+export const CARDS_RECORDABLE = ['approved', 'funded', 'receipted', 'audited'];
 export const cardsIssuable = (cart) =>
-  !!cart?.list_closed_at && ['approved', 'funded'].includes(cart?.status) && Number(cart?.pending_count) === 0;
+  !!cart?.list_closed_at && CARDS_RECORDABLE.includes(cart?.status) && Number(cart?.pending_count) === 0;
+
+/** A card recorded now is one the buyer already SPENT, not one being handed over. */
+export const cardsAfterPurchase = (cart) => ['receipted', 'audited'].includes(cart?.status);
 
 /** Why cards cannot be recorded yet, in words for the desk. Null when they can. */
 export function cardsRefusedBecause(cart) {
   if (cardsIssuable(cart)) return null;
   if (['closed', 'cancelled', 'written_off'].includes(cart?.status)) return 'This request is finished.';
-  if (!['approved', 'funded'].includes(cart?.status)) {
+  if (!CARDS_RECORDABLE.includes(cart?.status)) {
     return cart?.status === 'submitted' || cart?.status === 'draft'
       ? 'This request has not been approved yet — no approval, no gift cards.'
       : 'Gift cards can only go against an approved request.';

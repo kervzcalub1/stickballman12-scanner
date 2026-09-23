@@ -693,6 +693,9 @@ function Audit({ cart, onChanged, onSignOut }) {
   }
 
   const recorded = !!cart.audited_at;
+  // Cards the desk recorded after the receipt came in carry no spend yet — the audit on
+  // file was made without them, so it has to be recorded again with them in it.
+  const unaudited = recorded ? cards.filter((c) => c.spent_amount == null) : [];
   return (
     <section className="card bc-audit">
       <h3 className="bc-h">Financial audit</h3>
@@ -710,6 +713,12 @@ function Audit({ cart, onChanged, onSignOut }) {
           {Math.abs(gap) > 0.01
             ? ` The ${money(Math.abs(gap))} gap stays on the record — see “Gift card spending was reconciled” in the checklist. Correct the figures and record again if a card was misread.`
             : ' The cards and the receipt agree.'}
+        </p>
+      )}
+      {unaudited.length > 0 && (
+        <p className="bc-till-warn">
+          {unaudited.map((c) => `•••• ${c.code_last4}`).join(', ')} {unaudited.length === 1 ? 'was' : 'were'} recorded
+          after this audit. Fill in what {unaudited.length === 1 ? 'it was' : 'they were'} spent and what is left, then record it again.
         </p>
       )}
       <ul className="bc-audit-list">

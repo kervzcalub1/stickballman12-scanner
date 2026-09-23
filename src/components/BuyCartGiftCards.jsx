@@ -13,7 +13,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { PriceInput, CopyText, ImageZoomModal, FormModal } from './common.jsx';
-import { cardsIssuable, cardsRefusedBecause } from '../lib/buycartRules.js';
+import { cardsIssuable, cardsRefusedBecause, cardsAfterPurchase } from '../lib/buycartRules.js';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -285,6 +285,15 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
       )}
       {!cards.length && <p className="muted sm">No cards recorded yet.</p>}
 
+      {/* Past the till, a card recorded here is one the buyer already spent — the receipt
+          came to more than the cards on file. Say so, because it is a different act from
+          handing a card over, and say what it sets off. */}
+      {canAdd && cardsAfterPurchase(cart) && (
+        <p className="muted sm">
+          The receipt is in. Record a card here only if the buyer spent one that isn’t listed
+          above — the auditor then records what it was spent.
+        </p>
+      )}
       {canAdd && (
         <form className="bc-gc-add" onSubmit={addCard}>
           <input className="input" value={code} onChange={(e) => setCode(e.target.value)}

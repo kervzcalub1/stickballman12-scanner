@@ -202,11 +202,11 @@ test('Receiving: ListingPhotos shows "PH edited on file" banner for a SKU with p
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('label:has-text("Tracking #") input').fill(`QAP-BANNER-${Date.now()}`);
 
-  await page.getByRole('button', { name: /Items →|Next/ }).first().click().catch(() => {});
-  // If step didn't advance via that button, try the wizard step tab directly.
-  if (!(await page.locator('.scanbar').isVisible().catch(() => false))) {
-    await page.locator('.wstep', { hasText: 'Items' }).click();
-  }
+  // The manifest question is required — without it Next refuses to leave Step 1. This
+  // used to be a click-then-fallback that swallowed the refusal, so the test failed one
+  // step later with "scan bar not found" and hid the real reason for weeks.
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
   // Scan straight into the cart, then open THAT shoe's photos — listing photos
   // hang off the cart row now, not off the scan flow.
   const skuField = page.locator('.scanbar input[placeholder="Scan or type UPC / SKU"]');

@@ -28,6 +28,7 @@ import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
 import { isBoxesOrder, hasLeftSupplier, isSupplierRaised } from '../lib/postatus.js';
 import { hasPriv } from '../lib/constants.js';
+import { useLive, afterTyping } from '../hooks.js';
 
 const PO_STATUS = {
   draft:      { label: 'Filling',     cls: 'draft' },
@@ -90,6 +91,10 @@ function ShipToCard({ shipTo }) {
 // Which of the supplier's two screens a path means. Their own tiny router, the same
 // shape as the PH one: the page lives in the path so a refresh (or a link) comes back
 // to it, and anything unrecognised falls to the home chooser rather than a blank app.
+// Live re-reads (docs/context/live-updates.md) wait for whoever is TYPING to leave the
+// field: a scanned line's size/qty inputs re-seed from the server value, so a re-read
+// landing mid-keystroke would put the old number back under the supplier's cursor.
+
 const SUP_PATHS = { orders: '/orders', payout: '/payout', buying: '/buying' };
 const supPathForPage = (p) => SUP_PATHS[p] || '/';
 const supPageForPath = (p) => {
@@ -203,6 +208,7 @@ export function SupplierApp({ user, onSignOut }) {
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
   const refreshDetail = () => { if (openId) openPo(openId); };
+
   // `/orders?po=ID` opens that order straight away — it is where a buying request's
   // "Open the order" link lands. Read once on arrival; the list still loads behind it so
   // closing the order shows the usual screen. The param is dropped on close so a later
@@ -218,6 +224,32 @@ export function SupplierApp({ user, onSignOut }) {
   const [trackBoxBusy, setTrackBoxBusy] = useState(null); // po_box id being refreshed on its own
   const [historyOpen, setHistoryOpen] = useState(() => new Set()); // box ids showing the tracking timeline
   const toggleHistory = (id) => setHistoryOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  // Live: the warehouse receiving a box, staff adding labels or entering a line on the
+  // supplier's behalf, a carrier update — the list chips and the open order move without
+  // F5. Only on the Orders page, and held while a box is being scanned, reviewed or
+  // closed, a new order is being opened, or this supplier's own save is in flight — the
+  // scan modal is a draft and must never be swapped out from under them.
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'items', 'batches'], async () => {
+    await afterTyping('.app');
+    try {
+      const n = (await api.poList()).pos || [];
+      setPos((cur) => (same(cur, n) ? cur : n));
+      const id = openId;
+      if (!id) return;
+      const r = await api.poGet(id);
+      setDetail((cur) => {
+        if (!cur || Number(cur.po?.id) !== Number(id)) return cur;
+        const next = { po: r.po, boxes: r.boxes, lines: r.lines };
+        return same(cur, next) ? cur : next;
+      });
+    } catch (e) { if (e.unauthorized) onSignOut(); }
+  }, {
+    mount: false,
+    paused: page !== 'orders' || busy || newOpen || !!scanBox || !!closeReview || !!packedBox
+      || lineBusy != null || trackBusy || trackBoxBusy != null,
+  });
   // Refresh tracking status. Omit `boxId` to refresh every label at once; pass one to
   // refresh just that label (one tracking-API call instead of all — saves credits).
   const refreshTracking = async (boxId) => {

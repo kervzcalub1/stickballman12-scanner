@@ -11,7 +11,7 @@ import { poHref } from '../lib/poLink.js';
 import { TopBar, FormModal } from '../components/common.jsx';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
-import { useLiveRefresh } from '../hooks.js';
+import { useLive } from '../hooks.js';
 import { BuyCart } from './BuyCart.jsx';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -75,11 +75,12 @@ export function BuyCarts({ user, onHome, onSignOut }) {
   // though that were all of them.
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter, buyer]);
   // The queue counts and the status chips move when somebody else acts — a buyer closing
-  // a list, a tap in the group — so the desk's pile is re-read quietly rather than on F5.
-  useLiveRefresh(async () => {
+  // a list, a tap in the group — so the desk's pile is re-read the moment it changes
+  // (live-updates.md) rather than on F5.
+  useLive(['buy_carts', 'buy_cart_lines', 'buy_cart_gift_cards', 'buy_cart_tasks'], async () => {
     const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined);
     setCarts(c); setCounts(n); if (b) setBuyers(b);
-  }, { every: 20_000, paused: !!asking || !!open });
+  }, { paused: !!asking || !!open, mount: false });
 
   // Opening a request asks ONE thing: which store. What is being bought is not known
   // yet — a buyer often works that out standing in the shop — and a field that has to be

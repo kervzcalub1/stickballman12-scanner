@@ -13,7 +13,7 @@ import { ListingPhotos, PhotoCountButton, invalidatePhotoCount } from '../compon
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
-import { useUnsavedGuard } from '../hooks.js';
+import { useUnsavedGuard, useLive } from '../hooks.js';
 import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
 import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
@@ -3263,6 +3263,14 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
       .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); });
   }, [kind, page]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setPage(1); }, [kind]);   // a different kind is a different list
+  // LIVE (docs/context/live-updates.md) — the other benches' commits appear here as they
+  // land. Only this server-backed list: the wizard's scanned cart is this person's draft
+  // and is never re-read. The expanded batch keeps its detail; labels hold it still.
+  useLive(['batches', 'batch_boxes', 'items', 'shipment_issues'], async () => {
+    const r = await api.batchList({ kind, page });
+    setBatches((cur) => (JSON.stringify(cur) === JSON.stringify(r.batches) ? cur : r.batches));
+    setMeta((cur) => (cur.total === (r.total || 0) && cur.pageSize === (r.pageSize || 25) ? cur : { total: r.total || 0, pageSize: r.pageSize || 25 }));
+  }, { mount: false, paused: !!labels });
 
   async function toggle(id) {
     if (open === id) { setOpen(null); setDetail(null); return; }

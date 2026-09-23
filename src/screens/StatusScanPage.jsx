@@ -16,7 +16,7 @@ import { api } from '../api.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { TopBar, StatusPill, Modal } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
-import { useUnsavedGuard, useMediaQuery } from '../hooks.js';
+import { useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { isVinCode, isRollVin } from '../lib/codes.js';
 import { stickerState, stickerScanMessage } from '../lib/stickerState.js';
 import { beepOk, beepErr } from '../lib/beep.js';
@@ -84,6 +84,9 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
     catch { /* a missing count must never block scanning */ }
   }
   useEffect(() => { loadRemaining(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // LIVE (docs/context/live-updates.md) — the "remaining" count follows every other
+  // scanner and every sale. The scanned rows are this person's session and never re-read.
+  useLive(target === 'shipped' ? ['items'] : [], loadRemaining, { mount: false, every: target === 'shipped' ? 60_000 : 0 });
 
   // Keep the box focused so a scanner gun types straight in.
   useEffect(() => { if (!showCam) { const t = setTimeout(() => inputRef.current?.focus(), 50); return () => clearTimeout(t); } }, [showCam, rows]);

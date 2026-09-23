@@ -10,6 +10,7 @@ import { TopBar, DateRangeBar, ShoeThumb, StatusPill } from '../components/commo
 import { Icon } from '../components/NavIcons.jsx';
 import { rangeOf } from '../lib/format.js';
 import { useQueryParam, useQueryDateRange } from '../lib/urlstate.js';
+import { useLive } from '../hooks.js';
 
 const STORES = [['alias', 'Alias'], ['stockx', 'StockX'], ['shopify', 'Shopify']];
 
@@ -59,6 +60,13 @@ export function InstoreListing({ onHome, onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, [dr]); // eslint-disable-line react-hooks/exhaustive-deps
+  // LIVE (docs/context/live-updates.md) — a store ticked on another device, or a new
+  // in-store buy, shows up here without a refresh. Held while this person's tick saves.
+  useLive(['items', 'batches', 'product_photos'], async () => {
+    const [from, to] = rangeOf(dr.mode, dr.anchor);
+    const { rows: r } = await api.instoreList(from, to);
+    setRows((cur) => (JSON.stringify(cur) === JSON.stringify(r) ? cur : r));
+  }, { mount: false, paused: rows == null || !!savingSku });
 
   const groups = useMemo(() => {
     const g = groupBySku(rows || []);

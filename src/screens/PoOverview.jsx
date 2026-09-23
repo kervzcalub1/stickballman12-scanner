@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { useLive } from '../hooks.js';
 import { poMatchesSearch } from '../lib/postatus.js';
 import { TopBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
@@ -46,6 +47,12 @@ export function PoOverview({ onHome, onSignOut }) {
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
   useEffect(loadList, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live (docs/context/live-updates.md): a supplier closing or shipping a box, a label
+  // added, a pair received — the list's chips and counts move without F5. Held while one
+  // order is open full screen (PoDetail keeps itself live); it catches up on the way back.
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'items', 'batches'], () => api.poList()
+    .then((r) => { const n = r.pos || []; setPos((cur) => (JSON.stringify(cur) === JSON.stringify(n) ? cur : n)); })
+    .catch((e) => { if (e.unauthorized) onSignOut(); }), { mount: false, minGap: 5000, paused: openId != null });
 
   // The date a filter means: the purchase date the PH team typed on the form, and only
   // when that was left blank, the day the order was opened. `date_of_purchase` is a DATE

@@ -14,6 +14,7 @@ import { batchMatchesSearch } from '../lib/postatus.js';
 import { estTime } from '../lib/format.js';
 import { issueTypeLabel } from '../lib/constants.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { useLive } from '../hooks.js';
 
 const shortDate = (s) => String(s || '').slice(0, 10);
 
@@ -206,6 +207,35 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
     return () => clearTimeout(t);
   }, [q, page, from, to, supplier, po]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else { setDetail(null); setMergedFrom(null); } }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // LIVE (docs/context/live-updates.md). Another bench submitting a box, a batch being
+  // audited or closed, a pair sold off it — the lists and the open batch re-read with the
+  // page's current filters, swapping only what changed. The open box stays open (it is
+  // keyed by id). Held while any dialog or write of this person's is up.
+  const dialogUp = busy || deleting || !!renumber || !!reopenBox || !!sizeEdit || !!auditing || auditBusy || !!reopenId;
+  const BATCH_TABLES = ['batches', 'batch_boxes', 'items', 'shipment_issues', 'purchase_orders'];
+  useLive(BATCH_TABLES, async () => {
+    const [o, r] = await Promise.all([
+      api.openBatches(),
+      api.batchList({ kind: 'receiving', page, excludeOpen: true, from, to, supplier, po, audit }),
+    ]);
+    const ob = o.batches || [];
+    setOpen((cur) => (JSON.stringify(cur) === JSON.stringify(ob) ? cur : ob));
+    setRecent((cur) => (JSON.stringify(cur) === JSON.stringify(r) ? cur : r));
+    const query = q.trim();
+    if (query) {
+      const f = await api.batchList({ kind: 'receiving', q: query, page, from, to, supplier, po, audit });
+      setFound((cur) => (cur == null || JSON.stringify(cur) === JSON.stringify(f) ? cur : f));
+    }
+  }, { mount: false, paused: dialogUp || !!selId });
+  useLive([...BATCH_TABLES, 'locations', 'item_events'], async () => {
+    const id = selId;
+    if (!id) return;
+    const d = await api.batchFull(id);
+    // A merged-away batch is loadDetail's job (it redirects); leave it to the next open.
+    if (d.batch?.merged_into_batch_id && Number(d.batch.merged_into_batch_id) !== Number(id)) return;
+    setDetail((cur) => (Number(cur?.batch?.id) !== Number(id) || JSON.stringify(cur) === JSON.stringify(d) ? cur : d));
+  }, { mount: false, paused: dialogUp || !selId });
   // Audit pending on a batch with no order: does its tracking number belong to a PO?
   // One lookup per batch, and only in that state — it is the auditor's pointer to the
   // manifest they should be checking against.

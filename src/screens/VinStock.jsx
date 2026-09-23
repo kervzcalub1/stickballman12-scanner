@@ -9,6 +9,7 @@
 // the first 700 away.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { useLive } from '../hooks.js';
 import { TopBar, RawVinLabelSheet } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PH_DATETIME } from '../lib/format.js';
@@ -34,6 +35,12 @@ export function VinStock({ onHome, onSignOut }) {
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // LIVE (docs/context/live-updates.md) — stickers used at receiving on another bench,
+  // or minted by someone else, move the counts here. Held while minting/voiding/printing.
+  useLive(['vin_stock'], async () => {
+    const s = await api.vinStock();
+    setSummary((cur) => (JSON.stringify(cur) === JSON.stringify(s) ? cur : s));
+  }, { mount: false, paused: busy || !!labels || summary == null });
 
   // Mint, then open the print dialog straight away with what was just minted. The two
   // are one action in the warehouse's head — a minted sticker that never got printed

@@ -11,6 +11,7 @@
 // EditGroupModal / DeleteGroupModal.
 import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { api } from '../api.js';
+import { useLive } from '../hooks.js';
 import { TopBar, StatusPill, ShelfLabelSheet, ShoeThumb, PhotoLightbox, Modal, IntakeChip } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { WAREHOUSES, LOCATION_AREAS } from '../lib/constants.js';
@@ -249,6 +250,22 @@ export function Locations({ onHome, onSignOut }) {
       .catch((err) => { if (err.unauthorized) return onSignOut(); if (!cancelled) { setContents([]); setError(err.message); } });
     return () => { cancelled = true; };
   }, [r.shelfId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // LIVE (docs/context/live-updates.md) — shelf counts and the open shelf's shoes follow
+  // put-away and sales on other devices. The tree, drill path, selection and search stay
+  // exactly where they are; held while any edit, delete, add or print dialog is open.
+  const locBusy = busy || delBusy || !!pane || !!printLocs || !!editShelf || !!editGroup || !!delShelf || !!delGroup || pendingNav != null;
+  useLive(['locations', 'items'], async () => {
+    const { locations: l } = await api.locationList({ active });
+    setLocations((cur) => (JSON.stringify(cur) === JSON.stringify(l) ? cur : l));
+  }, { mount: false, paused: locBusy || locations == null });
+  useLive(['items', 'batches', 'product_photos'], async () => {
+    const id = r.shelfId;
+    if (id == null) return;
+    const { items } = await api.locationItems(id);
+    const next = items || [];
+    setContents((cur) => (!Array.isArray(cur) || JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+  }, { mount: false, paused: locBusy || r.shelfId == null });
 
   // --- Print selection (checkboxes on any tile / folder rolls up its ids) -----
   const allSel = (ids) => ids.length > 0 && ids.every((id) => sel.has(id));

@@ -34,6 +34,7 @@ import {
 } from '../lib/inbound.js';
 import { estDate, estToday, estCivilFromYmd } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { useLive } from '../hooks.js';
 
 // "box" pluralises to "boxes", not "boxs" — the one irregular this screen needs.
 const plural = (n, s) => `${n} ${n === 1 ? s : (/(?:s|x|z|ch|sh)$/.test(s) ? `${s}es` : `${s}s`)}`;
@@ -110,6 +111,12 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live (docs/context/live-updates.md): a carrier update, a box shipped or received
+  // moves the strip and the progress bar without F5. Filters and open rows are local
+  // state and untouched; only the feed is swapped, and only when it changed.
+  useLive(['po_boxes', 'purchase_orders', 'po_lines', 'items', 'batches'], () => api.inbound()
+    .then((r) => { const n = r.boxes || []; setRows((cur) => (JSON.stringify(cur) === JSON.stringify(n) ? cur : n)); })
+    .catch((err) => { if (err.unauthorized) onSignOut(); }), { mount: false, minGap: 5000 });
 
   // Filters apply to SHIPMENTS, and the counts are computed from the same filtered
   // set — a strip that kept counting the whole warehouse while the list below showed

@@ -32,8 +32,26 @@ import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoOriginChip } from '../components/PoOriginChip.jsx';
 import { PoAssignLabels } from '../components/PoAssignLabels.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
+import { useLive, afterTyping } from '../hooks.js';
 
 const FROZEN = ['reconciled', 'closed'];
+
+// Live re-reads (docs/context/live-updates.md) wait for whoever is TYPING on this page to
+// leave the field: the line rows re-seed their inputs from the server value, so a re-read
+// landing mid-keystroke would put the old number back under somebody's cursor.
+// Swap in only the parts that changed. PoDetailsEdit re-seeds its open form whenever the
+// `po` object changes identity, so a pair received on another label must not hand it a
+// fresh-but-identical `po` and wipe what somebody is typing.
+const keepSame = (cur, next) => {
+  if (!cur) return next;
+  let same = true;
+  const out = {};
+  for (const k of Object.keys(next)) {
+    if (JSON.stringify(cur[k]) === JSON.stringify(next[k])) out[k] = cur[k];
+    else { out[k] = next[k]; same = false; }
+  }
+  return same ? cur : out;
+};
 
 export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   const [detail, setDetail] = useState(null);           // { po, boxes, lines, batches }
@@ -66,6 +84,20 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
       .finally(() => { if (!cancelled) setBusy(false); });
     return () => { cancelled = true; };
   }, [poId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live: a supplier scanning into a label, the warehouse receiving a box, a carrier
+  // update — the manifest, the counts and the chips move without F5. Quiet: no "Loading…",
+  // and held while this person has a dialog open or a save of their own in flight.
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'items', 'batches', 'batch_boxes'], async () => {
+    await afterTyping('.app');
+    try {
+      const r = await api.poGet(poId);
+      setDetail((cur) => keepSame(cur, { po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [] }));
+    } catch (e) { if (e.unauthorized) onSignOut(); }
+  }, {
+    mount: false,
+    paused: busy || !!scanBox || !!scanOrderPo || !!linkPo || !!delPo || !!delLine || lineBusy != null || unlinkBusy != null || trackBusy || trackBoxBusy != null,
+  });
 
   const po = detail?.po || null;
   const boxes = detail?.boxes || [];

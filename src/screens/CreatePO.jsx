@@ -8,6 +8,7 @@ import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
 import { CARRIERS, carrierName } from '../lib/carriers.js';
 import { estToday } from '../lib/format.js';
+import { useLive } from '../hooks.js';
 
 // EST, not UTC: an order raised at 9pm EST would otherwise be dated tomorrow, and one
 // raised from a PH desk dated by Manila's calendar. The whole system dates by EST.
@@ -40,6 +41,12 @@ export function CreatePO({ onHome, onSignOut }) {
       .then((r) => setSuppliers(r.suppliers || []))
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live (docs/context/live-updates.md) for the supplier dropdown ONLY — a supplier
+  // account approved while this form is open appears in it. The form itself is a draft
+  // and is never touched; the chosen supplier stays chosen.
+  useLive(['users'], () => api.poSuppliers()
+    .then((r) => { const n = r.suppliers || []; setSuppliers((cur) => (JSON.stringify(cur) === JSON.stringify(n) ? cur : n)); })
+    .catch((e) => { if (e.unauthorized) onSignOut(); }), { mount: false, paused: busy });
 
   const setLabel = (i, patch) => setLabels((ls) => ls.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   const addLabel = () => setLabels((ls) => [...ls, { trackingNumber: '', carrierKey: null }]);

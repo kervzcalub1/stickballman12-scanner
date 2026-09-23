@@ -5,7 +5,7 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, DateRangeBar, RescaleCompare, YesNo, PriceInput, BasisChip } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
-import { useUnsavedGuard } from '../hooks.js';
+import { useUnsavedGuard, useLive } from '../hooks.js';
 import { rangeOf, fmtPrice, PH_DATETIME } from '../lib/format.js';
 import { REQUEST_REASONS } from '../lib/constants.js';
 import { SkuCodePicker } from '../components/SkuCodePicker.jsx';
@@ -375,6 +375,28 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   // counted toward the green home badge forever. The request's own card always exists,
   // so the affordance belongs here too.
   const [closeId, setCloseId] = useState(null);
+
+  // Live (docs/context/live-updates.md): PH raising a request, the warehouse auditing
+  // one, a listing saved — the list, its status tabs' contents and the audited counts move
+  // without F5. Held while this person is auditing, editing, cancelling or closing a
+  // request, has unsaved listing edits, or a save of theirs is in flight: every one of
+  // those is a draft seeded from these rows, and a re-read would re-seed it.
+  useLive(['rescale_requests', 'rescale_request_items'], async () => {
+    try {
+      const [from, to] = rangeOf(dr.mode, dr.anchor);
+      const { requests: r } = await api.rescaleRequestList(statusF, from, to);
+      setRequests((cur) => (JSON.stringify(cur) === JSON.stringify(r) ? cur : r));
+      setListDrafts((cur) => {
+        const next = Object.fromEntries((r || []).filter((x) => x.status === 'audited' || x.status === 'closed')
+          .map((x) => { const rows = buildListRows(x); return [x.id, JSON.stringify(cur[x.id]) === JSON.stringify(rows) ? cur[x.id] : rows]; }));
+        return JSON.stringify(cur) === JSON.stringify(next) ? cur : next;
+      });
+    } catch (err) { if (err.unauthorized) onSignOut(); }
+  }, {
+    mount: false,
+    paused: mode !== 'list' || listDirty || auditId != null || editId != null || cancelId != null || closeId != null
+      || busyId != null || giBusyId != null || saveBusyId != null,
+  });
   async function submitClose(r) {
     setBusyId(r.id); setCloseId(r.id); setError('');
     try { await api.rescaleRequestClose(r.id); setCloseId(null); load(); }

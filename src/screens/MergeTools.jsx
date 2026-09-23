@@ -14,6 +14,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, Modal } from '../components/common.jsx';
+import { useLive } from '../hooks.js';
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -30,6 +31,12 @@ function SupplierMerge({ onSignOut }) {
     .then((r) => setNames(r.suppliers || []))
     .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live (docs/context/live-updates.md): a name added or merged elsewhere shows up in the
+  // dropdowns. Held while a preview is on screen or a merge is running — the preview is
+  // what the person is about to confirm, and the choices under it must not move.
+  useLive(['suppliers', 'batches', 'purchase_orders'], () => api.suppliers()
+    .then((r) => { const n = r.suppliers || []; setNames((cur) => (JSON.stringify(cur) === JSON.stringify(n) ? cur : n)); })
+    .catch((e) => { if (e.unauthorized) onSignOut(); }), { mount: false, paused: busy || !!preview });
 
   async function check() {
     setError(''); setPreview(null); setDone(null); setBusy(true);
@@ -129,6 +136,15 @@ function BatchMerge({ onSignOut }) {
     }, 250);
     return () => clearTimeout(t);
   }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live: the search results re-read when a batch changes (a box added, a merge done at
+  // another desk). Held while a pair is being previewed or confirmed, for the same reason.
+  useLive(['batches', 'batch_boxes'], () => {
+    const query = q.trim();
+    if (!query) return undefined;
+    return api.batchList({ kind: 'receiving', q: query })
+      .then((r) => { const n = r.batches || []; setHits((cur) => (JSON.stringify(cur) === JSON.stringify(n) ? cur : n)); })
+      .catch((e) => { if (e.unauthorized) onSignOut(); });
+  }, { mount: false, paused: busy || confirm || !!preview });
 
   async function check(src, tgt) {
     setError(''); setPreview(null); setDone(null); setBusy(true);

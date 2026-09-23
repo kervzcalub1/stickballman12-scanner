@@ -1630,6 +1630,72 @@ await sql(`
 await sql(`CREATE INDEX IF NOT EXISTS scan_failures_at_idx ON scan_failures (created_at DESC)`);
 await sql(`CREATE INDEX IF NOT EXISTS scan_failures_reason_idx ON scan_failures (reason, created_at DESC)`);
 
+// ---------------------------------------------------------------------------
+// LIVE UPDATES — every write announces WHICH TABLE changed (docs/context/live-updates.md).
+//
+// A statement-level trigger on each table the screens read calls pg_notify('sb_change',
+// <table>). The server LISTENs, coalesces, and forwards the table names over one open
+// stream per tab (api/live.js); each screen re-reads what it shows through its ordinary,
+// authorised endpoint. The payload is a table NAME and nothing else, so no row, id or
+// value ever reaches a viewer this way — what they see is still what their own call
+// returns.
+//
+// In the database rather than in each endpoint so no write path can forget: a script, a
+// merge tool or an endpoint added next month announces itself for free. STATEMENT level
+// so a 200-row bulk update is one notice, not 200; Postgres also folds identical notices
+// inside one transaction.
+//
+// Deliberately NOT here: login_attempts, locks, edit_locks (the PH grid's presence has
+// its own heartbeat loop), telegram_link_requests, scan_failures — bookkeeping no screen
+// needs to watch, and some of it is written on every request.
+// ONLY WHEN ROWS MOVED. A statement trigger fires even when its WHERE matched nothing,
+// and several READ paths run a checking UPDATE (reconcile-list's auto-close is one): that
+// made reading a page announce a change, which made every open copy of it read again —
+// a loop, re-reading forever. The transition table (`changed`) is how a statement trigger
+// can see whether it touched anything. Postgres allows a transition table on one event
+// per trigger, hence three triggers per table plus TRUNCATE (which has none, and always
+// matters).
+await sql(`
+  CREATE OR REPLACE FUNCTION sb_notify_change() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF EXISTS (SELECT 1 FROM changed) THEN
+      PERFORM pg_notify('sb_change', TG_TABLE_NAME);
+    END IF;
+    RETURN NULL;
+  END $$
+`);
+await sql(`
+  CREATE OR REPLACE FUNCTION sb_notify_truncate() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    PERFORM pg_notify('sb_change', TG_TABLE_NAME);
+    RETURN NULL;
+  END $$
+`);
+const LIVE_TABLES = [
+  'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
+  'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
+  'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
+  'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions',
+  'rescale_requests', 'rescale_request_items',
+  'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards',
+  'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',
+];
+for (const t of LIVE_TABLES) {
+  await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version
+  for (const [name, ev, ref] of [
+    ['sb_live_ins', 'INSERT', 'NEW TABLE AS changed'],
+    ['sb_live_upd', 'UPDATE', 'NEW TABLE AS changed'],
+    ['sb_live_del', 'DELETE', 'OLD TABLE AS changed'],
+  ]) {
+    await sql(`DROP TRIGGER IF EXISTS ${name} ON ${t}`);
+    await sql(`CREATE TRIGGER ${name} AFTER ${ev} ON ${t} REFERENCING ${ref}
+               FOR EACH STATEMENT EXECUTE FUNCTION sb_notify_change()`);
+  }
+  await sql(`DROP TRIGGER IF EXISTS sb_live_trunc ON ${t}`);
+  await sql(`CREATE TRIGGER sb_live_trunc AFTER TRUNCATE ON ${t}
+             FOR EACH STATEMENT EXECUTE FUNCTION sb_notify_truncate()`);
+}
+
 const { rows: [{ count }] } = await sql(`SELECT count(*)::int AS count FROM users`);
 const { rows: [{ b }] } = await sql(`SELECT count(*)::int AS b FROM batches`);
 const { rows: [{ po }] } = await sql(`SELECT count(*)::int AS po FROM purchase_orders`);

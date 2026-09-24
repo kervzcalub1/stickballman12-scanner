@@ -175,7 +175,17 @@ link survives sign-in; only an unknown path is normalised to `/`.
   admin/warehouse `Home` is grouped **by lifecycle** (Intake → Stock/Locate →
   Listings → Fulfilment → Admin) rather than a flat card wall, with a
   **"needs attention" strip** at top surfacing counts that need action (e.g.
-  items needing a shelf, no-box queue). Page/label renames: **"Report" →
+  items needing a shelf, no-box queue). **2026-09-25 rework:** a **find box** at the
+  top (VIN → that pair's detail; anything else → Inventory `?q=` with no date window,
+  which Inventory reads as a whole-inventory search), a row of **daily-job shortcuts**
+  (`HOME_QUICK`: Receive · Shelve · Mark sold · Mark shipped), and the attention strip
+  split into two **tiers** (`HOME_ATTENTION[].tier`): `now` = amber tiles for queues a
+  person is waiting on; `backlog` = a quiet chip row for standing work (needs shelf, no
+  box, restock, no cost). Attention rows with a `priv` are drawn only for holders of that
+  privilege (the counts are global). Tool cards are icon-beside-text, and sections with
+  ≤ 2 cards take half the width on desktop (`.home-section.half`). Every home key needs a
+  `NavIcons` entry — a missing one silently draws the magnifier. E2E: `e2e/home.spec.js`.
+  Page/label renames: **"Report" →
   "Listings & Sync"** (the PH grid, `ph-report.md`); `Inventory`, `Locate Shoe`
   (formerly "Locations"), and `Shelve` each have a **unique nav icon**
   (`NavIcons.jsx`).

@@ -385,7 +385,15 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
       setUpcCheck(null); setError(err.message);
     } finally { setUpcBusy(false); }
   }
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // A search with no dates in the URL is a search of the whole inventory — that is what
+  // `submit()` does (it clears the window), and it is what Home's find box hands over.
+  // Without this the page would restore `?q=` inside the default week, so a refresh
+  // after a search, or a search started from Home, found only this week's arrivals.
+  useEffect(() => {
+    if (readParam('q') && !readParam('from') && !readParam('to')) {
+      setFrom(''); setTo(''); load({ from: '', to: '' });
+    } else load();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // LIVE (docs/context/live-updates.md). The list re-reads the search that is ON SCREEN
   // (`lastParams`, not the half-typed box) whenever a unit or its batch is written, and

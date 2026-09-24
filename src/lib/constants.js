@@ -222,23 +222,43 @@ export const hasPriv = (user, key) =>
 // Any of the STAFF duties — what draws the Buying Requests card on the staff homes.
 export const hasAnyPriv = (user) => STAFF_PRIVILEGES.some((p) => hasPriv(user, p.key));
 
+// Two tiers, because they ask for different things. `now` is a queue somebody is
+// waiting on, and it clears in a day: a buyer stuck in a shop, a spend nobody has
+// verified, a shipment that can't be listed until someone answers for it. `backlog` is
+// standing work that is essentially never zero — pairs to shelve, costs to fill in. Seven
+// amber tiles of the same size made 647 pairs-to-shelve look as urgent as one buyer
+// waiting on approval, so the backlog is drawn as a quieter row underneath.
+//
+// `priv` = only drawn for an account holding that privilege. The counts are global, and
+// a warehouse account with no buying duty was being shown "1584 Buying requests" it could
+// neither open nor act on.
 export const HOME_ATTENTION = [
-  { key: 'nobox', label: 'No box', count: 'no_box' },
-  { key: 'costs', label: 'No cost on file', count: 'missing_cost' },
-  { key: 'shelve', label: 'Needs shelf', count: 'needs_shelf' },
-  { key: 'rescalereq', label: 'Rescale requests', count: 'rescale_requests' },
-  { key: 'rescale', label: 'Restock', count: 'restock_pending' },
-  { key: 'presell', label: 'Pre-sell to work', count: 'presell_pending' },
-  { key: 'reconcile', label: 'PO reconcile', count: 'po_to_reconcile' },
-  // Shipments received without a manifest and not yet signed off. `query` opens the
-  // Batches page already filtered to them (Home writes it after go()).
-  { id: 'batches-audit', key: 'batches', label: 'No manifest — audit', count: 'batches_to_audit', query: { audit: 'pending' } },
-  // Company money waiting on a person. Both ends of the gift-card process stall the
-  // same way — a buyer stuck in a shop, or a spend nobody has verified.
+  // Company money waiting on a person. Both ends of the buying process stall the same
+  // way — a buyer stuck in a shop, or a spend nobody has verified.
   // Two rows, one destination — so they need an explicit `id`: `key` is the screen to
   // open, and using it as the React key too would collide and drop one of them.
-  { id: 'carts-approve', key: 'buy-carts', label: 'Buying requests', count: 'carts_to_approve' },
-  { id: 'carts-audit', key: 'buy-carts', label: 'Spend to audit', count: 'carts_to_audit' },
+  { id: 'carts-approve', key: 'buy-carts', label: 'Buying requests to approve', count: 'carts_to_approve', tier: 'now', priv: 'approve_buying' },
+  { id: 'carts-audit', key: 'buy-carts', label: 'Spend to audit', count: 'carts_to_audit', tier: 'now', priv: 'audit_buying' },
+  { key: 'reconcile', label: 'PO to reconcile', count: 'po_to_reconcile', tier: 'now' },
+  { key: 'presell', label: 'Pre-sell to work', count: 'presell_pending', tier: 'now' },
+  { key: 'rescalereq', label: 'Rescale requests', count: 'rescale_requests', tier: 'now' },
+  // Shipments received without a manifest and not yet signed off. `query` opens the
+  // Batches page already filtered to them (Home writes it after go()).
+  { id: 'batches-audit', key: 'batches', label: 'No manifest — audit', count: 'batches_to_audit', query: { audit: 'pending' }, tier: 'now' },
+  { key: 'shelve', label: 'Needs shelf', count: 'needs_shelf', tier: 'backlog' },
+  { key: 'nobox', label: 'No box', count: 'no_box', tier: 'backlog' },
+  { key: 'rescale', label: 'Restock', count: 'restock_pending', tier: 'backlog' },
+  { key: 'costs', label: 'No cost on file', count: 'missing_cost', tier: 'backlog' },
+];
+
+// The four jobs the floor does all day, as one-tap buttons above everything else. They
+// are also cards further down (in their lifecycle section) — this row is a shortcut, not
+// a second home for them.
+export const HOME_QUICK = [
+  { key: 'receiving', label: 'Receive' },
+  { key: 'shelve', label: 'Shelve' },
+  { key: 'sold', label: 'Mark sold' },
+  { key: 'shipped', label: 'Mark shipped' },
 ];
 
 // Total quantity across a [{qty}] size array (rescale reported vs actual).

@@ -24,7 +24,7 @@ import { BuyCartTasks } from '../components/BuyCartTasks.jsx';
 import { estDate, estTime } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
-import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable } from '../lib/buycartRules.js';
+import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
 // `best_platform` stores the KEY ('alias'), and printing it raw read "92.7% ROI via
@@ -65,8 +65,14 @@ function ListChip({ cart }) {
 }
 
 // The closing checklist. Rendered whatever the state, because the useful question on
-// day one is "what is this still waiting on", not only on the last day.
-function Checks({ checks }) {
+// day one is "what is this still waiting on" — but a group is only OPENED once it can be
+// answered. Twelve unticked conditions on a request written ten minutes ago are twelve
+// rows everybody learns to scroll past, and then nobody reads them on the day they
+// matter. A group that is not answerable yet is one line with its count; tap to see it.
+const MONEY_LIVE = ['funded', 'receipted', 'audited', 'closed', 'written_off'];
+const GOODS_LIVE = ['receipted', 'audited', 'closed', 'written_off'];
+
+function Checks({ checks, status }) {
   if (!checks?.length) return null;
   const done = checks.filter((c) => c.ok).length;
   // TWO groups, because they are answerable at different times from different evidence.
@@ -74,8 +80,8 @@ function Checks({ checks }) {
   // are in the building. Showing them as one list of ten made a request look stuck on the
   // money for weeks when it was only ever waiting for a parcel.
   const groups = [
-    { scope: 'money', title: 'The money', note: 'Answerable as soon as the receipt is in.' },
-    { scope: 'goods', title: 'The goods', note: 'Not answerable until the boxes have landed.' },
+    { scope: 'money', title: 'The money', note: 'Answerable as soon as the receipt is in.', live: MONEY_LIVE.includes(status) },
+    { scope: 'goods', title: 'The goods', note: 'Not answerable until the boxes have landed.', live: GOODS_LIVE.includes(status) },
   ];
   return (
     <section className="card bc-checks">
@@ -91,15 +97,17 @@ function Checks({ checks }) {
         // "what is left", and a done row sitting above three outstanding ones is a row
         // you have to read past every time you open the request.
         const ordered = [...list].sort((a, b) => Number(a.ok) - Number(b.ok));
+        const expand = g.live && gd < list.length;
         return (
-          <div key={g.scope} className="bc-check-group">
-            <div className="bc-check-group-h">
+          <details key={g.scope} className="bc-check-group" open={expand}>
+            <summary className="bc-check-group-h">
               <h4>{g.title}</h4>
               <span className={gd === list.length ? 'bc-covered sm' : 'muted sm'}>{gd} of {list.length}</span>
+              {!g.live && gd < list.length && <span className="muted xs">not yet</span>}
               <span className="bc-check-bar" aria-hidden="true">
                 <span className={`bc-check-fill${gd === list.length ? ' done' : ''}`} style={{ width: `${pct}%` }} />
               </span>
-            </div>
+            </summary>
             <p className="muted xs bc-check-blurb">{g.note}</p>
             <ul className="bc-check-list">
               {ordered.map((c) => (
@@ -115,10 +123,10 @@ function Checks({ checks }) {
                 </li>
               ))}
             </ul>
-          </div>
+          </details>
         );
       })}
-      {done < checks.length && (
+      {done < checks.length && GOODS_LIVE.includes(status) && (
         <p className="muted sm">
           A transaction isn’t finished because the money was spent. It’s finished when every
           line above is true.
@@ -518,7 +526,7 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
                         onChange={() => toggle(id)} aria-label={`Select ${l.sku}`} />
                     )}</td>
                   )}
-                  <td>
+                  <td className="bc-td-shoe">
                     <b>{l.sku}</b>
                     {l.name && <div className="muted xs">{l.name}</div>}
                     <ShoeShots cart={cart} sku={l.sku} onSignOut={onSignOut} />
@@ -533,7 +541,7 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
                       </span>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Size">
                     {l.size || '—'}
                     {/* What the BUYER counted on the shelf. Sits under the size because
                         it is a fact about this size, and because the quantity box beside
@@ -547,7 +555,7 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
                   {/* HOW MANY. Empty on a line nobody has decided yet, because the buyer
                       never said — an approver types it here and approving carries it.
                       A decided line prints the number that was approved. */}
-                  <td className="num" onClick={(e) => e.stopPropagation()}>
+                  <td className="num" data-label="Qty" onClick={(e) => e.stopPropagation()}>
                     {canDecide && l.status === 'pending' ? (
                       <>
                         <input className={`input bc-qty-in${overAvail(l, qty[id]) ? ' over' : ''}`}
@@ -574,14 +582,14 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
                       </>
                     )}
                   </td>
-                  <td className="num">{money(l.shelf_price)}</td>
-                  {!isBuyer && <td className="num">{money(l.final_cost)}</td>}
+                  <td className="num" data-label="Shelf">{money(l.shelf_price)}</td>
+                  {!isBuyer && <td className="num" data-label="Cost">{money(l.final_cost)}</td>}
                   {/* The call and its working together — the profit and ROI used to sit
                       under the cost column, a column away from the verdict they justify.
                       No verdict means nobody priced it, which is a different answer from
                       "we priced it and it's a Pass". */}
                   {!isBuyer && (
-                    <td className="bc-call-cell">
+                    <td className="bc-call-cell" data-label="Call">
                       {l.verdict ? <VerdictChip verdict={l.verdict} />
                         : <span className="muted xs">Not priced</span>}
                       {l.profit != null ? (
@@ -593,7 +601,7 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
                       )}
                     </td>
                   )}
-                  <td>
+                  <td className="bc-td-status">
                     <span className={`bc-line-status ${l.status}`}>{l.status}</span>
                     {l.decided_by && <div className="muted xs">{l.decided_by}</div>}
                     {/* One approver reversing another's call is a real thing here, and
@@ -774,12 +782,35 @@ function Thread({ cart, onChanged, onSignOut }) {
           <li key={e.id} className={`bc-ev ${e.kind}`}>
             <span className="bc-ev-kind">{String(e.kind).replace(/_/g, ' ')}</span>
             <span className="bc-ev-who">{e.actor_name || 'system'}</span>
-            {e.body && <span className="bc-ev-body">{e.body}</span>}
+            {/* Rows written before the removal text was fixed carry a literal "×null" (a
+                line with no quantity yet); they are history, so they are cleaned on the
+                way out rather than rewritten. */}
+            {e.body && <span className="bc-ev-body">{String(e.body).replace(/ ×null\b/g, '')}</span>}
             <span className="muted xs">{estDate(e.created_at)} {estTime(e.created_at)} EST</span>
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+// Whose turn it is, in one line at the top — see `nextStep`. When it is the viewer's,
+// it is drawn as a call to action with a button that scrolls to where they act;
+// otherwise it is a quiet "waiting on …" so nobody reads a pile as theirs.
+function NextStep({ step }) {
+  if (!step) return null;
+  const go = () => {
+    const el = step.target && document.getElementById(`bc-sec-${step.target}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  return (
+    <div className={`bc-next${step.mine ? ' mine' : ''}`} role="status">
+      <span className="bc-next-tag">{step.mine ? 'Your turn' : 'Next'}</span>
+      <span className="bc-next-text">{step.text}</span>
+      {step.action && step.target && (
+        <button type="button" className={`btn sm ${step.mine ? 'primary' : 'ghost'}`} onClick={go}>{step.action}</button>
+      )}
+    </div>
   );
 }
 
@@ -874,6 +905,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         {/* Where it is, as a row of dots. The status chip above says the column value;
             this says the STOP on the route, including the half that lives on the order. */}
         <BuyCartProgress cart={cart} />
+        <NextStep step={nextStep(cart, { isBuyer, canDecide, canIssue, canAudit })} />
         {cart.status === 'written_off' && (
           <p className="bc-writeoff"><b>Written off:</b> {cart.write_off_reason}</p>
         )}
@@ -934,7 +966,10 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
               {isBuyer ? 'Start packing this shipment' : 'Raise the purchase order'}
             </button>
           )}
-          {canAudit && !['closed', 'written_off'].includes(cart.status) && (
+          {/* Only once there is something to close against. It used to sit here, primary
+              and disabled, from the day a request was written — the most prominent
+              button on the page for weeks, and one nobody could press. */}
+          {canAudit && ['receipted', 'audited'].includes(cart.status) && (
             <button className="btn primary" disabled={busy === 'close' || !checksDone}
               title={checksDone ? '' : 'Not every closing condition is met yet.'}
               onClick={() => act(() => api.cartClose(cart.id), 'close')}>
@@ -1053,7 +1088,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           and the list stays open through approvals and even funding until they close it
           (or re-open it) themselves. */}
       {isBuyer && buyerCanAdd(cart) && (
-        <BuyCartAdd cart={cart} onAdded={load} onSignOut={onSignOut} />
+        <div id="bc-sec-add" className="bc-sec"><BuyCartAdd cart={cart} onAdded={load} onSignOut={onSignOut} /></div>
       )}
       {isBuyer && cart.list_closed_at && ['submitted', 'approved', 'denied', 'funded'].includes(cart.status) && (
         <p className="muted sm bc-list-note">
@@ -1071,6 +1106,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           onChanged={load} onSignOut={onSignOut} />
       )}
 
+      <div id="bc-sec-lines" className="bc-sec" />
       <Lines cart={cart} canDecide={canDecide} isBuyer={isBuyer}
         // Load it WITHOUT being asked for whoever would act on it, while there is still
         // something to act on. `mayDecide`, not `canDecide`: an approver reading a draft
@@ -1105,12 +1141,12 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         && ['approved', 'funded', 'receipted', 'audited', 'closed', 'written_off'].includes(cart.status)
         && (cardsIssuable(cart) || (cart.giftCards || []).length > 0
           || (cart.files || []).some((f) => f.kind === 'gift_card') || !['approved'].includes(cart.status)) && (
-        <BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer}
-          onChanged={load} onSignOut={onSignOut} />
+        <div id="bc-sec-cards" className="bc-sec"><BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer}
+          onChanged={load} onSignOut={onSignOut} /></div>
       )}
 
       {['funded', 'receipted', 'audited', 'closed', 'written_off'].includes(cart.status) && (
-        <BuyCartReceipt cart={cart}
+        <div id="bc-sec-receipt" className="bc-sec"><BuyCartReceipt cart={cart}
           // ATTACHING the receipt is open to everyone who can reach the request: the
           // buyer standing in the shop, and any staff member the paper reaches first.
           // It is evidence, and a request that sits waiting because the one person with
@@ -1122,30 +1158,30 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           // buyer, either desk, or the auditor.
           canEdit={!['closed', 'cancelled', 'written_off'].includes(cart.status)
             && (isBuyer || canDecide || canIssue || canAudit)}
-          onChanged={load} onSignOut={onSignOut} />
+          onChanged={load} onSignOut={onSignOut} /></div>
       )}
 
       {/* Step 6, second half. Appears the moment the order exists, because that is when
           the buyer starts filling cartons — and the count of what is still loose is the
           thing that decides whether the last box may ship. */}
       {cart.po_id && (
-        <BuyCartPack cart={cart} user={user} onChanged={load} onSignOut={onSignOut}
+        <div id="bc-sec-pack" className="bc-sec"><BuyCartPack cart={cart} user={user} onChanged={load} onSignOut={onSignOut}
           canPack={(isBuyer || canDecide || canAudit) && !['closed', 'cancelled', 'written_off'].includes(cart.status)}
           // Who may ASK for labels is the order's rule, not the request's: the buyer,
           // PH (who buy the labels and may ask on a buyer's behalf) and admin — the same
           // set `po/request-labels` accepts, so the button never leads to a 403.
           canAskLabels={['supplier', 'ph_team', 'admin', 'superadmin'].includes(role)
-            && !['closed', 'cancelled', 'written_off'].includes(cart.status)} />
+            && !['closed', 'cancelled', 'written_off'].includes(cart.status)} /></div>
       )}
 
       {canAudit && ['receipted', 'audited'].includes(cart.status) && (
-        <Audit cart={cart} onChanged={load} onSignOut={onSignOut} />
+        <div id="bc-sec-audit" className="bc-sec"><Audit cart={cart} onChanged={load} onSignOut={onSignOut} /></div>
       )}
 
       {/* The goods sign-off is separate from the money one and can be weeks later, so it
           hangs off the goods conditions rather than the cart's status. */}
       {canAudit && cart.po_id && !cart.goods_audited_at && !['cancelled', 'written_off'].includes(cart.status) && (
-        <section className="card bc-goods-audit">
+        <section className="card bc-goods-audit bc-sec" id="bc-sec-goods">
           <h3 className="bc-h">The shipment against the receipt</h3>
           <p className="muted sm">
             Three lists have to agree: what the receipt says was paid for, what the buyer packed
@@ -1162,7 +1198,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
 
       <BuyCartTasks cart={cart} canManage={canDecide} onChanged={load} onSignOut={onSignOut} />
 
-      <Checks checks={cart.checks} />
+      <div id="bc-sec-checks" className="bc-sec"><Checks checks={cart.checks} status={cart.status} /></div>
       <Thread cart={cart} onChanged={load} onSignOut={onSignOut} />
     </div>
   );

@@ -46,7 +46,7 @@ export function BuyCartTasks({ cart, canManage, onChanged, onSignOut }) {
   return (
     <section className="card bc-tasks">
       <h3 className="bc-h">
-        Open cases
+        Open cases{' '}
         <span className={live.length ? 'bc-short sm' : 'muted sm'}>
           {live.length ? `${live.length} outstanding` : 'none'}
         </span>
@@ -80,8 +80,7 @@ export function BuyCartTasks({ cart, canManage, onChanged, onSignOut }) {
 
       {!tasks.length && (
         <p className="muted sm">
-          Nothing outstanding. A wrong pair, a missing box or an unposted refund goes here —
-          with an owner and a date, so following it up isn’t a memory test.
+          Nothing outstanding. A wrong pair, a missing box or an unposted refund goes here.
         </p>
       )}
 

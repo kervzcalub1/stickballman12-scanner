@@ -240,6 +240,65 @@ body {
 .home-card.home-attention .home-card-icon { color: #e0a458; background: rgba(224, 164, 88, 0.12); border-color: rgba(224, 164, 88, 0.25); }
 .home-attention-top { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .home-attention-count { font-size: 26px; font-weight: 800; line-height: 1; color: #e0a458; font-variant-numeric: tabular-nums; }
+
+/* Home head: greeting, the find box and the four daily jobs (Home.jsx). */
+.home-head { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
+.home-head .home-greeting { margin: 4px 2px 0; }
+.home-find { display: flex; align-items: center; gap: 8px; position: relative; }
+.home-find input { flex: 1; min-width: 0; padding-left: 40px; height: 46px; font-size: 15px; }
+.home-find-icon { position: absolute; left: 13px; top: 50%; width: 18px; height: 18px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.home-find .btn { height: 46px; padding-inline: 18px; }
+.home-quick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.home-quick-btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 10px;
+  border-radius: 12px; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  font-size: 14px; font-weight: 600; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease;
+}
+.home-quick-btn:hover { border-color: var(--primary); background: var(--panel-2); }
+.home-quick-icon { width: 18px; height: 18px; color: var(--primary); flex: none; }
+@media (max-width: 560px) {
+  .home-quick { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Needs attention, two tiers: "now" tiles (amber, above) and the backlog row. */
+.home-attn-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.home-attn-grid .home-card { padding: 14px 16px 14px 19px; }
+.home-attn-grid .home-card-icon { width: 36px; height: 36px; padding: 8px; margin: 0; }
+.home-attn-grid .home-card-title { font-size: 15px; }
+.home-backlog { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.home-attn-grid + .home-backlog { padding-top: 12px; border-top: 1px dashed var(--border); }
+.home-backlog-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin-right: 2px;
+}
+.home-backlog-item {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px;
+  transition: border-color 0.15s ease;
+}
+.home-backlog-item:hover { border-color: var(--accent-edge); }
+.home-backlog-icon { width: 15px; height: 15px; color: var(--muted); flex: none; }
+.home-backlog-item .home-attention-count { font-size: 14px; font-weight: 700; color: var(--text); }
+.home-backlog-name { color: var(--muted); }
+
+/* Tool cards: icon beside the text instead of stacked above it, and a denser grid — the
+   same 26 cards in roughly half the height, with no lone card stretched across a row. */
+.home-tools { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.home-tools .home-card { flex-direction: row; align-items: flex-start; gap: 12px; padding: 14px 14px 14px 17px; border-radius: 12px; }
+.home-tools .home-card-icon { width: 38px; height: 38px; padding: 9px; margin: 0; flex: none; }
+.home-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; }
+.home-sections > .home-section { grid-column: 1 / -1; }
+.home-sections > .home-section.half { grid-column: auto; }
+@media (max-width: 820px) { .home-sections > .home-section.half { grid-column: 1 / -1; } }
+.home-card-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.home-tools .home-card-title { font-size: 15px; }
+.home-tools .home-card-sub {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4;
+}
+.home-tools .card-badges { margin-top: 5px; }
+@media (max-width: 560px) {
+  .home-tools { grid-template-columns: 1fr; gap: 8px; }
+  .home-tools .home-card { padding: 12px 12px 12px 15px; }
+}
 .card-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 /* Three tones, and the distinction is meaningful — amber is a CALL TO ACTION, not
    decoration. Store-sync counts (II/AL/SX/SH) are just numbers, so they're `info`;
@@ -5090,4 +5149,63 @@ button.bc-cost-chip { font-family: inherit; line-height: inherit; }
   .bc-card-money { display: flex; gap: 16px; font-size: 13px; font-variant-numeric: tabular-nums;
     padding-top: 7px; border-top: 1px solid var(--border); }
   .bc-card-money i { font-style: normal; color: var(--muted); font-size: 11.5px; margin-right: 4px; }
+}
+
+/* ── Buying requests: whose turn, Open/Finished, collapsible conditions (2026-09-25) ── */
+.bc-views { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.bc-view { padding: 6px 14px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+.bc-view:hover { color: var(--text); }
+.bc-view.on { background: var(--panel-2); color: var(--text); }
+.bc-queue { position: relative; }
+.bc-queue-mine {
+  position: absolute; top: 6px; right: 8px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase;
+  background: rgba(79, 124, 255, 0.16); color: #8fb0ff;
+}
+.bc-next {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 12px 0 4px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); font-size: 14px;
+}
+.bc-next.mine { border-color: rgba(79, 124, 255, 0.45); background: rgba(79, 124, 255, 0.08); }
+.bc-next-tag {
+  flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.4px;
+  text-transform: uppercase; background: var(--panel); color: var(--muted);
+}
+.bc-next.mine .bc-next-tag { background: var(--primary); color: #fff; }
+.bc-next-text { flex: 1 1 220px; min-width: 0; }
+.bc-sec { scroll-margin-top: 12px; }
+details.bc-check-group > summary { list-style: none; cursor: pointer; }
+details.bc-check-group > summary::-webkit-details-marker { display: none; }
+details.bc-check-group > summary h4::before {
+  content: '\25B8'; display: inline-block; width: 1em; color: var(--muted); transition: transform 0.15s ease;
+}
+details.bc-check-group[open] > summary h4::before { transform: rotate(90deg); }
+details.bc-check-group:not([open]) { padding-bottom: 4px; }
+
+/* The photo state sat flush against the SKU ("CW2288-111photo failed"). */
+.bc-table .bc-td-shoe .bc-shot-none,
+.bc-table .bc-td-shoe .bc-hold { margin-left: 6px; }
+
+/* Lines on a phone: one stacked card per pair instead of a 620px table scrolled
+   sideways, which hid the quantity, the price and the approval — everything but the
+   shoe and its size — from the buyer standing in the shop. Each cell carries its own
+   label (data-label), so nothing depends on a header row scrolled out of view. */
+@media (max-width: 560px) {
+  .bc-lines .bc-scroll { overflow-x: visible; }
+  .bc-lines .bc-table { min-width: 0; }
+  .bc-lines .bc-table thead { display: none; }
+  .bc-lines .bc-table tr.bc-line {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+    padding: 10px 2px; border-bottom: 1px solid var(--border);
+  }
+  .bc-lines .bc-table tr.bc-line > td { display: block; padding: 0; border: 0; white-space: normal; text-align: left; }
+  .bc-lines .bc-table tr.bc-line > td.bc-td-shoe { flex: 1 1 60%; }
+  .bc-lines .bc-table tr.bc-line > td.bc-td-status { order: 9; flex: 1 1 100%; }
+  .bc-lines .bc-table tr.bc-line > td.bc-line-actions { order: 10; margin-left: auto; }
+  .bc-lines .bc-table tr.bc-line > td[data-label]::before {
+    content: attr(data-label); display: block; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .bc-lines .bc-table tr.bc-line-detail > td { display: block; padding: 8px 0; }
+  .bc-lines .bc-table .muted.xs { max-width: none; }
 }

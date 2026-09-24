@@ -153,6 +153,43 @@ const PATHS = {
     <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
     <path d="M10 11v6M14 11v6" />
   </>),
+  // Inbound — a truck on its way. These six used to have no entry at all, and a
+  // missing name silently draws the Inventory magnifier — six cards shared one glyph.
+  inbound: (<>
+    <path d="M2 6h11v10H2z" />
+    <path d="M13 9h4l3 3v4h-7" />
+    <circle cx="6.5" cy="17.5" r="1.8" />
+    <circle cx="16.5" cy="17.5" r="1.8" />
+  </>),
+  // 1ID Stickers — a sheet of peel-off labels
+  'vin-stock': (<>
+    <rect x="4" y="3" width="16" height="18" rx="2" />
+    <rect x="7" y="6" width="10" height="4" rx="1" />
+    <rect x="7" y="13" width="10" height="4" rx="1" />
+  </>),
+  // Costs — a price tag with a dollar sign
+  costs: (<>
+    <path d="M3 12V4h8l10 10-8 8L3 12z" />
+    <path d="M12.5 10.5c-.5-.6-1.3-.9-2-.8-.9.1-1.5.7-1.4 1.4.1.8 1 1 1.8 1.2.9.2 1.7.5 1.7 1.3 0 .8-.8 1.3-1.7 1.3-.8 0-1.5-.4-1.9-.9M10.7 8.8v.9M10.7 14.4v.9" />
+  </>),
+  // Box Labels — a shoe box with a label on its end
+  'box-labels': (<>
+    <path d="M3 8l9-4 9 4v9l-9 4-9-4V8z" />
+    <path d="M3 8l9 4 9-4M12 12v9" />
+    <path d="M15 14.5l3-1.3v2.5l-3 1.3z" />
+  </>),
+  // Empty Box Stock — two stacked boxes
+  'box-stock': (<>
+    <rect x="3" y="13" width="18" height="7" rx="1" />
+    <rect x="6" y="5" width="12" height="8" rx="1" />
+    <path d="M10 16.5h4M10 8.5h4" />
+  </>),
+  // Merge duplicates — two paths joining into one
+  merge: (<>
+    <path d="M6 3v4a5 5 0 0 0 5 5h2a5 5 0 0 1 5 5v4" />
+    <path d="M18 3v4a5 5 0 0 1-5 5" />
+    <path d="M15 18l3 3 3-3" />
+  </>),
 };
 
 export function NavIcon({ name, ...props }) {

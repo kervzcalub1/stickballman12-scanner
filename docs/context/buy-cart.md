@@ -44,6 +44,28 @@ BUY CART (new)                          PURCHASE ORDER (existing)
 10 CLOSED ◄──────────────────────────────  Reconciled
 ```
 
+## Whose turn — the UI pass of 2026-09-25
+Every role used to open a request and hunt for their part. What changed:
+- **Next step line** under the progress dots (`nextStep` in `src/lib/buycartRules.js`,
+  drawn by `NextStep` in `BuyCart.jsx`). It reads the status plus the viewer's draw-flags
+  (`isBuyer`, `canDecide`, `canIssue`, `canAudit`) and says either **Your turn** + what to
+  do + a button that scrolls to the section (`#bc-sec-add|lines|cards|receipt|pack|audit|goods|checks`),
+  or **Next** + who we're waiting on. Pure function, tested in `e2e/buy-cart-next-step.spec.js`.
+  It draws nothing new — it points at controls that already exist.
+- **Closing conditions** groups are `<details>`: a group opens only once it is answerable
+  (money from `funded`, goods from `receipted`) and still has something outstanding;
+  before that it's one line with its count and "not yet".
+- **Close / reconciled** is drawn only in `receipted`/`audited` — it used to sit primary
+  and disabled from day one.
+- **List**: **Open / Finished / All** tabs (`?view=`, default open; server-side `view` on
+  `api/cart/list`, ended = `BUY_CART_DONE` = closed · cancelled · written_off · denied).
+  Picking a desk's queue count overrides the tab. The desk a viewer holds says **Yours**.
+  Status is the second column; a request with nothing approved/funded shows "—" not
+  `$0.00`; with no purpose the Buying column shows the pair count.
+- **Lines on a phone** stack into one card per pair (`data-label` on each cell) instead of
+  a 620px table scrolled sideways that hid qty, price and approval.
+- History: removals no longer write `×null`; old rows are cleaned on render.
+
 ## The naming trap, first
 Our `supplier` role is the process's **BUYER** — the person who goes to the shop (and
 who also ships us the boxes, which is why they hold that role). The process's "gift card

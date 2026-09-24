@@ -21,6 +21,8 @@ export default async function handler(req, res) {
 
   const params = new URL(req.url, 'http://x').searchParams;
   const status = STATUSES.includes(params.get('status')) ? params.get('status') : null;
+  // 'open' = still moving, 'done' = ended (closed, cancelled, written off, denied).
+  const view = ['open', 'done'].includes(params.get('view')) ? params.get('view') : null;
   // Fail CLOSED on a uid that isn't a real row id: scoped to -1 (nothing) rather than
   // reaching the query as NaN, which is the wrong kind of surprise on a money screen.
   const isBuyer = user.role === 'supplier' && !isPrivileged(user.role);
@@ -35,7 +37,7 @@ export default async function handler(req, res) {
   const buyerId = !isBuyer && Number.isInteger(buyerParam) && buyerParam > 0 ? buyerParam : null;
 
   try {
-    const carts = await listBuyCarts({ buyerUserId, status, buyerId });
+    const carts = await listBuyCarts({ buyerUserId, status, buyerId, view });
     // Desk counts are a staff thing — a buyer has no queue to hold up.
     const counts = isBuyer ? null : await buyCartPendingCounts();
     // The dropdown's options come from the whole table, not from the page above: the

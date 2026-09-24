@@ -5150,3 +5150,62 @@ button.bc-cost-chip { font-family: inherit; line-height: inherit; }
     padding-top: 7px; border-top: 1px solid var(--border); }
   .bc-card-money i { font-style: normal; color: var(--muted); font-size: 11.5px; margin-right: 4px; }
 }
+
+/* ── Buying requests: whose turn, Open/Finished, collapsible conditions (2026-09-25) ── */
+.bc-views { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.bc-view { padding: 6px 14px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+.bc-view:hover { color: var(--text); }
+.bc-view.on { background: var(--panel-2); color: var(--text); }
+.bc-queue { position: relative; }
+.bc-queue-mine {
+  position: absolute; top: 6px; right: 8px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase;
+  background: rgba(79, 124, 255, 0.16); color: #8fb0ff;
+}
+.bc-next {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 12px 0 4px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); font-size: 14px;
+}
+.bc-next.mine { border-color: rgba(79, 124, 255, 0.45); background: rgba(79, 124, 255, 0.08); }
+.bc-next-tag {
+  flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.4px;
+  text-transform: uppercase; background: var(--panel); color: var(--muted);
+}
+.bc-next.mine .bc-next-tag { background: var(--primary); color: #fff; }
+.bc-next-text { flex: 1 1 220px; min-width: 0; }
+.bc-sec { scroll-margin-top: 12px; }
+details.bc-check-group > summary { list-style: none; cursor: pointer; }
+details.bc-check-group > summary::-webkit-details-marker { display: none; }
+details.bc-check-group > summary h4::before {
+  content: '\25B8'; display: inline-block; width: 1em; color: var(--muted); transition: transform 0.15s ease;
+}
+details.bc-check-group[open] > summary h4::before { transform: rotate(90deg); }
+details.bc-check-group:not([open]) { padding-bottom: 4px; }
+
+/* The photo state sat flush against the SKU ("CW2288-111photo failed"). */
+.bc-table .bc-td-shoe .bc-shot-none,
+.bc-table .bc-td-shoe .bc-hold { margin-left: 6px; }
+
+/* Lines on a phone: one stacked card per pair instead of a 620px table scrolled
+   sideways, which hid the quantity, the price and the approval — everything but the
+   shoe and its size — from the buyer standing in the shop. Each cell carries its own
+   label (data-label), so nothing depends on a header row scrolled out of view. */
+@media (max-width: 560px) {
+  .bc-lines .bc-scroll { overflow-x: visible; }
+  .bc-lines .bc-table { min-width: 0; }
+  .bc-lines .bc-table thead { display: none; }
+  .bc-lines .bc-table tr.bc-line {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+    padding: 10px 2px; border-bottom: 1px solid var(--border);
+  }
+  .bc-lines .bc-table tr.bc-line > td { display: block; padding: 0; border: 0; white-space: normal; text-align: left; }
+  .bc-lines .bc-table tr.bc-line > td.bc-td-shoe { flex: 1 1 60%; }
+  .bc-lines .bc-table tr.bc-line > td.bc-td-status { order: 9; flex: 1 1 100%; }
+  .bc-lines .bc-table tr.bc-line > td.bc-line-actions { order: 10; margin-left: auto; }
+  .bc-lines .bc-table tr.bc-line > td[data-label]::before {
+    content: attr(data-label); display: block; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .bc-lines .bc-table tr.bc-line-detail > td { display: block; padding: 8px 0; }
+  .bc-lines .bc-table .muted.xs { max-width: none; }
+}

@@ -6336,8 +6336,19 @@ export async function getBuyCartFull(id) {
 // List for a queue screen. `buyerUserId` scopes a buyer to their own carts; staff pass
 // null and get everything. Scoping on the id off the token (never a name) is the same
 // rule the payout presets follow, and for the same reason.
-export async function listBuyCarts({ buyerUserId = null, status = null, buyerId = null, limit = 100 } = {}) {
+// A request that has ENDED — nothing more will happen to it. Denied is here too: the
+// buyer's next step after a denial is a new request, not this one.
+export const BUY_CART_DONE = ['closed', 'cancelled', 'written_off', 'denied'];
+
+export async function listBuyCarts({ buyerUserId = null, status = null, buyerId = null, view = null, limit = 100 } = {}) {
   const sql = db();
+  // `view` splits the list into what is still moving and what has ended. The list is
+  // capped at 100 and the endings pile up forever, so without it the open requests —
+  // the only ones anybody acts on — were a thin stripe among closed and denied ones.
+  // Two arrays rather than a branch per view: the shim can't nest fragments, and an
+  // IN list with a NULL guard reads the same in both queries.
+  const onlyIn = view === 'done' ? BUY_CART_DONE : null;
+  const notIn = view === 'open' ? BUY_CART_DONE : null;
   // `buyerUserId` is the SCOPE — a buyer reaching only their own, off the token.
   // `buyerId` is a staff FILTER, and they are deliberately different arguments: folding
   // them into one parameter is how a filter becomes a way to read somebody else's
@@ -6347,12 +6358,16 @@ export async function listBuyCarts({ buyerUserId = null, status = null, buyerId 
         SELECT c.*, (SELECT po_code FROM purchase_orders p WHERE p.id = c.po_id) AS po_code
           FROM buy_carts c WHERE c.buyer_user_id = ${buyerUserId}
            AND (${status}::text IS NULL OR c.status = ${status})
+           AND (${onlyIn}::text[] IS NULL OR c.status = ANY(${onlyIn}::text[]))
+           AND (${notIn}::text[] IS NULL OR c.status <> ALL(${notIn}::text[]))
          ORDER BY c.id DESC LIMIT ${limit}`
     : await sql`
         SELECT c.*, (SELECT po_code FROM purchase_orders p WHERE p.id = c.po_id) AS po_code
           FROM buy_carts c
          WHERE (${status}::text IS NULL OR c.status = ${status})
            AND (${buyerId}::bigint IS NULL OR c.buyer_user_id = ${buyerId})
+           AND (${onlyIn}::text[] IS NULL OR c.status = ANY(${onlyIn}::text[]))
+           AND (${notIn}::text[] IS NULL OR c.status <> ALL(${notIn}::text[]))
          ORDER BY c.id DESC LIMIT ${limit}`;
   return rows.map(cartOut);
 }
@@ -6517,7 +6532,7 @@ export async function removeBuyCartLine(cartId, lineId, actor) {
   const rows = await sql`DELETE FROM buy_cart_lines WHERE id = ${lineId} AND cart_id = ${cartId} RETURNING sku, size, qty`;
   if (!rows[0]) return null;
   await recalcCartMoney(sql, cartId);
-  await logCartEvent({ cartId, kind: 'line_removed', actor, body: `${rows[0].sku} ${rows[0].size || ''} ×${rows[0].qty}` });
+  await logCartEvent({ cartId, kind: 'line_removed', actor, body: `${rows[0].sku}${rows[0].size ? ` size ${rows[0].size}` : ''}${Number(rows[0].qty) > 0 ? ` ×${rows[0].qty}` : ''}` });
   return rows[0];
 }
 

@@ -101,3 +101,91 @@ export function cardsRefusedBecause(cart) {
   if (Number(cart?.pending_count) > 0) return `${cart.pending_count} line${Number(cart.pending_count) === 1 ? ' is' : 's are'} still waiting for a decision — cards wait until every line is decided.`;
   return 'Gift cards can only go against an approved request.';
 }
+
+/**
+ * The one sentence at the top of a request: whose turn it is, and — when it is the
+ * viewer's — what to do and where on the page to do it.
+ *
+ * Every role used to open a request and hunt. The buyer's receipt box sat halfway down
+ * under the lines and the cards; the approver's buttons were at the foot of the table;
+ * the auditor scrolled past packing to find the audit. The status chip named the column
+ * value, the dots named the stop, and neither said "this is yours".
+ *
+ * `who` = { isBuyer, canDecide, canIssue, canAudit } — the same draw-flags the screen
+ * already computes. `target` names a section id (`bc-sec-<target>`) to scroll to; it is
+ * null when the thing to press is in the header.
+ *
+ * Returns { mine, text, action?, target? } or null for a request with nothing to say.
+ */
+export function nextStep(cart, who) {
+  if (!cart) return null;
+  const { isBuyer, canDecide, canIssue, canAudit } = who;
+  const buyer = cart.buyer_name || 'the buyer';
+  const pending = Number(cart.pending_count) || 0;
+  const pairs = (n) => `${n} pair${n === 1 ? '' : 's'}`;
+  const checks = cart.checks || [];
+  const goodsDone = checks.filter((c) => c.scope === 'goods').every((c) => c.ok);
+  const allDone = checks.length > 0 && checks.every((c) => c.ok);
+  const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+
+  switch (cart.status) {
+    case 'draft':
+      return isBuyer
+        ? { mine: true, text: 'Add each pair as you find it — the approver sees them as you go.', action: 'Add a pair', target: 'add' }
+        : { mine: false, text: `Waiting on ${buyer} to add the first pair.` };
+    case 'submitted':
+    case 'approved':
+    case 'denied': {
+      if (pending > 0) {
+        if (canDecide) return { mine: true, text: `${pairs(pending)} waiting for your decision.`, action: 'Decide', target: 'lines' };
+        if (isBuyer) return { mine: false, text: `Waiting on an approver — ${pairs(pending)} to decide. Keep adding, then close the request when you are done.` };
+        return { mine: false, text: `Waiting on an approver — ${pairs(pending)} to decide.` };
+      }
+      if (listOpen(cart)) {
+        return isBuyer
+          ? { mine: true, text: 'Everything so far is decided. Found it all? Close the request so the desk can fund the cards.', action: null, target: null }
+          : { mine: false, text: `Everything so far is decided. Waiting on ${buyer} to close the list — cards wait until then.` };
+      }
+      if (cart.status === 'denied') return { mine: false, text: 'Turned down. Anything else is a new request.' };
+      if (canIssue) return { mine: true, text: `Record the gift cards — ${money(cart.funding_target || cart.approved_amount)} to fund.`, action: 'Record cards', target: 'cards' };
+      return { mine: false, text: 'Waiting on the gift card desk to release the cards.' };
+    }
+    case 'funded':
+      return isBuyer
+        ? { mine: true, text: 'Cards are out. After the till, upload the receipt — it is required.', action: 'Add the receipt', target: 'receipt' }
+        : { mine: false, text: `Waiting on ${buyer}'s receipt.` };
+    case 'receipted':
+    case 'audited': {
+      // Two halves run side by side here — the money (the auditor) and the goods (the
+      // buyer packing, then the boxes landing). Say the viewer's half first.
+      if (canAudit && cart.status === 'receipted') {
+        return { mine: true, text: 'Record the financial audit — what each card was spent, and what is left on it.', action: 'Audit', target: 'audit' };
+      }
+      if (!cart.po_id) {
+        return isBuyer || canDecide
+          ? { mine: true, text: 'Receipt is in. Start packing: every pair on the receipt goes into a box.', action: null, target: null }
+          : { mine: false, text: `Waiting on ${buyer} to start packing the shipment.` };
+      }
+      const pack = cart.pack;
+      if (pack && pack.unpacked > 0) {
+        return isBuyer
+          ? { mine: true, text: `${pairs(pack.unpacked)} on the receipt not in a box yet.`, action: 'Pack', target: 'pack' }
+          : { mine: false, text: `Waiting on ${buyer} to pack ${pairs(pack.unpacked)}.` };
+      }
+      if (canAudit && allDone) return { mine: true, text: 'Every condition is met. Close it out.', action: null, target: null };
+      if (canAudit && goodsDone && !cart.goods_audited_at) {
+        return { mine: true, text: 'The boxes are in and match. Sign off the shipment.', action: 'Sign off', target: 'goods' };
+      }
+      const open = checks.filter((c) => !c.ok);
+      return { mine: false, text: open.length ? `Waiting on: ${open[0].label.toLowerCase()}${open.length > 1 ? ` (+${open.length - 1} more)` : ''}.` : 'Waiting on the shipment.' , target: 'checks', action: 'See what' };
+    }
+    case 'closed':
+      return { mine: false, text: 'Closed — the money and the goods both reconciled.' };
+    case 'written_off':
+      return { mine: false, text: 'Written off.' };
+    case 'cancelled':
+      return { mine: false, text: 'Cancelled before any money moved.' };
+    default:
+      return null;
+  }
+}

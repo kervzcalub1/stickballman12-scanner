@@ -12,9 +12,18 @@ import { TopBar, FormModal } from '../components/common.jsx';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { useLive } from '../hooks.js';
+import { hasPriv } from '../lib/constants.js';
 import { BuyCart } from './BuyCart.jsx';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+// A request with nothing approved or funded yet has no money figure, which is different
+// from a figure of zero — a column of "$0.00" on every draft read as a list of requests
+// somebody had priced at nothing.
+const moneyOr = (n) => (Number(n) > 0 ? money(n) : '—');
+const pairs = (c) => {
+  const n = Number(c.line_count) || 0;
+  return n ? `${n} pair${n === 1 ? '' : 's'}` : 'No pairs yet';
+};
 
 // "Still adding" beside the status: a request is `submitted` from its first pair
 // onward, whether the buyer is mid-aisle or done — and the queue is where the desk
@@ -31,15 +40,29 @@ const STATUS = {
   audited: { label: 'Waiting on the shipment', cls: 'shipped' },
   closed: { label: 'Closed / reconciled', cls: 'ok' },
   cancelled: { label: 'Cancelled', cls: 'muted' },
+  written_off: { label: 'Written off', cls: 'muted' },
 };
 
 // Which desk each count belongs to, named as a job rather than as a state — "needs gift
 // cards" tells the issuer it is theirs in a way "approved" never does.
+//
+// `priv` marks the desk a person holds, so their own pile says "Yours" — the counts are
+// the same for everybody, and "is any of this mine?" was left for each reader to work
+// out from their privileges.
 const QUEUES = [
-  { key: 'carts_to_approve', status: 'submitted', label: 'To approve' },
-  { key: 'carts_to_fund', status: 'approved', label: 'Needs gift cards' },
+  { key: 'carts_to_approve', status: 'submitted', label: 'To approve', priv: 'approve_buying' },
+  { key: 'carts_to_fund', status: 'approved', label: 'Needs gift cards', priv: 'issue_gift_cards' },
   { key: 'carts_awaiting_receipt', status: 'funded', label: 'Waiting on receipts' },
-  { key: 'carts_to_audit', status: 'receipted', label: 'To audit' },
+  { key: 'carts_to_audit', status: 'receipted', label: 'To audit', priv: 'audit_buying' },
+];
+
+// Open by default: the list is capped at 100 and the endings (closed, denied, cancelled)
+// pile up forever, so without a split the requests anybody can still act on were a thin
+// stripe between finished ones — and on a buyer's phone, a 13,000px scroll.
+const VIEWS = [
+  { key: 'open', label: 'Open' },
+  { key: 'done', label: 'Finished' },
+  { key: 'all', label: 'All' },
 ];
 
 export function BuyCarts({ user, onHome, onSignOut }) {
@@ -54,6 +77,10 @@ export function BuyCarts({ user, onHome, onSignOut }) {
   // inside BC-2400 used to land back on the queue, and a link to one could not be sent.
   const [openRaw, setOpen] = useQueryParam('request');
   const open = /^\d+$/.test(openRaw) ? Number(openRaw) : null;
+  const [view, setView] = useQueryParam('view', 'open');
+  // A desk's queue is always open work, so picking one overrides the Open/Finished split
+  // rather than being ANDed with it (Finished + "To approve" would always be empty).
+  const listView = filter ? undefined : (view === 'all' ? undefined : view);
   const [err, setErr] = useState('');
   const [asking, setAsking] = useState(false);
 
@@ -66,19 +93,19 @@ export function BuyCarts({ user, onHome, onSignOut }) {
 
   async function load() {
     try {
-      const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined);
+      const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined, listView);
       setCarts(c); setCounts(n); if (b) setBuyers(b); setErr('');
     } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
   }
   // Filtered SERVER-side, not in the browser: the list is capped at 100, so narrowing
   // the loaded page would quietly show a fraction of somebody's requests and read as
   // though that were all of them.
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter, buyer]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter, buyer, view]);
   // The queue counts and the status chips move when somebody else acts — a buyer closing
   // a list, a tap in the group — so the desk's pile is re-read the moment it changes
   // (live-updates.md) rather than on F5.
   useLive(['buy_carts', 'buy_cart_lines', 'buy_cart_gift_cards', 'buy_cart_tasks'], async () => {
-    const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined);
+    const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined, listView);
     setCarts(c); setCounts(n); if (b) setBuyers(b);
   }, { paused: !!asking || !!open, mount: false });
 
@@ -120,6 +147,14 @@ export function BuyCarts({ user, onHome, onSignOut }) {
           ]} />
       )}
 
+      <div className="bc-views" role="tablist" aria-label="Which requests">
+        {VIEWS.map((v) => (
+          <button key={v.key} type="button" role="tab" aria-selected={!filter && view === v.key}
+            className={`bc-view ${!filter && view === v.key ? 'on' : ''}`}
+            onClick={() => { setFilter(''); setView(v.key); }}>{v.label}</button>
+        ))}
+      </div>
+
       {counts && (
         <div className="bc-queues">
           {QUEUES.map((q) => (
@@ -128,11 +163,12 @@ export function BuyCarts({ user, onHome, onSignOut }) {
               onClick={() => setFilter(filter === q.status ? '' : q.status)}>
               <span className="bc-queue-n">{counts[q.key] || 0}</span>
               <span className="bc-queue-l">{q.label}</span>
+              {q.priv && hasPriv(user, q.priv) && <span className="bc-queue-mine">Yours</span>}
             </button>
           ))}
           {(filter || buyer) && (
             <button type="button" className="btn sm ghost"
-              onClick={() => { setFilter(''); setBuyer(''); }}>Show all</button>
+              onClick={() => { setFilter(''); setBuyer(''); }}>Clear filters</button>
           )}
         </div>
       )}
@@ -179,8 +215,10 @@ export function BuyCarts({ user, onHome, onSignOut }) {
           {filter && buyer ? 'Nothing in that queue for that buyer.'
             : filter ? 'Nothing in that queue.'
               : buyer ? 'No requests from that buyer.'
-                : isBuyer ? 'No requests yet — start one when you are heading to a store.'
-                  : 'No buying requests yet.'}
+                : view === 'open' ? (isBuyer ? 'Nothing open — start a request when you are heading to a store.' : 'No open buying requests.')
+                  : view === 'done' ? 'No finished requests yet.'
+                    : isBuyer ? 'No requests yet — start one when you are heading to a store.'
+                      : 'No buying requests yet.'}
         </p>
       )}
 
@@ -213,8 +251,8 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                     {c.po_code && <span>· <a className="bc-po-link" href={poHref(user, c.po_id)} onClick={(e) => e.stopPropagation()}>{c.po_code}</a></span>}
                   </span>
                   <span className="bc-card-money">
-                    <span><i>Approved</i> {money(c.approved_amount)}</span>
-                    <span><i>Cards</i> {money(c.gc_total)}</span>
+                    <span><i>Approved</i> {moneyOr(c.approved_amount)}</span>
+                    <span><i>Cards</i> {moneyOr(c.gc_total)}</span>
                   </span>
                 </button>
               </li>
@@ -228,8 +266,8 @@ export function BuyCarts({ user, onHome, onSignOut }) {
           <table className="table">
             <thead>
               <tr>
-                <th>Request</th>{!isBuyer && <th>Buyer</th>}<th>Store</th><th className="bc-purpose-cell">Buying</th>
-                <th className="num">Approved</th><th className="num">Cards</th><th>Status</th><th>Order</th><th>Opened</th>
+                <th>Request</th><th>Status</th>{!isBuyer && <th>Buyer</th>}<th>Store</th><th className="bc-purpose-cell">Buying</th>
+                <th className="num">Approved</th><th className="num">Cards</th><th>Order</th><th>Opened</th>
               </tr>
             </thead>
             <tbody>
@@ -239,15 +277,19 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                   <tr key={c.id} className="bc-row" onClick={() => setOpen(c.id)} tabIndex={0}
                     onKeyDown={(e) => { if (e.key === 'Enter') setOpen(c.id); }}>
                     <td><b>{c.cart_code}</b></td>
-                    {!isBuyer && <td>{c.buyer_name}</td>}
-                    <td>{c.retailer || '—'}</td>
-                    <td className="bc-purpose-cell">{c.purpose || <span className="muted">—</span>}</td>
-                    <td className="num">{money(c.approved_amount)}</td>
-                    <td className="num">{money(c.gc_total)}</td>
+                    {/* Status second, beside the code: it is what a desk scans the list for,
+                        and at the far right it was the column that scrolled out of view. */}
                     <td>
                       <span className={`po-chip ${s.cls}`}>{s.label}</span>
                       {stillAdding(c) && <span className="po-chip warn bc-list-chip">Still adding</span>}
                     </td>
+                    {!isBuyer && <td>{c.buyer_name}</td>}
+                    <td>{c.retailer || '—'}</td>
+                    {/* No purpose is asked for any more, so on every new request this column
+                        was a dash. The pairs are the answer to "what is being bought". */}
+                    <td className="bc-purpose-cell">{c.purpose || <span className="muted">{pairs(c)}</span>}</td>
+                    <td className="num">{moneyOr(c.approved_amount)}</td>
+                    <td className="num">{moneyOr(c.gc_total)}</td>
                     <td>{c.po_code ? <a className="bc-po-link" href={poHref(user, c.po_id)} onClick={(e) => e.stopPropagation()}>{c.po_code}</a> : '—'}</td>
                     <td className="muted sm">{estDate(c.created_at)}</td>
                   </tr>

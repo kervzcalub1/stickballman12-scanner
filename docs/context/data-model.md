@@ -60,6 +60,7 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   (253) via `npm run db:seed-manheim`; other sites added in the Locations UI.
   See `locations.md`.
 - **shipment_issues** — per-batch issues (e.g. no-box auto-listed).
+- **telegram_pending_qty** (2026-09-29) — the open "How many pairs?" per Telegram account after a "More…" tap: `telegram_user_id PK, cart_id, line_id, chat_id, card_message_id, env, asked_at`. Taken with DELETE…RETURNING within 10 min (`askTelegramQty` / `takeTelegramQty`). See `buy-cart.md` → Telegram direct.
 - **payout_presets** — supplier cost stacks for the Payout Calculator. `id, name
   (UNIQUE on `lower(btrim(name))`), tip_amt, shipping_amt, tax_pct, gift_pct,
   store_pct, promo_pct, cashback_pct, note, created_by, updated_by, updated_at`.

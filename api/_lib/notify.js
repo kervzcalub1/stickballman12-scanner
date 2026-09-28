@@ -1,8 +1,10 @@
 // Telling the outside world that a buyer has asked about a pair.
 //
-// One POST to a Make.com custom webhook, from which Make builds the Telegram card the
-// desk taps. `MAKE_WEBHOOK_URL` in the environment, never in the source: anybody holding
-// that URL can inject into their scenario, so it is a credential.
+// DIRECT to Telegram (api/_lib/telegram.js) when TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are
+// set — the card, the buttons and the photo all go from this server (2026-09-29). Until
+// then, and as the way back if it ever has to be undone, it is one POST to the Make.com
+// webhook in MAKE_WEBHOOK_URL, from which Make built the card; that payload is unchanged.
+// Both are credentials and live only in the environment.
 //
 // ── Two rules this has to obey ────────────────────────────────────────────────
 //
@@ -19,6 +21,7 @@ import { getBuyCart, getBuyCartLine } from './db.js';
 import { fundingTarget, fundingTaxPct } from './buycart.js';
 import { stockForPair, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
+import { telegramConfigured, sendApprovalCard, sendNote, cardKeyboard } from './telegram.js';
 
 // THE TEST SUITE MUST NOT POST TO TELEGRAM.
 //
@@ -29,7 +32,7 @@ import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js'
 // the endpoint being correct about a row that is genuinely gone. BC-2923 was one of these.
 //
 // It is stopped the way the 17TRACK leak is stopped — `playwright.config.js` blanks
-// MAKE_WEBHOOK_URL for the server it starts, and vite's devApi only fills a var that is
+// MAKE_WEBHOOK_URL and TELEGRAM_BOT_TOKEN for the server it starts, and vite's devApi only fills a var that is
 // `undefined`, so an empty string is already "set" and .env cannot put the real URL back.
 //
 // IT IS *NOT* GUARDED ON APP_ENV, and that is the correction, not an omission. A guard on
@@ -39,7 +42,7 @@ import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js'
 // exactly like Make dropping them: two rounds of chasing the wrong half of the system
 // while someone waited. A control that cannot tell a test run from a human doing their
 // job is not a control, it is an outage with a rationale.
-export const notifyConfigured = () => !!String(process.env.MAKE_WEBHOOK_URL || '').trim();
+export const notifyConfigured = () => telegramConfigured() || !!String(process.env.MAKE_WEBHOOK_URL || '').trim();
 
 // WHICH INSTANCE SENT IT. Dev and prod share one bot, one group and one webhook; the
 // scenario carries this on every button's callback_data and posts the tap back to the
@@ -63,10 +66,11 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
   // server that had sent successfully. That ambiguity cost two rounds of "no card
   // arrived" with a person waiting, and it is the same lesson as the failed scan: a
   // refusal has to leave a line, or it cannot be told apart from the thing working.
+  const direct = telegramConfigured();
   const url = String(process.env.MAKE_WEBHOOK_URL || '').trim();
-  if (!url) {
-    console.log(`[notify] line ${lineId} — MAKE_WEBHOOK_URL is blank on this server, so no card was sent`);
-    return { sent: false, reason: 'MAKE_WEBHOOK_URL is not set' };
+  if (!direct && !url) {
+    console.log(`[notify] line ${lineId} — neither TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID nor MAKE_WEBHOOK_URL is set on this server, so no card was sent`);
+    return { sent: false, reason: 'Telegram is not configured' };
   }
 
   const rawBase = String(process.env.APP_BASE_URL || '').trim().replace(/\/+$/, '');
@@ -260,6 +264,19 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
       },
     };
 
+    if (direct) {
+      // Straight to the group. The photo goes up as bytes from R2 — no public url, no
+      // tunnel — and the buttons carry the same callback data Make's did.
+      const msg = await sendApprovalCard({
+        caption,
+        keyboard: cardKeyboard(Number(cart.id), Number(line.id), notifyEnv()),
+        photoFileId: extra.photoFileId ?? null,
+      });
+      console.log(`[notify] ${cart.cart_code} ${line.sku}/${line.size || '—'} → Telegram message ${msg?.message_id}`
+        + `${msg?.photo ? ' (with photo)' : ' (no photo)'}`);
+      return { sent: true };
+    }
+
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -282,7 +299,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
     return { sent: true };
   } catch (e) {
     // Swallowed on purpose. See the header: the buyer must never pay for this.
-    console.error('[notify] could not tell Make about the line:', e.message);
+    console.error(`[notify] could not send the card (${direct ? 'Telegram' : 'Make'}):`, e.message);
     return { sent: false, reason: e.message };
   }
 }
@@ -306,10 +323,11 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
  * @param {object} [actor]  who pressed it (the caption names the buyer off the request)
  */
 export async function notifyRequestEvent(cartId, event, actor = null) {
+  const direct = telegramConfigured();
   const url = String(process.env.MAKE_WEBHOOK_URL || '').trim();
-  if (!url) {
-    console.log(`[notify] cart ${cartId} ${event} — MAKE_WEBHOOK_URL is blank on this server, so nothing was sent`);
-    return { sent: false, reason: 'MAKE_WEBHOOK_URL is not set' };
+  if (!direct && !url) {
+    console.log(`[notify] cart ${cartId} ${event} — Telegram is not configured on this server, so nothing was sent`);
+    return { sent: false, reason: 'Telegram is not configured' };
   }
   try {
     const cart = await getBuyCart(cartId);
@@ -354,6 +372,11 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
       },
       caption,
     };
+    if (direct) {
+      const msg = await sendNote(caption);
+      console.log(`[notify] ${cart.cart_code} ${event} → Telegram message ${msg?.message_id}`);
+      return { sent: true };
+    }
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -367,7 +390,7 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
     console.log(`[notify] ${cart.cart_code} ${event} → Make ${res.status}`);
     return { sent: true };
   } catch (e) {
-    console.error(`[notify] could not tell Make about ${event}:`, e.message);
+    console.error(`[notify] could not send ${event} (${direct ? 'Telegram' : 'Make'}):`, e.message);
     return { sent: false, reason: e.message };
   }
 }

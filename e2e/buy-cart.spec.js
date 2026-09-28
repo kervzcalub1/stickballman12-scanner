@@ -1911,12 +1911,14 @@ test.describe('the suite cannot put a card in the Telegram group', () => {
   test('a blank webhook refuses the card, and says so rather than going quiet', async () => {
     const { notifyLineAsked, notifyConfigured } = await import('../api/_lib/notify.js');
     const keep = process.env.MAKE_WEBHOOK_URL;
+    const keepTg = process.env.TELEGRAM_BOT_TOKEN;
     try {
       process.env.MAKE_WEBHOOK_URL = '';
+      process.env.TELEGRAM_BOT_TOKEN = '';
       expect(notifyConfigured()).toBe(false);
       const out = await notifyLineAsked(1, 1);
       expect(out.sent).toBe(false);
-      expect(out.reason).toMatch(/MAKE_WEBHOOK_URL/);
+      expect(out.reason).toMatch(/not configured/);
 
       // And a configured server still sends — the refusal must come from the blank, not
       // from something that would also be true in production.
@@ -1925,6 +1927,8 @@ test.describe('the suite cannot put a card in the Telegram group', () => {
     } finally {
       if (keep === undefined) delete process.env.MAKE_WEBHOOK_URL;
       else process.env.MAKE_WEBHOOK_URL = keep;
+      if (keepTg === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+      else process.env.TELEGRAM_BOT_TOKEN = keepTg;
     }
   });
 
@@ -1934,6 +1938,199 @@ test.describe('the suite cannot put a card in the Telegram group', () => {
   // the `reuseExistingServer` caveat above — a hand-started server on this port carries a
   // real .env — and the honest guard for that is the comment, not a test that cannot see
   // the thing it names.
+});
+
+// ---------------------------------------------------------------------------
+// Telegram, DIRECT (api/_lib/telegram.js + api/telegram/webhook.js) — what the two Make
+// scenarios used to do. The server playwright starts points its Bot API at a FAKE on
+// 127.0.0.1:5198 (playwright.config.js); this block runs that fake and reads what the
+// server said to "Telegram", then plays Telegram back at the webhook.
+test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
+  test.describe.configure({ mode: 'serial' });
+  const TG = 771009001;
+  const CHAT = -100777;               // TELEGRAM_CHAT_ID in playwright.config.js
+  const SECRET = 'e2e-telegram-secret';
+  const calls = [];
+  let fake;
+  let msgSeq = 5000;
+
+  test.beforeAll(async () => {
+    const http = await import('node:http');
+    fake = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const method = req.url.split('/').pop();
+        const raw = Buffer.concat(chunks);
+        let body = {};
+        if (String(req.headers['content-type'] || '').includes('json')) body = JSON.parse(raw.toString() || '{}');
+        else body = { multipart: true, text: raw.toString('latin1').slice(0, 4000) };
+        calls.push({ method, body });
+        msgSeq += 1;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ ok: true, result: method === 'answerCallbackQuery' || method === 'setMessageReaction' ? true : { message_id: msgSeq, chat: { id: CHAT } } }));
+      });
+    });
+    await new Promise((r) => fake.listen(5198, '127.0.0.1', r));
+    await pool.query('UPDATE users SET telegram_user_id = $1 WHERE id = $2', [TG, people.approver.uid]);
+  });
+  test.afterAll(async () => {
+    await pool.query('UPDATE users SET telegram_user_id = NULL WHERE telegram_user_id = $1', [TG]);
+    await pool.query('DELETE FROM telegram_pending_qty WHERE telegram_user_id IN ($1, $2)', [TG, 999000777]);
+    await new Promise((r) => fake.close(r));
+  });
+
+  const hook = (request, update, secret = SECRET) => request.post('/api/telegram/webhook', {
+    headers: { 'x-telegram-bot-api-secret-token': secret },
+    data: update,
+  });
+  const tapUpdate = (data, { from = TG, messageId = 42, chat = CHAT } = {}) => ({
+    update_id: Date.now(),
+    callback_query: {
+      id: `cq-${Date.now()}`, data, from: { id: from, first_name: 'Tapper' },
+      message: { message_id: messageId, chat: { id: chat } },
+    },
+  });
+  // By POSITION, not by clock: a call recorded in the same millisecond as the mark
+  // would otherwise count as "after" it.
+  const since = (i) => calls.slice(i);
+
+  // The card itself, built and sent from THIS process against the fake — the trigger (a
+  // buyer's add → background market read → notify) is unchanged and waits on a live Alias
+  // read measured in minutes, which is not what this test is about.
+  test('a card goes straight to the group, with the same buttons Make sent', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    const keep = { ...process.env };
+    Object.assign(process.env, {
+      TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: String(CHAT),
+      TELEGRAM_API_BASE: 'http://127.0.0.1:5198', MAKE_WEBHOOK_URL: '',
+    });
+    try {
+      const { notifyLineAsked } = await import('../api/_lib/notify.js');
+      const t0 = calls.length;
+      const out = await notifyLineAsked(cartId, Number(line.id));
+      expect(out.sent).toBe(true);
+      const card = since(t0).find((c) => c.method === 'sendMessage');
+      expect(String(card.body.chat_id)).toBe(String(CHAT));
+      expect(card.body.text).toContain('CW2288-111');
+      expect(card.body.text).toContain('Size: 9');
+      // Same callback shapes the Make scenario used — cards sent before the switch
+      // still work when tapped after it.
+      const buttons = card.body.reply_markup.inline_keyboard.flat().map((b) => `${b.text}=${b.callback_data}`);
+      const env = process.env.APP_ENV === 'dev' ? 'dev' : 'prod';
+      expect(buttons).toEqual([
+        `✓ Buy 1=approve:${cartId}:${line.id}:1:${env}`,
+        `✓ Buy 2=approve:${cartId}:${line.id}:2:${env}`,
+        `✓ Buy 3=approve:${cartId}:${line.id}:3:${env}`,
+        `More…=more:${cartId}:${line.id}:${env}`,
+        `✕ Turn it down=reject:${cartId}:${line.id}:${env}`,
+      ]);
+    } finally {
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL']) {
+        if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+      }
+    }
+  });
+
+  test('without the secret, the webhook refuses — a tap has to come from Telegram', async ({ request }) => {
+    const r = await hook(request, tapUpdate('approve:1:1:1:dev'), 'wrong');
+    expect(r.status()).toBe(401);
+  });
+
+  test('a Buy tap records the decision under the tapper, replies, and stamps 👍', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    const t0 = calls.length;
+    const r = await hook(request, tapUpdate(`approve:${cartId}:${line.id}:2:dev`, { messageId: 4242 }));
+    expect(r.status()).toBe(200);
+    const after = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    expect(after.lines[0].status).toBe('approved');
+    const got = since(t0);
+    expect(got.some((c) => c.method === 'answerCallbackQuery')).toBe(true);
+    const reply = got.find((c) => c.method === 'sendMessage');
+    expect(reply.body.text).toBe(`${people.approver.name} approved · 2 pairs · [dev]`);
+    expect(reply.body.reply_parameters.message_id).toBe(4242);
+    const react = got.find((c) => c.method === 'setMessageReaction');
+    expect(react.body.reaction[0].emoji).toBe('👍');
+    expect(react.body.message_id).toBe(4242);
+  });
+
+  test('an unlinked tapper is refused OUT LOUD in the group, and nothing is recorded', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    const t0 = calls.length;
+    await hook(request, tapUpdate(`approve:${cartId}:${line.id}:1:dev`, { from: 999000777 }));
+    const reply = since(t0).find((c) => c.method === 'sendMessage');
+    expect(reply.body.text).toMatch(/^⚠️ .*isn’t linked.* · HTTP 403 · \[dev\]$/);
+    expect(since(t0).some((c) => c.method === 'setMessageReaction')).toBe(false);
+    const after = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    expect(after.lines[0].status).toBe('pending');
+    await pool.query('DELETE FROM telegram_link_requests WHERE telegram_user_id = $1', [999000777]);
+  });
+
+  test('"More…" asks how many, and the number typed back approves that many — once', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    let t0 = calls.length;
+    await hook(request, tapUpdate(`more:${cartId}:${line.id}:dev`, { messageId: 777 }));
+    const ask = since(t0).find((c) => c.method === 'sendMessage');
+    expect(ask.body.text).toMatch(/^Tapper, how many pairs\?/);
+    // A PICKER — with group privacy on, a plain typed "10" never reaches the bot, so the
+    // common quantities are buttons: ordinary approve taps, answered on the CARD.
+    const picks = ask.body.reply_markup.inline_keyboard.flat().map((x) => x.callback_data);
+    expect(picks).toContain(`approve:${cartId}:${line.id}:10:dev`);
+    expect(picks).toContain(`cancel:${cartId}:${line.id}:dev`);
+
+    // Somebody ELSE typing a number answers nothing.
+    t0 = calls.length;
+    await hook(request, { update_id: 1, message: { message_id: 900, text: '4', from: { id: 999000777 }, chat: { id: CHAT } } });
+    expect(since(t0).length).toBe(0);
+
+    t0 = calls.length;
+    const typed = { update_id: 2, message: { message_id: 901, text: ' 5 ', from: { id: TG, first_name: 'Tapper' }, chat: { id: CHAT } } };
+    await hook(request, typed);
+    const after = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    expect(after.lines[0].status).toBe('approved');
+    const reply = since(t0).find((c) => c.method === 'sendMessage');
+    expect(reply.body.text).toContain('5 pairs');
+    // Answered under the CARD, not under the typed number.
+    expect(reply.body.reply_parameters.message_id).toBe(777);
+
+    // Telegram redelivers; the second delivery must find the question already spent.
+    t0 = calls.length;
+    await hook(request, typed);
+    expect(since(t0).length).toBe(0);
+  });
+
+  test('a quantity tapped on the picker is answered on the CARD, and spends the question', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    await hook(request, tapUpdate(`more:${cartId}:${line.id}:dev`, { messageId: 880 }));
+    let t0 = calls.length;
+    // The picker message (id 881) replies to the card (880); the tap lands on the picker.
+    const pick = tapUpdate(`approve:${cartId}:${line.id}:8:dev`, { messageId: 881 });
+    pick.callback_query.message.reply_to_message = { message_id: 880 };
+    await hook(request, pick);
+    const after = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    expect(after.lines[0].status).toBe('approved');
+    const reply = since(t0).find((c) => c.method === 'sendMessage');
+    expect(reply.body.text).toContain('8 pairs');
+    expect(reply.body.reply_parameters.message_id).toBe(880);
+    expect(since(t0).find((c) => c.method === 'setMessageReaction').body.message_id).toBe(880);
+    // The question is spent: a number typed afterwards decides nothing.
+    t0 = calls.length;
+    await hook(request, { update_id: 3, message: { message_id: 902, text: '3', from: { id: TG }, chat: { id: CHAT } } });
+    expect(since(t0).length).toBe(0);
+  });
+
+  test('a tap from another chat is ignored', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    await hook(request, tapUpdate(`approve:${cartId}:${line.id}:1:dev`, { chat: -1009999 }));
+    const after = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    expect(after.lines[0].status).toBe('pending');
+  });
 });
 
 // A run of one shoe is usually one ticket price, but it often breaks — the 12.5 and the
@@ -2212,12 +2409,17 @@ test.describe('the list stays open until the buyer closes it', () => {
     // going quiet — the suite runs with it blanked (playwright.config.js).
     const { notifyRequestEvent } = await import('../api/_lib/notify.js');
     const keep = process.env.MAKE_WEBHOOK_URL;
+    const keepTg = process.env.TELEGRAM_BOT_TOKEN;
     try {
       process.env.MAKE_WEBHOOK_URL = '';
+      process.env.TELEGRAM_BOT_TOKEN = '';
       const r = await notifyRequestEvent(1, 'buying_request_closed');
       expect(r.sent).toBe(false);
-      expect(r.reason).toMatch(/MAKE_WEBHOOK_URL/);
-    } finally { process.env.MAKE_WEBHOOK_URL = keep; }
+      expect(r.reason).toMatch(/not configured/);
+    } finally {
+      process.env.MAKE_WEBHOOK_URL = keep;
+      if (keepTg === undefined) delete process.env.TELEGRAM_BOT_TOKEN; else process.env.TELEGRAM_BOT_TOKEN = keepTg;
+    }
   });
 });
 

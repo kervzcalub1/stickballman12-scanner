@@ -6627,6 +6627,29 @@ export async function noteTelegramLinkRequest({ telegramUserId, name, username }
           last_seen_at = now()`;
 }
 
+// "More…" → "How many pairs?" (api/telegram/webhook.js). Asking replaces any earlier open
+// question from the same person; taking it DELETEs it, so a number is only ever spent once
+// — Telegram redelivers an update it didn't get a 200 for, and the second delivery must
+// find nothing.
+export async function askTelegramQty({ telegramUserId, cartId, lineId, chatId, cardMessageId, env }) {
+  await db()`
+    INSERT INTO telegram_pending_qty (telegram_user_id, cart_id, line_id, chat_id, card_message_id, env)
+    VALUES (${telegramUserId}, ${cartId}, ${lineId}, ${chatId}, ${cardMessageId}, ${env || 'prod'})
+    ON CONFLICT (telegram_user_id) DO UPDATE
+      SET cart_id = EXCLUDED.cart_id, line_id = EXCLUDED.line_id, chat_id = EXCLUDED.chat_id,
+          card_message_id = EXCLUDED.card_message_id, env = EXCLUDED.env, asked_at = now()`;
+}
+
+// The open question this person may answer in this chat, if it is under 10 minutes old.
+export async function takeTelegramQty(telegramUserId, chatId) {
+  const rows = await db()`
+    DELETE FROM telegram_pending_qty
+     WHERE telegram_user_id = ${telegramUserId} AND chat_id = ${chatId}
+       AND asked_at > now() - interval '10 minutes'
+    RETURNING cart_id, line_id, chat_id, card_message_id, env`;
+  return rows[0] || null;
+}
+
 // Waiting to be linked — and never anything already linked, so a row disappears the
 // moment it is dealt with rather than needing to be dismissed.
 export async function listTelegramLinkRequests() {

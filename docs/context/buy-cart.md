@@ -247,7 +247,53 @@ re-priced". A record that says something changed and not what it used to be is n
 record of anything. **No schema change**: `cost_stack` is already JSONB and the event
 `kind` column is free text.
 
-## Telegram approvals via Make.com (2026-09-11)
+## Telegram approvals — DIRECT to the Bot API (2026-09-29)
+**Make.com is no longer in the loop.** Everything its two scenarios did now runs in this
+server; the Make sections below describe the history and the way back.
+- **Out** — `notifyLineAsked` / `notifyRequestEvent` (`api/_lib/notify.js`) send straight to
+  the group via `api/_lib/telegram.js` when `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are
+  set (else they fall back to `MAKE_WEBHOOK_URL`, unchanged). Same caption, same buttons,
+  **same `callback_data`** (`approve:<cart>:<line>:<qty>:<env>`, `more:…`, `reject:…`), so a
+  card Make sent before the switch still answers after it. The **photo is uploaded as bytes
+  from R2** (resized by `imageForCard`) — no public url, so `APP_BASE_URL`/the tunnel no
+  longer matter for the picture — and Telegram's `file_id` is cached in memory so the other
+  sizes of a burst send it by reference. Sends are **queued one at a time** with 429
+  `retry_after` honoured (Telegram throttles a bot per group; Make ran sequential for this).
+  An unreadable photo still sends the card, as text, with "⚠️ Photo unavailable (reason)".
+- **In** — `POST /api/telegram/webhook`, checked against `TELEGRAM_WEBHOOK_SECRET`
+  (`X-Telegram-Bot-Api-Secret-Token`), only the configured chat. Approve/reject →
+  `decideFromTelegram` (`api/_lib/telegramDecide.js`, the SAME function
+  `api/cart/telegram-decide.js` now wraps) → reply `outcome` under the card + 👍/👎 reaction
+  (a refused reaction is said in the group); a refusal is replied as
+  `⚠️ <error> · HTTP <code>`. **"More…"** → a **quantity picker** ("Kervy, how many pairs?" with
+  4 5 6 8 / 10 12 15 20 / Cancel, replying to the card) and a row in `telegram_pending_qty`
+  (one per Telegram account; **new table → db:setup**). A picker button is an ordinary
+  `approve:` tap, answered on the CARD (`reply_to_message`); Cancel clears the question and
+  deletes the picker. Any other number typed by that person, in that chat, within 10
+  minutes is `DELETE … RETURNING`-taken and approved — Telegram redelivers, and a second
+  delivery finds nothing. **Live-tested 2026-09-29:** Make's typed-reply-only flow never
+  worked with group privacy ON (a plain "10" never reaches a bot, and `force_reply` —
+  even with the tapper mentioned — is a hint phones ignored). Hence the picker, AND the
+  bot's **group privacy is now OFF** (@BotFather, done by the user) so a plain typed
+  number arrives too; the handler still acts only on a number from someone with an open
+  question in that chat. Always answers
+  200 after the secret check, so a failure is not redelivered forever.
+- **Dev and prod still share the bot.** A bot has one webhook — production's. Buttons carry
+  the sender's env; prod passes a dev card's taps (and the typed answer to a dev "More…")
+  to **`TELEGRAM_DEV_FORWARD_URL`** (the dev tunnel), which records them in the dev DB and
+  replies ` · [dev]`. Unset = dev taps are dropped with a log line. The reverse,
+  **`TELEGRAM_PROD_FORWARD_URL`** (a full url, dev only), is for pointing the bot at a dev
+  tunnel to test: real cards tapped meanwhile are passed on to prod (or Make's hook).
+- **Switching over:** set the four `TELEGRAM_*` vars (token from @BotFather — the one the Make
+  connection held; chat `-5397913241`; any long random secret; prod's forward url), run
+  `db:setup`, deploy, then `npm run telegram:webhook -- set https://stickballman12.com`
+  (this takes the webhook away from Make's scenario at once), then deactivate Make
+  scenarios 6231985 + 6232871. `npm run telegram:webhook` alone shows where the bot points.
+- **The suite**: `playwright.config.js` points the server's Bot API at a fake on :5198 with a
+  fake token (`TELEGRAM_API_BASE`), and § "Telegram, direct" in `e2e/buy-cart.spec.js` runs
+  that fake and plays Telegram back at the webhook.
+
+## Telegram approvals via Make.com (2026-09-11) — superseded by the section above
 The desk approves from a Telegram group instead of the screen. Our half is the two ends;
 Make.com is the middle. Full build guide, including the Make module wiring and the
 Gemini question: the **Telegram Approval Loop** artifact.

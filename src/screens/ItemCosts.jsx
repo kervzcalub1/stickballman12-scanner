@@ -8,7 +8,8 @@
 // One amount covers every pair of that size in that shipment — the same granularity
 // as po_lines.unit_cost, and the same as the PH grid's per-size layout.
 import React, { useEffect, useRef, useState } from 'react';
-import { api } from '../api.js';
+import { api, getUser } from '../api.js';
+import { CostBackfill } from '../components/CostBackfill.jsx';
 import { TopBar, DateRangeBar, PriceInput } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useLive } from '../hooks.js';
@@ -191,6 +192,12 @@ export function ItemCosts({ onHome, onSignOut }) {
             <DateRangeBar mode={dr.mode} anchor={dr.anchor} onChange={(mode, anchor) => setDr({ mode, anchor })}
               right={<span className="muted sm">{groups ? `${totalPairs} pair${totalPairs === 1 ? '' : 's'} ${tab === 'zero' ? 'at $0' : 'with no cost'}` : ''}</span>} />
           </>
+        )}
+
+        {/* Admin only: fills blank costs from the PO's shelf price in one go. The
+            server re-checks the role; this only decides whether to draw it. */}
+        {!searched && ['admin', 'superadmin'].includes(getUser()?.role) && (
+          <CostBackfill onDone={() => loadWorklist()} onSignOut={onSignOut} />
         )}
 
         {error && <div className="error mt">{error}</div>}

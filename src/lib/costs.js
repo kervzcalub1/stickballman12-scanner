@@ -136,11 +136,16 @@ export function poLineCost(lines, sku, size, poBoxId = null) {
 // Shelf price → landed cost, through the SAME register maths as the Payout Calculator
 // (calcCostBreakdown), so a received pair and a calculator line can never disagree.
 // The line's own tip wins over the preset's: the supplier typed it for that pair.
-// With no preset only what we know is added (shelf + tip) — tax and shipping are
-// unknown, not zero, and the receiving hint says so.
+//
+// NO PRESET → NULL, not the shelf price (2026-09-30, the owner's rule). What a supplier
+// declares is only the shelf price; the actual cost is that shelf price PLUS the
+// supplier's preset — tax, gift card, tip, shipping. Without the preset the actual cost
+// is not known, and writing shelf + tip would put a number on the pair that looks
+// landed but is short by the tax and shipping. Blank is the honest answer; link a
+// preset to the supplier and the pair can be costed (Costs → Fill costs from POs).
 export function landedFromShelf(shelf, lineTip, preset) {
   const s = costOrNull(shelf);
-  if (s == null) return null;
+  if (s == null || !preset) return null;
   const tip = lineTip != null ? lineTip : (preset ? preset.tipAmt : 0);
   const b = calcCostBreakdown({
     shelfPrice: s,

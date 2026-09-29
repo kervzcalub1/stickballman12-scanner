@@ -1629,9 +1629,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // value, or a range when the supplier priced sizes differently), else the default.
   const shoeCostHint = (it) => {
     const fromPo = [...new Set(it.sizes.map((s) => poLanded(it, s)).filter((c) => c != null))];
-    // Name the stack, or say there isn't one: without it the cost is shelf + tip only —
-    // tax and shipping unknown, not zero.
-    const via = costPreset ? `shelf + ${costPreset.name}’s costs` : 'shelf only, no supplier preset';
+    // The PO has a shelf price but the supplier has no preset: the actual cost is not
+    // known (shelf + preset is the cost — landedFromShelf), so the pair lands BLANK and
+    // the hint says why and what fixes it. The shelf price is still saved on the pair.
+    if (!costPreset && it.sizes.some((s) => poMoney(it, s))) {
+      if (batchDefaultCost != null) return { cost: batchDefaultCost, source: 'batch default · PO shelf price needs a supplier preset' };
+      return { cost: null, source: 'no supplier preset — cost left blank; link one, then Costs → Fill costs from POs' };
+    }
+    const via = `shelf + ${costPreset?.name || 'preset'}’s costs`;
     if (fromPo.length === 1) return { cost: fromPo[0], source: `from PO · ${via}` };
     if (fromPo.length > 1) return { cost: null, source: `from PO · $${Math.min(...fromPo).toFixed(2)}–$${Math.max(...fromPo).toFixed(2)} by size · ${via}` };
     if (batchDefaultCost != null) return { cost: batchDefaultCost, source: 'batch default' };

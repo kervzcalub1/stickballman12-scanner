@@ -146,9 +146,13 @@ blocks a box without one), and receiving works out the landed cost:
   merge tool moves this link with the name.
 - **Receiving** (`landedFromShelf` in `src/lib/costs.js`, the calculator's own
   `calcCostBreakdown`): shelf → preset gift card/discounts → tax → + tip + shipping. The
-  **line's own tip beats the preset's**. With no preset: shelf + line tip only, and the
-  hint says "shelf only, no supplier preset" (tax/shipping unknown, not zero). Typed
-  "Cost ea" at receiving still wins and is taken as the landed figure.
+  **line's own tip beats the preset's**. **With no preset the cost is left BLANK**
+  (2026-09-30, owner's rule: what the supplier declares is only the shelf price; the actual
+  cost is shelf + their preset). `landedFromShelf` returns null without a preset — it used
+  to write shelf + tip, which looked landed but was short by the tax and shipping. The
+  shelf price is still saved (`items.shelf_price`), the card says "no supplier preset —
+  cost left blank", and once a preset is linked Costs → **Fill costs from POs** costs those
+  pairs (`costs.md`). A batch default or a typed "Cost ea" still applies — a person's figure.
 - **`items.shelf_price`** (new) records the sticker next to the landed `items.cost`.
 - E2E: `e2e/receiving-per-shoe-cost.spec.js` (150 shelf → $162.64 with an $8.25/8.25%/8%/$5
   stack; a line tip of $7 beating the preset's $5).

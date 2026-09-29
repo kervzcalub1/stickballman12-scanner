@@ -24,7 +24,15 @@ const SKU_Y = `E2E-COST-Y-${stamp}`;   // PO: no cost declared
 const SKU_Z = `E2E-COST-Z-${stamp}`;   // PO: 60, overridden on the card
 const SKU_P = `E2E-COST-P-${stamp}`;   // preset PO: shelf 150, no line tip
 const SKU_Q = `E2E-COST-Q-${stamp}`;   // preset PO: shelf 100, line tip 7 (beats the preset's 5)
-const ALL = [SKU_A, SKU_B, SKU_C, SKU_X, SKU_Y, SKU_Z, SKU_P, SKU_Q];
+const SKU_N = `E2E-COST-N-${stamp}`;   // no-preset PO: shelf 70 → cost left BLANK
+const ALL = [SKU_A, SKU_B, SKU_C, SKU_X, SKU_Y, SKU_Z, SKU_P, SKU_Q, SKU_N];
+// A zero-cost stack for the per-size test: with it, landed = shelf exactly, so that test
+// stays about the PO's per-size prices. (With NO preset a pair's cost is not known —
+// the declared figure is only the shelf price — and it lands blank; its own test below.)
+const COST_SUPPLIER = `E2E Cost Supplier ${stamp}`;
+const NOPRESET_SUPPLIER = `E2E NoPreset Supplier ${stamp}`;
+const NOPRESET_PO_CODE = `PO-COSTN-${stamp}`;
+let noPresetPoId;
 const PO_CODE = `PO-COST-${stamp}`;
 const PRESET_PO_CODE = `PO-COSTP-${stamp}`;
 const PRESET_SUPPLIER = `E2E Preset Supplier ${stamp}`;
@@ -38,7 +46,7 @@ test.afterAll(async () => {
   for (const i of items) await q('DELETE FROM item_events WHERE item_id = $1', [i.id]);
   await q('DELETE FROM items WHERE sku = ANY($1)', [ALL]);
   const batchIds = [...new Set(items.map((i) => i.batch_id).filter(Boolean))];
-  for (const id of [poId, presetPoId].filter((x) => x != null)) {
+  for (const id of [poId, presetPoId, noPresetPoId].filter((x) => x != null)) {
     await q('UPDATE purchase_orders SET received_batch_id = NULL WHERE id = $1', [id]);
     await q('DELETE FROM batch_boxes WHERE batch_id IN (SELECT id FROM batches WHERE po_id = $1)', [id]);
     await q('DELETE FROM batches WHERE po_id = $1', [id]);
@@ -47,12 +55,12 @@ test.afterAll(async () => {
     await q('DELETE FROM batch_boxes WHERE batch_id = $1', [id]);
     await q('DELETE FROM batches WHERE id = $1', [id]);
   }
-  for (const id of [poId, presetPoId].filter((x) => x != null)) {
+  for (const id of [poId, presetPoId, noPresetPoId].filter((x) => x != null)) {
     await q('DELETE FROM po_lines WHERE po_id = $1', [id]);
     await q('DELETE FROM po_boxes WHERE po_id = $1', [id]);
     await q('DELETE FROM purchase_orders WHERE id = $1', [id]);
   }
-  await q('DELETE FROM payout_presets WHERE supplier_name = $1', [PRESET_SUPPLIER]);
+  await q('DELETE FROM payout_presets WHERE supplier_name = ANY($1)', [[PRESET_SUPPLIER, COST_SUPPLIER]]);
   await pool.end();
 });
 
@@ -149,9 +157,11 @@ test('Inventory shows "no cost" rather than $0.00, and the pencil lands on the C
 });
 
 test('a box received against a PO inherits the cost the supplier declared per size', async ({ page }) => {
+  await q(`INSERT INTO payout_presets (name, tip_amt, shipping_amt, tax_pct, gift_pct, supplier_name)
+           VALUES ($1, 0, 0, 0, 0, $1)`, [COST_SUPPLIER]);
   const po = (await q(
     `INSERT INTO purchase_orders (po_code, supplier_name, status, expected_boxes, manifest_scope)
-     VALUES ($1, 'E2E Cost Supplier', 'shipped', 1, 'box') RETURNING id`, [PO_CODE]))[0];
+     VALUES ($1, $2, 'shipped', 1, 'box') RETURNING id`, [PO_CODE, COST_SUPPLIER]))[0];
   poId = Number(po.id);
   const box = (await q(
     `INSERT INTO po_boxes (po_id, box_number, tracking_number, status) VALUES ($1, 1, $2, 'shipped') RETURNING id`,
@@ -249,4 +259,45 @@ test('a PO shelf price lands as shelf + the supplier preset’s costs', async ({
   expect(await costsOnFile(SKU_Q)).toEqual([{ size: '9', cost: 114.84 }]);
   const shelf = await q('SELECT sku, shelf_price FROM items WHERE sku = ANY($1) ORDER BY sku', [[SKU_P, SKU_Q]]);
   expect(shelf.map((r) => Number(r.shelf_price))).toEqual([150, 100]);
+});
+
+// 2026-09-30 (owner's rule): what the supplier declares is ONLY the shelf price; the actual
+// cost is shelf + the supplier's preset. A supplier with no preset therefore has no known
+// cost — the pair lands BLANK (never at shelf + tip, which looks landed but is short by
+// the tax and shipping), the shelf price is still kept, and the card says what fixes it.
+test('with no supplier preset the cost is left blank, and the shelf price is still kept', async ({ page }) => {
+  const po = (await q(
+    `INSERT INTO purchase_orders (po_code, supplier_name, status, expected_boxes, manifest_scope)
+     VALUES ($1, $2, 'shipped', 1, 'box') RETURNING id`, [NOPRESET_PO_CODE, NOPRESET_SUPPLIER]))[0];
+  noPresetPoId = Number(po.id);
+  const box = (await q(
+    `INSERT INTO po_boxes (po_id, box_number, tracking_number, status) VALUES ($1, 1, $2, 'shipped') RETURNING id`,
+    [noPresetPoId, `COSTN${stamp}A`]))[0];
+  await q(`INSERT INTO po_lines (po_id, po_box_id, sku, size, name, qty_expected, unit_cost, tip, entered_on_behalf)
+           VALUES ($1, $2, $3, '9', 'E2E Cost NoPreset', 1, 70, 5, true)`, [noPresetPoId, box.id, SKU_N]);
+
+  await loginAs(page, 'warehouse');
+  await page.goto('/receiving');
+  await page.locator('label:has-text("Buyer") input').fill('e2e');
+  await page.getByRole('button', { name: /Receive against a purchase order/i }).click();
+  await page.locator('.po-picker input').fill(NOPRESET_PO_CODE);
+  await page.locator('.po-picker').getByRole('button', { name: 'Find' }).click();
+  await expect(page.locator('.po-receive-banner')).toContainText(NOPRESET_PO_CODE);
+  await page.getByRole('button', { name: 'Add items' }).first().click();
+  await expect(page.locator('.po-manifest')).toBeVisible();
+  for (const row of await page.locator('.po-manifest-size').all()) await row.locator('input[type="checkbox"]').check();
+  await page.getByRole('button', { name: /Review →/ }).click();
+  const card = page.locator(`.recv-items.review .recv-item[data-sku="${SKU_N}"]`);
+
+  await expect(costSrc(card)).toContainText('no supplier preset — cost left blank');
+  await expect(costBox(card)).toHaveAttribute('placeholder', '—');
+
+  await page.getByRole('button', { name: /Next →/ }).click();
+  await page.getByRole('button', { name: 'Submit box' }).click();
+  await page.getByRole('button', { name: 'Yes, commit' }).click();
+  await expect(page.locator('.modal.success, .modal')).toContainText(/Box saved/i);
+
+  const [row] = await q('SELECT cost, shelf_price FROM items WHERE sku = $1', [SKU_N]);
+  expect(row.cost).toBeNull();
+  expect(Number(row.shelf_price)).toBe(70);
 });

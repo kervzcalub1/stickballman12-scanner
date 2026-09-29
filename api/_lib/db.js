@@ -2904,6 +2904,73 @@ export async function setItemsCost(vins, cost, by) {
   return rows;
 }
 
+// ---- Fill costs from POs (2026-09-30) ------------------------------------------------
+// `items.cost` is written once, at receiving, and only on a receive AGAINST the PO — so a
+// pair received before the shelf price was on the PO, or before this rule existed, never
+// got one, while the PO sitting on the same screen plainly has it. These three feed
+// api/items/cost-backfill.js, which works the landed cost out the way receiving does.
+//
+// Only a BLANK cost is a candidate. A $0 is a claim already on file (costs.md), and a
+// real cost is never overwritten. Empty-box orders are skipped: their "Cost ea" is the
+// price of a carton, not a pair's shelf price.
+// Tracking numbers are compared with whitespace stripped and upper-cased on both sides.
+// The regex is written '\\s' ON PURPOSE: in a JS template literal '\s' cooks to a bare
+// 's', which stripped the letter s instead of spaces — a spaced tracking number then
+// missed its own label and took whichever line came first (CI caught it, PR #239).
+export async function listCostBackfillCandidates() {
+  return db()`
+    SELECT i.id, i.vin, i.sku, i.size, i.status, b.po_id, b.supplier_name,
+           upper(regexp_replace(coalesce(bb.tracking_number, ''), '\\s', '', 'g')) AS tracking
+      FROM items i
+      JOIN batches b ON b.id = i.batch_id
+      JOIN purchase_orders o ON o.id = b.po_id
+      LEFT JOIN batch_boxes bb ON bb.id = i.box_id
+     WHERE i.cost IS NULL
+       AND coalesce(btrim(i.sku), '') <> ''
+       AND coalesce(o.order_kind, 'shoes') <> 'boxes'
+     ORDER BY i.id`;
+}
+
+// Blank-cost pairs whose batch is on NO purchase order — nothing to fill them from.
+export async function countUncostedWithoutPo() {
+  const rows = await db()`
+    SELECT count(*)::int AS n FROM items i LEFT JOIN batches b ON b.id = i.batch_id
+     WHERE i.cost IS NULL AND b.po_id IS NULL`;
+  return rows[0]?.n || 0;
+}
+
+export async function listPoLinesForCost(poIds) {
+  const ids = [...new Set((poIds || []).map(Number).filter(Number.isInteger))];
+  if (!ids.length) return [];
+  return db()`
+    SELECT l.po_id, l.po_box_id, l.sku, l.size, l.unit_cost, l.tip, o.po_code,
+           upper(regexp_replace(coalesce(pb.tracking_number, ''), '\\s', '', 'g')) AS tracking
+      FROM po_lines l
+      JOIN purchase_orders o ON o.id = l.po_id
+      LEFT JOIN po_boxes pb ON pb.id = l.po_box_id
+     WHERE l.po_id = ANY(${ids}) AND l.unit_cost IS NOT NULL
+     ORDER BY l.po_id, l.po_box_id NULLS FIRST, l.id`;
+}
+
+// Write one group (same landed cost, same shelf, same source) and its history note.
+// `cost IS NULL` again in the UPDATE: a cost typed on the Costs page between the preview
+// and the click wins — this only ever fills a blank.
+export async function fillItemsCost(ids, cost, shelf, text, by) {
+  const list = (ids || []).map(Number).filter(Number.isInteger);
+  if (!list.length) return 0;
+  const sql = db();
+  const rows = await sql`
+    UPDATE items SET cost = ${cost}, shelf_price = ${shelf}, updated_at = now()
+     WHERE id = ANY(${list}) AND cost IS NULL
+     RETURNING id`;
+  const done = rows.map((r) => Number(r.id));
+  if (done.length) {
+    await sql`INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT x, 'note', ${JSON.stringify({ text })}::jsonb, ${by || null} FROM unnest(${done}::bigint[]) AS x`;
+  }
+  return done.length;
+}
+
 // Toggle "GOAT only" (list to Alias/GOAT + II only) across a set of units — used
 // from Receiving (whole shoe) and the PH grid (a SKU group).
 //

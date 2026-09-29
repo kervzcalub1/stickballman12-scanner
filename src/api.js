@@ -226,6 +226,9 @@ export const api = {
   costsList: (from, to, mode) => get(`/api/items/costs?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(mode ? { mode } : {}) }).toString()}`),
   costsSearch: (q) => get(`/api/items/costs?q=${encodeURIComponent(q)}`),
   setItemsCost: (vins, cost) => post('/api/items/set-cost', { vins, cost }),
+  // Fill blank costs from the PO's shelf price (admin). Preview writes nothing.
+  costBackfillPreview: () => get('/api/items/cost-backfill'),
+  costBackfillApply: () => post('/api/items/cost-backfill', { apply: true }),
   pendingCounts: () => get('/api/items/pending-counts'),
   boxFound: (vin) => post('/api/items/box-found', { vin }),
   restockDone: (vins) => post('/api/items/restock-done', { vins }),

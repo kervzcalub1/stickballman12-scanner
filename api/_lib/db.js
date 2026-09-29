@@ -2913,10 +2913,14 @@ export async function setItemsCost(vins, cost, by) {
 // Only a BLANK cost is a candidate. A $0 is a claim already on file (costs.md), and a
 // real cost is never overwritten. Empty-box orders are skipped: their "Cost ea" is the
 // price of a carton, not a pair's shelf price.
+// Tracking numbers are compared with whitespace stripped and upper-cased on both sides.
+// The regex is written '\\s' ON PURPOSE: in a JS template literal '\s' cooks to a bare
+// 's', which stripped the letter s instead of spaces — a spaced tracking number then
+// missed its own label and took whichever line came first (CI caught it, PR #239).
 export async function listCostBackfillCandidates() {
   return db()`
     SELECT i.id, i.vin, i.sku, i.size, i.status, b.po_id, b.supplier_name,
-           upper(regexp_replace(coalesce(bb.tracking_number, ''), '\s', '', 'g')) AS tracking
+           upper(regexp_replace(coalesce(bb.tracking_number, ''), '\\s', '', 'g')) AS tracking
       FROM items i
       JOIN batches b ON b.id = i.batch_id
       JOIN purchase_orders o ON o.id = b.po_id
@@ -2940,11 +2944,12 @@ export async function listPoLinesForCost(poIds) {
   if (!ids.length) return [];
   return db()`
     SELECT l.po_id, l.po_box_id, l.sku, l.size, l.unit_cost, l.tip, o.po_code,
-           upper(regexp_replace(coalesce(pb.tracking_number, ''), '\s', '', 'g')) AS tracking
+           upper(regexp_replace(coalesce(pb.tracking_number, ''), '\\s', '', 'g')) AS tracking
       FROM po_lines l
       JOIN purchase_orders o ON o.id = l.po_id
       LEFT JOIN po_boxes pb ON pb.id = l.po_box_id
-     WHERE l.po_id = ANY(${ids}) AND l.unit_cost IS NOT NULL`;
+     WHERE l.po_id = ANY(${ids}) AND l.unit_cost IS NOT NULL
+     ORDER BY l.po_id, l.po_box_id NULLS FIRST, l.id`;
 }
 
 // Write one group (same landed cost, same shelf, same source) and its history note.

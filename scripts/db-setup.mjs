@@ -1429,6 +1429,9 @@ await sql(`
     uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+// The card a card-face image shows (its last four, never the number) — set when the image
+// is read, so cart/gift-cards-pdf pairs each picture with its card (buy-cart.md).
+await sql(`ALTER TABLE buy_cart_files ADD COLUMN IF NOT EXISTS gc_last4 TEXT`);
 // A photo of the SHOE, keyed by SKU rather than by line (2026-09-11). The buyer hunting
 // a shop sends one shoe in several sizes, and photographing it once per size is work
 // nobody does twice — so the photos hang off the style code and every line carrying that

@@ -16,6 +16,8 @@ import { hasPrivilege, requireBuyerAccess } from '../_lib/buycart.js';
 const EXT = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
   'image/heic': 'heic', 'application/pdf': 'pdf',
+  // The card seller's export (number · PIN · balance). Gift-card files only.
+  'text/csv': 'csv',
 };
 
 export default async function handler(req, res) {
@@ -37,7 +39,8 @@ export default async function handler(req, res) {
   const sku = kind === 'shoe' ? String(body.sku ?? '').trim().toUpperCase().slice(0, 40) : null;
   const contentType = EXT[body.contentType] ? body.contentType : null;
   if (!Number.isInteger(cartId)) return send(res, 400, { ok: false, error: 'A valid cartId is required.' });
-  if (!contentType) return send(res, 400, { ok: false, error: 'Upload a photo or a PDF.' });
+  if (!contentType || (contentType === 'text/csv' && kind !== 'gift_card'))
+    return send(res, 400, { ok: false, error: kind === 'gift_card' ? 'Upload a photo, a PDF or a CSV.' : 'Upload a photo or a PDF.' });
 
   try {
     const cart = await getBuyCart(cartId);

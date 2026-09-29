@@ -2454,6 +2454,74 @@ test.describe('gift cards read off a file', () => {
     expect(wrong.status).toBe(404);
     expect(wrong.body.error).toMatch(/not on this request/);
   });
+
+  // Nike's e-gift PDF: one card a page, "Pin:" and "Gift Card Value:" on lines of their
+  // own. The row reader found every number in such a file and not one PIN or balance.
+  test('an e-gift PDF, one card a page, reads its PIN and value off their labels', async () => {
+    const { cardsFromPages } = await import('../api/cart/gift-card-read.js');
+    const nikePage = (value, number, pin) => [
+      'Nike Gift Card', `Gift Card Value: ${value}`, `Card Number: ${number}`, `Pin: ${pin}`,
+      'Simply enter the card number and PIN number displayed on this eGift Card at checkout.',
+      'and Puerto Rico or by phone at 1-800-806-6453.',
+      'For Internal Use: Id: NG-0000001 Order: 1234567',
+    ];
+    const rows = cardsFromPages([
+      nikePage('200.00', '6060100000000001111', '111111'),
+      nikePage('150.00', '6060100000000002222', '222222'),
+      // A table page still reads row by row.
+      ['Balance Card number PIN', '$50.00 6060100000000003333 333333'],
+    ]);
+    expect(rows).toEqual([
+      { number: '6060100000000001111', pin: '111111', balance: 200, retailer: '' },
+      { number: '6060100000000002222', pin: '222222', balance: 150, retailer: '' },
+      { number: '6060100000000003333', pin: '333333', balance: 50, retailer: '' },
+    ]);
+  });
+
+  test('a CSV of cards reads by its header, or by its cells, and says when Excel ate a number', async () => {
+    const { cardsFromCsv } = await import('../api/cart/gift-card-read.js');
+    const pick = (r) => r.cards.map((c) => [c.number, c.pin, c.balance]);
+    expect(pick(cardsFromCsv('Card Number,PIN,Balance\n6060100000000001111,111111,$200.00\n"6060100000000002222","222222","150"\n')))
+      .toEqual([['6060100000000001111', '111111', 200], ['6060100000000002222', '222222', 150]]);
+    // Columns in another order, semicolons, no header at all.
+    expect(pick(cardsFromCsv('Amount;Pin;Gift Card\n100.00;1234;6060100000000003333\n'))).toEqual([['6060100000000003333', '1234', 100]]);
+    expect(pick(cardsFromCsv('6060100000000004444,4321,25.00\n'))).toEqual([['6060100000000004444', '4321', 25]]);
+    // cardwell's own export: a Retailer column, an Added timestamp, a 12-digit PIN.
+    const cw = cardsFromCsv('Retailer,Card number,PIN,Added,Balance\n"Finishline/JD Sports","5896000000001111","208900000001","2026-09-29T11:09:40.345Z","65.00"\n');
+    expect(cw.cards).toEqual([{ number: '5896000000001111', pin: '208900000001', balance: 65, retailer: 'Finishline/JD Sports' }]);
+    // 6.06E+18: the digits are gone. Counted, never guessed.
+    const m = cardsFromCsv('Card Number,PIN,Balance\n6.06011E+18,111111,200\n6060100000000005555,555555,200\n');
+    expect(m.mangled).toBe(1);
+    expect(pick(m)).toEqual([['6060100000000005555', '555555', 200]]);
+  });
+
+  // Every live card as one PDF. It prints every code on the request, so it follows
+  // gc-reveal's rules exactly: the desk, or the buyer once released; trail row first.
+  test('all the cards as one PDF: the desk any time, the buyer only once released, and it is on the trail', async ({ request }) => {
+    const { PDFDocument } = await import('pdf-lib');
+    const cartId = await newRequest(request, { lines: [LINE] });          // $108.25 to fund
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000001111', pin: '111111', balance: 100 } });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000002222', balance: 8.25 } });
+    const get = (who) => request.get(`/api/cart/gift-cards-pdf?cartId=${cartId}`, { headers: { Authorization: `Bearer ${tokenFor(people[who])}` } });
+
+    expect((await get('approver')).status()).toBe(403);
+    expect((await get('buyer')).status()).toBe(409);                      // not released yet
+
+    const desk = await get('issuer');
+    expect(desk.status()).toBe(200);
+    expect(desk.headers()['content-type']).toContain('application/pdf');
+    expect(desk.headers()['cache-control']).toContain('no-store');
+    expect((await PDFDocument.load(await desk.body())).getPageCount()).toBe(2);   // a page a card
+
+    expect((await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true })).status).toBe(200);
+    expect((await get('buyer')).status()).toBe(200);
+
+    const { rows } = await pool.query(`SELECT body FROM buy_cart_events WHERE cart_id = $1 AND kind = 'gc_pdf' ORDER BY id`, [cartId]);
+    expect(rows.length).toBe(2);
+    expect(rows[0].body).toMatch(/2 cards · \$108\.25/);
+    expect(rows.map((r) => r.body).join(' ')).not.toMatch(/\d{8,}/);  // never a card number
+  });
 });
 
 // ── How many the shop has, per size ──────────────────────────────────────────────

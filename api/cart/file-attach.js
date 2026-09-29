@@ -42,8 +42,8 @@ export default async function handler(req, res) {
     // Only a key THIS server minted, and only under this cart's own prefix. Without the
     // cart_code in the pattern, an attach could point one request's record at another
     // request's file.
-    const re = new RegExp(`^buy-carts/${cart.cart_code}/(gift_card|receipt|shoe)-\\d+\\.(jpg|png|webp|heic|pdf)$`);
-    if (!re.test(key)) return send(res, 400, { ok: false, error: 'Invalid file key.' });
+    const re = new RegExp(`^buy-carts/${cart.cart_code}/(gift_card|receipt|shoe)-\\d+\\.(jpg|png|webp|heic|pdf|csv)$`);
+    if (!re.test(key) || (/\.csv$/.test(key) && kind !== 'gift_card')) return send(res, 400, { ok: false, error: 'Invalid file key.' });
 
     const file = await addBuyCartFile({
       cartId, kind, key, sku,

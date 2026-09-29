@@ -317,6 +317,9 @@ export const api = {
   // (the endpoint sends `no-store`, and an object URL isn't cached at all).
   cartFileBlob: (cartId, fileId, kind) =>
     downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}${kind ? `&kind=${kind}` : ''}`),
+  // Every live card on the request as ONE PDF — balance, number, PIN and the card's own
+  // picture, a page a card. The bulk form of cartGcReveal: the server logs it first.
+  cartGiftCardsPdf: (cartId) => downloadBlob(`/api/cart/gift-cards-pdf?cartId=${cartId}`),
   cartFileDownload: (cartId, fileId, kind) =>
     downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}&download=1${kind ? `&kind=${kind}` : ''}`),
   cartSaveReceipt: (cartId, lines, receiptTotal, subtotal = null, tax = null) =>

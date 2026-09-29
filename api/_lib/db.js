@@ -7095,6 +7095,32 @@ export async function getBuyCartFile(cartId, fileId) {
   return (await sql`SELECT * FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId}`)[0] || null;
 }
 
+// Which card a card-face image shows — its LAST FOUR, the part already on screen,
+// never the number. Set when the image is read, so the gift-card PDF can put the
+// picture on its card's page without paying to read the same image again.
+export async function setBuyCartFileCardTail(cartId, fileId, last4) {
+  const tail = String(last4 || '').replace(/\D/g, '').slice(-4) || null;
+  await db()`UPDATE buy_cart_files SET gc_last4 = ${tail} WHERE id = ${fileId} AND cart_id = ${cartId}`;
+}
+
+// Every LIVE card on a request with its ciphertext, for the one endpoint that prints
+// them (cart/gift-cards-pdf). Same rule as getBuyCartGiftCardSecret: the query layer
+// hands back ciphertext; decrypting is the endpoint's job, after it has logged the read.
+export async function listBuyCartGiftCardSecrets(cartId) {
+  return db()`
+    SELECT id, code_enc, pin_enc, code_last4, balance, retailer, label
+      FROM buy_cart_gift_cards
+     WHERE cart_id = ${cartId} AND voided_at IS NULL
+     ORDER BY issued_at, id`;
+}
+
+export async function listBuyCartCardFiles(cartId) {
+  return db()`
+    SELECT id, r2_key, name, content_type, gc_last4
+      FROM buy_cart_files WHERE cart_id = ${cartId} AND kind = 'gift_card'
+     ORDER BY uploaded_at, id`;
+}
+
 export async function removeBuyCartFile(cartId, fileId, actor) {
   const sql = db();
   const rows = await sql`DELETE FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId} RETURNING r2_key, kind, name`;

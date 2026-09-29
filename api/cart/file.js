@@ -12,7 +12,7 @@ import { requireBuyerAccess } from '../_lib/buycart.js';
 import { getBuyCart, getBuyCartFile, dbConfigured } from '../_lib/db.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
 
-const TYPE = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic', pdf: 'application/pdf' };
+const TYPE = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic', pdf: 'application/pdf', csv: 'text/csv' };
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -43,11 +43,15 @@ export default async function handler(req, res) {
       // Only a CARD. This read `!== 'receipt'`, which swept in the shoe photos the buyer
       // took themselves and answered "these cards have not been released to you yet" —
       // for their own picture, on their own request, before it was funded.
-      if (params.get('kind') === 'gift_card' && !['funded', 'receipted', 'audited', 'closed'].includes(cart.status))
-        return send(res, 409, { ok: false, error: 'These cards have not been released to you yet.' });
     }
     const file = await getBuyCartFile(cartId, fileId);
     if (!file) return send(res, 404, { ok: false, error: 'That file does not exist.' });
+    // Keyed on the FILE's kind, never the `?kind=` the caller sent: that parameter is the
+    // client's description of what it is asking for, and leaving it off used to fetch a
+    // card image before release (found 2026-09-30).
+    if (user.role === 'supplier' && !isPrivileged(user.role) && file.kind === 'gift_card'
+      && !['funded', 'receipted', 'audited', 'closed'].includes(cart.status))
+      return send(res, 409, { ok: false, error: 'These cards have not been released to you yet.' });
 
     const bytes = await getObject(file.r2_key);
     const ext = String(file.r2_key).split('.').pop().toLowerCase();

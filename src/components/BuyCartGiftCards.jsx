@@ -147,13 +147,16 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
     e.target.value = '';
     if (!file) return;
     setBusy('upload'); setErr('');
+    // A CSV arrives as text/csv, application/vnd.ms-excel (Windows) or no type at all,
+    // depending on the machine — the name is the one thing they agree on.
+    const type = /\.csv$/i.test(file.name || '') ? 'text/csv' : file.type;
     try {
-      const { uploadUrl, key } = await api.cartFileSign(cart.id, 'gift_card', file.type);
+      const { uploadUrl, key } = await api.cartFileSign(cart.id, 'gift_card', type);
       const put = await fetch(uploadUrl, { method: 'PUT', body: file });
       if (!put.ok) throw new Error('The upload did not go through. Try again.');
       await api.cartFileAttach({
         cartId: cart.id, kind: 'gift_card', key, name: file.name,
-        contentType: file.type, sizeBytes: file.size,
+        contentType: type, sizeBytes: file.size,
       });
       onChanged();
     } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
@@ -193,11 +196,13 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
     try {
       const r = await api.cartGiftCardRead(cart.id, f.id);
       if (!r.cards?.length) {
-        setErr(`Nothing on “${f.name || 'that file'}” read as a card number. Try a sharper shot with the card filling the frame, or type it in.`);
+        setErr(r.mangled
+          ? `The card numbers in “${f.name || 'that file'}” were turned into numbers like 6.06E+18 by Excel — the digits are gone. Ask for the original CSV, or re-export with the card number column formatted as Text.`
+          : `Nothing on “${f.name || 'that file'}” read as a card number. Try a sharper shot with the card filling the frame, or type it in.`);
         return;
       }
       setReading({
-        file: f, source: r.source,
+        file: f, source: r.source, mangled: r.mangled || 0,
         cards: r.cards.map((c) => ({ ...c, balance: c.balance == null ? '' : String(c.balance), ok: !c.already })),
       });
     } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
@@ -215,7 +220,7 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
     let done = 0;
     try {
       for (const c of rows) {
-        await api.cartAddGiftCard(cart.id, { code: c.number, pin: c.pin || '', balance: c.balance, label: reading.file.name || '' });
+        await api.cartAddGiftCard(cart.id, { code: c.number, pin: c.pin || '', balance: c.balance, retailer: c.retailer || '', label: reading.file.name || '' });
         done++;
         setReading((r) => ({ ...r, cards: r.cards.map((x) => (x.number === c.number ? { ...x, saved: true, ok: false } : x)) }));
       }
@@ -226,6 +231,23 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
       setErr(`${done} of ${rows.length} recorded. ${ex.message}`);
       if (done) onChanged();
     } finally { setBusy(''); }
+  }
+
+  // Every live card as ONE PDF: balance, number, PIN and the card's own picture, a page
+  // a card — the CSV's numbers and the images' barcodes put back together for the till.
+  // The server writes the trail row before it decrypts anything.
+  async function downloadAll() {
+    setBusy('pdf'); setErr('');
+    try {
+      const { blob, filename } = await api.cartGiftCardsPdf(cart.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename || `${cart.cart_code || 'request'}-gift-cards.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      onChanged();
+    } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
   }
 
   async function download(f) {
@@ -284,6 +306,15 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
         </ul>
       )}
       {!cards.length && <p className="muted sm">No cards recorded yet.</p>}
+      {canReveal && live.length > 0 && (
+        <div className="bc-gc-pdf">
+          <button type="button" className="btn sm" disabled={busy === 'pdf'} onClick={downloadAll}
+            title="One PDF, a page a card: balance, number, PIN and the card's picture. Recorded against your name.">
+            {busy === 'pdf' ? 'Building the PDF…' : `Download all ${live.length} card${live.length === 1 ? '' : 's'} (PDF)`}
+          </button>
+          <span className="muted xs">Balance, number, PIN and the card’s picture on one page each · recorded against your name</span>
+        </div>
+      )}
 
       {/* Past the till, a card recorded here is one the buyer already spent — the receipt
           came to more than the cards on file. Say so, because it is a different act from
@@ -313,11 +344,11 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
           authorised proxy, never a bucket URL. */}
       <div className="bc-gc-files">
         <div className="bc-gc-files-h">
-          <span className="muted sm">{images.length ? `${images.length} card image${images.length === 1 ? '' : 's'}` : 'No card images'}</span>
+          <span className="muted sm">{images.length ? `${images.length} card file${images.length === 1 ? '' : 's'}` : 'No card files'}</span>
           {canPrep && (
             <label className="btn sm ghost bc-upload">
-              {busy === 'upload' ? 'Uploading…' : 'Add image / PDF'}
-              <input type="file" accept="image/*,application/pdf" hidden onChange={upload} />
+              {busy === 'upload' ? 'Uploading…' : 'Add image / PDF / CSV'}
+              <input type="file" accept="image/*,application/pdf,.csv,text/csv" hidden onChange={upload} />
             </label>
           )}
         </div>
@@ -355,7 +386,10 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
         <div className="bc-gc-read">
           <div className="bc-gc-read-h">
             <b>{reading.cards.length} card{reading.cards.length === 1 ? '' : 's'} read from “{reading.file.name || 'file'}”</b>
-            <span className="muted xs">{reading.source === 'pdf' ? 'from the PDF text' : 'by the image reader'} · check every digit, fill any blank balance, tick, then record</span>
+            <span className="muted xs">{reading.source === 'pdf' ? 'from the PDF text' : reading.source === 'csv' ? 'from the CSV' : 'by the image reader'} · check every digit, fill any blank balance, tick, then record</span>
+            {reading.mangled > 0 && (
+              <span className="bc-short xs">{reading.mangled} row{reading.mangled === 1 ? '' : 's'} skipped — Excel turned the card number into 6.06E+18 and the digits are gone. Get the original CSV for {reading.mangled === 1 ? 'it' : 'them'}.</span>
+            )}
             <span className="bc-gc-read-fill">
               <PriceInput placeholder="Set every blank balance"
                 onChange={(e) => { const v = e.target.value; setReading((r) => ({ ...r, cards: r.cards.map((c) => (c.balance === '' ? { ...c, balance: v } : c)) })); }} />

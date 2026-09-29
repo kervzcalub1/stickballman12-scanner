@@ -918,6 +918,37 @@ real samples: one card face, one screenshot and a six-row table all read every d
   in the background as the viewer opens), and a download button in the bar. The panel
   is drawn whenever card files exist, even before cards can be recorded.
 
+### E-gift PDFs, CSVs, and all the cards as one PDF (2026-09-30)
+- **An e-gift PDF, one card a PAGE** (Nike's layout) prints "Gift Card Value:", "Card
+  Number:" and "Pin:" on lines of their own, so the row reader found every number and
+  **no PIN or balance** (measured on an 8-card Nike PDF). `cardsFromPages` now reads a
+  page holding exactly ONE long number as a card face and takes its PIN / value off
+  their **labels** anywhere on that page; any other page is still a table read row by
+  row (`cardsFromText`). The real file: 8/8 numbers, PINs and $200 values.
+- **A CSV** (the card seller's export: number · PIN · balance) is a gift-card file too
+  (`text/csv`, gift_card kind only — file-sign/file-attach refuse it for a receipt or a
+  shoe). `cardsFromCsv` finds the columns by header in any order, or by what the cells
+  look like when there is none. A number Excel already turned into `6.06E+18` has lost
+  its digits: it is **counted (`mangled`) and said**, never guessed.
+- **Download all N cards (PDF)** → `GET api/cart/gift-cards-pdf` (pdf-lib, server-side):
+  a page per LIVE card — balance, full number, PIN, and that card's own picture under
+  them (its barcode is what the till scans); footer = request code · who it was printed
+  for · EST time. It prints every code, so it is **gc-reveal's bulk form with the same
+  rules**: the desk any time, the buyer on their own request once released; the
+  **`gc_pdf` trail row is written BEFORE anything is decrypted** (count + total, never a
+  digit); `no-store`; 6/min.
+- **Page order = the CSV's row order** (rule, 2026-09-30): whenever the request has a
+  CSV card file, the pages follow its rows, matched on the full number — never the order
+  cards were recorded or images uploaded/read. Several CSVs: upload order, each by row.
+  A card on no CSV keeps its recorded place, after them.
+- **Pairing a picture with its card:** a PDF page by the FULL number in its text layer
+  (the page is embedded as-is); an image by **`buy_cart_files.gc_last4`** — set when the
+  image is read and names exactly one card (the last four, never the number). An image
+  never read is read once at download time and remembered. A picture matching no live
+  card is still printed, at the end, under a heading that says so.
+- **`cart/file` keys the buyer's release check on the FILE's kind**, not the `?kind=` the
+  caller sends — leaving that parameter off used to fetch a card image before release.
+
 ## The receipt
 ### Attaching it and reading it are two different permissions
 - **Anyone who can reach the request may ATTACH one** — the buyer on their own request,

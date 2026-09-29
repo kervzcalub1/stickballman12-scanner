@@ -55,7 +55,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
 | Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders** | `docs/context/purchase-orders.md` |
 | Empty shoe boxes end to end: order → declare → receive → shelve → put on a pair | `docs/context/empty-boxes.md` |
-| Buying requests (was "gift-card buying"): request → approve → cards → receipt → audit → reconciled; **`users.privileges`** | `docs/context/buy-cart.md` |
+| Buying requests (was "gift-card buying"): request → approve → cards → receipt → audit → reconciled; **`users.privileges`**; **Telegram approval cards, direct to the Bot API** | `docs/context/buy-cart.md` |
 | Merging duplicates (superadmin): one supplier typed twice, one inbound received as two batches | `docs/context/merge-tools.md` |
 | StockX / Alias / KicksDB, Alias auto-relogin, proxies | `docs/context/integrations.md` |
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |

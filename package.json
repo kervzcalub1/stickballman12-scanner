@@ -13,6 +13,7 @@
     "mobile:https": "node scripts/mobile-preview.mjs --https",
     "mobile:ca": "node scripts/local-cert.mjs --serve",
     "mobile:tunnel": "node scripts/mobile-preview.mjs --tunnel",
+    "telegram:webhook": "node scripts/telegram-webhook.mjs",
     "db:setup": "node scripts/db-setup.mjs",
     "db:reset": "node scripts/db-reset.mjs",
     "db:go-live": "node scripts/db-go-live.mjs",

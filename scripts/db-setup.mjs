@@ -122,6 +122,22 @@ await sql(`
     last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+// "More…" on a Telegram approval card asks the tapper "How many pairs?" and waits for a
+// number typed back (2026-09-29, replacing the Make data store that did this). One open
+// question per Telegram account — a second "More…" replaces the first — answered only in
+// the same chat, within 10 minutes. `env` says which server owns the card: prod passes a
+// dev card's answer on to the dev server rather than recording it (api/telegram/webhook.js).
+await sql(`
+  CREATE TABLE IF NOT EXISTS telegram_pending_qty (
+    telegram_user_id BIGINT PRIMARY KEY,
+    cart_id          BIGINT NOT NULL,
+    line_id          BIGINT NOT NULL,
+    chat_id          BIGINT NOT NULL,
+    card_message_id  BIGINT NOT NULL,
+    env              TEXT NOT NULL DEFAULT 'prod',
+    asked_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
 // Anyone who was given one of the short-lived roles keeps the capability as a
 // privilege, and lands back on a real job title. Runs before the constraint is
 // re-asserted, or these rows would fail it.

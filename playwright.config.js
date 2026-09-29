@@ -71,7 +71,8 @@ export default defineConfig({
     // tapping one answered "that buying request does not exist". Blanked here rather than
     // guarded in the code on APP_ENV, because that guard cannot tell this suite from a
     // developer's own `npm run dev` and silently swallowed a real person's cards for half
-    // an hour.
+    // an hour. TELEGRAM_*: cards now go to Telegram directly (api/_lib/telegram.js), so
+    // the Bot API itself is replaced with a local fake — see below.
     // MAKE_RECEIPT_PARSER_URL: the receipt-by-number lookup searches REAL ordering
     // mailboxes and spends Make operations on every call.
     //
@@ -81,6 +82,15 @@ export default defineConfig({
     // which specs it ate depended on how the 60s windows lined up with the run, so an
     // unrelated PR could go red just for adding a test file. It is refused under
     // NODE_ENV=production (api/_lib/util.js), and the server logs a line when it is off.
-    env: { TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', E2E_NO_RATE_LIMIT: '1' },
+    env: {
+      TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', E2E_NO_RATE_LIMIT: '1',
+      // Telegram is pointed at a FAKE Bot API on localhost (e2e/buy-cart.spec.js starts it
+      // for the tests that read it) with a fake token — so the real bot's token is never
+      // used by this server, and nothing can reach the real group whether or not the fake
+      // is listening (a send to a closed port just fails, and a failed send is swallowed).
+      TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: '-100777',
+      TELEGRAM_API_BASE: 'http://127.0.0.1:5198', TELEGRAM_WEBHOOK_SECRET: 'e2e-telegram-secret',
+      TELEGRAM_DEV_FORWARD_URL: '',
+    },
   },
 });

@@ -469,7 +469,7 @@ export function SupplierApp({ user, onSignOut }) {
     const q = Math.max(0, Number(l.qty_expected) || 0);
     const per = (c || 0) + (t || 0);
     return {
-      per: `${money(c || 0)}${t ? ` + ${money(t)} tip` : ''}`,
+      per: `${money(c || 0)}${boxesOrder ? '' : ' shelf'}${t ? ` + ${money(t)} tip` : ''}`,
       total: money(per * q),
       showTotal: q > 1,
     };
@@ -698,7 +698,7 @@ export function SupplierApp({ user, onSignOut }) {
                               const mm = lineMoney(l);
                               return mm
                                 ? <span className="po-line-money">{mm.per} per {boxesOrder ? 'box' : 'pair'}{mm.showTotal ? ` · ${mm.total}` : ''}</span>
-                                : <span className="po-line-money none">no cost entered</span>;
+                                : <span className="po-line-money none">{boxesOrder ? 'no cost entered' : 'no shelf price entered'}</span>;
                             })()}
                             {l.entered_on_behalf && <span className="po-line-attribution muted xs">Entered for you by {staffLabel}</span>}
                           </li>
@@ -712,7 +712,7 @@ export function SupplierApp({ user, onSignOut }) {
                   {!isReplacement && (m.any || m.blank > 0) && (
                     <div className="po-box-total">
                       <span className="muted xs">
-                        {m.any ? `Cost ${money(m.items)}${m.tips > 0 ? ` + tips ${money(m.tips)}` : ''}` : ''}
+                        {m.any ? `${boxesOrder ? 'Cost' : 'Shelf'} ${money(m.items)}${m.tips > 0 ? ` + tips ${money(m.tips)}` : ''}` : ''}
                         {m.blank > 0 ? `${m.any ? ' · ' : ''}${m.blank} ${boxesOrder ? (m.blank === 1 ? 'box' : 'boxes') : `pair${m.blank === 1 ? '' : 's'}`} with nothing entered` : ''}
                       </span>
                       {m.any && <span className="po-box-total-n">{money(m.total)}</span>}
@@ -841,7 +841,7 @@ export function SupplierApp({ user, onSignOut }) {
                         const mm = lineMoney(l);
                         return mm
                           ? <span className="po-line-money">{mm.per} per {boxesOrder ? 'box' : 'pair'}{mm.showTotal ? ` · ${mm.total}` : ''}</span>
-                          : <span className="po-line-money none">no cost entered</span>;
+                          : <span className="po-line-money none">{boxesOrder ? 'no cost entered' : 'no shelf price entered'}</span>;
                       })()}
                     </li>
                   ))}
@@ -853,8 +853,8 @@ export function SupplierApp({ user, onSignOut }) {
               {(m.any || m.blank > 0) && (
                 <div className="po-review-money">
                   <span className="muted xs">
-                    {m.any ? `Cost ${money(m.items)}${m.tips > 0 ? ` + tips ${money(m.tips)}` : ''}` : ''}
-                    {m.blank > 0 ? `${m.any ? ' · ' : ''}${m.blank} pair${m.blank === 1 ? '' : 's'} with no cost or tip` : ''}
+                    {m.any ? `${boxesOrder ? 'Cost' : 'Shelf'} ${money(m.items)}${m.tips > 0 ? ` + tips ${money(m.tips)}` : ''}` : ''}
+                    {m.blank > 0 ? `${m.any ? ' · ' : ''}${m.blank} pair${m.blank === 1 ? '' : 's'} with no shelf price or tip` : ''}
                   </span>
                   {m.any && <span className="po-box-total-n">{money(m.total)}</span>}
                 </div>

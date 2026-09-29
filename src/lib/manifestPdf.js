@@ -339,7 +339,7 @@ function drawItemTable(doc, startY, items, headerFn, prices = false, boxesOrder 
       doc.text(label, PAGE_W - MARGIN - 70, y);
       doc.text(value, PAGE_W - MARGIN, y, { align: 'right' });
     };
-    row('Cost', usd(costTotal));
+    row(boxesOrder ? 'Cost' : 'Shelf price', usd(costTotal));
     if (tipTotal > 0) row('Tips', usd(tipTotal));
     row('TOTAL DECLARED', usd(costTotal + tipTotal), true);
     if (blankLines) {

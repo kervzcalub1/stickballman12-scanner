@@ -188,3 +188,40 @@ export function dealVerdict(payouts, finalCost, liquidity = '') {
 
   return { call, best, risk: riskLevel(best.margin, liquidity), spread, note };
 }
+
+/**
+ * Where each SIZE sells best. Takes the lowest ask on each platform, runs it through
+ * the SAME payout maths as the one-pair view (fee cut of the ask, no markup) against
+ * ONE final cost, and picks the platform that leaves more money.
+ *
+ * `quotes` is `[{ size, alias, stockx, stockxInexact, cost? }]` with the asks as numbers or
+ * null. A platform with no ask for a size is left out of that size's comparison rather
+ * than read as $0 — "StockX has no ask" is not "StockX pays nothing". With a single
+ * priced platform it still wins, but `edge` stays null: there's nothing to beat.
+ *
+ * The ranking is by PAYOUT, which with one cost across every size is the same order as
+ * profit — so the table can rank before a shelf price is typed, and profit/ROI just
+ * appear once there's a cost to subtract.
+ */
+export function platformBySize(quotes, finalCost, feePct = {}) {
+  return (quotes || []).map((q) => {
+    // A size can carry its OWN cost (the PH grid: what those pairs actually landed at);
+    // otherwise the one final cost applies (the calculator: one pair, any size).
+    const cost = q.cost != null && q.cost !== '' ? num(q.cost) : num(finalCost);
+    const per = {};
+    for (const { key } of PLATFORMS) {
+      const ask = Number(q[key]);
+      per[key] = ask > 0 ? calcPayout(key, ask, cost, feePct[key] ?? DEFAULT_FEE_PCT[key]) : null;
+    }
+    const priced = PLATFORMS.map((p) => per[p.key]).filter(Boolean);
+    let best = null;
+    let edge = null;
+    if (priced.length) {
+      const top = priced.reduce((a, b) => (b.payout > a.payout ? b : a));
+      edge = priced.length > 1 ? top.payout - Math.min(...priced.map((p) => p.payout)) : null;
+      // Within a cent is a tie — naming a winner over rounding would be a coin toss.
+      best = edge != null && edge < 0.005 ? 'tie' : top.platform;
+    }
+    return { size: q.size, cost, ...per, best, edge, stockxInexact: !!q.stockxInexact };
+  });
+}

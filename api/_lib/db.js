@@ -706,6 +706,9 @@ export async function mergeSuppliers(fromName, toName, actor) {
     UPDATE batches SET supplier_name = ${to} WHERE btrim(supplier_name) = ${from} RETURNING id`;
   const p = await sql`
     UPDATE purchase_orders SET supplier_name = ${to} WHERE btrim(supplier_name) = ${from} RETURNING id`;
+  // A cost preset linked to the losing name follows it — otherwise that supplier's
+  // shipments would quietly stop getting their landed cost at receiving.
+  await sql`UPDATE payout_presets SET supplier_name = ${to} WHERE lower(btrim(supplier_name)) = lower(${from})`;
   // Delete the row as it is actually stored — a trailing-space name is not `from`.
   await sql`DELETE FROM suppliers WHERE name = ${rawFrom}`;
   if (rawFrom !== from) await sql`DELETE FROM suppliers WHERE name = ${from} AND ${from} <> ${rawTo}`;
@@ -938,14 +941,14 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   const sql = db();
   const queries = items.map((it) => sql`
     INSERT INTO items
-      (vin, batch_id, box_id, name, sku, size, dimensions, upc, image_url, cost, source, status, with_box, goat_only, pre_sell, gender, colorway, notes, created_by)
+      (vin, batch_id, box_id, name, sku, size, dimensions, upc, image_url, cost, shelf_price, source, status, with_box, goat_only, pre_sell, gender, colorway, notes, created_by)
     VALUES
       (coalesce(${it.vin || null},
         'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
               || '-' || lpad(nextval('vin_seq')::text, 6, '0')),
        ${batchId}, ${it.boxId ?? null}, ${it.name || null}, ${it.sku || null}, ${it.size || null},
        ${it.dimensions || null},
-       ${it.upc || null}, ${it.image || null}, ${it.cost ?? null},
+       ${it.upc || null}, ${it.image || null}, ${it.cost ?? null}, ${it.shelfPrice ?? null},
        ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false}, ${it.goatOnly === true},
        ${it.preSell === true},
        ${it.gender || null}, ${it.colorway || null}, ${it.notes || null}, ${createdBy || null})
@@ -1117,6 +1120,27 @@ export async function getProductByUpc(upc) {
   if (!upc) return null;
   const rows = await db()`SELECT * FROM products WHERE upc = ${upc} LIMIT 1`;
   return rows[0] || null;
+}
+
+// A UPC we have already received → the shoe and size it was filed under. The last
+// link in the UPC chain before Alias: a barcode no catalogue knows yet is typed in by
+// hand ONCE, and the next box carrying it is recognised from our own stock. Only a
+// unanimous answer counts — if the pairs wearing this code disagree on the style or
+// the size (a bad old stamp; see scripts/repair-unit-upcs.mjs), it is not an answer.
+// Leading zeros ignored, the same as the scan matcher.
+export async function productFromOwnStockByUpc(upc) {
+  const code = String(upc || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (code.length < 8) return null;
+  const rows = await db()`
+    SELECT upper(sku) AS sku, size, max(name) AS name, max(image_url) AS image,
+           max(gender) AS gender, max(colorway) AS colorway, count(*)::int AS n
+    FROM items
+    WHERE upc IS NOT NULL AND ltrim(upc, '0') = ${code} AND sku IS NOT NULL AND size IS NOT NULL
+    GROUP BY upper(sku), size
+    LIMIT 2`;
+  if (rows.length !== 1) return null;
+  const r = rows[0];
+  return { ambiguous: false, sku: r.sku, scannedSize: r.size, name: r.name, image: r.image, gender: r.gender, colorway: r.colorway, brand: null };
 }
 
 // The Alias catalog_id for a SKU (shared across its sizes) — first known row.
@@ -2793,6 +2817,37 @@ export async function listItemsMissingCost(from = null, to = null, zero = false)
       AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
     ORDER BY i.created_at DESC, i.sku, i.id
     LIMIT 5000
+  `;
+}
+
+// Platform Profit report (docs/context/payout-calculator.md → "Where to sell"): the
+// stock PH is deciding where to list, one row per SKU + SIZE — what's on hand, what it
+// landed at, and how many of those pairs have no cost yet. On hand = still ours to
+// sell: not sold/shipped/pre-sold, not missing/issue, not a no-box pair (not sellable).
+// PH-excluded kinds and pre-sell units are left out on both counts — the same two
+// exclusions every PH path carries (CLAUDE.md), because this is a PH screen.
+// Cost is the AVERAGE of the costed pairs (> 0; a $0 is a claim, not a price), so a
+// size received twice at two prices reads as one honest number rather than the first.
+export async function listPlatformProfitStock() {
+  return await db()`
+    SELECT i.sku, i.size,
+           max(i.name) AS name,
+           count(*)::int AS qty,
+           count(*) FILTER (WHERE i.cost > 0)::int AS costed,
+           round(avg(i.cost) FILTER (WHERE i.cost > 0), 2) AS cost,
+           min(i.cost) FILTER (WHERE i.cost > 0) AS cost_min,
+           max(i.cost) FILTER (WHERE i.cost > 0) AS cost_max,
+           round(avg(i.shelf_price) FILTER (WHERE i.shelf_price > 0), 2) AS shelf,
+           string_agg(DISTINCT btrim(b.supplier_name), ', ') AS suppliers
+      FROM items i
+      LEFT JOIN batches b ON b.id = i.batch_id
+     WHERE i.status IN ('needs_shelf', 'in_stock', 'returned')
+       AND coalesce(i.pre_sell, false) = false
+       AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
+       AND coalesce(btrim(i.sku), '') <> ''
+     GROUP BY i.sku, i.size
+     ORDER BY i.sku, i.size
+     LIMIT 20000
   `;
 }
 
@@ -6003,6 +6058,7 @@ const presetOut = (r) => (r ? {
   note: r.note || '',
   supplierUserId: r.supplier_user_id == null ? null : Number(r.supplier_user_id),
   supplierUsername: r.supplier_username || null, // only selected for the staff editor
+  supplierName: r.supplier_name || null,         // the receiving supplier it applies to
   updatedBy: r.updated_by || null,
   updatedAt: r.updated_at || null,
 } : null);
@@ -6018,7 +6074,7 @@ export async function listPayoutPresets({ supplierUserId = null } = {}) {
   if (supplierUserId != null) {
     const rows = await sql`
       SELECT id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct, promo_pct,
-             cashback_pct, note, supplier_user_id, updated_by, updated_at
+             cashback_pct, note, supplier_user_id, supplier_name, updated_by, updated_at
         FROM payout_presets
        WHERE supplier_user_id = ${supplierUserId}
        ORDER BY lower(btrim(name))`;
@@ -6026,7 +6082,7 @@ export async function listPayoutPresets({ supplierUserId = null } = {}) {
   }
   const rows = await sql`
     SELECT p.id, p.name, p.tip_amt, p.shipping_amt, p.tax_pct, p.gift_pct, p.store_pct,
-           p.promo_pct, p.cashback_pct, p.note, p.supplier_user_id, p.updated_by, p.updated_at,
+           p.promo_pct, p.cashback_pct, p.note, p.supplier_user_id, p.supplier_name, p.updated_by, p.updated_at,
            u.username AS supplier_username
       FROM payout_presets p
       LEFT JOIN users u ON u.id = p.supplier_user_id
@@ -6053,6 +6109,7 @@ export async function savePayoutPreset(p, updatedBy) {
   const note = String(p.note || '').trim() || null;
   // null unlinks; the endpoint has already checked the id is a real approved supplier.
   const supplierUserId = p.supplierUserId == null || p.supplierUserId === '' ? null : Number(p.supplierUserId);
+  const supplierName = String(p.supplierName || '').trim() || null;
   try {
     // The shim can't nest sql fragments, so insert and update are two whole statements.
     const rows = p.id
@@ -6061,19 +6118,19 @@ export async function savePayoutPreset(p, updatedBy) {
              SET name = ${name}, tip_amt = ${tip}, shipping_amt = ${ship},
                  tax_pct = ${tax}, gift_pct = ${gift}, store_pct = ${store},
                  promo_pct = ${promo}, cashback_pct = ${cash}, note = ${note},
-                 supplier_user_id = ${supplierUserId},
+                 supplier_user_id = ${supplierUserId}, supplier_name = ${supplierName},
                  updated_by = ${updatedBy || null}, updated_at = now()
            WHERE id = ${p.id}
        RETURNING id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct,
-                 promo_pct, cashback_pct, note, supplier_user_id, updated_by, updated_at`
+                 promo_pct, cashback_pct, note, supplier_user_id, supplier_name, updated_by, updated_at`
       : await sql`
           INSERT INTO payout_presets
             (name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct, promo_pct,
-             cashback_pct, note, supplier_user_id, created_by, updated_by)
+             cashback_pct, note, supplier_user_id, supplier_name, created_by, updated_by)
           VALUES (${name}, ${tip}, ${ship}, ${tax}, ${gift}, ${store}, ${promo},
-                  ${cash}, ${note}, ${supplierUserId}, ${updatedBy || null}, ${updatedBy || null})
+                  ${cash}, ${note}, ${supplierUserId}, ${supplierName}, ${updatedBy || null}, ${updatedBy || null})
        RETURNING id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct,
-                 promo_pct, cashback_pct, note, supplier_user_id, updated_by, updated_at`;
+                 promo_pct, cashback_pct, note, supplier_user_id, supplier_name, updated_by, updated_at`;
     return presetOut(rows[0]);
   } catch (e) {
     if (String(e.message || '').includes('payout_presets_name_idx')) {
@@ -6083,6 +6140,40 @@ export async function savePayoutPreset(p, updatedBy) {
     }
     throw e;
   }
+}
+
+/**
+ * The cost stack a shipment was bought at — what turns a supplier's SHELF price into
+ * the landed cost at receiving. Most specific first:
+ *   1. received against a PO → the preset linked to that PO's supplier ACCOUNT
+ *      (supplier_user_id — an id, so it can't drift);
+ *   2. otherwise → the preset linked to the supplier NAME picked at receiving.
+ * Returns `{ preset, via: 'po' | 'name' }`, or `{ preset: null }` when neither links.
+ */
+export async function presetForShipment({ poId = null, supplierName = '' } = {}) {
+  const sql = db();
+  if (poId != null && Number.isInteger(Number(poId)) && Number(poId) > 0) {
+    const rows = await sql`
+      SELECT p.id, p.name, p.tip_amt, p.shipping_amt, p.tax_pct, p.gift_pct, p.store_pct,
+             p.promo_pct, p.cashback_pct, p.note, p.supplier_user_id, p.supplier_name,
+             p.updated_by, p.updated_at
+        FROM purchase_orders o
+        JOIN payout_presets p ON p.supplier_user_id = o.supplier_user_id
+       WHERE o.id = ${Number(poId)}
+       ORDER BY p.id LIMIT 1`;
+    if (rows[0]) return { preset: presetOut(rows[0]), via: 'po' };
+  }
+  const name = String(supplierName || '').trim();
+  if (name) {
+    const rows = await sql`
+      SELECT id, name, tip_amt, shipping_amt, tax_pct, gift_pct, store_pct, promo_pct,
+             cashback_pct, note, supplier_user_id, supplier_name, updated_by, updated_at
+        FROM payout_presets
+       WHERE lower(btrim(supplier_name)) = lower(${name})
+       ORDER BY id LIMIT 1`;
+    if (rows[0]) return { preset: presetOut(rows[0]), via: 'name' };
+  }
+  return { preset: null, via: null };
 }
 
 // Hard delete: a preset is a convenience, referenced by nothing — the calculator saves

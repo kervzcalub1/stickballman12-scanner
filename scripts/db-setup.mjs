@@ -244,6 +244,9 @@ await sql(`
 await sql(`CREATE INDEX IF NOT EXISTS items_batch_idx   ON items (batch_id)`);
 await sql(`CREATE INDEX IF NOT EXISTS items_sku_idx     ON items (sku)`);
 await sql(`CREATE INDEX IF NOT EXISTS items_created_idx ON items (created_at)`);
+// UPC → our own stock (productFromOwnStockByUpc, the last link in the UPC scan chain).
+// Matched without leading zeros, so the index is on the same expression.
+await sql(`CREATE INDEX IF NOT EXISTS items_upc_trim_idx ON items (ltrim(upc, '0')) WHERE upc IS NOT NULL`);
 await sql(`CREATE INDEX IF NOT EXISTS items_status_idx  ON items (status)`);
 
 // V5 columns (idempotent) — receiving "With Box" + PH Team editable fields.
@@ -1115,6 +1118,18 @@ await sql(`CREATE UNIQUE INDEX IF NOT EXISTS payout_presets_name_idx ON payout_p
 // (staff-only, which is every preset until someone links one).
 await sql(`ALTER TABLE payout_presets ADD COLUMN IF NOT EXISTS supplier_user_id BIGINT REFERENCES users(id)`);
 await sql(`CREATE INDEX IF NOT EXISTS payout_presets_supplier_idx ON payout_presets (supplier_user_id)`);
+// Which RECEIVING supplier (the `suppliers` dropdown, i.e. batches.supplier_name) buys at
+// this stack (2026-09-29). A shipment received WITHOUT a PO has no supplier account to key
+// on, only the name picked at receiving — so staff link the two once in the preset
+// manager. A PO shipment still resolves through supplier_user_id first. Picked from the
+// real dropdown list rather than typed, and compared case-insensitively.
+await sql(`ALTER TABLE payout_presets ADD COLUMN IF NOT EXISTS supplier_name TEXT`);
+// The SHELF price a pair was bought at, per pair (2026-09-29). Suppliers now declare the
+// shelf price on the PO manifest (po_lines.unit_cost, relabelled "Shelf price ea"), and
+// receiving runs it through the supplier's preset stack (tax, gift card, shipping, tip)
+// into items.cost — the landed cost everything else reads. Kept beside it so the
+// landed number can always be traced back to what was on the sticker.
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS shelf_price NUMERIC(12,2)`);
 
 // Seed the known suppliers — but ONLY into an empty table, never ON CONFLICT DO
 // NOTHING. db:setup runs on every deploy, and a preset someone deliberately deleted

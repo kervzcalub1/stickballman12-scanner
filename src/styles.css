@@ -5209,3 +5209,55 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
   .bc-lines .bc-table tr.bc-line-detail > td { display: block; padding: 8px 0; }
   .bc-lines .bc-table .muted.xs { max-width: none; }
 }
+
+/* Payout Calculator — best platform by size. One row per size; the winning platform's
+   cell is tinted so the column of answers reads at a glance down a size run. */
+.pc-bysize { margin-top: 22px; }
+.pc-bysize-intro { margin: 0 0 8px; line-height: 1.5; }
+.pc-bysize-tally { margin: 10px 0 6px; }
+.pc-bysize-table { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.pc-bysize-row {
+  display: grid; grid-template-columns: 3.5em minmax(0,1fr) minmax(0,1fr) 6.5em; gap: 6px;
+  align-items: center; width: 100%; text-align: left; font: inherit; color: inherit;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px;
+}
+.pc-bysize-row.pickable { cursor: pointer; }
+.pc-bysize-row.head { background: none; border: none; padding: 0 8px; cursor: default; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted); }
+.pc-bysize-row.current { border-color: var(--accent, #6ea8fe); }
+.pc-bysize-size { font-weight: 800; font-variant-numeric: tabular-nums; }
+.pc-bysize-cell { display: flex; flex-direction: column; gap: 1px; padding: 4px 6px; border-radius: 8px; min-width: 0; font-variant-numeric: tabular-nums; }
+.pc-bysize-cell.win { background: rgba(46, 204, 113, 0.12); box-shadow: inset 0 0 0 1px rgba(46, 204, 113, 0.45); }
+.pc-bysize-cell.win.loss { background: none; box-shadow: inset 0 0 0 1px var(--border); }
+.pc-bysize-ask { font-weight: 700; }
+.pc-bysize-profit { font-size: 12px; }
+.pc-bysize-profit.up { color: var(--ok); }
+.pc-bysize-profit.down { color: var(--err); }
+.pc-bysize-best { display: flex; flex-direction: column; gap: 1px; }
+@media (max-width: 420px) {
+  .pc-bysize-row { grid-template-columns: 2.8em minmax(0,1fr) minmax(0,1fr) 5.2em; gap: 4px; padding: 6px; }
+  .pc-bysize-cell { padding: 3px 4px; }
+  .pc-bysize-profit { font-size: 11px; }
+}
+/* The same per-size table under a PH grid group — sits below the size table. */
+.ph-projection { margin-top: 12px; }
+.ph-projection .pc-bysize { margin-top: 0; }
+.ph-projection .pc-h { font-size: 14px; }
+
+/* Platform Profit report (src/screens/PlatformProfit.jsx). */
+.pp-intro { margin: 0 0 12px; line-height: 1.5; }
+.pp-stats { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.pp-stats .pc-stat-val.up { color: var(--ok); }
+.pp-stats .pc-stat-val.down { color: var(--err); }
+.pp-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.pp-search { flex: 1 1 220px; min-width: 0; }
+.pp-list { display: flex; flex-direction: column; gap: 12px; }
+.pp-style { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--panel); }
+.pp-style-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.pp-style-info { flex: 1; min-width: 0; }
+.pp-style-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-unpriced { margin: 4px 0 0; line-height: 1.5; }
+.pp-stats .pc-stat > span { display: block; }
+@media (max-width: 600px) {
+  .pp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pp-stats .pc-stat-val { font-size: 18px; }
+}

@@ -484,7 +484,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                             <span className="po-line-name">{l.name || l.sku}</span>
                             <span className="po-line-meta">
                               {l.sku} · {`size ${l.size}${boxesOrder ? ` · ${l.dimensions || 'no dimensions'}` : ''}`} · ×{l.qty_expected}
-                              {l.unit_cost != null && l.unit_cost !== '' && ` · $${Number(l.unit_cost).toFixed(2)} ea`}
+                              {l.unit_cost != null && l.unit_cost !== '' && ` · $${Number(l.unit_cost).toFixed(2)} ${boxesOrder ? 'ea' : 'shelf ea'}`}
                               {l.tip != null && l.tip !== '' && ` · tip $${Number(l.tip).toFixed(2)} ea`}
                             </span>
                             {lineAttribution(l) && <span className="po-line-attribution muted xs">{lineAttribution(l)}</span>}
@@ -515,7 +515,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                     return (
                       <div className="po-box-total">
                         <span className="muted xs">
-                          Cost {usd(items)}{tips > 0 ? ` + tips ${usd(tips)}` : ''}
+                          {boxesOrder ? 'Cost' : 'Shelf'} {usd(items)}{tips > 0 ? ` + tips ${usd(tips)}` : ''}
                           {blank > 0 ? ` · ${blank} ${boxesOrder ? (blank === 1 ? 'box' : 'boxes') : `pair${blank === 1 ? '' : 's'}`} with nothing entered` : ''}
                         </span>
                         <span className="po-box-total-n">{usd(items + tips)}</span>

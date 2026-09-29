@@ -22,7 +22,10 @@ corrections here afterwards — and a box received against a PO **ignored the
 in `Receiving.jsx`):
 
 1. **typed on the card** (`it.cost`) →
-2. **the PO line for that SKU + size** — `receivingPo.lines` on a receive-against-PO,
+2. **the PO line for that SKU + size** — since 2026-09-29 a **shelf price**, turned into
+   the landed cost with the shipment's supplier preset (`landedFromShelf`; full rule in
+   `payout-calculator.md` → "Where the cost comes from"), and the shelf itself saved to
+   `items.shelf_price` — `receivingPo.lines` on a receive-against-PO,
    or `poCostLines` (fetched alongside the labels) when adding a box to a PO-linked
    batch; matched on bare SKU + **numeric** size (`"10W"` ≡ `"10"`), a line for the
    active label winning over the same SKU+size on another label →

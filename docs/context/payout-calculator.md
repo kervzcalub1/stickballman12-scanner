@@ -86,6 +86,73 @@ want them. Their **bulk/batch analyser** was, on 2026-08-26 — see below.
 4. **Expected payouts → The call** — per-platform **markup** and **fees** → payout /
    profit / ROI, then a **Buy / Watch / Pass** verdict with risk and platform spread.
 
+## Best platform by size (2026-09-29)
+`src/components/PlatformBySize.jsx` + `platformBySize()` in `src/lib/payout.js`, under
+**The call** and above batch analysis. Answers a different question from the verdict:
+not *"should I buy this pair"* but *"which platform should each SIZE of this shoe be
+listed on"* — size 8 can pay more on StockX while size 9 pays more on Alias.
+
+- **Every size's LOWEST ASK on both platforms**, through `calcPayout` (fee off the ask,
+  **no markup** — the market's answer) against the **one final cost** from Store cost:
+  the shelf price, tax, tip, shipping and gift card don't change with the size. Profit is
+  therefore *after fees*, not bare ask − cost.
+- **Priced by `api/payout/batch.js`**, the same endpoint batch analysis uses (sizes
+  chunked by its 24-size cap), honouring the Alias basis toggle. **On a tap
+  ("Compare every size"), not on look-up** — it's one StockX call per size against the
+  shared daily quota and takes ~a minute on a full run. A new shoe or basis clears it;
+  a change to the cost or fees recomputes locally with no refetch.
+- **Ranked by payout**, which with one cost is the same order as profit — so it answers
+  before a shelf price is typed and shows profit/ROI once there is one. Within a cent is
+  "Either". A platform with no ask is left out of that size's comparison, never read as
+  $0; with one priced platform it wins with no "+$" edge.
+- **Green means "take it"**: the better platform on a size that loses money either way is
+  outlined, not tinted green. StockX near-misses carry the same `≈` warning as elsewhere.
+- Tapping a row loads that size into the one-pair calculator above.
+
+### The same table on the PH grid, and the Platform Profit report
+The per-size question is really PH's: *where should THIS stock be listed*. So the table
+(`BySizeTable` + `platformBySize`, `src/components/PlatformBySize.jsx`) is used in two
+more places, where each size carries **its own cost** (`items.cost`) instead of the
+calculator's one Final cost:
+- **PH grid, "Where to sell"** — under every group's size table (desktop) and size list
+  (phone), PH + admin only (`showPricing`). Same on-tap fetch, **Alias consigned** like
+  every other PH pricing surface. Sizes with no cost on file rank by payout and say so.
+- **Platform Profit** (`src/screens/PlatformProfit.jsx`, **`/ph/platform-profit`**, PH
+  home → Pricing & Listing). Stock from `api/ph/platform-profit.js`
+  (`listPlatformProfitStock`: on hand = `needs_shelf`/`in_stock`/`returned`, **not**
+  pre-sell, **PH_EXCLUDED_KINDS guarded**, one row per SKU + size, cost = AVERAGE of the
+  costed pairs, `$0` treated as uncosted). The market is priced **15 styles per tap**
+  ("Price next N styles", or one style's own Price button) through `api/payout/batch.js`
+  and kept for the visit only — pricing everything on load would spend thousands of
+  StockX calls. Headline: profit if every costed pair goes to its best platform vs
+  all-Alias vs all-StockX, counting **only costed pairs** (a size with some pairs
+  uncosted shows the costed pairs' average, not a claim about the rest). Filters: best
+  on Alias / StockX, losing money, not priced, missing cost; `?q=` + `?f=` in the URL;
+  CSV of the priced rows.
+- Not yet: GOAT-only pairs are still compared against StockX (they can't list there).
+
+### Where the cost comes from — the supplier's shelf price + their preset (2026-09-29)
+The projection is only as good as `items.cost`, and ~9% of pairs had one. The rule now:
+**suppliers send the SHELF price per SKU + size** (an internal rule — the app never
+blocks a box without one), and receiving works out the landed cost:
+- **`po_lines.unit_cost` means SHELF price** — relabelled "Shelf price ea" on every PO
+  surface (supplier portal, `PoLineRow`/`PoScanModal`, PO detail, manifest CSV
+  "Shelf price per pair", PDF totals). **Empty-box orders keep "Cost ea"** — a box has
+  no shelf price. Existing values were NOT migrated: they are read as shelf prices.
+- **Preset per shipment** (`presetForShipment` in `db.js`, `GET /api/payout/presets?for=shipment&po=&supplier=`,
+  staff only): the PO's supplier ACCOUNT (`payout_presets.supplier_user_id`) first, else
+  the **receiving supplier name** (`payout_presets.supplier_name`, new — picked from the
+  real dropdown list in the preset manager, matched case-insensitively). The supplier
+  merge tool moves this link with the name.
+- **Receiving** (`landedFromShelf` in `src/lib/costs.js`, the calculator's own
+  `calcCostBreakdown`): shelf → preset gift card/discounts → tax → + tip + shipping. The
+  **line's own tip beats the preset's**. With no preset: shelf + line tip only, and the
+  hint says "shelf only, no supplier preset" (tax/shipping unknown, not zero). Typed
+  "Cost ea" at receiving still wins and is taken as the landed figure.
+- **`items.shelf_price`** (new) records the sticker next to the landed `items.cost`.
+- E2E: `e2e/receiving-per-shoe-cost.spec.js` (150 shelf → $162.64 with an $8.25/8.25%/8%/$5
+  stack; a line tip of $7 beating the preset's $5).
+
 ## Supplier presets — the one thing here that ISN'T per device
 Table `payout_presets`, endpoint `api/payout/presets.js` (GET list · POST save · POST
 `{deleteId}`), editor in `PresetManager` inside the screen. Seeded from the five

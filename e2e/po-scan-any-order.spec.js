@@ -6,8 +6,9 @@
 // them in the app's order" and went round it through the Batch page (Brent, Sept 2026).
 //
 // What has to hold now: a scanned UPC lands on its own size row whatever the order; a
-// SKU with one open size lands there too, and one with several says which sizes rather
-// than guessing; an over-count is recorded and named; undo steps the row back; a pair
+// SKU with one open size lands there too, and one with several opens the size +
+// quantity picker on the label's sizes rather than guessing (in raw-1ID mode those pairs
+// then wait for their stickers, nothing minted); an over-count is recorded and named; undo steps the row back; a pair
 // that is on no row becomes an unexpected line that can be typed in; and Review states
 // expected / received / missing / not-on-PO before anything is committed.
 import { test, expect } from '@playwright/test';
@@ -62,7 +63,7 @@ test.beforeAll(async () => {
   const rows = await q(
     `INSERT INTO vin_stock (vin, run_id, printed_by)
      SELECT 'SBM-R-' || lpad(($2::bigint + g)::text, 6, '0'), $1, 'e2e'
-     FROM generate_series(1, 2) g RETURNING vin`, [RUN, VIN_BASE]);
+     FROM generate_series(1, 5) g RETURNING vin`, [RUN, VIN_BASE]);
   stickers = rows.map((r) => r.vin).sort();
 });
 
@@ -155,9 +156,14 @@ test('the box is scanned in the order it comes out, and Review says what differs
   await expect(qtyOf(rowFor(page, SKU_B, '8'))).toHaveValue('1');
 
   // Shoe A by style code while BOTH its sizes are still open — the scan can't know
-  // which pair this is, so it names them instead of guessing.
+  // which pair this is, so it opens the size + quantity picker on the label's sizes
+  // instead of guessing. Closed without picking: nothing is counted.
   await scan(SKU_A);
-  await expect(bar.locator('.scan-flash')).toContainText(/sizes 9, 10/);
+  const picker = page.locator('.modal.additem');
+  await expect(picker).toBeVisible();
+  await expect(picker.locator('.size-chip:not(.custom)')).toHaveText(['9', '10']);
+  await picker.locator('.modal-head button').click();
+  await expect(picker).toHaveCount(0);
   await expect(qtyOf(rowFor(page, SKU_A, '9'))).toHaveValue('0');
 
   // Second size-10 pair, then a third: the third is over the label and says so.
@@ -175,19 +181,21 @@ test('the box is scanned in the order it comes out, and Review says what differs
   await scan(SKU_A);
   await expect(qtyOf(rowFor(page, SKU_A, '9'))).toHaveValue('1');
 
-  // A pair that is on no row: resolved through the catalogue like any rapid scan. The
-  // lookup is stubbed to fail, which is the worst case — the line still lands, below
-  // the sheet, typeable, flagged as not on the PO.
+  // A style code that is on no row: the same picker, looked up in the catalogue. The
+  // lookup is stubbed to fail, which is the worst case — the picker still opens on a
+  // blank shoe carrying the code, and it lands below the sheet, flagged as not on the PO.
   await page.route('**/api/sku-search', (route) => route.fulfill({ status: 404, json: { ok: false, error: 'Not found' } }));
   await scan('E2E-STRAY-1');
+  await expect(picker).toBeVisible();
+  await expect(picker).toContainText(/Not found · E2E-STRAY-1/);
+  await picker.locator('input.cart-name').fill('Stray Pair');
+  await picker.locator('.size-chip', { hasText: /^11$/ }).click();
+  await picker.getByRole('button', { name: /Complete item/ }).click();
   const stray = page.locator('.po-manifest-item.overage');
   await expect(stray).toHaveCount(1);
-  await expect(stray).toContainText('Nothing found for');
+  await expect(stray).toContainText('Stray Pair');
   await expect(stray.locator('.po-chip')).toHaveText('Overage · not on PO');
   await expect(page.locator('.po-manifest-item').last()).toHaveClass(/overage/);   // below the sheet, not on top
-  await stray.locator('input.cart-name').fill('Stray Pair');
-  await stray.locator('.po-size-input').fill('11');
-  await stray.locator('.po-size-input').blur();
 
   // Take shoe B back out (its pair went back in the wrong box, say): a row at 0 on
   // Review is a MISSING pair, said as one. Clearing a row that holds a SCANNED pair
@@ -253,5 +261,53 @@ test('in raw-1ID mode the sticker follows the pair just scanned, not the first r
   await expect(rowFor(page, SKU_A, '9')).toHaveClass(/awaiting/);
   await scan(stickers[1]);
   await expect(rowFor(page, SKU_A, '9').locator('.po-flag.id')).toHaveText('1ID 1/1');
+  await expect(bar.locator('.rawvin-beat')).toContainText('Every pair has its 1ID');
+});
+
+test('raw-1ID: a typed SKU opens the size + quantity picker, and the stickers go on those pairs', async ({ page }) => {
+  await page.addInitScript(() => {
+    const cur = JSON.parse(localStorage.getItem('sb_prefs') || '{}');
+    localStorage.setItem('sb_prefs', JSON.stringify({ ...cur, rawVins: true }));
+  });
+  await loginAs(page, 'warehouse');
+  await page.goto('/receiving');
+  await page.locator('label:has-text("Buyer") input').fill('e2e');
+  await page.getByRole('button', { name: /Receive against a purchase order/i }).click();
+  await page.locator('.po-picker input').fill(PO_RAW);
+  await page.locator('.po-picker').getByRole('button', { name: 'Find' }).click();
+  await expect(page.locator('.po-receive-banner')).toContainText(PO_RAW);
+  await page.getByRole('button', { name: 'Add items' }).first().click();
+  await expect(page.locator('.po-manifest')).toBeVisible();
+
+  const bar = page.locator('.po-scan-bar');
+  const scan = async (code) => {
+    await bar.locator('input').fill(code);
+    await bar.getByRole('button', { name: 'Add' }).click();
+  };
+
+  // Both sizes open, so the style code opens the picker on the label's sizes.
+  await scan(SKU_A);
+  const picker = page.locator('.modal.additem');
+  await expect(picker).toBeVisible();
+  await expect(picker.locator('.size-chip:not(.custom)')).toHaveText(['9', '10']);
+  await picker.locator('.size-chip', { hasText: /^9$/ }).click();
+  await picker.locator('.size-chip', { hasText: /^10$/ }).click();
+  await picker.locator('.size-line').nth(1).getByRole('button', { name: '+' }).click();   // two 10s
+  await picker.getByRole('button', { name: /Complete item/ }).click();
+  await expect(picker).toHaveCount(0);
+
+  // Counted onto the EXPECTED rows (not a second "not on PO" line), and no VIN was
+  // minted for them — each is waiting for its sticker.
+  await expect(page.locator('.po-manifest-item.overage')).toHaveCount(0);
+  await expect(qtyOf(rowFor(page, SKU_A, '9'))).toHaveValue('1');
+  await expect(qtyOf(rowFor(page, SKU_A, '10'))).toHaveValue('2');
+  await expect(rowFor(page, SKU_A, '9').locator('.po-flag.id')).toHaveText('1ID 0/1');
+  await expect(rowFor(page, SKU_A, '10').locator('.po-flag.id')).toHaveText('1ID 0/2');
+
+  await scan(stickers[2]);
+  await scan(stickers[3]);
+  await scan(stickers[4]);
+  await expect(rowFor(page, SKU_A, '9').locator('.po-flag.id')).toHaveText('1ID 1/1');
+  await expect(rowFor(page, SKU_A, '10').locator('.po-flag.id')).toHaveText('1ID 2/2');
   await expect(bar.locator('.rawvin-beat')).toContainText('Every pair has its 1ID');
 });

@@ -2,6 +2,7 @@
 // routinely leave cost off a manifest, so pairs land with nothing on file and
 // nothing in the app could fill it in afterwards.
 import { sizeNum, compareSizes } from './codes.js';
+import { calcCostBreakdown } from './payout.js';
 
 // Group flat item rows into one card per BATCH + SKU, with a row per size inside.
 //
@@ -100,12 +101,15 @@ export function costOrNull(v) {
 
 const bareSku = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
 
-// What the supplier declared this SKU + size cost on the PO, or null. Matched on the
-// code with spaces/dashes stripped and on the NUMERIC size ("9.5W" is "9.5" — the
-// reconciliation learned this the hard way, po-reconciliation-notation-matching).
-// A line for the box being received wins over the same SKU + size declared on another
-// label; a whole-order (Path C) manifest has no box on its lines, so it matches too.
-export function poLineCost(lines, sku, size, poBoxId = null) {
+// What the supplier declared for this SKU + size on the PO — `{ shelf, tip }`, or null.
+// Since 2026-09-29 the line's `unit_cost` is the SHELF price (relabelled "Shelf price
+// ea" on the manifest); the landed cost is worked out from it with the supplier's
+// preset stack (`landedFromShelf`). Matched on the code with spaces/dashes stripped and
+// on the NUMERIC size ("9.5W" is "9.5" — the reconciliation learned this the hard way,
+// po-reconciliation-notation-matching). A line for the box being received wins over the
+// same SKU + size declared on another label; a whole-order (Path C) manifest has no box
+// on its lines, so it matches too.
+export function poLineMoney(lines, sku, size, poBoxId = null) {
   if (!Array.isArray(lines) || !lines.length) return null;
   const want = bareSku(sku);
   if (!want) return null;
@@ -115,12 +119,36 @@ export function poLineCost(lines, sku, size, poBoxId = null) {
     if (bareSku(l.sku) !== want) continue;
     const ln = sizeNum(l.size);
     if (!(Number.isNaN(n) && Number.isNaN(ln)) && ln !== n) continue;
-    const c = costOrNull(l.unit_cost);
-    if (c == null) continue;
-    if (poBoxId != null && Number(l.po_box_id) === Number(poBoxId)) return c;
-    if (any == null) any = c;
+    const shelf = costOrNull(l.unit_cost);
+    if (shelf == null) continue;
+    const m = { shelf, tip: costOrNull(l.tip) };
+    if (poBoxId != null && Number(l.po_box_id) === Number(poBoxId)) return m;
+    if (any == null) any = m;
   }
   return any;
+}
+
+// The PO's shelf price for the size, or null.
+export function poLineCost(lines, sku, size, poBoxId = null) {
+  return poLineMoney(lines, sku, size, poBoxId)?.shelf ?? null;
+}
+
+// Shelf price → landed cost, through the SAME register maths as the Payout Calculator
+// (calcCostBreakdown), so a received pair and a calculator line can never disagree.
+// The line's own tip wins over the preset's: the supplier typed it for that pair.
+// With no preset only what we know is added (shelf + tip) — tax and shipping are
+// unknown, not zero, and the receiving hint says so.
+export function landedFromShelf(shelf, lineTip, preset) {
+  const s = costOrNull(shelf);
+  if (s == null) return null;
+  const tip = lineTip != null ? lineTip : (preset ? preset.tipAmt : 0);
+  const b = calcCostBreakdown({
+    shelfPrice: s,
+    storePct: preset?.storePct, promoPct: preset?.promoPct, giftPct: preset?.giftPct,
+    cashbackPct: preset?.cashbackPct, taxPct: preset?.taxPct,
+    tipAmt: tip, shippingAmt: preset?.shippingAmt,
+  });
+  return Math.round(b.finalCost * 100) / 100;
 }
 
 // The cost a unit is committed with. `shoeCost` is what was typed on the card,

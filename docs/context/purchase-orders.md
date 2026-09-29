@@ -515,8 +515,18 @@ Tests: `e2e/po-wholeorder-1id.spec.js` — verified to fail without the fix.
     input. A sticky scan bar (`.po-scan-bar`, always shown, `manifestScan`) takes the
     shoe in hand: `matchManifestRow` (`src/lib/manifestScan.js`, pure) lands a UPC on
     its exact size row (leading zeros ignored), a style code on the one size of that
-    shoe still open — or names the open sizes when several are, rather than guessing —
-    and steps the row up by one. Over the declared count is recorded and named. A code
+    shoe still open, and steps the row up by one. **A typed style code with several
+    sizes open — or one on no row — opens the size + quantity picker** (`openSkuPicker`
+    → the Add-item modal; 2026-09-29): an expected shoe opens pre-filled with the label's
+    sizes (no catalogue call) and Complete counts onto its rows in place; an unknown one
+    is looked up, and a failed lookup still opens a blank shoe to type in. It used to
+    say "tick the one you're holding" — nowhere to enter "two 9s and a 10". The plain
+    (no-checklist) PO scan bar routes a typed SKU the same way. **In raw 1ID mode the
+    picker mints NO VINs** (`buildItemFromDraft` skips `reserveVins`, like `rapidScan`):
+    it used to, so those pairs had every VIN slot filled, never asked for a sticker, and
+    saved under numbers no shoe was wearing. `addOrMergeItem` compares `goatOnly` with
+    `!!` — a manifest row never sets it, so `undefined !== false` sent picked pairs to a
+    separate "not on PO" line. Over the declared count is recorded and named. A code
     on no row goes through `rapidScan` and lands BELOW the sheet as an unexpected line
     (typeable name/SKU/size right there; expected rows keep their place — the manifest
     is a fixed sheet, so PO mode never floats a shoe to the top). Undo steps a hit row
@@ -1121,6 +1131,10 @@ on different orders, and one line at the top would be a claim about both.
   the picker looks empty for exactly these suppliers.
 
 ## What the shipment cost the supplier (cost + tip, both per pair per size)
+> **2026-09-29: `unit_cost` is the SHELF price.** Labelled "Shelf price ea" on every shoes
+> order (empty-box orders keep "Cost ea"); receiving runs it through the supplier's cost
+> preset into the landed `items.cost` — see `payout-calculator.md` → "Where the cost comes from".
+
 - **Both are per pair, on the line** — `po_lines.unit_cost` (the column pre-dated any UI)
   and `po_lines.tip`. A `po_line` is one **SKU + SIZE**, so both are *per size*: the same
   shoe can cost, and be tipped, differently in a 9 than in an 11. The tip is kept as its

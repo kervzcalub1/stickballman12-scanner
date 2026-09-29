@@ -13,7 +13,7 @@
 // outsole and D the top-down in all three. Covers Nike AND Jordan (same channel; the
 // feed reports brand='Jordan'), but NOT adidas/New Balance/Reebok — different brands
 // need their own module.
-import { fetchWithTimeout } from './util.js';
+import { fetchWithTimeout, cacheGet, cacheSet } from './util.js';
 
 const FEED = 'https://api.nike.com/product_feed/threads/v2';
 // Nike's US/en consumer channel. Required — the feed 400s without a channel filter.
@@ -192,4 +192,63 @@ export async function nikeSpecData(sku) {
     // [{ type: 'PRIMARY', name: 'Obsidian', hex: '28303E' }, …]
     colors: Array.isArray(pc.colors) ? pc.colors : [],
   };
+}
+
+// A scanned barcode → the shoe and its exact size, from Nike itself. The feed filters on
+// `productInfo.skus.gtin`, but only as the 14-digit GTIN — the 12-digit UPC off the box
+// returns nothing, so it is padded with zeros first.
+//
+// Why it is in the UPC chain at all: StockX (proxy and official alike) is missing the
+// barcodes for whole size ranges of some new releases — the Jordan 4 J Balvin had 12 of
+// 25 sizes on 2026-09-30 — while Nike had all 25, and resolved every one of them back to
+// the right style code and size. Nike and Jordan only; anything else is simply not found.
+// Best-effort: every failure is null, so the chain moves on.
+export async function nikeProductByUpc(upc) {
+  const digits = String(upc || '').replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 14) return null;
+  const gtin = digits.padStart(14, '0');
+  const key = `nike:gtin:${gtin}`;
+  const hit = cacheGet(key);
+  if (hit !== null) return hit;
+
+  const qs = new URLSearchParams();
+  qs.append('anchor', '0');
+  qs.append('count', '1');
+  qs.append('filter', 'marketplace(US)');
+  qs.append('filter', 'language(en)');
+  qs.append('filter', `channelId(${CHANNEL_ID})`);
+  qs.append('filter', `productInfo.skus.gtin(${gtin})`);
+  let obj = null;
+  try {
+    const r = await fetchWithTimeout(`${FEED}?${qs}`, { headers: { accept: 'application/json' } }, 8000);
+    if (r.ok) obj = (await r.json())?.objects?.[0] || null;
+  } catch { return null; }   // an outage is not an answer — don't cache it
+
+  // A thread can carry several products; take the one that actually holds this barcode.
+  const pi = (obj?.productInfo || []).find((p) => (p?.skus || []).some((x) => x?.gtin === gtin));
+  const unit = pi?.skus?.find((x) => x?.gtin === gtin);
+  const sku = String(pi?.merchProduct?.styleColor || '').trim().toUpperCase();
+  if (!pi || !unit || !sku) { cacheSet(key, null, 10 * 60 * 1000); return null; }
+
+  const pc = pi.productContent || {};
+  // Nike prints a women's size bare ("7") and a kids' one with its Y ("3.5Y"); the app
+  // writes women's as "7W" (what StockX returns and what the size run is keyed on).
+  const women = /^women/i.test(pc.subtitle || '')
+    || (Array.isArray(pi.merchProduct?.genders) && pi.merchProduct.genders.length === 1 && pi.merchProduct.genders[0] === 'WOMEN');
+  let size = String(unit.nikeSize || '').trim();
+  if (size && women && /^\d+(\.\d+)?$/.test(size)) size = `${size}W`;
+  const views = collectViews(obj);
+  const first = VIEW_ORDER.find((v) => views[v]) || Object.keys(views)[0];
+  const out = {
+    ambiguous: false,
+    sku,
+    scannedSize: size || null,
+    name: pc.fullTitle || pc.title || null,
+    colorway: pc.colorDescription || null,
+    brand: pi.merchProduct?.brand || 'Nike',
+    image: first ? imageUrl(views[first]) : null,
+    gender: pc.subtitle || null,   // "Men's Shoes" / "Women's Shoes" / "Big Kids' Shoes"
+  };
+  cacheSet(key, out);
+  return out;
 }

@@ -147,3 +147,10 @@ a `1ID · in use` chip next to it, so the sticker's state is legible from either
 Low-stock warning under 200 unused. Tests: `e2e/raw-vin.spec.js`,
 `e2e/po-raw-vin.spec.js` (the PO manifest), `e2e/inventory-sticker-status.spec.js`
 (the four states on Inventory).
+
+**The size + quantity picker (Add item / Add manually) mints nothing in this mode
+either (2026-09-29).** It used to reserve a VIN per pair, which filled every pair's
+slot, so the sticker had nowhere to land and the pair saved under a number nobody
+stuck on it. Now its pairs wait for stickers like a scanned pair, and a 1ID scanned
+*into* the picker is refused with "complete this shoe first". On a PO, a typed SKU
+opens this picker (`purchase-orders.md` → "Scan-first, any order").

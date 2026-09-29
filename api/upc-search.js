@@ -1,23 +1,33 @@
 // POST /api/upc-search  { upc }  ->  { ok, product }
 //
 // UPC scan flow:
-//   1. PROXY lookup (UPC -> SKU + scanned size):
-//        PRIMARY  StockX proxy — returns the SKU *and* the exact scanned size.
-//        FALLBACK Alias proxy  — returns the SKU only (no per-UPC size), used
-//                                when StockX has no match. Scanned size is left
-//                                blank so the user picks from the size dropdown.
+//   1. RESOLVE the UPC to a SKU + the exact scanned size, first answer wins:
+//        a. StockX proxy (keyless)   — SKU + size.
+//        b. StockX official API      — SKU + size, ONLY when (a) is down. Same
+//                                      catalogue, same gaps (verified on 16 new
+//                                      releases), so it is a spare, not more reach.
+//        c. Nike product feed        — SKU + size for Nike/Jordan. Fills the size
+//                                      ranges StockX has no barcode for yet on new
+//                                      releases (J Balvin 4: StockX 12/25, Nike 25/25).
+//        d. Our own received pairs   — a UPC typed in by hand once is known from then
+//                                      on; only a unanimous SKU + size counts.
+//        e. Alias proxy              — SKU only (no per-UPC size → size left blank).
+//                                      Last, because it can name the wrong style (it
+//                                      answered an adult Space Jam 9 with the GS code).
 //   2. DETAILS from the official Alias catalog (by SKU): canonical title,
-//      colorway, gender, image, full size run (StockX/Alias-proxy details are
+//      colorway, gender, image, full size run (the resolver's own details are
 //      only a fallback if the catalog lookup misses).
 // The scanned size is what auto-fills + auto-increments per scan in receiving, so
-// it must come from the UPC lookup (only StockX provides it).
+// it must come from step 1 — every source but Alias provides it.
 
 import {
   getJsonBody, send, applySecurity, rateLimit, requireRole, cleanUpc,
   fetchWithTimeout, cacheGet, cacheSet, normalizeGender, skuCodes,
 } from './_lib/util.js';
 import { aliasProductByUpc, aliasCatalogBySku } from './_lib/alias.js';
-import { knownSkuAmong, dbConfigured } from './_lib/db.js';
+import { knownSkuAmong, dbConfigured, productFromOwnStockByUpc } from './_lib/db.js';
+import { stockxProductByUpc } from './_lib/stockx.js';
+import { nikeProductByUpc } from './_lib/nike.js';
 
 const STOCKX_BASE = 'https://bypass-stock-x-host-railway-stock-x.up.railway.app';
 
@@ -113,21 +123,35 @@ export default async function handler(req, res) {
   const cached = cacheGet(cacheKey);
   if (cached) return send(res, 200, { ok: true, product: await resolveCodes(cached), cached: true });
 
-  // 1) Resolve SKU (+ scanned size from StockX) via the proxies.
+  // 1) Resolve SKU + scanned size — first source to answer wins (see the header).
   let sku = null;
   let scannedSize = null;
-  let fb = null; // proxy-supplied details, used only if the catalog lookup misses
+  let fb = null; // resolver-supplied details, used only if the catalog lookup misses
+  let via = null;
+  const take = (r, name) => {
+    if (!r?.sku) return false;
+    sku = normSku(r.sku); scannedSize = r.scannedSize || null; fb = r; via = name;
+    return true;
+  };
+  let proxyDown = false;
   try {
-    const sx = await stockxUpcLookup(upc);
-    if (sx) { sku = sx.sku; scannedSize = sx.scannedSize; fb = sx; }
+    take(await stockxUpcLookup(upc), 'stockx');
   } catch (e) {
-    console.warn('[upc-search] StockX failed, rotating to Alias:', e.message);
+    proxyDown = true;
+    console.warn('[upc-search] StockX proxy failed:', e.message);
+  }
+  if (!sku && proxyDown) take(await stockxProductByUpc(upc), 'stockx-official');
+  if (!sku) take(await nikeProductByUpc(upc), 'nike');
+  if (!sku && dbConfigured()) {
+    try { take(await productFromOwnStockByUpc(upc), 'own-stock'); } catch (e) {
+      console.warn('[upc-search] own-stock lookup failed:', e.message);
+    }
   }
   if (!sku) {
-    // FALLBACK — Alias proxy: SKU only (no scanned size → size left blank).
+    // LAST — Alias proxy: SKU only (no scanned size → size left blank).
     try {
       const al = await aliasProductByUpc(upc);
-      if (al?.sku) { sku = normSku(al.sku); scannedSize = null; fb = al; }
+      if (al?.sku) { sku = normSku(al.sku); scannedSize = null; fb = al; via = 'alias'; }
     } catch (e) {
       console.warn('[upc-search] Alias proxy failed:', e.message);
     }
@@ -163,6 +187,8 @@ export default async function handler(req, res) {
     scannedSize,
     gender: normalizeGender(gender, { size: scannedSize || sizes[0] || '', title: name }),
     source: 'alias',
+    // Which resolver named the shoe — for diagnosing a wrong or missed scan.
+    upcSource: via,
   };
 
   cacheSet(cacheKey, product);

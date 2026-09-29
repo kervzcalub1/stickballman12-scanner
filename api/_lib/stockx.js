@@ -264,6 +264,36 @@ export async function stockxVariantByGtin(gtin) {
   return out;
 }
 
+// A scanned barcode → the shoe and its exact size, off the OFFICIAL catalogue. Two
+// cached calls (the GTIN, then its product). Same catalogue the keyless UPC proxy reads
+// — verified 2026-09-30, 16 new-release UPCs, identical answers and identical gaps — so
+// upc-search calls this only when that proxy is DOWN, never for extra coverage.
+// Null when unconfigured or unknown; throws nothing.
+export async function stockxProductByUpc(upc) {
+  if (!stockxConfigured()) return null;
+  let v = null;
+  try { v = await stockxVariantByGtin(upc); } catch { return null; }
+  if (!v) return null;
+  const key = `sx:pid:${v.productId}`;
+  let p = cacheGet(key);
+  if (p === null) {
+    const r = await sxGet(`/catalog/products/${encodeURIComponent(v.productId)}`).catch(() => ({ ok: false }));
+    if (!r.ok || !r.data?.styleId) return null;
+    p = r.data;
+    cacheSet(key, p, PRODUCT_TTL);
+  }
+  return {
+    ambiguous: false,
+    sku: String(p.styleId).trim().replace(/\s+/g, '-'),
+    scannedSize: v.size || null,
+    name: p.title || null,
+    colorway: p.productAttributes?.colorway || null,
+    brand: p.brand || null,
+    image: null,   // the Public API carries no imagery; the Alias catalogue supplies it
+    gender: p.productAttributes?.gender || null,
+  };
+}
+
 /**
  * The one call the Payout Calculator makes: SKU + size → that size's StockX market.
  * Three upstream requests on a cold cache (search → variants → market data), one on

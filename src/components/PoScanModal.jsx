@@ -88,7 +88,7 @@ export function PoLineRow({ line, disabled, onSave, attribution, boxesOrder = fa
           </div>
         </div>
         <label className="po-line-cost">
-          <span className="muted xs">Cost ea</span>
+          <span className="muted xs">{boxesOrder ? 'Cost ea' : 'Shelf price ea'}</span>
           <span className="po-money-input">
             <span className="po-money-sym">$</span>
             <input className="cost" value={cost} disabled={disabled} inputMode="decimal" placeholder="—"
@@ -122,7 +122,7 @@ export function PoLineHeader({ boxesOrder = false }) {
   return (
     <li className={`po-line-headings${boxesOrder ? ' boxes' : ''}`} aria-hidden="true">
       <span>Item</span><span>Size</span>{boxesOrder && <span>Dimensions</span>}
-      <span>Qty</span><span>Cost ea</span><span>Tip ea</span><span />
+      <span>Qty</span><span>{boxesOrder ? 'Cost ea' : 'Shelf price ea'}</span><span>Tip ea</span><span />
     </li>
   );
 }
@@ -454,7 +454,7 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
                   {/* Money is per size, so it belongs on the size's own row. */}
                   <div className="po-size-line-money">
                     <label className="po-size-money">
-                      <span className="muted xs">Cost ea</span>
+                      <span className="muted xs">{boxesOrder ? 'Cost ea' : 'Shelf price ea'}</span>
                       <span className="po-money-input">
                         <span className="po-money-sym">$</span>
                         <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00"
@@ -477,7 +477,7 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
                 only appears once there's money to add up. */}
             {draftTotal.any && (
               <p className="po-draft-total muted sm">
-                Cost ${draftTotal.cost.toFixed(2)}
+                {boxesOrder ? 'Cost' : 'Shelf'} ${draftTotal.cost.toFixed(2)}
                 {draftTotal.tip > 0 ? ` + tips $${draftTotal.tip.toFixed(2)}` : ''}
                 {' = '}<b>${(draftTotal.cost + draftTotal.tip).toFixed(2)}</b>
               </p>

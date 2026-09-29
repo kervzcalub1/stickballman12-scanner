@@ -31,7 +31,7 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   sub‑queries order angle‑first then `(source='ph_edited') DESC`, and exclude `extra*`).
   PH manages `ph_edited`, warehouse manages `warehouse`, admin both — see `ph-report.md`.
   (Defect photos are NOT here — they ride per-unit `item_events(type='issue')`.)
-- **items** — one row per physical unit (`gi_basis` = which of the 8 pricing-hierarchy
+- **items** — one row per physical unit (`shelf_price` 2026-09-29 = the PO's sticker price beside the landed `cost`; `gi_basis` = which of the 8 pricing-hierarchy
   levels priced this size, NULL = a person typed it; `integrations.md`). Key columns:
   `id, vin UNIQUE NOT NULL, batch_id, box_id, name, sku, size, status, cost, price,
   global_indicator, gi_basis, with_box, upc, gender, colorway, restock_pending,
@@ -61,7 +61,7 @@ access via `api/_lib/db.js` (tagged-template `sql` shim, parameterized).
   See `locations.md`.
 - **shipment_issues** — per-batch issues (e.g. no-box auto-listed).
 - **telegram_pending_qty** (2026-09-29) — the open "How many pairs?" per Telegram account after a "More…" tap: `telegram_user_id PK, cart_id, line_id, chat_id, card_message_id, env, asked_at`. Taken with DELETE…RETURNING within 10 min (`askTelegramQty` / `takeTelegramQty`). See `buy-cart.md` → Telegram direct.
-- **payout_presets** — supplier cost stacks for the Payout Calculator. `id, name
+- **payout_presets** — supplier cost stacks for the Payout Calculator. `supplier_name` (2026-09-29) links a stack to the RECEIVING supplier name, so a non-PO shipment resolves its preset (`presetForShipment`). `id, name
   (UNIQUE on `lower(btrim(name))`), tip_amt, shipping_amt, tax_pct, gift_pct,
   store_pct, promo_pct, cashback_pct, note, created_by, updated_by, updated_at`.
   Every rate is `NOT NULL DEFAULT 0` — a preset states the WHOLE register stack, so a

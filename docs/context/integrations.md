@@ -3,17 +3,34 @@
 All third-party calls are server-side (`api/*`); browser only hits `/api/*`.
 
 ## Product lookup
-- **UPC** (`api/upc-search.js`): two stages, all results `source:'alias'`.
-  1. **Proxy → SKU + scanned size**: **StockX primary** (keyless proxy
-     `/stockx-upc-search`) returns the SKU **and the exact scanned size**;
-     **Alias proxy fallback** (`aliasProductByUpc`) returns the **SKU only** (no
-     per-UPC size → scanned size left blank) when StockX has no match.
+- **UPC** (`api/upc-search.js`): two stages, all results `source:'alias'`; the
+  resolver that named the shoe rides along as **`upcSource`** (for diagnosing a scan).
+  1. **Resolve → SKU + scanned size**, first answer wins (2026-09-30):
+     a. **StockX keyless proxy** (`/stockx-upc-search`, `stockxUpcLookup`) — SKU + size.
+     b. **StockX official API** (`stockxProductByUpc` → `/catalog/products/variants/gtins/{upc}`
+        + `/catalog/products/{id}`) — **only when (a) threw** (proxy down/timeout). It is
+        the SAME catalogue: on 16 new-release UPCs both found 16/16 with identical
+        answers, and both lack the same sizes. A spare, not extra reach; 2 cached calls.
+     c. **Nike product feed** (`nikeProductByUpc`) — filter `productInfo.skus.gtin(…)`,
+        which only matches the **14-digit** GTIN (pad the UPC with zeros; the bare
+        12-digit code returns nothing). Nike/Jordan only. This is the one that fixes
+        "new releases don't scan": StockX had barcodes for 12 of 25 sizes of the Jordan 4
+        J Balvin, Nike had 25/25 and resolved each back to the right code + size. Nike
+        prints women's sizes bare ("7") → we append `W`; kids' come as "5Y" already.
+     d. **Our own received pairs** (`productFromOwnStockByUpc`, index
+        `items_upc_trim_idx` on `ltrim(upc,'0')`) — a UPC typed in by hand once is
+        recognised on the next box. Only a **unanimous** SKU + size counts (bad old
+        stamps exist — `scripts/repair-unit-upcs.mjs`).
+     e. **Alias proxy** (`aliasProductByUpc`) — **SKU only** (scanned size left blank).
+        Last on purpose: it answered an adult Space Jam 9 UPC with the **GS** style code.
   2. **Official Alias catalog (by SKU)** → canonical title, colorway, gender,
-     image, full size run (`aliasCatalogBySku`). Proxy details are only a fallback
+     image, full size run (`aliasCatalogBySku`). Resolver details are only a fallback
      if the catalog misses.
   - The **scanned size drives receiving's auto-fill + auto-increment**, so it must
-    come from the UPC lookup (only StockX provides it). A `W`/`Y` suffix on the
+    come from step 1 (every resolver but Alias gives it). A `W`/`Y` suffix on the
     scanned size is carried onto the size run so women's/youth runs line up.
+  - Still nothing? Receiving keeps the line (typeable), and on a PO a typed SKU opens
+    the size + quantity picker (`purchase-orders.md` → "Scan-first, any order").
 - **SKU** (`api/sku-search.js`): **three sources in order — Alias → StockX → Nike**
   (2026-09-18). This is the ONE lookup behind Receiving, the PO scan modal, Box Labels,
   Existing Stock, Buy Cart, the Payout Calculator, Price Inquiry, Inventory and the

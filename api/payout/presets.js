@@ -26,7 +26,7 @@
 //     so letting the supplier raise their own tip fee would let them move the verdict.
 //     They get a read-only chip; changing it is a conversation with the floor.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, listPayoutPresets, savePayoutPreset, deletePayoutPreset, listSupplierUsers } from '../_lib/db.js';
+import { dbConfigured, listPayoutPresets, savePayoutPreset, deletePayoutPreset, listSupplierUsers, presetForShipment } from '../_lib/db.js';
 
 const MAX_NAME = 60;
 const MAX_NOTE = 200;
@@ -50,6 +50,21 @@ export default async function handler(req, res) {
   // endpoint whose whole job here is "yours and nobody else's".
   const uid = Number(user.uid);
   const supplierScope = isSupplier ? (Number.isInteger(uid) && uid > 0 ? uid : -1) : null;
+
+  // GET ?for=shipment&po=<id>&supplier=<name> — the ONE stack a shipment was bought at,
+  // for receiving to turn the PO's shelf prices into landed costs (presetForShipment).
+  // Staff only: a supplier never receives, and must not learn which name maps to whom.
+  const q = new URL(req.url, 'http://x').searchParams;
+  if (req.method === 'GET' && q.get('for') === 'shipment') {
+    if (isSupplier) return send(res, 403, { ok: false, error: 'Not available.' });
+    try {
+      const out = await presetForShipment({ poId: q.get('po') || null, supplierName: q.get('supplier') || '' });
+      return send(res, 200, { ok: true, ...out });
+    } catch (e) {
+      console.error('[payout/presets:for]', e.message);
+      return send(res, 500, { ok: false, error: 'Could not look up that supplier’s cost stack.' });
+    }
+  }
 
   if (req.method === 'GET') {
     try {
@@ -103,7 +118,9 @@ export default async function handler(req, res) {
   // typo, and it would come back as a buy call — reject it here rather than let the
   // arithmetic run on it.
   const nums = ['tipAmt', 'shippingAmt', 'taxPct', 'giftPct', 'storePct', 'promoPct', 'cashbackPct'];
-  const clean = { id: p.id ? Number(p.id) : null, name, note: String(p.note ?? '').slice(0, MAX_NOTE), supplierUserId };
+  // The receiving supplier it applies to — a name off the dropdown, so it's capped like one.
+  const supplierName = String(p.supplierName ?? '').trim().slice(0, 120) || null;
+  const clean = { id: p.id ? Number(p.id) : null, name, note: String(p.note ?? '').slice(0, MAX_NOTE), supplierUserId, supplierName };
   for (const k of nums) {
     const raw = String(p[k] ?? '').trim();
     const v = raw === '' ? 0 : Number(raw);

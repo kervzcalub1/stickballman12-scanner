@@ -48,6 +48,8 @@ export function normalizeItems(rawItems, { defaultCost = null, noBoxVins = new S
       upc: String(it.upc ?? '').replace(/\D/g, '').slice(0, 14) || null,
       image: it.image || null,
       cost: toCost(it.cost) ?? defaultCost,
+      // What was on the sticker, when the PO declared it — `cost` is the landed figure.
+      shelfPrice: toCost(it.shelfPrice),
       source: ['stockx', 'alias', 'kicksdb', 'manual'].includes(it.source) ? it.source : 'manual',
       gender: ['Men', 'Women', 'Youth', 'Toddler', 'Unisex'].includes(it.gender) ? it.gender : null,
       colorway: String(it.colorway ?? '').trim().slice(0, 120) || null,

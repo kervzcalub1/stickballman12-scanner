@@ -27,6 +27,8 @@ import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { ImageFinder } from './ImageFinder.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
 import { PayoutCalculator } from './PayoutCalculator.jsx';
+import { PlatformBySize } from '../components/PlatformBySize.jsx';
+import { PlatformProfit } from './PlatformProfit.jsx';
 import { BuyCarts } from './BuyCarts.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
@@ -65,6 +67,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
   // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and
   // never touches the staff router, so without a route here a PH team member who was
   // ticked for gift cards had nowhere to go — which is the exact case the privilege model
@@ -117,6 +120,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="image" /></span>
             <span className="home-card-title">Find Image Listings</span>
             <span className="home-card-sub">Manage a SKU’s listing photos — upload finished images, or build a branded set from the template (cut out, place, resize), then save</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('profit')}>
+            <span className="home-card-icon"><NavIcon name="payout" /></span>
+            <span className="home-card-title">Platform Profit</span>
+            <span className="home-card-sub">Where each size on hand earns most — Alias vs StockX lowest ask, less fees, less what the pairs cost</span>
           </button>
         </div>
       </section>
@@ -227,6 +235,18 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
 export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const canEdit = user?.role === 'ph_team' || user?.role === 'superadmin'; // admin + warehouse are read-only
   const showPricing = user?.role !== 'warehouse'; // GI + Final price hidden from warehouse
+  // Where each size of this shoe earns most: Alias vs StockX lowest ask, less the fee,
+  // less what THOSE pairs landed at (items.cost — the supplier's shelf price run through
+  // their cost preset at receiving). Fetched on a tap: one StockX call per size against a
+  // shared daily quota. Consigned, like every other PH pricing surface.
+  const platformProjection = (g) => (
+    <div className="ph-projection" onClick={(e) => e.stopPropagation()}>
+      <PlatformBySize compact title="Where to sell"
+        sku={skuCodes(g.sku)[0] || g.sku}
+        sizes={g.sizes.map((s) => ({ size: s.size, cost: s.cost }))}
+        basis="consigned" onSignOut={onSignOut} />
+    </div>
+  );
   const title = kind === 'rescale' ? 'Rescale Stock' : kind === 'receiving' ? 'New Inventory' : 'Listings & Sync';
   const emptyKind = kind === 'rescale' ? 'rescaled' : kind === 'receiving' ? 'received' : 'scanned';
   const isMobile = useMediaQuery('(max-width: 768px)'); // phones get cards, not the wide grid
@@ -1144,6 +1164,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                           </div>
                         );
                       })}
+                      {showPricing && platformProjection(g)}
                     </div>
                   )}
                   {/* Saved-state badges — while editing, the live draft checkboxes below are
@@ -1453,6 +1474,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                   })}
                                 </tbody>
                               </table>
+                              {showPricing && !guideModeFor(g) && platformProjection(g)}
                             </div>
                           </td>
                         </tr>

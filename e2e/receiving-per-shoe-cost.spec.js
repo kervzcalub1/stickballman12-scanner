@@ -22,9 +22,14 @@ const SKU_C = `E2E-COST-C-${stamp}`;
 const SKU_X = `E2E-COST-X-${stamp}`;   // PO: priced 80 / 90 by size
 const SKU_Y = `E2E-COST-Y-${stamp}`;   // PO: no cost declared
 const SKU_Z = `E2E-COST-Z-${stamp}`;   // PO: 60, overridden on the card
-const ALL = [SKU_A, SKU_B, SKU_C, SKU_X, SKU_Y, SKU_Z];
+const SKU_P = `E2E-COST-P-${stamp}`;   // preset PO: shelf 150, no line tip
+const SKU_Q = `E2E-COST-Q-${stamp}`;   // preset PO: shelf 100, line tip 7 (beats the preset's 5)
+const ALL = [SKU_A, SKU_B, SKU_C, SKU_X, SKU_Y, SKU_Z, SKU_P, SKU_Q];
 const PO_CODE = `PO-COST-${stamp}`;
+const PRESET_PO_CODE = `PO-COSTP-${stamp}`;
+const PRESET_SUPPLIER = `E2E Preset Supplier ${stamp}`;
 let poId = null;
+let presetPoId = null;
 
 test.describe.configure({ mode: 'serial' });
 
@@ -33,20 +38,21 @@ test.afterAll(async () => {
   for (const i of items) await q('DELETE FROM item_events WHERE item_id = $1', [i.id]);
   await q('DELETE FROM items WHERE sku = ANY($1)', [ALL]);
   const batchIds = [...new Set(items.map((i) => i.batch_id).filter(Boolean))];
-  if (poId != null) {
-    await q('UPDATE purchase_orders SET received_batch_id = NULL WHERE id = $1', [poId]);
-    await q('DELETE FROM batch_boxes WHERE batch_id IN (SELECT id FROM batches WHERE po_id = $1)', [poId]);
-    await q('DELETE FROM batches WHERE po_id = $1', [poId]);
+  for (const id of [poId, presetPoId].filter((x) => x != null)) {
+    await q('UPDATE purchase_orders SET received_batch_id = NULL WHERE id = $1', [id]);
+    await q('DELETE FROM batch_boxes WHERE batch_id IN (SELECT id FROM batches WHERE po_id = $1)', [id]);
+    await q('DELETE FROM batches WHERE po_id = $1', [id]);
   }
   for (const id of batchIds) {
     await q('DELETE FROM batch_boxes WHERE batch_id = $1', [id]);
     await q('DELETE FROM batches WHERE id = $1', [id]);
   }
-  if (poId != null) {
-    await q('DELETE FROM po_lines WHERE po_id = $1', [poId]);
-    await q('DELETE FROM po_boxes WHERE po_id = $1', [poId]);
-    await q('DELETE FROM purchase_orders WHERE id = $1', [poId]);
+  for (const id of [poId, presetPoId].filter((x) => x != null)) {
+    await q('DELETE FROM po_lines WHERE po_id = $1', [id]);
+    await q('DELETE FROM po_boxes WHERE po_id = $1', [id]);
+    await q('DELETE FROM purchase_orders WHERE id = $1', [id]);
   }
+  await q('DELETE FROM payout_presets WHERE supplier_name = $1', [PRESET_SUPPLIER]);
   await pool.end();
 });
 
@@ -194,4 +200,53 @@ test('a box received against a PO inherits the cost the supplier declared per si
   expect(await costsOnFile(SKU_X)).toEqual([{ size: '10W', cost: 90 }, { size: '9', cost: 80 }]);
   expect(await costsOnFile(SKU_Y)).toEqual([{ size: '9', cost: 40 }]);
   expect(await costsOnFile(SKU_Z)).toEqual([{ size: '9', cost: 65 }]);
+});
+
+// 2026-09-29: the PO line is the SHELF price, and the supplier's cost preset (linked to
+// the receiving supplier name) turns it into the landed cost — the Payout Calculator's
+// register maths, so a received pair and a calculator line agree to the cent.
+test('a PO shelf price lands as shelf + the supplier preset’s costs', async ({ page }) => {
+  await q(`INSERT INTO payout_presets (name, tip_amt, shipping_amt, tax_pct, gift_pct, supplier_name)
+           VALUES ($1, 5, 8.25, 8.25, 8, $1)`, [PRESET_SUPPLIER]);
+  const po = (await q(
+    `INSERT INTO purchase_orders (po_code, supplier_name, status, expected_boxes, manifest_scope)
+     VALUES ($1, $2, 'shipped', 1, 'box') RETURNING id`, [PRESET_PO_CODE, PRESET_SUPPLIER]))[0];
+  presetPoId = Number(po.id);
+  const box = (await q(
+    `INSERT INTO po_boxes (po_id, box_number, tracking_number, status) VALUES ($1, 1, $2, 'shipped') RETURNING id`,
+    [presetPoId, `COSTP${stamp}A`]))[0];
+  const line = (sku, shelf, tip) => q(
+    `INSERT INTO po_lines (po_id, po_box_id, sku, size, name, qty_expected, unit_cost, tip, entered_on_behalf)
+     VALUES ($1, $2, $3, '9', $4, 1, $5, $6, true)`, [presetPoId, box.id, sku, `E2E Cost ${sku.slice(-8)}`, shelf, tip]);
+  await line(SKU_P, 150, null);
+  await line(SKU_Q, 100, 7);
+
+  await loginAs(page, 'warehouse');
+  await page.goto('/receiving');
+  await page.locator('label:has-text("Buyer") input').fill('e2e');
+  await page.getByRole('button', { name: /Receive against a purchase order/i }).click();
+  await page.locator('.po-picker input').fill(PRESET_PO_CODE);
+  await page.locator('.po-picker').getByRole('button', { name: 'Find' }).click();
+  await expect(page.locator('.po-receive-banner')).toContainText(PRESET_PO_CODE);
+  await page.getByRole('button', { name: 'Add items' }).first().click();
+  await expect(page.locator('.po-manifest')).toBeVisible();
+  for (const row of await page.locator('.po-manifest-size').all()) await row.locator('input[type="checkbox"]').check();
+  await page.getByRole('button', { name: /Review →/ }).click();
+  const card = (sku) => page.locator(`.recv-items.review .recv-item[data-sku="${sku}"]`);
+
+  // 150 − 8% gift card = 138, + 8.25% tax = 149.39, + $5 tip + $8.25 shipping = 162.64
+  await expect(costSrc(card(SKU_P))).toContainText(`shelf + ${PRESET_SUPPLIER}’s costs`);
+  await expect(costBox(card(SKU_P))).toHaveAttribute('placeholder', '162.64');
+  // The line's own $7 tip wins over the preset's $5: 92 + 7.59 + 7 + 8.25 = 114.84
+  await expect(costBox(card(SKU_Q))).toHaveAttribute('placeholder', '114.84');
+
+  await page.getByRole('button', { name: /Next →/ }).click();
+  await page.getByRole('button', { name: 'Submit box' }).click();
+  await page.getByRole('button', { name: 'Yes, commit' }).click();
+  await expect(page.locator('.modal.success, .modal')).toContainText(/Box saved/i);
+
+  expect(await costsOnFile(SKU_P)).toEqual([{ size: '9', cost: 162.64 }]);
+  expect(await costsOnFile(SKU_Q)).toEqual([{ size: '9', cost: 114.84 }]);
+  const shelf = await q('SELECT sku, shelf_price FROM items WHERE sku = ANY($1) ORDER BY sku', [[SKU_P, SKU_Q]]);
+  expect(shelf.map((r) => Number(r.shelf_price))).toEqual([150, 100]);
 });

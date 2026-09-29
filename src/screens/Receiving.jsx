@@ -20,7 +20,7 @@ import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, comp
 import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
-import { costOrNull, poLineCost, unitCost } from '../lib/costs.js';
+import { costOrNull, poLineMoney, landedFromShelf, unitCost } from '../lib/costs.js';
 import { estToday } from '../lib/format.js';
 import { declaresPerBox } from '../lib/postatus.js';
 
@@ -87,6 +87,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // is a guess, and that guess is what filed box 6 of 9 as "box 10".
   const [poLabels, setPoLabels] = useState(null);
   const [poCostLines, setPoCostLines] = useState(null); // box mode: the PO's lines, for cost only
+  const [boxPoId, setBoxPoId] = useState(null);         // box mode: that PO's id, for its supplier's cost stack
   // What is ALREADY in the box being continued. A reopened box keeps its pairs —
   // `commitBoxItems` only ever appends — but the Items step opened empty, so a row
   // reading "11 items" led straight to a cart saying "0 units". From the floor that
@@ -151,6 +152,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         setNewBoxNumber((v) => v || String(next));
       }
       if (r.batch?.po_id) {
+        setBoxPoId(Number(r.batch.po_id));
         api.poGet(Number(r.batch.po_id))
           .then((po) => {
             if (cancelled) return;
@@ -227,6 +229,22 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // links the batch back via poId (server flips the PO to 'receiving').
   const [receivingPo, setReceivingPo] = useState(null); // { po, boxes, lines }
   const [showPoPicker, setShowPoPicker] = useState(false);
+  // The supplier's cost stack for THIS shipment (api presetForShipment): the PO's
+  // supplier account first, else the supplier name picked in Step 1. It turns the PO's
+  // shelf prices into landed costs. Debounced — "Custom…" supplier names are typed.
+  const [costPreset, setCostPreset] = useState(null);
+  const costPoId = receivingPo?.po?.id ?? boxPoId ?? null;
+  const costSupplier = isBoxMode ? (batchContext?.supplier_name || '') : String(header.supplier || '').trim();
+  useEffect(() => {
+    if (noShipment || (!costPoId && !costSupplier)) { setCostPreset(null); return undefined; }
+    let live = true;
+    const t = setTimeout(() => {
+      api.presetForShipment({ poId: costPoId, supplier: costSupplier })
+        .then((r) => { if (live) setCostPreset(r.preset || null); })
+        .catch(() => { if (live) setCostPreset(null); });
+    }, 350);
+    return () => { live = false; clearTimeout(t); };
+  }, [noShipment, costPoId, costSupplier]);
   const [poSuggest, setPoSuggest] = useState(null);     // { code, tracking, data } — a typed/scanned tracking matched an open PO
   const poSuggestDismiss = useRef(new Set());           // trackings the user chose to receive plainly
   const emptyBoxAck = useRef(false);                    // "yes, this PO box really is empty" — see goStep3
@@ -858,7 +876,29 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setCanUndo(false); setScanInput(''); setScanCam(false); setFlash(null);
   }
 
-  function openAddItem() { setDraft(null); setMInput(''); setMError(''); setPendingSwitch(null); setMCam(false); recentRef.current = {}; setShowAdd(true); }
+  // `seed` (optional): `{ draft }` opens straight onto a shoe, `{ code }` looks one up.
+  // Buttons call this bare, so an event arriving here carries neither and is ignored.
+  function openAddItem(seed) {
+    const draft0 = seed?.draft || null;
+    draftRef.current = draft0;
+    setDraft(draft0); setMInput(seed?.code || ''); setMError(''); setPendingSwitch(null); setMCam(false); recentRef.current = {}; setShowAdd(true);
+    if (!draft0 && seed?.code) addCode(seed.code, { showInField: true });
+  }
+  // A typed style code carries no size, so on a PO it opens the size + quantity picker
+  // instead of adding one sizeless pair (or refusing with "tick the one you're
+  // holding"). An expected shoe opens already filled from the manifest — its sizes are
+  // the label's, no catalogue call — and Complete counts them onto its rows.
+  function openSkuPicker(item, code) {
+    const opts = [...(item?.sizes || [])].sort((a, b) => compareSizes(a.size, b.size)).map((s) => String(s.size)).filter(Boolean);
+    openAddItem(item ? {
+      draft: {
+        name: item.name || '', sku: item.sku || '', image: item.image || '', source: item.source || 'manual',
+        upc: '', scannedUpc: '', scannedSize: null, sizeOptions: [...new Set(opts)],
+        gender: item.gender || null, colorway: item.colorway || '', withBox: item.withBox !== false, goatOnly: !!item.goatOnly, rows: [],
+      },
+    } : { code });
+    setFlash({ type: 'added', text: `${item?.name || item?.sku || code} — tap each size you have, set how many, then Complete${rawVinsRef.current ? '. Their 1IDs go on next.' : ''}` });
+  }
   function closeAddItem() { setShowAdd(false); setDraft(null); setPendingSwitch(null); setMError(''); setMCam(false); }
 
   // Resolve a scanned/typed code (auto-detect UPC vs SKU) and fold it into the
@@ -878,6 +918,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // scan replaces the selection instead of appending to it. Only the legacy
     // showInField=false callers clear the field outright.
     setMInput(showInField ? c : ''); setMError('');
+
+    // A 1ID sticker belongs on a pair that is already in the list — the picker has no
+    // pair yet. Looked up as a SKU it would only come back "not found".
+    if (rawVinsRef.current && isRollVin(c)) {
+      setMError(`${c.toUpperCase()} is a 1ID sticker — complete this shoe first, then scan its stickers on the list.`);
+      scanFeedback('dup');
+      return;
+    }
 
     // Rescale: a scanned/typed VIN is an EXISTING unit — look it up and add it
     // to the rescanned list (its own record gets updated on finish; no new VIN).
@@ -932,7 +980,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       }
     } catch (err) {
       if (err.unauthorized) return onSignOut();
-      setMError(err.message); scanFeedback('dup');
+      // Nothing started yet: open a blank shoe carrying the code, so a pair the
+      // catalogue doesn't know can still be typed in with its sizes — an error and
+      // an empty modal was a dead end.
+      if (!draftRef.current) {
+        setDraft({ name: '', sku: isUpcCode(c) ? '' : c.toUpperCase(), image: '', source: 'manual', upc: isUpcCode(c) ? c : '', scannedUpc: '',
+          scannedSize: null, sizeOptions: [], gender: null, colorway: '', withBox: true, rows: [] });
+        setMError(`${err.timeout ? 'Catalogue timed out' : 'Not found'} · ${c} — type the name, then pick the sizes`);
+      } else setMError(err.message);
+      scanFeedback('dup');
     } finally { setMBusy(false); }
   }
 
@@ -948,8 +1004,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (!rows.length) { setMError('Add at least one size.'); return null; }
     const total = rows.reduce((a, r) => a + Math.max(1, Number(r.qty) || 1), 0);
     let vins = [];
-    try { const res = await api.reserveVins(total, header.dateReceived); vins = res.vins || []; }
-    catch (err) { if (err.unauthorized) { onSignOut(); return null; } /* else proceed; server assigns on commit */ }
+    // Raw 1ID mode mints nothing, same as rapidScan: each pair's number is the sticker
+    // scanned onto it next. Minting here filled every pair's VIN slot, so the sticker
+    // had nowhere to go and the pair saved under a number no shoe is wearing.
+    if (!rawVinsRef.current) {
+      try { const res = await api.reserveVins(total, header.dateReceived); vins = res.vins || []; }
+      catch (err) { if (err.unauthorized) { onSignOut(); return null; } /* else proceed; server assigns on commit */ }
+    }
     let idx = 0;
     const sizes = rows.map((r) => {
       const qty = Math.max(1, Number(r.qty) || 1);
@@ -964,21 +1025,39 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // stays separate (boxed vs no-box are tracked apart).
   function addOrMergeItem(item) {
     setItems((arr) => {
-      const i = arr.findIndex((x) => x.withBox === item.withBox && x.goatOnly === item.goatOnly
+      // `!!` on goatOnly: a manifest row never sets it, and `undefined !== false` sent a
+      // shoe picked off the PO to its own "not on PO" line instead of onto its rows.
+      const i = arr.findIndex((x) => x.withBox === item.withBox && !!x.goatOnly === !!item.goatOnly
         && (x.preSell === true) === (item.preSell === true) && sameSku(x.sku, item.sku));
-      // Newest scanned shoe shows on top (Feature 3) — prepend new lines.
-      if (i === -1) return [item, ...arr];
+      const sheet = poBoxHasChecklistRef.current;
+      const firstSize = [...item.sizes].sort(compareSizes)[0];
+      // Newest scanned shoe shows on top (Feature 3) — prepend new lines. A PO sheet is
+      // read top to bottom, so there an unexpected shoe goes below it instead.
+      if (i === -1) {
+        if (sheet && firstSize) lastHitRef.current = { itemKey: item.key, sizeKey: firstSize.key };
+        return sheet ? [...arr, item] : [item, ...arr];
+      }
       const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
-      for (const s of item.sizes) {
+      let hitKey = null;
+      for (const s of [...item.sizes].sort(compareSizes)) {
         const j = sizes.findIndex((z) => z.size === s.size);
-        if (j === -1) sizes.push({ key: cartKey++, size: s.size, qty: s.qty, upc: s.upc || '', vins: s.vins || [] });
-        else {
-          sizes[j].qty += s.qty; sizes[j].vins = [...sizes[j].vins, ...(s.vins || [])];
+        if (j === -1) {
+          sizes.push({ key: cartKey++, size: s.size, qty: s.qty, upc: s.upc || '', vins: s.vins || [] });
+          hitKey = hitKey ?? sizes[sizes.length - 1].key;
+        } else {
+          sizes[j].qty = (Number(sizes[j].qty) || 0) + s.qty; sizes[j].vins = [...sizes[j].vins, ...(s.vins || [])];
           sizes[j].upc = sizes[j].upc || s.upc || '';
+          hitKey = hitKey ?? sizes[j].key;
         }
       }
-      // Float the just-touched shoe to the top too (most recently scanned).
       const updated = { ...arr[i], sizes };
+      // On the sheet the shoe keeps its place, and the next 1ID is aimed at what was
+      // just counted (smallest size first), not at the first short row on the page.
+      if (sheet) {
+        if (hitKey != null) lastHitRef.current = { itemKey: arr[i].key, sizeKey: hitKey };
+        return arr.map((x, idx) => (idx === i ? updated : x));
+      }
+      // Float the just-touched shoe to the top too (most recently scanned).
       return [updated, ...arr.filter((_, idx) => idx !== i)];
     });
   }
@@ -989,6 +1068,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (!item) return;
       addOrMergeItem(item);
       closeAddItem();
+      if (rawVinsRef.current) {
+        const n = item.sizes.reduce((a, s) => a + (Number(s.qty) || 0), 0);
+        setFlash({ type: 'added', text: `✓ ${item.name || item.sku} · ${n} pair${n === 1 ? '' : 's'} — now scan a 1ID onto each; the bar names the size it goes on` });
+      }
+      // Back to the scan bar: the stickers (or the next shoe) come in there.
+      if (poBoxHasChecklistRef.current) scanInputRef.current?.focus({ preventScroll: true });
     } finally { setMBusy(false); }
   }
   async function confirmSwitch() {
@@ -1122,12 +1207,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       return;
     }
     if (hit) {
-      // A style code with no size on it. Naming the sizes is what lets the person tick
-      // the right one without hunting; the scan itself can't say which pair this is.
-      setFlash({ type: 'warn', text: `${hit.item.name || hit.item.sku} is on this label in size${hit.candidates.length === 1 ? '' : 's'} ${hit.candidates.map((z) => z.size).join(', ')} — tick the one you're holding, or scan the box's barcode` });
-      scanFeedback('dup');
+      // A style code with no size on it, on a shoe with several sizes open. It used to
+      // stop here with "tick the one you're holding" — nowhere to say "two 9s and a
+      // 10". The picker opens on this shoe's sizes; Complete counts them onto the rows.
+      openSkuPicker(hit.item, c);
       return;
     }
+    // A typed style code that is on no row: same picker, looked up in the catalogue,
+    // so a shoe the label never declared still goes in with its sizes and quantities
+    // rather than as one sizeless pair.
+    if (!isUpcCode(c)) return openSkuPicker(null, c);
     // Not on this label by code. The catalogue may still resolve it to an expected
     // shoe (a UPC the manifest didn't carry); rapidScan merges by SKU + size into the
     // manifest row when it does, and files an unexpected line when it doesn't.
@@ -1168,6 +1257,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (rawVinsRef.current && isRollVin(c)) return bindSticker(c);
 
     const isUpc = isUpcCode(c);
+    // Receiving against a PO with no per-label list (whole-order manifest, or a label
+    // that declared nothing): a typed style code opens the size + quantity picker, the
+    // same as on the checklist — a SKU names a shoe, not a size.
+    if (isPoReceive && !isRescale && !isUpc && !isVinCode(c)) return openSkuPicker(null, c);
     const withBox = scanBoxModeRef.current;
     const lineKey = cartKey++;
     lastScanRef.current = { lineKey, vin: null }; setCanUndo(true);
@@ -1524,13 +1617,23 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const costLines = receivingPo?.lines || poCostLines || [];
   const activePoBoxId = activeBox?.poBoxId ?? null;
   const batchDefaultCost = isBoxMode ? costOrNull(batchContext?.default_cost) : defaultCostNum;
-  const sizeCost = (it, s) => unitCost(it.cost, poLineCost(costLines, it.sku, s.size, activePoBoxId), batchDefaultCost);
+  // The PO line is a SHELF price (2026-09-29); the pair's cost is what landing it really
+  // took — shelf through the supplier's preset stack (tax, gift card, shipping, tip).
+  const poMoney = (it, s) => poLineMoney(costLines, it.sku, s.size, activePoBoxId);
+  const poLanded = (it, s) => {
+    const m = poMoney(it, s);
+    return m ? landedFromShelf(m.shelf, m.tip, costPreset) : null;
+  };
+  const sizeCost = (it, s) => unitCost(it.cost, poLanded(it, s), batchDefaultCost);
   // What the card shows when nothing is typed: the PO's figure for the shoe (one
   // value, or a range when the supplier priced sizes differently), else the default.
   const shoeCostHint = (it) => {
-    const fromPo = [...new Set(it.sizes.map((s) => poLineCost(costLines, it.sku, s.size, activePoBoxId)).filter((c) => c != null))];
-    if (fromPo.length === 1) return { cost: fromPo[0], source: 'from PO' };
-    if (fromPo.length > 1) return { cost: null, source: `from PO · $${Math.min(...fromPo).toFixed(2)}–$${Math.max(...fromPo).toFixed(2)} by size` };
+    const fromPo = [...new Set(it.sizes.map((s) => poLanded(it, s)).filter((c) => c != null))];
+    // Name the stack, or say there isn't one: without it the cost is shelf + tip only —
+    // tax and shipping unknown, not zero.
+    const via = costPreset ? `shelf + ${costPreset.name}’s costs` : 'shelf only, no supplier preset';
+    if (fromPo.length === 1) return { cost: fromPo[0], source: `from PO · ${via}` };
+    if (fromPo.length > 1) return { cost: null, source: `from PO · $${Math.min(...fromPo).toFixed(2)}–$${Math.max(...fromPo).toFixed(2)} by size · ${via}` };
     if (batchDefaultCost != null) return { cost: batchDefaultCost, source: 'batch default' };
     return { cost: null, source: 'no cost — fill in later on Costs' };
   };
@@ -1540,7 +1643,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const typed = String(it.cost ?? '').trim() !== '';
     const hint = shoeCostHint(it);
     return (
-      <label className="recv-item-cost" title="What this shoe cost, per pair. Leave blank to use the PO line or the batch default.">
+      <label className="recv-item-cost" title="What this shoe cost you, per pair, all-in. Leave blank to use the PO shelf price run through the supplier’s cost preset, or the batch default.">
         <span className="recv-item-cost-lbl">Cost ea</span>
         <PriceInput value={it.cost ?? ''} placeholder={hint.cost != null ? hint.cost.toFixed(2) : '—'}
           onChange={(e) => setItemCost(it.key, e.target.value)} />
@@ -1706,7 +1809,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), withBox: it.withBox, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null });
+            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), shelfPrice: poMoney(it, r)?.shelf ?? null, withBox: it.withBox, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null });
           }
         }
       }

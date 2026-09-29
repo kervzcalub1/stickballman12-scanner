@@ -118,7 +118,7 @@ function discrepancyRows({ boxDiffs }) {
 
 // Money columns ride on the END of the row so an existing sheet's columns keep their
 // positions — anyone with a saved formula or a pivot pointing at column D still works.
-const MONEY_COLS = [['cost', 'Cost per pair'], ['tip', 'Tip per pair'], ['line', 'Line total']];
+const MONEY_COLS = [['cost', 'Shelf price per pair'], ['tip', 'Tip per pair'], ['line', 'Line total']];
 const BOX_MONEY_COLS = [['cost', 'Cost per box'], ['tip', 'Tip per box'], ['line', 'Line total']];
 
 // An EMPTY-BOX order counts boxes, not pairs, and carries one column a shoes order

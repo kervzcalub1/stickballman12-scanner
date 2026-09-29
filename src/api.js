@@ -255,6 +255,11 @@ export const api = {
   payoutPresets: () => get('/api/payout/presets'),
   payoutPresetSave: (preset) => post('/api/payout/presets', { preset }),
   payoutPresetDelete: (deleteId) => post('/api/payout/presets', { deleteId }),
+  // The one stack a shipment was bought at: the PO's supplier account first, else the
+  // supplier name picked at receiving. `{ preset, via }`, preset null when unlinked.
+  // Platform Profit report: on-hand stock per SKU + size with its landed cost.
+  platformProfitStock: () => get('/api/ph/platform-profit'),
+  presetForShipment: ({ poId = null, supplier = '' } = {}) => get(`/api/payout/presets?for=shipment${poId ? `&po=${encodeURIComponent(poId)}` : ''}${supplier ? `&supplier=${encodeURIComponent(supplier)}` : ''}`),
 
   /* ---- Buying requests (docs/context/buy-cart.md) ----------------------------
      Money out, then inventory in. A buyer asks, staff approve, the gift card desk

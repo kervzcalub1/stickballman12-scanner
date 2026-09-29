@@ -21,6 +21,7 @@ import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { TopBar, ShoeThumb, NumField } from '../components/common.jsx';
 import { BatchAnalysis } from '../components/BatchAnalysis.jsx';
+import { PlatformBySize } from '../components/PlatformBySize.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { loadPrefs, savePrefs } from '../prefs.js';
 import { useAdvisorContext } from '../lib/advisorContext.js';
@@ -77,7 +78,7 @@ const PRESET_FIELDS = [
   ['promoPct', 'Promo / birthday', '%'],
   ['cashbackPct', 'Cashback', '%'],
 ];
-const BLANK_PRESET = { id: null, name: '', note: '', supplierUserId: '', tipAmt: '', shippingAmt: '', taxPct: '', giftPct: '', storePct: '', promoPct: '', cashbackPct: '' };
+const BLANK_PRESET = { id: null, name: '', note: '', supplierUserId: '', supplierName: '', tipAmt: '', shippingAmt: '', taxPct: '', giftPct: '', storePct: '', promoPct: '', cashbackPct: '' };
 // Empty box === 0, so a preset always states the whole stack. Compared numerically
 // because '8.25' from the form and 8.25 from the server are the same fee.
 const same = (a, b) => Number(a || 0) === Number(b || 0);
@@ -139,6 +140,16 @@ function PresetManager({ presets, onClose, onSaved, onDeleted, onSignOut }) {
     api.poSuppliers()
       .then(({ suppliers }) => { if (live) setAccounts(suppliers || []); })
       .catch(() => { /* the link field just stays empty */ });
+    return () => { live = false; };
+  }, []);
+  // The RECEIVING supplier names (the dropdown the warehouse picks at receiving). Linking
+  // one here is what gives a shipment received without a PO its landed cost.
+  const [recvNames, setRecvNames] = useState([]);
+  useEffect(() => {
+    let live = true;
+    api.suppliers()
+      .then(({ suppliers }) => { if (live) setRecvNames((suppliers || []).map((x) => (typeof x === 'string' ? x : x.name)).filter(Boolean)); })
+      .catch(() => { /* the field just stays empty */ });
     return () => { live = false; };
   }, []);
 
@@ -210,6 +221,11 @@ function PresetManager({ presets, onClose, onSaved, onDeleted, onSignOut }) {
                       ⇄ signs in as {p.supplierUsername || `#${p.supplierUserId}`}
                     </span>
                   )}
+                  {p.supplierName && (
+                    <span className="pc-preset-linked" title="Shipments received from this supplier get their landed cost from this stack">
+                      ⇢ receiving: {p.supplierName}
+                    </span>
+                  )}
                 </div>
                 <div className="pc-preset-row-acts">
                   <button type="button" className="btn ghost sm" disabled={busy}
@@ -268,6 +284,19 @@ function PresetManager({ presets, onClose, onSaved, onDeleted, onSignOut }) {
               </select>
               <span className="muted sm">
                 Linked, this supplier sees this stack — and only this one — on their own Payout Calculator. They can’t edit it.
+              </span>
+            </label>
+            <label className="pc-field">
+              <span className="pc-field-label">Receiving supplier <span className="muted sm">optional</span></span>
+              <select value={draft.supplierName ?? ''} onChange={(e) => field('supplierName', e.target.value)}>
+                <option value="">Not linked</option>
+                {/* Keep a saved name selectable even if it has left the dropdown list. */}
+                {[...new Set([...(draft.supplierName ? [draft.supplierName] : []), ...recvNames])]
+                  .map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <span className="muted sm">
+                The name picked at receiving. A shipment from them turns each pair’s shelf price into its real cost with this stack
+                (a PO shipment uses the sign-in link above first).
               </span>
             </label>
           </form>
@@ -441,6 +470,13 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
     ? DEFAULT_FEE_PCT[key]
     : Number(feeOverride[key]));
 
+  // Held as one object so the per-size table only recomputes when a fee actually moves.
+  const fees = useMemo(
+    () => ({ alias: feeFor('alias'), stockx: feeFor('stockx') }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feeOverride.alias, feeOverride.stockx],
+  );
+
   const markupFor = (key) => (!markupOn || String(markup[key] ?? '').trim() === '' ? 0 : Number(markup[key]));
   const payouts = useMemo(
     () => PLATFORMS.map((p) => calcPayout(p.key, sale[p.key], breakdown.finalCost, feeFor(p.key), markupFor(p.key))),
@@ -559,6 +595,9 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
   }
 
   const sizes = product?.sizes || [];
+  // For the per-size table: every size, no cost of its own — the Store cost step's
+  // final cost applies to whichever size you pick up.
+  const sizeRows = useMemo(() => sizes.map((size) => ({ size })), [sizes]);
   const hasMarket = market && !market._empty;
   const sxRow = sx?.row || null;
   // "Measured" only while it still matches the data — the moment someone overrides it,
@@ -935,6 +974,23 @@ export function PayoutCalculator({ user, onHome, onSignOut }) {
         <p className="pc-note muted sm">
           “Buy” needs both: at least {money(BUY_MIN_PROFIT)} profit a pair and {pct(BUY_MIN_ROI)} ROI. One of the two is a “Watch”.
         </p>
+
+        {/* 4½ — the same shoe, every size: which platform each one sells best on. The
+            cost is the one above (the shelf price doesn't change with the size); only
+            the asks do, and they don't move together across a size run. */}
+        <PlatformBySize
+          sku={product?.sku || ''}
+          sizes={sizeRows}
+          basis={basis}
+          finalCost={breakdown.finalCost}
+          fees={fees}
+          currentSize={size}
+          onSignOut={onSignOut}
+          onPickSize={(sz) => {
+            if (String(sz) !== String(size)) tapSize(sz);
+            document.querySelector('.pi-sizes')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+        />
 
         {/* 5 — the same question, asked about a whole list. It lives DOWN HERE, under the
             cost stack, on purpose: every pasted price is run through the register above,

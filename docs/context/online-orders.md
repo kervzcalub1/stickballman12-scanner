@@ -1,0 +1,78 @@
+# Online Orders — shoes the PH team buys online
+
+Screen `src/screens/OnlineOrders.jsx` at **`/ph/online-orders`** (PH home → Purchase
+Orders) and **`/online-orders`** (warehouse home → Receiving Shipment Orders). Endpoints
+`api/online-orders/{list,get,save,line,receive,delete}.js` (+ `_shared.js`, not a route).
+Cost maths + stage: `src/lib/onlineOrders.js` (pure, used by the form AND the server).
+Queries: the "Online orders" section at the end of `api/_lib/db.js`. E2E:
+`e2e/online-orders.spec.js`. Added 2026-10-01.
+
+## Why it exists
+Three things, in the owner's words: the **warehouse knows what to expect** from online
+buys, we **keep track of what each pair cost**, and it is **easy to audit** later.
+
+**Deliberately its own list, not a purchase order** (owner's call when offered both).
+Consequence: receiving does NOT yet match an online order by tracking number, so a pair
+received off one doesn't pick up its cost automatically — see "Not yet".
+
+## The scenarios it was built from (owner, 2026-10-01)
+| Scenario | What the page does |
+|---|---|
+| ordered → shipped → tracking → delivered | saved without tracking = **Ordered**; tracking added = **Shipped** (on the warehouse's **Expected** tab); counted in = **Delivered** |
+| ordered → cancelled | tracking is OPTIONAL for exactly this: cancel the lines, the refund is still traced; every line cancelled = **Cancelled** |
+| ordered → shipped (± tracking) → cancelled | cancel per line (OOT / other), refund traced |
+| ordered 5 → delivered 3 | the warehouse's count splits the 2 off as **not delivered**, refund to chase |
+
+The stage is **derived, never stored** (`orderStage`): `received_at` → delivered; every
+line cancelled → cancelled; tracking → shipped; else ordered.
+
+## Actual cost per pair (`orderCosts`)
+`(price − coupon each + tax share + shipping share) × (1 − gift card %)`
+- **coupon** split evenly per unit ordered (owner); **tax + shipping** split by PRICE
+  (owner picked "by price"); **gift card** a % off everything paid (owner picked %).
+- **Cancelled / not-delivered lines are left out** of the split — the pairs that come
+  carry the order's money. (So a short delivery raises the survivors' cost; that is the
+  honest number until a refund lands.)
+- Never stored: worked out on every read from the order's money, so editing the tax can't
+  leave a stale cost on a line. Blank coupon/tax/shipping = 0 (genuinely none).
+
+## Tables (`scripts/db-setup.mjs`; all three in `LIVE_TABLES`)
+- `online_orders` — store, order_number, tracking_number (nullable), ordered_on (DATE),
+  coupon, tax, shipping, gc_pct, note, created/updated by+at, **received_at/_by**.
+  Expression index on the whitespace-stripped upper tracking number (`[[:space:]]`, NOT
+  `'\s'` — see the template-literal note in db.js).
+- `online_order_lines` — sku, name, size, qty, unit_price; cancellation (`cancelled_at/_by`,
+  `cancel_reason` oot|other|**not_delivered**, `cancel_note`) and the refund trail.
+- `online_order_events` — the history: created · edited (with what changed) · cancelled ·
+  restored · received · refund_requested · refund_refunded · refund_needs_request.
+
+## Cancelling and the refund trail
+- **Per line, and partial**: cancelling 1 of 2 SPLITS the line — the cancelled pairs get
+  their own row, so the refund belongs to exactly those pairs (`cancelOnlineLine`).
+- At cancellation: **refunded** (with the amount) or **needs follow-up**. Then
+  `needs_request` → **requested** (how it was asked; the row shows "requested N days ago")
+  → **refunded** (amount REQUIRED — it's what the audit checks). "Not actually back" returns
+  it to follow-up. The **Refund follow-up** tab + the row's "N refunds to chase" chip are
+  the chase list.
+- **Undo cancel** for a mistake (not for `not_delivered` — that's the warehouse's count).
+- Pairs on an order already counted in can't be cancelled (they arrived).
+
+## Receiving (warehouse)
+"Count it in…" on a Shipped order: per line, how many arrived (default = ordered). Short →
+split off as `not_delivered` + `needs_request`. One transaction; a second count of the
+same order aborts the whole transaction (the guarded claim divides by zero when it
+matched nothing → 409), so two benches can't both split the lines.
+
+## Roles
+PH records, edits, cancels, chases refunds, deletes; the **warehouse reads + counts in**
+(`receive` allows warehouse + PH); admin/superadmin auto-allowed. **Delete** only for an
+order recorded by mistake: refused once counted in or once a refund was requested/received.
+Duplicate tracking number → 409 naming the other order, "Save anyway" for one parcel
+holding two orders.
+
+## Not yet
+- **Receiving doesn't read it**: scanning a tracking number at Receive New doesn't find the
+  online order, so items.cost isn't filled from `orderCosts`. The natural next step (it is
+  what "keep track of cost" ultimately needs on the pair).
+- No home badge for "Expected" / follow-ups (the page's tab counts only).
+- No 17TRACK registration of the tracking numbers.

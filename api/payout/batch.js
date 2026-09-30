@@ -18,7 +18,7 @@
 //  · One SKU failing returns an empty result FOR THAT SKU, never a failed request. A
 //    style Alias has never heard of must not cost you the other thirty-nine.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured } from '../_lib/db.js';
+import { dbConfigured, savePlatformQuotes } from '../_lib/db.js';
 import { priceInquiryForSkuSizes } from '../_lib/intake.js';
 import { stockxConfigured, stockxPriceForSkuSize } from '../_lib/stockx.js';
 
@@ -106,6 +106,21 @@ export default async function handler(req, res) {
     const results = await pool(skus, CONCURRENCY, (s) => quoteOne(s, consigned));
     const quotes = {};
     skus.forEach((s, i) => { quotes[s.sku] = results[i]; });
+    // Remember what the market said, so the New Inventory chip can read it without
+    // spending the StockX quota again. Only a style whose lookups both ANSWERED is
+    // stored — "Alias failed" (or "StockX isn't set up here") written down as "no ask"
+    // would outlive the outage.
+    const remember = [];
+    skus.forEach((s, i) => {
+      const r = results[i];
+      if (r.alias?.error || r.stockx?.error || !r.alias?.configured || !r.stockx?.configured) return;
+      const al = new Map((r.alias?.results || []).map((x) => [String(x.size), x]));
+      const sx = new Map((r.stockx?.results || []).map((x) => [String(x.size), x]));
+      for (const size of s.sizes) {
+        remember.push({ sku: s.sku, size, alias: al.get(size)?.lowest_listing, stockx: sx.get(size)?.lowest_ask, stockxInexact: sx.get(size)?.inexact === true });
+      }
+    });
+    await savePlatformQuotes(remember, consigned).catch((e) => console.warn('[payout/batch] quote cache:', e.message));
     return send(res, 200, {
       ok: true, quotes, consigned,
       // Said in the response, not assumed by the client: a silently dropped style is

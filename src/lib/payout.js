@@ -225,3 +225,56 @@ export function platformBySize(quotes, finalCost, feePct = {}) {
     return { size: q.size, cost, ...per, best, edge, stockxInexact: !!q.stockxInexact };
   });
 }
+
+// One line's answer for the New Inventory chip: which platform these pairs should go to,
+// and what a pair makes there. Built on platformBySize so the chip, the "Where to sell"
+// table under the row and the Platform Profit report can never disagree about a size.
+//
+// `sizes`: [{ size, qty, cost }] — cost is what THOSE pairs landed at (null = not costed;
+//   $0 is treated as not costed too, the same as Platform Profit: a free pair is rarer
+//   than a missing figure, and "+$180" off a blank cost is a confident wrong number).
+// `quoteFor(size)` → { alias, stockx, stockxInexact } or undefined when nobody priced it.
+// `goatOnly`: the pair can only go to Alias, so StockX is left out of the comparison.
+//
+// Only COSTED sizes are compared (owner's call, 2026-10-01): without a cost there is no
+// profit to show, and pricing it would spend the StockX quota on a number nobody uses.
+//
+// → { state: 'nocost' }                         no size of this line has a cost
+//   { state: 'unpriced' }                       nothing remembered for any costed size
+//   { state: 'noask', priced, total }           priced, and no ask on either platform
+//   { state: 'ok', best: 'alias'|'stockx'|'tie'|'mixed', split: { alias, stockx, tie },
+//     profitEach, costedPairs, pairs, payoutEach, priced, total, rows }
+//   profitEach is the average over COSTED pairs at each size's best platform (null when
+//   none is costed — then payoutEach is the honest number: what a pair would pay out).
+export function platformChipSummary(sizes, quoteFor, { goatOnly = false, fees = DEFAULT_FEE_PCT } = {}) {
+  const named = (sizes || []).filter((s) => String(s.size ?? '').trim());
+  const list = named.filter((s) => Number(s.cost) > 0);
+  if (!list.length) return { state: 'nocost', total: named.length };
+  const total = list.length;
+  const quoted = list.map((s) => ({ s, q: quoteFor(String(s.size)) })).filter((x) => x.q);
+  if (!quoted.length) return { state: 'unpriced', total };
+  const rows = platformBySize(quoted.map(({ s, q }) => ({
+    size: String(s.size), alias: q.alias, stockx: goatOnly ? null : q.stockx,
+    stockxInexact: !!q.stockxInexact, cost: Number(s.cost),
+  })), 0, fees);
+  const split = { alias: 0, stockx: 0, tie: 0 };
+  let pairs = 0; let costedPairs = 0; let profitSum = 0; let payoutSum = 0;
+  rows.forEach((r, i) => {
+    if (!r.best) return;
+    const s = quoted[i].s;
+    const qty = Math.max(1, Number(s.qty) || 1);
+    split[r.best] += qty;
+    const win = r.best === 'tie' ? (r.alias || r.stockx) : r[r.best];
+    pairs += qty; payoutSum += win.payout * qty;
+    costedPairs += qty; profitSum += win.profit * qty;
+  });
+  if (!pairs) return { state: 'noask', priced: quoted.length, total };
+  const winners = ['alias', 'stockx'].filter((k) => split[k] > 0);
+  const best = winners.length === 2 ? 'mixed' : winners[0] || 'tie';
+  return {
+    state: 'ok', best, split, pairs, costedPairs,
+    profitEach: costedPairs ? profitSum / costedPairs : null,
+    payoutEach: payoutSum / pairs,
+    priced: quoted.length, total, rows,
+  };
+}

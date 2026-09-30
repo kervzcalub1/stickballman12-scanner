@@ -3,7 +3,7 @@
 // a line cancelled, a refund requested / received, counted in by the warehouse).
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, getOnlineOrder, onlineOrderEvents } from '../_lib/db.js';
-import { shapeOrder } from './_shared.js';
+import { shapeOrder, idOf } from './_shared.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -12,8 +12,8 @@ export default async function handler(req, res) {
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 })) return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
-  const id = Number(new URL(req.url, 'http://x').searchParams.get('id'));
-  if (!Number.isInteger(id) || id <= 0) return send(res, 400, { ok: false, error: 'Which order?' });
+  const id = idOf(new URL(req.url, 'http://x').searchParams.get('id'));
+  if (!id) return send(res, 400, { ok: false, error: 'Which order?' });
   try {
     const o = await getOnlineOrder(id);
     if (!o) return send(res, 404, { ok: false, error: 'That order no longer exists.' });

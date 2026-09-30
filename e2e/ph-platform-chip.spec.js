@@ -92,3 +92,27 @@ test('the remembered prices are PH-only', async ({ request }) => {
   expect(ph.quotes.filter((q) => q.sku === COSTED)).toHaveLength(2);
   expect(ph.quotes.filter((q) => q.sku === OLD)).toHaveLength(0);
 });
+
+// QA 2026-10-01: a search change used to price another 20 styles by itself, so filtering
+// could walk the whole grid through the StockX quota. Only the first load auto-prices.
+test('changing the search reads remembered prices, and never prices by itself', async ({ page }) => {
+  let calls = 0;
+  await page.route('**/api/payout/batch', async (route) => {
+    calls += 1;
+    const body = route.request().postDataJSON();
+    const quotes = {};
+    for (const s of body.skus) quotes[s.sku] = { alias: { configured: true, results: [] }, stockx: { configured: true, results: [] } };
+    await route.fulfill({ json: { ok: true, quotes, consigned: true } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/new-inventory?q=QAPC');
+  await expect(page.locator('.ph-trow', { hasText: COSTED }).locator('.ph-plat-chip')).toHaveText('Alias +$80/pr');
+  await page.waitForTimeout(500);
+  const first = calls;
+  await page.locator('.ph-search-input').fill('QAPC-FRESH');
+  await page.waitForTimeout(800);
+  await page.locator('.ph-search-input').fill('QAPC-OLD');
+  await page.waitForTimeout(800);
+  expect(calls).toBe(first);
+});
+

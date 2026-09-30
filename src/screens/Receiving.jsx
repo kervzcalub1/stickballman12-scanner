@@ -923,6 +923,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   function turnOnRawVins() {
     setRawVins(true);
     setRawOffer(false);
+    setMError('');   // the dialog's "turn on Raw first" line is answered now
     setItems((arr) => arr.map((it) => ({ ...it, sizes: it.sizes.map((sz) => ({ ...sz, vins: [] })) })));
     setFlash({ type: 'added', text: 'Raw 1ID stickers on — scan that sticker again. Every pair in the list now takes one.' });
     scanInputRef.current?.focus({ preventScroll: true });

@@ -150,3 +150,77 @@ test('the page: PH records an order and sees each pair’s actual cost as it typ
   await expect(page.locator('.oo-stage')).toHaveText('Ordered');
   await expect(page.locator('.oo-lines td b', { hasText: '$98.00' })).toBeVisible();
 });
+
+// ---- QA findings, 2026-10-01 — each one pinned so it can't come back -----------------
+test('QA: a refused action writes no history, and a counted-in order can’t be un-cancelled', async ({ request }) => {
+  const { id } = await (await save(request, { store: STORE, tracking_number: `1ZE2EOOQ${Date.now()}`,
+    lines: [{ sku: 'OO-QA-X', size: '9', qty: 1, unit_price: 100 }, { sku: 'OO-QA-Y', size: '10', qty: 1, unit_price: 100 }] })).json();
+  let { order } = await get(request, id);
+  const y = order.lines.find((l) => l.sku === 'OO-QA-Y');
+  const x = order.lines.find((l) => l.sku === 'OO-QA-X');
+  const cancelY = () => request.post('/api/online-orders/line', { headers: PH, data: { lineId: y.id, action: 'cancel', reason: 'oot', refund: 'needs_request' } });
+  const [a, b] = await Promise.all([cancelY(), cancelY()]);
+  expect([a.status(), b.status()].sort()).toEqual([200, 409]);
+  expect((await get(request, id)).events.filter((e) => e.action === 'cancelled')).toHaveLength(1);
+
+  expect((await request.post('/api/online-orders/receive', { headers: WH, data: { id, counts: [{ lineId: x.id, got: 1 }] } })).ok()).toBeTruthy();
+  const restore = await request.post('/api/online-orders/line', { headers: PH, data: { lineId: y.id, action: 'restore' } });
+  expect(restore.status()).toBe(409);
+  ({ order } = await get(request, id));
+  expect(order.lines.find((l) => l.id === y.id).cancelled_at).toBeTruthy();
+});
+
+test('QA: the refund only moves the ways that mean something', async ({ request }) => {
+  const { id } = await (await save(request, { store: STORE, lines: [{ sku: 'OO-QA-R', size: '9', qty: 1, unit_price: 80 }] })).json();
+  const { order } = await get(request, id);
+  const lineId = order.lines[0].id;
+  const line = (data) => request.post('/api/online-orders/line', { headers: PH, data: { lineId, ...data } });
+  expect((await line({ action: 'cancel', reason: 'other', refund: 'refunded', amount: 80 })).ok()).toBeTruthy();
+  expect((await line({ action: 'refund', to: 'requested' })).status()).toBe(409);        // already back
+  expect((await line({ action: 'refund', to: 'needs_request' })).ok()).toBeTruthy();     // "not actually back"
+  const after = (await get(request, id)).order.lines[0];
+  expect(after).toMatchObject({ refund: 'needs_request', refund_amount: null });
+  expect((await line({ action: 'refund', to: 'refunded', amount: 0 })).status()).toBe(400);
+});
+
+test('QA: bad input is a 400 with a reason, never a 500', async ({ request }) => {
+  const one = [{ sku: 'OO-QA-V', size: '9', qty: 1, unit_price: 100 }];
+  expect((await save(request, { store: STORE, coupon: 1e20, lines: one })).status()).toBe(400);
+  expect((await save(request, { store: STORE, lines: [{ ...one[0], unit_price: 1e15 }] })).status()).toBe(400);
+  expect((await save(request, { store: STORE, ordered_on: '2026-13-45', lines: one })).status()).toBe(400);
+  expect((await save(request, { store: STORE, coupon: 150, lines: one })).status()).toBe(400);   // coupon > shoes
+  expect((await request.get('/api/online-orders/get?id=99999999999999999999', { headers: PH })).status()).toBe(400);
+  const { id } = await (await save(request, { store: STORE, lines: one })).json();
+  const { order } = await get(request, id);
+  const blank = await request.post('/api/online-orders/receive', { headers: WH, data: { id, counts: [{ lineId: order.lines[0].id, got: null }] } });
+  expect(blank.status()).toBe(400);
+});
+
+test('QA: a form opened before a cancel can’t put the cancelled line back', async ({ request }) => {
+  const { id } = await (await save(request, { store: STORE, lines: [{ sku: 'OO-QA-S1', size: '9', qty: 1, unit_price: 50 }, { sku: 'OO-QA-S2', size: '9', qty: 1, unit_price: 50 }] })).json();
+  const { order } = await get(request, id);
+  const baseLineIds = order.lines.map((l) => l.id);
+  await request.post('/api/online-orders/line', { headers: PH, data: { lineId: order.lines[1].id, action: 'cancel', reason: 'oot', refund: 'refunded', amount: 50 } });
+  const stale = await save(request, { id, store: STORE, baseLineIds, lines: order.lines.map((l) => ({ sku: l.sku, size: l.size, qty: l.qty, unit_price: l.unit_price })) });
+  expect(stale.status()).toBe(409);
+});
+
+test('QA: a phone gets no sideways scroll, Back leaves the form, and an untracked order can be counted in', async ({ page, request }) => {
+  page.on('pageerror', (err) => { throw err; });
+  const { id } = await (await save(request, { store: `${STORE} Phone`, lines: [{ sku: 'OO-QA-P', size: '9', qty: 1, unit_price: 50 }] })).json();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/online-orders');
+  await page.waitForSelector('.oo-row');
+  const noSideScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+  expect(await noSideScroll()).toBe(true);
+  await page.getByRole('button', { name: '+ New order' }).click();
+  await expect(page.locator('.oo-form')).toBeVisible();
+  expect(await noSideScroll()).toBe(true);
+  await page.goBack();
+  await expect(page.locator('.oo-form')).toHaveCount(0);
+  await expect(page.locator('.oo-row').first()).toBeVisible();
+  await page.goto(`/ph/online-orders?o=${id}`);
+  await expect(page.locator('.oo-stage')).toHaveText('Ordered');
+  await expect(page.getByRole('button', { name: 'Count it in…' })).toBeVisible();
+});

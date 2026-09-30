@@ -4,6 +4,7 @@
 // to undo a real order is to cancel its lines. PH (admin auto).
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { dbConfigured, getOnlineOrder, deleteOnlineOrder } from '../_lib/db.js';
+import { idOf } from './_shared.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -13,8 +14,8 @@ export default async function handler(req, res) {
   if (!rateLimit(req, { windowMs: 60_000, max: 30 })) return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
   const b = await getJsonBody(req);
-  const id = Number(b.id);
-  if (!Number.isInteger(id) || id <= 0) return send(res, 400, { ok: false, error: 'Which order?' });
+  const id = idOf(b.id);
+  if (!id) return send(res, 400, { ok: false, error: 'Which order?' });
   try {
     const order = await getOnlineOrder(id);
     if (!order) return send(res, 404, { ok: false, error: 'That order no longer exists.' });

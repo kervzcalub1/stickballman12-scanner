@@ -21,7 +21,7 @@ const cents = (v) => Math.round(v * 100) / 100;
 export const isCancelled = (line) => !!(line && (line.cancelled_at || line.cancelled));
 
 // `order`: { coupon, tax, shipping, gc_pct }; `lines`: [{ qty, unit_price, cancelled_at? }]
-// → { lines: [{ ...line, each, parts: { price, coupon, tax, shipping, gc } }],
+// → { lines: [{ ...line, each, lineTotal, parts: { price, coupon, tax, shipping, gc } }],
 //     units, subtotal, total, paid }   (cancelled lines come back with each = null)
 export function orderCosts(order, lines) {
   const o = order || {};
@@ -47,6 +47,9 @@ export function orderCosts(order, lines) {
     return {
       ...l,
       each: cents(before - g),
+      // Rounded from the EXACT per-pair figure, not from the rounded `each` — 3 × $36.663
+      // is $109.99, while 3 × $36.66 would be a cent short of the order total (QA).
+      lineTotal: cents((before - g) * num(l.qty)),
       parts: { price, coupon: cents(couponEach), tax: cents(t), shipping: cents(s), gc: cents(g) },
     };
   });

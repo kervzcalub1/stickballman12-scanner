@@ -46,7 +46,10 @@ export function OnlineOrders({ user, onHome, onSignOut }) {
   const [orders, setOrders] = useState(null);
   const [counts, setCounts] = useState({ needs_request: 0, requested: 0, expected: 0 });
   const [error, setError] = useState('');
-  const [editing, setEditing] = useState(null);   // null | 'new' | order being edited
+  // The form is in the URL (?e=new | ?e=<id>) so Back leaves it, like every other step
+  // on this page (QA: Back changed the URL but left the form on screen).
+  const [editing, setEditingRaw] = useQueryParam('e', '');
+  const openEditor = (v) => setEditingRaw(String(v), { replace: false });
 
   async function load() {
     try {
@@ -62,13 +65,13 @@ export function OnlineOrders({ user, onHome, onSignOut }) {
     setCounts(r.counts || {});
   }, { mount: false, paused: !!editing });
 
-  if (editing) {
+  if (editing && canEdit) {
     return (
       <div className="app">
         <TopBar title="Online Orders" onHome={onHome} onSignOut={onSignOut} />
-        <OrderForm initial={editing === 'new' ? null : editing} onSignOut={onSignOut}
-          onCancel={() => setEditing(null)}
-          onSaved={(id) => { setEditing(null); setOpenId(String(id), { replace: false }); load(); }} />
+        <EditLoader id={editing === 'new' ? null : editing} onSignOut={onSignOut}
+          onCancel={() => setEditingRaw('')}
+          onSaved={(id) => { setEditingRaw('', { replace: true }); setOpenId(String(id), { replace: true }); load(); }} />
       </div>
     );
   }
@@ -77,7 +80,7 @@ export function OnlineOrders({ user, onHome, onSignOut }) {
       <div className="app">
         <TopBar title="Online Orders" onHome={onHome} onSignOut={onSignOut} />
         <OrderDetail id={openId} canEdit={canEdit} canReceive={canReceive} onSignOut={onSignOut}
-          onBack={() => setOpenId('')} onEdit={(o) => setEditing(o)} onDeleted={() => { setOpenId(''); load(); }} />
+          onBack={() => setOpenId('')} onEdit={(o) => openEditor(o.id)} onDeleted={() => { setOpenId(''); load(); }} />
       </div>
     );
   }
@@ -106,7 +109,7 @@ export function OnlineOrders({ user, onHome, onSignOut }) {
           </div>
           <input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Store, order #, tracking #, SKU…" aria-label="Search online orders" />
-          {canEdit && <button type="button" className="btn primary" onClick={() => setEditing('new')}>+ New order</button>}
+          {canEdit && <button type="button" className="btn primary" onClick={() => openEditor('new')}>+ New order</button>}
         </div>
         {view === 'followup' && followUps > 0 && (
           <p className="muted sm">
@@ -175,7 +178,13 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
   const o = data.order;
   const active = o.lines.filter((l) => !isCancelled(l));
   const gone = o.lines.filter(isCancelled);
+  // Dialogs show a failure inside themselves (FormModal catches the throw); the one-tap
+  // buttons on a cancelled line have no dialog, so they say it on the page (QA).
   const act = async (body) => { await api.onlineOrderLine(body); setDialog(null); load(); };
+  const actNow = async (body) => {
+    try { setError(''); await act(body); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); load(); }
+  };
 
   return (
     <>
@@ -192,7 +201,9 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
         {o.note && <p className="oo-note">{o.note}</p>}
         <div className="oo-actions">
           {canEdit && <button type="button" className="btn sm" onClick={() => onEdit(o)}>{o.tracking_number ? 'Edit order' : 'Edit · add tracking #'}</button>}
-          {canReceive && o.stage === 'shipped' && <button type="button" className="btn sm primary" onClick={() => setDialog({ kind: 'receive' })}>Count it in…</button>}
+          {/* Ordered too: a parcel that turns up before anyone typed its tracking number
+              still gets counted in (QA). */}
+          {canReceive && (o.stage === 'shipped' || o.stage === 'ordered') && <button type="button" className="btn sm primary" onClick={() => setDialog({ kind: 'receive' })}>Count it in…</button>}
           {canEdit && !o.received_at && <button type="button" className="btn sm ghost oo-danger" onClick={() => setDialog({ kind: 'delete' })}>Delete</button>}
         </div>
         {error && <div className="error mt">{error}</div>}
@@ -233,7 +244,7 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
         <div className="card">
           <h3 className="rows-title">Cancelled &amp; not delivered <span className="muted">— the refund is tracked until it is back</span></h3>
           <div className="oo-gone">
-            {gone.map((l) => <CancelledLine key={l.id} l={l} canEdit={canEdit} onDialog={setDialog} onAct={act} />)}
+            {gone.map((l) => <CancelledLine key={l.id} l={l} canEdit={canEdit && !o.received_at} canChase={canEdit} onDialog={setDialog} onAct={actNow} />)}
           </div>
         </div>
       )}
@@ -254,7 +265,7 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
             ...(dialog.line.qty > 1 ? [{ name: 'qty', label: `How many of the ${dialog.line.qty}?`, type: 'number', min: 1, max: dialog.line.qty, value: String(dialog.line.qty), required: true }] : []),
             { name: 'reason', label: 'Why', type: 'select', value: 'oot', options: CANCEL_REASONS.map(([value, label]) => ({ value, label })) },
             { name: 'refund', label: 'Refund', type: 'select', value: 'refunded', options: [{ value: 'refunded', label: 'Refunded with the cancellation' }, { value: 'needs_request', label: 'Not yet — needs follow-up' }] },
-            { name: 'amount', label: 'Amount refunded (if refunded)', type: 'number', step: '0.01', min: 0, value: dialog.line.each != null ? String((dialog.line.each * dialog.line.qty).toFixed(2)) : '', hint: 'What came back — checked at the audit.' },
+            { name: 'amount', label: 'Amount refunded (if refunded)', type: 'number', step: '0.01', min: 0, value: dialog.line.lineTotal != null ? String(dialog.line.lineTotal.toFixed(2)) : '', hint: 'What came back — checked at the audit.' },
             { name: 'note', label: 'Note', type: 'textarea', rows: 2, placeholder: 'e.g. store email 10/01, size sold out' },
           ]}
           submitLabel="Cancel pairs" danger onClose={() => setDialog(null)}
@@ -304,7 +315,7 @@ const EVENT_LABEL = {
   refund_requested: 'Refund requested', refund_refunded: 'Refund received', refund_needs_request: 'Refund back to follow-up',
 };
 
-function CancelledLine({ l, canEdit, onDialog, onAct }) {
+function CancelledLine({ l, canEdit, canChase, onDialog, onAct }) {
   const waited = daysSince(l.refund_requested_at);
   return (
     <div className={`oo-gone-row ${l.refund || ''}`}>
@@ -323,12 +334,12 @@ function CancelledLine({ l, canEdit, onDialog, onAct }) {
               : REFUND_STATES.needs_request}
         </span>
         {l.refund_note && <span className="muted sm">{l.refund_note}</span>}
-        {canEdit && (
+        {canChase && (
           <span className="oo-refund-acts">
             {l.refund === 'needs_request' && <button type="button" className="btn sm" onClick={() => onDialog({ kind: 'requested', line: l })}>Mark requested…</button>}
             {l.refund !== 'refunded' && <button type="button" className="btn sm primary" onClick={() => onDialog({ kind: 'refunded', line: l })}>Refund received…</button>}
             {l.refund === 'refunded' && <button type="button" className="btn sm ghost" onClick={() => onAct({ lineId: l.id, action: 'refund', to: 'needs_request' })}>Not actually back</button>}
-            {l.cancel_reason !== 'not_delivered' && <button type="button" className="btn sm ghost" onClick={() => onAct({ lineId: l.id, action: 'restore' })}>Undo cancel</button>}
+            {canEdit && l.cancel_reason !== 'not_delivered' && <button type="button" className="btn sm ghost" onClick={() => onAct({ lineId: l.id, action: 'restore' })}>Undo cancel</button>}
           </span>
         )}
       </div>
@@ -337,6 +348,20 @@ function CancelledLine({ l, canEdit, onDialog, onAct }) {
 }
 
 // ---- New / edit ----------------------------------------------------------------------
+// The form opens from the URL, so an edit fetches the order it is editing fresh — which
+// is also what makes the stale-form guard below meaningful.
+function EditLoader({ id, onCancel, onSaved, onSignOut }) {
+  const [order, setOrder] = useState(id ? null : false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!id) { setOrder(false); return; }
+    api.onlineOrder(id).then((r) => setOrder(r.order)).catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); });
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (error) return <div className="card"><div className="error">{error}</div><button className="btn ghost sm mt" onClick={onCancel}>Back</button></div>;
+  if (order === null) return <div className="card"><p className="muted">Loading…</p></div>;
+  return <OrderForm key={id || 'new'} initial={order || null} onCancel={onCancel} onSaved={onSaved} onSignOut={onSignOut} />;
+}
+
 function OrderForm({ initial, onCancel, onSaved, onSignOut }) {
   const [f, setF] = useState(() => ({
     store: initial?.store || '', order_number: initial?.order_number || '', tracking_number: initial?.tracking_number || '',
@@ -362,7 +387,10 @@ function OrderForm({ initial, onCancel, onSaved, onSignOut }) {
   async function save(allowDuplicateTracking = false) {
     setBusy(true); setError('');
     try {
-      const r = await api.saveOnlineOrder({ id: initial?.id, ...f, lines: lines.map(({ key, ...l }) => l), allowDuplicateTracking });
+      // The active lines this form was built from — the server refuses the save if they
+      // changed underneath it (a cancel or a count in another tab).
+      const baseLineIds = initial ? initial.lines.filter((l) => !isCancelled(l)).map((l) => l.id) : undefined;
+      const r = await api.saveOnlineOrder({ id: initial?.id, ...f, lines: lines.map(({ key, ...l }) => l), allowDuplicateTracking, baseLineIds });
       onSaved(r.id);
     } catch (err) {
       if (err.unauthorized) return onSignOut();

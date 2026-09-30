@@ -7726,75 +7726,108 @@ export async function getOnlineOrderLine(lineId) {
 // Cancel `qty` pairs of a line. All of them → the line itself is cancelled; fewer → the
 // line keeps the rest and the cancelled pairs become their own row, so the refund trail
 // belongs to exactly the pairs that were cancelled. `refund`: 'refunded' | 'needs_request'.
-// Guards in the WHERE: a line already cancelled (or changed) under us is left alone.
+//
+// ONE statement each, with the history row and the split row selected FROM the guarded
+// UPDATE: when the guard matches nothing (a line already cancelled or changed under us,
+// or an order the warehouse already counted in) nothing at all is written — no split, and
+// no "cancelled" in the history for an action that didn't happen (QA, 2026-10-01: two
+// racing cancels left two history rows for one cancellation).
 export async function cancelOnlineLine(line, { qty, reason, note, refund, amount }, actor, detail) {
   const sql = db();
   const refunded = refund === 'refunded';
   const whole = qty >= line.qty;
-  const ev = sql`INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
-                 VALUES (${line.order_id}, ${line.id}, 'cancelled', ${detail}, ${actor})`;
   if (whole) {
-    const [upd] = await sql.transaction([
-      sql`UPDATE online_order_lines
-             SET cancelled_at = now(), cancelled_by = ${actor}, cancel_reason = ${reason}, cancel_note = ${note},
-                 refund = ${refund}, refund_amount = ${refunded ? amount : null},
-                 refunded_at = ${refunded ? new Date() : null}, refund_by = ${refunded ? actor : null}
-           WHERE id = ${line.id} AND cancelled_at IS NULL AND qty = ${line.qty}
-         RETURNING id`,
-      ev,
-    ]);
-    return upd.length > 0;
+    const r = await sql`
+      WITH u AS (
+        UPDATE online_order_lines l
+           SET cancelled_at = now(), cancelled_by = ${actor}, cancel_reason = ${reason}, cancel_note = ${note},
+               refund = ${refund}, refund_amount = ${refunded ? amount : null},
+               refunded_at = ${refunded ? new Date() : null}, refund_by = ${refunded ? actor : null}
+         WHERE l.id = ${line.id} AND l.cancelled_at IS NULL AND l.qty = ${line.qty}
+           AND NOT EXISTS (SELECT 1 FROM online_orders o WHERE o.id = l.order_id AND o.received_at IS NOT NULL)
+        RETURNING l.id, l.order_id),
+      e AS (
+        INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
+        SELECT u.order_id, u.id, 'cancelled', ${detail}, ${actor} FROM u)
+      SELECT id FROM u`;
+    return r.length > 0;
   }
-  const [upd] = await sql.transaction([
-    sql`UPDATE online_order_lines SET qty = qty - ${qty}
-         WHERE id = ${line.id} AND cancelled_at IS NULL AND qty = ${line.qty} RETURNING id`,
-    sql`INSERT INTO online_order_lines (order_id, sku, name, size, qty, unit_price, cancelled_at, cancelled_by,
-                                        cancel_reason, cancel_note, refund, refund_amount, refunded_at, refund_by)
-        SELECT order_id, sku, name, size, ${qty}, unit_price, now(), ${actor}, ${reason}, ${note}, ${refund},
-               ${refunded ? amount : null}, ${refunded ? new Date() : null}, ${refunded ? actor : null}
-          FROM online_order_lines WHERE id = ${line.id} AND qty = ${line.qty - qty}`,
-    ev,
-  ]);
-  if (!upd.length) throw Object.assign(new Error('That line changed while you were cancelling it — reload and try again.'), { status: 409 });
-  return true;
+  const r = await sql`
+    WITH u AS (
+      UPDATE online_order_lines l SET qty = l.qty - ${qty}
+       WHERE l.id = ${line.id} AND l.cancelled_at IS NULL AND l.qty = ${line.qty}
+         AND NOT EXISTS (SELECT 1 FROM online_orders o WHERE o.id = l.order_id AND o.received_at IS NOT NULL)
+      RETURNING l.id, l.order_id, l.sku, l.name, l.size, l.unit_price),
+    c AS (
+      INSERT INTO online_order_lines (order_id, sku, name, size, qty, unit_price, cancelled_at, cancelled_by,
+                                      cancel_reason, cancel_note, refund, refund_amount, refunded_at, refund_by)
+      SELECT u.order_id, u.sku, u.name, u.size, ${qty}, u.unit_price, now(), ${actor}, ${reason}, ${note}, ${refund},
+             ${refunded ? amount : null}, ${refunded ? new Date() : null}, ${refunded ? actor : null}
+        FROM u),
+    e AS (
+      INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
+      SELECT u.order_id, u.id, 'cancelled', ${detail}, ${actor} FROM u)
+    SELECT id FROM u`;
+  return r.length > 0;
 }
 
-// Move a cancelled line's refund along: 'requested' (we asked the store), 'refunded'
-// (the money came back — amount + note), or back to 'needs_request' (asked in error).
+// Move a cancelled line's refund along. Only the moves that mean something are allowed,
+// enforced in the WHERE (QA: the API could take a refunded line back to "requested" with
+// the old amount still on it):
+//   needs_request → requested            (we asked the store)
+//   needs_request | requested → refunded (money back — amount required by the handler)
+//   requested | refunded → needs_request ("not actually back": the amount is cleared)
 export async function setOnlineRefund(line, { to, amount, note }, actor, detail) {
   const sql = db();
-  const q = to === 'requested'
-    ? sql`UPDATE online_order_lines SET refund = 'requested', refund_requested_at = now(), refund_requested_by = ${actor},
+  const r = to === 'requested'
+    ? await sql`
+        WITH u AS (
+          UPDATE online_order_lines SET refund = 'requested', refund_requested_at = now(), refund_requested_by = ${actor},
                  refund_note = coalesce(${note}, refund_note)
-           WHERE id = ${line.id} AND cancelled_at IS NOT NULL RETURNING id`
+           WHERE id = ${line.id} AND cancelled_at IS NOT NULL AND refund = 'needs_request'
+          RETURNING id, order_id),
+        e AS (INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
+              SELECT u.order_id, u.id, 'refund_requested', ${detail}, ${actor} FROM u)
+        SELECT id FROM u`
     : to === 'refunded'
-      ? sql`UPDATE online_order_lines SET refund = 'refunded', refund_amount = ${amount}, refunded_at = now(), refund_by = ${actor},
+      ? await sql`
+          WITH u AS (
+            UPDATE online_order_lines SET refund = 'refunded', refund_amount = ${amount}, refunded_at = now(), refund_by = ${actor},
                    refund_note = coalesce(${note}, refund_note)
-             WHERE id = ${line.id} AND cancelled_at IS NOT NULL RETURNING id`
-      : sql`UPDATE online_order_lines SET refund = 'needs_request', refund_amount = NULL, refunded_at = NULL, refund_by = NULL
-             WHERE id = ${line.id} AND cancelled_at IS NOT NULL RETURNING id`;
-  const [upd] = await sql.transaction([
-    q,
-    sql`INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
-        VALUES (${line.order_id}, ${line.id}, ${`refund_${to}`}, ${detail}, ${actor})`,
-  ]);
-  return upd.length > 0;
+             WHERE id = ${line.id} AND cancelled_at IS NOT NULL AND refund IN ('needs_request', 'requested')
+            RETURNING id, order_id),
+          e AS (INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
+                SELECT u.order_id, u.id, 'refund_refunded', ${detail}, ${actor} FROM u)
+          SELECT id FROM u`
+      : await sql`
+          WITH u AS (
+            UPDATE online_order_lines SET refund = 'needs_request', refund_amount = NULL, refunded_at = NULL, refund_by = NULL
+             WHERE id = ${line.id} AND cancelled_at IS NOT NULL AND refund IN ('requested', 'refunded')
+            RETURNING id, order_id),
+          e AS (INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
+                SELECT u.order_id, u.id, 'refund_needs_request', ${detail}, ${actor} FROM u)
+          SELECT id FROM u`;
+  return r.length > 0;
 }
 
 // Undo a cancellation made in error: the pairs are coming after all. The refund trail
-// goes with it (there is nothing to refund); the history keeps both steps.
+// goes with it (there is nothing to refund); the history keeps both steps. Never for the
+// warehouse's own count (not_delivered), and never once the order was counted in — a line
+// brought back then would be an active pair nobody counted, on a Delivered order (QA).
 export async function restoreOnlineLine(line, actor, detail) {
-  const sql = db();
-  const [upd] = await sql.transaction([
-    sql`UPDATE online_order_lines
-           SET cancelled_at = NULL, cancelled_by = NULL, cancel_reason = NULL, cancel_note = NULL, refund = NULL,
-               refund_requested_at = NULL, refund_requested_by = NULL, refund_amount = NULL, refunded_at = NULL,
-               refund_by = NULL, refund_note = NULL
-         WHERE id = ${line.id} AND cancelled_at IS NOT NULL RETURNING id`,
-    sql`INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
-        VALUES (${line.order_id}, ${line.id}, 'restored', ${detail}, ${actor})`,
-  ]);
-  return upd.length > 0;
+  const r = await db()`
+    WITH u AS (
+      UPDATE online_order_lines l
+         SET cancelled_at = NULL, cancelled_by = NULL, cancel_reason = NULL, cancel_note = NULL, refund = NULL,
+             refund_requested_at = NULL, refund_requested_by = NULL, refund_amount = NULL, refunded_at = NULL,
+             refund_by = NULL, refund_note = NULL
+       WHERE l.id = ${line.id} AND l.cancelled_at IS NOT NULL AND l.cancel_reason <> 'not_delivered'
+         AND NOT EXISTS (SELECT 1 FROM online_orders o WHERE o.id = l.order_id AND o.received_at IS NOT NULL)
+      RETURNING l.id, l.order_id),
+    e AS (INSERT INTO online_order_events (order_id, line_id, action, detail, actor)
+          SELECT u.order_id, u.id, 'restored', ${detail}, ${actor} FROM u)
+    SELECT id FROM u`;
+  return r.length > 0;
 }
 
 // The warehouse counted the parcel in. `counts`: Map(lineId → pairs that arrived) for

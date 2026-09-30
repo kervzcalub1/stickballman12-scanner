@@ -146,7 +146,11 @@ calculator's one Final cost:
   - The chip reads **`GET /api/ph/platform-quotes`** (DB only, never upstream; rows
     **younger than 12 h** — an older ask is not returned at all), then prices up to
     **20** still-missing styles in ONE batch call per page load; "Price N more" in the
-    header does the next 20. A style is asked at most once per visit. Before `db:setup`
+    header does the next 20. A style is asked at most once per visit, and **only the first
+    load of a visit auto-prices** — a later search / tab / date change reads what's
+    remembered and waits for the button (QA: searching used to walk the grid through the
+    quota 20 styles at a time). A StockX that isn't configured is skipped, never read as
+    "no ask". Before `db:setup`
     the read returns `[]` and the write only warns, so the page still works.
   - Not in `LIVE_TABLES` on purpose: a quote landing isn't a reason to re-read the grid.
   - E2E: `e2e/ph-platform-chip.spec.js` (batch mocked — the suite never spends quota).

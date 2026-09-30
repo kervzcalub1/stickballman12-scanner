@@ -6,7 +6,7 @@
 // history and are changed only through line.js. PH records orders (admin auto-allowed).
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { dbConfigured, createOnlineOrder, updateOnlineOrder, getOnlineOrder, onlineOrderByTracking } from '../_lib/db.js';
-import { actorOf } from './_shared.js';
+import { actorOf, MAX_MONEY, realDate } from './_shared.js';
 import { orderCode } from '../../src/lib/onlineOrders.js';
 
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
@@ -15,7 +15,7 @@ const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); retur
 const money = (v) => {
   if (v === '' || v == null) return 0;
   const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : NaN;
+  return Number.isFinite(n) && n >= 0 && n <= MAX_MONEY ? Math.round(n * 100) / 100 : NaN;
 };
 
 export default async function handler(req, res) {
@@ -27,20 +27,21 @@ export default async function handler(req, res) {
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
   const b = await getJsonBody(req);
   const id = b.id != null ? Number(b.id) : null;
-  if (id != null && (!Number.isInteger(id) || id <= 0)) return send(res, 400, { ok: false, error: 'Which order?' });
+  if (id != null && (!Number.isSafeInteger(id) || id <= 0)) return send(res, 400, { ok: false, error: 'Which order?' });
 
   const o = {
     store: text(b.store, 120),
     order_number: text(b.order_number, 80),
     tracking_number: text(b.tracking_number, 60),
-    ordered_on: /^\d{4}-\d{2}-\d{2}$/.test(String(b.ordered_on || '')) ? b.ordered_on : null,
+    ordered_on: realDate(b.ordered_on),
     coupon: money(b.coupon), tax: money(b.tax), shipping: money(b.shipping),
     gc_pct: money(b.gc_pct),
     note: text(b.note, 1000),
   };
   if (!o.store) return send(res, 400, { ok: false, error: 'Which store was it bought from?' });
+  if (b.ordered_on && !o.ordered_on) return send(res, 400, { ok: false, error: 'That order date isn’t a real date.' });
   for (const k of ['coupon', 'tax', 'shipping', 'gc_pct']) {
-    if (Number.isNaN(o[k])) return send(res, 400, { ok: false, error: `The ${k === 'gc_pct' ? 'gift card discount' : k} has to be a number, 0 or more.` });
+    if (Number.isNaN(o[k])) return send(res, 400, { ok: false, error: `The ${k === 'gc_pct' ? 'gift card discount' : k} has to be a number from 0 to ${MAX_MONEY.toLocaleString('en-US')}.` });
   }
   if (o.gc_pct > 100) return send(res, 400, { ok: false, error: 'The gift card discount is a percentage — 100 at most.' });
 
@@ -54,7 +55,7 @@ export default async function handler(req, res) {
     if (!sku && !size && !l?.unit_price) continue;   // an empty row left on the form
     if (!sku || !size) return send(res, 400, { ok: false, error: `Line ${i + 1} needs a SKU and a size.` });
     if (!Number.isInteger(qty) || qty < 1 || qty > 999) return send(res, 400, { ok: false, error: `Line ${i + 1}: the quantity has to be a whole number, 1 or more.` });
-    if (Number.isNaN(price) || l?.unit_price === '' || l?.unit_price == null) return send(res, 400, { ok: false, error: `Line ${i + 1} needs the price paid per shoe.` });
+    if (Number.isNaN(price) || l?.unit_price === '' || l?.unit_price == null) return send(res, 400, { ok: false, error: `Line ${i + 1} needs the price paid per shoe (0 to ${MAX_MONEY.toLocaleString('en-US')}).` });
     lines.push({ sku: sku.toUpperCase(), name: text(l?.name, 200), size, qty, unit_price: price });
   }
 
@@ -64,6 +65,17 @@ export default async function handler(req, res) {
     // A new order needs something on it; an edited one may be left with only cancelled lines.
     const cancelledCount = (before?.lines || []).filter((l) => l.cancelled_at).length;
     if (!lines.length && !cancelledCount) return send(res, 400, { ok: false, error: 'Add at least one shoe to the order.' });
+    // A coupon bigger than what the coming pairs cost would make their cost negative (QA).
+    const subtotal = lines.reduce((n, l) => n + l.unit_price * l.qty, 0);
+    if (o.coupon > subtotal + 0.005) return send(res, 400, { ok: false, error: `The coupon ($${o.coupon.toFixed(2)}) is more than the shoes cost ($${subtotal.toFixed(2)}).` });
+    // A form opened before somebody cancelled (or restored) a line would put that line
+    // back as active when saved — the active lines are replaced wholesale. The form sends
+    // the active line ids it was built from; if they no longer match, it's stale (QA).
+    if (id && Array.isArray(b.baseLineIds)) {
+      const now = (before.lines || []).filter((l) => !l.cancelled_at).map((l) => Number(l.id)).sort((x, y) => x - y).join(',');
+      const was = b.baseLineIds.map(Number).sort((x, y) => x - y).join(',');
+      if (now !== was) return send(res, 409, { ok: false, error: 'Somebody changed this order’s lines since you opened it (a cancellation or a count). Go back and open it again so nothing is undone.' });
+    }
     if (before?.received_at && lines.reduce((n, l) => n + l.qty, 0) !== (before.lines || []).filter((l) => !l.cancelled_at).reduce((n, l) => n + Number(l.qty), 0)) {
       return send(res, 409, { ok: false, error: 'The warehouse already counted this order in — the number of pairs can’t change now. Cancel a line instead.' });
     }

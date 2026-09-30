@@ -5298,6 +5298,10 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
    PH records online buys; the warehouse sees what is on its way; a cancelled or
    undelivered pair's refund is traced until it is back. Amber = something to chase. */
 .oo-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+/* The five tabs wrap rather than push the page sideways on a phone (QA: 469px at 390). */
+.oo-toolbar .seg { flex-wrap: wrap; max-width: 100%; }
+.oo-form-grid input, .oo-note-field textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.oo-form-grid label { min-width: 0; }
 .oo-search { flex: 1; min-width: 200px; }
 .oo-list { display: flex; flex-direction: column; gap: 8px; }
 .oo-row { display: flex; justify-content: space-between; gap: 12px; width: 100%; text-align: left; font: inherit; color: var(--text);
@@ -5348,7 +5352,9 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 @media (max-width: 768px) {
   .oo-row { flex-direction: column; }
   .oo-row-side { align-items: flex-start; }
-  .oo-form-grid, .oo-money-fields { grid-template-columns: 1fr 1fr; }
+  .oo-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .oo-money-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .oo-search { min-width: 0; flex-basis: 100%; }
   .oo-lines-edit, .oo-lines { display: block; overflow-x: auto; }
   .oo-refund { align-items: flex-start; }
   .oo-refund-acts { justify-content: flex-start; }

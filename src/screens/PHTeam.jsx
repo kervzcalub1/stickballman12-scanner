@@ -249,6 +249,11 @@ function useMarketQuotes(groups, enabled, onSignOut) {
   const [quotes, setQuotes] = useState(() => new Map());   // SKU → Map(size → quote)
   const [pricing, setPricing] = useState(() => new Set()); // SKUs being priced now
   const tried = useRef(new Set());                          // asked this visit — never twice
+  // Only the FIRST load of a visit prices anything by itself. After that a new search, a
+  // status tab or a date range reads what is remembered and waits for "Price N more" —
+  // otherwise every search change priced another 20 styles, and filtering could walk the
+  // whole grid through the StockX quota without a click (QA, 2026-10-01).
+  const autoPriced = useRef(false);
   const wanted = useMemo(() => {
     const m = new Map();
     for (const g of groups || []) {
@@ -282,7 +287,9 @@ function useMarketQuotes(groups, enabled, onSignOut) {
       const got = [];
       for (const [sku, sizes] of entries) {
         const q = res.quotes?.[sku];
-        if (!q || q.alias?.error || q.stockx?.error) continue;
+        // StockX not set up here is "we couldn't ask", not "no ask" — comparing Alias
+        // against nothing would name Alias the winner on every size (QA).
+        if (!q || q.alias?.error || q.stockx?.error || !q.stockx?.configured) continue;
         const al = new Map((q.alias?.results || []).map((r) => [String(r.size), r]));
         const sx = new Map((q.stockx?.results || []).map((r) => [String(r.size), r]));
         for (const size of sizes) {
@@ -310,7 +317,10 @@ function useMarketQuotes(groups, enabled, onSignOut) {
           for (const q of r.quotes || []) { const by = new Map(have.get(q.sku) || []); by.set(String(q.size), q); have.set(q.sku, by); }
         } catch (err) { if (err.unauthorized) { onSignOut?.(); return; } }
       }
-      if (live) price(missing(have).slice(0, AUTO_PRICE));
+      if (live && !autoPriced.current) {
+        autoPriced.current = true;
+        price(missing(have).slice(0, AUTO_PRICE));
+      }
     })();
     return () => { live = false; };
   }, [enabled, wantedKey]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -57,6 +57,25 @@ line cancelled → cancelled; tracking → shipped; else ordered.
 - **Undo cancel** for a mistake (not for `not_delivered` — that's the warehouse's count).
 - Pairs on an order already counted in can't be cancelled (they arrived).
 
+## Rules added after QA (2026-10-01)
+- **A refused action writes nothing.** Cancel / refund / restore are ONE statement each,
+  with the history row (and a partial cancel's split row) selected FROM the guarded UPDATE —
+  two racing cancels used to leave two "cancelled" rows for one cancellation.
+- **Refund moves are fixed**: needs_request → requested; needs_request|requested →
+  refunded (amount > 0); requested|refunded → needs_request (amount cleared). Anything else
+  is a 409 — enforced in the handler AND the WHERE.
+- **Nothing is cancelled or restored once counted in** (a restored line would be a pair
+  nobody counted on a Delivered order). Refunds can still be chased.
+- **Stale form**: the edit form sends `baseLineIds` (the active lines it was built from);
+  if they changed since (a cancel, a count), save is a 409 instead of resurrecting a
+  cancelled line. The form lives in `?e=new|<id>`, so Back leaves it.
+- **Coupon ≤ what the coming shoes cost**; money capped at $1,000,000; `ordered_on` must be
+  a real date; ids past safe-integer range are a 400; a blank count in receive is a 400
+  (it used to read as 0 = the whole line not delivered).
+- **Count it in** is offered on Ordered too — a parcel can land before its tracking # is typed.
+- Each line carries `lineTotal` (rounded from the exact per-pair figure) so a line never
+  drifts a cent from the order total; the cancel dialog's refund default uses it.
+
 ## Receiving (warehouse)
 "Count it in…" on a Shipped order: per line, how many arrived (default = ordered). Short →
 split off as `not_delivered` + `needs_request`. One transaction; a second count of the

@@ -49,15 +49,21 @@ test.beforeAll(async () => {
   const loose = await mkBatch(`B-E2EBFT-${stamp}`, 'receiving', `bft ${stamp}`);
   const amb = await mkBatch(`B-E2EBFA-${stamp}`, 'receiving', AMB);
   const instore = await mkBatch(`B-E2EBFI-${stamp}`, 'instore', TRK);
+  // QA pass #2, finding 3: a box row saved with tracking '' (not NULL) must fall back to
+  // the batch's own number.
+  const blankBox = await mkBatch(`B-E2EBFE-${stamp}`, 'receiving', TRK);
+  const [bx] = await q(`INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status) VALUES ($1, 1, '', 'received') RETURNING id`, [blankBox]);
   await q(`INSERT INTO items (vin, batch_id, sku, size, name, status, cost) VALUES
              ($1, $4, $7, '9', 'E2E BFT Shoe', 'in_stock', NULL),
              ($2, $5, $7, '9', 'E2E BFT Shoe', 'in_stock', NULL),
              ($3, $6, $7, '9', 'E2E BFT Shoe', 'in_stock', NULL)`, [vin(1), vin(2), vin(3), loose, amb, instore, SKU]);
+  await q(`INSERT INTO items (vin, batch_id, box_id, sku, size, name, status, cost) VALUES ($1, $2, $3, $4, '9', 'E2E BFT Shoe', 'in_stock', NULL)`, [vin(4), blankBox, bx.id, SKU]);
 });
 
 test.afterAll(async () => {
   await q('DELETE FROM item_events WHERE item_id IN (SELECT id FROM items WHERE sku = $1)', [SKU]);
   await q('DELETE FROM items WHERE sku = $1', [SKU]);
+  await q('DELETE FROM batch_boxes WHERE batch_id = ANY($1)', [batches]);
   await q('DELETE FROM batches WHERE id = ANY($1)', [batches]);
   await q('DELETE FROM po_lines WHERE po_id = ANY($1)', [po]);
   await q('DELETE FROM po_boxes WHERE po_id = ANY($1)', [po]);
@@ -70,7 +76,7 @@ test('an unlinked batch is filled through its tracking number — once, and only
   const prev = await (await request.get('/api/items/cost-backfill', { headers: admin })).json();
   expect(prev.plan.byTracking).toBeGreaterThanOrEqual(1);
   expect(prev.plan.ambiguous).toBeGreaterThanOrEqual(1);
-  expect(prev.plan.byPo.find((p) => p.poCode === `PO-E2EBFT-${stamp}`)).toMatchObject({ pairs: 1, byTracking: 1 });
+  expect(prev.plan.byPo.find((p) => p.poCode === `PO-E2EBFT-${stamp}`)).toMatchObject({ pairs: 2, byTracking: 2 });
 
   const run = await request.post('/api/items/cost-backfill', { headers: admin, data: { apply: true } });
   expect(run.ok(), await run.text()).toBeTruthy();
@@ -78,6 +84,7 @@ test('an unlinked batch is filled through its tracking number — once, and only
   expect(Number(await cost(1))).toBeCloseTo(landedFromShelf(120, null, PRESET), 2);
   expect(await cost(2)).toBeNull();   // on two POs — not guessed
   expect(await cost(3)).toBeNull();   // in-store batch — never matched by tracking
+  expect(Number(await cost(4))).toBeCloseTo(landedFromShelf(120, null, PRESET), 2);   // blank box tracking → batch's
   const [ev] = await q(`SELECT e.details->>'text' AS text FROM item_events e JOIN items i ON i.id = e.item_id WHERE i.vin = $1`, [vin(1)]);
   expect(ev.text).toContain(`PO-E2EBFT-${stamp}`);
   expect(ev.text).toContain('matched by tracking');

@@ -2987,7 +2987,9 @@ export async function listCostBackfillCandidates() {
        GROUP BY 1),
     c AS (
       SELECT i.id, i.vin, i.sku, i.size, i.status, b.po_id AS linked_po, b.kind, b.supplier_name,
-             upper(regexp_replace(coalesce(bb.tracking_number, b.tracking_number, ''), '\\s', '', 'g')) AS tracking
+             -- nullif: a box row saved with '' (not NULL) must still fall back to the
+             -- batch's number (QA pass #2, finding 3).
+             upper(regexp_replace(coalesce(nullif(btrim(bb.tracking_number), ''), b.tracking_number, ''), '\\s', '', 'g')) AS tracking
         FROM items i
         JOIN batches b ON b.id = i.batch_id
         LEFT JOIN batch_boxes bb ON bb.id = i.box_id

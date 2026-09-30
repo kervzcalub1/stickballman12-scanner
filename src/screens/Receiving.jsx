@@ -560,9 +560,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // shipment's, each box's); tracking → order. The screen then says what the parcel
   // should hold, and each pair's cost comes from the order's ACTUAL cost for that SKU +
   // size. A PO receive is the PO's business — never both.
+  // Keyed by the NORMALISED number (normTrack: spaces out, upper case) — the same parcel
+  // typed two ways is one lookup and one order.
   const [onlineByTrack, setOnlineByTrack] = useState(() => new Map());
+  // Answers already had this receive (number → order | null), so editing one box's
+  // tracking doesn't re-ask about the other nine (QA pass #2, note 4). Kept a minute.
+  const onlineSeen = useRef(new Map());
   const onlineTracks = [header.tracking, ...boxSlots.map((s) => s.tracking), isBoxMode ? boxModeSlot?.tracking : null]
-    .map((t) => String(t || '').trim()).filter((t) => t.replace(/\s+/g, '').length >= 8);
+    .map(normTrack).filter((t) => t.length >= 8);
   const onlineTracksKey = [...new Set(onlineTracks)].sort().join('|');
   useEffect(() => {
     if (receivingPo || noShipment || isRescale || !onlineTracksKey) { setOnlineByTrack(new Map()); return undefined; }
@@ -570,14 +575,27 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const id = setTimeout(async () => {
       const next = new Map();
       for (const t of onlineTracksKey.split('|')) {
-        try { const r = await api.onlineOrderByTracking(t); if (r?.order) next.set(t, r.order); }
-        catch (err) { if (err.unauthorized) { onSignOut(); return; } /* unreachable → no online order, plain receive */ }
+        const seen = onlineSeen.current.get(t);
+        if (seen && Date.now() - seen.at < 60_000) { if (seen.order) next.set(t, seen.order); continue; }
+        try {
+          const r = await api.onlineOrderByTracking(t);
+          onlineSeen.current.set(t, { order: r?.order || null, at: Date.now() });
+          if (r?.order) next.set(t, r.order);
+        } catch (err) { if (err.unauthorized) { onSignOut(); return; } /* unreachable → no online order, plain receive */ }
       }
       if (!dead) setOnlineByTrack(next);
     }, 600);
     return () => { dead = true; clearTimeout(id); };
   }, [onlineTracksKey, receivingPo, noShipment, isRescale]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Every online order this receive touches — Step 1 names them all.
   const onlineOrders = [...new Map([...onlineByTrack.values()].map((o) => [o.id, o])).values()];
+  // The online order for the parcel BEING SCANNED: the active box's own tracking number
+  // (or the shipment's, on a one-box receive). A multi-box receive with box 1 = order A and
+  // box 2 = order B used to cost a box-2 pair off order A whenever both orders carried that
+  // SKU + size — the first order in the list won (QA pass #2, finding 1). Same rule a PO
+  // receive already follows with the active label.
+  const activeOnlineOrder = onlineByTrack.get(normTrack(activeBox?.tracking) || normTrack(header.tracking)) || null;
+  const activeOnlineOrders = activeOnlineOrder ? [activeOnlineOrder] : [];
 
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showPrefs, setShowPrefs] = useState(false);
@@ -1712,7 +1730,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   };
   // An online order's line: its actual cost (coupon, tax, shipping and gift card already
   // spread over it — orderCosts) IS the landed cost, so no preset is applied on top.
-  const onlineLine = (it, s) => (onlineOrders.length ? onlineLineFor(onlineOrders, it.sku, s.size) : null);
+  const onlineLine = (it, s) => (activeOnlineOrders.length ? onlineLineFor(activeOnlineOrders, it.sku, s.size) : null);
   const sizeCost = (it, s) => unitCost(it.cost, poLanded(it, s) ?? onlineLine(it, s)?.each, batchDefaultCost);
   // What the card shows when nothing is typed: the PO's figure for the shoe (one
   // value, or a range when the supplier priced sizes differently), else the default.
@@ -2062,6 +2080,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     {batchContext.batch_tag ? <> · <Icon name="tag" /> {batchContext.batch_tag}</> : ''} · {batchContext.supplier_name || '—'}
                   </div>
                 )}
+                {/* Box mode hides the PO block the shipment banner lives in, so the box's own
+                    online order is named here (QA pass #2, finding 2). */}
+                {isBoxMode && activeOnlineOrders.map((o) => <OnlineOrderBanner key={o.id} order={o} />)}
                 <div className="batch-form">
                   {/* Which box this is — the number on the carton, not the next one along.
                       Defaults to the next free number, which is right when boxes arrive in
@@ -2441,7 +2462,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     ({totalItems}{boxTarget && boxExisting?.length ? ' new' : ''} unit{totalItems === 1 ? '' : 's'})</span></h3>
                   <button className="btn ghost sm" onClick={openAddItem}>+ Add manually</button>
                 </div>
-                {onlineOrders.map((o) => <OnlineOrderBanner key={o.id} order={o} />)}
+                {activeOnlineOrders.map((o) => <OnlineOrderBanner key={o.id} order={o} />)}
                 {/* Why this label has no checklist. Without it the screen looks like the
                     PO link was lost, and somebody goes hunting for a manifest that was
                     never per-box in the first place. */}

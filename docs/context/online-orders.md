@@ -100,6 +100,13 @@ as a PO line) IS the landed cost, no preset on top; the card says "from online o
 OO-…". The price paid is saved as `items.shelf_price`. Never on a PO receive, rescale or a
 no-shipment receive. Counting the order in stays on the Online Orders page (that is where
 a short count becomes a refund to chase). E2E: `e2e/receiving-online-order.spec.js`.
+- **Per box, not per receive** (QA pass #2): the cost and the scan-step banner use only the
+  order of the parcel BEING SCANNED — the active box's tracking (else the shipment's).
+  Box 1 = order A and box 2 = order B used to cost a box-2 pair off order A whenever both
+  carried that SKU + size. Step 1 still names every order the receive touches.
+- Box mode (adding a box to an existing batch) names the box's order under its header.
+- Answers are remembered per number for a minute, so editing one box's tracking doesn't
+  re-ask about the others.
 
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).

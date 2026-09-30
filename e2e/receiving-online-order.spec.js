@@ -75,3 +75,47 @@ test('a tracking number that is no online order changes nothing', async ({ page 
   await page.waitForTimeout(1200);
   await expect(page.locator('.oo-recv-banner')).toHaveCount(0);
 });
+
+// QA pass #2, finding 1: a multi-box receive with box 1 = order A and box 2 = order B costed
+// a box-2 pair off order A whenever both orders carried that SKU + size (the first order in
+// the list won), and a shoe only on A's order was costed in box 2 too. Each box now uses
+// ITS OWN parcel's order.
+test('a multi-box receive costs each box from its own online order', async ({ page, request }) => {
+  const S = `${SKU}-M`; const X = `${SKU}-X`;
+  const mk = async (tracking, lines) => {
+    const r = await request.post('/api/online-orders/save', { headers: PH, data: { store: 'E2E-OO Multi', tracking_number: tracking, lines } });
+    expect(r.ok(), await r.text()).toBeTruthy();
+    return (await r.json()).id;
+  };
+  await mk(`1ZOOMA${stamp}`, [{ sku: S, size: '9', qty: 1, unit_price: 50 }, { sku: X, size: '9', qty: 1, unit_price: 51 }]);
+  const bId = await mk(`1ZOOMB${stamp}`, [{ sku: S, size: '9', qty: 1, unit_price: 80 }]);
+
+  await loginAs(page, 'warehouse');
+  await page.route('**/api/sku-search', (route) => {
+    const sku = String(route.request().postDataJSON()?.sku || '').toUpperCase();
+    return route.fulfill({ json: { ok: true, product: { name: `E2E OO ${sku.slice(-1)}`, sku, image: '', source: 'manual', scannedSize: '9', sizes: ['9'] } } });
+  });
+  await page.goto('/receiving');
+  await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
+  await page.locator('label:has-text("Boxes expected") input').fill('2');
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click();
+  const rows = page.locator('.box-build-row');
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).locator('.box-build-track input').fill(`1ZOOMA${stamp}`);
+  await rows.nth(1).locator('.box-build-track input').fill(`1ZOOMB${stamp}`);
+  await page.waitForTimeout(1200);   // the lookup's pause
+  await rows.nth(1).getByRole('button', { name: 'Add items' }).click();
+
+  await expect(page.locator('.oo-recv-banner')).toHaveCount(1);
+  await expect(page.locator('.oo-recv-banner')).toContainText(`OO-${String(bId).padStart(4, '0')}`);
+  for (const code of [S, X]) {
+    await page.locator('.scanbar input').first().fill(code);
+    await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+  }
+  const card = (sku) => page.locator(`.recv-item[data-sku="${sku}"]`);
+  await expect(card(S).locator('.recv-item-cost input')).toHaveAttribute('placeholder', '80.00');
+  await expect(card(S).locator('.recv-item-cost-src')).toContainText(`OO-${String(bId).padStart(4, '0')}`);
+  // X is only on box 1's order — nothing to take from box 2's.
+  await expect(card(X).locator('.recv-item-cost-src')).not.toContainText('online order');
+});
+

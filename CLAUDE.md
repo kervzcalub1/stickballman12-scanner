@@ -41,7 +41,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Receiving wizard, VINs, batches, intake | `docs/context/receiving.md` |
 | Pre-printed 1ID stickers (`SBM-R-…` roll stock, printer-free intake) | `docs/context/vin-stock.md` |
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
-| Payout Calculator: store cost stack → Alias/StockX payout, profit, ROI, buy call, **supplier presets**; **best platform per size** (calculator, PH grid, Platform Profit report, **New Inventory chip + `platform_quotes` price cache**); **PO shelf price → landed cost** | `docs/context/payout-calculator.md` |
+| Payout Calculator: store cost stack → Alias/StockX payout, profit, ROI, buy call, **supplier presets**; **best platform per size** (calculator, PH grid, Platform Profit report); **PO shelf price → landed cost** | `docs/context/payout-calculator.md` |
 | The app-wide advisor: floating button, screen context, its nine read-only tools | `docs/context/advisor.md` |
 | Shopify: the all-channel sales + inventory feed (`api/_lib/shopify.js`) | `docs/context/shopify.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
@@ -56,7 +56,6 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders** | `docs/context/purchase-orders.md` |
 | Empty shoe boxes end to end: order → declare → receive → shelve → put on a pair | `docs/context/empty-boxes.md` |
 | Buying requests (was "gift-card buying"): request → approve → cards → receipt → audit → reconciled; **`users.privileges`**; **Telegram approval cards, direct to the Bot API** | `docs/context/buy-cart.md` |
-| **Online Orders**: PH's online buys — tracking, actual cost per pair (coupon/tax/shipping/gift card), per-line cancel + **refund trail**, warehouse "Expected" + count-in (its own list, not a PO) | `docs/context/online-orders.md` |
 | Merging duplicates (superadmin): one supplier typed twice, one inbound received as two batches | `docs/context/merge-tools.md` |
 | StockX / Alias / KicksDB, Alias auto-relogin, proxies | `docs/context/integrations.md` |
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |

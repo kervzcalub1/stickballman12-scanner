@@ -1146,22 +1146,6 @@ await sql(`ALTER TABLE payout_presets ADD COLUMN IF NOT EXISTS supplier_name TEX
 // into items.cost — the landed cost everything else reads. Kept beside it so the
 // landed number can always be traced back to what was on the sticker.
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS shelf_price NUMERIC(12,2)`);
-// The market, remembered (2026-10-01). Every Alias/StockX lowest ask api/payout/batch.js
-// fetches is written here, so the New Inventory "best platform" chip can read what anyone
-// last priced instead of spending one StockX call per size on every page load. A price is
-// a statement about a moment — readers ask for rows younger than a few hours, never
-// "whatever is there". Keyed by basis: consigned and with-you Alias asks differ.
-await sql(`
-  CREATE TABLE IF NOT EXISTS platform_quotes (
-    sku            TEXT NOT NULL,
-    size           TEXT NOT NULL,
-    consigned      BOOLEAN NOT NULL,
-    alias_ask      NUMERIC(12,2),
-    stockx_ask     NUMERIC(12,2),
-    stockx_inexact BOOLEAN NOT NULL DEFAULT false,
-    fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (sku, size, consigned)
-  )`);
 
 // Seed the known suppliers — but ONLY into an empty table, never ON CONFLICT DO
 // NOTHING. db:setup runs on every deploy, and a preset someone deliberately deleted
@@ -1721,78 +1705,6 @@ await sql(`
     RETURN NULL;
   END $$
 `);
-// Online orders (2026-10-01) — shoes the PH team buys from an online store. Its own
-// list, deliberately NOT a purchase order (owner's call): what was ordered, from where,
-// under which tracking number, and what each pair ACTUALLY cost once the order's coupon,
-// tax, shipping and gift-card discount are spread over it (src/lib/onlineOrders.js).
-// Its stage is DERIVED, never stored: no tracking yet = Ordered · tracking = Shipped (the
-// warehouse's "what to expect" list) · received_at = Delivered · every line cancelled =
-// Cancelled. Tracking is optional because "ordered → cancelled" never gets one and its
-// refund still has to be traced.
-await sql(`
-  CREATE TABLE IF NOT EXISTS online_orders (
-    id              BIGSERIAL PRIMARY KEY,
-    store           TEXT NOT NULL,
-    order_number    TEXT,
-    tracking_number TEXT,
-    ordered_on      DATE,
-    coupon          NUMERIC(12,2) NOT NULL DEFAULT 0,
-    tax             NUMERIC(12,2) NOT NULL DEFAULT 0,
-    shipping        NUMERIC(12,2) NOT NULL DEFAULT 0,
-    gc_pct          NUMERIC(5,2)  NOT NULL DEFAULT 0,
-    note            TEXT,
-    created_by      TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_by      TEXT,
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    received_at     TIMESTAMPTZ,
-    received_by     TEXT
-  )`);
-// One row per SKU + size at one price. Cancelled per LINE — an online store cancels one
-// size (out of stock) and ships the rest — so a partial cancel splits the line: the
-// cancelled pairs become their own row. A cancelled line's refund is TRACED, not a flag:
-//   needs_request → nobody has asked the store yet (the follow-up list)
-//   requested     → asked on refund_requested_at, waiting (the list shows how long)
-//   refunded      → money back: refund_amount on refunded_at (or with the cancellation)
-// Every step is also written to online_order_events, so "who asked, when" survives.
-await sql(`
-  CREATE TABLE IF NOT EXISTS online_order_lines (
-    id            BIGSERIAL PRIMARY KEY,
-    order_id      BIGINT NOT NULL REFERENCES online_orders(id) ON DELETE CASCADE,
-    sku           TEXT NOT NULL,
-    name          TEXT,
-    size          TEXT NOT NULL,
-    qty           INTEGER NOT NULL CHECK (qty > 0),
-    unit_price    NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0),
-    cancelled_at  TIMESTAMPTZ,
-    cancelled_by  TEXT,
-    -- 'not_delivered': the warehouse counted fewer than were shipped ("ordered 5,
-    -- delivered 3") — the missing pairs split off onto this row and are chased the same way.
-    cancel_reason TEXT CHECK (cancel_reason IN ('oot', 'other', 'not_delivered')),
-    cancel_note   TEXT,
-    refund        TEXT CHECK (refund IN ('refunded', 'needs_request', 'requested')),
-    refund_requested_at TIMESTAMPTZ,
-    refund_requested_by TEXT,
-    refund_amount NUMERIC(12,2),
-    refunded_at   TIMESTAMPTZ,
-    refund_by     TEXT,
-    refund_note   TEXT
-  )`);
-await sql(`CREATE INDEX IF NOT EXISTS online_order_lines_order_idx ON online_order_lines (order_id)`);
-// The order's history — created, edited, a line cancelled, a refund requested/received.
-await sql(`
-  CREATE TABLE IF NOT EXISTS online_order_events (
-    id       BIGSERIAL PRIMARY KEY,
-    order_id BIGINT NOT NULL REFERENCES online_orders(id) ON DELETE CASCADE,
-    line_id  BIGINT,
-    action   TEXT NOT NULL,
-    detail   TEXT,
-    actor    TEXT,
-    at       TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`);
-await sql(`CREATE INDEX IF NOT EXISTS online_order_events_order_idx ON online_order_events (order_id, at)`);
-await sql(`CREATE INDEX IF NOT EXISTS online_orders_track_idx ON online_orders (upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')))`);
-
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -1801,7 +1713,6 @@ const LIVE_TABLES = [
   'rescale_requests', 'rescale_request_items',
   'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards',
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',
-  'online_orders', 'online_order_lines', 'online_order_events',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

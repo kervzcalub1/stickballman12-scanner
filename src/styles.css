@@ -1176,21 +1176,6 @@ body {
 }
 .ph-split-chip.done { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
 .ph-split-chip.in_progress { color: #e0a878; border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.12); }
-/* Best platform for this line (New Inventory): where its pairs pay most after fees,
-   and roughly what a pair makes there. Green = take it, red = loses money either way,
-   amber = no cost on file (ranked by payout, so no profit is claimed). Tapping it opens
-   the row, where "Where to sell" has the size-by-size table. */
-.ph-plat-chip {
-  font: inherit; font-size: 10.5px; white-space: nowrap; cursor: default;
-  padding: 1px 7px; border-radius: 5px; margin-left: 6px;
-  border: 1px solid var(--border); color: var(--muted); background: var(--panel-2);
-}
-button.ph-plat-chip { cursor: pointer; }
-.ph-plat-chip b { font-weight: 700; }
-.ph-plat-chip.gain { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
-.ph-plat-chip.loss { color: #ff8a8a; border-color: rgba(255,107,107,0.5); background: rgba(255,107,107,0.10); }
-.ph-plat-chip.nocost { color: #e0a878; border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.10); }
-.ph-plat-chip.pending { font-style: italic; }
 /* "Rescale requested" — this SKU already has an OPEN request in the warehouse's
    queue. Same shape as the split chip; blue, because it isn't a problem with the
    row, it's work already in flight somewhere else. */
@@ -5293,63 +5278,3 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 .cost-backfill-plan { display: grid; gap: 6px; }
 .cost-backfill-list { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
 .cost-backfill-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
-
-/* --- Online Orders (src/screens/OnlineOrders.jsx) ------------------------------------
-   PH records online buys; the warehouse sees what is on its way; a cancelled or
-   undelivered pair's refund is traced until it is back. Amber = something to chase. */
-.oo-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
-.oo-search { flex: 1; min-width: 200px; }
-.oo-list { display: flex; flex-direction: column; gap: 8px; }
-.oo-row { display: flex; justify-content: space-between; gap: 12px; width: 100%; text-align: left; font: inherit; color: var(--text);
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
-.oo-row:hover { border-color: var(--accent-edge); }
-.oo-row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.oo-row-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.oo-row-skus { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.oo-row-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; white-space: nowrap; font-size: 13px; }
-.oo-chip { font-size: 11px; padding: 1px 7px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel); }
-.oo-chip.muted { color: var(--muted); }
-.oo-chip.warn { color: #e0a878; border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.10); }
-.oo-stage { font-size: 10.5px; font-weight: 700; letter-spacing: 0.3px; padding: 1px 7px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); }
-.oo-stage.shipped { color: #8fb0ff; border-color: var(--accent-edge); background: var(--accent-tint); }
-.oo-stage.delivered { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }
-.oo-stage.cancelled { color: #ff8a8a; border-color: rgba(255,107,107,0.45); background: rgba(255,107,107,0.08); }
-.oo-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 6px; font-size: 20px; }
-.oo-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; }
-.oo-facts .muted.xs { display: block; }
-.oo-note { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--border); color: var(--muted); white-space: pre-wrap; }
-.oo-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.oo-danger { color: var(--err); }
-.oo-lines { width: 100%; border-collapse: collapse; font-size: 14px; }
-.oo-lines th { text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; padding: 6px 6px; border-bottom: 1px solid var(--border); }
-.oo-lines td { padding: 7px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-.oo-lines-edit input { width: 100%; min-width: 0; }
-.oo-lines-edit .oo-size { max-width: 70px; }
-.oo-lines-edit .oo-qty { max-width: 64px; }
-.oo-lines-edit .oo-price { max-width: 100px; }
-.oo-each { font-weight: 600; white-space: nowrap; }
-.oo-money { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 12px; color: var(--muted); font-size: 13px; align-items: baseline; }
-.oo-money b { color: var(--text); font-size: 15px; margin-left: auto; }
-.oo-money-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.oo-form-grid { display: grid; grid-template-columns: 2fr 1fr 2fr 1fr; gap: 10px; }
-.oo-form-grid label, .oo-note-field { display: flex; flex-direction: column; gap: 4px; }
-.oo-note-field { margin-top: 12px; }
-.oo-form .rows-title { margin-top: 18px; }
-.oo-gone { display: flex; flex-direction: column; gap: 8px; }
-.oo-gone-row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border-radius: 10px;
-  border: 1px solid var(--border); background: var(--panel-2); }
-.oo-gone-row.needs_request, .oo-gone-row.requested { border-color: rgba(224,168,120,0.5); }
-.oo-refund { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.oo-refund-state { font-weight: 600; font-size: 13px; }
-.oo-refund-state.refunded { color: #7bc99a; }
-.oo-refund-state.needs_request, .oo-refund-state.requested { color: #e0a878; }
-.oo-refund-acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
-.oo-history { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
-@media (max-width: 768px) {
-  .oo-row { flex-direction: column; }
-  .oo-row-side { align-items: flex-start; }
-  .oo-form-grid, .oo-money-fields { grid-template-columns: 1fr 1fr; }
-  .oo-lines-edit, .oo-lines { display: block; overflow-x: auto; }
-  .oo-refund { align-items: flex-start; }
-  .oo-refund-acts { justify-content: flex-start; }
-}

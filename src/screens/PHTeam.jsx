@@ -28,9 +28,7 @@ import { ImageFinder } from './ImageFinder.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
 import { PayoutCalculator } from './PayoutCalculator.jsx';
 import { PlatformBySize } from '../components/PlatformBySize.jsx';
-import { platformChipSummary } from '../lib/payout.js';
 import { PlatformProfit } from './PlatformProfit.jsx';
-import { OnlineOrders } from './OnlineOrders.jsx';
 import { BuyCarts } from './BuyCarts.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
@@ -70,7 +68,6 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'online') return <OnlineOrders user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and
   // never touches the staff router, so without a route here a PH team member who was
   // ticked for gift cards had nowhere to go — which is the exact case the privilege model
@@ -143,11 +140,6 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="shipped" /></span>
             <span className="home-card-title">Purchase Orders</span>
             <span className="home-card-sub">Every PO you opened — status &amp; live shipment tracking for each label</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('online')}>
-            <span className="home-card-icon"><NavIcon name="shipped" /></span>
-            <span className="home-card-title">Online Orders</span>
-            <span className="home-card-sub">Shoes bought online — tracking, what each pair actually cost, and cancelled pairs’ refunds until they’re back</span>
           </button>
           <button className="home-card" onClick={() => goPage('reconcile')}>
             <span className="home-card-icon"><NavIcon name="reconcile" /></span>
@@ -235,114 +227,6 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
         </div>
       </section>
     </div>
-  );
-}
-
-// The market for the New Inventory chip. Reads what anyone priced in the last 12 hours
-// (platform_quotes — free, no upstream call), then prices up to AUTO_PRICE of the
-// styles still missing in ONE api/payout/batch call, which remembers them for everyone
-// else. More than that waits for "Price N more" — one StockX call per size against a
-// shared daily quota is why nothing here prices the whole grid on every load.
-const AUTO_PRICE = 20;
-const primaryCode = (sku) => String(skuCodes(sku)[0] || sku || '').trim().toUpperCase();
-function useMarketQuotes(groups, enabled, onSignOut) {
-  const [quotes, setQuotes] = useState(() => new Map());   // SKU → Map(size → quote)
-  const [pricing, setPricing] = useState(() => new Set()); // SKUs being priced now
-  const tried = useRef(new Set());                          // asked this visit — never twice
-  const wanted = useMemo(() => {
-    const m = new Map();
-    for (const g of groups || []) {
-      const sku = primaryCode(g.sku);
-      if (!sku) continue;
-      const set = m.get(sku) || new Set();
-      // Costed sizes only — the chip says "No cost" for the rest without asking anyone.
-      for (const sz of g.sizes || []) if (String(sz.size ?? '').trim() && Number(sz.cost) > 0) set.add(String(sz.size));
-      if (set.size) m.set(sku, set);
-    }
-    return m;
-  }, [groups]);
-  const wantedKey = [...wanted.keys()].sort().join(',');
-  const merge = (list) => setQuotes((cur) => {
-    const next = new Map(cur);
-    for (const q of list) {
-      const by = new Map(next.get(q.sku) || []);
-      by.set(String(q.size), q);
-      next.set(q.sku, by);
-    }
-    return next;
-  });
-  const missing = (have) => [...wanted.entries()]
-    .filter(([sku, sizes]) => !tried.current.has(sku) && [...sizes].some((z) => !have.get(sku)?.has(z)));
-  async function price(entries) {
-    if (!entries.length) return;
-    entries.forEach(([sku]) => tried.current.add(sku));
-    setPricing((p) => new Set([...p, ...entries.map(([sku]) => sku)]));
-    try {
-      const res = await api.payoutBatch(entries.map(([sku, sizes]) => ({ sku, sizes: [...sizes].slice(0, 24) })), true);
-      const got = [];
-      for (const [sku, sizes] of entries) {
-        const q = res.quotes?.[sku];
-        if (!q || q.alias?.error || q.stockx?.error) continue;
-        const al = new Map((q.alias?.results || []).map((r) => [String(r.size), r]));
-        const sx = new Map((q.stockx?.results || []).map((r) => [String(r.size), r]));
-        for (const size of sizes) {
-          const a = Number(al.get(size)?.lowest_listing); const x = Number(sx.get(size)?.lowest_ask);
-          got.push({ sku, size, alias: a > 0 ? a : null, stockx: x > 0 ? x : null, stockxInexact: sx.get(size)?.inexact === true });
-        }
-      }
-      merge(got);
-    } catch (err) { if (err.unauthorized) onSignOut?.(); /* the chip stays "Not priced" */ }
-    finally { setPricing((p) => { const n = new Set(p); entries.forEach(([sku]) => n.delete(sku)); return n; }); }
-  }
-  const quotesRef = useRef(quotes); quotesRef.current = quotes;
-  useEffect(() => {
-    if (!enabled || !wanted.size) return undefined;
-    let live = true;
-    (async () => {
-      let have = quotesRef.current;
-      const unseen = [...wanted.keys()].filter((sku) => !have.has(sku));
-      if (unseen.length) {
-        try {
-          const r = await api.platformQuotes(unseen);
-          if (!live) return;
-          merge(r.quotes || []);
-          have = new Map(have);
-          for (const q of r.quotes || []) { const by = new Map(have.get(q.sku) || []); by.set(String(q.size), q); have.set(q.sku, by); }
-        } catch (err) { if (err.unauthorized) { onSignOut?.(); return; } }
-      }
-      if (live) price(missing(have).slice(0, AUTO_PRICE));
-    })();
-    return () => { live = false; };
-  }, [enabled, wantedKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const left = enabled ? missing(quotes).length : 0;
-  return {
-    quoteFor: (sku) => { const by = quotes.get(primaryCode(sku)); return (size) => by?.get(String(size)); },
-    isPricing: (sku) => pricing.has(primaryCode(sku)),
-    busy: pricing.size > 0,
-    left,
-    priceMore: () => price(missing(quotesRef.current).slice(0, AUTO_PRICE)),
-  };
-}
-
-const money0 = (v) => `${v < 0 ? '−' : '+'}$${Math.abs(Math.round(v)).toLocaleString('en-US')}`;
-const PLATFORM_LABEL = { alias: 'Alias', stockx: 'StockX', tie: 'Either' };
-// The chip itself: where this line's pairs should go and what a pair makes there.
-function PlatformChip({ summary, pricing, uncosted = 0, onOpen }) {
-  if (summary?.state === 'nocost') return <span className="ph-plat-chip nocost" title="No cost on file for these pairs, so there is no profit to compare — fill it in on Costs and the chip prices it">No cost</span>;
-  if (!summary || summary.state === 'unpriced') {
-    return pricing ? <span className="ph-plat-chip pending">Pricing…</span> : <span className="ph-plat-chip none" title="Nobody has priced this shoe in the last 12 hours — use “Price more” above, or open the row">Not priced</span>;
-  }
-  if (summary.state === 'noask') return <span className="ph-plat-chip none" title="Neither Alias nor StockX has an ask on these sizes right now">No asks</span>;
-  const { best, split, profitEach, payoutEach, costedPairs } = summary;
-  const where = best === 'mixed' ? `Alias ${split.alias} · StockX ${split.stockx}` : PLATFORM_LABEL[best];
-  const tone = profitEach < 0 ? 'loss' : 'gain';
-  const detail = (summary.rows || []).map((r) => `US ${r.size}: ${r.best ? `${PLATFORM_LABEL[r.best] || r.best}` : 'no ask'}${r.alias ? ` · Alias $${Math.round(r.alias.payout)}` : ''}${r.stockx ? ` · StockX $${Math.round(r.stockx.payout)}` : ''} payout`).join('\n');
-  const title = `About ${money0(profitEach)} a pair after fees (about $${Math.round(payoutEach)} payout), over ${costedPairs} costed pair${costedPairs === 1 ? '' : 's'}${uncosted ? ` — ${uncosted} pair${uncosted === 1 ? '' : 's'} without a cost left out` : ''}\nLowest asks, Alias consigned; last priced within 12 hours.\n\n${detail}`;
-  return (
-    <button type="button" className={`ph-plat-chip ${best} ${tone}`} title={title}
-      onClick={(e) => { e.stopPropagation(); onOpen?.(); }}>
-      <b>{where}</b><span> {money0(profitEach)}/pr</span>
-    </button>
   );
 }
 
@@ -1150,15 +1034,6 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // by a row nobody can see.
   const groups = statusGroups.filter((g) => editing.has(g.key) || phRowMatches(g, searchTokens));
   const hiddenBySearch = statusGroups.length - groups.length;
-  // Best-platform chip — New Inventory only, and only for the people who price.
-  const market = useMarketQuotes(groups, showPricing && kind === 'receiving' && !!rows, onSignOut);
-  const platChip = (g) => (showPricing && kind === 'receiving' ? (
-    <PlatformChip
-      summary={platformChipSummary(g.sizes.map((s) => ({ size: s.size, qty: s.qty, cost: s.cost })), market.quoteFor(g.sku), { goatOnly: !!g.goat_only })}
-      pricing={market.isPricing(g.sku)}
-      uncosted={g.sizes.reduce((n, s) => n + (Number(s.cost) > 0 ? 0 : (Number(s.qty) || 0)), 0)}
-      onOpen={() => { if (!expanded.has(g.key)) toggleExpand(g.key); }} />
-  ) : null);
   const totalUnits = groups.reduce((n, g) => n + g.qty, 0);
   return (
     <div className="app app-wide">
@@ -1169,12 +1044,6 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
             <span className="muted sm">
               {isRescale ? 'pending restocks · ' : ''}{groups.length} line{groups.length === 1 ? '' : 's'} · {totalUnits} unit{totalUnits === 1 ? '' : 's'}{canEdit ? '' : ' · view only'}
               {!isRescale && <button className="btn ghost sm" type="button" style={{ marginLeft: 8 }} onClick={() => setSortDir((s) => (s === 'asc' ? 'desc' : 'asc'))}>Date {sortDir === 'asc' ? '↑' : '↓'}</button>}
-              {showPricing && kind === 'receiving' && (market.busy || market.left > 0) && (
-                <button className="btn ghost sm" type="button" style={{ marginLeft: 8 }} disabled={market.busy} onClick={market.priceMore}
-                  title="Look up Alias + StockX for the next shoes whose best-platform chip says “Not priced” — one StockX call per size, so it goes a page at a time">
-                  {market.busy ? 'Pricing…' : `Price ${Math.min(AUTO_PRICE, market.left)} more`}
-                </button>
-              )}
               {showPricing && <button className="btn sm ph-gi-refresh-btn" type="button" style={{ marginLeft: 8 }} disabled={refreshing || loading} onClick={refreshPrices} title={`Re-fetch Global Indicator from Alias and update Final price (GI + ${markupSuffix()})`}><Icon name="refresh" className={refreshing ? 'spin' : ''} /> {refreshing ? 'Refreshing…' : 'Refresh prices'}</button>}
             </span>
           )} />
@@ -1234,7 +1103,6 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                   <div className="ph-card-subline muted sm">
                     {g.gender ? <>{g.gender} · </> : ''}<StatusPill status={g.status} />
                     {splitChip(g)}
-                    {platChip(g)}
                     {rescaleStateChip(g) || rescaleChip(g)}
                     {g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}
                   </div>
@@ -1374,7 +1242,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     <React.Fragment key={g.key}>
                       <tr className={`ph-trow ${ed ? 'ph-editing' : ''} ${open ? 'open' : ''}`} onClick={() => toggleExpand(g.key)}>
                         <td style={frozenStyle(0)} className="ph-frozen">{dateCell(g)}</td>
-                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} />{copyable(g.name, g.name || '—', 'ph-title-name')}{splitChip(g)}{platChip(g)}{g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}</span></td>
+                        <td style={frozenStyle(1)} className="ph-frozen ph-title"><span className="ph-title-inner"><span className="ph-caret">{open ? '▾' : '▸'}</span><ShoeThumb url={g.photo_url} size={30} onOpen={g.photo_count > 0 ? () => setPhotosSku(g.sku) : null} />{copyable(g.name, g.name || '—', 'ph-title-name')}{splitChip(g)}{g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}</span></td>
                         <td style={frozenStyle(2)} className="ph-frozen">{copyable(g.sku, g.sku || '—')}</td>
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>

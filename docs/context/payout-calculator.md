@@ -129,29 +129,7 @@ calculator's one Final cost:
   uncosted shows the costed pairs' average, not a claim about the rest). Filters: best
   on Alias / StockX, losing money, not priced, missing cost; `?q=` + `?f=` in the URL;
   CSV of the priced rows.
-- **New Inventory chip** (2026-10-01) — one chip per line beside the name (desktop title
-  cell, phone subline), PH + admin, `kind === 'receiving'` only. `platformChipSummary`
-  (`src/lib/payout.js`, built on `platformBySize`) → the best platform across the line's
-  sizes weighted by pairs (**"Mixed · Alias n · StockX n"** when sizes disagree) and the
-  average profit per pair after fees; losing → red. **Only COSTED sizes are compared and
-  priced** (owner, 2026-10-01): a line with no cost at all shows amber **"No cost"** and is
-  never sent to be priced — no profit to show, so no quota spent; a partly costed line
-  prices its costed sizes and the tooltip names the pairs left out. **GOAT-only lines compare Alias only.** Tap →
-  opens the line to "Where to sell".
-  - **Prices are remembered**: `api/payout/batch.js` writes every answered style to
-    **`platform_quotes`** (sku, size, consigned → alias/stockx lowest ask, `fetched_at`;
-    **needs `db:setup`**), so the calculator, "Where to sell", Platform Profit and the chip
-    all feed one cache. A style is stored only when BOTH platforms answered (an outage or
-    an unconfigured StockX must not be written down as "no ask").
-  - The chip reads **`GET /api/ph/platform-quotes`** (DB only, never upstream; rows
-    **younger than 12 h** — an older ask is not returned at all), then prices up to
-    **20** still-missing styles in ONE batch call per page load; "Price N more" in the
-    header does the next 20. A style is asked at most once per visit. Before `db:setup`
-    the read returns `[]` and the write only warns, so the page still works.
-  - Not in `LIVE_TABLES` on purpose: a quote landing isn't a reason to re-read the grid.
-  - E2E: `e2e/ph-platform-chip.spec.js` (batch mocked — the suite never spends quota).
-- Not yet: GOAT-only pairs are still compared against StockX in "Where to sell" and
-  Platform Profit (the chip already leaves StockX out for them).
+- Not yet: GOAT-only pairs are still compared against StockX (they can't list there).
 
 ### Where the cost comes from — the supplier's shelf price + their preset (2026-09-29)
 The projection is only as good as `items.cost`, and ~9% of pairs had one. The rule now:

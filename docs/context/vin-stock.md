@@ -99,6 +99,14 @@ on the flow the stickers are most useful for (PO-100005). Now:
 
 - **Nothing is minted** in raw mode — the pair's number comes off the sticker. Minting
   one anyway would burn a sequence number per scan and put a second, wrong VIN on the line.
+- **Quantity and size typed by hand still take stickers** (2026-10-01, Brent). A UPC the
+  catalogue names but gives no size for lands as a `size?` row; the Items step now has a
+  qty stepper on every size row (sized or not), and `reserveMoreVins` returns nothing in
+  raw mode — the stepper and "+ Add size" used to MINT a VIN into the new pair's slot, so
+  the scanned 1ID had nowhere to go. The `+` also aims the next sticker at that row
+  (`lastHitRef`), and on a PO sheet a new unexpected line is aimed at the same way. A pair
+  added on Review still short a sticker sends the person back to the Items step
+  (`backToStickers`) — Review has no scan bar. `e2e/raw-vin.spec.js`.
 - **A pair with no sticker can't be committed.** `needsSticker` feeds the existing
   `isUnresolved` machinery, so it blocks Review and commit and focuses the row exactly
   like a missing size. Committing without one would write a system-minted VIN matching

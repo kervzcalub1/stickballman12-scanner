@@ -573,6 +573,12 @@ body {
 .recv-size-warn { color: var(--err); flex: none; }
 .recv-size-row .sz.need, .review-size-row .sz.need { flex: 1; min-width: 0; max-width: 120px; border-color: var(--err); }
 .recv-size-row.needs-size .recv-size-qty { margin-left: auto; }
+/* Qty on the Items step: the row itself is the expand toggle, so the stepper sits
+   beside it rather than inside the button. */
+.recv-size-line { display: flex; align-items: center; gap: 8px; }
+.recv-size-line .recv-size-row { flex: 1; min-width: 0; }
+.recv-size-row.needs-size .recv-size-step { margin-left: auto; }
+.recv-size-step .step { min-width: 36px; min-height: 36px; }
 
 /* "Pick the style code on the box" — a shoe sold under more than one code
    ("315122-111/CW2288-111"). Amber, not red: nothing is wrong, the scan just can't

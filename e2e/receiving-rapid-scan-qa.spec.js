@@ -57,7 +57,7 @@ test('a scanned cart commits real units: one VIN each, box status from the stick
   await scan(page, SKU_A);
   await scan(page, SKU_A);
   const lineA = page.locator(`.recv-item[data-sku="${SKU_A}"]`);
-  await expect(lineA.locator('.recv-size-qty')).toHaveText('×2', { timeout: 10_000 });
+  await expect(lineA.locator('.recv-size-step .qty-val')).toHaveText('2', { timeout: 10_000 });
 
   // …then flip the sticky switch and scan a pair that arrived without one.
   await page.locator('.scanbar').getByRole('button', { name: /No box/ }).click();
@@ -230,7 +230,7 @@ test('two sizeless scans of one shoe fold together once the same size is typed',
   await second.blur();
   // Same size now on both → one row of ×2, and both VINs carried across.
   await expect(line.locator('.recv-size')).toHaveCount(1);
-  await expect(line.locator('.recv-size-qty')).toHaveText('×2');
+  await expect(line.locator('.recv-size-step .qty-val')).toHaveText('2');
   await line.locator('.recv-size-row').click();
   await expect(line.locator('.recv-units .recv-unit')).toHaveCount(2);
   const vins = await line.locator('.recv-units .vin').allTextContents();

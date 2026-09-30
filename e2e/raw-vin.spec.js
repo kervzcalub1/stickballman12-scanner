@@ -34,7 +34,7 @@ async function rawMode(page, on = true) {
 test.beforeAll(async () => {
   const rows = await q(
     `INSERT INTO vin_stock (vin, run_id, printed_by)
-     SELECT 'SBM-R-9' || lpad(g::text, 5, '0'), 9999, 'e2e' FROM generate_series(1, 4) g
+     SELECT 'SBM-R-9' || lpad(g::text, 5, '0'), 9999, 'e2e' FROM generate_series(1, 6) g
      RETURNING vin`,
   );
   minted = rows.map((r) => r.vin).sort();
@@ -106,6 +106,39 @@ test.describe('Raw 1ID · receiving', () => {
     await expect(line).not.toHaveClass(/needs-fix/);
     await line.locator('.recv-size-row').first().click();
     await expect(line.locator('.recv-unit .vin')).toHaveText(minted[0]);
+  });
+
+  // Brent, 2026-10-01: a UPC the catalogue names but gives no size for. He types the
+  // size, sets how many, and every one of those pairs must still take a raw 1ID —
+  // the stepper used to mint a VIN into the slot, leaving the sticker nowhere to go.
+  test('a sizeless scan takes a typed size, a quantity, and a 1ID per pair', async ({ page }) => {
+    await rawMode(page);
+    await loginAs(page, 'warehouse');
+    let reserved = 0;
+    await page.route('**/api/vins/reserve**', (route) => { reserved += 1; return route.continue(); });
+    await page.route('**/api/upc-search', (route) => route.fulfill({
+      json: { ok: true, product: { name: 'Raw VIN Runner', sku: SKU, image: '', source: 'nike', scannedSize: null, sizes: [] } },
+    }));
+    await toItemsStep(page);
+
+    await page.locator('.scanbar input').first().fill('196975123456');
+    await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+    const line = page.locator(`.recv-item[data-sku="${SKU}"]`);
+    await expect(line).toBeVisible({ timeout: 10_000 });
+    await line.getByLabel('Size').fill('10');
+    await line.getByLabel('Size').blur();
+    await line.getByRole('button', { name: 'One more' }).click();
+    await expect(line.locator('.qty-val')).toHaveText('2');
+
+    for (const v of [minted[4], minted[5]]) {
+      await page.locator('.scanbar input').first().fill(v);
+      await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+      await expect(page.locator('.scan-flash')).toContainText(v);
+    }
+    await expect(line).not.toHaveClass(/needs-fix/);
+    await line.locator('.recv-size-row').first().click();
+    await expect(line.locator('.recv-unit .vin')).toHaveText([minted[4], minted[5]]);
+    expect(reserved).toBe(0);   // nothing minted behind the stickers
   });
 
   test('off by default — the normal flow is untouched', async ({ page }) => {

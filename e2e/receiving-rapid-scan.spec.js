@@ -61,11 +61,11 @@ test('scans land straight in the cart and re-scans stack by size — no dialog i
   await expect(line).toBeVisible({ timeout: 10_000 });
   // No modal was ever opened — that's the whole point.
   await expect(page.locator('.modal.additem')).toHaveCount(0);
-  await expect(line.locator('.recv-size-qty')).toHaveText('×1');
+  await expect(line.locator('.recv-size-step .qty-val')).toHaveText('1');
 
   // The same shoe scanned again is +1 on its size, still one line.
   await scan(page, SKU_A);
-  await expect(line.locator('.recv-size-qty')).toHaveText('×2');
+  await expect(line.locator('.recv-size-step .qty-val')).toHaveText('2');
   await expect(page.locator('.recv-item')).toHaveCount(1);
   await expect(page.getByText('Items (2 units)')).toBeVisible();
 
@@ -76,12 +76,12 @@ test('Undo pulls the last scan back out', async ({ page }) => {
   await openItemsStep(page);
   await scan(page, SKU_A);
   const line = page.locator(`.recv-item[data-sku="${SKU_A}"]`);
-  await expect(line.locator('.recv-size-qty')).toHaveText('×1');
+  await expect(line.locator('.recv-size-step .qty-val')).toHaveText('1');
   await scan(page, SKU_A);
-  await expect(line.locator('.recv-size-qty')).toHaveText('×2');
+  await expect(line.locator('.recv-size-step .qty-val')).toHaveText('2');
 
   await page.getByRole('button', { name: /Undo last scan/ }).click();
-  await expect(line.locator('.recv-size-qty')).toHaveText('×1');
+  await expect(line.locator('.recv-size-step .qty-val')).toHaveText('1');
   // Undo is one-shot — it can't keep eating the cart on repeat taps.
   await expect(page.getByRole('button', { name: /Undo last scan/ })).toHaveCount(0);
 

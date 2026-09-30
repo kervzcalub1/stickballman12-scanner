@@ -599,6 +599,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
   // ---- Review-step item edits (box status, qty, delete) ----
   async function reserveMoreVins(n) {
+    // Raw 1ID mode mints nothing, same as rapidScan and buildItemFromDraft: a pair added
+    // by the stepper or "+ Add size" gets its number from the sticker scanned onto it.
+    // Minting here filled the slot, so the 1ID had nowhere to go (Brent, 2026-10-01).
+    if (rawVinsRef.current) return [];
     try { const res = await api.reserveVins(n, header.dateReceived); return res.vins || []; }
     catch (err) { if (err.unauthorized) onSignOut(); return []; }
   }
@@ -615,6 +619,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   async function bumpSizeQty(itemKey, sizeKey, delta) {
     if (delta > 0) {
       const vins = await reserveMoreVins(1);
+      // The next sticker goes on the pair just added, not the first short row on screen.
+      lastHitRef.current = { itemKey, sizeKey };
       setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
         ...it, sizes: it.sizes.map((s) => (s.key !== sizeKey ? s : { ...s, qty: s.qty + 1, vins: [...(s.vins || []), ...vins] })),
       })));
@@ -1323,7 +1329,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       // GOAT status — boxed and no-box pairs are tracked apart).
       const i = arr.findIndex((x) => x.key !== lineKey && !x.pending && !x.failed
         && x.withBox === withBox && !!x.goatOnly === false && !!x.preSell === !!resolved.preSell && sameSku(x.sku, resolved.sku));
-      if (i === -1) return arr.map((it) => (it.key === lineKey ? resolved : it));
+      if (i === -1) {
+        // On a PO sheet a new line sits BELOW the expected rows, so "first short row"
+        // would hand its sticker to some other pair — aim it at this one.
+        if (poBoxHasChecklistRef.current) lastHitRef.current = { itemKey: lineKey, sizeKey: resolved.sizes[0].key };
+        return arr.map((it) => (it.key === lineKey ? resolved : it));
+      }
       const sizes = arr[i].sizes.map((s) => ({ ...s, vins: [...(s.vins || [])] }));
       // A blank size always starts its OWN row — two unknown sizes are not one
       // size scanned twice.
@@ -1487,6 +1498,24 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const removeDraftRow = (key) => setDraftRows((rows) => rows.filter((r) => r.key !== key));
 
   const removeItem = (key) => setItems((arr) => arr.filter((i) => i.key !== key));
+  // How many pairs of this size — on the Items step too, not just Review. A scan that
+  // came back without a size (or a shoe with no barcode) is one pair; two more of the
+  // same are counted here, and in raw 1ID mode each waits for its own sticker.
+  const qtyStepper = (it, s) => (
+    <div className="qty-stepper sm recv-size-step">
+      <button type="button" className="btn icon ghost step" aria-label="One fewer" disabled={(Number(s.qty) || 0) <= 1} onClick={() => bumpSizeQty(it.key, s.key, -1)}>−</button>
+      <span className="qty-val">{s.qty}</span>
+      <button type="button" className="btn icon ghost step" aria-label="One more" onClick={() => bumpSizeQty(it.key, s.key, 1)}>+</button>
+    </div>
+  );
+  // Stickers are scanned on the Items step — Review and Issues have no scan bar. A pair
+  // added on Review (stepper / "+ Add size") in raw 1ID mode sends the person back there
+  // rather than to an error on a screen with nothing to scan into.
+  const backToStickers = () => {
+    if (!missingStickers) return false;
+    setStep(2); setError(unresolvedMsg); focusFirstUnresolved();
+    return true;
+  };
 
   // ---- Rescale: existing-unit (VIN) helpers ----
   // The new status to apply to a rescanned unit: a preset key, or the typed
@@ -1799,6 +1828,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }
   function goStep4() { // Issues (shipment-level)
     setError('');
+    if (backToStickers()) return;
     if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; }
     setStep(4);
   }
@@ -2546,7 +2576,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                     <input className="sz need" placeholder="size?" aria-label="Size"
                                       value={s.size} onChange={(e) => setSizeValue(it.key, s.key, e.target.value)}
                                       onBlur={() => mergeSizeRow(it.key, s.key)} />
-                                    <span className="recv-size-qty">×{s.qty}</span>
+                                    {qtyStepper(it, s)}
                                     <button type="button" className="btn icon ghost remove sm" title="Remove size" onClick={() => removeSizeRow(it.key, s.key)}>×</button>
                                   </div>
                                 </div>
@@ -2554,11 +2584,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             }
                             return (
                               <div className="recv-size" key={s.key}>
-                                <button type="button" className="recv-size-row" onClick={() => toggleSize(k)} aria-expanded={open} title="Show units / VINs">
-                                  <span className="recv-caret">{open ? '▾' : '▸'}</span>
-                                  <span className="recv-size-name">{s.size}</span>
-                                  <span className="recv-size-qty">×{s.qty}</span>
-                                </button>
+                                <div className="recv-size-line">
+                                  <button type="button" className="recv-size-row" onClick={() => toggleSize(k)} aria-expanded={open} title="Show units / VINs">
+                                    <span className="recv-caret">{open ? '▾' : '▸'}</span>
+                                    <span className="recv-size-name">{s.size}</span>
+                                  </button>
+                                  {qtyStepper(it, s)}
+                                </div>
                                 {open && (
                                   <div className="recv-units">
                                     {Array.from({ length: Math.max(1, Number(s.qty) || 1) }, (_, i) => (
@@ -2710,7 +2742,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                       return (
                                         <div className="recv-unit" key={i}>
                                           <span className="recv-unit-n">{i + 1}.</span>
-                                          {vin ? <span className="vin">{vin}</span> : <span className="vin pending">VIN on submit</span>}
+                                          {vin ? <span className="vin">{vin}</span> : rawVins ? <span className="vin need">1ID?</span> : <span className="vin pending">VIN on submit</span>}
                                           {!it.withBox && <span className="recv-unit-nobox">no box</span>}
                                           {vin && (
                                             <button type="button" className={`recv-unit-issue ${hasIssue(vin) ? 'flagged' : ''}`}
@@ -2780,7 +2812,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               <div className="batch-bar">
                 <button className="btn ghost" onClick={() => setStep(3)}>← Back</button>
                 <div className="batch-totals"><b>{totalItems}</b> units · <b>${totalCost.toFixed(2)}</b></div>
-                <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; } setShowConfirm(true); }} disabled={committing}>
+                <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } if (backToStickers()) return; if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; } setShowConfirm(true); }} disabled={committing}>
                   {isBoxMode || isMultiBoxNew ? 'Submit box' : isInstore ? 'Save trip' : 'Finish batch'}
                 </button>
               </div>

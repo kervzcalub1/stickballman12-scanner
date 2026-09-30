@@ -527,7 +527,8 @@ against anything, so until a named person signs it off:
 - it counts in `pendingCounts.batches_to_audit` → Home *Needs attention* card ("No
   manifest — audit", opens `/batches?audit=pending` via `HOME_ATTENTION[].query`, which
   `go(v, query)` writes after the path change) and the Batches card badge;
-- the Batches page has an **Audit** checkbox filter (`?audit=pending`, `listBatches` /
+- the Batches page has a **Manifest** dropdown filter (`?audit=pending` needs audit ·
+  `audited` signed off · `all` every no-manifest shipment; `listBatches` /
   `searchBatches` `audit` option, and `inRange` for the open list) and an amber
   `AuditChip` on the row ("No manifest · audit pending" → "· audited");
 - the Batch page shows a *Received without a manifest — audit pending* block. It points

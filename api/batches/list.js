@@ -1,4 +1,4 @@
-// GET /api/batches/list?kind=…&q=…&page=N&excludeOpen=1&from=&to=&supplier=&po=&audit=pending
+// GET /api/batches/list?kind=…&q=…&page=N&excludeOpen=1&from=&to=&supplier=&po=&audit=pending|audited|all
 //   ->  { ok, batches, total, page, pageSize }
 // Recent receiving batches with item counts/totals.
 //
@@ -43,7 +43,8 @@ export default async function handler(req, res) {
     to: ymd(params.get('to')),
     supplier: (params.get('supplier') || '').trim().slice(0, 120) || null,
     po: (params.get('po') || '').trim().slice(0, 40) || null,
-    audit: params.get('audit') === 'pending' ? 'pending' : null,
+    // Received without a manifest: 'pending' (not signed off yet), 'audited', or 'all'.
+    audit: ['pending', 'audited', 'all'].includes(params.get('audit')) ? params.get('audit') : null,
   };
   const offset = (page - 1) * PAGE_SIZE;
   try {

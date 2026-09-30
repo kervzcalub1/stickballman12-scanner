@@ -88,6 +88,12 @@ test('the question is required, "No" flags the batch, and the audit is signed of
   // …and it has left the audit list.
   const after = await (await request.get('/api/batches/list?kind=receiving&audit=pending', { headers: authHeaders() })).json();
   expect(after.batches.some((b) => Number(b.id) === Number(batch_id))).toBe(false);
+  // …but "where are the shipments that came without a packing slip" still finds it.
+  for (const [audit, want] of [['audited', true], ['all', true]]) {
+    const r = await (await request.get(`/api/batches/list?kind=receiving&audit=${audit}`, { headers: authHeaders() })).json();
+    expect(r.batches.some((b) => Number(b.id) === Number(batch_id))).toBe(want);
+    expect(r.batches.every((b) => b.manifest_received === false)).toBe(true);
+  }
 });
 
 test('a batch received WITH a manifest has no audit to sign', async ({ request }) => {

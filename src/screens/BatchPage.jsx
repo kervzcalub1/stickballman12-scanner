@@ -84,7 +84,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   const [to, setToRaw] = useQueryParam('to');
   const [supplier, setSupplierRaw] = useQueryParam('supplier');
   const [po, setPoRaw] = useQueryParam('po');
-  // ?audit=pending — only the shipments received without a manifest and not signed off.
+  // ?audit= — shipments received without a manifest: pending (not signed off), audited, or all.
   const [audit, setAuditRaw] = useQueryParam('audit');
   const [suppliers, setSuppliers] = useState([]);
   const [poCodes, setPoCodes] = useState([]);
@@ -679,7 +679,9 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
     // exactly — without it, picking any PO emptied this card.
     if (po === 'none' && b.po_id) return false;
     if (po && po !== 'none' && b.po_code !== po) return false;
-    if (audit === 'pending' && !(b.manifest_received === false && !b.audited_at)) return false;
+    if (audit && b.manifest_received !== false) return false;
+    if (audit === 'pending' && b.audited_at) return false;
+    if (audit === 'audited' && !b.audited_at) return false;
     return true;
   };
   const openList = (open || []).filter(inRange);
@@ -756,11 +758,13 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
               {poCodes.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </label>
-          <label className="batch-filter-check"><span className="muted xs">Audit</span>
-            <span className="batch-filter-check-row">
-              <input type="checkbox" checked={audit === 'pending'} onChange={(e) => setAudit(e.target.checked ? 'pending' : '')} aria-label="Only shipments received without a manifest, not yet audited" />
-              <span>No manifest — needs audit</span>
-            </span>
+          <label><span className="muted xs">Manifest</span>
+            <select value={audit} onChange={(e) => setAudit(e.target.value)} aria-label="Manifest">
+              <option value="">Any</option>
+              <option value="pending">No manifest — needs audit</option>
+              <option value="audited">No manifest — audited</option>
+              <option value="all">No manifest — all</option>
+            </select>
           </label>
           {filtering && <button className="btn sm ghost" onClick={clearFilters}>Clear filters</button>}
         </div>

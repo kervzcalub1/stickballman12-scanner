@@ -1232,7 +1232,11 @@ export async function listBatches(limit = 50, kind = null,
   { phSafe = false, offset = 0, excludeOpen = false, from = null, to = null, supplier = null, po = null, audit = null } = {}) {
   const poCode = po && po !== 'none' ? po : null;
   const poNone = po === 'none';
-  const auditPending = audit === 'pending';   // received with no manifest, not yet signed off
+  // Received with no manifest: 'pending' = not yet signed off, 'audited' = signed off,
+  // 'all' = either. Booleans, not fragments — the shim can't nest them.
+  const noManifest = ['pending', 'audited', 'all'].includes(audit);
+  const auditPending = audit === 'pending';
+  const auditDone = audit === 'audited';
   return await db()`
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
            b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.pre_sell_scope, b.merged_into_batch_id,
@@ -1258,7 +1262,9 @@ export async function listBatches(limit = 50, kind = null,
       AND (${poNone} = false OR b.po_id IS NULL)
       AND (${poCode}::text IS NULL
            OR b.po_id = (SELECT p.id FROM purchase_orders p WHERE p.po_code = ${poCode}))
-      AND (${auditPending} = false OR (b.manifest_received = false AND b.audited_at IS NULL))
+      AND (${noManifest} = false OR b.manifest_received = false)
+      AND (${auditPending} = false OR b.audited_at IS NULL)
+      AND (${auditDone} = false OR b.audited_at IS NOT NULL)
     ORDER BY b.created_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `;
@@ -1302,7 +1308,9 @@ export async function searchBatches(query,
   { phSafe = false, limit = 25, offset = 0, from = null, to = null, supplier = null, po = null, audit = null } = {}) {
   const poCode = po && po !== 'none' ? po : null;
   const poNone = po === 'none';
+  const noManifest = ['pending', 'audited', 'all'].includes(audit);
   const auditPending = audit === 'pending';
+  const auditDone = audit === 'audited';
   const key = searchTrackKey(query);
   if (!key) return [];              // "----" normalises to nothing: match nothing, not everything
   const like = `%${key}%`;
@@ -1329,7 +1337,9 @@ export async function searchBatches(query,
       AND (${poNone} = false OR b.po_id IS NULL)
       AND (${poCode}::text IS NULL
            OR b.po_id = (SELECT p.id FROM purchase_orders p WHERE p.po_code = ${poCode}))
-      AND (${auditPending} = false OR (b.manifest_received = false AND b.audited_at IS NULL))
+      AND (${noManifest} = false OR b.manifest_received = false)
+      AND (${auditPending} = false OR b.audited_at IS NULL)
+      AND (${auditDone} = false OR b.audited_at IS NOT NULL)
       AND (
         regexp_replace(upper(coalesce(b.batch_code, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
         OR regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}

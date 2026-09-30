@@ -565,6 +565,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // to print. Never on for RESCALE — there a VIN scan means "this existing pair",
   // which is the opposite operation.
   const rawVins = !!prefs.rawVins && !isRescale;
+  // A 1ID roll sticker scanned while raw mode is OFF on this device (it's a per-device
+  // pref). Looked up as a shoe it only ever came back "Not found" and left a bogus line
+  // (Brent, 2026-10-01) — so it's refused, with one tap to turn the mode on.
+  const [rawOffer, setRawOffer] = useState(false);
 
   const [items, setItems] = useState([]);     // completed shoes (each: name,sku,…,withBox,sizes[])
   // How many shoes are being held back. Declared HERE and not up with `preSellSome`:
@@ -907,6 +911,23 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }
   function closeAddItem() { setShowAdd(false); setDraft(null); setPendingSwitch(null); setMError(''); setMCam(false); }
 
+  function rollStickerWhileOff(c) {
+    setRawOffer(true);
+    setFlash({ type: 'dup', text: `${c.toUpperCase()} is a 1ID sticker, but raw 1ID stickers are off on this device — turn them on to scan stickers onto pairs.` });
+    scanFeedback('dup');
+  }
+  // Mid-cart is fine: nothing has been committed or printed yet, so the numbers minted
+  // for the pairs already in the list are only reservations (a gap in the sequence,
+  // never reused). Dropping them makes each of those pairs wait for its own sticker
+  // instead of saving under a number no shoe is wearing.
+  function turnOnRawVins() {
+    setRawVins(true);
+    setRawOffer(false);
+    setItems((arr) => arr.map((it) => ({ ...it, sizes: it.sizes.map((sz) => ({ ...sz, vins: [] })) })));
+    setFlash({ type: 'added', text: 'Raw 1ID stickers on — scan that sticker again. Every pair in the list now takes one.' });
+    scanInputRef.current?.focus({ preventScroll: true });
+  }
+
   // Resolve a scanned/typed code (auto-detect UPC vs SKU) and fold it into the
   // current draft: start the shoe, +1 the matching size, or (different SKU)
   // prompt to finish the current shoe and start a new one.
@@ -929,6 +950,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // pair yet. Looked up as a SKU it would only come back "not found".
     if (rawVinsRef.current && isRollVin(c)) {
       setMError(`${c.toUpperCase()} is a 1ID sticker — complete this shoe first, then scan its stickers on the list.`);
+      scanFeedback('dup');
+      return;
+    }
+    if (!isRescale && isRollVin(c)) {
+      setMError(`${c.toUpperCase()} is a 1ID sticker, not a shoe — scan the UPC on the box. To use stickers, turn on Raw 1ID stickers first.`);
+      setRawOffer(true);
       scanFeedback('dup');
       return;
     }
@@ -1198,6 +1225,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setStickerTyping(false);
     // Raw 1ID mode, second beat: a sticker, onto the pair just scanned.
     if (rawVinsRef.current && isRollVin(c)) return bindSticker(c);
+    if (isRollVin(c)) return rollStickerWhileOff(c);
+    setRawOffer(false);   // a shoe scanned normally — the offer was about the last scan
 
     const hit = matchManifestRow(itemsRef.current, c);
     if (hit && hit.by !== 'ambiguous') {
@@ -1261,6 +1290,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
     // Raw 1ID mode, second beat: this scan is a STICKER, not a shoe.
     if (rawVinsRef.current && isRollVin(c)) return bindSticker(c);
+    if (isRollVin(c)) return rollStickerWhileOff(c);
+    setRawOffer(false);   // a shoe scanned normally — the offer was about the last scan
 
     const isUpc = isUpcCode(c);
     // Receiving against a PO with no per-label list (whole-order manifest, or a label
@@ -2355,6 +2386,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       )}
                       <div className="scan-flash-live" role="status" aria-live="polite">
                         {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
+              {rawOffer && !rawVins && <button type="button" className="btn sm primary raw-offer" onClick={turnOnRawVins}>Turn on Raw 1ID stickers</button>}
                         {canUndo && <button type="button" className="scan-undo" onClick={undoLastScan}>↶ Undo last scan</button>}
                       </div>
                     </div>
@@ -2429,6 +2461,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   )}
                   <div className="scan-flash-live" role="status" aria-live="polite">
                     {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
+              {rawOffer && !rawVins && <button type="button" className="btn sm primary raw-offer" onClick={turnOnRawVins}>Turn on Raw 1ID stickers</button>}
                     {canUndo && <button type="button" className="scan-undo" onClick={undoLastScan}>↶ Undo last scan</button>}
                   </div>
                 </div>
@@ -2853,6 +2886,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             )}
             <div className="scan-flash-live" role="status" aria-live="polite">
               {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
+              {rawOffer && !rawVins && <button type="button" className="btn sm primary raw-offer" onClick={turnOnRawVins}>Turn on Raw 1ID stickers</button>}
             </div>
             {mError && <div className="error sm mt">{mError}</div>}
 

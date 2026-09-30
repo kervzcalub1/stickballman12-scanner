@@ -141,6 +141,23 @@ test.describe('Raw 1ID · receiving', () => {
     expect(reserved).toBe(0);   // nothing minted behind the stickers
   });
 
+  // Brent, 2026-10-01: raw mode was off on the tablet (it's per device), the gun read the
+  // roll sticker, and it was looked up as a shoe — "Not found · SBM-R-…" and a bogus line.
+  test('a 1ID sticker scanned with raw mode off is refused, with one tap to turn it on', async ({ page }) => {
+    await rawMode(page, false);
+    await loginAs(page, 'warehouse');
+    let looked = 0;
+    await page.route('**/api/sku-search', (route) => { looked += 1; return route.continue(); });
+    await toItemsStep(page);
+    await page.locator('.scanbar input').first().fill(minted[4]);
+    await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+    await expect(page.locator('.scan-flash')).toContainText('is a 1ID sticker');
+    await expect(page.locator('.recv-item')).toHaveCount(0);
+    expect(looked).toBe(0);
+    await page.getByRole('button', { name: 'Turn on Raw 1ID stickers' }).click();
+    await expect(page.locator('.rawvin-beat')).toContainText('Scan the shoe');
+  });
+
   test('off by default — the normal flow is untouched', async ({ page }) => {
     await rawMode(page, false);
     await loginAs(page, 'warehouse');

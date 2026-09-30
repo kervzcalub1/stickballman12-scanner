@@ -268,6 +268,7 @@ export const api = {
   onlineOrderLine: (body) => post('/api/online-orders/line', body),
   receiveOnlineOrder: (id, counts) => post('/api/online-orders/receive', { id, counts }),
   deleteOnlineOrder: (id) => post('/api/online-orders/delete', { id }),
+  onlineOrderByTracking: (t) => get(`/api/online-orders/by-tracking?t=${encodeURIComponent(t)}`),
   platformQuotes: (skus, consigned = true) => get(`/api/ph/platform-quotes?skus=${encodeURIComponent(skus.join(','))}${consigned ? '' : '&consigned=0'}`),
   presetForShipment: ({ poId = null, supplier = '' } = {}) => get(`/api/payout/presets?for=shipment${poId ? `&po=${encodeURIComponent(poId)}` : ''}${supplier ? `&supplier=${encodeURIComponent(supplier)}` : ''}`),
 

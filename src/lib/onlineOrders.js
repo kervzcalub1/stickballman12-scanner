@@ -12,6 +12,8 @@
 // the order's coupon, tax and shipping. Pure — the screen and the server use the same
 // function, so the number PH saw while typing is the number that was saved.
 
+import { poLineMoney } from './costs.js';
+
 const num = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -88,3 +90,18 @@ export const STAGE_LABEL = { ordered: 'Ordered', shipped: 'Shipped', delivered: 
 export const REFUND_STATES = { refunded: 'Refunded', needs_request: 'Needs follow-up', requested: 'Requested — waiting' };
 export const needsFollowUp = (l) => isCancelled(l) && (l.refund === 'needs_request' || l.refund === 'requested');
 export const orderCode = (id) => `OO-${String(id).padStart(4, '0')}`;
+
+// Receive New: the online-order line for this pair, across the orders its parcel(s) match.
+// Same matching as a PO line (poLineMoney: code with dashes/spaces stripped, NUMERIC
+// size), so an online order and a PO can't disagree about which line a pair is.
+// → { each, price, code } — each = the actual cost; price = what was paid per shoe.
+export function onlineLineFor(orders, sku, size) {
+  for (const o of orders || []) {
+    const active = (o.lines || []).filter((l) => !isCancelled(l) && l.each != null);
+    const each = poLineMoney(active.map((l) => ({ sku: l.sku, size: l.size, unit_cost: l.each })), sku, size);
+    if (!each) continue;
+    const price = poLineMoney(active.map((l) => ({ sku: l.sku, size: l.size, unit_cost: l.unit_price })), sku, size);
+    return { each: each.shelf, price: price?.shelf ?? null, code: orderCode(o.id) };
+  }
+  return null;
+}

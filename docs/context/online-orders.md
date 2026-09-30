@@ -89,9 +89,18 @@ order recorded by mistake: refused once counted in or once a refund was requeste
 Duplicate tracking number → 409 naming the other order, "Save anyway" for one parcel
 holding two orders.
 
+## Receive New reads it (2026-10-01)
+Every tracking number on a receive (the shipment's, each box's; ≥ 8 chars, spaces/case
+ignored) is looked up with `GET /api/online-orders/by-tracking?t=` (warehouse + PH; newest
+order wins if two share a number; before `db:setup` it answers "none", never an error).
+A match shows `OnlineOrderBanner` (Step 1 and above the scanned pairs: what it should
+hold, "already counted in" if so), and each pair's cost resolves **typed → PO → online
+order → batch default** — the order's line `each` (`onlineLineFor`, same SKU/size matching
+as a PO line) IS the landed cost, no preset on top; the card says "from online order
+OO-…". The price paid is saved as `items.shelf_price`. Never on a PO receive, rescale or a
+no-shipment receive. Counting the order in stays on the Online Orders page (that is where
+a short count becomes a refund to chase). E2E: `e2e/receiving-online-order.spec.js`.
+
 ## Not yet
-- **Receiving doesn't read it**: scanning a tracking number at Receive New doesn't find the
-  online order, so items.cost isn't filled from `orderCosts`. The natural next step (it is
-  what "keep track of cost" ultimately needs on the pair).
 - No home badge for "Expected" / follow-ups (the page's tab counts only).
 - No 17TRACK registration of the tracking numbers.

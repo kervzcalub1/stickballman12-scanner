@@ -5359,3 +5359,6 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
   .oo-refund { align-items: flex-start; }
   .oo-refund-acts { justify-content: flex-start; }
 }
+/* Receive New: this parcel is one of PH's online orders (OnlineOrderBanner). */
+.oo-recv-banner { margin: 10px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--accent-edge); background: var(--accent-tint); font-size: 14px; }
+.oo-recv-done { color: #e0a878; font-weight: 600; }

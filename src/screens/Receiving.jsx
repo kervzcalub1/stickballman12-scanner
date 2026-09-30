@@ -21,6 +21,7 @@ import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineMoney, landedFromShelf, unitCost } from '../lib/costs.js';
+import { onlineLineFor, orderCode as onlineOrderCode } from '../lib/onlineOrders.js';
 import { estToday } from '../lib/format.js';
 import { declaresPerBox } from '../lib/postatus.js';
 
@@ -553,6 +554,30 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }, 600);
     return () => { dead = true; clearTimeout(id); };
   }, [header.tracking, boxSlots, receivingPo, noShipment, isRescale, isBoxMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Online orders (docs/context/online-orders.md): a parcel whose tracking number is on
+  // one of PH's online orders. Looked up for every tracking number on this receive (the
+  // shipment's, each box's); tracking → order. The screen then says what the parcel
+  // should hold, and each pair's cost comes from the order's ACTUAL cost for that SKU +
+  // size. A PO receive is the PO's business — never both.
+  const [onlineByTrack, setOnlineByTrack] = useState(() => new Map());
+  const onlineTracks = [header.tracking, ...boxSlots.map((s) => s.tracking), isBoxMode ? boxModeSlot?.tracking : null]
+    .map((t) => String(t || '').trim()).filter((t) => t.replace(/\s+/g, '').length >= 8);
+  const onlineTracksKey = [...new Set(onlineTracks)].sort().join('|');
+  useEffect(() => {
+    if (receivingPo || noShipment || isRescale || !onlineTracksKey) { setOnlineByTrack(new Map()); return undefined; }
+    let dead = false;
+    const id = setTimeout(async () => {
+      const next = new Map();
+      for (const t of onlineTracksKey.split('|')) {
+        try { const r = await api.onlineOrderByTracking(t); if (r?.order) next.set(t, r.order); }
+        catch (err) { if (err.unauthorized) { onSignOut(); return; } /* unreachable → no online order, plain receive */ }
+      }
+      if (!dead) setOnlineByTrack(next);
+    }, 600);
+    return () => { dead = true; clearTimeout(id); };
+  }, [onlineTracksKey, receivingPo, noShipment, isRescale]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onlineOrders = [...new Map([...onlineByTrack.values()].map((o) => [o.id, o])).values()];
 
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showPrefs, setShowPrefs] = useState(false);
@@ -1685,7 +1710,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const m = poMoney(it, s);
     return m ? landedFromShelf(m.shelf, m.tip, costPreset) : null;
   };
-  const sizeCost = (it, s) => unitCost(it.cost, poLanded(it, s), batchDefaultCost);
+  // An online order's line: its actual cost (coupon, tax, shipping and gift card already
+  // spread over it — orderCosts) IS the landed cost, so no preset is applied on top.
+  const onlineLine = (it, s) => (onlineOrders.length ? onlineLineFor(onlineOrders, it.sku, s.size) : null);
+  const sizeCost = (it, s) => unitCost(it.cost, poLanded(it, s) ?? onlineLine(it, s)?.each, batchDefaultCost);
   // What the card shows when nothing is typed: the PO's figure for the shoe (one
   // value, or a range when the supplier priced sizes differently), else the default.
   const shoeCostHint = (it) => {
@@ -1700,6 +1728,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const via = `shelf + ${costPreset?.name || 'preset'}’s costs`;
     if (fromPo.length === 1) return { cost: fromPo[0], source: `from PO · ${via}` };
     if (fromPo.length > 1) return { cost: null, source: `from PO · $${Math.min(...fromPo).toFixed(2)}–$${Math.max(...fromPo).toFixed(2)} by size · ${via}` };
+    const fromOnline = it.sizes.map((s) => onlineLine(it, s)).filter(Boolean);
+    const onlineCosts = [...new Set(fromOnline.map((x) => x.each))];
+    if (onlineCosts.length === 1) return { cost: onlineCosts[0], source: `from online order ${fromOnline[0].code} · actual cost` };
+    if (onlineCosts.length > 1) return { cost: null, source: `from online order ${fromOnline[0].code} · $${Math.min(...onlineCosts).toFixed(2)}–$${Math.max(...onlineCosts).toFixed(2)} by size` };
     if (batchDefaultCost != null) return { cost: batchDefaultCost, source: 'batch default' };
     return { cost: null, source: 'no cost — fill in later on Costs' };
   };
@@ -1876,7 +1908,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), shelfPrice: poMoney(it, r)?.shelf ?? null, withBox: it.withBox, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null });
+            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), shelfPrice: poMoney(it, r)?.shelf ?? onlineLine(it, r)?.price ?? null, withBox: it.withBox, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null });
           }
         }
       }
@@ -2100,6 +2132,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                           <button type="button" className="btn ghost po-receive-btn" onClick={() => setShowPoPicker(true)}>
                             <Icon name="box" /> Receive against a purchase order
                           </button>
+                          {onlineOrders.map((o) => <OnlineOrderBanner key={o.id} order={o} />)}
                           {poSuggest && (
                             <div className="po-suggest">
                               <span className="po-suggest-text">Tracking <b>{poSuggest.tracking}</b> matches <b>{poSuggest.code}</b> · {poSuggest.data.po.supplier_name}.</span>
@@ -2408,6 +2441,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     ({totalItems}{boxTarget && boxExisting?.length ? ' new' : ''} unit{totalItems === 1 ? '' : 's'})</span></h3>
                   <button className="btn ghost sm" onClick={openAddItem}>+ Add manually</button>
                 </div>
+                {onlineOrders.map((o) => <OnlineOrderBanner key={o.id} order={o} />)}
                 {/* Why this label has no checklist. Without it the screen looks like the
                     PO link was lost, and somebody goes hunting for a manifest that was
                     never per-box in the first place. */}
@@ -3572,3 +3606,24 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
     </>
   );
 }
+
+// "This parcel is an online order" — on Step 1 and above the scanned pairs. What it
+// should hold (the lines still coming), and that each pair's cost comes from the order.
+// Counting it in stays on the Online Orders page: that is where a shortage becomes a
+// refund to chase.
+function OnlineOrderBanner({ order }) {
+  const coming = (order.lines || []).filter((l) => !l.cancelled_at);
+  const pairs = coming.reduce((n, l) => n + Number(l.qty || 0), 0);
+  return (
+    <div className="oo-recv-banner" role="status">
+      <b>Online order {onlineOrderCode(order.id)}</b> · {order.store}{order.order_number ? ` #${order.order_number}` : ''}
+      {order.received_at ? <span className="oo-recv-done"> · already counted in</span> : null}
+      <div className="muted sm">
+        Should hold {pairs} pair{pairs === 1 ? '' : 's'}: {coming.map((l) => `${l.sku} US ${l.size}${l.qty > 1 ? ` ×${l.qty}` : ''}`).join(' · ') || '—'}.
+        {' '}Each pair’s cost comes from the order (after coupon, tax, shipping and gift card).
+        {!order.received_at && ' Count it in on Online Orders once the box is checked.'}
+      </div>
+    </div>
+  );
+}
+

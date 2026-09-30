@@ -29,7 +29,9 @@ in `Receiving.jsx`):
    or `poCostLines` (fetched alongside the labels) when adding a box to a PO-linked
    batch; matched on bare SKU + **numeric** size (`"10W"` ≡ `"10"`), a line for the
    active label winning over the same SKU+size on another label →
-3. **the batch default** — `header.defaultCost`, or in box mode the batch's own
+3. (2026-10-01) **the online order's actual cost** when the parcel's tracking number is on
+   one of PH's online orders (`onlineLineFor`, `docs/context/online-orders.md`) →
+4. **the batch default** — `header.defaultCost`, or in box mode the batch's own
    `default_cost` (sent as `null`; `box-commit.js` fills it server-side).
 
 The line under the box says which will apply (`typed` · `from PO` · `from PO ·
@@ -103,7 +105,16 @@ only on a receive AGAINST the PO — pairs received before their PO carried a sh
 (or before the shelf-price rule) showed "without a cost" on Platform Profit while the PO
 plainly had one (HV6103-300 on PO 49 was the report).
 - **Candidates** (`listCostBackfillCandidates`): `cost IS NULL` (never a `$0` claim, never a
-  real cost), batch linked to a PO (`batches.po_id`), not an empty-box order.
+  real cost), not an empty-box order, and the pair's PO found one of two ways:
+  - its batch is **linked** (`batches.po_id`); or
+  - (2026-10-01) its batch was **never linked** but the parcel's tracking number — the
+    box's, or the **batch's own for a loose receive** (no box row) — is on exactly **one**
+    shoes PO's label, spaces/case ignored. Only `kind` receiving batches (never in-store /
+    existing / rescale). A number on two POs is counted as `ambiguous` in the preview and
+    never guessed. The history note ends "batch not linked to the PO; matched by tracking
+    …" so the match can be checked. E2E: `e2e/cost-backfill-tracking.spec.js`.
+  The own-label match now also uses the batch's tracking for loose pairs (it used the box's
+  only, so a loose pair never found its own label).
 - **Which line:** `poLineMoney` — the pair's OWN label first (its `batch_boxes.tracking_number`
   = the `po_boxes.tracking_number`, case/space-insensitive), any label after that.
 - **Landed:** `landedFromShelf` with `presetForShipment(po, batch supplier)` — the same code

@@ -7,6 +7,8 @@
 // plainly does. The Platform Profit report then shows it as "without a cost".
 //
 // The landed cost is worked out EXACTLY the way receiving does it, with the same code:
+//   · the pair's PO: its batch's link, or — when the batch was never linked — the ONE shoes
+//     PO whose label carries the parcel's tracking number (listCostBackfillCandidates);
 //   · the PO line for the pair's SKU + size (`poLineMoney`) — the pair's own LABEL first
 //     (matched by the box's tracking number), any label on the order after that;
 //   · the shipment's supplier preset (`presetForShipment`: the PO's supplier account,
@@ -30,7 +32,10 @@ import { poLineMoney, landedFromShelf } from '../../src/lib/costs.js';
 const money = (n) => `$${Number(n).toFixed(2)}`;
 
 async function buildPlan() {
-  const cands = await listCostBackfillCandidates();
+  const all = await listCostBackfillCandidates();
+  // A tracking number on two POs is reported, never guessed.
+  const ambiguous = all.filter((c) => c.ambiguous).length;
+  const cands = all.filter((c) => c.po_id != null);
   const lines = await listPoLinesForCost(cands.map((c) => c.po_id));
   const linesByPo = new Map();
   for (const l of lines) {
@@ -74,18 +79,22 @@ async function buildPlan() {
     }
     const cost = landedFromShelf(m.shelf, m.tip, preset);
     if (cost == null) { noLine++; continue; }
-    const k = `${cost}|${m.shelf}|${poCode}|${preset?.id || ''}`;
-    if (!groups.has(k)) groups.set(k, { ids: [], cost, shelf: m.shelf, tip: m.tip, poCode, preset: preset?.name || null });
+    const byTracking = c.by_tracking === true;
+    const k = `${cost}|${m.shelf}|${poCode}|${preset?.id || ''}|${byTracking ? c.tracking : ''}`;
+    if (!groups.has(k)) groups.set(k, { ids: [], cost, shelf: m.shelf, tip: m.tip, poCode, preset: preset?.name || null, byTracking, tracking: byTracking ? c.tracking : null });
     groups.get(k).ids.push(Number(c.id));
   }
 
   const list = [...groups.values()];
   const byPo = new Map();
   for (const g of list) {
-    const r = byPo.get(g.poCode) || { poCode: g.poCode, pairs: 0, preset: g.preset };
+    const r = byPo.get(g.poCode) || { poCode: g.poCode, pairs: 0, preset: g.preset, byTracking: 0 };
     r.pairs += g.ids.length;
+    if (g.byTracking) r.byTracking += g.ids.length;
     byPo.set(g.poCode, r);
   }
+  // Pairs the tracking match reached (fillable or not) are no longer "without a PO".
+  const reachedByTracking = cands.filter((c) => c.by_tracking === true).length;
   return {
     groups: list,
     summary: {
@@ -93,7 +102,9 @@ async function buildPlan() {
       noLine,
       noPreset: [...noPresetBy.values()].sort((a, b) => b.pairs - a.pairs),
       noPresetPairs: [...noPresetBy.values()].reduce((n, r) => n + r.pairs, 0),
-      noPo: await countUncostedWithoutPo(),
+      noPo: Math.max(0, (await countUncostedWithoutPo()) - reachedByTracking - ambiguous),
+      byTracking: list.filter((g) => g.byTracking).reduce((n, g) => n + g.ids.length, 0),
+      ambiguous,
       byPo: [...byPo.values()].sort((a, b) => b.pairs - a.pairs),
       noLineSample: [...noLineSkus.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12)
         .map(([k, n]) => ({ what: k, pairs: n })),
@@ -123,8 +134,11 @@ export default async function handler(req, res) {
     let filled = 0;
     for (const g of plan.groups) {
       const how = `${money(g.shelf)} shelf through the “${g.preset}” preset${g.tip != null ? ` (line tip ${money(g.tip)})` : ''}`;
+      // Said in the note when the batch was never linked: the PO was found by the parcel's
+      // tracking number, so whoever reads the history can check that match.
+      const via = g.byTracking ? ` — batch not linked to the PO; matched by tracking ${g.tracking}` : '';
       filled += await fillItemsCost(g.ids, g.cost, g.shelf,
-        `Cost filled from ${g.poCode}: ${money(g.cost)} landed (${how})`, user.username);
+        `Cost filled from ${g.poCode}: ${money(g.cost)} landed (${how})${via}`, user.username);
     }
     return send(res, 200, { ok: true, filled, plan: plan.summary });
   } catch (e) {

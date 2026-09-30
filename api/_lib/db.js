@@ -2969,21 +2969,44 @@ export async function setItemsCost(vins, cost, by) {
 // The regex is written '\\s' ON PURPOSE: in a JS template literal '\s' cooks to a bare
 // 's', which stripped the letter s instead of spaces — a spaced tracking number then
 // missed its own label and took whichever line came first (CI caught it, PR #239).
+// Two ways a blank-cost pair reaches its PO:
+//   · its batch is LINKED to the PO (b.po_id) — the original path;
+//   · its batch is NOT linked, but the parcel's tracking number (the box's, or the
+//     batch's own for a loose receive — 165 of 190 prod batches file pairs with no box)
+//     is on exactly ONE shoes PO's label (2026-10-01: HV6103-300 sat beside PO label
+//     …180655 with its shelf price and no link). `by_tracking` says which, for the note.
+// A number on two POs is `ambiguous` and never guessed; a batch of another kind (in-store,
+// existing, rescale) is never matched by tracking — those aren't supplier parcels.
 export async function listCostBackfillCandidates() {
   return db()`
-    SELECT i.id, i.vin, i.sku, i.size, i.status, b.po_id, b.supplier_name,
-           upper(regexp_replace(coalesce(bb.tracking_number, ''), '\\s', '', 'g')) AS tracking
-      FROM items i
-      JOIN batches b ON b.id = i.batch_id
-      JOIN purchase_orders o ON o.id = b.po_id
-      LEFT JOIN batch_boxes bb ON bb.id = i.box_id
-     WHERE i.cost IS NULL
-       AND coalesce(btrim(i.sku), '') <> ''
-       AND coalesce(o.order_kind, 'shoes') <> 'boxes'
-     ORDER BY i.id`;
+    WITH pbt AS (
+      SELECT upper(regexp_replace(pb.tracking_number, '\\s', '', 'g')) AS t,
+             min(pb.po_id) AS po_id, count(DISTINCT pb.po_id)::int AS n
+        FROM po_boxes pb JOIN purchase_orders o ON o.id = pb.po_id
+       WHERE coalesce(btrim(pb.tracking_number), '') <> '' AND coalesce(o.order_kind, 'shoes') <> 'boxes'
+       GROUP BY 1),
+    c AS (
+      SELECT i.id, i.vin, i.sku, i.size, i.status, b.po_id AS linked_po, b.kind, b.supplier_name,
+             upper(regexp_replace(coalesce(bb.tracking_number, b.tracking_number, ''), '\\s', '', 'g')) AS tracking
+        FROM items i
+        JOIN batches b ON b.id = i.batch_id
+        LEFT JOIN batch_boxes bb ON bb.id = i.box_id
+       WHERE i.cost IS NULL AND coalesce(btrim(i.sku), '') <> '')
+    SELECT c.id, c.vin, c.sku, c.size, c.status, c.supplier_name, c.tracking,
+           coalesce(c.linked_po, CASE WHEN pbt.n = 1 THEN pbt.po_id END) AS po_id,
+           (c.linked_po IS NULL AND pbt.n = 1) AS by_tracking,
+           (c.linked_po IS NULL AND pbt.n > 1) AS ambiguous
+      FROM c
+      LEFT JOIN purchase_orders lo ON lo.id = c.linked_po
+      LEFT JOIN pbt ON c.linked_po IS NULL AND c.tracking <> '' AND pbt.t = c.tracking
+                   AND (c.kind IS NULL OR c.kind = 'receiving')
+     WHERE (c.linked_po IS NOT NULL AND coalesce(lo.order_kind, 'shoes') <> 'boxes')
+        OR (c.linked_po IS NULL AND pbt.n >= 1)
+     ORDER BY c.id`;
 }
 
-// Blank-cost pairs whose batch is on NO purchase order — nothing to fill them from.
+// Blank-cost pairs whose batch is on NO purchase order — nothing to fill them from
+// (before the tracking match; the handler subtracts what that match reached).
 export async function countUncostedWithoutPo() {
   const rows = await db()`
     SELECT count(*)::int AS n FROM items i LEFT JOIN batches b ON b.id = i.batch_id
@@ -7671,6 +7694,7 @@ export async function onlineOrderByTracking(tracking, exceptId = null) {
     SELECT id, store, order_number FROM online_orders
      WHERE upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')) = ${key}
        AND (${exceptId}::bigint IS NULL OR id <> ${exceptId})
+     ORDER BY created_at DESC
      LIMIT 1`;
   return r[0] || null;
 }

@@ -54,6 +54,7 @@ export function CostBackfill({ onDone, onSignOut }) {
               {plan.byPo.map((p) => (
                 <li key={p.poCode}>
                   <b>{p.poCode}</b> · {p.pairs} pair{p.pairs === 1 ? '' : 's'} · preset “{p.preset}”
+                  {p.byTracking > 0 && <span className="muted"> · {p.byTracking === p.pairs ? 'all' : p.byTracking} matched by tracking # (batch not linked)</span>}
                 </li>
               ))}
             </ul>
@@ -73,6 +74,7 @@ export function CostBackfill({ onDone, onSignOut }) {
             Can’t be filled: <b>{plan.noLine}</b> on a PO with no shelf price for that SKU + size
             {plan.noLineSample.length > 0 && <> (most: {plan.noLineSample.slice(0, 5).map((x) => `${x.what} ×${x.pairs}`).join(', ')})</>}
             {' '}· <b>{plan.noPo}</b> received without a PO — type those below.
+            {plan.ambiguous > 0 && <> · <b>{plan.ambiguous}</b> whose tracking number is on more than one PO — link the batch to the right PO first.</>}
           </p>
           <div className="cost-backfill-actions">
             <button type="button" className="btn sm ghost" disabled={!!busy} onClick={() => setPlan(null)}>Cancel</button>

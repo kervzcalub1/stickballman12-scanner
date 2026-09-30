@@ -1582,7 +1582,8 @@ export async function listOpenBatches() {
   return await db()`
     SELECT b.id, b.batch_code, b.supplier_name, b.batch_tag, b.expected_boxes, b.pre_sell, b.pre_sell_scope,
            b.manifest_received, b.audited_at, b.audited_by,
-           b.tracking_number, b.no_tracking,
+           b.tracking_number, b.no_tracking, b.po_id,
+           (SELECT p.po_code FROM purchase_orders p WHERE p.id = b.po_id) AS po_code,
            b.date_received, b.created_by, b.created_at,
            (SELECT coalesce(array_agg(DISTINCT bx.tracking_number)
                       FILTER (WHERE bx.tracking_number IS NOT NULL), ARRAY[]::text[])

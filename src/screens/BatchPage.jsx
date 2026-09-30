@@ -95,12 +95,12 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   const setQ = (v) => { setQRaw(v, { replace: !!q.trim() }); if (page !== 1) setPageRaw(''); };
   // Any filter change goes back to page 1 — narrowing while on page 4 of a 2-page result
   // shows an empty list that looks like "nothing matches".
-  const onPage1 = (set) => (v) => { set(v); if (page !== 1) setPageRaw(''); };
+  const onPage1 = (set) => (v) => { set(v); if (page !== 1) setPageRaw(''); if (openPageRaw) setOpenPageRaw(''); };
   const setFrom = onPage1(setFromRaw); const setTo = onPage1(setToRaw);
   const setSupplier = onPage1(setSupplierRaw); const setPo = onPage1(setPoRaw);
   const setAudit = onPage1(setAuditRaw);
   const filtering = !!(from || to || supplier || po || audit);
-  const clearFilters = () => { setFromRaw(''); setToRaw(''); setSupplierRaw(''); setPoRaw(''); setAuditRaw(''); setPageRaw(''); };
+  const clearFilters = () => { setFromRaw(''); setToRaw(''); setSupplierRaw(''); setPoRaw(''); setAuditRaw(''); setPageRaw(''); setOpenPageRaw(''); };
   // The audit sign-off dialog: { note } while open. Plus, for a batch that came in
   // blind and was never linked to an order, the PO its tracking number belongs to —
   // looked up once, so the auditor is pointed at the manifest to check against.
@@ -112,13 +112,18 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   const [openPageRaw, setOpenPageRaw] = useQueryParam('op');
   const openPage = Math.max(1, Number(openPageRaw) || 1);
 
+  // Only the newest request may land: ticking two filters quickly fires two loads, and
+  // the older one answering last would put the previous filter's list back on screen.
+  const listSeq = useRef(0);
   async function loadLists() {
     setError('');
+    const seq = ++listSeq.current;
     try {
       const [o, r] = await Promise.all([
         api.openBatches(),
         api.batchList({ kind: 'receiving', page, excludeOpen: true, from, to, supplier, po, audit }),
       ]);
+      if (seq !== listSeq.current) return;
       setOpen(o.batches || []);
       setRecent(r);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
@@ -172,7 +177,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
 
-  useEffect(() => { loadLists(); }, [page, from, to, supplier, po]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadLists(); }, [page, from, to, supplier, po, audit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The pickers offer only what is actually on a batch — a supplier with no shipments or
   // an order with none received is a dead option that returns an empty list.
@@ -198,14 +203,15 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
     setFound(null);
     setSearching(true);
     // Typing "1Z999AA10123456784" is 20 renders; wait for the pause before asking.
+    let current = true;   // a filter changed mid-flight: this answer is for the old one
     const t = setTimeout(() => {
       api.batchList({ kind: 'receiving', q: query, page, from, to, supplier, po, audit })
-        .then((r) => setFound(r))
-        .catch((err) => { if (err.unauthorized) return onSignOut(); setError(err.message); setFound({ batches: [], total: 0 }); })
-        .finally(() => setSearching(false));
+        .then((r) => { if (current) setFound(r); })
+        .catch((err) => { if (err.unauthorized) return onSignOut(); if (!current) return; setError(err.message); setFound({ batches: [], total: 0 }); })
+        .finally(() => { if (current) setSearching(false); });
     }, 250);
-    return () => clearTimeout(t);
-  }, [q, page, from, to, supplier, po]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { current = false; clearTimeout(t); };
+  }, [q, page, from, to, supplier, po, audit]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setOpenBox(null); if (selId) loadDetail(selId); else { setDetail(null); setMergedFrom(null); } }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // LIVE (docs/context/live-updates.md). Another bench submitting a box, a batch being
@@ -215,10 +221,12 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   const dialogUp = busy || deleting || !!renumber || !!reopenBox || !!sizeEdit || !!auditing || auditBusy || !!reopenId;
   const BATCH_TABLES = ['batches', 'batch_boxes', 'items', 'shipment_issues', 'purchase_orders'];
   useLive(BATCH_TABLES, async () => {
+    const seq = ++listSeq.current;
     const [o, r] = await Promise.all([
       api.openBatches(),
       api.batchList({ kind: 'receiving', page, excludeOpen: true, from, to, supplier, po, audit }),
     ]);
+    if (seq !== listSeq.current) return;
     const ob = o.batches || [];
     setOpen((cur) => (JSON.stringify(cur) === JSON.stringify(ob) ? cur : ob));
     setRecent((cur) => (JSON.stringify(cur) === JSON.stringify(r) ? cur : r));
@@ -667,10 +675,10 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
     if (from && (!d || d < from)) return false;
     if (to && (!d || d > to)) return false;
     if (supplier && String(b.supplier_name || '').trim() !== supplier) return false;
-    // The open list carries no PO code, only whether it has an order at all — enough for
-    // "none", and a named order is answered by the Recent list below.
+    // The open list carries its PO code (listOpenBatches), so a named order is matched
+    // exactly — without it, picking any PO emptied this card.
     if (po === 'none' && b.po_id) return false;
-    if (po && po !== 'none' && !b.po_id) return false;
+    if (po && po !== 'none' && b.po_code !== po) return false;
     if (audit === 'pending' && !(b.manifest_received === false && !b.audited_at)) return false;
     return true;
   };

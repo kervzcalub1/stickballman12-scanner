@@ -262,6 +262,13 @@ export const api = {
   // supplier name picked at receiving. `{ preset, via }`, preset null when unlinked.
   // Platform Profit report: on-hand stock per SKU + size with its landed cost.
   platformProfitStock: () => get('/api/ph/platform-profit'),
+  onlineOrders: ({ q = '', view = 'all' } = {}) => get(`/api/online-orders/list?view=${encodeURIComponent(view)}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
+  onlineOrder: (id) => get(`/api/online-orders/get?id=${encodeURIComponent(id)}`),
+  saveOnlineOrder: (order) => post('/api/online-orders/save', order),
+  onlineOrderLine: (body) => post('/api/online-orders/line', body),
+  receiveOnlineOrder: (id, counts) => post('/api/online-orders/receive', { id, counts }),
+  deleteOnlineOrder: (id) => post('/api/online-orders/delete', { id }),
+  platformQuotes: (skus, consigned = true) => get(`/api/ph/platform-quotes?skus=${encodeURIComponent(skus.join(','))}${consigned ? '' : '&consigned=0'}`),
   presetForShipment: ({ poId = null, supplier = '' } = {}) => get(`/api/payout/presets?for=shipment${poId ? `&po=${encodeURIComponent(poId)}` : ''}${supplier ? `&supplier=${encodeURIComponent(supplier)}` : ''}`),
 
   /* ---- Buying requests (docs/context/buy-cart.md) ----------------------------

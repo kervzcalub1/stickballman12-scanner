@@ -1233,7 +1233,10 @@ export async function listBatches(limit = 50, kind = null,
   const poCode = po && po !== 'none' ? po : null;
   const poNone = po === 'none';
   // Received with no manifest: 'pending' = not yet signed off, 'audited' = signed off,
-  // 'all' = either. Booleans, not fragments — the shim can't nest them.
+  // 'all' = either; 'with' = received WITH one. NULL (received before the question
+  // was asked) is neither — "with" means someone said yes, not "nobody said no".
+  // Booleans, not fragments — the shim can't nest them.
+  const withManifest = audit === 'with';
   const noManifest = ['pending', 'audited', 'all'].includes(audit);
   const auditPending = audit === 'pending';
   const auditDone = audit === 'audited';
@@ -1263,6 +1266,7 @@ export async function listBatches(limit = 50, kind = null,
       AND (${poCode}::text IS NULL
            OR b.po_id = (SELECT p.id FROM purchase_orders p WHERE p.po_code = ${poCode}))
       AND (${noManifest} = false OR b.manifest_received = false)
+      AND (${withManifest} = false OR b.manifest_received = true)
       AND (${auditPending} = false OR b.audited_at IS NULL)
       AND (${auditDone} = false OR b.audited_at IS NOT NULL)
     ORDER BY b.created_at DESC
@@ -1308,6 +1312,7 @@ export async function searchBatches(query,
   { phSafe = false, limit = 25, offset = 0, from = null, to = null, supplier = null, po = null, audit = null } = {}) {
   const poCode = po && po !== 'none' ? po : null;
   const poNone = po === 'none';
+  const withManifest = audit === 'with';
   const noManifest = ['pending', 'audited', 'all'].includes(audit);
   const auditPending = audit === 'pending';
   const auditDone = audit === 'audited';
@@ -1338,6 +1343,7 @@ export async function searchBatches(query,
       AND (${poCode}::text IS NULL
            OR b.po_id = (SELECT p.id FROM purchase_orders p WHERE p.po_code = ${poCode}))
       AND (${noManifest} = false OR b.manifest_received = false)
+      AND (${withManifest} = false OR b.manifest_received = true)
       AND (${auditPending} = false OR b.audited_at IS NULL)
       AND (${auditDone} = false OR b.audited_at IS NOT NULL)
       AND (

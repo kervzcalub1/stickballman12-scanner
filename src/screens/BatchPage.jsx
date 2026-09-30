@@ -84,7 +84,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   const [to, setToRaw] = useQueryParam('to');
   const [supplier, setSupplierRaw] = useQueryParam('supplier');
   const [po, setPoRaw] = useQueryParam('po');
-  // ?audit= — shipments received without a manifest: pending (not signed off), audited, or all.
+  // ?audit= — received without a manifest: pending (not signed off), audited, all; or `with` one.
   const [audit, setAuditRaw] = useQueryParam('audit');
   const [suppliers, setSuppliers] = useState([]);
   const [poCodes, setPoCodes] = useState([]);
@@ -679,6 +679,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
     // exactly — without it, picking any PO emptied this card.
     if (po === 'none' && b.po_id) return false;
     if (po && po !== 'none' && b.po_code !== po) return false;
+    if (audit === 'with') return b.manifest_received === true;
     if (audit && b.manifest_received !== false) return false;
     if (audit === 'pending' && b.audited_at) return false;
     if (audit === 'audited' && !b.audited_at) return false;
@@ -761,6 +762,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
           <label><span className="muted xs">Manifest</span>
             <select value={audit} onChange={(e) => setAudit(e.target.value)} aria-label="Manifest">
               <option value="">Any</option>
+              <option value="with">With manifest</option>
               <option value="pending">No manifest — needs audit</option>
               <option value="audited">No manifest — audited</option>
               <option value="all">No manifest — all</option>

@@ -89,6 +89,9 @@ test('the question is required, "No" flags the batch, and the audit is signed of
   const after = await (await request.get('/api/batches/list?kind=receiving&audit=pending', { headers: authHeaders() })).json();
   expect(after.batches.some((b) => Number(b.id) === Number(batch_id))).toBe(false);
   // …but "where are the shipments that came without a packing slip" still finds it.
+  const withM = await (await request.get('/api/batches/list?kind=receiving&audit=with', { headers: authHeaders() })).json();
+  expect(withM.batches.some((b) => Number(b.id) === Number(batch_id))).toBe(false);
+  expect(withM.batches.every((b) => b.manifest_received === true)).toBe(true);
   for (const [audit, want] of [['audited', true], ['all', true]]) {
     const r = await (await request.get(`/api/batches/list?kind=receiving&audit=${audit}`, { headers: authHeaders() })).json();
     expect(r.batches.some((b) => Number(b.id) === Number(batch_id))).toBe(want);

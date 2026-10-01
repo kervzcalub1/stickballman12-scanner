@@ -6385,11 +6385,9 @@ const lineOut = (r) => (r ? {
 // reads the tax rate off it.
 //
 // `approved_amount` is the SHELF price of every approved pair — the sticker, with no
-// discount assumed. `funding_target` is that plus the sales tax on the request's cost
-// stack: the till charges tax on top of the sticker, and funding at the sticker alone
-// left every card short by exactly the tax (docs/context/buy-cart.md). Still no
-// discount assumed — a card that comes up short strands a buyer in a shop, while a
-// leftover balance is money still ours and step 10 accounts for it.
+// discount assumed — and `funding_target` is that same figure: the gift cards cover the
+// approved shoes' shelf price and nothing else (owner's rule, 2026-10-02; from
+// 2026-09-16 it had the cost stack's sales tax added on top — docs/context/buy-cart.md).
 async function recalcCartMoney(sql, cartId) {
   await sql`
     UPDATE buy_carts c SET
@@ -6397,7 +6395,7 @@ async function recalcCartMoney(sql, cartId) {
       approved_count = l.approved,
       pending_count  = l.pending,
       approved_amount = l.approved_amount,
-      funding_target  = round(l.approved_amount * (1 + coalesce(nullif(c.cost_stack->>'taxPct', '')::numeric, 0) / 100), 2),
+      funding_target  = l.approved_amount,
       gc_total        = g.total,
       balance_remaining = CASE WHEN c.receipt_total IS NULL THEN NULL
                                ELSE g.total - c.receipt_total END,
@@ -6489,6 +6487,28 @@ export async function logCartEvent({ cartId, kind, lineId = null, gcId = null, b
             ${actorId}, ${actor ? (actor.name || actor.username || null) : null}, ${actor ? actor.role : null})
     RETURNING *`;
   return rows[0];
+}
+
+// The gift-card desk, for a direct Telegram message: everyone active who holds
+// `issue_gift_cards` explicitly and has a linked Telegram account. Admins hold it
+// implicitly (`isPrivileged`) and are deliberately NOT included — "the issuer" is the
+// person given the duty, not everyone who could do it.
+export async function giftCardIssuersOnTelegram() {
+  return db()`
+    SELECT id, name, username, telegram_user_id
+      FROM users
+     WHERE status = 'approved' AND 'issue_gift_cards' = ANY(privileges)
+       AND telegram_user_id IS NOT NULL
+     ORDER BY id`;
+}
+
+// The latest event of one kind on a request — e.g. the last "cards requested" notice,
+// so the same amount is not announced twice.
+export async function lastCartEvent(cartId, kind) {
+  const rows = await db()`
+    SELECT * FROM buy_cart_events WHERE cart_id = ${cartId} AND kind = ${kind}
+     ORDER BY id DESC LIMIT 1`;
+  return rows[0] || null;
 }
 
 export async function createBuyCart({ buyerUserId, buyerName, retailer, purpose, restrictions, presetId, costStack, actor }) {

@@ -151,28 +151,21 @@ holds both.
 - **buyer** — supplier portal → *Buying Requests* (`/buying`).
 
 ## The money
-**Funding target = Σ (shelf_price × qty) over APPROVED lines, PLUS the sales tax on the
-request's cost stack** — `buy_carts.funding_target`, recomputed by `recalcCartMoney` with
-every change to the lines, the cards *or the stack* (`setBuyCartCostStack` now calls it).
-`approved_amount` stays the sticker sum (what was approved); `fundingTarget(cart)` in
-`buycart.js` reads the taxed figure and every consumer — the gift-card release check, the
-`cards_recorded` closing condition, the panel, the Telegram summary — goes through it.
+**Funding target = Σ (shelf_price × qty) over APPROVED lines — nothing added.**
+`buy_carts.funding_target`, recomputed by `recalcCartMoney` with every change to the lines
+or the cards; since 2026-10-02 it always equals `approved_amount`. `fundingTarget(cart)` in
+`buycart.js` is still what every consumer reads — the gift-card release check, the
+`cards_recorded` closing condition, the panel, the Telegram summary, the issuer DM.
 
-**Why the tax went in (2026-09-16).** The target was the sticker alone, with an amber
-"till overrun" warning beside it. On a full-price purchase that meant every request came
-up short by exactly the tax — $400 of cards against a $422.18 receipt — and the audit
-then had a gap to explain on every one. The warning is gone; the number it warned about
-IS the target. Still no discount assumed: it over-funds deliberately on a discounted
-purchase, because a card that comes up short strands a buyer in a shop while a leftover
-balance is money still ours, and step 10 accounts for it either way.
-
-- `cart/get` adds `fundingTaxPct` for anyone who can read the stack (`canSeeBuyCall`);
-  the buyer's copy carries `funding_target` (the number their cards will hold) and
-  `null` for the rate, since the stack is redacted for them.
-- The strip reads **Approved $390.00 · To fund $422.18 incl. 8.25% tax**; the gift-card
-  panel says *against $422.18 to fund ($390.00 approved + 8.25% tax)*; the 409 on release
-  names both.
-- `db:setup` backfills `funding_target` for existing rows. **Needs `db:setup`.**
+**History: tax in, then out again.** From 2026-09-16 the target was the sticker PLUS the
+cost stack's sales tax ($400 approved → $422.18 to fund), because full-price purchases
+kept coming up short by exactly the tax. On 2026-10-02 the owner's rule replaced it: **the
+gift cards cover the shelf price of the approved shoes, and only that.** A till that
+charges more is a top-up the buyer asks for (re-open → add → approve), not money the cards
+were sized to include. The `fundingTaxPct` field, the "To fund … incl. X% tax" strip and
+the "+ X% tax" wording are gone. `db:setup` brings every request still in play
+(`status NOT IN closed/cancelled/written_off`) to `funding_target = approved_amount`;
+finished ones keep the figure they were funded and closed against.
 
 ## The cost stack — and who may write it
 A request's stack is snapshotted from the **buyer's** payout preset when it is opened
@@ -246,6 +239,35 @@ before-and-after in words — "Store discount 0% → 20% · Sales tax 0% → 8.2
 re-priced". A record that says something changed and not what it used to be is not a
 record of anything. **No schema change**: `cost_stack` is already JSONB and the event
 `kind` column is free text.
+
+## The gift card desk is messaged DIRECTLY (2026-10-02)
+When a request becomes fundable, every person who holds **`issue_gift_cards`** (explicitly
+— admins' implicit hold doesn't count) and has a linked Telegram account gets a **private
+message from the bot**, not a group post:
+
+```
+Test Supplier is waiting for gift cards on BC-2400 — $390.00
+6 pairs approved, at shelf price.
+Store: Champs
+https://stickballman12.com/buy-carts?request=2400
+```
+
+- `notifyIssuersIfReady(cartId)` in `api/_lib/notify.js` → `sendDirect` in `telegram.js`
+  (chat id = the person's `users.telegram_user_id`). Fire-and-forget after the two writes
+  that can make a request ready: the buyer **closing the list** (`cart/submit`) and a
+  **decision** (`cart/decide`, and a Telegram tap via `telegramDecide.js`).
+- **Ready** = `cardsIssuable` (list closed, nothing pending) on an `approved`/`funded`
+  request whose recorded cards are short of `fundingTarget`. The amount is what's still
+  owed (target − cards already recorded), so a re-opened list announces the **top-up**.
+- **Said once per amount**: a `cards_requested` event (shown in the request's History)
+  records the figure and who was told; the same figure isn't sent again.
+- **Telegram won't let a bot message someone first.** Each issuer must open the bot and
+  press **Start** once. Until they do, the send fails 403 and the log says so by name. No
+  @BotFather setting changes that, and none is needed (group privacy is irrelevant here).
+- The issuer's Telegram id is linked on **Check Access** (the same column the approvers'
+  taps use); an issuer with no link is skipped, and nobody linked is logged.
+- Dev sends carry a `[dev] ` prefix — dev and prod share the bot. Company-card requests
+  are never announced (no cards to issue).
 
 ## Telegram approvals — DIRECT to the Bot API (2026-09-29)
 **Make.com is no longer in the loop.** Everything its two scenarios did now runs in this
@@ -375,7 +397,7 @@ silently. The caption is built here for the same reason the line card's is:
 ```
 BC-2400 — Test Supplier closed the request
 7 pairs asked · 4 approved · 2 still waiting · 1 turned down
-Approved $390.00 + 8.25% tax = $422.18 to fund
+Approved $390.00 to fund
 Store: Champs
 ```
 

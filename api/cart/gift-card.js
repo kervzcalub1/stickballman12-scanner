@@ -27,7 +27,7 @@ import {
   getBuyCart, addBuyCartGiftCard, voidBuyCartGiftCard, fundBuyCart, dbConfigured,
 } from '../_lib/db.js';
 import { encryptSecret, maskTail, secretsConfigured } from '../_lib/secrets.js';
-import { requirePrivilege, fundingTarget, fundingTaxPct, redactCartForViewer } from '../_lib/buycart.js';
+import { requirePrivilege, fundingTarget, redactCartForViewer } from '../_lib/buycart.js';
 import { cardsIssuable, cardsRefusedBecause } from '../../src/lib/buycartRules.js';
 
 const money = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
@@ -65,13 +65,13 @@ export default async function handler(req, res) {
       if (!cardsIssuable(cart))
         return send(res, 409, { ok: false, error: cardsRefusedBecause(cart) });
       const target = fundingTarget(cart);
-      // The check the whole step turns on: the cards have to cover what was approved,
-      // tax included. Named with the shortfall, because "not enough" without a number
+      // The check the whole step turns on: the cards have to cover what was approved —
+      // the shelf price of the approved pairs. Named with the shortfall, because "not enough" without a number
       // sends somebody back to a spreadsheet to work out what to add.
       if (Number(cart.gc_total) < target) {
         return send(res, 409, {
           ok: false,
-          error: `The cards total $${Number(cart.gc_total).toFixed(2)} against $${target.toFixed(2)} to fund ($${Number(cart.approved_amount).toFixed(2)} approved${fundingTaxPct(cart) ? ` + ${fundingTaxPct(cart)}% tax` : ''}) — $${(target - Number(cart.gc_total)).toFixed(2)} short. Add another card first.`,
+          error: `The cards total $${Number(cart.gc_total).toFixed(2)} against $${target.toFixed(2)} approved — $${(target - Number(cart.gc_total)).toFixed(2)} short. Add another card first.`,
         });
       }
       const out = await fundBuyCart(cartId, user);

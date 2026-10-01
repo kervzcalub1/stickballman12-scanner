@@ -17,11 +17,12 @@
 // seconds later by `priceInBackground`, and a card that goes out first says "not priced"
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
-import { getBuyCart, getBuyCartLine } from './db.js';
-import { fundingTarget, fundingTaxPct } from './buycart.js';
+import { getBuyCart, getBuyCartLine, giftCardIssuersOnTelegram, lastCartEvent, logCartEvent } from './db.js';
+import { fundingTarget } from './buycart.js';
 import { stockForPair, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
-import { telegramConfigured, sendApprovalCard, sendNote, cardKeyboard } from './telegram.js';
+import { telegramConfigured, sendApprovalCard, sendNote, sendDirect, cardKeyboard } from './telegram.js';
+import { cardsIssuable } from '../../src/lib/buycartRules.js';
 
 // THE TEST SUITE MUST NOT POST TO TELEGRAM.
 //
@@ -334,7 +335,6 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
     if (!cart) return { sent: false, reason: 'cart is gone' };
     const n = (v) => Number(v) || 0;
     const target = fundingTarget(cart);
-    const tax = fundingTaxPct(cart);
     const rejected = n(cart.line_count) - n(cart.approved_count) - n(cart.pending_count);
     const pairs = (k) => `${k} pair${k === 1 ? '' : 's'}`;
     const closed = event === 'buying_request_closed';
@@ -344,7 +344,7 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
         : `${cart.cart_code} — ${cart.buyer_name} re-opened the request and is adding more pairs`,
       `${pairs(n(cart.line_count))} asked · ${n(cart.approved_count)} approved · ${n(cart.pending_count)} still waiting${rejected > 0 ? ` · ${rejected} turned down` : ''}`,
       closed
-        ? `Approved ${dollars(cart.approved_amount)}${tax ? ` + ${tax}% tax` : ''} = ${dollars(target)} to fund${n(cart.gc_total) > 0 ? ` · ${dollars(cart.gc_total)} in cards already issued` : ''}`
+        ? `Approved ${dollars(target)} to fund${n(cart.gc_total) > 0 ? ` · ${dollars(cart.gc_total)} in cards already issued` : ''}`
         : n(cart.gc_total) > 0
           ? `Cards issued so far: ${dollars(cart.gc_total)} — a top-up may be needed once the new lines are approved.`
           : 'No cards issued yet.',
@@ -391,6 +391,73 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
     return { sent: true };
   } catch (e) {
     console.error(`[notify] could not send ${event} (${direct ? 'Telegram' : 'Make'}):`, e.message);
+    return { sent: false, reason: e.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "Your turn" for the gift card desk — a DIRECT message, not the group.
+//
+// The moment a request can take cards (`cardsIssuable`: the buyer closed the list and
+// every line is decided) and the cards recorded so far don't cover the approved total,
+// each person holding `issue_gift_cards` with a linked Telegram account is told, in
+// their own chat with the bot: who is waiting, on which request, for how much.
+//
+// Called after the two writes that can make a request ready — the buyer closing the
+// list (cart/submit) and a decision (cart/decide, a Telegram tap) — fire-and-forget like
+// every other notice here. Said ONCE per amount: the last `cards_requested` event holds
+// the figure, so a second decision that changes nothing stays quiet, while a re-opened
+// list that adds approved pairs announces the top-up.
+//
+// A person who never pressed Start on the bot cannot be messaged first (Telegram's
+// rule); that is logged by name so "I never got it" has an answer.
+export async function notifyIssuersIfReady(cartId) {
+  if (!telegramConfigured()) return { sent: false, reason: 'Telegram is not configured' };
+  try {
+    const cart = await getBuyCart(cartId);
+    if (!cart || cart.funding_method === 'company_card') return { sent: false, reason: 'not a gift-card request' };
+    if (!cardsIssuable(cart) || !['approved', 'funded'].includes(cart.status)) return { sent: false, reason: 'not ready for cards' };
+    const target = fundingTarget(cart);
+    const issued = Number(cart.gc_total) || 0;
+    const owed = money(target - issued);
+    if (!(owed > 0)) return { sent: false, reason: 'already covered' };
+
+    const tag = `$${owed.toFixed(2)}`;
+    const last = await lastCartEvent(cartId, 'cards_requested');
+    if (last && String(last.body || '').startsWith(tag)) return { sent: false, reason: 'already announced' };
+
+    const issuers = await giftCardIssuersOnTelegram();
+    if (!issuers.length) {
+      console.log(`[notify] ${cart.cart_code} is waiting for gift cards, but nobody holding issue_gift_cards has a linked Telegram account`);
+      return { sent: false, reason: 'no issuer on Telegram' };
+    }
+
+    const n = Number(cart.approved_count) || 0;
+    const base = String(process.env.APP_BASE_URL || '').trim().replace(/\/+$/, '');
+    const text = [
+      `${notifyEnv() === 'dev' ? '[dev] ' : ''}${cart.buyer_name || 'The buyer'} is waiting for gift cards on ${cart.cart_code} — ${dollars(owed)}`,
+      issued > 0
+        ? `${dollars(issued)} is already on cards; ${dollars(target)} approved in all (${n} pair${n === 1 ? '' : 's'}).`
+        : `${n} pair${n === 1 ? '' : 's'} approved, at shelf price.`,
+      ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
+      ...(base ? [`${base}/buy-carts?request=${Number(cart.id)}`] : []),
+    ].join('\n');
+
+    const sentTo = [];
+    for (const u of issuers) {
+      try {
+        await sendDirect(u.telegram_user_id, text);
+        sentTo.push(u.name || u.username);
+      } catch (e) {
+        console.error(`[notify] ${cart.cart_code} gift-card DM to ${u.name || u.username} failed — ${e.status === 403 ? 'they have not pressed Start on the bot yet' : e.message}`);
+      }
+    }
+    if (!sentTo.length) return { sent: false, reason: 'no DM went through' };
+    await logCartEvent({ cartId, kind: 'cards_requested', body: `${tag} — gift card desk told on Telegram: ${sentTo.join(', ')}` });
+    console.log(`[notify] ${cart.cart_code} waiting for ${tag} in gift cards → DM to ${sentTo.join(', ')}`);
+    return { sent: true, to: sentTo };
+  } catch (e) {
+    console.error(`[notify] gift-card DM for cart ${cartId} failed:`, e.message);
     return { sent: false, reason: e.message };
   }
 }

@@ -105,11 +105,9 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
   const cards = cart.giftCards || [];
   const live = cards.filter((c) => !c.voided_at);
   const images = (cart.files || []).filter((f) => f.kind === 'gift_card');
-  // What the cards must carry: the approved sticker total plus the sales tax the till
-  // adds to it (`funding_target`, computed server-side). The old target was the sticker
-  // alone, and every full-price purchase came up short by exactly the tax.
+  // What the cards must carry: the shelf price of the approved pairs (`funding_target`,
+  // computed server-side) — no tax on top.
   const target = Number(cart.funding_target ?? cart.approved_amount) || 0;
-  const approved = Number(cart.approved_amount) || 0;
   const total = Number(cart.gc_total) || 0;
   const short = Math.max(0, Math.round((target - total) * 100) / 100);
   // Only against a list the buyer has CLOSED, with every line decided — the same rule
@@ -272,10 +270,7 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
         <div className="bc-fund-nums">
           <span><b>{money(total)}</b> on {live.length} card{live.length === 1 ? '' : 's'}</span>
           <span className="muted">
-            against <b>{money(target)}</b> to fund
-            {target !== approved && (
-              <span className="muted xs"> ({money(approved)} approved{cart.fundingTaxPct ? ` + ${cart.fundingTaxPct}% tax` : ' + tax'})</span>
-            )}
+            against <b>{money(target)}</b> approved
           </span>
           {short > 0
             ? <span className="bc-short">{money(short)} short</span>

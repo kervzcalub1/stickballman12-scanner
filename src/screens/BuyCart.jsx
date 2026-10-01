@@ -913,13 +913,6 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         {cart.restrictions && <p className="muted sm"><b>Limits:</b> {cart.restrictions}</p>}
         <div className="bc-money">
           <span>Approved <b>{money(cart.approved_amount)}</b></span>
-          {/* What the cards must actually carry: the sticker total plus the tax the till
-              adds. The rate is shown only to whoever can read the stack it came from. */}
-          {cart.funding_method !== 'company_card' && Number(cart.funding_target) !== Number(cart.approved_amount) && (
-            <span title={cart.fundingTaxPct ? `${money(cart.approved_amount)} + ${cart.fundingTaxPct}% sales tax` : undefined}>
-              To fund <b>{money(cart.funding_target)}</b>{cart.fundingTaxPct ? <span className="muted xs"> incl. {cart.fundingTaxPct}% tax</span> : null}
-            </span>
-          )}
           {cart.funding_method === 'company_card'
             ? <span>Card charge <b>{money(cart.card_authorized)}</b></span>
             : <span>Cards <b>{money(cart.gc_total)}</b></span>}

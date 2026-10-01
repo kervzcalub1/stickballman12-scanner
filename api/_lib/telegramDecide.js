@@ -9,6 +9,7 @@
 // Returns { code, body } — the HTTP status and JSON the endpoint used to send.
 import { getBuyCart, userByTelegramId, noteTelegramLinkRequest } from './db.js';
 import { hasPrivilege, decideLines } from './buycart.js';
+import { notifyIssuersIfReady } from './notify.js';
 
 const R = (code, body) => ({ code, body });
 
@@ -85,6 +86,7 @@ export async function decideFromTelegram(body) {
       reason: body.reason, actor,
     });
     if (out.error) return R(out.code, { ok: false, error: out.error });
+    notifyIssuersIfReady(cartId);   // the last pending line decided → the desk's turn
 
     // Enough for Make to EDIT the original message rather than send a new one — a group
     // where every decision leaves a live button behind is a group where somebody taps

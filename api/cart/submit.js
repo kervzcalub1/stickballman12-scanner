@@ -24,7 +24,7 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_li
 import { getBuyCart, closeBuyCartList, reopenBuyCartList, dbConfigured, skusWithoutPhotos } from '../_lib/db.js';
 import { cartVisibleTo, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
 import { buyerCanClose, buyerCanReopen, reopenRefusedBecause } from '../../src/lib/buycartRules.js';
-import { notifyRequestEvent } from '../_lib/notify.js';
+import { notifyRequestEvent, notifyIssuersIfReady } from '../_lib/notify.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -78,6 +78,7 @@ export default async function handler(req, res) {
     const out = await closeBuyCartList(cartId, user);
     if (!out) return send(res, 409, { ok: false, error: 'This request is already closed.' });
     notifyRequestEvent(cartId, 'buying_request_closed', user);
+    notifyIssuersIfReady(cartId);   // everything already decided → the desk's turn now
     return send(res, 200, { ok: true, cart: redactCartForViewer(out, user) });
   } catch (e) {
     console.error('[cart/submit]', e.message);

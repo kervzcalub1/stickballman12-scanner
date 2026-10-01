@@ -142,6 +142,14 @@ export async function sendApprovalCard({ caption, keyboard, photoFileId = null }
   });
 }
 
+// A plain message straight to one person — their Telegram user id is the chat id of
+// their private chat with the bot. Telegram refuses (403 "bot can't initiate
+// conversation with a user") until that person has opened the bot and pressed Start
+// once; no bot setting can lift that, it is Telegram's anti-spam rule.
+export function sendDirect(telegramUserId, text) {
+  return enqueue(() => tg('sendMessage', { chat_id: Number(telegramUserId), text }));
+}
+
 // A plain note to the group — request closed / re-opened. No parse mode, like before:
 // a stray `*` in a store name prints rather than formats.
 export function sendNote(text) {

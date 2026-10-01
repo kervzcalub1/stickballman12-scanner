@@ -161,25 +161,18 @@ export function cartVisibleTo(user, cart) {
 // ---------------------------------------------------------------------------
 // Money
 //
-// The funding target is the SHELF price of every approved pair PLUS THE SALES TAX on
-// the request's cost stack — `buy_carts.funding_target`, recomputed with the lines and
-// the stack (recalcCartMoney). The sticker, no discount assumed, and the tax the till
-// will add to it: funding at the sticker alone over-funded on a discounted purchase and
-// came up short by exactly the tax on a full-price one, which is the common case. It
-// still over-funds on purpose where a discount applies — a gift card that comes up
-// short at the till strands a buyer in a shop, while a leftover balance is simply money
-// still ours, and step 10 makes us account for it either way.
+// The funding target is the SHELF price of every approved pair — `buy_carts.funding_target`,
+// recomputed with the lines (recalcCartMoney). The sticker, no discount assumed and NO
+// TAX added: the gift cards cover the approved shoes and nothing else (owner's rule,
+// 2026-10-02 — it carried the cost stack's sales tax from 2026-09-16 until then). A till
+// that charges more than the cards hold is a top-up the buyer asks for, not money the
+// cards were sized to include.
 export const fundingTarget = (cart) => {
   const t = Number(cart?.funding_target);
   if (Number.isFinite(t) && cart?.funding_target != null) return t;
   return Number(cart?.approved_amount) || 0;
 };
 
-/** The tax rate the target was built with, as a percentage, off the cost stack. */
-export const fundingTaxPct = (cart) => {
-  const n = Number(cart?.cost_stack?.taxPct);
-  return Number.isFinite(n) && n > 0 ? n : 0;
-};
 
 const money = (v) => (v == null ? null : Number(v));
 const near = (a, b, tol = 0.01) => Math.abs(Number(a) - Number(b)) <= tol;
@@ -530,7 +523,7 @@ export async function cartCloseChecks(full) {
         detail: cards.length === 0
           ? 'No gift cards recorded.'
           : Number(c.gc_total) < target
-            ? `Cards total $${Number(c.gc_total).toFixed(2)} against $${target.toFixed(2)} to fund ($${Number(c.approved_amount).toFixed(2)} approved${fundingTaxPct(c) ? ` + ${fundingTaxPct(c)}% tax` : ''}) — $${(target - Number(c.gc_total)).toFixed(2)} short.`
+            ? `Cards total $${Number(c.gc_total).toFixed(2)} against $${target.toFixed(2)} approved — $${(target - Number(c.gc_total)).toFixed(2)} short.`
             : null,
       }
       : {

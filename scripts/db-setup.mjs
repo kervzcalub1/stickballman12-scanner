@@ -1579,10 +1579,10 @@ await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS write_off_reason TEXT`
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_closed_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_closed_by TEXT`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_reopened_at TIMESTAMPTZ`);
-// What the cards must cover: the approved sticker total PLUS the sales tax off the cost
-// stack. `approved_amount` stays the sticker sum (what was approved); this is what the
-// till will actually ask for. Recomputed by recalcCartMoney with every change to the
-// lines or the stack.
+// What the cards must cover: the shelf price of the approved pairs — the same figure as
+// `approved_amount` since 2026-10-02 (owner's rule: gift cards cover the approved shoes,
+// no tax on top; 2026-09-16 → 10-01 it carried the cost stack's sales tax). Recomputed by
+// recalcCartMoney with every change to the lines.
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS funding_target NUMERIC(12,2)`);
 // ONE-SHOT backfill, guarded by a marker row: every request that had already been sent
 // in under the old flow is treated as a closed list, so nothing already approved is
@@ -1595,9 +1595,12 @@ if (!listBackfill.rows.length) {
               WHERE list_closed_at IS NULL AND status <> 'draft'`);
   await sql(`INSERT INTO app_settings (key, value) VALUES ('migr_buy_carts_list_closed', 'done') ON CONFLICT (key) DO NOTHING`);
 }
-await sql(`UPDATE buy_carts
-              SET funding_target = round(approved_amount * (1 + coalesce(nullif(cost_stack->>'taxPct','')::numeric, 0) / 100), 2)
-            WHERE funding_target IS NULL`);
+// Idempotent: any request still in play is brought to the rule; a finished one keeps
+// the figure it was funded and closed against.
+await sql(`UPDATE buy_carts SET funding_target = approved_amount
+            WHERE funding_target IS NULL
+               OR (funding_target IS DISTINCT FROM approved_amount
+                   AND status NOT IN ('closed', 'cancelled', 'written_off'))`);
 
 // Every open task, in ONE table rather than a return-case table beside a follow-up
 // table. The deck's rule is a single sentence — "owner + next action + due date +

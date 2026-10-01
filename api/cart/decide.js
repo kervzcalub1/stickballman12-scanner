@@ -12,6 +12,7 @@
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import { getBuyCart, dbConfigured } from '../_lib/db.js';
 import { requirePrivilege, decideLines } from '../_lib/buycart.js';
+import { notifyIssuersIfReady } from '../_lib/notify.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -46,6 +47,7 @@ export default async function handler(req, res) {
       qtyById, qtyAll, reason: body.reason, actor: user,
     });
     if (out.error) return send(res, out.code, { ok: false, error: out.error });
+    notifyIssuersIfReady(cartId);   // the last pending line decided → the desk's turn
     return send(res, 200, { ok: true, ...out });
   } catch (e) {
     console.error('[cart/decide]', e.message);

@@ -199,6 +199,16 @@ and `purchase-orders.md` → "Scan-first, any order".
      on blur** once both are typed to the same size (`mergeSizeRow`, carrying the
      units' VINs across) — on blur, not per keystroke, or "1" en route to "10" would
      dissolve into a real size-1 row mid-type.
+   - **A sizeless UPC remembers its size within the cart** (`knownUpcRow`). A UPC is
+     one size's box, so once the first box of a code has its size typed in, every
+     later scan of that code lands on that size row (+1) instead of opening another
+     `size?` row — those boxes rapid-scan like recognised ones. Same for a code the
+     catalogue doesn't know at all: once its first red line is filled in by hand,
+     later scans bump that row rather than opening a new red line (Undo steps it
+     back one). The catalogue's own size always wins. This works because **filling
+     in a `needsSize` row keeps its scanned UPC** — only retyping a size that was
+     already known clears it (before 2026-10-02 the first keystroke wiped it, so
+     those pairs also committed `upc = NULL`).
    - **`scanBoxMode`** ("Scanning as: With box / No box") is **sticky** and applied
      to every scan — the SOP already says to scan no-box pairs separately. Per-shoe
      box status and **GOAT only** (`goat_only` → PH lists to Alias(GOAT) ALONE;

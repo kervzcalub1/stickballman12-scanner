@@ -903,6 +903,19 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // ---- Add Item modal: scan one shoe model, auto-incrementing sizes ----
   const sameSku = (a, b) => Boolean(a) && Boolean(b)
     && String(a).trim().toUpperCase().replace(/\s+/g, '-') === String(b).trim().toUpperCase().replace(/\s+/g, '-');
+  // A UPC is one size's box. When the catalogue knows the shoe but not the size (or
+  // doesn't know the code at all), the size typed for the FIRST box of that code is
+  // the size of every other box wearing it — so the next scan lands there instead of
+  // asking again, and those boxes rapid-scan like any recognised code.
+  const knownUpcRow = (list, code) => {
+    for (const it of list) {
+      if (it.pending) continue;
+      for (const s of it.sizes || []) {
+        if (s.upc === code && !s.needsSize && String(s.size || '').trim()) return { item: it, size: s };
+      }
+    }
+    return null;
+  };
   // `upc` is the code THIS size was scanned from, and it stays on the size row —
   // a shoe line has no single UPC (every size has its own), so a line-level code
   // scanned once would be stamped on every other size committed with it.
@@ -1368,8 +1381,35 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     ]);
     if (lastScanRef.current?.lineKey === lineKey) lastScanRef.current.vin = vin;
 
+    // A size already typed in for this code earlier in the cart (see knownUpcRow).
+    const known = isUpc ? knownUpcRow(itemsRef.current, c) : null;
+
     if (!look.ok) {
       if (look.err?.unauthorized) return onSignOut();
+      // Not in the catalogue, but this code's first box was already filled in by hand
+      // (name, SKU, size): this box is another of those, not a new red line to retype.
+      if (known && known.item.withBox === withBox && !known.item.goatOnly
+        && !!known.item.preSell === !!preSellDefaultRef.current) {
+        const { item: kit, size: ksz } = known;
+        lastHitRef.current = { itemKey: kit.key, sizeKey: ksz.key };
+        // Undo steps that row back one, the way a manifest hit is undone — the line
+        // this scan opened is gone, so undoing by lineKey would remove nothing.
+        lastScanRef.current = { manifest: { itemKey: kit.key, sizeKey: ksz.key } };
+        setItems((arr) => {
+          const rest = arr.filter((x) => x.key !== lineKey);
+          const bumped = rest.map((it) => (it.key !== kit.key ? it : {
+            ...it,
+            sizes: it.sizes.map((s) => (s.key !== ksz.key ? s : {
+              ...s, qty: (Number(s.qty) || 0) + 1, scanned: (Number(s.scanned) || 0) + 1, vins: [...(s.vins || []), ...(vin ? [vin] : [])],
+            })),
+          }));
+          if (poBoxHasChecklistRef.current) return bumped;
+          const top = bumped.find((x) => x.key === kit.key);
+          return top ? [top, ...bumped.filter((x) => x.key !== kit.key)] : bumped;
+        });
+        setFlash({ type: 'added', text: `✓ ${kit.name || kit.sku || c} · size ${ksz.size} — same code as the box you sized` });
+        return;
+      }
       setItems((arr) => arr.map((it) => (it.key !== lineKey ? it : {
         ...it, pending: false, failed: true, sizes: [{ key: cartKey++, size: '', qty: 1, needsSize: true, upc: isUpc ? c : '', vins: vin ? [vin] : [] }],
       })));
@@ -1381,7 +1421,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }
 
     const p = look.product || {};
-    const size = p.scannedSize || '';
+    // The catalogue's size wins; failing that, the size already typed for this code.
+    const remembered = !p.scannedSize && known ? String(known.size.size).trim() : '';
+    const size = p.scannedSize || remembered;
     setItems((arr) => {
       // A re-released shoe comes back with several style codes and no way for the
       // server to know which is printed on THIS box. If the warehouse has already
@@ -1434,7 +1476,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       return [merged, ...arr.filter((x, idx) => idx !== i && x.key !== lineKey)];
     });
     setFlash(size
-      ? { type: 'added', text: `✓ ${p.name || c} · size ${size}` }
+      ? { type: 'added', text: `✓ ${p.name || c} · size ${size}${remembered ? ' — same code as the box you sized' : ''}` }
       : { type: 'warn', text: `${p.name || c} — no size from the catalogue, set it below` });
   }
 
@@ -1524,7 +1566,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const setSizeValue = (itemKey, sizeKey, size) => setItems((arr) => arr.map((it) => (it.key !== itemKey ? it : {
     ...it,
     sizes: it.sizes.map((s) => (s.key !== sizeKey ? s
-      : { ...s, size, upc: String(s.size || '').trim() === String(size || '').trim() ? s.upc : '' })),
+      // Retyping a KNOWN size clears its UPC (that code was the old size's box). Filling
+      // in a size the scan came back without doesn't: the code was scanned off this box.
+      : { ...s, size, upc: s.needsSize || String(s.size || '').trim() === String(size || '').trim() ? s.upc : '' })),
   })));
   // Two scans of one shoe that both came back sizeless land as two separate rows
   // (two unknown sizes are not one size scanned twice). Once they're typed in and

@@ -13,6 +13,8 @@ loadEnv();
 const SKU_A = 'E2E-RAPID-A';
 const SKU_B = 'E2E-RAPID-B';   // resolves, but the catalogue has no size for it
 const SKU_X = 'E2E-RAPID-X';   // resolves to nothing at all
+const UPC_NOSIZE = '190000000017';  // a UPC the catalogue knows the shoe of, but not the size
+const UPC_UNKNOWN = '190000000024'; // a UPC the catalogue doesn't know at all
 
 async function stubCatalogue(page) {
   await page.route('**/api/sku-search', async (route) => {
@@ -22,6 +24,13 @@ async function stubCatalogue(page) {
     }
     if (sku === SKU_B) {
       return route.fulfill({ json: { ok: true, product: { name: 'E2E Rapid Trainer', sku: SKU_B, image: '', source: 'manual', sizes: [] } } });
+    }
+    return route.fulfill({ status: 404, json: { ok: false, error: 'No product found' } });
+  });
+  await page.route('**/api/upc-search', async (route) => {
+    const upc = String(route.request().postDataJSON()?.upc || '');
+    if (upc === UPC_NOSIZE) {
+      return route.fulfill({ json: { ok: true, product: { name: 'E2E Sizeless Retro', sku: SKU_B, upc, image: '', source: 'manual', sizes: [] } } });
     }
     return route.fulfill({ status: 404, json: { ok: false, error: 'No product found' } });
   });
@@ -143,6 +152,52 @@ test('a product with no size from the catalogue lands with a size? row that must
   await expect(line).not.toHaveClass(/needs-fix/);
   await page.getByRole('button', { name: 'Review →' }).click();
   await expect(page.getByText(/^Review /)).toBeVisible();
+
+  await leave(page);
+});
+
+// A UPC is one size's box: size the first box of a sizeless code once, and every
+// other box wearing that code lands on that size — rapid scan, no retyping.
+test('a sizeless UPC remembers the size typed for its first box', async ({ page }) => {
+  await openItemsStep(page);
+
+  await scan(page, UPC_NOSIZE);
+  const line = page.locator(`.recv-item[data-sku="${SKU_B}"]`);
+  await expect(line.locator('.sz.need')).toBeVisible({ timeout: 10_000 });
+  await line.locator('.sz.need').fill('10');
+  await line.locator('.sz.need').blur();
+  await expect(line).not.toHaveClass(/needs-fix/);
+
+  await scan(page, UPC_NOSIZE);
+  await scan(page, UPC_NOSIZE);
+  await expect(page.locator('.recv-item').filter({ hasText: 'E2E Sizeless Retro' })).toHaveCount(1);
+  await expect(line.locator('.sz.need')).toHaveCount(0);
+  await expect(line.locator('.recv-size-name')).toHaveText(['10']);
+  await expect(line.locator('.qty-val')).toHaveText('3');
+
+  await leave(page);
+});
+
+test('an unknown UPC filled in by hand once takes its later boxes without a new red line', async ({ page }) => {
+  await openItemsStep(page);
+
+  await scan(page, UPC_UNKNOWN);
+  await expect(page.locator('.recv-item.needs-fix')).toBeVisible({ timeout: 10_000 });
+  const failed = page.locator('.recv-item').first();   // not .needs-fix: that goes once it's filled
+  await failed.getByPlaceholder('Product name').fill('Hand-typed Runner');
+  const sz = failed.locator('.sz.need');
+  await sz.fill('9.5');
+  await sz.blur();
+  await expect(page.locator('.recv-item.needs-fix')).toHaveCount(0);
+
+  await scan(page, UPC_UNKNOWN);
+  await expect(page.locator('.recv-item .qty-val')).toHaveText('2', { timeout: 10_000 });
+  await expect(page.locator('.recv-item')).toHaveCount(1);
+  await expect(page.locator('.recv-item.needs-fix')).toHaveCount(0);
+
+  // Undo steps that row back one rather than leaving the extra pair in.
+  await page.getByRole('button', { name: /Undo last scan/ }).click();
+  await expect(page.locator('.recv-item .qty-val')).toHaveText('1');
 
   await leave(page);
 });

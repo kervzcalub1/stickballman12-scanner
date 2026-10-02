@@ -108,6 +108,63 @@ async function resolveCodes(product) {
   return product;
 }
 
+/**
+ * Step 1 on its own: which shoe and which SIZE is this barcode, by the first source that
+ * answers (header order). Used by the scan endpoint above and by the rescale audit's
+ * count (api/rescale-requests/audit-scan.js), which passes `ownStock: false, alias: false`
+ * — a count that checks OUR records can't take its answer from them, and Alias names no
+ * size. Returns { sku, scannedSize, via, ambiguous, fb } or null. Never throws.
+ */
+const resolveCache = new Map();
+export async function resolveUpc(upc, { ownStock = true, alias = true } = {}) {
+  const key = `${upc}|${ownStock ? 1 : 0}${alias ? 1 : 0}`;
+  const c = resolveCache.get(key);
+  if (c && Date.now() - c.at < c.ttl) return c.hit;
+  let hit = null;
+  const take = (r, via) => {
+    if (!r?.sku) return false;
+    hit = { sku: normSku(r.sku), scannedSize: r.scannedSize || null, via, ambiguous: !!r.ambiguous, fb: r };
+    return true;
+  };
+  let proxyDown = false;
+  try { take(await stockxUpcLookup(upc), 'stockx'); } catch (e) {
+    proxyDown = true;
+    console.warn('[upc-search] StockX proxy failed:', e.message);
+  }
+  try { if (!hit && proxyDown) take(await stockxProductByUpc(upc), 'stockx-official'); } catch (e) {
+    console.warn('[upc-search] StockX official failed:', e.message);
+  }
+  try { if (!hit) take(await nikeProductByUpc(upc), 'nike'); } catch (e) {
+    console.warn('[upc-search] Nike feed failed:', e.message);
+  }
+  if (!hit && ownStock && dbConfigured()) {
+    try { take(await productFromOwnStockByUpc(upc), 'own-stock'); } catch (e) {
+      console.warn('[upc-search] own-stock lookup failed:', e.message);
+    }
+  }
+  if (!hit && alias) {
+    // LAST — Alias proxy: SKU only (no scanned size → size left blank).
+    try {
+      const al = await aliasProductByUpc(upc);
+      if (al?.sku) hit = { sku: normSku(al.sku), scannedSize: null, via: 'alias', ambiguous: false, fb: al };
+    } catch (e) {
+      console.warn('[upc-search] Alias proxy failed:', e.message);
+    }
+  }
+  // Only CATALOGUE answers are kept (a gun fires the same box code again and again).
+  // Our own stock is cheap to ask and changes the moment a pair is received, and a miss
+  // is never kept: a code typed in by hand once is known from then on, and a new
+  // release can reach the catalogue later the same day.
+  // The one exception: a catalogue-only caller (the audit count) keeps a MISS for ten
+  // minutes, so a shelf of an unlisted box doesn't ask StockX and Nike on every scan.
+  const keep = hit ? ['stockx', 'stockx-official', 'nike'].includes(hit.via) : !ownStock;
+  if (keep) {
+    resolveCache.set(key, { hit, at: Date.now(), ttl: hit ? 6 * 60 * 60 * 1000 : 10 * 60 * 1000 });
+    if (resolveCache.size > 5000) resolveCache.clear();
+  }
+  return hit;
+}
+
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
@@ -124,38 +181,11 @@ export default async function handler(req, res) {
   if (cached) return send(res, 200, { ok: true, product: await resolveCodes(cached), cached: true });
 
   // 1) Resolve SKU + scanned size — first source to answer wins (see the header).
-  let sku = null;
-  let scannedSize = null;
-  let fb = null; // resolver-supplied details, used only if the catalog lookup misses
-  let via = null;
-  const take = (r, name) => {
-    if (!r?.sku) return false;
-    sku = normSku(r.sku); scannedSize = r.scannedSize || null; fb = r; via = name;
-    return true;
-  };
-  let proxyDown = false;
-  try {
-    take(await stockxUpcLookup(upc), 'stockx');
-  } catch (e) {
-    proxyDown = true;
-    console.warn('[upc-search] StockX proxy failed:', e.message);
-  }
-  if (!sku && proxyDown) take(await stockxProductByUpc(upc), 'stockx-official');
-  if (!sku) take(await nikeProductByUpc(upc), 'nike');
-  if (!sku && dbConfigured()) {
-    try { take(await productFromOwnStockByUpc(upc), 'own-stock'); } catch (e) {
-      console.warn('[upc-search] own-stock lookup failed:', e.message);
-    }
-  }
-  if (!sku) {
-    // LAST — Alias proxy: SKU only (no scanned size → size left blank).
-    try {
-      const al = await aliasProductByUpc(upc);
-      if (al?.sku) { sku = normSku(al.sku); scannedSize = null; fb = al; via = 'alias'; }
-    } catch (e) {
-      console.warn('[upc-search] Alias proxy failed:', e.message);
-    }
-  }
+  const hit = await resolveUpc(upc);
+  const sku = hit?.sku || null;
+  const scannedSize = hit?.scannedSize || null;
+  const fb = hit?.fb || null;
+  const via = hit?.via || null;
   if (!sku) return send(res, 404, { ok: false, error: 'No product found for that UPC.' });
 
   // 2) Authoritative details from the official Alias catalog (by SKU).

@@ -1,4 +1,4 @@
-// POST /api/rescale-requests/audit-scan { id, code } -> { ok, kind, size, vin?, name?, warn? }
+// POST /api/rescale-requests/audit-scan { id, code } -> { ok, kind:'upc', size, upc, source, name?, warn?, note? }
 //
 // The audit's scan path. Brent counts a shelf by scanning, not by typing a number into a
 // box — and the two are not the same claim. A typed 3 is somebody's assertion; three
@@ -11,10 +11,14 @@
 // what our own stock says a box barcode is. One round trip per scan, so the gun can keep
 // firing.
 //
+// It counts by the BOX BARCODE, sized by the catalogue — never by the 1ID, which only
+// repeats the size we recorded (see resolveAuditScan in db.js for why).
+//
 // It does NOT write anything. The count is still submitted in one go by /audit — a scan
 // that half-committed would leave a shelf count nobody could re-do.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { resolveAuditScan, dbConfigured } from '../_lib/db.js';
+import { resolveUpc } from '../upc-search.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -31,7 +35,11 @@ export default async function handler(req, res) {
   if (!id) return send(res, 400, { ok: false, error: 'Missing request id.' });
 
   try {
-    const r = await resolveAuditScan({ requestId: id, code: body.code });
+    // A box barcode is asked of the CATALOGUE first (StockX → Nike), never our own stock
+    // or Alias: our stock is the thing being checked, and Alias names no size.
+    const code = String(body.code || '').trim();
+    const catalogue = /^\d{8,14}$/.test(code) ? await resolveUpc(code, { ownStock: false, alias: false }) : null;
+    const r = await resolveAuditScan({ requestId: id, code, catalogue });
     // A scan that resolves to nothing is a 409, not a 500: it is an answer about the
     // shoe in somebody's hand, and the screen has to say what to do about it.
     if (r.error) return send(res, 409, { ok: false, error: r.error });

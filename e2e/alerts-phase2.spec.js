@@ -78,6 +78,11 @@ const post = async (request, who, path, data) => {
   const r = await request.post(`/api/${path}`, { headers: { Authorization: `Bearer ${tokenFor(people[who])}` }, data });
   return { status: r.status(), body: await r.json() };
 };
+// The "Open in Inventory" link — only there when the server has APP_BASE_URL (CI has
+// none). Where it routes per role is tested directly below, so it is covered either way.
+const linkOf = (dm) => dm.body.reply_markup?.inline_keyboard?.[0]?.[0]?.url
+  || (String(dm.body.text).match(/https?:\/\/\S+/) || [])[0] || null;
+const expectLinkIfAny = (dm, re) => { const l = linkOf(dm); if (l) expect(l).toMatch(re); };
 const dmsTo = (from, who) => calls.slice(from).filter((c) => c.method === 'sendMessage' && Number(c.body.chat_id) === TG[who]);
 
 // In THIS process, against the same fake — for the events whose trigger (a supplier
@@ -127,7 +132,7 @@ test('decisions on a request reach the buyer as ONE summary', async ({ request }
   expect(text).toContain('Approved 3 pairs: E2E-AL2-A 9 ×2, E2E-AL2-C 11 ×1');
   expect(text).toContain('Turned down: E2E-AL2-B 10 (Too slow)');
   // A supplier's link goes to the supplier portal's buying page.
-  expect(dms[0].body.reply_markup?.inline_keyboard?.[0]?.[0]?.url || dms[0].body.text).toMatch(/\/buying\?request=/);
+  expectLinkIfAny(dms[0], /\/buying\?request=/);
   // The approver never hears about their own decisions.
   expect(dmsTo(t0, 'approver').filter((d) => /pairs decided/.test(d.body.text))).toHaveLength(0);
 });
@@ -157,7 +162,7 @@ test('a rescale count tells whoever asked for it, reported vs counted', async ({
   const dm = dmsTo(t0, 'ph')[0];
   expect(dm.body.text).toContain('E2E Al2 Warehouse counted E2E Al2 Shoe — you reported 10 ×2; on the shelf: 10.');
   // PH lives under /ph — the link has to land inside the PH app.
-  expect(dm.body.reply_markup?.inline_keyboard?.[0]?.[0]?.url || dm.body.text).toMatch(/\/ph\/rescale/);
+  expectLinkIfAny(dm, /\/ph\/rescale/);
 });
 
 test('boxes shipped on one order are one message; a delivery is announced once', async ({ request }) => {
@@ -256,11 +261,24 @@ test('nudges: the server picks the people, once an hour, and it is on the trail'
   const t2 = calls.length;
   expect((await post(request, 'ph', 'nudge', { kind: 'po', id: made.pos[0], to: 'supplier' })).status).toBe(200);
   await expect.poll(() => dmsTo(t2, 'sup').length).toBe(1);
-  expect(dmsTo(t2, 'sup')[0].body.reply_markup?.inline_keyboard?.[0]?.[0]?.url || dmsTo(t2, 'sup')[0].body.text).toMatch(/\/orders\?po=/);
+  expectLinkIfAny(dmsTo(t2, 'sup')[0], /\/orders\?po=/);
   expect((await pool.query(`SELECT count(*)::int AS n FROM po_comments WHERE po_id = $1 AND body LIKE 'Nudged the supplier%'`, [made.pos[0]])).rows[0].n).toBe(1);
 
   // Nonsense targets are refused before anything is looked up.
   expect((await post(request, 'ph', 'nudge', { kind: 'po', id: made.pos[0], to: 'everyone' })).status).toBe(400);
+});
+
+test('"Open in Inventory" lands inside the reader\'s own app', async () => {
+  const { at } = await import('../api/_lib/alerts.js');
+  const ph = { role: 'ph_team' }; const sup = { role: 'supplier' }; const wh = { role: 'warehouse' }; const sa = { role: 'superadmin' };
+  expect(at('buying', 'request=7')(ph)).toBe('/ph/gift-card-buying?request=7');
+  expect(at('buying', 'request=7')(sup)).toBe('/buying?request=7');
+  expect(at('buying', 'request=7')(wh)).toBe('/buy-carts?request=7');
+  expect(at('buying', 'request=7')(sa)).toBe('/buy-carts?request=7');
+  expect(at('rescale')(ph)).toBe('/ph/rescale');
+  expect(at('rescale')(wh)).toBe('/rescalereq');
+  expect(at('po', 'po=3')(sup)).toBe('/orders?po=3');
+  expect(at('reconcile', 'po=3')(ph)).toBe('/ph/reconciliation?po=3');
 });
 
 test('the panel lists the Phase 2 alerts by job', async ({ request }) => {

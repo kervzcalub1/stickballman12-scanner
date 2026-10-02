@@ -16,6 +16,7 @@ import { useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
 import { isCameraReread, isLocationCode, isRollVin, isUpcCode, isVinCode } from '../lib/codes.js';
 import UpcCheck from '../components/UpcCheck.jsx';
+import { BulkVinCheck } from '../components/BulkVinCheck.jsx';
 import { toCSV, downloadCSV } from '../lib/csv.js';
 import { ymd, periodRange, periodLabel, shiftAnchor, estToday, estCivil, estCivilFromYmd, estDate, PH_DATETIME } from '../lib/format.js';
 import { SUPPLIERS } from '../lib/constants.js';
@@ -246,13 +247,26 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   // batch of pairs sold or shelved already has its own screens (StatusScanPage,
   // Move to shelf), and quietly growing a second one behind a scanner is how two
   // screens end up disagreeing about what a scan means.
-  const [rapid, setRapid] = useState(() => !!loadPrefs().rapidScan);
+  // THREE scan modes, named for what the next scan does (the user's ask, 2026-10-03:
+  // "name it properly so it's not confusing"):
+  //   single — "One at a time": a scan opens that pair.
+  //   rapid  — "Rapid · instant": a scan adds to a list AND answers straight away.
+  //   bulk   — "Bulk · check all": scan / paste a hundred-plus first, then check them all
+  //            at once (BulkVinCheck) — "which of these are registered?".
+  // Per device. `rapidScan: true` from before the three modes still means Rapid.
+  const [scanMode, setScanModeState] = useState(() => {
+    const p = loadPrefs();
+    return ['single', 'rapid', 'bulk'].includes(p.scanMode) ? p.scanMode : (p.rapidScan ? 'rapid' : 'single');
+  });
+  const rapid = scanMode === 'rapid';
+  const bulk = scanMode === 'bulk';
+  const bulkRef = useRef(null);
   const [scans, setScans] = useState([]); // newest first: { vin, at, loading?, item?, sticker?, error?, seen }
   const scanSeen = useRef({});            // vin -> last accepted ms, for the camera re-read guard
-  const toggleRapid = (on) => {
-    setRapid(on);
-    setPrefs((p) => { const n = { ...p, rapidScan: !!on }; savePrefs(n); return n; });
-    if (!on) setShowCam(false);
+  const setScanMode = (m) => {
+    setScanModeState(m);
+    setPrefs((p) => { const n = { ...p, scanMode: m, rapidScan: m === 'rapid' }; savePrefs(n); return n; });
+    if (m === 'single') setShowCam(false);
   };
   const clearScans = () => { setScans([]); scanSeen.current = {}; };
   const undoLastScan = () => setScans((rows) => {
@@ -463,6 +477,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     // SB-100001 barcodes. isVinCode has to be asked FIRST — the loose pattern below
     // wants a digit right after the letters, so it misses every roll sticker.
     if (isVinCode(v) || /^s[a-z]*-?\d/i.test(v)) {
+      if (bulk) { bulkRef.current?.add(v); setQ(''); return; }
       if (rapid) { addScan(v); return; }
       openDetail(v); setQ(''); return;
     }
@@ -477,6 +492,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     // A shelf barcode is a search either way — it isn't a pair, so it has nothing to add
     // to a scan list. It closes the camera because the answer is the table below.
     if (isLocationCode(c)) { setShowCam(false); setQ(c); setFrom(''); setTo(''); load({ q: c, from: '', to: '' }); return; }
+    if (bulk) {
+      // The camera holds a barcode in frame for many decodes — same guard as Rapid.
+      const v = c.toUpperCase();
+      if (isCameraReread(scanSeen.current, v, Date.now())) return;
+      scanSeen.current[v] = Date.now();
+      bulkRef.current?.add(c); return;
+    }
     if (rapid) { addScan(c, { fromCamera: true }); return; }
     openDetail(c);
   }
@@ -1063,23 +1085,30 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
           {/* The mode toggle sits ON the scan row because that is the thing it changes:
               what the next scan does. `aria-pressed` rather than a checkbox — it is a
               two-state button, and it has to read as one to a screen reader. */}
-          <button type="button" className={`btn ${rapid ? 'primary' : 'ghost'}`} aria-pressed={rapid}
-            onClick={() => toggleRapid(!rapid)}
-            title={rapid ? 'Scans open each pair again' : 'Keep scanning — build a list instead of opening each pair'}>
-            <Icon name="refresh" /> Rapid scan{rapid ? ' · on' : ''}
-          </button>
         </form>
+        <div className="seg scan-modes" role="group" aria-label="Scan mode">
+          <span className="scan-modes-label muted sm">Scan mode</span>
+          {[
+            ['single', 'One at a time', 'Each scan opens that pair'],
+            ['rapid', 'Rapid · instant', 'Keep scanning — each scan is added to a list and answered right away'],
+            ['bulk', 'Bulk · check all', 'Scan or paste many VINs first, then check them all at once — registered or not'],
+          ].map(([m, label, tip]) => (
+            <button key={m} type="button" className={`seg-btn ${scanMode === m ? 'on' : ''}`} aria-pressed={scanMode === m}
+              title={tip} onClick={() => setScanMode(m)}>{label}</button>
+          ))}
+        </div>
         {showCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>
             {/* `continuous` only in rapid mode: otherwise the first scan navigates away
                 and a scanner still decoding behind the detail view is just battery. */}
-            <CameraScanner mode="vin" continuous={rapid} onDetected={routeScan} onClose={() => setShowCam(false)}
+            <CameraScanner mode="vin" continuous={rapid || bulk} onDetected={routeScan} onClose={() => setShowCam(false)}
               zoom={prefs.cameraZoom} onZoomChange={setCameraZoom} />
           </Suspense>
         )}
         {rapid && (
           <ScanSession rows={scans} onOpen={openDetail} onUndo={undoLastScan} onClear={clearScans} />
         )}
+        {bulk && <BulkVinCheck ref={bulkRef} sound={!!prefs.scanSound} onOpen={openDetail} onSignOut={onSignOut} />}
 
         <div className="cal-bar mt">
           <div className="seg cal-modes" role="group" aria-label="Date range">

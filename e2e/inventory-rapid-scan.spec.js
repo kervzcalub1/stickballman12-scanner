@@ -48,7 +48,8 @@ test.afterAll(async () => {
 async function openRapid(page) {
   await loginAs(page, 'warehouse');
   await page.goto('/inventory');
-  const toggle = page.getByRole('button', { name: /Rapid scan/ });
+  // Scan mode is a three-way choice now (One at a time / Rapid · instant / Bulk · check all).
+  const toggle = page.getByRole('button', { name: 'Rapid · instant' });
   await expect(toggle).toBeVisible();
   if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click();
   await expect(page.locator('.scan-session')).toBeVisible();
@@ -129,11 +130,10 @@ test('undo and clear', async ({ page }) => {
   await expect(page.locator('.scan-row')).toHaveCount(0);
 });
 
-test('with rapid scan OFF a scan still opens the pair', async ({ page }) => {
+test('with "One at a time" a scan still opens the pair', async ({ page }) => {
   await loginAs(page, 'warehouse');
   await page.goto('/inventory');
-  const toggle = page.getByRole('button', { name: /Rapid scan/ });
-  if ((await toggle.getAttribute('aria-pressed')) === 'true') await toggle.click();
+  await page.getByRole('button', { name: 'One at a time' }).click();
   await expect(page.locator('.scan-session')).toHaveCount(0);
   const input = page.locator('.searchrow input').first();
   await gun(input, VINS[0]);

@@ -5410,3 +5410,39 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 /* Nudge… (src/components/NudgeButton.jsx) */
 .bc-nudge { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 4px; }
 .nudge-done { margin-left: 4px; }
+
+/* Inventory · scan mode (One at a time / Rapid · instant / Bulk · check all) */
+.scan-modes { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
+.scan-modes-label { margin-right: 4px; }
+
+/* Inventory · Bulk · check all (src/components/BulkVinCheck.jsx) */
+.bulk-check { margin-top: 12px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--panel-2); }
+.bulk-check-head { margin-bottom: 8px; }
+.bulk-check-scan { display: flex; gap: 8px; flex-wrap: wrap; }
+.bulk-check-scan input { flex: 1 1 220px; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.bulk-check-paste { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.bulk-check-paste .btn { align-self: flex-start; }
+.bulk-check-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.bulk-check-total { margin-right: auto; }
+.bulk-check-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.bulk-check-exports { margin-left: auto; display: flex; gap: 6px; }
+.bc-chip { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.bc-chip.on { border-color: var(--primary); background: rgba(79,124,255,0.15); }
+.bc-chip.tone-ok { color: var(--ok); }
+.bc-chip.tone-bad { color: var(--err); }
+.bc-chip.tone-warn { color: #e0a458; }
+.bulk-check-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 60vh; overflow-y: auto; }
+.bulk-row { display: grid; grid-template-columns: minmax(150px, auto) auto auto 1fr auto; align-items: center; gap: 8px;
+  padding: 8px 4px; border-top: 1px solid var(--border); }
+.bulk-row-vin { font-size: 13px; }
+.bulk-row-detail { color: var(--muted); min-width: 0; }
+.bulk-pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; border: 1px solid currentColor; }
+.bulk-pill.tone-ok { color: var(--ok); }
+.bulk-pill.tone-bad { color: var(--err); }
+.bulk-pill.tone-warn { color: #e0a458; }
+.bulk-pill.tone-muted { color: var(--muted); }
+@media (max-width: 600px) {
+  .bulk-row { grid-template-columns: 1fr auto; }
+  .bulk-row-detail, .bulk-status { grid-column: 1 / -1; }
+  .bulk-check-exports { margin-left: 0; }
+}

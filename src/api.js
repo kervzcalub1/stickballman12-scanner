@@ -204,6 +204,8 @@ export const api = {
   batchAudit: (batchId, note) => post('/api/batches/audit', { batchId, note }),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
+  // Inventory · Bulk · check all — up to 1,000 VINs in one call.
+  checkVinsBulk: (vins) => post('/api/items/check-vins', { vins }),
   // Exact UPC/SKU match against our own stock (Box Labels asks this before the catalogue).
   itemsFind: (code) => get(`/api/items/find?code=${encodeURIComponent(code)}`),
   // Shelf locations (put-away + management)

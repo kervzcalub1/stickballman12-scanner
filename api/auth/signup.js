@@ -6,6 +6,7 @@ import {
   getJsonBody, send, applySecurity, rateLimit, hashPassword,
 } from '../_lib/util.js';
 import { createUser, dbConfigured } from '../_lib/db.js';
+import { alertSignup } from '../_lib/alerts.js';
 
 const USERNAME_RE = /^[a-z0-9._-]{3,32}$/;
 
@@ -42,6 +43,7 @@ export default async function handler(req, res) {
 
   try {
     await createUser({ name, username, passHash: hashPassword(password), role });
+    alertSignup({ name, username, role }); // admins, on Telegram — after the write, never blocking it
     return send(res, 201, {
       ok: true,
       message: 'Account created. Please wait for an admin to approve your access.',

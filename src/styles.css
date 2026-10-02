@@ -5362,3 +5362,47 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 /* Receive New: this parcel is one of PH's online orders (OnlineOrderBanner). */
 .oo-recv-banner { margin: 10px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--accent-edge); background: var(--accent-tint); font-size: 14px; }
 .oo-recv-done { color: #e0a878; font-weight: 600; }
+
+/* ── 🔔 Alerts panel (src/components/AlertsPanel.jsx) — the Hub's Alert Preferences ── */
+.topbar-bell { padding-left: 9px; padding-right: 9px; }
+.modal.al-panel { max-width: 480px; text-align: left; padding: 20px 18px 18px; }
+.al-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.al-head .modal-title { margin: 0; }
+.al-eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+.al-lede { color: var(--muted); font-size: 13px; margin: 4px 0 14px; }
+.al-flash { font-size: 13px; color: var(--ok); margin: 0 0 10px; }
+.al-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+.al-row { display: flex; align-items: center; gap: 12px; }
+.al-icon { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--bg); color: var(--muted); font-size: 16px; }
+.al-text { flex: 1; min-width: 0; }
+.al-title { font-weight: 600; font-size: 14px; }
+.al-when { color: var(--muted); font-size: 12.5px; line-height: 1.4; margin-top: 2px; }
+.al-when b { color: var(--text); font-weight: 600; }
+.al-wait { color: #e0a458; }
+.al-bad { color: var(--err); }
+.al-telegram.broken { border-color: rgba(255, 107, 107, 0.45); }
+.al-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.al-actions .btn { white-space: nowrap; }
+.al-req { color: var(--muted); font-weight: 400; font-size: 12.5px; }
+.al-group { margin-top: 14px; }
+.al-group-name { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 2px 6px; }
+.al-list { padding: 0; }
+.al-list > .al-row { padding: 12px 14px; }
+.al-list > .al-row + .al-row { border-top: 1px solid var(--border); }
+.al-foot { color: var(--muted); font-size: 12px; margin: 12px 2px 0; line-height: 1.45; }
+/* The switch — a 44px-tall hit area for a thumb on a warehouse floor. */
+.al-switch { flex: none; position: relative; width: 48px; height: 28px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--bg); cursor: pointer; padding: 0; margin: 8px 0; transition: background 0.15s; }
+.al-switch .al-knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--muted); transition: transform 0.15s, background 0.15s; }
+.al-switch.on { background: var(--primary); border-color: var(--primary); }
+.al-switch.on .al-knob { transform: translateX(20px); background: #fff; }
+.al-switch.locked { opacity: 0.55; cursor: not-allowed; }
+.al-switch:disabled:not(.locked) { opacity: 0.7; cursor: default; }
+.al-switch:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (max-width: 420px) {
+  .al-telegram { flex-wrap: wrap; }
+  .al-telegram .al-actions { flex-direction: row; width: 100%; padding-left: 46px; }
+  .al-telegram .al-actions .btn { flex: 1; }
+}

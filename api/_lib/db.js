@@ -6949,6 +6949,107 @@ export async function userByTelegramId(telegramUserId) {
   return u ? { ...u, uid: Number(u.id) } : null;
 }
 
+// ── Alerts on Telegram (api/_lib/alerts.js, docs/context/alerts.md) ──────────────────
+
+// Everyone an alert could go to, with what decides whether it does. A few dozen rows;
+// the audience rules (role, privileges) are applied in JS next to the catalogue that
+// defines them, rather than spread across one query per event.
+export async function alertCandidates() {
+  return db()`
+    SELECT id, name, username, role, privileges, telegram_user_id, telegram_broken_at,
+           alerts_muted, alert_prefs
+      FROM users
+     WHERE status = 'approved'
+     ORDER BY id`;
+}
+
+// One account's Telegram + alert state, for the Alerts panel.
+export async function getAlertAccount(userId) {
+  const rows = await db()`
+    SELECT id, name, username, role, privileges, telegram_user_id, telegram_name, telegram_username,
+           telegram_linked_at, telegram_broken_at, alerts_muted, alert_prefs
+      FROM users WHERE id = ${userId}`;
+  return rows[0] || null;
+}
+
+export async function setAlertPrefs(userId, { muted, prefs }) {
+  const rows = await db()`
+    UPDATE users
+       SET alerts_muted = COALESCE(${muted ?? null}::boolean, alerts_muted),
+           alert_prefs  = ${JSON.stringify(prefs || {})}::jsonb
+     WHERE id = ${userId}
+     RETURNING id`;
+  return rows[0] || null;
+}
+
+export async function createTelegramLinkToken({ userId, token, env, minutes = 15 }) {
+  // One live token per person — minting a new one retires the old, so a link sitting in
+  // some other chat stops working the moment its owner asks for a fresh one.
+  await db()`DELETE FROM telegram_link_tokens WHERE user_id = ${userId} AND used_at IS NULL`;
+  await db()`
+    INSERT INTO telegram_link_tokens (token, user_id, env, expires_at)
+    VALUES (${token}, ${userId}, ${env}, now() + make_interval(mins => ${minutes}))`;
+}
+
+// Spend a connect token and attach the Telegram account that pressed Start.
+// Returns { ok, user } or { ok: false, why: 'unknown' | 'used' | 'expired' | 'taken' | 'account', other? }.
+// The token is spent FIRST, in one conditional UPDATE, so two /starts racing on one link
+// can't both link — and a refused link still burns it (the owner mints another).
+export async function redeemTelegramLinkToken({ token, telegramUserId, telegramName, telegramUsername }) {
+  const spent = await db()`
+    UPDATE telegram_link_tokens SET used_at = now()
+     WHERE token = ${token} AND used_at IS NULL AND expires_at > now()
+     RETURNING user_id`;
+  if (!spent.length) {
+    const t = (await db()`SELECT used_at, expires_at FROM telegram_link_tokens WHERE token = ${token}`)[0];
+    return { ok: false, why: !t ? 'unknown' : t.used_at ? 'used' : 'expired' };
+  }
+  const userId = spent[0].user_id;
+  const other = (await db()`
+    SELECT id, name FROM users WHERE telegram_user_id = ${telegramUserId} AND id <> ${userId}`)[0];
+  if (other) return { ok: false, why: 'taken', other };
+  const rows = await db()`
+    UPDATE users
+       SET telegram_user_id = ${telegramUserId}, telegram_name = ${telegramName || null},
+           telegram_username = ${telegramUsername || null}, telegram_linked_at = now(),
+           telegram_broken_at = NULL
+     WHERE id = ${userId} AND status = 'approved'
+     RETURNING id, name, username`;
+  if (!rows.length) return { ok: false, why: 'account' };
+  // That Telegram account may have been waiting on Check Access after an unlinked tap.
+  await db()`DELETE FROM telegram_link_requests WHERE telegram_user_id = ${telegramUserId}`;
+  return { ok: true, user: rows[0] };
+}
+
+export async function unlinkTelegram(userId) {
+  const rows = await db()`
+    UPDATE users
+       SET telegram_user_id = NULL, telegram_name = NULL, telegram_username = NULL,
+           telegram_linked_at = NULL, telegram_broken_at = NULL
+     WHERE id = ${userId}
+     RETURNING id`;
+  return rows[0] || null;
+}
+
+// Telegram refused (403) → broken; a send that went through → healthy again. Written only
+// on a CHANGE, so a healthy send doesn't touch `users` (and wake every live screen) each time.
+export async function setTelegramBroken(userId, broken) {
+  if (broken) await db()`UPDATE users SET telegram_broken_at = now() WHERE id = ${userId} AND telegram_broken_at IS NULL`;
+  else await db()`UPDATE users SET telegram_broken_at = NULL WHERE id = ${userId} AND telegram_broken_at IS NOT NULL`;
+}
+
+export async function logAlert({ userId, eventKey, ref = null, status, reason = null }) {
+  await db()`
+    INSERT INTO alert_log (user_id, event_key, ref, status, reason)
+    VALUES (${userId}, ${eventKey}, ${ref}, ${status}, ${reason})`;
+}
+
+// Who the bot is talking to in a private chat — for a plain /start with no token.
+export async function userNameByTelegramId(telegramUserId) {
+  const rows = await db()`SELECT id, name FROM users WHERE telegram_user_id = ${telegramUserId}`;
+  return rows[0] || null;
+}
+
 // One file by its id alone, WITHOUT a cart to scope it. Only `cart/shoe-photo` uses
 // this — a machine caller holding an API key has no cart in hand, so the row itself has
 // to carry the check. It returns `kind`, and that endpoint refuses anything but 'shoe'.

@@ -13,6 +13,8 @@ import { Icon } from './NavIcons.jsx';
 import { onLiveState } from '../lib/live.js';
 import { compareSizes } from '../lib/codes.js';
 import { priceBasisChip } from '../lib/ph.js';
+import { useQueryParam } from '../lib/urlstate.js';
+import { AlertsPanel } from './AlertsPanel.jsx';
 import { LABEL_STOCKS, buildLabelPdf, dispatchPdf, isTouchPrint, canSharePdf, isChunkLoadError } from '../lib/labelPdf.js';
 
 // Live clock, always rendered in US Eastern with a literal "EST" suffix so the
@@ -337,6 +339,9 @@ export function NumField({ label, value, onChange, prefix, suffix, placeholder =
 }
 
 export function TopBar({ title, onHome, onSignOut, right }) {
+  // The 🔔 Alerts panel (Telegram alerts + preferences) — here so every app, warehouse,
+  // PH and supplier, reaches it the same way. `?alerts=1` survives a refresh.
+  const [alertsOpen, setAlertsOpen] = useQueryParam('alerts');
   return (
     <header className="topbar">
       <div className="brand">
@@ -347,8 +352,11 @@ export function TopBar({ title, onHome, onSignOut, right }) {
       <div className="topbar-actions">
         {right}
         {onHome && <button className="btn ghost sm" onClick={onHome}>← Home</button>}
+        <button type="button" className="btn ghost sm topbar-bell" aria-label="Alerts" title="Alerts"
+          onClick={() => setAlertsOpen('1')}><Icon name="bell" /></button>
         <button className="btn ghost sm" onClick={onSignOut}>Sign out</button>
       </div>
+      {alertsOpen === '1' && createPortal(<AlertsPanel onClose={() => setAlertsOpen('')} />, document.body)}
     </header>
   );
 }

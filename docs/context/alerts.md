@@ -61,6 +61,8 @@ still works. The env logins (`admin`, `superadmin`) have no users row → panel 
 | `online.delivered` | warehouse (admins: off) — on the transition, `once` | same two | on |
 | `po.discrepancy` | admins (PH: shown, off) — `once` per distinct result | `batches/commit`, `box-commit`, `set-status` | on |
 | `po.comment` | everyone on that PO thread + admins | `po/comment.js` | on |
+| `buy.list_reopened` | gift card desk — only once the desk is in play (approved / released / cards issued) | `cart/submit.js` (reopen) | on |
+| `buy.list_reclosed` | gift card desk — closed AGAIN after a re-open: lines added / removed / changed since `list_reopened_at`, and what that means for the cards | `cart/submit.js` (close) | on |
 | `nudge` | whoever the record waits on | `api/nudge.js` | required |
 
 **Links are per reader** (`at(page, query)`): PH lands under `/ph/*`, a supplier on its

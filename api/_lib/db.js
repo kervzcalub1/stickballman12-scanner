@@ -2129,15 +2129,25 @@ export async function listRescaleRequests(status = 'open', from = null, to = nul
 //
 // Brent counts a shelf by scanning, not by typing a number into a box, and the two are
 // not the same act: a typed 3 is a claim, while three scans are three pairs that were
-// each in somebody's hand. It also makes the two mistakes a shelf count actually makes
-// impossible to miss — counting the same pair twice (the VIN is already in the list) and
-// counting a pair of a DIFFERENT shoe that shares the shelf (its style code doesn't
-// match the request).
+// each in somebody's hand. It also catches a pair of a DIFFERENT shoe that shares the
+// shelf (its style code doesn't match the request).
 //
-// A 1ID/VIN names a UNIT, so it carries its own size and can be de-duplicated. A box UPC
-// names a SIZE and nothing more: two boxes of a size 9 are two legitimate scans of the
-// same code, so a repeat is never refused there.
-export async function resolveAuditScan({ requestId, code }) {
+// THE BOX BARCODE, NOT THE 1ID (2026-10-03). A rescale request exists because our numbers
+// may be wrong — "mismatch" is one of its reasons — and a 1ID/VIN answers with the size we
+// RECORDED at receiving. The warehouse found VINs pulling up the wrong size: a count that
+// reads our own record back can never catch a size we got wrong. The UPC printed by the
+// manufacturer names the size the shoe actually is, so that is what counts. Its size comes
+// from the CATALOGUE (`catalogue` = resolveUpc, StockX → Nike, resolved by the endpoint),
+// not from which of our pairs carry the code; where our records disagree, the scan still
+// counts at the box's size and says so — that disagreement is the finding.
+//
+// Only when the catalogue doesn't know the barcode does our own stock answer, as before
+// (a unanimous size, or a refusal), and the scan is marked as such.
+//
+// A box UPC names a SIZE and nothing more: two boxes of a 9 are two legitimate scans of
+// the same code, so a repeat is never refused.
+const sizeNorm = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
+export async function resolveAuditScan({ requestId, code, catalogue = null }) {
   const sql = db();
   const [reqRow] = await sql`SELECT id, sku, sku_all, name FROM rescale_requests WHERE id = ${requestId}`;
   if (!reqRow) return { error: 'That request no longer exists.' };
@@ -2151,40 +2161,49 @@ export async function resolveAuditScan({ requestId, code }) {
   if (!raw) return { error: 'Nothing scanned.' };
 
   if (VIN_RE.test(raw)) {
-    const found = await getItemByVin(raw);
-    if (!found) return { error: `No pair wears ${raw}. Check the sticker, or count it by hand.` };
-    const it = found.item;
-    if (!matches(it.sku)) {
-      return { error: `${raw} is ${it.sku || 'another shoe'} — this request is for ${reqRow.sku}. Leave it on the shelf.` };
-    }
-    // A pair that is sold or shipped is not stock, but it IS standing on the shelf in
-    // front of somebody — which is the single most useful thing an audit can find. It
-    // counts, and it says so.
-    const gone = ['sold', 'shipped'].includes(String(it.status || ''));
-    return {
-      kind: 'vin', vin: it.vin, size: it.size || '', name: it.name, status: it.status,
-      warn: gone ? `${raw} is marked ${it.status} — it should not be on this shelf. Counted; say so in the note.` : null,
-    };
+    return { error: 'That’s the 1ID sticker — it only knows the size we have on file, which is what this count is checking. Scan the barcode on the box (or the label inside the tongue) instead, or count it by hand.' };
   }
 
   if (/^\d{8,14}$/.test(raw)) {
     const units = await findStockByCode(raw, 100);
     const mine = units.filter((u) => matches(u.sku));
+    const ownSizes = [...new Set(mine.map((u) => String(u.size || '').trim()).filter(Boolean))];
+
+    const cat = catalogue?.sku && catalogue.scannedSize ? catalogue : null;
+    // A barcode the catalogue files under several products is a coin toss on its own —
+    // trust it only when its answer is THIS shoe; otherwise let our stock speak.
+    if (cat && !(cat.ambiguous && !matches(cat.sku))) {
+      const size = String(cat.scannedSize).trim();
+      if (!matches(cat.sku)) {
+        return { error: `That box is ${cat.sku}, size ${size} — this request is for ${reqRow.sku}. Leave it on the shelf.` };
+      }
+      const differs = ownSizes.filter((s) => sizeNorm(s) !== sizeNorm(size));
+      return {
+        kind: 'upc', size, upc: raw, source: cat.via, name: mine[0]?.name || reqRow.name,
+        warn: differs.length
+          ? `Our records have this barcode as size ${differs.join(' / ')} — the box says ${size}. Counted as ${size}; the pairs on file need fixing.`
+          : null,
+      };
+    }
+
+    // The catalogue doesn't know it: our own stock, as before.
     if (!mine.length) {
       return { error: units.length
         ? `That barcode is ${units[0].sku} — this request is for ${reqRow.sku}.`
-        : 'That barcode is on nothing we hold. Scan the 1ID on the pair instead.' };
+        : 'Nobody knows that barcode — not the catalogue, not our stock. Count this pair by hand.' };
     }
-    const sizes = [...new Set(mine.map((u) => String(u.size || '').trim()).filter(Boolean))];
     // One UPC is one size's box. More than one size answering to it means our own
     // records disagree, and guessing which size to add to would bury that.
-    if (sizes.length !== 1) {
-      return { error: `That barcode is on ${sizes.length || 'no'} different sizes here — scan the 1ID on the pair instead.` };
+    if (ownSizes.length !== 1) {
+      return { error: `The catalogue doesn’t know that barcode, and our records have it on ${ownSizes.length || 'no'} different sizes — count this pair by hand.` };
     }
-    return { kind: 'upc', size: sizes[0], name: mine[0].name, upc: raw };
+    return {
+      kind: 'upc', size: ownSizes[0], upc: raw, source: 'own-stock', name: mine[0].name,
+      note: 'size from our records — the catalogue doesn’t know this barcode',
+    };
   }
 
-  return { error: 'That looks like a style code. Scan the 1ID sticker on the pair, or the barcode on its box.' };
+  return { error: 'That looks like a style code. Scan the barcode on the box (or the label inside the tongue).' };
 }
 
 export async function auditRescaleRequest(id, actualSizes, auditNote, by) {

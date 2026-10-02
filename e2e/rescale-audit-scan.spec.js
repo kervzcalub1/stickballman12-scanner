@@ -21,6 +21,8 @@ const stamp = `${Date.now()}`.slice(-6);
 const SKU = `E2E-AUD-${stamp}`;
 const OTHER = `E2E-OTHER-${stamp}`;
 const UPC = `9${stamp}0001`.slice(0, 12);
+const UPC11 = `9${stamp}0011`.slice(0, 12);
+const UPC_OTHER = `9${stamp}0099`.slice(0, 12);
 const vin = (n) => `SBM-888888-${stamp}${n}`;
 let batchId = null;
 let reqId = null;
@@ -35,8 +37,8 @@ test.beforeAll(async () => {
   await add(SKU, '9', 1);
   await add(SKU, '9', 2, UPC);          // this one's box carries a scannable barcode
   await add(SKU, '10', 3);
-  await add(SKU, '11', 4);              // a size the request never mentions
-  await add(OTHER, '9', 5);             // another shoe sharing the shelf
+  await add(SKU, '11', 4, UPC11);       // a size the request never mentions
+  await add(OTHER, '9', 5, UPC_OTHER);  // another shoe sharing the shelf
   reqId = Number((await q(
     `INSERT INTO rescale_requests (sku, sku_all, name, sizes, reason, requested_by, status)
      VALUES ($1,$1,'E2E Audit Shoe',$2::jsonb,'recount','E2E PH','open') RETURNING id`,
@@ -54,26 +56,43 @@ test.afterAll(async () => {
 
 const scan = (request, code) => request.post('/api/rescale-requests/audit-scan', { headers: wh, data: { id: reqId, code } });
 
-test('a scan resolves to the pair’s size — and a different shoe is turned away', async ({ request }) => {
-  const ok = await scan(request, vin(1));
-  expect(ok.ok(), await ok.text()).toBeTruthy();
-  expect(await ok.json()).toMatchObject({ kind: 'vin', size: '9', vin: vin(1) });
+test('a box barcode is counted at its size; a 1ID is refused, and says what to scan instead', async ({ request }) => {
+  // The 1ID only knows the size we recorded — the thing being checked.
+  const byVin = await scan(request, vin(1));
+  expect(byVin.status()).toBe(409);
+  expect((await byVin.json()).error).toMatch(/barcode on the box/i);
+
+  // A barcode the catalogue doesn't know falls back to our own stock, and says so.
+  const byUpc = await scan(request, UPC);
+  expect(byUpc.ok(), await byUpc.text()).toBeTruthy();
+  expect(await byUpc.json()).toMatchObject({ kind: 'upc', size: '9', source: 'own-stock' });
 
   // The shoe that shares the shelf. This is the one a typed count silently absorbs.
-  const wrong = await scan(request, vin(5));
+  const wrong = await scan(request, UPC_OTHER);
   expect(wrong.status()).toBe(409);
   expect((await wrong.json()).error).toContain(SKU);
 
-  // A box barcode names a SIZE, and that is enough to count one.
-  const byUpc = await scan(request, UPC);
-  expect(byUpc.ok(), await byUpc.text()).toBeTruthy();
-  expect(await byUpc.json()).toMatchObject({ kind: 'upc', size: '9' });
-
-  // A sticker no pair wears, and a style code typed in by mistake, each say what to do.
-  expect((await scan(request, 'SBM-888888-000000')).status()).toBe(409);
+  // A style code typed in by mistake says what to do.
   const asSku = await scan(request, SKU);
   expect(asSku.status()).toBe(409);
   expect((await asSku.json()).error).toMatch(/style code/i);
+});
+
+test('the catalogue sets the size — and a record that disagrees is the finding', async () => {
+  const { resolveAuditScan } = await import('../api/_lib/db.js');
+  // Our records hold UPC as a size 9; the box (the catalogue) says 10.
+  const r = await resolveAuditScan({ requestId: reqId, code: UPC, catalogue: { sku: SKU, scannedSize: '10', via: 'stockx' } });
+  expect(r).toMatchObject({ kind: 'upc', size: '10', source: 'stockx' });
+  expect(r.warn).toContain('Our records have this barcode as size 9 — the box says 10. Counted as 10');
+  // They agree → no warning.
+  const same = await resolveAuditScan({ requestId: reqId, code: UPC, catalogue: { sku: SKU, scannedSize: '9', via: 'nike' } });
+  expect(same).toMatchObject({ size: '9', warn: null });
+  // The catalogue says it's another shoe → turned away, whatever our records think.
+  const other = await resolveAuditScan({ requestId: reqId, code: UPC, catalogue: { sku: OTHER, scannedSize: '9', via: 'stockx' } });
+  expect(other.error).toContain(`That box is ${OTHER}, size 9`);
+  // …unless the catalogue itself is unsure (one barcode, several products): our stock answers.
+  const unsure = await resolveAuditScan({ requestId: reqId, code: UPC, catalogue: { sku: OTHER, scannedSize: '9', via: 'stockx', ambiguous: true } });
+  expect(unsure).toMatchObject({ size: '9', source: 'own-stock' });
 });
 
 test('the audit stores WHICH pairs were counted, per size', async ({ request }) => {
@@ -123,26 +142,30 @@ test('the shelf is counted by scanning on the screen, starting at zero', async (
     await audit.locator('.rc-audit-scan input').fill(code);
     await audit.locator('.rc-audit-scan').getByRole('button', { name: 'Add', exact: true }).click();
   };
-  await scanIn(vin(1));
+  await scanIn(UPC);
   await expect(audit.locator('.size-line').first().locator('.qty')).toHaveValue('1');
   await expect(audit.locator('.rc-audit-scanned').first()).toContainText('1 scanned');
 
-  // The same pair again is refused — the whole reason to scan instead of typing.
+  // Two boxes of a 9 are two real pairs — the same barcode again counts again.
+  await scanIn(UPC);
+  await expect(audit.locator('.size-line').first().locator('.qty')).toHaveValue('2');
+
+  // A 1ID is refused and KEPT in the list, with what to scan instead.
   await scanIn(vin(1));
-  await expect(audit.locator('.scan-flash')).toContainText(/Already counted/i);
-  await expect(audit.locator('.size-line').first().locator('.qty')).toHaveValue('1');
+  await expect(audit.locator('.rc-audit-fails')).toContainText(/barcode on the box/i);
+  await expect(audit.locator('.size-line').first().locator('.qty')).toHaveValue('2');
 
   // A size nobody asked about gets its own row rather than being dropped.
-  await scanIn(vin(4));
+  await scanIn(UPC11);
   await expect(audit.locator('.size-line')).toHaveCount(2);
   await expect(audit.locator('.size-line').nth(1).locator('.sz')).toHaveValue('11');
 
-  // A pair of another shoe is turned away, and the refusal is KEPT — "it wouldn't scan"
+  // A box of another shoe is turned away, and the refusal is KEPT — "it wouldn't scan"
   // is answerable from a list, and it is usually the finding.
-  await scanIn(vin(5));
-  await expect(audit.locator('.rc-audit-fails')).toContainText(vin(5));
+  await scanIn(UPC_OTHER);
+  await expect(audit.locator('.rc-audit-fails')).toContainText(UPC_OTHER);
 
-  // Undo takes back the last pair, count and all.
+  // Undo takes back the last counted box, count and all — a barcode scan too, not only a 1ID.
   await audit.getByRole('button', { name: /Undo last scan/ }).click();
   await expect(audit.locator('.size-line').nth(1).locator('.qty')).toHaveValue('0');
 
@@ -151,7 +174,7 @@ test('the shelf is counted by scanning on the screen, starting at zero', async (
   const [saved] = await q('SELECT status, actual_sizes FROM rescale_requests WHERE id = $1', [id]);
   expect(saved.status).toBe('audited');
   const nine = saved.actual_sizes.find((s) => s.size === '9');
-  expect(nine.qty).toBe(1);
-  expect(nine.vins).toEqual([vin(1)]);
+  expect(nine.qty).toBe(2);
+  expect(nine.vins).toBeUndefined();   // counted by barcode: no 1IDs to store
   await q('DELETE FROM rescale_requests WHERE id = $1', [id]);
 });

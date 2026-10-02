@@ -167,7 +167,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
   const [auditMode, setAuditMode] = useState('scan');   // 'scan' | 'type'
   const [auditScan, setAuditScan] = useState('');
   const [auditFlash, setAuditFlash] = useState(null);   // { kind, text }
-  const [auditVins, setAuditVins] = useState([]);       // [{ vin, size }] in scan order
+  const [auditVins, setAuditVins] = useState([]);       // every counted scan, in order: [{ code, vin|null, size }]
   const [auditFails, setAuditFails] = useState([]);     // kept: a refused scan is a finding
   const [auditCam, setAuditCam] = useState(false);
   const auditScanRef = useRef(null);
@@ -235,20 +235,17 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
     const code = String(raw || '').trim();
     if (!code) return;
     setAuditScan('');
-    // A 1ID names a UNIT, so the same one twice is a double-count — refused here,
-    // before the server is even asked. A box UPC names a SIZE: two boxes of a 9 are two
-    // real pairs, so a repeat there is never refused.
-    if (auditVins.some((v) => v.vin === code.toUpperCase())) {
-      auditPulse('dup', `Already counted · ${code.toUpperCase()}`);
-      return;
-    }
+    // Counted by the BOX BARCODE, sized by the catalogue — a 1ID only repeats the size we
+    // recorded, which is what this count is checking (the server refuses it and says so).
+    // A barcode names a SIZE: two boxes of a 9 are two real pairs, so a repeat is never
+    // refused.
     try {
       const res = await api.rescaleAuditScan(r.id, code);
-      if (!res.size) { auditPulse('dup', `${code} has no size on record — count it by hand.`); return; }
+      if (!res.size) { auditPulse('dup', `${code} has no size — count it by hand.`); return; }
       bumpAuditSize(res.size);
-      if (res.kind === 'vin') setAuditVins((a) => [...a, { vin: res.vin, size: res.size }]);
-      if (res.warn) { auditPulse('dup', res.warn); setAuditFails((f) => [{ code: res.vin || code, reason: res.warn, counted: true }, ...f]); }
-      else auditPulse('ok', `✓ size ${res.size}${res.kind === 'vin' ? ` · ${res.vin}` : ''}`);
+      setAuditVins((a) => [...a, { code: res.upc || code, vin: res.vin || null, size: res.size }]);
+      if (res.warn) { auditPulse('dup', res.warn); setAuditFails((f) => [{ code: res.upc || code, reason: res.warn, counted: true }, ...f]); }
+      else auditPulse('ok', `✓ size ${res.size}${res.note ? ` · ${res.note}` : ''}`);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       // Kept, not just flashed: "it wouldn't scan" is answerable from a list, and a
@@ -263,7 +260,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
     setAuditVins((a) => a.slice(0, -1));
     setAuditRows((rows) => rows.map((x) => (sizeKey(x.size) === sizeKey(last.size)
       ? { ...x, qty: Math.max(0, (Number(x.qty) || 0) - 1), scanned: Math.max(0, (x.scanned || 0) - 1) } : x)));
-    auditPulse('dup', `Removed ${last.vin}`);
+    auditPulse('dup', `Removed one size ${last.size} (${last.vin || last.code})`);
   };
   const setAuditRow = (k, patch) => setAuditRows((a) => a.map((x) => (x.key === k ? { ...x, ...patch } : x)));
   const addAuditRow = () => setAuditRows((a) => [...a, { key: cartKey++, size: '', qty: 0 }]);
@@ -415,7 +412,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
     // audit somebody disputes later can be re-walked pair by pair instead of re-counted
     // from scratch. Typed rows simply carry none.
     const vinsBySize = new Map();
-    for (const v of auditVins) {
+    for (const v of auditVins.filter((x) => x.vin)) {
       const k = sizeKey(v.size);
       if (!vinsBySize.has(k)) vinsBySize.set(k, []);
       vinsBySize.get(k).push(v.vin);
@@ -576,7 +573,7 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                       <>
                         <form className="searchrow rc-audit-scan" onSubmit={(e) => { e.preventDefault(); auditScanCode(r, auditScan); }}>
                           <input ref={auditScanRef} autoFocus autoCapitalize="characters" autoCorrect="off" autoComplete="off"
-                            placeholder="Scan each pair — 1ID sticker or box barcode" value={auditScan}
+                            placeholder="Scan each box barcode (or the tongue label)" value={auditScan}
                             onChange={(e) => setAuditScan(e.target.value)} />
                           <button className="btn primary" type="submit">Add</button>
                           <button type="button" className={`btn ${auditCam ? 'primary' : 'ghost'}`} title="Scan with camera"
@@ -593,9 +590,10 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                           {auditVins.length > 0 && <button type="button" className="scan-undo" onClick={undoLastScan}>↶ Undo last scan</button>}
                         </div>
                         <div className="muted xs rc-audit-hint">
-                          Every size starts at <b>0</b> — what you scan is what is on the shelf. A pair
-                          scanned twice is refused, and a pair of another shoe is turned away by its
-                          style code. Anything without a readable sticker: type it in below.
+                          Every size starts at <b>0</b> — what you scan is what is on the shelf. Scan the
+                          <b> barcode on each box</b> (or the label inside the tongue), not the 1ID: the box
+                          says the size the shoe really is, the 1ID only repeats what we recorded. A pair of
+                          another shoe is turned away. No barcode you can read: type it in below.
                         </div>
                       </>
                     )}

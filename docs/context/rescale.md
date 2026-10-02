@@ -31,16 +31,27 @@ Two connected flows: warehouse rescales stock; PH requests a rescale (audit).
     number an audit must never be. Switching to **Typing** re-seeds from reported (today's
     behaviour) and clears the scan session.
   - `POST /api/rescale-requests/audit-scan { id, code }` → `resolveAuditScan` in db.js.
-    **A 1ID/VIN names a UNIT**, so it carries its own size and can be de-duplicated. **A
-    box UPC names a SIZE** and nothing more — two boxes of a 9 are two real pairs, so a
-    repeat there is never refused. It resolves against our own stock, matches the
-    request's `sku` **and** `sku_all` (a re-released shoe's dual code), and **writes
-    nothing**: the count is still submitted in one go, because a scan that
-    half-committed would leave a shelf count nobody could re-do.
+    **Counted by the BOX BARCODE, never the 1ID (2026-10-03).** The warehouse found 1ID
+    scans pulling up the wrong size: a 1ID answers with the size we RECORDED at receiving,
+    which is exactly what a rescale count is checking. A 1ID is now refused with "scan the
+    barcode on the box (or the label inside the tongue)". The UPC is sized by the
+    **catalogue** — `resolveUpc(upc, { ownStock: false, alias: false })` from
+    `api/upc-search.js` (StockX → StockX official → Nike), resolved in the endpoint and
+    passed in. Where our records hold that barcode at another size, the scan still counts
+    at the BOX's size and warns ("Our records have this barcode as size 9 — the box says
+    10"); that disagreement is the finding. Only a barcode the catalogue doesn't know falls
+    back to our own stock (unanimous size, or refused), marked `source: 'own-stock'`.
+    Spot check 2026-10-03: 2 of 11 real barcodes had a recorded size that differed from
+    the box (JR1267 8 vs 7.5; IQ1867-474 11 vs 9).
+    A barcode names a SIZE, so a repeat is never refused (two boxes of a 9 are two pairs);
+    **Undo** takes back the last counted scan. It matches the request's `sku` **and**
+    `sku_all` (a re-released shoe's dual code), and **writes nothing**: the count is still
+    submitted in one go, because a scan that half-committed would leave a shelf count
+    nobody could re-do.
   - **A size nobody asked about gets its own row** instead of being dropped — a shelf
     holding a size the request never mentioned is exactly what an audit is for.
-  - A pair marked **sold/shipped** still counts, with a warning: it should not be on that
-    shelf, and that is the most useful thing a count can find.
+  - (A barcode can't say a pair is sold/shipped the way a 1ID could — that check went
+    with the 1ID scan. A count that comes out higher than our stock shows it anyway.)
   - **Refused scans are kept on screen** (`.rc-audit-fails`), not just flashed — "it
     wouldn't scan" is answerable from a list, and the refusal is usually the finding.
   - **Which pairs were counted is stored**: `actual_sizes[].vins`, deduped, VIN-shaped

@@ -188,6 +188,23 @@ its history over one character.
   three" for the dispatch order.
 - CSV export.
 
+## Scan mode: One at a time · Rapid · instant · Bulk · check all (2026-10-03)
+The search row's single "Rapid scan" toggle became a three-way **Scan mode** (the user asked
+for names that say what the next scan does). Per device, `prefs.scanMode`; an old
+`rapidScan: true` still means Rapid.
+- **One at a time** — a scanned VIN opens the pair (the old default).
+- **Rapid · instant** — the section below: a list, each scan answered as it lands.
+- **Bulk · check all** (`src/components/BulkVinCheck.jsx`) — scan or paste 100+ VINs FIRST,
+  then one **Check all** (`POST /api/items/check-vins`, ≤1,000, `checkVinsBulk` in db.js:
+  three reads for the whole list). Nothing is looked up while scanning. Each VIN gets one
+  answer: registered (name · SKU · size · status · shelf · batch) / deleted (archive row) /
+  unused sticker / void sticker / not registered / not a VIN. Summary chips filter the
+  list; Copy and CSV export what's shown; scans after a check are "new" and **Check N new**
+  sends only those. The list + answers live in `localStorage` (`sb_bulk_vin_check_v1`), so a
+  refresh or a trip into a pair's detail keeps them. The scan box reads the input element,
+  not state (a gun's Enter can beat React's re-render), and splits on spaces/commas so a
+  pasted line is several scans. E2E: `e2e/inventory-bulk-check.spec.js`.
+
 ## Rapid scan (2026-09-02)
 A **Rapid scan** toggle on the search row (persisted per device as `prefs.rapidScan`).
 Off — the default — a scanned VIN opens that pair's detail, which is right when you are

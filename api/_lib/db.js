@@ -3126,6 +3126,53 @@ export async function checkVinStock(vin) {
   };
 }
 
+// MANY VINs at once — Inventory's "Bulk · check all" (scan a hundred, then ask). Three
+// reads for the whole list instead of two per VIN: the pairs, the sticker roll, and the
+// deleted-pairs archive. Each VIN gets ONE answer, most specific first:
+//   registered      a pair wears it (with what and where)
+//   deleted         a pair wore it and was removed (the archive row)
+//   sticker_unused  a pre-printed 1ID still on the roll — on no pair yet
+//   sticker_void    a 1ID voided (torn / lost / misprint)
+//   not_registered  shaped like ours, but no pair, sticker or archive row knows it
+//   not_a_vin       not shaped like a VIN at all (a UPC, a shelf code, a typo)
+export async function checkVinsBulk(list) {
+  const vins = [...new Set((list || []).map((v) => String(v || '').trim().toUpperCase()).filter(Boolean))];
+  const valid = vins.filter((v) => VIN_RE.test(v));
+  const sql = db();
+  const items = valid.length ? await sql`
+    SELECT i.vin, i.name, i.sku, i.size, i.status, i.location_code, i.with_box, i.created_at,
+           b.batch_code, b.kind AS batch_kind
+      FROM items i LEFT JOIN batches b ON b.id = i.batch_id
+     WHERE i.vin = ANY(${valid})` : [];
+  const stock = valid.length ? await sql`
+    SELECT vin, status, run_id, printed_at, voided_at FROM vin_stock WHERE vin = ANY(${valid})` : [];
+  const gone = valid.length ? await sql`
+    SELECT DISTINCT ON (vin) vin, name, sku, size, status, deleted_at, deleted_by, reason
+      FROM deleted_items WHERE vin = ANY(${valid}) ORDER BY vin, deleted_at DESC` : [];
+  const byItem = new Map(items.map((r) => [r.vin, r]));
+  const byStock = new Map(stock.map((r) => [r.vin, r]));
+  const byGone = new Map(gone.map((r) => [r.vin, r]));
+  return vins.map((vin) => {
+    if (!VIN_RE.test(vin)) return { vin, result: 'not_a_vin' };
+    const it = byItem.get(vin);
+    if (it) {
+      return {
+        vin, result: 'registered',
+        item: {
+          name: it.name, sku: it.sku, size: it.size, status: it.status, location: it.location_code,
+          withBox: it.with_box, batch: it.batch_code, batchKind: it.batch_kind, receivedAt: it.created_at,
+        },
+      };
+    }
+    const d = byGone.get(vin);
+    if (d) return { vin, result: 'deleted', deleted: { name: d.name, sku: d.sku, size: d.size, at: d.deleted_at, by: d.deleted_by, reason: d.reason } };
+    const st = byStock.get(vin);
+    if (st?.status === 'available') return { vin, result: 'sticker_unused', sticker: { runId: st.run_id, printedAt: st.printed_at } };
+    if (st?.status === 'void') return { vin, result: 'sticker_void', sticker: { runId: st.run_id, voidedAt: st.voided_at } };
+    return { vin, result: 'not_registered' };
+  });
+}
+
 // Claim stickers for the units they were just scanned onto. **Compare-and-swap** —
 // `WHERE status = 'available'` means two people who scanned the same sticker can't
 // both win; the loser gets it back in `failed` and the caller 409s naming the VIN.

@@ -7108,6 +7108,19 @@ export async function alertSentRecently(eventKey, ref, minutes = null) {
   return rows.length > 0;
 }
 
+// What a buyer changed on a request's list since it was re-opened — for the gift card
+// desk's "closed again" message. Removed lines are gone, so they speak through the event
+// body (written as "SKU size N ×Q" by removeBuyCartLine).
+export async function cartListChangesSince(cartId, since) {
+  if (!since) return [];
+  return db()`
+    SELECT e.kind, e.body, l.sku, l.size
+      FROM buy_cart_events e LEFT JOIN buy_cart_lines l ON l.id = e.line_id
+     WHERE e.cart_id = ${cartId} AND e.created_at >= ${since}
+       AND e.kind IN ('line_added', 'line_edited', 'line_removed')
+     ORDER BY e.id`;
+}
+
 // One rescale request, for a nudge.
 export async function getRescaleRequestById(id) {
   const rows = await db()`SELECT id, sku, name, status, requested_by, requested_by_id FROM rescale_requests WHERE id = ${id}`;

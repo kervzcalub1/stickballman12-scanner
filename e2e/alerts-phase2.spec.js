@@ -7,7 +7,7 @@ import { signToken, hashPassword } from '../api/_lib/util.js';
 
 test.describe.configure({ mode: 'serial' });
 
-const TG = { buyer: 771030001, approver: 771030002, ph: 771030003, wh: 771030004, admin: 771030005, sup: 771030006 };
+const TG = { buyer: 771030001, approver: 771030002, ph: 771030003, wh: 771030004, admin: 771030005, sup: 771030006, issuer: 771030007 };
 const CAST = {
   buyer: { username: 'e2e_al2_buyer', name: 'E2E Al2 Buyer', role: 'supplier', privileges: ['request_buying'] },
   approver: { username: 'e2e_al2_approver', name: 'E2E Al2 Approver', role: 'warehouse', privileges: ['approve_buying'] },
@@ -15,6 +15,7 @@ const CAST = {
   wh: { username: 'e2e_al2_wh', name: 'E2E Al2 Warehouse', role: 'warehouse', privileges: [] },
   admin: { username: 'e2e_al2_admin', name: 'E2E Al2 Admin', role: 'admin', privileges: [] },
   sup: { username: 'e2e_al2_sup', name: 'E2E Al2 Supplier', role: 'supplier', privileges: [] },
+  issuer: { username: 'e2e_al2_issuer', name: 'E2E Al2 Issuer', role: 'ph_team', privileges: ['issue_gift_cards'] },
 };
 const SKU = 'E2E-AL2';
 const TRK = ['E2EAL2TRK0001', 'E2EAL2TRK0002', 'E2EAL2TRK0003'];
@@ -266,6 +267,46 @@ test('nudges: the server picks the people, once an hour, and it is on the trail'
 
   // Nonsense targets are refused before anything is looked up.
   expect((await post(request, 'ph', 'nudge', { kind: 'po', id: made.pos[0], to: 'everyone' })).status).toBe(400);
+});
+
+test('the gift card desk hears when a request is re-opened, and when it closes again — with what changed', async ({ request }) => {
+  const { cartId, ids, code } = await newCart([{ sku: 'E2E-AL2-R1', size: '9' }]);
+  await pool.query(`INSERT INTO buy_cart_files (cart_id, kind, sku, r2_key) VALUES ($1,'shoe','E2E-AL2-R1','e2e/r1.jpg'), ($1,'shoe','E2E-AL2-R2','e2e/r2.jpg')`, [cartId]);
+  expect((await post(request, 'approver', 'cart/decide', { cartId, action: 'approve', lineIds: ids, qty: { [ids[0]]: 2 } })).status).toBe(200);
+  // $100 approved, $100 already on cards.
+  await pool.query(`INSERT INTO buy_cart_gift_cards (cart_id, code_enc, balance) VALUES ($1, 'e2e-not-a-code', 100)`, [cartId]);
+  await pool.query(`UPDATE buy_carts SET gc_total = 100 WHERE id = $1`, [cartId]);
+  await new Promise((r) => setTimeout(r, 2500)); // let the "pairs decided" batch go first
+  const issuerSays = (from) => dmsTo(from, 'issuer').map((d) => d.body.text).filter((t) => t.includes(code));
+
+  // 1. Re-opened → heads-up, cards already issued are named.
+  let t = calls.length;
+  expect((await post(request, 'buyer', 'cart/submit', { cartId, reopen: true })).status).toBe(200);
+  await expect.poll(() => issuerSays(t).length).toBe(1);
+  expect(issuerSays(t)[0]).toMatch(/Request re-opened[\s\S]*re-opened .* to add more pairs\.\n\$100\.00 already on cards stays\.\nHold off on more cards/);
+
+  // 2. Closed again, nothing changed → said so, and nothing more to issue.
+  t = calls.length;
+  expect((await post(request, 'buyer', 'cart/submit', { cartId })).status).toBe(200);
+  await expect.poll(() => issuerSays(t).length).toBe(1);
+  expect(issuerSays(t)[0]).toContain(`closed ${code} again with no changes.\nNothing more to issue — $100.00 on cards covers the $100.00 approved.`);
+
+  // 3. Re-opened, a pair added, closed again → what was added, and that it needs approving first.
+  expect((await post(request, 'buyer', 'cart/submit', { cartId, reopen: true })).status).toBe(200);
+  expect((await post(request, 'buyer', 'cart/line', { cartId, line: { sku: 'E2E-AL2-R2', size: '10', shelfPrice: 60 } })).status).toBe(200);
+  t = calls.length;
+  expect((await post(request, 'buyer', 'cart/submit', { cartId })).status).toBe(200);
+  await expect.poll(() => issuerSays(t).filter((x) => /closed again/i.test(x)).length).toBe(1);
+  expect(issuerSays(t).find((x) => /closed again/i.test(x)))
+    .toContain(`again — added 1: E2E-AL2-R2 10.\n1 line still needs approving — you will get “Gift cards needed” with any top-up once they are decided.`);
+});
+
+test('a request the desk has nothing to do with yet stays quiet on re-open', async ({ request }) => {
+  const { cartId, code } = await newCart([{ sku: 'E2E-AL2-Q', size: '9' }]);
+  const t = calls.length;
+  expect((await post(request, 'buyer', 'cart/submit', { cartId, reopen: true })).status).toBe(200);
+  await new Promise((r) => setTimeout(r, 1500));
+  expect(dmsTo(t, 'issuer').filter((d) => d.body.text.includes(code))).toHaveLength(0);
 });
 
 test('"Open in Inventory" lands inside the reader\'s own app', async () => {

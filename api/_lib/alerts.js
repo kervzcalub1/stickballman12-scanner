@@ -16,7 +16,9 @@
 // Like notify.js this runs AFTER the response has gone (`fireAlert`), and it swallows
 // everything: an alert that fails costs the person a message, never a request.
 import { telegramConfigured, sendAlertMessage } from './telegram.js';
-import { alertCandidates, logAlert, setTelegramBroken, alertSentRecently, cartParticipantIds, poParticipantIds } from './db.js';
+import { alertCandidates, logAlert, setTelegramBroken, alertSentRecently, cartParticipantIds, poParticipantIds,
+  getBuyCart, cartListChangesSince } from './db.js';
+import { fundingTarget } from './buycart.js';
 
 const isAdminRole = (role) => role === 'admin' || role === 'superadmin';
 // Anyone who can raise a buying request: staff, and a supplier switched on for buying.
@@ -52,7 +54,19 @@ export const ALERT_EVENTS = [
     title: 'New account waiting',
     when: 'Someone signs up and needs approving',
     who: (u) => isAdminRole(u.role),
-  },  // ── Phase 2 ──
+  },  {
+    key: 'buy.list_reopened', group: 'Buying', emoji: '🔓', required: false,
+    title: 'Request re-opened',
+    when: 'A buyer re-opens a request the desk is funding — the total may change',
+    who: (u) => holds(u, 'issue_gift_cards'),
+  },
+  {
+    key: 'buy.list_reclosed', group: 'Buying', emoji: '🔒', required: false,
+    title: 'Request closed again',
+    when: 'That request is closed again — what changed, and whether more cards are needed',
+    who: (u) => holds(u, 'issue_gift_cards'),
+  },
+  // ── Phase 2 ──
   {
     key: 'buy.line_decided', group: 'Buying', emoji: '🧾', required: false,
     title: 'Your pairs decided',
@@ -458,6 +472,67 @@ export async function sendNudge({ toIds, from, code, about, note, path, ref }) {
     actorUid: from?.uid, ref, code,
     body: `${who} nudged you about ${about}.${note ? `\n“${String(note).slice(0, 300)}”` : ''}`,
     path,
+  });
+}
+
+// ── The gift card desk and a re-opened list ────────────────────────────────────
+//
+// The desk funds a TOTAL. A buyer re-opening the list means that total may move — maybe
+// after cards have gone out — and closing it again means it has settled, with or without
+// changes. Both go to everyone holding issue_gift_cards, but only once the desk is in
+// play (approved, released, or cards already issued): a list re-opened before anything was
+// approved changes nothing they were about to do, and they hear "Gift cards needed" when
+// it's their turn anyway.
+const deskInPlay = (cart) => cart && cart.funding_method !== 'company_card'
+  && (['approved', 'funded'].includes(cart.status) || Number(cart.gc_total) > 0);
+
+export function alertListReopened(cartId, actor) {
+  fireAlert(async () => {
+    const cart = await getBuyCart(cartId);
+    if (!deskInPlay(cart)) return null;
+    const issued = Number(cart.gc_total) || 0;
+    return alertUsers('buy.list_reopened', {
+      actorUid: actor?.uid, ref: `cart:${cart.id}:reopened:${cart.list_reopened_at ? new Date(cart.list_reopened_at).getTime() : ''}`,
+      code: cart.cart_code,
+      body: `${cart.buyer_name || 'The buyer'} re-opened ${cart.cart_code} to add more pairs.`
+        + (issued > 0 ? `\n${money(issued)} already on cards stays.` : '')
+        + '\nHold off on more cards until it is closed again — you will get a message when it is.',
+      path: at('buying', `request=${Number(cart.id)}`),
+    });
+  });
+}
+
+export function alertListReclosed(cartId, actor) {
+  fireAlert(async () => {
+    const cart = await getBuyCart(cartId);
+    if (!cart?.list_reopened_at || !deskInPlay(cart)) return null;
+    const changes = await cartListChangesSince(cart.id, cart.list_reopened_at);
+    const name = (c) => `${c.sku}${c.size ? ` ${c.size}` : ''}`;
+    const added = changes.filter((c) => c.kind === 'line_added' && c.sku).map(name);
+    const edited = [...new Set(changes.filter((c) => c.kind === 'line_edited' && c.sku).map(name))];
+    const removed = changes.filter((c) => c.kind === 'line_removed').map((c) => c.body);
+    const target = fundingTarget(cart);
+    const issued = Number(cart.gc_total) || 0;
+    const owed = Math.round((target - issued) * 100) / 100;
+    const pending = Number(cart.pending_count) || 0;
+    const what = [
+      ...(added.length ? [`added ${added.length}: ${listOf(added, 6)}`] : []),
+      ...(removed.length ? [`removed ${removed.length}: ${listOf(removed, 6)}`] : []),
+      ...(edited.length ? [`changed ${edited.length}: ${listOf(edited, 6)}`] : []),
+    ];
+    const next = pending > 0
+      ? `${pending} line${pending === 1 ? ' still needs' : 's still need'} approving — you will get “Gift cards needed” with any top-up once they are decided.`
+      : owed > 0 ? `${money(owed)} more to issue (${money(target)} approved, ${money(issued)} on cards).`
+      : owed < 0 ? `The cards (${money(issued)}) now cover more than is approved (${money(target)}) — ${money(-owed)} over.`
+      : `Nothing more to issue — ${money(issued)} on cards covers the ${money(target)} approved.`;
+    return alertUsers('buy.list_reclosed', {
+      actorUid: actor?.uid, ref: `cart:${cart.id}:reclosed:${new Date(cart.list_reopened_at).getTime()}`,
+      code: cart.cart_code,
+      body: `${cart.buyer_name || 'The buyer'} closed ${cart.cart_code} again `
+        + (what.length ? `— ${what.join('; ')}.` : 'with no changes.')
+        + `\n${next}`,
+      path: at('buying', `request=${Number(cart.id)}`),
+    });
   });
 }
 

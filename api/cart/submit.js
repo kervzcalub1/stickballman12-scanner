@@ -25,6 +25,7 @@ import { getBuyCart, closeBuyCartList, reopenBuyCartList, dbConfigured, skusWith
 import { cartVisibleTo, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
 import { buyerCanClose, buyerCanReopen, reopenRefusedBecause } from '../../src/lib/buycartRules.js';
 import { notifyRequestEvent, notifyIssuersIfReady } from '../_lib/notify.js';
+import { alertListReopened, alertListReclosed } from '../_lib/alerts.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -52,6 +53,7 @@ export default async function handler(req, res) {
       if (!out) return send(res, 409, { ok: false, error: 'This request is not closed.' });
       // Fire-and-forget, after the write — the buyer is in a shop and never waits on Make.
       notifyRequestEvent(cartId, 'buying_request_reopened', user);
+      alertListReopened(cartId, user);  // the gift card desk, privately: the total may move
       return send(res, 200, { ok: true, cart: redactCartForViewer(out, user) });
     }
 
@@ -78,6 +80,7 @@ export default async function handler(req, res) {
     const out = await closeBuyCartList(cartId, user);
     if (!out) return send(res, 409, { ok: false, error: 'This request is already closed.' });
     notifyRequestEvent(cartId, 'buying_request_closed', user);
+    alertListReclosed(cartId, user);  // closed AGAIN after a re-open → the desk: what changed
     notifyIssuersIfReady(cartId);   // everything already decided → the desk's turn now
     return send(res, 200, { ok: true, cart: redactCartForViewer(out, user) });
   } catch (e) {

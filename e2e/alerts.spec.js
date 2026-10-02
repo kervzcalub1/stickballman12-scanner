@@ -128,8 +128,8 @@ test('the panel lists only the alerts that apply to the job', async ({ request }
   // The warehouse's job — an admin sees the row but starts with it off.
   expect(admin.events.find((e) => e.key === 'rescale.requested').on).toBe(false);
 
-  // A supplier who only ships boxes has nothing to be alerted about yet.
-  expect((await get(request, 'sup', 'me/alerts')).body.events).toEqual([]);
+  // A supplier who only ships boxes gets nudges and nothing else.
+  expect((await get(request, 'sup', 'me/alerts')).body.events.map((e) => e.key)).toEqual(['nudge']);
 
   // The env login is shared — it can't carry one person's Telegram.
   const shared = await get(request, { token: ENV_ADMIN }, 'me/alerts');

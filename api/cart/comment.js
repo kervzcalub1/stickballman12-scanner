@@ -6,6 +6,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getBuyCart, logCartEvent, dbConfigured } from '../_lib/db.js';
 import { cartVisibleTo, requireBuyerAccess } from '../_lib/buycart.js';
+import { alertCartComment } from '../_lib/alerts.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -28,6 +29,7 @@ export default async function handler(req, res) {
     if (!cart) return send(res, 404, { ok: false, error: 'That buying request does not exist.' });
     if (!cartVisibleTo(user, cart)) return send(res, 403, { ok: false, error: 'You do not have access to this request.' });
     const event = await logCartEvent({ cartId, kind: 'comment', body: text, actor: user });
+    alertCartComment(cart, user, text);
     return send(res, 200, { ok: true, event });
   } catch (e) {
     console.error('[cart/comment]', e.message);

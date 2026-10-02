@@ -9,6 +9,7 @@ import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
 import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty } from './db.js';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
 import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly } from '../../src/lib/buycartRules.js';
+import { alertLinesDecided } from './alerts.js';
 
 // ---------------------------------------------------------------------------
 // Privileges — separation of duties
@@ -378,6 +379,8 @@ export async function decideLines({ cart, action, lineIds, all, qtyById, qtyAll,
         : 'Nothing was still awaiting a decision — someone may have got there first.',
       code: 409,
     };
+  // The buyer, on Telegram — batched, so approving twelve lines is one message.
+  alertLinesDecided(out.cart || cart, out.lines, actor);
   return out;
 }
 

@@ -7,6 +7,7 @@ import { getPoBox, getPo, countPoBoxLines, countPoOrderLines, shipPoBox, getPoFu
   getCartIdForPo, getCartPackState, dbConfigured } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
 import { declaresPerBox } from '../../src/lib/postatus.js';
+import { alertPoShipped } from '../_lib/alerts.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -71,6 +72,7 @@ export default async function handler(req, res) {
     }
 
     await shipPoBox(poBoxId);
+    alertPoShipped(po, box, user); // warehouse + admins, one message per order
     // Start tracking this label's shipment (best-effort; no-ops without a key).
     if (box.tracking_number) registerTracking([{ number: box.tracking_number, carrier: box.carrier_key }]).catch((e) => console.warn('[po/ship] registerTracking:', e.message));
     const data = await getPoFull(box.po_id);

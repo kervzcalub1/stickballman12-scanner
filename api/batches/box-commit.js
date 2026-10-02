@@ -4,6 +4,7 @@
 // box), records per-unit defect issues, marks the box received, and auto-completes
 // the batch when received == expected. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+import { alertPoDiscrepancy } from '../_lib/alerts.js';
 import {
   getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues,
   reconcileOutcomeForIntake, dbConfigured, SHIPMENT_KINDS,
@@ -77,6 +78,7 @@ export default async function handler(req, res) {
       ? await reconcileOutcomeForIntake(Number(found.batch.po_id))
         .catch((e) => { console.warn('[box-commit] reconcile outcome:', e.message); return null; })
       : null;
+    alertPoDiscrepancy(reconcile, user); // admins on Telegram — someone has to tell the supplier
 
     send(res, 200, { ok: true, count: created.length, vins, autoCompleted, reconcile });
     enrichGlobalIndicators(created, items).catch((e) => console.warn('[box-commit] GI enrichment failed:', e.message));

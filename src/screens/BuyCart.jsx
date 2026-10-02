@@ -25,6 +25,7 @@ import { estDate, estTime } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
 import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
+import { NudgeButton } from '../components/NudgeButton.jsx';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
 // `best_platform` stores the KEY ('alias'), and printing it raw read "92.7% ROI via
@@ -814,6 +815,21 @@ function NextStep({ step }) {
   );
 }
 
+// Who a request is waiting on, first — the choice the Nudge form opens on. A buyer can't
+// nudge themselves; everyone else may nudge the buyer.
+function nudgeTargets(cart, isBuyer) {
+  const all = {
+    buyer: { to: 'buyer', label: `The buyer (${cart.buyer_name || 'buyer'})` },
+    approvers: { to: 'approvers', label: 'The approvers' },
+    desk: { to: 'desk', label: 'The gift card desk' },
+    auditors: { to: 'auditors', label: 'The auditors' },
+  };
+  const order = cart.status === 'submitted' ? ['approvers', 'buyer', 'desk', 'auditors']
+    : cart.status === 'approved' ? ['desk', 'buyer', 'approvers', 'auditors']
+    : ['buyer', 'auditors', 'desk', 'approvers'];
+  return order.filter((k) => !(isBuyer && k === 'buyer')).map((k) => all[k]);
+}
+
 export function BuyCart({ user, cartId, onBack, onSignOut }) {
   // Two questions that used to be native prompts: how many boxes the PO covers, and why
   // a request is being cancelled.
@@ -906,6 +922,11 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
             this says the STOP on the route, including the half that lives on the order. */}
         <BuyCartProgress cart={cart} />
         <NextStep step={nextStep(cart, { isBuyer, canDecide, canIssue, canAudit })} />
+        {!settled && (
+          <div className="bc-nudge">
+            <NudgeButton kind="cart" id={cart.id} targets={nudgeTargets(cart, isBuyer)} />
+          </div>
+        )}
         {cart.status === 'written_off' && (
           <p className="bc-writeoff"><b>Written off:</b> {cart.write_off_reason}</p>
         )}

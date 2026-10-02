@@ -18,7 +18,7 @@
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
 import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent } from './db.js';
-import { alertUsers } from './alerts.js';
+import { alertUsers, at } from './alerts.js';
 import { fundingTarget } from './buycart.js';
 import { stockForPair, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
@@ -439,7 +439,7 @@ export async function notifyIssuersIfReady(cartId) {
     ].join('\n');
     const { sentTo } = await alertUsers('buy.cards_needed', {
       ref: `cart:${Number(cart.id)}`, code: cart.cart_code, body,
-      path: `/buy-carts?request=${Number(cart.id)}`,
+      path: at('buying', `request=${Number(cart.id)}`),
     });
     if (!sentTo.length) return { sent: false, reason: 'no DM went through' };
     await logCartEvent({ cartId, kind: 'cards_requested', body: `${tag} — gift card desk told on Telegram: ${sentTo.join(', ')}` });

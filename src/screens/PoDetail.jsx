@@ -33,6 +33,7 @@ import { PoOriginChip } from '../components/PoOriginChip.jsx';
 import { PoAssignLabels } from '../components/PoAssignLabels.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
 import { useLive, afterTyping } from '../hooks.js';
+import { NudgeButton } from '../components/NudgeButton.jsx';
 
 const FROZEN = ['reconciled', 'closed'];
 
@@ -269,6 +270,12 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                   </button>
                 )}
                 <ManifestPrint poId={po.id} poCode={po.po_code} onSignOut={onSignOut} />
+                {!FROZEN.includes(po.status) && (
+                  <NudgeButton kind="po" id={po.id} targets={[
+                    ...(po.supplier_user_id ? [{ to: 'supplier', label: `The supplier (${po.supplier_name})` }] : []),
+                    { to: 'warehouse', label: 'The warehouse' },
+                  ]} />
+                )}
               </div>
 
               {/* The order's own details — supplier, tag, date, boxes expected, notes.

@@ -45,18 +45,48 @@ still works. The env logins (`admin`, `superadmin`) have no users row → panel 
   Telegram rejects such URL buttons (`BUTTON_URL_INVALID`).
 - `alert_prefs` stores only differences from the default; defaults live in the catalogue.
 
-## Events (Phase 1)
+## Events
 | Key | To | Fires from | |
 |---|---|---|---|
 | `buy.cards_needed` | `issue_gift_cards` holders | `notifyIssuersIfReady` (notify.js) | required |
 | `buy.cards_released` | the buyer (`/buying` for a supplier, `/buy-carts` for staff) | `cart/gift-card.js` `fund` | required |
 | `rescale.requested` | warehouse (admins: shown, default off) | `rescale-requests/create.js` | on |
 | `account.signup` | DB admins | `auth/signup.js` | required |
+| `buy.line_decided` | the buyer — **batched**, one summary per request | `decideLines` (buycart.js) — screen AND Telegram taps | on |
+| `buy.audited` | the buyer | `cart/audit.js` (money / goods) | on |
+| `buy.comment` | everyone on the request + buyer (a buyer's first question → approvers) | `cart/comment.js` | on |
+| `rescale.audited` | the requester (`rescale_requests.requested_by_id`, new rows only) | `rescale-requests/audit.js` | on |
+| `po.shipped` | warehouse + admins — **batched** per order | `po/ship.js` | on |
+| `po.delivered` | warehouse (admins: off) — on the TRANSITION | `po/tracking-webhook.js` + `po/track-refresh.js` | on |
+| `online.delivered` | warehouse (admins: off) — on the transition, `once` | same two | on |
+| `po.discrepancy` | admins (PH: shown, off) — `once` per distinct result | `batches/commit`, `box-commit`, `set-status` | on |
+| `po.comment` | everyone on that PO thread + admins | `po/comment.js` | on |
+| `nudge` | whoever the record waits on | `api/nudge.js` | required |
+
+**Links are per reader** (`at(page, query)`): PH lands under `/ph/*`, a supplier on its
+portal routes, everyone else on the main app. A fixed path put PH on a page their app
+doesn't have (fixed for the Phase 1 gift-card alert too).
+
+**Batching** (`batchAlert`): held `ALERT_BATCH_MS` (60 s; 1.5 s in e2e) after the LAST
+event with the same key, in memory — a restart inside the window loses that summary only.
+**Once-only**: `alertUsers({ once: true, ref })` skips if `alert_log` already has that
+event+ref. Deliveries are detected by reading `deliveryStateBefore()` BEFORE the webhook
+writes, so 17TRACK's repeat pushes for a delivered parcel stay quiet.
+
+## Nudges (`POST /api/nudge { kind, id, to, note? }`)
+The **server** picks the people from `to` — the browser never sends user ids.
+| kind | to | who may |
+|---|---|---|
+| `cart` | `buyer` · `approvers` · `desk` · `auditors` | anyone who can see it; only staff → buyer; another supplier's request is 404 |
+| `rescale` | `warehouse` · `requester` | staff |
+| `po` | `supplier` · `warehouse` | staff |
+Privilege targets = EXPLICIT holders (admins hold everything implicitly — they're the
+fallback only when nobody does). One per sender+record+target per hour (`alert_log`).
+Written on the record's trail: buying history (`kind='nudge'`) / PO thread (`system`).
+Buttons: `NudgeButton` on the buying request header, PH's open rescale rows, PO detail.
 
 Adding an event: a catalogue entry (`key, group, emoji, title, when, who(u), required,
 defaultFor?`) + one `alertUsers(key, {…})` call after the write. No migration.
 
-## Not built yet (plan Phase 2/3)
-Decision on my line (batched per request), audit result, comments, PO shipped/delivered/
-discrepancy, online order delivered, **nudges**, announcements, quiet hours for the PH
-night shift, web push.
+## Not built yet (plan Phase 3)
+Announcements, quiet hours for the PH night shift, web push.

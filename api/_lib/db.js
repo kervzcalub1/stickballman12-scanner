@@ -2084,11 +2084,11 @@ export async function linkRescaleRequestItems(requestId, vins) {
   return rows.length;
 }
 
-export async function createRescaleRequest({ sku, skuAll, name, sizes, price, reason, note, by }) {
+export async function createRescaleRequest({ sku, skuAll, name, sizes, price, reason, note, by, byId = null }) {
   const rows = await db()`
-    INSERT INTO rescale_requests (sku, sku_all, name, sizes, price, reason, note, requested_by)
+    INSERT INTO rescale_requests (sku, sku_all, name, sizes, price, reason, note, requested_by, requested_by_id)
     VALUES (${sku}, ${skuAll || sku}, ${name || null}, ${JSON.stringify(sizes || [])}::jsonb, ${price ?? null},
-            ${reason || null}, ${note || null}, ${by || null})
+            ${reason || null}, ${note || null}, ${by || null}, ${Number(byId) || null})
     RETURNING id, created_at
   `;
   return rows[0];
@@ -2192,9 +2192,11 @@ export async function auditRescaleRequest(id, actualSizes, auditNote, by) {
     UPDATE rescale_requests
     SET actual_sizes = ${JSON.stringify(actualSizes || [])}::jsonb, audit_note = ${auditNote || null},
         status = 'audited', resolved_by = ${by || null}, resolved_at = now()
-    WHERE id = ${id} AND status = 'open' RETURNING id
+    WHERE id = ${id} AND status = 'open'
+    RETURNING id, sku, name, sizes, actual_sizes, requested_by, requested_by_id
   `;
-  return rows.length > 0;
+  // The row (truthy) rather than a boolean, so the caller can tell the requester what was counted.
+  return rows[0] || null;
 }
 
 // PH corrects a request it already submitted: a miscounted size, one it forgot, the
@@ -7044,6 +7046,74 @@ export async function logAlert({ userId, eventKey, ref = null, status, reason = 
     VALUES (${userId}, ${eventKey}, ${ref}, ${status}, ${reason})`;
 }
 
+// ── Alert recipients and once-only checks (api/_lib/alerts.js, Phase 2) ──
+
+// Everyone who has taken part in a buying request: wrote on it, decided a line, issued a
+// card, audited — the people a new comment is for. Env logins have no id and drop out.
+export async function cartParticipantIds(cartId) {
+  const rows = await db()`
+    SELECT actor_id AS id FROM buy_cart_events WHERE cart_id = ${cartId} AND actor_id IS NOT NULL
+    UNION
+    SELECT decided_by_id AS id FROM buy_cart_lines WHERE cart_id = ${cartId} AND decided_by_id IS NOT NULL`;
+  return rows.map((r) => Number(r.id));
+}
+
+// Everyone who has written on a PO's internal thread.
+export async function poParticipantIds(poId) {
+  const rows = await db()`
+    SELECT DISTINCT author_id AS id FROM po_comments WHERE po_id = ${poId} AND author_id IS NOT NULL`;
+  return rows.map((r) => Number(r.id));
+}
+
+const deliveryKey = (n) => String(n || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+// What the tracking webhook is about to overwrite — so "delivered" is announced on the
+// TRANSITION, not on every repeat push 17TRACK sends for a parcel already delivered.
+export async function deliveryStateBefore(numbers) {
+  const nums = [...new Set((numbers || []).map(String).filter(Boolean))];
+  if (!nums.length) return { boxes: [], tracking: new Map() };
+  // Matched the way setPoBoxTracking matches: case and punctuation ignored.
+  const keys = nums.map(deliveryKey);
+  const boxes = await db()`
+    SELECT b.id, b.po_id, b.status, b.tracking_number, p.po_code, p.supplier_name
+      FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
+     WHERE regexp_replace(upper(b.tracking_number), '[^A-Z0-9]', '', 'g') = ANY(${keys})`;
+  const tr = await db()`
+    SELECT tracking_number, tracking_status FROM shipment_tracking
+     WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') = ANY(${keys})`;
+  return { boxes, tracking: new Map(tr.map((r) => [deliveryKey(r.tracking_number), r.tracking_status])) };
+}
+
+// Online orders on these tracking numbers that haven't been counted in yet, with the
+// pairs still coming (cancelled lines left out).
+export async function openOnlineOrdersByTracking(numbers) {
+  const nums = [...new Set((numbers || []).map(String).filter(Boolean))];
+  if (!nums.length) return [];
+  return db()`
+    SELECT o.id, o.store, o.order_number, o.tracking_number, o.created_by,
+           COALESCE(SUM(l.qty) FILTER (WHERE l.cancelled_at IS NULL), 0)::int AS pairs
+      FROM online_orders o LEFT JOIN online_order_lines l ON l.order_id = o.id
+     WHERE regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g') = ANY(${nums.map(deliveryKey)})
+       AND o.received_at IS NULL
+     GROUP BY o.id`;
+}
+
+// Has this exact alert already gone out (or been decided) inside the window? Used for
+// "once per record" events and the nudge cooldown.
+export async function alertSentRecently(eventKey, ref, minutes = null) {
+  const rows = minutes == null
+    ? await db()`SELECT 1 FROM alert_log WHERE event_key = ${eventKey} AND ref = ${ref} LIMIT 1`
+    : await db()`SELECT 1 FROM alert_log WHERE event_key = ${eventKey} AND ref = ${ref}
+                    AND at > now() - make_interval(mins => ${minutes}) LIMIT 1`;
+  return rows.length > 0;
+}
+
+// One rescale request, for a nudge.
+export async function getRescaleRequestById(id) {
+  const rows = await db()`SELECT id, sku, name, status, requested_by, requested_by_id FROM rescale_requests WHERE id = ${id}`;
+  return rows[0] || null;
+}
+
 // Who the bot is talking to in a private chat — for a plain /start with no token.
 export async function userNameByTelegramId(telegramUserId) {
   const rows = await db()`SELECT id, name FROM users WHERE telegram_user_id = ${telegramUserId}`;
@@ -7241,7 +7311,7 @@ export async function decideBuyCartLines({
       body: reason || `${r.sku} ${r.size || ''}${qtyPart}${was}`.replace(/\s{2,}/g, ' ').trim(),
     });
   }
-  return { decided: rows.length, cart: await getBuyCart(cartId) };
+  return { decided: rows.length, lines: rows, cart: await getBuyCart(cartId) };
 }
 
 // ---- Gift cards -----------------------------------------------------------

@@ -5,7 +5,9 @@
 // fewer tracking-API calls/credits. A manual fallback to the webhook push. No-ops if
 // tracking isn't configured (TRACKING_API_KEY unset).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
-import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured, upsertShipmentTracking } from '../_lib/db.js';
+import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured, upsertShipmentTracking,
+  deliveryStateBefore, openOnlineOrdersByTracking } from '../_lib/db.js';
+import { alertDeliveries } from '../_lib/alerts.js';
 import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet, registerTracking, stopTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
@@ -61,6 +63,8 @@ export default async function handler(req, res) {
     for (let i = 0; i < items.length; i += 40) {
       updates.push(...await fetchTrackInfo(items.slice(i, i + 40)));
     }
+    // Same as the webhook: read first, so a delivery this pull discovers is announced once.
+    const before = await deliveryStateBefore(updates.map((u) => u.trackingNumber)).catch(() => null);
     for (const u of updates) {
       // Same pair of writes as the webhook: by number for the warehouse side, then
       // onto the PO's own box. Keeping them together is what stops the two answers
@@ -77,6 +81,8 @@ export default async function handler(req, res) {
     // Stop tracking any label that's now delivered so it stops consuming 17TRACK quota
     // (matches the webhook path). Best-effort — a failure here must not fail the refresh.
     const deliveredNums = updates.filter((u) => u.boxStatus === 'delivered').map((u) => u.trackingNumber);
+    if (deliveredNums.length && before)
+      alertDeliveries(before, updates, await openOnlineOrdersByTracking(deliveredNums).catch(() => []));
     if (deliveredNums.length)
       stopTracking(deliveredNums).catch((e) => console.warn('[po/track-refresh] stoptrack:', e.message));
     // Keep the warehouse's Google Sheet in sync on manual pulls too (best-effort, env-gated).

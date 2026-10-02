@@ -5406,3 +5406,7 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
   .al-telegram .al-actions { flex-direction: row; width: 100%; padding-left: 46px; }
   .al-telegram .al-actions .btn { flex: 1; }
 }
+
+/* Nudge… (src/components/NudgeButton.jsx) */
+.bc-nudge { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 4px; }
+.nudge-done { margin-left: 4px; }

@@ -14,6 +14,7 @@ import { useQueryParam, useQueryDateRange } from '../lib/urlstate.js';
 import { PH_FLAGS, calcFinalPrice } from '../lib/ph.js';
 import { normalizeSize } from '../lib/codes.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
+import { NudgeButton } from '../components/NudgeButton.jsx';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -704,6 +705,8 @@ export function RescaleRequestsReport({ canAudit, canCreate, showPricing = true,
                   <div className="rc-foot">
                     {editId !== r.id && <button className="btn sm ghost" onClick={() => startEdit(r)}>Edit request…</button>}
                     <button className="btn sm ghost danger" onClick={() => startCancel(r)}>Cancel request…</button>
+                    <NudgeButton kind="rescale" id={r.id} className="btn sm ghost"
+                      targets={[{ to: 'warehouse', label: 'The warehouse — count it' }]} />
                   </div>
                 ))}
 

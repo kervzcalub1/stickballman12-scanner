@@ -12,6 +12,7 @@
 import {
   getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku,
 } from '../_lib/util.js';
+import { alertPoDiscrepancy } from '../_lib/alerts.js';
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
@@ -244,6 +245,7 @@ export default async function handler(req, res) {
       ? await poMarked.then(() => reconcileOutcomeForIntake(poId))
         .catch((e) => { console.warn('[commit] reconcile outcome:', e.message); return null; })
       : null;
+    alertPoDiscrepancy(reconcile, user); // admins on Telegram — someone has to tell the supplier
 
     send(res, 200, {
       ok: true,

@@ -138,6 +138,50 @@ await sql(`
     asked_at         TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+
+// Alerts on Telegram (2026-10-03, docs/context/alerts.md). A person connects their OWN
+// Telegram from the Alerts panel: the app mints a one-use token, the deep link opens the
+// bot with `/start <token>`, and the webhook writes `telegram_user_id` for that account.
+//   telegram_name / telegram_username — who Telegram said pressed Start, shown back in the
+//     app so a wrong account is visible ("Connected as @someone-else").
+//   telegram_broken_at — Telegram refused a send (blocked the bot, deleted the chat); the
+//     panel says "reconnect" instead of alerts silently going nowhere.
+//   alerts_muted / alert_prefs — the master switch and the per-event opt-OUTS. Defaults
+//     live in code (api/_lib/alerts.js): a key missing here means that event's default,
+//     so a new event needs no migration.
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_name TEXT`);
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_username TEXT`);
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_linked_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_broken_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS alerts_muted BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS alert_prefs JSONB NOT NULL DEFAULT '{}'::jsonb`);
+// The one-use connect tokens. 15 minutes, spent on first use. `env` is the server that
+// minted it — dev and prod share one bot and one webhook (prod's), so prod passes a dev
+// token's /start on to the dev server, exactly like a dev card's tap.
+await sql(`
+  CREATE TABLE IF NOT EXISTS telegram_link_tokens (
+    token       TEXT PRIMARY KEY,
+    user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    env         TEXT NOT NULL DEFAULT 'prod',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    used_at     TIMESTAMPTZ
+  )
+`);
+// Every alert decision, sent or not, with the reason — so "I never got it" is answered
+// from a row (muted, event off, not connected, Telegram said 403) rather than a guess.
+await sql(`
+  CREATE TABLE IF NOT EXISTS alert_log (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id    BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    event_key  TEXT NOT NULL,
+    ref        TEXT,
+    status     TEXT NOT NULL CHECK (status IN ('sent','skipped','failed')),
+    reason     TEXT,
+    at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS alert_log_user_at_idx ON alert_log (user_id, at DESC)`);
 // Anyone who was given one of the short-lived roles keeps the capability as a
 // privilege, and lands back on a real job title. Runs before the constraint is
 // re-asserted, or these rows would fail it.

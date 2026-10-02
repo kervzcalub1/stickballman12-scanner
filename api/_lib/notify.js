@@ -17,11 +17,12 @@
 // seconds later by `priceInBackground`, and a card that goes out first says "not priced"
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
-import { getBuyCart, getBuyCartLine, giftCardIssuersOnTelegram, lastCartEvent, logCartEvent } from './db.js';
+import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent } from './db.js';
+import { alertUsers } from './alerts.js';
 import { fundingTarget } from './buycart.js';
 import { stockForPair, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
-import { telegramConfigured, sendApprovalCard, sendNote, sendDirect, cardKeyboard } from './telegram.js';
+import { telegramConfigured, sendApprovalCard, sendNote, cardKeyboard } from './telegram.js';
 import { cardsIssuable } from '../../src/lib/buycartRules.js';
 
 // THE TEST SUITE MUST NOT POST TO TELEGRAM.
@@ -410,7 +411,7 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
 // list that adds approved pairs announces the top-up.
 //
 // A person who never pressed Start on the bot cannot be messaged first (Telegram's
-// rule); that is logged by name so "I never got it" has an answer.
+// rule); every skip and failure is a row in `alert_log`, so "I never got it" has an answer.
 export async function notifyIssuersIfReady(cartId) {
   if (!telegramConfigured()) return { sent: false, reason: 'Telegram is not configured' };
   try {
@@ -426,32 +427,20 @@ export async function notifyIssuersIfReady(cartId) {
     const last = await lastCartEvent(cartId, 'cards_requested');
     if (last && String(last.body || '').startsWith(tag)) return { sent: false, reason: 'already announced' };
 
-    const issuers = await giftCardIssuersOnTelegram();
-    if (!issuers.length) {
-      console.log(`[notify] ${cart.cart_code} is waiting for gift cards, but nobody holding issue_gift_cards has a linked Telegram account`);
-      return { sent: false, reason: 'no issuer on Telegram' };
-    }
-
+    // Through the one alert sender (api/_lib/alerts.js): required for everyone holding
+    // issue_gift_cards, logged per person, a 403 marks that person's link broken.
     const n = Number(cart.approved_count) || 0;
-    const base = String(process.env.APP_BASE_URL || '').trim().replace(/\/+$/, '');
-    const text = [
-      `${notifyEnv() === 'dev' ? '[dev] ' : ''}${cart.buyer_name || 'The buyer'} is waiting for gift cards on ${cart.cart_code} — ${dollars(owed)}`,
+    const body = [
+      `${cart.buyer_name || 'The buyer'} is waiting for gift cards on ${cart.cart_code} — ${dollars(owed)}`,
       issued > 0
         ? `${dollars(issued)} is already on cards; ${dollars(target)} approved in all (${n} pair${n === 1 ? '' : 's'}).`
         : `${n} pair${n === 1 ? '' : 's'} approved, at shelf price.`,
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
-      ...(base ? [`${base}/buy-carts?request=${Number(cart.id)}`] : []),
     ].join('\n');
-
-    const sentTo = [];
-    for (const u of issuers) {
-      try {
-        await sendDirect(u.telegram_user_id, text);
-        sentTo.push(u.name || u.username);
-      } catch (e) {
-        console.error(`[notify] ${cart.cart_code} gift-card DM to ${u.name || u.username} failed — ${e.status === 403 ? 'they have not pressed Start on the bot yet' : e.message}`);
-      }
-    }
+    const { sentTo } = await alertUsers('buy.cards_needed', {
+      ref: `cart:${Number(cart.id)}`, code: cart.cart_code, body,
+      path: `/buy-carts?request=${Number(cart.id)}`,
+    });
     if (!sentTo.length) return { sent: false, reason: 'no DM went through' };
     await logCartEvent({ cartId, kind: 'cards_requested', body: `${tag} — gift card desk told on Telegram: ${sentTo.join(', ')}` });
     console.log(`[notify] ${cart.cart_code} waiting for ${tag} in gift cards → DM to ${sentTo.join(', ')}`);

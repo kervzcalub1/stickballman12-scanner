@@ -3,6 +3,7 @@
 // PH flags a SKU for the warehouse to recount/rescan. PH team (admin allowed).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku, skuCodes } from '../_lib/util.js';
 import { createRescaleRequest, linkRescaleRequestItems, dbConfigured } from '../_lib/db.js';
+import { alertRescaleRequested } from '../_lib/alerts.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -51,6 +52,7 @@ export default async function handler(req, res) {
     let linked = 0;
     try { linked = await linkRescaleRequestItems(r.id, body.vins); }
     catch (e) { console.warn('[rescale-requests/create] link failed:', e.message); }
+    alertRescaleRequested({ id: r.id, sku: chosen.join('/') || sku, name, sizes, reason, by: user.name || user.username, actorUid: user.uid });
     return send(res, 200, { ok: true, id: r.id, linked });
   } catch (e) {
     console.error('[rescale-requests/create]', e.message);

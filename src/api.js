@@ -85,6 +85,12 @@ export const api = {
   signup: (payload) => post('/api/auth/signup', payload, { auth: false }),
   requestReset: (username) => post('/api/auth/request-reset', { username }, { auth: false }),
   changePassword: (newPassword) => post('/api/auth/change-password', { newPassword }),
+  // My alerts (the 🔔 panel): Telegram connection + which events reach me.
+  myAlerts: () => get('/api/me/alerts'),
+  saveMyAlerts: (patch) => post('/api/me/alerts', patch),
+  telegramConnectLink: () => post('/api/me/telegram', { action: 'link' }),
+  telegramSendTest: () => post('/api/me/telegram', { action: 'test' }),
+  telegramDisconnect: () => post('/api/me/telegram', { action: 'disconnect' }),
   // Admin
   adminListUsers: () => get('/api/admin/users'),
   adminReview: (userId, decision) => post('/api/admin/review', { userId, decision }),

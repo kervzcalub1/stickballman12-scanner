@@ -62,6 +62,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Railway deploy, env vars, db:setup/reset, schema-drift trap | `docs/context/deploy.md` |
 | In-app SOP & Help: article/FAQ data model, search, SVG schematics, screenshot capture | `docs/context/sop.md` |
 | Failed scans: what a bad scan SAYS, and the `scan_failures` record behind it | `docs/context/scan-failures.md` |
+| **Alerts on Telegram**: 🔔 panel in TopBar, self-service connect (`/start <token>`), per-event prefs, `alert_log`, the one sender `alertUsers` | `docs/context/alerts.md` |
 | **Live updates**: DB triggers → `/api/live` stream → `useLive` re-reads; no refresh needed | `docs/context/live-updates.md` |
 
 Current work log / next steps: `june22-progress.md`. Full feature history:

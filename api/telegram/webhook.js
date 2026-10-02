@@ -7,6 +7,9 @@
 //     "More…" → a force-reply "How many pairs?"
 //   · a number typed back to that question (same person, same chat, 10 minutes) →
 //     approved at that quantity
+//   · `/start <token>` in a PRIVATE chat → connects that Telegram account to the app
+//     account that minted the token (the Alerts panel's "Connect Telegram"); a plain
+//     `/start` says who this chat is connected as (api/me/telegram.js, api/_lib/alerts.js)
 //
 // ALWAYS ANSWERS 200 once the secret checks out. Telegram re-sends any update it didn't get
 // a 2xx for, so a failure here would come back as the same tap again and again; the
@@ -17,7 +20,7 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, askTelegramQty, takeTelegramQty } from '../_lib/db.js';
+import { dbConfigured, askTelegramQty, takeTelegramQty, redeemTelegramLinkToken, userNameByTelegramId } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
@@ -134,6 +137,7 @@ async function handleTap(update, cq) {
 }
 
 async function handleMessage(update, msg) {
+  if (msg.chat?.type === 'private') return handlePrivate(update, msg);
   if (!/^\s*\d{1,3}\s*$/.test(String(msg.text || ''))) return null;
   if (!inOurChat(msg.chat?.id)) return null;
   const from = msg.from || {};
@@ -151,6 +155,41 @@ async function handleMessage(update, msg) {
     qty: Number(String(msg.text).trim()),
   });
   return answerOnCard(msg.chat.id, Number(pending.card_message_id), out, pending.env);
+}
+
+// A person's own chat with the bot — where their alerts arrive. Only `/start` means
+// anything here: with a token it is the second half of "Connect Telegram" in the app
+// (the deep link sends it for them); without one it is somebody asking what this chat is.
+// Pressing it again just repeats the answer, like the Hub's bot did.
+async function handlePrivate(update, msg) {
+  const m = /^\/start(?:@\w+)?(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$/.exec(String(msg.text || '').trim());
+  if (!m) return null;
+  const from = msg.from || {};
+  const token = m[1] || null;
+  if (token) {
+    // The first character is the server that minted it; a dev token goes to dev.
+    const tokenEnv = token[0] === 'd' ? 'dev' : 'prod';
+    if (tokenEnv !== notifyEnv()) return forwardToOtherEnv(update, tokenEnv);
+  }
+  const tag = notifyEnv() === 'dev' ? '[dev] ' : '';
+  const say = (text) => enqueue(() => tg('sendMessage', { chat_id: msg.chat.id, text: `${tag}${text}` }));
+  if (!token) {
+    const who = await userNameByTelegramId(from.id);
+    return say(who
+      ? `✅ You're connected to Stickballman12 Inventory as ${who.name}.\nChoose which alerts you get in the app: 🔔 Alerts.`
+      : 'To get your alerts here, open Stickballman12 Inventory, tap 🔔 Alerts, then Connect Telegram.');
+  }
+  const fullName = [from.first_name, from.last_name].filter(Boolean).join(' ').trim() || null;
+  const out = await redeemTelegramLinkToken({
+    token, telegramUserId: from.id, telegramName: fullName, telegramUsername: from.username || null,
+  });
+  if (out.ok) {
+    console.log(`[telegram/webhook] Telegram ${from.id} (@${from.username || '-'}) connected to ${out.user.username}`);
+    return say(`✅ Connected to Stickballman12 Inventory as ${out.user.name}.\nYou'll get your alerts here. Choose which ones in the app: 🔔 Alerts.`);
+  }
+  if (out.why === 'taken') return say(`This Telegram account is already connected to ${out.other.name}. Disconnect it there first, or ask an admin.`);
+  if (out.why === 'account') return say('That account is not active any more.');
+  return say('That connect link has expired or was already used. In the app, open 🔔 Alerts and tap Connect Telegram again.');
 }
 
 // What the group sees, worded by the decision itself (`outcome`, `reaction`) — the same

@@ -150,6 +150,31 @@ export function sendDirect(telegramUserId, text) {
   return enqueue(() => tg('sendMessage', { chat_id: Number(telegramUserId), text }));
 }
 
+// One alert to one person (api/_lib/alerts.js): HTML-formatted — the caller escapes —
+// with an "Open in Inventory" button when there is a link Telegram will accept. Telegram
+// refuses a URL button pointing at localhost or plain http (BUTTON_URL_INVALID), which
+// would lose the whole message on a dev server, so there the link rides in the text.
+export function sendAlertMessage(telegramUserId, { html, url = null }) {
+  const button = url && /^https:\/\//i.test(url) && !/^https:\/\/(localhost|127\.)/i.test(url);
+  const text = url && !button ? `${html}\n\n${url}` : html;
+  return enqueue(() => tg('sendMessage', {
+    chat_id: Number(telegramUserId),
+    text,
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    ...(button ? { reply_markup: { inline_keyboard: [[{ text: 'Open in Inventory ↗', url }]] } } : {}),
+  }));
+}
+
+// The bot's @username, for the t.me deep link. Asked of Telegram once (getMe) and kept —
+// TELEGRAM_BOT_USERNAME skips the call where it is set.
+let botUsername = null;
+export async function getBotUsername() {
+  if (env('TELEGRAM_BOT_USERNAME')) return env('TELEGRAM_BOT_USERNAME').replace(/^@/, '');
+  if (!botUsername) botUsername = (await tg('getMe'))?.username || null;
+  return botUsername;
+}
+
 // A plain note to the group — request closed / re-opened. No parse mode, like before:
 // a stray `*` in a store name prints rather than formats.
 export function sendNote(text) {

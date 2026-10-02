@@ -8,6 +8,7 @@
 // migration — but nothing here writes anything other than 'internal'.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getPo, addPoComment, COMMENT_MAX, dbConfigured } from '../_lib/db.js';
+import { alertPoComment } from '../_lib/alerts.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -33,6 +34,7 @@ export default async function handler(req, res) {
       poId, body: text,
       author: { id: Number(user.uid) || null, name: user.name || user.username || '', role: user.role },
     });
+    alertPoComment(po, user, text); // everyone on this thread, and admins
     return send(res, 200, { ok: true, comment });
   } catch (e) {
     console.error('[po/comment]', e.message);

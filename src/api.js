@@ -91,6 +91,8 @@ export const api = {
   telegramConnectLink: () => post('/api/me/telegram', { action: 'link' }),
   telegramSendTest: () => post('/api/me/telegram', { action: 'test' }),
   telegramDisconnect: () => post('/api/me/telegram', { action: 'disconnect' }),
+  // Nudge whoever a record is waiting on (server picks the people from `to`).
+  nudge: (kind, id, to, note) => post('/api/nudge', { kind, id, to, note }),
   // Admin
   adminListUsers: () => get('/api/admin/users'),
   adminReview: (userId, decision) => post('/api/admin/review', { userId, decision }),

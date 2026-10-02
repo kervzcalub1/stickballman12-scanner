@@ -10,8 +10,10 @@
 // after the response loses nothing. (We run on a persistent Express process, so async work
 // continues after the response is flushed.)
 import { getJsonBody, send, applySecurity } from '../_lib/util.js';
-import { setPoBoxTracking, upsertShipmentTracking, rollupPoShippedFromTracking, dbConfigured } from '../_lib/db.js';
+import { setPoBoxTracking, upsertShipmentTracking, rollupPoShippedFromTracking, deliveryStateBefore,
+  openOnlineOrdersByTracking, dbConfigured } from '../_lib/db.js';
 import { trackingWebhookSecret, parseWebhook, forwardTrackingToSheet, stopTracking } from '../_lib/tracking.js';
+import { alertDeliveries } from '../_lib/alerts.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -48,6 +50,10 @@ export default async function handler(req, res) {
       console.warn('[po/tracking-webhook] 0 parsed — body keys:', Object.keys(body || {}),
         '· data:', Array.isArray(body?.data) ? `array[${body.data.length}]` : typeof body?.data);
 
+    // Read BEFORE writing: "delivered" is announced on the transition, and 17TRACK
+    // re-pushes a delivered parcel more than once.
+    const before = await deliveryStateBefore(updates.map((u) => u.trackingNumber))
+      .catch((e) => { console.warn('[po/tracking-webhook] delivery state:', e.message); return null; });
     const affectedPoIds = new Set();
     for (const u of updates) {
       // By NUMBER first, and unconditionally. This is the only place a push about a
@@ -67,6 +73,10 @@ export default async function handler(req, res) {
     // keeping it on auto-tracking just burns 17TRACK quota. Covers every delivered number in
     // the push (matched or not), since the whole account funnels through here. Best-effort.
     const deliveredNums = updates.filter((u) => u.boxStatus === 'delivered').map((u) => u.trackingNumber);
+    if (deliveredNums.length && before) {
+      const online = await openOnlineOrdersByTracking(deliveredNums).catch(() => []);
+      alertDeliveries(before, updates, online); // warehouse on Telegram: ready to receive / count in
+    }
     if (deliveredNums.length)
       stopTracking(deliveredNums).catch((e) => console.warn('[po/tracking-webhook] stoptrack:', e.message));
     // Mirror the update into the warehouse's Google Sheet (best-effort, env-gated).

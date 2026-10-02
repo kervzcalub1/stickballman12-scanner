@@ -1,4 +1,4 @@
-# Telegram alerts — personal notifications through the bot (PLAN — Phase 1 BUILT 2026-10-03, see docs/context/alerts.md)
+# Telegram alerts — personal notifications through the bot (PLAN — Phase 1 + 2 BUILT 2026-10-03, see docs/context/alerts.md)
 
 Source: a 2m35s screen recording (WhatsApp video, 2026-10-03) of the team's **Stickballman12
 Hub** (the Lovable task app at `stickballman12-hub.lovable.app`) showing how a person connects

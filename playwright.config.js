@@ -91,6 +91,11 @@ export default defineConfig({
       TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: '-100777',
       TELEGRAM_API_BASE: 'http://127.0.0.1:5198', TELEGRAM_WEBHOOK_SECRET: 'e2e-telegram-secret',
       TELEGRAM_DEV_FORWARD_URL: '',
+      // Alerts batch "pairs decided" / "boxes shipped" for 60 s in real life; the suite
+      // can't wait a minute per test.
+      ALERT_BATCH_MS: '1500',
+      // The alerts spec plays 17TRACK at the tracking webhook. No sheet forwarding from tests.
+      TRACKING_WEBHOOK_SECRET: 'e2e-tracking-secret', GOOGLE_SHEETS_TRACKING_URL: '',
     },
   },
 });

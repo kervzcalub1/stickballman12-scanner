@@ -3,6 +3,7 @@
 // request. Both roles then see reported-vs-actual.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { auditRescaleRequest, dbConfigured } from '../_lib/db.js';
+import { alertRescaleCounted } from '../_lib/alerts.js';
 import { VIN_RE } from '../_lib/vins.js';
 
 export default async function handler(req, res) {
@@ -48,6 +49,7 @@ export default async function handler(req, res) {
   try {
     const ok = await auditRescaleRequest(id, actualSizes, note, user.name || user.username || '');
     if (!ok) return send(res, 404, { ok: false, error: 'Request not found or already audited.' });
+    alertRescaleCounted(ok, user); // whoever asked, on Telegram
     return send(res, 200, { ok: true });
   } catch (e) {
     console.error('[rescale-requests/audit]', e.message);

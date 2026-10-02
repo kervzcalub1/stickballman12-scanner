@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     return send(res, 400, { ok: false, error: 'Pick one of this shoe’s style codes, or all of them.' });
 
   try {
-    const r = await createRescaleRequest({ sku: chosen.join('/') || sku.replace(/\s+/g, '-'), skuAll, name, sizes, price: priceRaw, reason, note, by: user.name || user.username || '' });
+    const r = await createRescaleRequest({ sku: chosen.join('/') || sku.replace(/\s+/g, '-'), skuAll, name, sizes, price: priceRaw, reason, note, by: user.name || user.username || '', byId: user.uid });
     // Which PAIRS this is about — sent only by the New Inventory row modal, which is
     // the only place that knows. Best-effort on purpose: a request must file even if
     // the linking fails, because the ask is the point and the link is an optimisation.

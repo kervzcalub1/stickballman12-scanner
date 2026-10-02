@@ -503,6 +503,9 @@ await sql(`CREATE INDEX IF NOT EXISTS rescale_request_items_item_idx ON rescale_
 // The end of the loop: `audited` used to be terminal, so the green "Audited" home badge
 // counted up forever. `closed` is what the linked pairs having been dealt with looks like.
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS closed_by TEXT`);
+// WHO asked, as an account — `requested_by` is only a name. Lets the requester be told on
+// Telegram when the warehouse finishes the count (api/_lib/alerts.js). NULL on older rows.
+await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS requested_by_id BIGINT`);
 await sql(`ALTER TABLE rescale_requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ`);
 
 // Pre-printed VIN/1ID roll stock ("VIN Project"). Blank stickers are minted and

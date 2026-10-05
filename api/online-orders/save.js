@@ -1,13 +1,13 @@
 // POST /api/online-orders/save
 //   { id?, store, order_number?, tracking_number?, ordered_on?, coupon, tax, shipping,
-//     gc_pct, note?, lines:[{ sku, name?, size, qty, unit_price }], allowDuplicateTracking? }
+//     gc_pct, cashback, note?, lines:[{ sku, name?, size, qty, unit_price }], allowDuplicateTracking? }
 //   -> { ok, id }   ·   409 { duplicate:{ id, store } } when another order has the tracking #
 // Create or edit an online order. `lines` are the ACTIVE lines — cancelled ones are
 // history and are changed only through line.js. PH records orders (admin auto-allowed).
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { dbConfigured, createOnlineOrder, updateOnlineOrder, getOnlineOrder, onlineOrderByTracking } from '../_lib/db.js';
 import { actorOf, MAX_MONEY, realDate } from './_shared.js';
-import { orderCode } from '../../src/lib/onlineOrders.js';
+import { orderCode, orderCosts } from '../../src/lib/onlineOrders.js';
 
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
 // Money: blank is 0 here — a coupon or shipping nobody typed is genuinely none. Negative
@@ -35,12 +35,12 @@ export default async function handler(req, res) {
     tracking_number: text(b.tracking_number, 60),
     ordered_on: realDate(b.ordered_on),
     coupon: money(b.coupon), tax: money(b.tax), shipping: money(b.shipping),
-    gc_pct: money(b.gc_pct),
+    gc_pct: money(b.gc_pct), cashback: money(b.cashback),
     note: text(b.note, 1000),
   };
   if (!o.store) return send(res, 400, { ok: false, error: 'Which store was it bought from?' });
   if (b.ordered_on && !o.ordered_on) return send(res, 400, { ok: false, error: 'That order date isn’t a real date.' });
-  for (const k of ['coupon', 'tax', 'shipping', 'gc_pct']) {
+  for (const k of ['coupon', 'tax', 'shipping', 'gc_pct', 'cashback']) {
     if (Number.isNaN(o[k])) return send(res, 400, { ok: false, error: `The ${k === 'gc_pct' ? 'gift card discount' : k} has to be a number from 0 to ${MAX_MONEY.toLocaleString('en-US')}.` });
   }
   if (o.gc_pct > 100) return send(res, 400, { ok: false, error: 'The gift card discount is a percentage — 100 at most.' });
@@ -68,6 +68,9 @@ export default async function handler(req, res) {
     // A coupon bigger than what the coming pairs cost would make their cost negative (QA).
     const subtotal = lines.reduce((n, l) => n + l.unit_price * l.qty, 0);
     if (o.coupon > subtotal + 0.005) return send(res, 400, { ok: false, error: `The coupon ($${o.coupon.toFixed(2)}) is more than the shoes cost ($${subtotal.toFixed(2)}).` });
+    // Same for cashback: it can't take the order below $0.
+    const beforeCashback = orderCosts({ ...o, cashback: 0 }, lines).total;
+    if (o.cashback > beforeCashback + 0.005) return send(res, 400, { ok: false, error: `The cashback ($${o.cashback.toFixed(2)}) is more than the order cost ($${beforeCashback.toFixed(2)}).` });
     // A form opened before somebody cancelled (or restored) a line would put that line
     // back as active when saved — the active lines are replaced wholesale. The form sends
     // the active line ids it was built from; if they no longer match, it's stale (QA).
@@ -96,7 +99,7 @@ export default async function handler(req, res) {
     const changes = [];
     if (!before.tracking_number && o.tracking_number) changes.push(`tracking ${o.tracking_number} added — shipped`);
     else if (before.tracking_number !== o.tracking_number) changes.push(`tracking ${before.tracking_number || '—'} → ${o.tracking_number || '—'}`);
-    for (const k of ['coupon', 'tax', 'shipping', 'gc_pct']) {
+    for (const k of ['coupon', 'tax', 'shipping', 'gc_pct', 'cashback']) {
       if (Number(before[k]) !== o[k]) changes.push(`${k === 'gc_pct' ? 'gift card %' : k} ${Number(before[k])} → ${o[k]}`);
     }
     const beforeUnits = (before.lines || []).filter((l) => !l.cancelled_at).reduce((n, l) => n + Number(l.qty), 0);

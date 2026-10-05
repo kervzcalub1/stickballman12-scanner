@@ -25,12 +25,12 @@ export function shapeOrder(o) {
     id: Number(l.id), qty: Number(l.qty), unit_price: Number(l.unit_price),
     refund_amount: l.refund_amount == null ? null : Number(l.refund_amount),
   }));
-  const money = { coupon: Number(o.coupon), tax: Number(o.tax), shipping: Number(o.shipping), gc_pct: Number(o.gc_pct) };
+  const money = { coupon: Number(o.coupon), tax: Number(o.tax), shipping: Number(o.shipping), gc_pct: Number(o.gc_pct), cashback: Number(o.cashback || 0) };
   const costs = orderCosts(money, lines);
   return {
     ...o, ...money, id: Number(o.id),
     lines: costs.lines,
-    totals: { units: costs.units, subtotal: costs.subtotal, paid: costs.paid, total: costs.total },
+    totals: { units: costs.units, subtotal: costs.subtotal, paid: costs.paid, cashback: costs.cashback, total: costs.total },
     stage: orderStage({ ...o, lines }),
   };
 }

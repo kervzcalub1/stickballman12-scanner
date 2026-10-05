@@ -2,7 +2,7 @@
 //
 // Three jobs on one page:
 //   · PH records the order: what, from where, the tracking number once it ships, and the
-//     order's coupon / tax / shipping / gift-card discount — which turn into what each
+//     order's coupon / tax / shipping / gift-card discount / cashback — which turn into what each
 //     pair ACTUALLY cost (orderCosts, src/lib/onlineOrders.js).
 //   · The WAREHOUSE sees what to expect ("Expected": shipped, not counted in yet) and
 //     counts each parcel in; pairs that never arrived split off as not delivered.
@@ -92,7 +92,7 @@ export function OnlineOrders({ user, onHome, onSignOut }) {
       <div className="card">
         <p className="muted sm">
           {canEdit
-            ? 'Shoes bought from an online store — what was ordered, the tracking number once it ships, and what each pair actually cost after the coupon, tax, shipping and gift card discount. Cancelled or missing pairs keep their refund here until it is back.'
+            ? 'Shoes bought from an online store — what was ordered, the tracking number once it ships, and what each pair actually cost after the coupon, tax, shipping, gift card discount and cashback. Cancelled or missing pairs keep their refund here until it is back.'
             : 'Shoes the PH team bought online. “Expected” is what is on its way — when the parcel lands, open the order and count it in.'}
         </p>
         <div className="oo-toolbar">
@@ -213,7 +213,7 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
         <h3 className="rows-title">{o.received_at ? 'Received' : 'Coming'} <span className="muted">({active.reduce((n, l) => n + l.qty, 0)} pair{active.reduce((n, l) => n + l.qty, 0) === 1 ? '' : 's'})</span></h3>
         {!active.length ? <p className="muted">Nothing — every line was cancelled.</p> : (
           <table className="oo-lines">
-            <thead><tr><th>Shoe</th><th>Size</th><th>Qty</th><th>Price ea</th><th title="Price − coupon share + tax share + shipping share, less the gift card discount">Actual cost ea</th><th /></tr></thead>
+            <thead><tr><th>Shoe</th><th>Size</th><th>Qty</th><th>Price ea</th><th title="Price − coupon share + tax share + shipping share, less the gift card discount and the cashback share">Actual cost ea</th><th /></tr></thead>
             <tbody>
               {active.map((l) => (
                 <tr key={l.id}>
@@ -221,7 +221,7 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
                   <td>{l.size}</td>
                   <td>{l.qty}</td>
                   <td>{money(l.unit_price)}</td>
-                  <td title={l.parts ? `$${l.parts.price} − coupon $${l.parts.coupon} + tax $${l.parts.tax} + shipping $${l.parts.shipping} − gift card $${l.parts.gc}` : ''}><b>{money(l.each)}</b></td>
+                  <td title={l.parts ? `$${l.parts.price} − coupon $${l.parts.coupon} + tax $${l.parts.tax} + shipping $${l.parts.shipping} − gift card $${l.parts.gc}${l.parts.cashback ? ` − cashback $${l.parts.cashback}` : ''}` : ''}><b>{money(l.each)}</b></td>
                   {/* Once counted in, these pairs are on the shelf — nothing left to cancel. */}
                   <td>{canEdit && !o.received_at && <button type="button" className="btn sm ghost" onClick={() => setDialog({ kind: 'cancel', line: l })}>Cancel…</button>}</td>
                 </tr>
@@ -236,6 +236,7 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
           <span>+ shipping {money(o.shipping)}</span>
           <span>= paid {money(o.totals.paid)}</span>
           {o.gc_pct > 0 && <span>− gift card {Number(o.gc_pct)}%</span>}
+          {o.cashback > 0 && <span>− cashback {money(o.cashback)}</span>}
           <b>Actual cost {money(o.totals.total)}</b>
         </div>
       </div>
@@ -368,6 +369,7 @@ function OrderForm({ initial, onCancel, onSaved, onSignOut }) {
     ordered_on: initial?.ordered_on || estToday(),
     coupon: initial ? String(initial.coupon || '') : '', tax: initial ? String(initial.tax || '') : '',
     shipping: initial ? String(initial.shipping || '') : '', gc_pct: initial ? String(initial.gc_pct || '') : '',
+    cashback: initial ? String(initial.cashback || '') : '',
     note: initial?.note || '',
   }));
   const [lines, setLines] = useState(() => {
@@ -440,11 +442,13 @@ function OrderForm({ initial, onCancel, onSaved, onSignOut }) {
         <NumField label="Tax" prefix="$" value={f.tax} onChange={set('tax')} hint="Split by price" />
         <NumField label="Shipping" prefix="$" value={f.shipping} onChange={set('shipping')} hint="Split by price" />
         <NumField label="Gift card discount" suffix="%" value={f.gc_pct} onChange={set('gc_pct')} hint="Off everything paid" />
+        <NumField label="Cashback" prefix="$" value={f.cashback} onChange={set('cashback')} hint="Off the whole cost, split by price" />
       </div>
       <div className="oo-money">
         <span>{cost.units} pair{cost.units === 1 ? '' : 's'}</span>
         <span>Subtotal {money(cost.subtotal)}</span>
         <span>Paid {money(cost.paid)}</span>
+        {cost.cashback > 0 && <span>− cashback {money(cost.cashback)}</span>}
         <b>Actual cost {money(cost.total)}</b>
       </div>
       <label className="oo-note-field"><span className="muted xs">Note</span>

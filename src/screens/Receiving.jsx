@@ -3685,7 +3685,7 @@ function OnlineOrderBanner({ order }) {
       {order.received_at ? <span className="oo-recv-done"> · already counted in</span> : null}
       <div className="muted sm">
         Should hold {pairs} pair{pairs === 1 ? '' : 's'}: {coming.map((l) => `${l.sku} US ${l.size}${l.qty > 1 ? ` ×${l.qty}` : ''}`).join(' · ') || '—'}.
-        {' '}Each pair’s cost comes from the order (after coupon, tax, shipping and gift card).
+        {' '}Each pair’s cost comes from the order (after coupon, tax, shipping, gift card and cashback).
         {!order.received_at && ' Count it in on Online Orders once the box is checked.'}
       </div>
     </div>

@@ -27,9 +27,12 @@ The stage is **derived, never stored** (`orderStage`): `received_at` → deliver
 line cancelled → cancelled; tracking → shipped; else ordered.
 
 ## Actual cost per pair (`orderCosts`)
-`(price − coupon each + tax share + shipping share) × (1 − gift card %)`
+`(price − coupon each + tax share + shipping share) × (1 − gift card %) − cashback share`
 - **coupon** split evenly per unit ordered (owner); **tax + shipping** split by PRICE
   (owner picked "by price"); **gift card** a % off everything paid (owner picked %).
+- **cashback** (added 2026-10-05, `online_orders.cashback`): a DOLLAR amount off the
+  order's whole cost, split by price, taken after the gift card discount. Save refuses
+  cashback bigger than the order's cost (it would make a pair negative).
 - **Cancelled / not-delivered lines are left out** of the split — the pairs that come
   carry the order's money. (So a short delivery raises the survivors' cost; that is the
   honest number until a refund lands.)
@@ -38,7 +41,7 @@ line cancelled → cancelled; tracking → shipped; else ordered.
 
 ## Tables (`scripts/db-setup.mjs`; all three in `LIVE_TABLES`)
 - `online_orders` — store, order_number, tracking_number (nullable), ordered_on (DATE),
-  coupon, tax, shipping, gc_pct, note, created/updated by+at, **received_at/_by**.
+  coupon, tax, shipping, gc_pct, cashback, note, created/updated by+at, **received_at/_by**.
   Expression index on the whitespace-stripped upper tracking number (`[[:space:]]`, NOT
   `'\s'` — see the template-literal note in db.js).
 - `online_order_lines` — sku, name, size, qty, unit_price; cancellation (`cancelled_at/_by`,

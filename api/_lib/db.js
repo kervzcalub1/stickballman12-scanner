@@ -7925,13 +7925,13 @@ export async function onlineOrderByTracking(tracking, exceptId = null) {
 }
 
 // `o`: { store, order_number, tracking_number, ordered_on, coupon, tax, shipping, gc_pct,
-// note }; `lines`: [{ sku, name, size, qty, unit_price }] — the ACTIVE lines. One
+// cashback, note }; `lines`: [{ sku, name, size, qty, unit_price }] — the ACTIVE lines. One
 // statement, so an order can never exist without its lines.
 export async function createOnlineOrder(o, lines, actor) {
   const r = await db()`
     WITH o AS (
-      INSERT INTO online_orders (store, order_number, tracking_number, ordered_on, coupon, tax, shipping, gc_pct, note, created_by, updated_by)
-      VALUES (${o.store}, ${o.order_number}, ${o.tracking_number}, ${o.ordered_on}::date, ${o.coupon}, ${o.tax}, ${o.shipping}, ${o.gc_pct}, ${o.note}, ${actor}, ${actor})
+      INSERT INTO online_orders (store, order_number, tracking_number, ordered_on, coupon, tax, shipping, gc_pct, cashback, note, created_by, updated_by)
+      VALUES (${o.store}, ${o.order_number}, ${o.tracking_number}, ${o.ordered_on}::date, ${o.coupon}, ${o.tax}, ${o.shipping}, ${o.gc_pct}, ${o.cashback}, ${o.note}, ${actor}, ${actor})
       RETURNING id),
     l AS (
       INSERT INTO online_order_lines (order_id, sku, name, size, qty, unit_price)
@@ -7955,7 +7955,7 @@ export async function updateOnlineOrder(id, o, lines, actor, detail) {
     sql`UPDATE online_orders
            SET store = ${o.store}, order_number = ${o.order_number}, tracking_number = ${o.tracking_number},
                ordered_on = ${o.ordered_on}::date, coupon = ${o.coupon}, tax = ${o.tax}, shipping = ${o.shipping},
-               gc_pct = ${o.gc_pct}, note = ${o.note}, updated_by = ${actor}, updated_at = now()
+               gc_pct = ${o.gc_pct}, cashback = ${o.cashback}, note = ${o.note}, updated_by = ${actor}, updated_at = now()
          WHERE id = ${id}`,
     sql`DELETE FROM online_order_lines WHERE order_id = ${id} AND cancelled_at IS NULL`,
     sql`INSERT INTO online_order_lines (order_id, sku, name, size, qty, unit_price)

@@ -183,6 +183,19 @@ test('QA: the refund only moves the ways that mean something', async ({ request 
   expect((await line({ action: 'refund', to: 'refunded', amount: 0 })).status()).toBe(400);
 });
 
+test('cashback comes off the whole cost, split by price, after the gift card', async ({ request }) => {
+  // $100 + $200, 10% card → $270; $30 cashback by price = $10 / $20 → $80 and $160.
+  const r = await save(request, { store: STORE, gc_pct: 10, cashback: 30,
+    lines: [{ sku: 'OO-CB-1', size: '9', qty: 1, unit_price: 100 }, { sku: 'OO-CB-2', size: '10', qty: 1, unit_price: 200 }] });
+  expect(r.ok(), await r.text()).toBeTruthy();
+  const { order } = await get(request, (await r.json()).id);
+  expect(order.cashback).toBe(30);
+  expect(order.lines.map((l) => l.each)).toEqual([80, 160]);
+  expect(order.totals.total).toBe(240);
+  // More cashback than the order cost would make a pair cost less than nothing.
+  expect((await save(request, { store: STORE, cashback: 101, lines: [{ sku: 'OO-CB-3', size: '9', qty: 1, unit_price: 100 }] })).status()).toBe(400);
+});
+
 test('QA: bad input is a 400 with a reason, never a 500', async ({ request }) => {
   const one = [{ sku: 'OO-QA-V', size: '9', qty: 1, unit_price: 100 }];
   expect((await save(request, { store: STORE, coupon: 1e20, lines: one })).status()).toBe(400);

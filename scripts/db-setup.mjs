@@ -1841,6 +1841,9 @@ await sql(`
     at       TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS online_order_events_order_idx ON online_order_events (order_id, at)`);
+// Cashback (2026-10-05): dollars the store / card portal paid back on the order. It
+// comes off the whole order's cost, spread by price like tax and shipping.
+await sql(`ALTER TABLE online_orders ADD COLUMN IF NOT EXISTS cashback NUMERIC(12,2) NOT NULL DEFAULT 0`);
 await sql(`CREATE INDEX IF NOT EXISTS online_orders_track_idx ON online_orders (upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')))`);
 
 const LIVE_TABLES = [

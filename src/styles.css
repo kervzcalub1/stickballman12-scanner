@@ -5334,7 +5334,7 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 .oo-each { font-weight: 600; white-space: nowrap; }
 .oo-money { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 12px; color: var(--muted); font-size: 13px; align-items: baseline; }
 .oo-money b { color: var(--text); font-size: 15px; margin-left: auto; }
-.oo-money-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.oo-money-fields { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .oo-form-grid { display: grid; grid-template-columns: 2fr 1fr 2fr 1fr; gap: 10px; }
 .oo-form-grid label, .oo-note-field { display: flex; flex-direction: column; gap: 4px; }
 .oo-note-field { margin-top: 12px; }

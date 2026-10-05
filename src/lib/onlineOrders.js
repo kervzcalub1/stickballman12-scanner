@@ -6,7 +6,9 @@
 //   shipping  — split by PRICE, the same way
 //   gift card — a PERCENTAGE off everything paid (the cards were bought at a discount
 //               and the order was paid with them)
+//   cashback  — DOLLARS paid back on the order, off the whole cost; split by PRICE
 //   = actual cost each = (price − coupon each + tax share + shipping share) × (1 − gc%)
+//                        − cashback share
 //
 // Cancelled lines are left out of the split: the pairs that are actually coming carry
 // the order's coupon, tax and shipping. Pure — the screen and the server use the same
@@ -22,8 +24,8 @@ const cents = (v) => Math.round(v * 100) / 100;
 
 export const isCancelled = (line) => !!(line && (line.cancelled_at || line.cancelled));
 
-// `order`: { coupon, tax, shipping, gc_pct }; `lines`: [{ qty, unit_price, cancelled_at? }]
-// → { lines: [{ ...line, each, lineTotal, parts: { price, coupon, tax, shipping, gc } }],
+// `order`: { coupon, tax, shipping, gc_pct, cashback }; `lines`: [{ qty, unit_price, cancelled_at? }]
+// → { lines: [{ ...line, each, lineTotal, parts: { price, coupon, tax, shipping, gc, cashback } }],
 //     units, subtotal, total, paid }   (cancelled lines come back with each = null)
 export function orderCosts(order, lines) {
   const o = order || {};
@@ -34,6 +36,7 @@ export function orderCosts(order, lines) {
   const tax = num(o.tax);
   const shipping = num(o.shipping);
   const gc = Math.min(100, Math.max(0, num(o.gc_pct)));
+  const cashback = num(o.cashback);
   const couponEach = units ? coupon / units : 0;
   // By price. An order of all-$0 lines (a freebie) has no price to weigh by, so the
   // shares fall back to per unit rather than dividing by zero.
@@ -46,13 +49,16 @@ export function orderCosts(order, lines) {
     const s = shipping * share(price);
     const before = price - couponEach + t + s;
     const g = before * (gc / 100);
+    // Cashback lands after the card discount — it comes back on what was actually spent.
+    const cb = cashback * share(price);
+    const net = before - g - cb;
     return {
       ...l,
-      each: cents(before - g),
+      each: cents(net),
       // Rounded from the EXACT per-pair figure, not from the rounded `each` — 3 × $36.663
       // is $109.99, while 3 × $36.66 would be a cent short of the order total (QA).
-      lineTotal: cents((before - g) * num(l.qty)),
-      parts: { price, coupon: cents(couponEach), tax: cents(t), shipping: cents(s), gc: cents(g) },
+      lineTotal: cents(net * num(l.qty)),
+      parts: { price, coupon: cents(couponEach), tax: cents(t), shipping: cents(s), gc: cents(g), cashback: cents(cb) },
     };
   });
   const paid = subtotal - coupon + tax + shipping;
@@ -61,7 +67,8 @@ export function orderCosts(order, lines) {
     units,
     subtotal: cents(subtotal),
     paid: cents(paid),                          // what the store charged
-    total: cents(paid * (1 - gc / 100)),        // what it cost us, after the card discount
+    cashback: cents(cashback),
+    total: cents(paid * (1 - gc / 100) - cashback),   // what it cost us, after the card discount + cashback
   };
 }
 

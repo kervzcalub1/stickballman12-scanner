@@ -14,6 +14,7 @@ Same bot as the approval group (`@stickballman12_bot`) — a private chat is sep
 | Connect link / Send test / Disconnect | `api/me/telegram.js` |
 | `/start <token>` and plain `/start` in a PRIVATE chat | `api/telegram/webhook.js` (`handlePrivate`) |
 | Panel (opened by the bell in `TopBar`, `?alerts=1`) | `src/components/AlertsPanel.jsx` |
+| Connect banner on a supplier's Buying Requests list | `src/components/TelegramConnectBanner.jsx` |
 | DB | `users.telegram_name/_username/_linked_at/_broken_at`, `users.alerts_muted`, `users.alert_prefs` (JSONB opt-outs), `telegram_link_tokens`, `alert_log` — `scripts/db-setup.mjs` |
 | SOP | `telegram-alerts` in `src/lib/sop/articles.reference.js` |
 | e2e (fake Bot API on :5198) | `e2e/alerts.spec.js` |
@@ -33,6 +34,13 @@ Same bot as the approval group (`@stickballman12_bot`) — a private chat is sep
 safe because only the signed-in person can mint their token; Check Access's admin link
 still works. The env logins (`admin`, `superadmin`) have no users row → panel says
 "shared login", `/api/me/telegram` 409s.
+
+**Connect banner (2026-10-06).** A supplier with `request_buying` also gets a "Get updates
+on Telegram — Connect Telegram / Not now" strip at the top of Buying Requests
+(`BuyCarts.jsx`), because the bell is easy to miss. Same deep-link flow as the panel; it
+hides itself on the `users` live event once connected. Hidden when Telegram isn't
+configured, for shared logins, and per device after "Not now" (localStorage). A broken
+connection brings it back as **Reconnect** with no "Not now". No migration.
 
 ## Sending rules (`alertUsers`)
 - Never the actor. Then: connected → not `alerts_muted` → event on (required = always on,

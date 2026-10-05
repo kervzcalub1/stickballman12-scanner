@@ -9,6 +9,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { poHref } from '../lib/poLink.js';
 import { TopBar, FormModal } from '../components/common.jsx';
+import { TelegramConnectBanner } from '../components/TelegramConnectBanner.jsx';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { useLive } from '../hooks.js';
@@ -133,6 +134,8 @@ export function BuyCarts({ user, onHome, onSignOut }) {
           stock, and the cards are how we pay for it. */}
       <TopBar title="Buying requests" onHome={onHome} onSignOut={onSignOut}
         right={isBuyer ? <button className="btn sm primary" onClick={() => setAsking(true)}>New request</button> : null} />
+      {/* The buyer links their own Telegram right here — the bell is easy to miss. */}
+      {isBuyer && <TelegramConnectBanner what="when cards are released, pairs are approved or rejected, and someone comments on your request" />}
 
       {asking && (
         <FormModal

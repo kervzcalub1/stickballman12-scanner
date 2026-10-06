@@ -138,6 +138,11 @@ async function handleTap(update, cq) {
 
 async function handleMessage(update, msg) {
   if (msg.chat?.type === 'private') return handlePrivate(update, msg);
+  // `/chatid` in ANY group the bot is in → that group's id, so a new group (e.g. the
+  // pre-sell sales group, TELEGRAM_PRESELL_CHAT_ID) can be wired up without a developer.
+  if (/^\/chatid(@\w+)?\s*$/i.test(String(msg.text || ''))) {
+    return tg('sendMessage', { chat_id: msg.chat.id, text: `This chat's id: ${msg.chat.id}` }).catch((e) => console.error('[telegram/webhook] chatid', e.message));
+  }
   if (!/^\s*\d{1,3}\s*$/.test(String(msg.text || ''))) return null;
   if (!inOurChat(msg.chat?.id)) return null;
   const from = msg.from || {};

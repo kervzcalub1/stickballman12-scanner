@@ -32,6 +32,7 @@ import { platformChipSummary } from '../lib/payout.js';
 import { PlatformProfit } from './PlatformProfit.jsx';
 import { OnlineOrders } from './OnlineOrders.jsx';
 import { Receipts } from './Receipts.jsx';
+import { PresellListings } from './PresellListings.jsx';
 import { BuyCarts } from './BuyCarts.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
@@ -72,6 +73,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'online') return <OnlineOrders user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  if (page === 'presellListings') return <PresellListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
   if (page === 'receipts') return <Receipts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} cartHref={(id) => `/ph/gift-card-buying?request=${id}`} />;
   // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and
   // never touches the staff router, so without a route here a PH team member who was
@@ -150,6 +152,11 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <span className="home-card-icon"><NavIcon name="shipped" /></span>
             <span className="home-card-title">Online Orders</span>
             <span className="home-card-sub">Shoes bought online — tracking, what each pair actually cost, and cancelled pairs’ refunds until they’re back</span>
+          </button>
+          <button className="home-card" onClick={() => goPage('presellListings')}>
+            <span className="home-card-icon"><NavIcon name="report" /></span>
+            <span className="home-card-title">Pre-sell Listings</span>
+            <span className="home-card-sub">Scan or type a SKU and list pairs straight to Alias + StockX — own stock, sales deduct, Telegram on every sale</span>
           </button>
           <button className="home-card" onClick={() => goPage('receipts')}>
             <span className="home-card-icon"><NavIcon name="report" /></span>

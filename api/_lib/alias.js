@@ -200,6 +200,10 @@ export async function aliasCatalogBySku(query) {
     sizes: (Array.isArray(c.allowed_sizes) ? c.allowed_sizes : [])
       .map((s) => String(s.display_name ?? s.value ?? '').trim())
       .filter(Boolean),
+    // display name → the numeric value Alias wants back on a listing ("5Y" → 5).
+    sizeValues: Object.fromEntries((Array.isArray(c.allowed_sizes) ? c.allowed_sizes : [])
+      .filter((s) => s && s.value != null)
+      .map((s) => [String(s.display_name ?? s.value).trim(), Number(s.value)])),
     source: 'alias',
   };
 }
@@ -271,4 +275,66 @@ export async function aliasPriceWithBasis({ catalogId, size }) {
 export async function aliasGlobalIndicator(opts) {
   const p = await aliasPriceInsights(opts);
   return p?.globalIndicator ?? null;
+}
+
+/* ------------------------- Listings (write) ---------------------------- */
+// Pre-sell Listings (docs/context/presell-listings.md): listing a pair on Alias straight from
+// a scan, without it ever being an inventory unit. Official host only. The key is
+// ALIAS_LISTING_API_KEY — the account the listings belong to — falling back to
+// ALIAS_API_KEY when the two are one account.
+//   POST   /api/v1/listings?catalog_id&price_cents&condition&packaging_condition&size&size_unit&activate
+//   GET    /api/v1/listings/{id}            POST  /api/v1/listings/{id}?price_cents&size&size_unit  (update)
+//   POST   /api/v1/listings/{id}/activate   POST  /api/v1/listings/{id}/deactivate
+//   DELETE /api/v1/listings/{id}
+// The listing `id` Alias returns is the handle for every later call — it is what we keep.
+const ALIAS_LISTING_TIMEOUT_MS = 25_000;
+export const aliasListingKey = () => String(process.env.ALIAS_LISTING_API_KEY || process.env.ALIAS_API_KEY || '').trim();
+
+async function aliasListingCall(method, path, query) {
+  const key = aliasListingKey();
+  if (!key) return { ok: false, status: 503, data: { message: 'ALIAS_LISTING_API_KEY is not set on the server.' } };
+  const qs = query ? `?${new URLSearchParams(query).toString()}` : '';
+  const resp = await fetchWithTimeout(`${ALIAS_API_BASE}/api/v1/listings${path}${qs}`, {
+    method,
+    // This gateway answers 415 to a request without a JSON content type, even a bodyless one.
+    headers: { accept: 'application/json', 'content-type': 'application/json', Authorization: `Bearer ${key}` },
+    body: method === 'GET' || method === 'DELETE' ? undefined : '{}',
+  }, ALIAS_LISTING_TIMEOUT_MS);
+  let data = null;
+  try { data = await resp.json(); } catch { /* may be empty */ }
+  return { ok: resp.ok, status: resp.status, data };
+}
+// Alias's own words for a refusal ("The record could not be found"), never a stack.
+export const aliasListingError = (r) => r?.data?.message || r?.data?.error || `Alias answered HTTP ${r?.status}`;
+
+export function aliasCreateListing({ catalogId, priceCents, size, activate, condition = 'CONDITION_NEW', packaging = DEFAULT_PACKAGING_CONDITION }) {
+  return aliasListingCall('POST', '', {
+    catalog_id: catalogId, price_cents: String(priceCents), condition, packaging_condition: packaging,
+    size: String(size), size_unit: 'SIZE_UNIT_US', activate: activate ? 'true' : 'false',
+  });
+}
+export const aliasGetListing = (id) => aliasListingCall('GET', `/${encodeURIComponent(id)}`);
+// Update = POST to the listing itself, only the fields that change as query params.
+export function aliasUpdateListing(id, { priceCents = null, size = null } = {}) {
+  const q = {};
+  if (priceCents != null) q.price_cents = String(priceCents);
+  if (size != null) { q.size = String(size); q.size_unit = 'SIZE_UNIT_US'; }
+  return aliasListingCall('POST', `/${encodeURIComponent(id)}`, q);
+}
+export const aliasActivateListing = (id) => aliasListingCall('POST', `/${encodeURIComponent(id)}/activate`);
+export const aliasDeactivateListing = (id) => aliasListingCall('POST', `/${encodeURIComponent(id)}/deactivate`);
+export const aliasDeleteListing = (id) => aliasListingCall('DELETE', `/${encodeURIComponent(id)}`);
+
+// Recent Alias orders, NEWEST FIRST (checked 2026-10-07: 161 orders, page 1 = latest).
+// Each carries the `listing_id` it sold from — how a Pre-sell sale is recognised.
+export const aliasRecentOrders = (pageSize = 50) => fetchAliasOrders(pageSize);
+async function fetchAliasOrders(pageSize) {
+  const key = aliasListingKey();
+  if (!key) return { ok: false, status: 503, data: null };
+  const resp = await fetchWithTimeout(`${ALIAS_API_BASE}/api/v1/orders?page_size=${pageSize}`, {
+    method: 'GET', headers: { accept: 'application/json', 'content-type': 'application/json', Authorization: `Bearer ${key}` },
+  }, ALIAS_LISTING_TIMEOUT_MS);
+  let data = null;
+  try { data = await resp.json(); } catch { /* empty */ }
+  return { ok: resp.ok, status: resp.status, data };
 }

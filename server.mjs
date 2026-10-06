@@ -190,3 +190,10 @@ if (certPath && keyPath) {
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, () => console.log(`Stickballman12 listening on http://localhost:${port}`));
 }
+
+// Pre-sell Listings watcher — StockX operations + Alias/StockX sales. Opt-in per
+// environment (PRESELL_WATCH=on): dev and prod share the marketplace accounts, and only
+// one of them may act on a sale (docs/context/presell-listings.md).
+import('./api/_lib/presell-worker.js')
+  .then((m) => m.startPresellWorker())
+  .catch((e) => console.error('[presell-worker] failed to start:', e.message));

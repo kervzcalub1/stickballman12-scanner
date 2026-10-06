@@ -17,7 +17,29 @@ so Council's buys can be told from Joey's, without Joey sending his receipts in 
 `parser.js` as the order-number lookup (scenario 6282792), and POSTs one email per call to
 our ingest endpoint. Requested from the Make session on 2026-10-06 with the full contract
 (store_location + recipients added to the parser, spam folders added to the lookup too).
-Status of that work: see the memory/pending-ops note — the session was offline when asked.
+Status (2026-10-07, from the Make session): **parser done, sweep built but NOT deployed.**
+- `parser.js` (`~/Make.com Stickballman12/receipt-parser/`) has a `mode:"sweep"` entry
+  beside the order-number lookup — one parser for both. It now emits `store_location`
+  (in-store header block; online with no printed address → all null, never invented),
+  `recipients` (from the mail module's **`headersList`**, not `headers`; `original_to` =
+  X-Forwarded-To / X-Original-To / Resent-To, else the forwarded block's `To:`),
+  `order_number`, and `message_key` = `mailbox|folder|<Message-ID>` (fallback
+  `from~subject~date`). Marketing / shipping notices → `post:false`, not sent; an
+  unsupported store with order # + totals is still sent (`store:null` + warnings).
+  Tests: `test.js` 8/8, `test-sweep.js` 7/7.
+- Spam: Yahoo `Bulk` added to `YAHOO_FOLDERS` (9 folders). **Gmail Spam is NOT in
+  `[Gmail]/All Mail`** — it needs its own `[Gmail]/Spam` search module (in the sweep; a
+  pending edit to 6282792 too).
+- Sweep: `sweep-blueprint.json` — tick → router: Gmail All Mail · Gmail Spam · the 9 Yahoo
+  folders → parse → POST (filter `post = true`), window 2 days, ≤50 mails/folder, every
+  15 min, every module `onerror: Resume`. Key placeholder `__PASTE_RECEIPT_INGEST_KEY__`.
+  **Untested against Make** — on the first run watch the router filter and the
+  `headersList` mapping.
+- Blocked on Kervy: Make MCP re-auth (nothing can be deployed), and `RECEIPT_INGEST_KEY`
+  on Railway (prod ingest answered 503 on 2026-10-07). Deploy order: 6282792 from the new
+  parser + its Gmail Spam module → create the sweep → paste the key.
+- Not needed: headers through Yahoo helper 6283660 — the order-number lookup
+  (`cart/receipt-email`) never reads recipients/location; only the sweep does.
 
 **App (the filer)** — this repo:
 - `POST /api/receipts/ingest` (`x-api-key: RECEIPT_INGEST_KEY`, compared in constant time;

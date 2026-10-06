@@ -329,3 +329,77 @@ export async function stockxPriceForSkuSize(sku, size, { upc } = {}) {
   const market = await stockxVariantMarket(product.id, variant.id);
   return { product, size: want, variant, market };
 }
+
+/* ------------------------------------------------------------------ */
+/* Selling — Pre-sell Listings (docs/context/presell-listings.md)      */
+/* ------------------------------------------------------------------ */
+// Every write is ASYNC on StockX: the call returns { listingId, operationId,
+// operationStatus: 'PENDING' } and the result arrives later — the worker polls
+// GET /selling/listings/{id}/operations/{operationId} (api/_lib/presell-worker.js).
+// We list as DIRECT, like every listing already on the account (checked 2026-10-07).
+async function sxCall(method, path, body = null, { query = {}, retry = true } = {}) {
+  const token = await stockxAccessToken();
+  const qs = new URLSearchParams(Object.entries(query).filter(([, v]) => v != null && v !== '')).toString();
+  const r = await fetchWithTimeout(`${STOCKX_BASE}${path}${qs ? `?${qs}` : ''}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`, 'x-api-key': process.env.STOCKX_API_KEY, Accept: 'application/json',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  // Selling calls answer in ~1 s normally but stall past 20 s at times (seen 2026-10-07).
+  }, 30000);
+  if (r.status === 401 && retry) { clearStockxToken(); return sxCall(method, path, body, { query, retry: false }); }
+  const data = await r.json().catch(() => null);
+  return { ok: r.ok, status: r.status, data };
+}
+export const stockxError = (r) => r?.data?.errorMessage || r?.data?.message || r?.data?.error || (Array.isArray(r?.data?.errors) ? r.data.errors.map((e) => e.message || e).join('; ') : null) || `StockX answered HTTP ${r?.status}`;
+export const STOCKX_INVENTORY_TYPE = 'DIRECT';
+
+// SKU + size → the exact variant. Inexact catalogue hits are REFUSED here: listing the
+// wrong colourway is a sale we can't fill.
+export async function stockxVariantFor(sku, size, { upc } = {}) {
+  if (upc) {
+    const v = await stockxVariantByGtin(upc).catch(() => null);
+    if (v) return { productId: v.productId, variantId: v.variantId, size: v.size };
+  }
+  const product = await stockxProductBySku(sku);
+  if (!product?.id || !product.exact) return null;
+  const want = normSize(size);
+  const variants = await stockxVariants(product.id);
+  const v = variants.find((x) => x.size === want)
+    || variants.find((x) => Number(x.size) === Number(want) && Number.isFinite(Number(want)));
+  return v ? { productId: product.id, variantId: v.id, size: v.size } : null;
+}
+
+export const stockxCreateListing = ({ variantId, amount, active }) => sxCall('POST', '/selling/listings', {
+  variantId, amount: String(amount), currencyCode: 'USD', active: !!active, inventoryType: STOCKX_INVENTORY_TYPE,
+});
+export const stockxGetListing = (id) => sxCall('GET', `/selling/listings/${encodeURIComponent(id)}`);
+export const stockxListingOperation = (id, opId) => sxCall('GET', `/selling/listings/${encodeURIComponent(id)}/operations/${encodeURIComponent(opId)}`);
+export const stockxUpdateListing = (id, amount) => sxCall('PATCH', `/selling/listings/${encodeURIComponent(id)}`, { amount: String(amount), currencyCode: 'USD' });
+export const stockxActivateListing = (id, amount = null) => sxCall('PUT', `/selling/listings/${encodeURIComponent(id)}/activate`, amount != null ? { amount: String(amount), currencyCode: 'USD' } : {});
+export const stockxDeactivateListing = (id) => sxCall('PUT', `/selling/listings/${encodeURIComponent(id)}/deactivate`, {});
+export const stockxDeleteListing = (id) => sxCall('DELETE', `/selling/listings/${encodeURIComponent(id)}`);
+// Sales in progress, newest activity included — matched to our listings by listingId.
+export const stockxActiveOrders = (pageSize = 100) => sxCall('GET', '/selling/orders/active', null, { query: { pageNumber: 1, pageSize } });
+
+// The DIRECT market for one size, in StockX's own words (we list DIRECT). Falls back to
+// the headline numbers when the Direct block is absent.
+export async function stockxDirectMarket(productId, variantId) {
+  const key = `sx:dmkt:${variantId}`;
+  const hit = cacheGet(key);
+  if (hit !== null) return hit;
+  const { ok, data } = await sxGet(`/catalog/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}/market-data`, { currencyCode: 'USD' });
+  if (!ok) return null;
+  const d = data?.directMarketData || {};
+  const m = {
+    lowestAsk: amount(d.lowestAsk) ?? amount(data?.lowestAskAmount),
+    highestBid: amount(d.highestBidAmount) ?? amount(data?.highestBidAmount),
+    sellFaster: amount(d.sellFaster) ?? amount(data?.sellFasterAmount),
+    earnMore: amount(d.earnMore) ?? amount(data?.earnMoreAmount),
+    beatUS: amount(d.beatUS),
+  };
+  cacheSet(key, m, MARKET_TTL);
+  return m;
+}

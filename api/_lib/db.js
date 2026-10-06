@@ -8364,3 +8364,155 @@ export async function removePurchaseEmail(id, userId = null) {
 export async function listApprovedPeople() {
   return await db()`SELECT id, name, role FROM users WHERE status = 'approved' ORDER BY name`;
 }
+
+/* ---------------------------- Pre-sell Listings ---------------------------- */
+// docs/context/presell-listings.md — pairs listed on Alias / StockX straight from a scan.
+
+// The stock row for SKU + size, created on first use; `addQty` pairs are added to it.
+export async function upsertPresellStock({ sku, size, name, image, upc, addQty }, actor) {
+  const rows = await db()`
+    INSERT INTO presell_stock (sku, size, name, image, upc, qty, created_by, updated_by)
+    VALUES (${sku}, ${size}, ${name}, ${image}, ${upc}, ${addQty}, ${actor}, ${actor})
+    ON CONFLICT (sku, size) DO UPDATE
+       SET qty = presell_stock.qty + EXCLUDED.qty,
+           name = COALESCE(presell_stock.name, EXCLUDED.name), image = COALESCE(presell_stock.image, EXCLUDED.image),
+           upc = COALESCE(presell_stock.upc, EXCLUDED.upc), updated_by = ${actor}, updated_at = now()
+    RETURNING *`;
+  return rows[0];
+}
+export async function getPresellStock(id) {
+  const rows = await db()`SELECT * FROM presell_stock WHERE id = ${id}`;
+  return rows[0] || null;
+}
+export async function setPresellStockQty(id, qty, actor) {
+  const rows = await db()`UPDATE presell_stock SET qty = ${qty}, updated_by = ${actor}, updated_at = now()
+                           WHERE id = ${id} AND ${qty} >= sold RETURNING *`;
+  return rows[0] || null;
+}
+export async function insertPresellListing(r) {
+  const rows = await db()`
+    INSERT INTO presell_listings (stock_id, platform, external_id, catalog_ref, variant_id, size_value, price_cents,
+                                  status, platform_status, pending_op, pending_action, pending_since, last_error, raw, created_by, updated_by)
+    VALUES (${r.stock_id}, ${r.platform}, ${r.external_id}, ${r.catalog_ref}, ${r.variant_id}, ${r.size_value}, ${r.price_cents},
+            ${r.status}, ${r.platform_status}, ${r.pending_op || null}, ${r.pending_action || null},
+            ${r.pending_op ? new Date().toISOString() : null}::timestamptz, ${r.last_error || null},
+            ${r.raw ? JSON.stringify(r.raw) : null}::jsonb, ${r.actor}, ${r.actor})
+    RETURNING id`;
+  return Number(rows[0].id);
+}
+export async function getPresellListing(id) {
+  const rows = await db()`
+    SELECT l.*, s.sku, s.name, s.image, s.size, s.qty, s.sold
+      FROM presell_listings l JOIN presell_stock s ON s.id = l.stock_id WHERE l.id = ${id}`;
+  return rows[0] || null;
+}
+// Patch a listing after the platform answered. Only the keys present change.
+export async function updatePresellListing(id, p, actor) {
+  const has = (k) => Object.prototype.hasOwnProperty.call(p, k);
+  await db()`
+    UPDATE presell_listings SET
+      status = CASE WHEN ${has('status')} THEN ${p.status ?? null} ELSE status END,
+      platform_status = CASE WHEN ${has('platform_status')} THEN ${p.platform_status ?? null} ELSE platform_status END,
+      price_cents = CASE WHEN ${has('price_cents')} THEN ${p.price_cents ?? null}::int ELSE price_cents END,
+      size_value = CASE WHEN ${has('size_value')} THEN ${p.size_value ?? null}::numeric ELSE size_value END,
+      pending_op = CASE WHEN ${has('pending_op')} THEN ${p.pending_op ?? null} ELSE pending_op END,
+      pending_action = CASE WHEN ${has('pending_action')} THEN ${p.pending_action ?? null} ELSE pending_action END,
+      pending_since = CASE WHEN ${has('pending_op')} THEN (CASE WHEN ${p.pending_op ?? null}::text IS NULL THEN NULL ELSE now() END) ELSE pending_since END,
+      last_error = CASE WHEN ${has('last_error')} THEN ${p.last_error ?? null} ELSE last_error END,
+      raw = CASE WHEN ${has('raw')} THEN ${p.raw ? JSON.stringify(p.raw) : null}::jsonb ELSE raw END,
+      sold_at = CASE WHEN ${has('sold_at')} THEN ${p.sold_at ?? null}::timestamptz ELSE sold_at END,
+      deleted_at = CASE WHEN ${p.status === 'deleted'} AND deleted_at IS NULL THEN now() ELSE deleted_at END,
+      updated_by = ${actor}, updated_at = now()
+    WHERE id = ${id}`;
+}
+// Listings still on a platform for a stock row (counted against what's left to sell).
+export async function openPresellListings(stockId) {
+  // A StockX listing whose delete is already queued is on its way out — not counted.
+  return await db()`SELECT * FROM presell_listings WHERE stock_id = ${stockId}
+                      AND status IN ('pending', 'live', 'off') AND pending_action IS DISTINCT FROM 'delete'
+                    ORDER BY created_at DESC, id DESC`;
+}
+export async function pendingPresellListings(limit = 50) {
+  return await db()`SELECT * FROM presell_listings WHERE status = 'pending' AND pending_op IS NOT NULL
+                     ORDER BY pending_since ASC NULLS FIRST LIMIT ${limit}`;
+}
+// Our listings by platform id — what a sales poll matches orders against.
+export async function presellListingsByExternal(platform, ids) {
+  if (!ids.length) return [];
+  return await db()`SELECT * FROM presell_listings WHERE platform = ${platform} AND external_id = ANY(${ids}::text[])`;
+}
+// Record ONE sale, once: the insert is the dedupe (unique platform + order). Returns the
+// new sale id, or null when this order was already recorded.
+export async function recordPresellSale({ listing, platform, orderId, priceCents, payoutCents, soldAt, raw }, actor) {
+  const sql = db();
+  const ins = await sql`
+    INSERT INTO presell_sales (stock_id, listing_id, platform, order_id, price_cents, payout_cents, sold_at, raw)
+    VALUES (${listing.stock_id}, ${listing.id}, ${platform}, ${orderId}, ${priceCents}, ${payoutCents}, ${soldAt}::timestamptz, ${JSON.stringify(raw || {})}::jsonb)
+    ON CONFLICT (platform, order_id) DO NOTHING RETURNING id`;
+  if (!ins[0]) return null;
+  await sql.transaction([
+    sql`UPDATE presell_listings SET status = 'sold', sold_at = ${soldAt}::timestamptz, pending_op = NULL, updated_by = ${actor}, updated_at = now() WHERE id = ${listing.id}`,
+    sql`UPDATE presell_stock SET sold = sold + 1, updated_by = ${actor}, updated_at = now() WHERE id = ${listing.stock_id}`,
+  ]);
+  return Number(ins[0].id);
+}
+export async function markPresellSaleNotified(id, error = null) {
+  await db()`UPDATE presell_sales SET notified_at = CASE WHEN ${error}::text IS NULL THEN now() ELSE notified_at END, notify_error = ${error} WHERE id = ${id}`;
+}
+// The Stock tab: each SKU + size with how its listings stand per platform.
+export async function listPresellStock({ q = null } = {}) {
+  const like = q ? `%${q}%` : null;
+  return await db()`
+    SELECT s.*,
+           count(l.*) FILTER (WHERE l.platform = 'alias' AND l.status = 'live')::int AS alias_live,
+           count(l.*) FILTER (WHERE l.platform = 'alias' AND l.status IN ('pending', 'off'))::int AS alias_other,
+           count(l.*) FILTER (WHERE l.platform = 'stockx' AND l.status = 'live')::int AS stockx_live,
+           count(l.*) FILTER (WHERE l.platform = 'stockx' AND l.status IN ('pending', 'off'))::int AS stockx_other
+      FROM presell_stock s LEFT JOIN presell_listings l ON l.stock_id = s.id
+     WHERE (${like}::text IS NULL OR s.sku ILIKE ${like} OR s.name ILIKE ${like})
+     GROUP BY s.id ORDER BY s.updated_at DESC LIMIT 1000`;
+}
+// view: all (open) | live | off | pending | sold | deleted ; platform: '' | alias | stockx
+export async function listPresellListings({ view = 'all', platform = null, q = null, stockId = null } = {}) {
+  const like = q ? `%${q}%` : null;
+  const rows = await db()`
+    SELECT l.*, s.sku, s.name, s.image, s.size
+      FROM presell_listings l JOIN presell_stock s ON s.id = l.stock_id
+     WHERE (${view} = 'all' AND l.status IN ('pending', 'live', 'off', 'failed') OR l.status = ${view})
+       AND (${platform}::text IS NULL OR l.platform = ${platform})
+       AND (${stockId}::bigint IS NULL OR l.stock_id = ${stockId})
+       AND (${like}::text IS NULL OR s.sku ILIKE ${like} OR s.name ILIKE ${like} OR l.external_id ILIKE ${like})
+     ORDER BY l.created_at DESC, l.id DESC LIMIT 1000`;
+  const counts = await db()`
+    SELECT count(*) FILTER (WHERE status IN ('pending', 'live', 'off', 'failed'))::int AS all,
+           count(*) FILTER (WHERE status = 'live')::int AS live, count(*) FILTER (WHERE status = 'off')::int AS off,
+           count(*) FILTER (WHERE status = 'pending')::int AS pending, count(*) FILTER (WHERE status = 'sold')::int AS sold,
+           count(*) FILTER (WHERE status = 'deleted')::int AS deleted
+      FROM presell_listings WHERE (${platform}::text IS NULL OR platform = ${platform})`;
+  return { rows, counts: counts[0] };
+}
+export async function listPresellSales({ limit = 300 } = {}) {
+  return await db()`
+    SELECT x.*, s.sku, s.name, s.image, s.size, l.external_id
+      FROM presell_sales x LEFT JOIN presell_stock s ON s.id = x.stock_id LEFT JOIN presell_listings l ON l.id = x.listing_id
+     ORDER BY COALESCE(x.sold_at, x.created_at) DESC LIMIT ${limit}`;
+}
+// Anything that could still sell? (the watcher skips the order polls when not)
+export async function presellHasOpenListings() {
+  const r = await db()`SELECT EXISTS (SELECT 1 FROM presell_listings WHERE status IN ('pending', 'live', 'off')) AS any`;
+  return !!r[0]?.any;
+}
+// An Alias listing whose size was changed belongs to that size's stock row now.
+export async function movePresellListing(id, stockId, actor) {
+  await db()`UPDATE presell_listings SET stock_id = ${stockId}, updated_by = ${actor}, updated_at = now() WHERE id = ${id}`;
+}
+// Regular-sale test alerts: claim an order once. true = first time seen (alert it).
+export async function claimMarketplaceSale(platform, orderId, orderAt) {
+  const r = await db()`INSERT INTO marketplace_sales_seen (platform, order_id, order_at) VALUES (${platform}, ${orderId}, ${orderAt}::timestamptz)
+                       ON CONFLICT DO NOTHING RETURNING order_id`;
+  return r.length > 0;
+}
+export async function markMarketplaceSaleAlerted(platform, orderId, error = null) {
+  await db()`UPDATE marketplace_sales_seen SET alerted_at = CASE WHEN ${error}::text IS NULL THEN now() ELSE alerted_at END, error = ${error}
+              WHERE platform = ${platform} AND order_id = ${orderId}`;
+}

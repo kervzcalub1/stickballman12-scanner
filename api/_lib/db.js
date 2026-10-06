@@ -8234,3 +8234,133 @@ export async function lastMensFor(gsSku) {
      ORDER BY created_at DESC, id DESC LIMIT 1`;
   return r[0] || null;
 }
+
+/* ----------------------------- Email receipts ----------------------------- */
+// docs/context/receipts.md. Receipts the Make "Receipt sweep" files from our order
+// mailboxes, matched to a buyer by the address they were sent to.
+
+// File one receipt. The sweep overlaps its windows and re-sends, so `message_key` decides:
+// a key we already hold is a duplicate, never a second row. The buyer is matched here,
+// at filing, from user_purchase_emails — and later, when someone registers an address
+// (assignReceiptsForEmail), for the receipts that arrived before they did.
+export async function ingestEmailReceipt(r) {
+  const sql = db();
+  const rows = await sql`
+    WITH buyer AS (
+      SELECT pe.user_id FROM user_purchase_emails pe
+       WHERE lower(pe.email) = ANY(${r.recipient_addrs}::text[])
+       ORDER BY pe.id LIMIT 1
+    )
+    INSERT INTO email_receipts (message_key, mailbox, folder, received_at, from_addr, subject, recipients, recipient_addrs,
+                                store, store_name, store_number, address, city, state, zip, order_number,
+                                subtotal, tax, shipping, total, items, warnings, body_text, buyer_user_id, buyer_source)
+    SELECT ${r.message_key}, ${r.mailbox}, ${r.folder}, ${r.received_at}::timestamptz, ${r.from_addr}, ${r.subject},
+           ${JSON.stringify(r.recipients)}::jsonb, ${r.recipient_addrs}::text[],
+           ${r.store}, ${r.store_name}, ${r.store_number}, ${r.address}, ${r.city}, ${r.state}, ${r.zip}, ${r.order_number},
+           ${r.subtotal}, ${r.tax}, ${r.shipping}, ${r.total}, ${JSON.stringify(r.items)}::jsonb, ${JSON.stringify(r.warnings)}::jsonb,
+           ${r.body_text}, (SELECT user_id FROM buyer), CASE WHEN EXISTS (SELECT 1 FROM buyer) THEN 'email' END
+    ON CONFLICT (message_key) DO NOTHING
+    RETURNING id, buyer_user_id`;
+  if (rows[0]) return { id: Number(rows[0].id), duplicate: false, buyerUserId: rows[0].buyer_user_id };
+  const old = await sql`SELECT id FROM email_receipts WHERE message_key = ${r.message_key}`;
+  return { id: old[0] ? Number(old[0].id) : null, duplicate: true };
+}
+
+// The list, newest first. `buyer` = a user id, 'none' (nobody matched yet) or null (all).
+// The buying request is found by order number at READ time — the request's email receipt
+// is filed as "Email receipt <number>.txt" (cart/receipt-email) — so a request that gets
+// its receipt after the sweep filed it still links, with nothing stored to go stale.
+export async function listEmailReceipts({ buyer = null, store = null, state = null, from = null, to = null, q = null, limit = 300 } = {}) {
+  const sql = db();
+  const like = q ? `%${String(q).replace(/[%_\\]/g, '')}%` : null;
+  const buyerId = buyer && buyer !== 'none' ? Number(buyer) : null;
+  const none = buyer === 'none';
+  const rows = await sql`
+    SELECT r.id, r.received_at, r.folder, r.mailbox, r.from_addr, r.subject, r.store, r.store_name, r.store_number,
+           r.address, r.city, r.state, r.zip, r.order_number, r.subtotal, r.tax, r.shipping, r.total,
+           jsonb_array_length(r.items) AS item_lines,
+           (SELECT coalesce(sum(coalesce((x->>'qty')::numeric, 1)), 0)::int FROM jsonb_array_elements(r.items) x) AS pairs,
+           r.recipient_addrs, r.buyer_user_id, r.buyer_source, u.name AS buyer_name, u.role AS buyer_role,
+           c.cart_id, c.cart_code
+      FROM email_receipts r
+      LEFT JOIN users u ON u.id = r.buyer_user_id
+      LEFT JOIN LATERAL (
+        SELECT f.cart_id, bc.cart_code FROM buy_cart_files f JOIN buy_carts bc ON bc.id = f.cart_id
+         WHERE r.order_number IS NOT NULL AND f.name = 'Email receipt ' || r.order_number || '.txt'
+         ORDER BY f.id DESC LIMIT 1
+      ) c ON true
+     WHERE (${buyerId}::bigint IS NULL OR r.buyer_user_id = ${buyerId})
+       AND (${none} = false OR r.buyer_user_id IS NULL)
+       AND (${store}::text IS NULL OR r.store = ${store})
+       AND (${state}::text IS NULL OR upper(r.state) = upper(${state}))
+       AND (${from}::date IS NULL OR (r.received_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       AND (${to}::date IS NULL OR (r.received_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+       AND (${like}::text IS NULL OR r.order_number ILIKE ${like} OR r.subject ILIKE ${like} OR r.store_name ILIKE ${like}
+            OR r.city ILIKE ${like} OR r.from_addr ILIKE ${like} OR array_to_string(r.recipient_addrs, ' ') ILIKE ${like})
+     ORDER BY r.received_at DESC NULLS LAST, r.id DESC
+     LIMIT ${Math.min(1000, Math.max(1, Number(limit) || 300))}`;
+  const byBuyer = await sql`
+    SELECT r.buyer_user_id, coalesce(u.name, 'Unassigned') AS name, count(*)::int AS receipts,
+           coalesce(sum(r.total), 0)::numeric(12,2) AS total
+      FROM email_receipts r LEFT JOIN users u ON u.id = r.buyer_user_id
+     GROUP BY 1, 2 ORDER BY receipts DESC`;
+  const stores = await sql`SELECT DISTINCT store FROM email_receipts WHERE store IS NOT NULL ORDER BY 1`;
+  const states = await sql`SELECT DISTINCT upper(state) AS state FROM email_receipts WHERE state IS NOT NULL ORDER BY 1`;
+  return { rows, byBuyer, stores: stores.map((s) => s.store), states: states.map((s) => s.state) };
+}
+
+export async function getEmailReceipt(id) {
+  const rows = await db()`
+    SELECT r.*, u.name AS buyer_name FROM email_receipts r LEFT JOIN users u ON u.id = r.buyer_user_id WHERE r.id = ${id}`;
+  return rows[0] || null;
+}
+
+// A person decides who bought it (no registered address matched, or it matched wrongly).
+// `userId` null clears it.
+export async function assignEmailReceipt(id, userId, by) {
+  const rows = await db()`
+    UPDATE email_receipts
+       SET buyer_user_id = ${userId}, buyer_source = CASE WHEN ${userId}::bigint IS NULL THEN NULL ELSE 'manual' END,
+           assigned_by = ${by}, assigned_at = now()
+     WHERE id = ${id}
+     RETURNING id, buyer_user_id`;
+  return rows[0] || null;
+}
+
+// Purchase emails — the addresses a buyer orders with.
+export async function listPurchaseEmails(userId = null) {
+  return await db()`
+    SELECT pe.id, pe.user_id, pe.email, pe.added_by, pe.added_at, u.name AS user_name, u.role AS user_role
+      FROM user_purchase_emails pe JOIN users u ON u.id = pe.user_id
+     WHERE (${userId}::bigint IS NULL OR pe.user_id = ${userId})
+     ORDER BY u.name, pe.email`;
+}
+
+export async function addPurchaseEmail(userId, email, by) {
+  const sql = db();
+  const taken = await sql`SELECT pe.user_id, u.name FROM user_purchase_emails pe JOIN users u ON u.id = pe.user_id
+                           WHERE lower(pe.email) = lower(${email})`;
+  if (taken[0]) return { conflict: true, sameUser: Number(taken[0].user_id) === Number(userId), owner: taken[0].name };
+  const rows = await sql`INSERT INTO user_purchase_emails (user_id, email, added_by) VALUES (${userId}, ${email}, ${by})
+                         ON CONFLICT DO NOTHING RETURNING id`;
+  if (!rows[0]) return { conflict: true };
+  // Receipts that arrived to this address before anyone registered it become theirs —
+  // only ones nobody has assigned (a person's decision is never overwritten).
+  const claimed = await sql`
+    UPDATE email_receipts SET buyer_user_id = ${userId}, buyer_source = 'email'
+     WHERE buyer_user_id IS NULL AND lower(${email}) = ANY(recipient_addrs)
+     RETURNING id`;
+  return { id: Number(rows[0].id), claimed: claimed.length };
+}
+
+// Removing an address stops FUTURE matches; receipts already filed keep their buyer.
+export async function removePurchaseEmail(id, userId = null) {
+  const rows = await db()`DELETE FROM user_purchase_emails WHERE id = ${id}
+                            AND (${userId}::bigint IS NULL OR user_id = ${userId}) RETURNING id`;
+  return rows.length > 0;
+}
+
+// Who can own a purchase email / be a receipt's buyer — the admin pickers.
+export async function listApprovedPeople() {
+  return await db()`SELECT id, name, role FROM users WHERE status = 'approved' ORDER BY name`;
+}

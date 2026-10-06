@@ -1925,6 +1925,58 @@ await sql(`
     FROM r WHERE rn > 1
   ON CONFLICT DO NOTHING`);
 
+// Email receipts (2026-10-06) — every store receipt that lands in our order mailboxes,
+// filed automatically by the Make "Receipt sweep" scenario (POST /api/receipts/ingest),
+// with WHERE it was bought (store location, from the receipt) and WHO bought it (matched by
+// the address it was sent to against user_purchase_emails). docs/context/receipts.md.
+// A supplier registers the addresses they buy with; a receipt to one of them is theirs.
+await sql(`
+  CREATE TABLE IF NOT EXISTS user_purchase_emails (
+    id        BIGSERIAL PRIMARY KEY,
+    user_id   BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email     TEXT NOT NULL,
+    added_by  TEXT,
+    added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+// One address, one buyer — a receipt can't belong to two people.
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS user_purchase_emails_email ON user_purchase_emails (lower(email))`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS email_receipts (
+    id              BIGSERIAL PRIMARY KEY,
+    message_key     TEXT NOT NULL UNIQUE,      -- mailbox + folder + Message-ID: the sweep re-sends, we keep one
+    mailbox         TEXT,
+    folder          TEXT,
+    received_at     TIMESTAMPTZ,
+    from_addr       TEXT,
+    subject         TEXT,
+    recipients      JSONB,                     -- { to, cc, delivered_to, original_to } as sent
+    recipient_addrs TEXT[] NOT NULL DEFAULT '{}',  -- every address in it, lower-cased: what buyers match on
+    store           TEXT,
+    store_name      TEXT,
+    store_number    TEXT,
+    address         TEXT,
+    city            TEXT,
+    state           TEXT,
+    zip             TEXT,
+    order_number    TEXT,
+    subtotal        NUMERIC(12,2),
+    tax             NUMERIC(12,2),
+    shipping        NUMERIC(12,2),
+    total           NUMERIC(12,2),
+    items           JSONB NOT NULL DEFAULT '[]',
+    warnings        JSONB NOT NULL DEFAULT '[]',
+    body_text       TEXT,
+    buyer_user_id   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    buyer_source    TEXT CHECK (buyer_source IN ('email', 'manual')),
+    assigned_by     TEXT,
+    assigned_at     TIMESTAMPTZ,
+    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS email_receipts_received_idx ON email_receipts (received_at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS email_receipts_buyer_idx ON email_receipts (buyer_user_id)`);
+await sql(`CREATE INDEX IF NOT EXISTS email_receipts_order_idx ON email_receipts (order_number)`);
+await sql(`CREATE INDEX IF NOT EXISTS email_receipts_recipients_idx ON email_receipts USING gin (recipient_addrs)`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -1935,6 +1987,7 @@ const LIVE_TABLES = [
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',
   'online_orders', 'online_order_lines', 'online_order_events',
   'tracking_duplicates',
+  'email_receipts', 'user_purchase_emails',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

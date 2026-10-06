@@ -274,6 +274,13 @@ export const api = {
   // supplier name picked at receiving. `{ preset, via }`, preset null when unlinked.
   // Platform Profit report: on-hand stock per SKU + size with its landed cost.
   platformProfitStock: () => get('/api/ph/platform-profit'),
+  // Email receipts + the addresses buyers purchase with (docs/context/receipts.md).
+  receipts: (params = {}) => get(`/api/receipts/list?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString()}`),
+  receipt: (id) => get(`/api/receipts/list?id=${encodeURIComponent(id)}`),
+  assignReceipt: (id, userId) => post('/api/receipts/assign', { id, userId }),
+  purchaseEmails: (all = false) => get(`/api/purchase-emails${all ? '?all=1' : ''}`),
+  addPurchaseEmail: (email, userId = null) => post('/api/purchase-emails', { action: 'add', email, ...(userId ? { userId } : {}) }),
+  removePurchaseEmail: (id) => post('/api/purchase-emails', { action: 'remove', id }),
   onlineOrders: ({ q = '', view = 'all' } = {}) => get(`/api/online-orders/list?view=${encodeURIComponent(view)}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
   onlineOrder: (id) => get(`/api/online-orders/get?id=${encodeURIComponent(id)}`),
   saveOnlineOrder: (order) => post('/api/online-orders/save', order),

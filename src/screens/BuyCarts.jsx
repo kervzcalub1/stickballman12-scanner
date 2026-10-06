@@ -10,6 +10,7 @@ import { api } from '../api.js';
 import { poHref } from '../lib/poLink.js';
 import { TopBar, FormModal } from '../components/common.jsx';
 import { TelegramConnectBanner } from '../components/TelegramConnectBanner.jsx';
+import { PurchaseEmails } from '../components/PurchaseEmails.jsx';
 import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { useLive } from '../hooks.js';
@@ -302,6 +303,9 @@ export function BuyCarts({ user, onHome, onSignOut }) {
           </table>
         </div>
       )}
+      {/* The addresses this buyer orders with — a store's emailed receipt to one of them
+          is filed under them automatically (receipts.md). */}
+      {isBuyer && <PurchaseEmails mode="mine" onSignOut={onSignOut} />}
     </div>
   );
 }

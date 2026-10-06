@@ -1990,6 +1990,89 @@ await sql(`CREATE INDEX IF NOT EXISTS email_receipts_buyer_idx ON email_receipts
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_order_idx ON email_receipts (order_number)`);
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_recipients_idx ON email_receipts USING gin (recipient_addrs)`);
 
+// Pre-sell Listings (2026-10-07, docs/context/presell-listings.md): pairs listed on Alias
+// and/or StockX straight from a scan — never an inventory unit, never on Shopify.
+//   presell_stock    one row per SKU + size: how many pairs we can sell (qty) and how many
+//                    sold. Every sale deducts here; once sold = qty, the listings left on
+//                    the other platform are taken down (one pair can't sell twice).
+//   presell_listings one row per marketplace listing; external_id is the platform's
+//                    listing id — the handle for price / on-off / delete / matching a sale.
+//   presell_sales    one row per sale, unique per platform order — the watcher can see
+//                    the same order on every poll and it lands once.
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_stock (
+    id          BIGSERIAL PRIMARY KEY,
+    sku         TEXT NOT NULL,
+    name        TEXT,
+    image       TEXT,
+    upc         TEXT,
+    size        TEXT NOT NULL,
+    qty         INTEGER NOT NULL DEFAULT 0 CHECK (qty >= 0),
+    sold        INTEGER NOT NULL DEFAULT 0 CHECK (sold >= 0),
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (sku, size)
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_listings (
+    id             BIGSERIAL PRIMARY KEY,
+    stock_id       BIGINT NOT NULL REFERENCES presell_stock(id) ON DELETE CASCADE,
+    platform       TEXT NOT NULL CHECK (platform IN ('alias', 'stockx')),
+    external_id    TEXT,
+    catalog_ref    TEXT,
+    variant_id     TEXT,
+    size_value     NUMERIC(5,1),
+    price_cents    INTEGER NOT NULL CHECK (price_cents > 0),
+    status         TEXT NOT NULL CHECK (status IN ('pending', 'live', 'off', 'sold', 'deleted', 'failed')),
+    platform_status TEXT,
+    pending_op     TEXT,
+    pending_action TEXT,
+    pending_since  TIMESTAMPTZ,
+    last_error     TEXT,
+    raw            JSONB,
+    created_by     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by     TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sold_at        TIMESTAMPTZ,
+    deleted_at     TIMESTAMPTZ,
+    UNIQUE (platform, external_id)
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS presell_listings_stock_idx ON presell_listings (stock_id)`);
+await sql(`CREATE INDEX IF NOT EXISTS presell_listings_pending_idx ON presell_listings (status) WHERE status = 'pending'`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_sales (
+    id           BIGSERIAL PRIMARY KEY,
+    stock_id     BIGINT REFERENCES presell_stock(id) ON DELETE SET NULL,
+    listing_id   BIGINT REFERENCES presell_listings(id) ON DELETE SET NULL,
+    platform     TEXT NOT NULL,
+    order_id     TEXT NOT NULL,
+    price_cents  INTEGER,
+    payout_cents INTEGER,
+    sold_at      TIMESTAMPTZ,
+    raw          JSONB,
+    notified_at  TIMESTAMPTZ,
+    notify_error TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (platform, order_id)
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS presell_sales_sold_idx ON presell_sales (sold_at DESC)`);
+// Regular (non-pre-sell) sale alerts — a TEST switch (app_settings.sales_alert_all_since,
+// flipped on the Sales tab). One row per marketplace order the watcher has alerted on (or
+// decided not to), so every order posts once at most.
+await sql(`
+  CREATE TABLE IF NOT EXISTS marketplace_sales_seen (
+    platform   TEXT NOT NULL,
+    order_id   TEXT NOT NULL,
+    order_at   TIMESTAMPTZ,
+    alerted_at TIMESTAMPTZ,
+    error      TEXT,
+    seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (platform, order_id)
+  )`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -2001,6 +2084,7 @@ const LIVE_TABLES = [
   'online_orders', 'online_order_lines', 'online_order_events',
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
+  'presell_stock', 'presell_listings', 'presell_sales',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

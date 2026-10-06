@@ -29,6 +29,8 @@ import { imageForCard } from './imgformat.js';
 const env = (k) => String(process.env[k] || '').trim();
 export const telegramConfigured = () => !!(env('TELEGRAM_BOT_TOKEN') && env('TELEGRAM_CHAT_ID'));
 export const telegramChatId = () => env('TELEGRAM_CHAT_ID');
+// Pre-sell Listings sales go to their OWN group (docs/context/presell-listings.md).
+export const presellChatId = () => env('TELEGRAM_PRESELL_CHAT_ID');
 const apiUrl = (method) => `${env('TELEGRAM_API_BASE') || 'https://api.telegram.org'}/bot${env('TELEGRAM_BOT_TOKEN')}/${method}`;
 
 // One Bot API call. Returns Telegram's `result`, or throws an Error carrying Telegram's
@@ -179,4 +181,13 @@ export async function getBotUsername() {
 // a stray `*` in a store name prints rather than formats.
 export function sendNote(text) {
   return enqueue(() => tg('sendMessage', { chat_id: telegramChatId(), text }));
+}
+
+// A Pre-sell sale → the pre-sell group. HTML, so the shoe name can be bold; every value
+// that came from outside is escaped. Throws on failure — the caller records why.
+const escHtml = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+export function sendPresellSale(lines) {
+  if (!env('TELEGRAM_BOT_TOKEN') || !presellChatId()) return Promise.reject(new Error('TELEGRAM_PRESELL_CHAT_ID is not set'));
+  const text = lines.map((l) => (typeof l === 'string' ? escHtml(l) : `<b>${escHtml(l.b)}</b>`)).join('\n');
+  return enqueue(() => tg('sendMessage', { chat_id: presellChatId(), text, parse_mode: 'HTML', disable_web_page_preview: true }));
 }

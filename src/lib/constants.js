@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'dup-tracking', 'receipts'];
+export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'dup-tracking', 'receipts', 'presell-listings'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -147,6 +147,7 @@ export const HOME_SECTIONS = [
     // here is buying a gift card. A buyer asks to purchase stock, we approve it, the
     // desk funds them with cards to spend, they ship, we receive and reconcile.
     { key: 'buy-carts', icon: '🛒', title: 'Buying Requests', sub: 'Buyers ask, you approve, the desk funds the cards — then receipt, audit and reconcile', priv: true },
+    { key: 'presell-listings', icon: '⚡', title: 'Pre-sell Listings', sub: 'Scan or type a SKU and list pairs straight to Alias + StockX — own stock, sales deduct, Telegram on every sale' },
     { key: 'receipts', icon: '🧾', title: 'Receipts', sub: 'Store receipts found in our order mailboxes — where each pair was bought, and by whom' },
   ] },
   // A one-off migration mode, not part of the daily loop — its own section so it

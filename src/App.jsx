@@ -43,6 +43,7 @@ import { DeletedItems } from './screens/DeletedItems.jsx';
 import { OnlineOrders } from './screens/OnlineOrders.jsx';
 import { TrackingDuplicates } from './screens/TrackingDuplicates.jsx';
 import { Receipts } from './screens/Receipts.jsx';
+import { PresellListings } from './screens/PresellListings.jsx';
 import { VinStock } from './screens/VinStock.jsx';
 
 // The supplier scan-out portal is served on the `supplier.` subdomain. This is a
@@ -219,6 +220,8 @@ export default function App() {
   if (view === 'dup-tracking') return withAdvisor(<TrackingDuplicates user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Store receipts the mailbox sweep filed (receipts.md).
   if (view === 'receipts') return withAdvisor(<Receipts user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  // Pairs listed straight to Alias + StockX from a scan — never inventory (presell-listings.md).
+  if (view === 'presell-listings') return withAdvisor(<PresellListings onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'access') return withAdvisor(<CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'settings') return withAdvisor(<Settings onHome={() => go('home')} onSignOut={signOut} />);

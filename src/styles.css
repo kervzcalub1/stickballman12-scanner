@@ -5489,3 +5489,53 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
   .rc-table td::before { content: attr(data-label); flex: 0 0 90px; font-size: 11px; color: var(--muted); text-transform: uppercase; }
 }
 .rc-modal { max-width: 560px; width: calc(100vw - 32px); max-height: calc(100vh - 48px); overflow: auto; text-align: left; }
+
+/* Pre-sell Listings (src/screens/PresellListings.jsx) — pairs listed straight to Alias + StockX. */
+.ap-product { display: flex; gap: 12px; align-items: flex-start; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.ap-product-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ap-sizes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ap-sizes .btn { min-width: 48px; }
+.ap-bulk { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-bottom: 10px; }
+.ap-bulk label { display: flex; flex-direction: column; gap: 4px; }
+.ap-bulk input { width: 110px; }
+.ap-tablewrap { overflow-x: auto; }
+.ap-lines .ap-qty { width: 64px; }
+.ap-lines .ap-price { width: 100px; }
+.ap-activate { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 14px; }
+.ap-activate input { margin-top: 3px; }
+.ap-shoe { display: flex; gap: 8px; align-items: center; min-width: 180px; }
+.ap-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--border); white-space: nowrap; }
+.ap-chip.ok { color: #5fc58a; border-color: rgba(95,197,138,0.45); background: rgba(95,197,138,0.1); }
+.ap-chip.warn { color: #e0b05f; border-color: rgba(224,176,95,0.45); background: rgba(224,176,95,0.1); }
+.ap-chip.muted { color: var(--muted); }
+.ap-mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; word-break: break-all; }
+.ap-actions { white-space: nowrap; }
+.ap-actions .btn + .btn { margin-left: 4px; }
+.ap-basis { display: flex; flex-direction: column; gap: 4px; }
+.ap-mkt { display: flex; gap: 4px; }
+.ap-mkt-cell { display: flex; flex-direction: column; align-items: flex-start; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; cursor: pointer; min-width: 64px; font: inherit; }
+.ap-mkt-cell:hover:not(:disabled) { border-color: var(--accent, #5b8cff); }
+.ap-mkt-cell:disabled { cursor: default; opacity: 0.55; }
+.ap-mkt-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
+.ap-mkt-val { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ap-edit { text-align: left; max-width: 480px; width: calc(100% - 32px); }
+.ap-edit-fields { display: flex; gap: 10px; margin: 10px 0; }
+.ap-edit-fields label { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.ap-edit-mkt { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.ap-inline { display: flex; gap: 6px; align-items: center; }
+.ap-cart { display: flex; flex-direction: column; gap: 10px; }
+.ap-cart-line { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.ap-cart-head { display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; }
+.ap-cart-head > div:first-child { flex: 1; min-width: 0; }
+.ap-qtyfield { display: flex; flex-direction: column; gap: 2px; }
+.ap-qtyfield .ap-qty { width: 64px; }
+.ap-plat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.ap-plat.off { opacity: 0.6; }
+.ap-plat-tick { display: flex; align-items: center; gap: 6px; min-width: 110px; font-size: 14px; }
+.ap-plat .ap-price { width: 96px; margin-left: auto; }
+.ap-plat .ap-mkt { flex-wrap: wrap; }
+.ap-list-more { display: block; margin-top: 4px; }
+.ap-chip.info { color: #6fa8ff; border-color: rgba(111,168,255,0.45); background: rgba(111,168,255,0.1); }
+.ap-chip.sold { color: #c79bff; border-color: rgba(199,155,255,0.45); background: rgba(199,155,255,0.1); }
+.ap-chip.bad { color: #e08f8f; border-color: rgba(224,143,143,0.45); background: rgba(224,143,143,0.1); }
+@media (max-width: 640px) { .ap-plat .ap-price { margin-left: 0; } }

@@ -471,8 +471,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (!t) { setDupBatch(null); return undefined; }
     let cancelled = false;
     const id = setTimeout(() => {
-      api.checkTracking(t)
-        .then(({ exists, batchCode, batchId }) => { if (!cancelled) setDupBatch(exists ? { code: batchCode, id: batchId } : null); })
+      // Box mode adds a box to an EXISTING batch — that batch's own boxes aren't "before".
+      api.checkTracking(t, batchContext?.id || null)
+        .then(({ exists, batchCode, batchId, supplier }) => { if (!cancelled) setDupBatch(exists ? { code: batchCode, id: batchId, supplier } : null); })
         .catch(() => { /* ignore — warning is best-effort */ });
     }, 500);
     return () => { cancelled = true; clearTimeout(id); };
@@ -547,6 +548,36 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const poBoxHasChecklistRef = useRef(poBoxHasChecklist);
   poBoxHasChecklistRef.current = poBoxHasChecklist;
   const isMultiBoxNew = !noShipment && !isBoxMode && (expectedBoxesNum > 1 || isPoReceive);
+  // Duplicate tracking per BOX (receiving.md, "Duplicate tracking numbers"). The header
+  // check above only ever covered a single-box receive, so a multi-box one — Foot Locker's
+  // two packages under one number — went in without a word. Two kinds: a number an
+  // earlier receive already used (asked of the server, its own open batch excluded), and
+  // two boxes of THIS receive carrying the same number (compared here). Warn, never block:
+  // the server logs it when the box is submitted either way.
+  const slotKey = (t) => String(t || '').replace(/\s+/g, '').toUpperCase();
+  const [slotDup, setSlotDup] = useState({}); // key → { code, supplier } | null
+  useEffect(() => {
+    if (!isMultiBoxNew || header.noTracking) return undefined;
+    const todo = [...new Set(boxSlots.map((s) => slotKey(s.tracking)).filter((k) => k.length >= 6 && !(k in slotDup)))];
+    if (!todo.length) return undefined;
+    const id = setTimeout(() => {
+      for (const k of todo) {
+        api.checkTracking(k, activeBatch?.id)
+          .then((r) => setSlotDup((m) => ({ ...m, [k]: r.exists ? { code: r.batchCode, supplier: r.supplier } : null })))
+          .catch(() => { /* best-effort, like the header check */ });
+      }
+    }, 500);
+    return () => clearTimeout(id);
+  }, [boxSlots, activeBatch?.id, isMultiBoxNew, header.noTracking]); // eslint-disable-line react-hooks/exhaustive-deps
+  const slotWarning = (i) => {
+    const k = slotKey(boxSlots[i]?.tracking);
+    if (k.length < 6 || header.noTracking) return null;
+    const twin = boxSlots.findIndex((s, j) => j !== i && slotKey(s.tracking) === k);
+    if (twin >= 0) return `Same tracking number as box ${Number(boxSlots[twin].boxNumber) || twin + 1} — two packages under one number. It will be logged.`;
+    const d = slotDup[k];
+    if (d) return `Already received in ${d.code}${d.supplier ? ` (${d.supplier})` : ''}. You can still receive it — it will be logged as a duplicate.`;
+    return null;
+  };
   const receivedSlots = boxSlots.filter((s) => s.status === 'received').length;
 
   // Suggest a PO when a typed/scanned tracking number matches an open shipment and the
@@ -2328,7 +2359,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   )}
                   {!noShipment && !isMultiBoxNew && dupBatch && (
                     <div className="batch-form-wide dup-warn">
-                      ⚠ This tracking number was already received in <b>{dupBatch.code}</b>. You can still proceed — this batch will be flagged as a duplicate.
+                      ⚠ This tracking number was already received in <b>{dupBatch.code}</b>{dupBatch.supplier ? ` (${dupBatch.supplier})` : ''}. You can still proceed — it will be logged as a duplicate on the Duplicate Tracking page.
                     </div>
                   )}
                   {isRescale && (
@@ -2430,6 +2461,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             <button className="btn primary sm" onClick={() => openBoxSlot(i)}>Add items</button>
                           </>
                         )}
+                        {slotWarning(i) && <div className="dup-warn" role="status">⚠ {slotWarning(i)}</div>}
                       </div>
                     ))}
                   </div>

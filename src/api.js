@@ -137,7 +137,9 @@ export const api = {
   mensFor: (sku) => get(`/api/items/mens-for?sku=${encodeURIComponent(sku)}`),
   // v4 — receiving / batches
   suppliers: () => get('/api/suppliers'),
-  checkTracking: (tracking) => get(`/api/batches/check-tracking?tracking=${encodeURIComponent(tracking)}`),
+  checkTracking: (tracking, exceptBatch = null) => get(`/api/batches/check-tracking?tracking=${encodeURIComponent(tracking)}${exceptBatch ? `&exceptBatch=${encodeURIComponent(exceptBatch)}` : ''}`),
+  trackingDuplicates: (params = {}) => get(`/api/tracking-duplicates?${new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString()}`),
+  setTrackingDuplicate: (id, handled, note) => post('/api/tracking-duplicates', { id, handled, note }),
   batchCommit: (payload) => post('/api/batches/commit', payload),
   // v6 — multi-box batches (Feature 7)
   createOpenBatch: (batch) => post('/api/batches/create-open', { batch }),

@@ -1853,6 +1853,78 @@ await sql(`CREATE INDEX IF NOT EXISTS online_orders_track_idx ON online_orders (
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS original_sku TEXT`);
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS original_size TEXT`);
 
+// Duplicate tracking numbers (2026-10-06) — every time a package is RECEIVED under a
+// tracking number we have already received (an earlier batch, or another box of the same
+// batch), one row here. Alexander saw Foot Locker ship two single-pair packages under ONE
+// number; the receive screen warned, but nothing kept the incident or counted it per
+// supplier (receiving.md "Duplicate tracking numbers"). Written by the server at commit
+// time (batches/commit, batches/box-commit), never by the browser. The batch/box refs are
+// SET NULL on delete and the codes are copied, so the log outlives a deleted batch.
+await sql(`
+  CREATE TABLE IF NOT EXISTS tracking_duplicates (
+    id               BIGSERIAL PRIMARY KEY,
+    tracking_key     TEXT NOT NULL,            -- spaces stripped, upper case
+    tracking_number  TEXT NOT NULL,            -- as typed on this receive
+    batch_id         BIGINT REFERENCES batches(id) ON DELETE SET NULL,
+    box_id           BIGINT REFERENCES batch_boxes(id) ON DELETE SET NULL,
+    batch_code       TEXT,
+    box_number       INT,
+    supplier_name    TEXT,
+    prior_batch_id   BIGINT REFERENCES batches(id) ON DELETE SET NULL,
+    prior_box_id     BIGINT REFERENCES batch_boxes(id) ON DELETE SET NULL,
+    prior_batch_code TEXT,
+    prior_box_number INT,
+    prior_supplier   TEXT,
+    prior_at         TIMESTAMPTZ,
+    same_batch       BOOLEAN NOT NULL DEFAULT false,
+    detected_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    detected_by      TEXT,
+    status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'handled')),
+    handled_note     TEXT,
+    handled_by       TEXT,
+    handled_at       TIMESTAMPTZ
+  )`);
+// One row per receive of a number: a re-submitted / reopened box doesn't log twice.
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS tracking_duplicates_once
+  ON tracking_duplicates (tracking_key, coalesce(batch_id, 0), coalesce(box_id, 0))`);
+await sql(`CREATE INDEX IF NOT EXISTS tracking_duplicates_supplier_idx ON tracking_duplicates (supplier_name)`);
+await sql(`CREATE INDEX IF NOT EXISTS batches_track_key_idx ON batches (upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')))`);
+await sql(`CREATE INDEX IF NOT EXISTS batch_boxes_track_key_idx ON batch_boxes (upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')))`);
+// History, once and idempotently: every receive of a number after its FIRST one, as it
+// stands today. Marked detected_by 'history' so the log says it was found afterwards.
+await sql(`
+  WITH occ AS (
+    SELECT b.id AS batch_id, NULL::bigint AS box_id, b.batch_code, NULL::int AS box_number, b.supplier_name,
+           b.tracking_number AS t, coalesce(b.committed_at, b.created_at) AS at
+      FROM batches b
+     WHERE coalesce(btrim(b.tracking_number), '') <> ''
+       -- a header that repeats one of its OWN boxes is one package, not two
+       AND NOT EXISTS (SELECT 1 FROM batch_boxes x WHERE x.batch_id = b.id
+                         AND upper(regexp_replace(x.tracking_number, '[[:space:]]', '', 'g'))
+                           = upper(regexp_replace(b.tracking_number, '[[:space:]]', '', 'g')))
+    UNION ALL
+    SELECT bx.batch_id, bx.id, b.batch_code, bx.box_number, b.supplier_name,
+           bx.tracking_number, coalesce(bx.received_at, bx.created_at)
+      FROM batch_boxes bx JOIN batches b ON b.id = bx.batch_id
+     WHERE coalesce(btrim(bx.tracking_number), '') <> '' AND bx.status = 'received'
+  ), k AS (
+    SELECT occ.*, upper(regexp_replace(t, '[[:space:]]', '', 'g')) AS key FROM occ
+  ), r AS (
+    SELECT k.*, row_number() OVER w AS rn,
+           first_value(batch_id) OVER w AS p_batch, first_value(box_id) OVER w AS p_box,
+           first_value(batch_code) OVER w AS p_code, first_value(box_number) OVER w AS p_boxno,
+           first_value(supplier_name) OVER w AS p_sup, first_value(at) OVER w AS p_at
+      FROM k
+    WINDOW w AS (PARTITION BY key ORDER BY at, batch_id, box_id NULLS FIRST)
+  )
+  INSERT INTO tracking_duplicates (tracking_key, tracking_number, batch_id, box_id, batch_code, box_number, supplier_name,
+                                   prior_batch_id, prior_box_id, prior_batch_code, prior_box_number, prior_supplier, prior_at,
+                                   same_batch, detected_at, detected_by)
+  SELECT key, t, batch_id, box_id, batch_code, box_number, supplier_name,
+         p_batch, p_box, p_code, p_boxno, p_sup, p_at, (p_batch = batch_id), at, 'history'
+    FROM r WHERE rn > 1
+  ON CONFLICT DO NOTHING`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -1862,6 +1934,7 @@ const LIVE_TABLES = [
   'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards',
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',
   'online_orders', 'online_order_lines', 'online_order_events',
+  'tracking_duplicates',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

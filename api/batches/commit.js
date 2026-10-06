@@ -12,11 +12,11 @@
 import {
   getJsonBody, send, applySecurity, rateLimit, requireRole, cleanSku,
 } from '../_lib/util.js';
-import { alertPoDiscrepancy } from '../_lib/alerts.js';
+import { alertPoDiscrepancy, alertDuplicateTracking } from '../_lib/alerts.js';
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
-  getLocationByCode, shelveItems, PH_EXCLUDED_KINDS, claimForTracking,
+  getLocationByCode, shelveItems, PH_EXCLUDED_KINDS, claimForTracking, logTrackingDuplicate,
 } from '../_lib/db.js';
 import { registerWarehouseTracking } from '../_lib/tracking.js';
 import { enrichGlobalIndicators, normalizeItems, toCost } from '../_lib/intake.js';
@@ -247,8 +247,17 @@ export default async function handler(req, res) {
       : null;
     alertPoDiscrepancy(reconcile, user); // admins on Telegram — someone has to tell the supplier
 
+    // Received under a number we already received → logged, admins told (receiving.md,
+    // "Duplicate tracking numbers"). The server decides, whatever the screen warned.
+    const dup = isShipment && bh.tracking
+      ? await logTrackingDuplicate({ tracking: bh.tracking, batchId: batch.id, by: createdBy })
+        .catch((e) => { console.warn('[commit] dup tracking:', e.message); return null; })
+      : null;
+    alertDuplicateTracking(dup, user);
+
     send(res, 200, {
       ok: true,
+      duplicateTracking: dup ? { id: Number(dup.id), prior: dup.prior_batch_code } : null,
       batchCode: batch.batch_code,
       count: created.length,
       vins: created.map((r) => r.vin),

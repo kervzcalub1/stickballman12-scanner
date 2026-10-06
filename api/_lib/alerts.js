@@ -112,6 +112,13 @@ export const ALERT_EVENTS = [
     defaultFor: (u) => isAdminRole(u.role),
   },
   {
+    key: 'receiving.dup_tracking', group: 'Purchase orders', emoji: '🔁', required: false,
+    title: 'Duplicate tracking number',
+    when: 'A package is received under a tracking number we already received',
+    who: (u) => u.role === 'warehouse' || isAdminRole(u.role),
+    defaultFor: (u) => isAdminRole(u.role),
+  },
+  {
     key: 'po.comment', group: 'Purchase orders', emoji: '💬', required: false,
     title: 'Comment on a purchase order',
     when: 'Someone writes on the thread of an order you are part of',
@@ -237,6 +244,7 @@ const ROUTES = {
   inbound:   { main: '/inbound',       ph: '/ph/po-status' },
   access:    { main: '/access' },
   po:        { main: '/inbound',       ph: '/ph/purchase-orders', supplier: '/orders' },
+  duptrack:  { main: '/dup-tracking' },
 };
 export const at = (page, query = '') => (u) => {
   const r = ROUTES[page];
@@ -537,3 +545,19 @@ export function alertListReclosed(cartId, actor) {
 }
 
 export { EVENT as ALERT_EVENT_BY_KEY };
+
+// A package received under a tracking number we had already received (receiving.md,
+// "Duplicate tracking numbers"). `d` is the tracking_duplicates row just logged — one
+// alert per row, and a row is only ever logged once.
+export function alertDuplicateTracking(d, actor) {
+  if (!d) return;
+  const where = (code, box) => `${code || 'a deleted batch'}${box ? ` box ${box}` : ''}`;
+  fireAlert(() => alertUsers('receiving.dup_tracking', {
+    once: true, actorUid: actor?.uid, ref: `duptrack:${d.id}`,
+    code: d.tracking_number,
+    body: `${d.supplier_name || 'A supplier'} sent ${where(d.batch_code, d.box_number)} under the same tracking number as `
+      + `${d.same_batch ? `box ${d.prior_box_number || '?'} of the same batch` : where(d.prior_batch_code, d.prior_box_number)}`
+      + `${d.prior_supplier && d.prior_supplier !== d.supplier_name ? ` (${d.prior_supplier})` : ''}. Logged — decide whether to follow up.`,
+    path: at('duptrack', `d=${Number(d.id)}`),
+  }));
+}

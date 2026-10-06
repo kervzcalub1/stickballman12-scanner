@@ -68,6 +68,7 @@ connection brings it back as **Reconnect** with no "Not now". No migration.
 | `po.delivered` | warehouse (admins: off) — on the TRANSITION | `po/tracking-webhook.js` + `po/track-refresh.js` | on |
 | `online.delivered` | warehouse (admins: off) — on the transition, `once` | same two | on |
 | `po.discrepancy` | admins (PH: shown, off) — `once` per distinct result | `batches/commit`, `box-commit`, `set-status` | on |
+| `receiving.dup_tracking` | admins (warehouse: shown, off) — one per logged duplicate | `batches/commit` + `box-commit` (receiving.md) | on |
 | `po.comment` | everyone on that PO thread + admins | `po/comment.js` | on |
 | `buy.list_reopened` | gift card desk — only once the desk is in play (approved / released / cards issued) | `cart/submit.js` (reopen) | on |
 | `buy.list_reclosed` | gift card desk — closed AGAIN after a re-open: lines added / removed / changed since `list_reopened_at`, and what that means for the cards | `cart/submit.js` (close) | on |

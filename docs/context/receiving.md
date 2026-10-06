@@ -56,7 +56,8 @@ and `purchase-orders.md` → "Scan-first, any order".
    As the tracking # is entered it's checked against
    past batches/boxes (`GET /api/batches/check-tracking`, debounced); a repeat
    shows a **non-blocking duplicate warning** and, if committed, sets
-   `batches.duplicate_of` (V6 Feature 8).
+   `batches.duplicate_of` (V6 Feature 8). Every duplicate is now also **logged** —
+   see "Duplicate tracking numbers" at the end.
    **Multi-box (Boxes expected > 1):** the single Tracking field is hidden and a
    **box list renders inline on this page** (`boxSlots`, synced to the count): one
    row per box with its **own tracking #** (type / camera-scan) + **"Add items"**.
@@ -591,3 +592,39 @@ stock was built and rejected as unnecessary.
   listed.
 - E2E: `e2e/receiving-gs-as-mens.spec.js` (convert + commit, the suggestion + Keep as GS,
   PO reconciliation stays clean).
+
+## Duplicate tracking numbers (2026-10-06)
+Alexander saw **Foot Locker send two single-pair packages under ONE tracking number**
+instead of one box of two. The task: handle duplicates and **log every instance per
+supplier**. What existed only half did: a warning on a *single-box* receive (exact text
+match) and `batches.duplicate_of`. A multi-box receive — exactly that case — was never
+checked, `1z 999…` didn't match `1Z999…`, and nothing listed or counted the incidents.
+- **The server logs it, at commit** (`logTrackingDuplicate`, db.js): `batches/commit`
+  (the header number of a single-box receive) and `batches/box-commit` (each box, PO
+  labels included). One row in **`tracking_duplicates`** when the number was already
+  received — the earliest OTHER receive is "prior": another batch, or **another box of the
+  same batch** (`same_batch`; that box counts only once it was received). The receive's
+  own batch header and own box never match. Unique per (number, batch, box), so a
+  reopened / re-submitted box doesn't log twice. Never blocks — the warehouse can't send a
+  package back from the bench. Response carries `duplicateTracking`.
+- **Matching = spaces stripped, upper case** (`trackingKey`), also in
+  `findBatchByTracking` (the live check). Expression indexes on both tracking columns.
+- **History backfilled** by `db:setup`, idempotently (`detected_by = 'history'`): every
+  receive of a number after its first, as the data stands. A batch header that repeats
+  one of its own boxes is one package, not two.
+- **Receive New warns per box** in a multi-box receive (`slotWarning`): "Same tracking
+  number as box N" (compared on screen) or "Already received in B-… (supplier)" (asked of
+  `check-tracking?exceptBatch=` — the receive's own open batch excluded). Box mode passes
+  its batch the same way, so continuing a box no longer warns about itself.
+- **Duplicate Tracking page** (`/dup-tracking`, `src/screens/TrackingDuplicates.jsx`; home
+  → Receiving Shipment Orders, **Open** badge = `pendingCounts.dup_tracking_open`):
+  per-supplier totals (tap to filter), Open / Handled / All, search, links to both batches.
+  The warehouse reads; an **admin closes** an entry with a **required note** (told the
+  supplier / left it — the Foot Locker call) and can reopen it.
+  `GET|POST /api/tracking-duplicates`.
+- **Telegram:** `receiving.dup_tracking` (alerts.md) — admins on by default, warehouse
+  can opt in; links to the row (`?d=`).
+- ⚠ `pendingCounts` reads the new table: **run `db:setup` before this deploys** or every
+  home page's counts fail.
+- E2E: `e2e/duplicate-tracking.spec.js`.
+

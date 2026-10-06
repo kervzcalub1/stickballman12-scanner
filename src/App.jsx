@@ -41,6 +41,7 @@ import { Reconciliation } from './screens/Reconciliation.jsx';
 import { Sop } from './screens/Sop.jsx';
 import { DeletedItems } from './screens/DeletedItems.jsx';
 import { OnlineOrders } from './screens/OnlineOrders.jsx';
+import { TrackingDuplicates } from './screens/TrackingDuplicates.jsx';
 import { VinStock } from './screens/VinStock.jsx';
 
 // The supplier scan-out portal is served on the `supplier.` subdomain. This is a
@@ -213,6 +214,8 @@ export default function App() {
   if (view === 'deleted') return withAdvisor(<DeletedItems onHome={() => go('home')} onSignOut={signOut} />);
   // PH records online orders; the warehouse reads what is on its way and counts it in.
   if (view === 'online-orders') return withAdvisor(<OnlineOrders user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  // The duplicate tracking number log — warehouse reads, admin closes entries.
+  if (view === 'dup-tracking') return withAdvisor(<TrackingDuplicates user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'access') return withAdvisor(<CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'settings') return withAdvisor(<Settings onHome={() => go('home')} onSignOut={signOut} />);

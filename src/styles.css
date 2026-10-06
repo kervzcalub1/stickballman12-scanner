@@ -5421,3 +5421,9 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 /* Nudge… (src/components/NudgeButton.jsx) */
 .bc-nudge { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 4px; }
 .nudge-done { margin-left: 4px; }
+
+/* GS received as men's — Receive New cart card (MensConvert.jsx, receiving.md) */
+.mens-chip { display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid rgba(124, 158, 255, 0.5); background: rgba(124, 158, 255, 0.14); color: #9db4ff; white-space: nowrap; }
+.mens-sizes { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.mens-sizes .muted { flex-basis: 100%; }

@@ -16,7 +16,8 @@ import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { useUnsavedGuard, useLive } from '../hooks.js';
-import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
+import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread, gsToMensSize } from '../lib/codes.js';
+import { MensConvertModal } from '../components/MensConvert.jsx';
 import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
@@ -60,6 +61,20 @@ function ReconcileAlert({ rc, onOpen }) {
       )}
     </div>
   );
+}
+
+// GS received as men's (receiving.md): the commit payload for one size of a cart line
+// that's being received under the men's code. Men's code + size (7Y → 7) on the unit, the
+// GS code + size it arrived as kept in originalSku / originalSize. Nothing for a line that
+// isn't converted, or a size left as GS.
+function asMens(it, r) {
+  const m = it.mens;
+  if (!m?.sku || (m.skip || []).includes(r.size)) return {};
+  return {
+    sku: m.sku, size: gsToMensSize(r.size), name: m.name || it.name, image: m.image || it.image,
+    colorway: m.colorway || it.colorway, gender: 'Men',
+    originalSku: it.sku, originalSize: r.size,
+  };
 }
 
 export function Receiving({ mode = 'receiving', navBack, batchContext = null, onBatchDone, onOpenItem, onOpenReconcile, onHome, onSignOut }) {
@@ -655,6 +670,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }
   const setItemBox = (itemKey, withBox) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, withBox } : it)));
   const setItemGoat = (itemKey, goatOnly) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, goatOnly } : it)));
+  // GS received as men's (receiving.md): `mens` = { sku, name, image, colorway, skip:[GS sizes
+  // left as GS] } or null. The cart keeps the GS code — the PO manifest and an online order
+  // match on what the box says — and the swap happens only in the commit payload (asMens).
+  const setItemMens = (itemKey, mens) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, mens } : it)));
+  const [mensFor, setMensFor] = useState(null); // the cart line the "Receive as men's" dialog is open on
   // Pre-sell per SHOE. A shipment where one of fifteen SKUs is spoken for used to hold
   // all fifteen, because the only question anyone was asked was about the shipment
   // (docs/context/pre-sell.md). Lives beside the box status and GOAT toggles because it
@@ -1799,6 +1819,22 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   };
   // The per-shoe cost box, on the card beside Box / GOAT only. Shown on rescale too:
   // it can take in unlabeled stock it finds, and that stock is created with a cost.
+  // "Receive as men's" — a GS shoe that goes in under the men's code (receiving.md). Not in
+  // rescale: those pairs are already ours, under whatever they were received as.
+  const mensToggle = (it) => {
+    if (isRescale || it.pending || !String(it.sku || '').trim()) return null;
+    if (!it.mens) {
+      return <button type="button" className="btn sm ghost mens-btn" onClick={() => setMensFor(it.key)}
+        title="Grade School pair that Alias lists under the men's product — receive it under the men's code; the GS code is kept for the record">As men’s…</button>;
+    }
+    const kept = (it.mens.skip || []).length;
+    return (
+      <button type="button" className="mens-chip" onClick={() => setMensFor(it.key)}
+        title={`Received as men's ${it.mens.sku}${it.mens.name ? ` (${it.mens.name})` : ''}; each pair keeps ${it.sku} as its original code. Tap to change.`}>
+        → Men’s {it.mens.sku}{kept ? ` · ${kept} size${kept === 1 ? '' : 's'} stay GS` : ''}
+      </button>
+    );
+  };
   const costField = (it) => {
     const typed = String(it.cost ?? '').trim() !== '';
     const hint = shoeCostHint(it);
@@ -1970,7 +2006,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), shelfPrice: poMoney(it, r)?.shelf ?? onlineLine(it, r)?.price ?? null, withBox: it.withBox, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null });
+            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), shelfPrice: poMoney(it, r)?.shelf ?? onlineLine(it, r)?.price ?? null, withBox: it.withBox, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null, ...asMens(it, r) });
           }
         }
       }
@@ -2674,6 +2710,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                 <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
                                   <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
                                 </label>
+                                {mensToggle(it)}
                                 {preSellSome && (
                                   <label className={`presell-chip-toggle ${it.preSell === true ? 'on' : ''}`} title="This shoe was sold before it landed — hold it back from listing">
                                     <input type="checkbox" checked={it.preSell === true} onChange={(e) => setItemPreSell(it.key, e.target.checked)} /> Pre-sell
@@ -2841,6 +2878,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                               <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
                                 <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
                               </label>
+                              {mensToggle(it)}
                               {costField(it)}
                             </div>
                           </div>
@@ -3059,6 +3097,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       {/* Listing photos for one shoe in the cart — the 5 angle slots and the
           full-screen camera, opened from that shoe's row instead of blocking the
           scan flow. */}
+      {mensFor && items.some((x) => x.key === mensFor) && (
+        <MensConvertModal item={items.find((x) => x.key === mensFor)} onClose={() => setMensFor(null)}
+          onSave={(m) => { setItemMens(mensFor, m); setMensFor(null); }} />
+      )}
       {photoSku && (
         <div className="modal-overlay" onClick={() => { if (!photoCam) closePhotoModal(); }}>
           <div className="modal additem" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>

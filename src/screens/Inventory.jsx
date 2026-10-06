@@ -813,6 +813,12 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                           onClick={() => setSkuEdit(true)}><Icon name="pencil" /></button>
                       )}
                     </dd></div>
+                    {/* GS received as men's (receiving.md): the code + size the box says,
+                        kept for the record — it's what to look for on the shelf. */}
+                    {it.original_sku ? (
+                      <div><dt>Box says</dt><dd><span className="mens-chip">GS</span> <CopyText text={it.original_sku}>{it.original_sku}</CopyText>
+                        {it.original_size ? ` · size ${it.original_size}` : ''} <span className="muted sm">— received as men’s</span></dd></div>
+                    ) : null}
                     <div><dt>UPC</dt><dd><CopyText text={it.upc}>{it.upc || '—'}</CopyText></dd></div>
                     {/* The size is the one fact at intake nobody can scan — a `size?` row is
                         typed off the tongue label. Correcting it here beats removing the

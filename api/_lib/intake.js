@@ -31,6 +31,14 @@ export const toCost = (v) => {
 const roundFinal = (v) => Math.round(v);
 const normSku = (s) => { const c = cleanSku(s); return c ? c.replace(/\s+/g, '-') : null; };
 
+// GS → men's at receiving: the original code + size, or nothing when it wasn't converted.
+function gsOriginal(it) {
+  const sku = normSku(it.originalSku);
+  const size = String(it.originalSize ?? '').trim().slice(0, 24) || null;
+  if (!sku || (sku === normSku(it.sku) && size === String(it.size ?? '').trim())) return { originalSku: null, originalSize: null };
+  return { originalSku: sku, originalSize: size };
+}
+
 // Normalize raw client items. A unit whose VIN is in `noBoxVins` (flagged with a
 // 'no_box' defect) follows the no-box rules too — status no_box / with_box=false.
 // `preSellAll` is the SHIPMENT's answer — true only when the whole thing was sold
@@ -64,6 +72,9 @@ export function normalizeItems(rawItems, { defaultCost = null, noBoxVins = new S
       // question anyone was asked was about the shipment (docs/context/pre-sell.md).
       preSell: preSellAll === true || it.preSell === true,
       goatOnly: it.goatOnly === true, // list to Alias(GOAT)+II only; StockX/Shopify N/A
+      // GS received as men's: `sku`/`size` are the men's; these keep what the box said.
+      // Only stored when the pair really was converted (receiving.md).
+      ...gsOriginal(it),
       status: withBox ? 'needs_shelf' : 'no_box',
       vin,
     };
@@ -120,7 +131,8 @@ export async function enrichGlobalIndicators(created, items) {
   const giByKey = new Map();
   const updates = [];
   for (let i = 0; i < created.length; i++) {
-    const it = items[i];
+    // A GS pair received as men's still carries the GS box UPC — price it by its men's SKU.
+    const it = items[i]?.originalSku ? { ...items[i], upc: null } : items[i];
     const id = created[i]?.id;
     if (!id || !it?.size || (!it?.upc && !it?.sku)) continue;
     try {

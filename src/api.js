@@ -133,6 +133,8 @@ export const api = {
   // already written every field this returns.
   inbound: () => get('/api/inbound'),
   searchSku: (sku) => post('/api/sku-search', { sku }),
+  // GS received as men's: what this GS code was last received as (receiving.md).
+  mensFor: (sku) => get(`/api/items/mens-for?sku=${encodeURIComponent(sku)}`),
   // v4 — receiving / batches
   suppliers: () => get('/api/suppliers'),
   checkTracking: (tracking) => get(`/api/batches/check-tracking?tracking=${encodeURIComponent(tracking)}`),

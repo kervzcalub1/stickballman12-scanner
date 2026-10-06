@@ -147,6 +147,10 @@ export const apparelRank = (s) => {
 //   · apparel sizes (XS … 5XL, both spellings) pass through uppercased, and so does OS.
 // Returns null for anything else — the caller refuses it rather than storing a typo,
 // because nothing downstream can tell "99" from a size later on.
+// GS received as men's (receiving.md): a Grade School size on the men's run — 7Y → 7.
+// The men's run is written bare (see normalizeSize).
+export const gsToMensSize = (size) => String(size ?? '').trim().replace(/\s*Y$/i, '');
+
 export function normalizeSize(raw) {
   const t = String(raw ?? '').trim().toUpperCase().replace(/[\s-]+/g, '').replace(/^(?:US|SIZE)/, '');
   if (!t) return null;

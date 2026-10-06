@@ -5427,3 +5427,28 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
   border: 1px solid rgba(124, 158, 255, 0.5); background: rgba(124, 158, 255, 0.14); color: #9db4ff; white-space: nowrap; }
 .mens-sizes { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
 .mens-sizes .muted { flex-basis: 100%; }
+
+/* ── Duplicate Tracking (src/screens/TrackingDuplicates.jsx, receiving.md) ── */
+.dup-lede { margin: 0 0 12px; line-height: 1.5; }
+.dup-suppliers { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.dup-sup { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; }
+.dup-sup.on { border-color: var(--primary); background: rgba(79, 124, 255, 0.16); }
+.dup-open { color: #e0a458; }
+.dup-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.dup-filters .input { flex: 1 1 220px; min-width: 0; }
+.dup-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.dup-table th { text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; padding: 6px; border-bottom: 1px solid var(--border); }
+.dup-table td { padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.dup-table tr.focus td { background: rgba(79, 124, 255, 0.10); }
+.dup-table code { font-size: 12.5px; word-break: break-all; }
+.dup-same { font-size: 11px; font-weight: 600; color: #e0a458; }
+.dup-open-chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: rgba(224, 164, 88, 0.15); color: #e0a458; margin-right: 6px; }
+.dup-handled { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: rgba(46, 204, 113, 0.14); color: var(--ok); }
+@media (max-width: 760px) {
+  .dup-table thead { display: none; }
+  .dup-table tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .dup-table td { display: flex; gap: 10px; border: 0; padding: 3px 0; }
+  .dup-table td::before { content: attr(data-label); flex: 0 0 120px; font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .dup-table td > * { min-width: 0; }
+}
+.box-build-row .dup-warn { flex-basis: 100%; font-size: 12.5px; color: #e0a458; }

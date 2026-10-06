@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders'];
+export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'dup-tracking'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -113,6 +113,8 @@ export function homeCardBadges(key, c) {
   // A supplier is packed and waiting on us to buy labels — nothing on their side moves
   // until somebody here acts, so it belongs on the order list's own card.
   if (key === 'po') return [['Labels requested', c.po_labels_requested]];
+  // Logged duplicates nobody has decided about yet.
+  if (key === 'dup-tracking') return [['Open', c.dup_tracking_open]];
   // Empty shoe boxes. "On hand" is stock, not a chore, so it reads as neutral info; only
   // the ones still to put away are amber. Both hide at 0, which is most days.
   if (key === 'box-stock') return [['On hand', c.boxes_on_hand, 'info'], ['To shelve', c.boxes_needs_shelf]];
@@ -133,6 +135,7 @@ export const HOME_SECTIONS = [
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
     { key: 'presell', icon: '🔖', title: 'Pre-sell', sub: 'Shipments sold before they landed — say how many each order covers, then free the rest for listing' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
+    { key: 'dup-tracking', icon: '🔁', title: 'Duplicate Tracking', sub: 'Packages received under a tracking number we already received — logged per supplier' },
     { key: 'costs', icon: '💵', title: 'Costs', sub: 'Fill in what a pair cost when the supplier left it off the manifest' },
   ] },
   { title: 'In-Store Mode', accent: 'inventory', cards: [

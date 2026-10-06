@@ -1,7 +1,10 @@
-// GET /api/batches/check-tracking?tracking=... -> { ok, exists, batchCode, batchId }
+// GET /api/batches/check-tracking?tracking=...&exceptBatch=ID -> { ok, exists, batchCode, batchId, supplier }
 // Non-blocking lookup so the receiving screen can warn when a tracking number
 // was already received (supplier error / unexpected reshipment). The duplicate
-// can still be committed — it just gets flagged via batches.duplicate_of.
+// can still be committed — it just gets flagged via batches.duplicate_of, and the server
+// logs it in tracking_duplicates when the package is committed (receiving.md).
+// `exceptBatch`: the open batch a box slot belongs to — its own boxes are this receive,
+// not an earlier one (the screen compares its slots with each other itself).
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { findBatchByTracking, dbConfigured } from '../_lib/db.js';
 
@@ -13,14 +16,17 @@ export default async function handler(req, res) {
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
-  const tracking = new URL(req.url, 'http://x').searchParams.get('tracking') || '';
+  const params = new URL(req.url, 'http://x').searchParams;
+  const tracking = params.get('tracking') || '';
+  const except = Number(params.get('exceptBatch'));
   try {
-    const match = await findBatchByTracking(tracking);
+    const match = await findBatchByTracking(tracking, { exceptBatchId: Number.isSafeInteger(except) && except > 0 ? except : null });
     return send(res, 200, {
       ok: true,
       exists: Boolean(match),
       batchCode: match?.batch_code || null,
       batchId: match?.id || null,
+      supplier: match?.supplier_name || null,
     });
   } catch (e) {
     console.error('[batches/check-tracking]', e.message);

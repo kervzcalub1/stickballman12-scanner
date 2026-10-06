@@ -847,18 +847,102 @@ export async function addSupplier(name, createdBy) {
 
 // Has this tracking number already been received (on a batch OR one of its
 // boxes)? Returns the first matching batch or null — drives the duplicate alert.
-export async function findBatchByTracking(tracking) {
-  const t = String(tracking || '').trim();
-  if (!t) return null;
+// Matched on the number with spaces stripped and upper-cased: "1Z 999 AA1…" pasted from an
+// email and "1Z999AA1…" off a scanner are one parcel (it used to be an exact-text match).
+export async function findBatchByTracking(tracking, { exceptBatchId = null } = {}) {
+  const key = trackingKey(tracking);
+  if (!key) return null;
   const rows = await db()`
-    SELECT b.id, b.batch_code
+    SELECT b.id, b.batch_code, b.supplier_name
     FROM batches b
-    WHERE b.tracking_number = ${t}
-       OR EXISTS (SELECT 1 FROM batch_boxes bx WHERE bx.batch_id = b.id AND bx.tracking_number = ${t})
+    WHERE (${exceptBatchId}::bigint IS NULL OR b.id <> ${exceptBatchId})
+      AND (upper(regexp_replace(coalesce(b.tracking_number, ''), '[[:space:]]', '', 'g')) = ${key}
+       OR EXISTS (SELECT 1 FROM batch_boxes bx WHERE bx.batch_id = b.id
+                    AND upper(regexp_replace(coalesce(bx.tracking_number, ''), '[[:space:]]', '', 'g')) = ${key}))
     ORDER BY b.id
     LIMIT 1
   `;
   return rows[0] || null;
+}
+
+export const trackingKey = (t) => String(t || '').replace(/\s+/g, '').toUpperCase();
+
+// Log one RECEIVE of a tracking number we had already received (docs/context/receiving.md,
+// "Duplicate tracking numbers"). Called after a package is committed: the batch header's
+// number on a single-box receive (boxId null), each box's number on a multi-box one. The
+// earliest OTHER receive of the number is "prior" — another batch, or another box of this
+// same batch (same_batch). The receive itself never matches: its own box, and its own
+// batch header, are excluded. Returns the new row, or null (not a duplicate, or already
+// logged — a reopened box doesn't log twice).
+export async function logTrackingDuplicate({ tracking, batchId, boxId = null, by = null }) {
+  const key = trackingKey(tracking);
+  if (!key || key.length < 6) return null;
+  const sql = db();
+  const rows = await sql`
+    WITH me AS (
+      SELECT b.id AS batch_id, b.batch_code, b.supplier_name,
+             (SELECT box_number FROM batch_boxes WHERE id = ${boxId}) AS box_number
+        FROM batches b WHERE b.id = ${batchId}
+    ), prior AS (
+      SELECT b.id AS batch_id, NULL::bigint AS box_id, b.batch_code, NULL::int AS box_number, b.supplier_name,
+             coalesce(b.committed_at, b.created_at) AS at
+        FROM batches b
+       WHERE b.id <> ${batchId}
+         AND upper(regexp_replace(coalesce(b.tracking_number, ''), '[[:space:]]', '', 'g')) = ${key}
+      UNION ALL
+      SELECT bx.batch_id, bx.id, b.batch_code, bx.box_number, b.supplier_name, coalesce(bx.received_at, bx.created_at)
+        FROM batch_boxes bx JOIN batches b ON b.id = bx.batch_id
+       WHERE upper(regexp_replace(coalesce(bx.tracking_number, ''), '[[:space:]]', '', 'g')) = ${key}
+         AND (${boxId}::bigint IS NULL OR bx.id <> ${boxId})
+         -- another box of THIS batch counts only once it was actually received
+         AND (bx.batch_id <> ${batchId} OR bx.status = 'received')
+       ORDER BY 6, 1, 2 NULLS FIRST
+       LIMIT 1
+    )
+    INSERT INTO tracking_duplicates (tracking_key, tracking_number, batch_id, box_id, batch_code, box_number, supplier_name,
+                                     prior_batch_id, prior_box_id, prior_batch_code, prior_box_number, prior_supplier, prior_at,
+                                     same_batch, detected_by)
+    SELECT ${key}, ${String(tracking).trim()}, me.batch_id, ${boxId}, me.batch_code, me.box_number, me.supplier_name,
+           prior.batch_id, prior.box_id, prior.batch_code, prior.box_number, prior.supplier_name, prior.at,
+           prior.batch_id = me.batch_id, ${by}
+      FROM me, prior
+    ON CONFLICT DO NOTHING
+    RETURNING *`;
+  return rows[0] || null;
+}
+
+// The log, newest first, plus per-supplier totals for the header of the page.
+export async function listTrackingDuplicates({ status = null, supplier = null, q = null } = {}) {
+  const sql = db();
+  const like = q ? `%${String(q).replace(/[%_\\]/g, '')}%` : null;
+  const rows = await sql`
+    SELECT * FROM tracking_duplicates
+     WHERE (${status}::text IS NULL OR status = ${status})
+       AND (${supplier}::text IS NULL OR supplier_name = ${supplier})
+       AND (${like}::text IS NULL OR tracking_number ILIKE ${like} OR batch_code ILIKE ${like}
+            OR prior_batch_code ILIKE ${like} OR supplier_name ILIKE ${like})
+     ORDER BY detected_at DESC, id DESC
+     LIMIT 500`;
+  const bySupplier = await sql`
+    SELECT coalesce(supplier_name, '—') AS supplier, count(*)::int AS total,
+           count(*) FILTER (WHERE status = 'open')::int AS open,
+           max(detected_at) AS last_at
+      FROM tracking_duplicates GROUP BY 1 ORDER BY total DESC, supplier`;
+  return { rows, bySupplier };
+}
+
+// "Handled": somebody looked at it and decided — told the supplier, or (like the Foot
+// Locker case) chose to leave it alone. The note says which. Re-opening clears it.
+export async function setTrackingDuplicateStatus(id, { handled, note }, by) {
+  const r = await db()`
+    UPDATE tracking_duplicates
+       SET status = ${handled ? 'handled' : 'open'},
+           handled_note = ${handled ? note : null},
+           handled_by = ${handled ? by : null},
+           handled_at = CASE WHEN ${!!handled} THEN now() END
+     WHERE id = ${id}
+     RETURNING *`;
+  return r[0] || null;
 }
 
 /* ------------------------ v6: listing photos ------------------------- */
@@ -2031,6 +2115,9 @@ export async function pendingCounts() {
       (SELECT count(*) FROM purchase_orders p
         WHERE p.labels_requested_at IS NOT NULL
           AND p.status NOT IN ('reconciled', 'closed'))::int AS po_labels_requested,
+      -- Packages received under a tracking number we'd already received, nobody has
+      -- decided about yet (receiving.md, "Duplicate tracking numbers").
+      (SELECT count(*) FROM tracking_duplicates WHERE status = 'open')::int AS dup_tracking_open,
       -- Gift-card buying. Both ends of that process stall on a person rather than on a
       -- parcel: a buyer standing in a shop waiting to be told yes, and a spend nobody
       -- has independently verified. Company money is on the wrong side of both.

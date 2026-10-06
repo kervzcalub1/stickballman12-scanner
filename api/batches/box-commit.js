@@ -4,10 +4,10 @@
 // box), records per-unit defect issues, marks the box received, and auto-completes
 // the batch when received == expected. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { alertPoDiscrepancy } from '../_lib/alerts.js';
+import { alertPoDiscrepancy, alertDuplicateTracking } from '../_lib/alerts.js';
 import {
   getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues,
-  reconcileOutcomeForIntake, dbConfigured, SHIPMENT_KINDS,
+  reconcileOutcomeForIntake, dbConfigured, SHIPMENT_KINDS, logTrackingDuplicate,
 } from '../_lib/db.js';
 import { normalizeItems, parseUnitIssues, enrichGlobalIndicators, toCost } from '../_lib/intake.js';
 import { duplicateVin } from '../_lib/vins.js';
@@ -80,7 +80,16 @@ export default async function handler(req, res) {
       : null;
     alertPoDiscrepancy(reconcile, user); // admins on Telegram — someone has to tell the supplier
 
-    send(res, 200, { ok: true, count: created.length, vins, autoCompleted, reconcile });
+    // A box received under a number we already received — another batch, or another box
+    // of this one — is logged and admins are told (receiving.md, "Duplicate tracking
+    // numbers"). Best-effort: the box is saved either way.
+    const dup = box.tracking_number
+      ? await logTrackingDuplicate({ tracking: box.tracking_number, batchId, boxId, by: createdBy })
+        .catch((e) => { console.warn('[box-commit] dup tracking:', e.message); return null; })
+      : null;
+    alertDuplicateTracking(dup, user);
+
+    send(res, 200, { ok: true, count: created.length, vins, autoCompleted, reconcile, duplicateTracking: dup ? { id: Number(dup.id), prior: dup.prior_batch_code } : null });
     enrichGlobalIndicators(created, items).catch((e) => console.warn('[box-commit] GI enrichment failed:', e.message));
     return;
   } catch (e) {

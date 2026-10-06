@@ -27,12 +27,16 @@ The stage is **derived, never stored** (`orderStage`): `received_at` → deliver
 line cancelled → cancelled; tracking → shipped; else ordered.
 
 ## Actual cost per pair (`orderCosts`)
-`(price − coupon each + tax share + shipping share) × (1 − gift card %) − cashback share`
+`(price − coupon each + tax share + shipping share) × (1 − gift card %) − (price − coupon each) × cashback %`
 - **coupon** split evenly per unit ordered (owner); **tax + shipping** split by PRICE
   (owner picked "by price"); **gift card** a % off everything paid (owner picked %).
-- **cashback** (added 2026-10-05, `online_orders.cashback`): a DOLLAR amount off the
-  order's whole cost, split by price, taken after the gift card discount. Save refuses
-  cashback bigger than the order's cost (it would make a pair negative).
+- **cashback** — a **PERCENTAGE** (`online_orders.cashback_pct`, since 2026-10-07; was a
+  dollar amount `cashback` from 2026-10-05). It's % of each pair's price **after the
+  coupon, pre-tax and pre-shipping** (what Rakuten/card portals pay on; same base as the
+  Payout Calculator's cashback), netted off after the gift card discount. Save refuses
+  > 100% or a combination that would take a pair below $0. `db:setup` converted any
+  dollar cashback already typed into the equivalent % once and zeroed `cashback`
+  (legacy, unread).
 - **Cancelled / not-delivered lines are left out** of the split — the pairs that come
   carry the order's money. (So a short delivery raises the survivors' cost; that is the
   honest number until a refund lands.)
@@ -41,7 +45,7 @@ line cancelled → cancelled; tracking → shipped; else ordered.
 
 ## Tables (`scripts/db-setup.mjs`; all three in `LIVE_TABLES`)
 - `online_orders` — store, order_number, tracking_number (nullable), ordered_on (DATE),
-  coupon, tax, shipping, gc_pct, cashback, note, created/updated by+at, **received_at/_by**.
+  coupon, tax, shipping, gc_pct, cashback_pct (cashback = legacy $), note, created/updated by+at, **received_at/_by**.
   Expression index on the whitespace-stripped upper tracking number (`[[:space:]]`, NOT
   `'\s'` — see the template-literal note in db.js).
 - `online_order_lines` — sku, name, size, qty, unit_price; cancellation (`cancelled_at/_by`,

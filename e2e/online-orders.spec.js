@@ -145,10 +145,13 @@ test('the page: PH records an order and sees each pair’s actual cost as it typ
   await page.locator('.pc-field', { hasText: 'Tax' }).locator('input').fill('16');
   // $100 − $10 coupon + $8 tax = $98 a pair.
   await expect(page.locator('.oo-each').first()).toHaveText('$98.00');
+  // 5% cashback on the $90 after coupon (not on the tax) = $4.50 back → $93.50 a pair.
+  await page.locator('.pc-field', { hasText: 'Cashback' }).locator('input').fill('5');
+  await expect(page.locator('.oo-each').first()).toHaveText('$93.50');
   await page.getByRole('button', { name: 'Save order' }).click();
   await expect(page.locator('.oo-title')).toContainText('E2E-OO Store UI');
   await expect(page.locator('.oo-stage')).toHaveText('Ordered');
-  await expect(page.locator('.oo-lines td b', { hasText: '$98.00' })).toBeVisible();
+  await expect(page.locator('.oo-lines td b', { hasText: '$93.50' })).toBeVisible();
 });
 
 // ---- QA findings, 2026-10-01 — each one pinned so it can't come back -----------------
@@ -183,17 +186,22 @@ test('QA: the refund only moves the ways that mean something', async ({ request 
   expect((await line({ action: 'refund', to: 'refunded', amount: 0 })).status()).toBe(400);
 });
 
-test('cashback comes off the whole cost, split by price, after the gift card', async ({ request }) => {
-  // $100 + $200, 10% card → $270; $30 cashback by price = $10 / $20 → $80 and $160.
-  const r = await save(request, { store: STORE, gc_pct: 10, cashback: 30,
+test('cashback is a % of each price after the coupon, pre-tax, after the gift card', async ({ request }) => {
+  // $100 + $200, $30 coupon ($15 each), $20 tax, 10% card, 5% cashback:
+  //   pair 1: (100 − 15 + 6.67) × 0.9 − 85 × 5% = 82.50 − 4.25 = 78.25
+  //   pair 2: (200 − 15 + 13.33) × 0.9 − 185 × 5% = 178.50 − 9.25 = 169.25
+  const r = await save(request, { store: STORE, coupon: 30, tax: 20, gc_pct: 10, cashback_pct: 5,
     lines: [{ sku: 'OO-CB-1', size: '9', qty: 1, unit_price: 100 }, { sku: 'OO-CB-2', size: '10', qty: 1, unit_price: 200 }] });
   expect(r.ok(), await r.text()).toBeTruthy();
   const { order } = await get(request, (await r.json()).id);
-  expect(order.cashback).toBe(30);
-  expect(order.lines.map((l) => l.each)).toEqual([80, 160]);
-  expect(order.totals.total).toBe(240);
-  // More cashback than the order cost would make a pair cost less than nothing.
-  expect((await save(request, { store: STORE, cashback: 101, lines: [{ sku: 'OO-CB-3', size: '9', qty: 1, unit_price: 100 }] })).status()).toBe(400);
+  expect(order.cashback_pct).toBe(5);
+  expect(order.lines.map((l) => l.each)).toEqual([78.25, 169.25]);
+  expect(order.totals.cashback).toBe(13.5);
+  expect(order.totals.total).toBe(247.5);
+  // It's a percentage — over 100 is refused, and so is one that takes a pair below $0.
+  const one = [{ sku: 'OO-CB-3', size: '9', qty: 1, unit_price: 100 }];
+  expect((await save(request, { store: STORE, cashback_pct: 101, lines: one })).status()).toBe(400);
+  expect((await save(request, { store: STORE, gc_pct: 90, cashback_pct: 50, lines: one })).status()).toBe(400);
 });
 
 test('QA: bad input is a 400 with a reason, never a 500', async ({ request }) => {

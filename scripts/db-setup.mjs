@@ -1844,6 +1844,19 @@ await sql(`CREATE INDEX IF NOT EXISTS online_order_events_order_idx ON online_or
 // Cashback (2026-10-05): dollars the store / card portal paid back on the order. It
 // comes off the whole order's cost, spread by price like tax and shipping.
 await sql(`ALTER TABLE online_orders ADD COLUMN IF NOT EXISTS cashback NUMERIC(12,2) NOT NULL DEFAULT 0`);
+// Cashback as a PERCENTAGE (2026-10-07): % of each pair's price after the coupon,
+// pre-tax / pre-shipping. `cashback` (dollars) is now legacy: any dollar amount already
+// typed is converted once to the % that gives the same money, then zeroed — so this is
+// safe to re-run (a converted row has cashback = 0 and is skipped).
+await sql(`ALTER TABLE online_orders ADD COLUMN IF NOT EXISTS cashback_pct NUMERIC(6,3) NOT NULL DEFAULT 0`);
+await sql(`
+  UPDATE online_orders o
+     SET cashback_pct = LEAST(100, ROUND(o.cashback * 100 / b.base, 3)), cashback = 0
+    FROM (SELECT l.order_id, SUM(l.unit_price * l.qty) - MAX(oo.coupon) AS base
+            FROM online_order_lines l JOIN online_orders oo ON oo.id = l.order_id
+           WHERE l.cancelled_at IS NULL
+           GROUP BY l.order_id) b
+   WHERE b.order_id = o.id AND o.cashback > 0 AND b.base > 0`);
 await sql(`CREATE INDEX IF NOT EXISTS online_orders_track_idx ON online_orders (upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')))`);
 
 // GS received as men's (2026-10-06): the warehouse converts a Grade School pair to the

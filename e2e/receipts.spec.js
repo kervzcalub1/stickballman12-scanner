@@ -62,7 +62,7 @@ test.afterAll(async () => {
 });
 
 test('ingest: the key is required, a re-sent email is one row, and the buyer is matched by recipient', async ({ request }) => {
-  expect(KEY, 'RECEIPT_INGEST_KEY must be set in .env for this suite').toBeTruthy();
+  expect(KEY, 'RECEIPT_INGEST_KEY is set by playwright.config.js').toBeTruthy();
   expect((await ingest(request, receipt(1), null)).status()).toBe(401);
   expect((await ingest(request, receipt(1), 'wrong')).status()).toBe(401);
   expect((await ingest(request, { ...receipt(1), message_key: '' })).status()).toBe(400);

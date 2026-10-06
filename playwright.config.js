@@ -19,6 +19,9 @@ if (fs.existsSync(envPath)) {
     if (process.env[m[1]] === undefined) process.env[m[1]] = v;
   }
 }
+// The receipt-ingest key (docs/context/receipts.md): CI has no .env, so the suite brings
+// its own. Set here, in the runner's env, so the test server AND the specs read the same one.
+if (!process.env.RECEIPT_INGEST_KEY) process.env.RECEIPT_INGEST_KEY = 'e2e-receipt-ingest-key';
 
 // Fixed port so baseURL is deterministic (strictPort makes Vite fail rather than
 // drift to another port). Override with E2E_PORT if 5189 is taken.
@@ -84,6 +87,7 @@ export default defineConfig({
     // NODE_ENV=production (api/_lib/util.js), and the server logs a line when it is off.
     env: {
       TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', E2E_NO_RATE_LIMIT: '1',
+      RECEIPT_INGEST_KEY: process.env.RECEIPT_INGEST_KEY,
       // Telegram is pointed at a FAKE Bot API on localhost (e2e/buy-cart.spec.js starts it
       // for the tests that read it) with a fake token — so the real bot's token is never
       // used by this server, and nothing can reach the real group whether or not the fake

@@ -22,6 +22,7 @@ const CAST = {
   ph: { username: 'e2e_alerts_ph', name: 'E2E Alerts PH', role: 'ph_team', privileges: [] },
   admin: { username: 'e2e_alerts_admin', name: 'E2E Alerts Admin', role: 'admin', privileges: [] },
   sup: { username: 'e2e_alerts_sup', name: 'E2E Alerts Shipper', role: 'supplier', privileges: [] },
+  buyer: { username: 'e2e_alerts_buyer', name: 'E2E Alerts Buyer', role: 'supplier', privileges: ['request_buying'] },
 };
 
 let pool;
@@ -271,4 +272,23 @@ test('the bell opens the panel, and ?alerts=1 survives a refresh', async ({ page
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Alerts' })).toHaveCount(0);
   await expect(page).not.toHaveURL(/alerts=1/);
+});
+
+test('a buying supplier is offered Connect Telegram on Buying Requests; it goes away once connected', async ({ page, request }) => {
+  const u = people.buyer;
+  await page.addInitScript(([token, user]) => {
+    sessionStorage.setItem('sb_session_token', token);
+    sessionStorage.setItem('sb_user', JSON.stringify(user));
+  }, [tokenFor(u), { uid: u.uid, username: u.username, name: u.name, role: u.role, privileges: u.privileges }]);
+  await page.goto('/buying');
+  const banner = page.getByRole('region', { name: 'Telegram updates' });
+  await expect(banner.getByRole('button', { name: 'Connect Telegram' })).toBeVisible();
+  // Connected through the bot (the same link the button opens) — the live stream hides it.
+  await connect(request, 'buyer', 771020010);
+  await expect(banner).toHaveCount(0);
+  // Telegram refusing a later send brings it back as Reconnect, with no "Not now".
+  await pool.query('UPDATE users SET telegram_broken_at = now() WHERE id = $1', [u.uid]);
+  await page.reload();
+  await expect(banner.getByRole('button', { name: 'Reconnect' })).toBeVisible();
+  await expect(banner.getByRole('button', { name: 'Not now' })).toHaveCount(0);
 });

@@ -554,3 +554,40 @@ NOT EXISTS` + a partial index — **run `db:setup` before deploying**. Guarded b
 `e2e/receiving-manifest-audit.spec.js`; every spec that walks Step 1 now answers the
 question (`.manifest-q` → Yes).
 
+
+## GS received as men's (2026-10-06)
+Some **Grade School** Jordan Retros sell better under the **men's** product, and Alias lets
+them be listed there (the Retro 9 shipment that came in under GS codes). The **warehouse
+converts them as they are received** — owner's call; a separate "list as" layer on top of
+stock was built and rejected as unnecessary.
+- **Cart card → "As men's…"** (`src/components/MensConvert.jsx`; Items AND Review steps, not
+  rescale). Type the men's code → **Look up** (required — the name/image/colorway come with
+  it) → **Receive as …**. The card then shows **→ Men's CODE**; tap it to change or **Keep
+  as GS**. Per size: untick a size Alias won't take as men's and it stays GS.
+- **Offered next time:** `GET /api/items/mens-for?sku=GS` (`lastMensFor`) returns what this
+  GS code was last received as, prefilled ("Last time … was received as men's") — the
+  second box of a shipment is one tap. Never applied on its own.
+- **The cart keeps the GS code** — the PO manifest, online-order cost and manifest matching
+  all match on what the box says. The swap happens only in the commit payload (`asMens`):
+  `sku`/`size` = men's (GS `7Y` → `7`, `gsToMensSize`), name/image/colorway = the men's
+  lookup, `gender = 'Men'`, and **`items.original_sku` / `original_size` = the GS code + size**
+  (`normalizeItems` → `gsOriginal`; only stored when it really changed). Kept for the
+  record — the box on the shelf still says GS.
+- **The UPC stays the GS box's** (it's what the box says). So pricing ignores it for a
+  converted pair and goes by the men's SKU: `enrichGlobalIndicators` at intake and
+  `getItemsForGiRefresh` (Refresh prices) both drop the UPC when `original_sku` is set.
+- **PO reconciliation counts by the box:** `getPoReconciliation` and `getPoReceivedBoxes`
+  read `coalesce(original_sku, sku)` / `coalesce(original_size, size)`, so a pair the
+  manifest listed as GS 7Y is not a "wrong SKU" for having gone in as men's 7.
+- **Rescale counting:** scanning the GS box of a converted pair on a men's request counts
+  it at the men's size it was received as (`resolveAuditScan`, via `findStockByCode`, which
+  now returns `original_sku/size`), instead of "that box is a different shoe".
+- **Where it shows:** Inventory item detail **Box says · GS CODE · size 7Y — received as
+  men's**; the PH grid row a **GS box ×N** chip (`groupPhRows` counts `original_sku`; the
+  tooltip names the box codes — what to look for on the shelf).
+- Not done: already-received GS stock is converted with the existing ✎ SKU / size edits,
+  which don't fill `original_sku` (their history note keeps the old code). Platform Profit,
+  Costs and Shopify sale matching read `items.sku` — i.e. the men's code, which is what's
+  listed.
+- E2E: `e2e/receiving-gs-as-mens.spec.js` (convert + commit, the suggestion + Keep as GS,
+  PO reconciliation stays clean).

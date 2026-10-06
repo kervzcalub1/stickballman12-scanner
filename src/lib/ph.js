@@ -246,6 +246,9 @@ export function groupPhSized(list, isLocked, rescaleIdFor) {
         first_edit_at: null, first_edit_by: null, _hasSubsequent: false, _drift: false,
         last_edit_at: r.last_edit_at, last_edit_by: r.last_edit_by,
         goat_only: true, // "GOAT only" (Alias+II only) — all-units rollup, set just below
+        // GS received as men's: how many of these pairs sit in a GS box (receiving.md) —
+        // the row says so, so whoever pulls one looks for the GS code on the shelf.
+        gsBoxes: 0, _boxCodes: new Set(),
         _flags: { added_to_intel_inv: true, synced_alias: true, synced_stockx: true, synced_shopify: true },
         _counts: zeroCounts(),
         _sizes: new Map(),
@@ -265,6 +268,7 @@ export function groupPhSized(list, isLocked, rescaleIdFor) {
     // Group badge = all units true; the count beside it = how many of them actually are.
     for (const f of FLAG_KEYS) { g._flags[f] = g._flags[f] && !!r[f]; if (r[f]) g._counts[f] += 1; }
     g.goat_only = g.goat_only && !!r.goat_only; // GOAT-only only if every unit is
+    if (r.original_sku) { g.gsBoxes += 1; g._boxCodes.add(`${r.original_sku} ${r.original_size || ''}`.trim()); }
     const sz = r.size || '—';
     let s = g._sizes.get(sz);
     if (!s) {
@@ -292,6 +296,7 @@ export function groupPhSized(list, isLocked, rescaleIdFor) {
   }
   const out = [...map.values()].map((g) => ({
     ...g, ...g._flags, flagCounts: g._counts, priceChanged: g._drift,
+    boxCodes: [...g._boxCodes],
     days: [...g._days].sort(), // ≥2 only on a merged pending row; drives the Date cell
     sizes: [...g._sizes.values()]
       .sort((a, b) => compareSizes(a.size, b.size))

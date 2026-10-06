@@ -941,7 +941,8 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
   const sql = db();
   const queries = items.map((it) => sql`
     INSERT INTO items
-      (vin, batch_id, box_id, name, sku, size, dimensions, upc, image_url, cost, shelf_price, source, status, with_box, goat_only, pre_sell, gender, colorway, notes, created_by)
+      (vin, batch_id, box_id, name, sku, size, dimensions, upc, image_url, cost, shelf_price, source, status, with_box, goat_only, pre_sell, gender, colorway, notes, created_by,
+       original_sku, original_size)
     VALUES
       (coalesce(${it.vin || null},
         'SBM-' || to_char(coalesce(${dateReceived}::date, current_date), 'YYMMDD')
@@ -951,7 +952,8 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
        ${it.upc || null}, ${it.image || null}, ${it.cost ?? null}, ${it.shelfPrice ?? null},
        ${it.source || 'manual'}, ${it.status || 'needs_shelf'}, ${it.withBox !== false}, ${it.goatOnly === true},
        ${it.preSell === true},
-       ${it.gender || null}, ${it.colorway || null}, ${it.notes || null}, ${createdBy || null})
+       ${it.gender || null}, ${it.colorway || null}, ${it.notes || null}, ${createdBy || null},
+       ${it.originalSku || null}, ${it.originalSize || null})
     RETURNING id, vin
   `);
   const results = await sql.transaction(queries);
@@ -1055,7 +1057,8 @@ export async function getItemsForGiRefresh(vins) {
   const list = [...new Set((vins || []).filter(Boolean))];
   if (!list.length) return [];
   return await db()`
-    SELECT i.id, i.upc, i.sku, i.size, i.global_indicator, i.price,
+    -- A GS pair received as men's keeps the GS box UPC; pricing goes by its (men's) SKU.
+    SELECT i.id, CASE WHEN i.original_sku IS NULL THEN i.upc END AS upc, i.sku, i.size, i.global_indicator, i.price,
            i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
@@ -1726,7 +1729,7 @@ export async function findStockByCode(code, limit = 25) {
   if (upc) {
     return await db()`
       SELECT i.vin, i.name, i.sku, i.size, i.upc, i.colorway, i.gender, i.status,
-             i.with_box, i.location_code, i.created_at
+             i.with_box, i.location_code, i.created_at, i.original_sku, i.original_size
         FROM items i
        WHERE regexp_replace(coalesce(i.upc, ''), '\\D', '', 'g') = ${upc}
        ORDER BY i.created_at DESC, i.vin DESC
@@ -1818,6 +1821,7 @@ export async function phListItems(from, to, kind = null) {
              i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.goat_only, i.listed_price,
              i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
              i.pre_sell, b.pre_sell AS from_pre_sell,
+             i.original_sku, i.original_size,  -- GS received as men's (receiving.md)
              (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
              (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
                 ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
@@ -1853,6 +1857,7 @@ export async function phListItems(from, to, kind = null) {
            i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.goat_only, i.listed_price,
            i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
            i.pre_sell, b.pre_sell AS from_pre_sell,
+             i.original_sku, i.original_size,  -- GS received as men's (receiving.md)
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
            (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
               ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
@@ -2175,6 +2180,14 @@ export async function resolveAuditScan({ requestId, code, catalogue = null }) {
     if (cat && !(cat.ambiguous && !matches(cat.sku))) {
       const size = String(cat.scannedSize).trim();
       if (!matches(cat.sku)) {
+        // A GS box whose pair was received as men's (receiving.md): the box says the GS
+        // code, the pair on file is this request's men's code. Count it at the men's size
+        // it was received as.
+        const conv = [...new Set(mine.filter((u) => u.original_sku).map((u) => String(u.size || '').trim()).filter(Boolean))];
+        if (conv.length === 1) {
+          return { kind: 'upc', size: conv[0], upc: raw, source: 'own-stock', name: mine[0].name,
+            note: `GS box (${cat.sku} ${size}) received as men's — counted as ${conv[0]}` };
+        }
         return { error: `That box is ${cat.sku}, size ${size} — this request is for ${reqRow.sku}. Leave it on the shelf.` };
       }
       const differs = ownSizes.filter((s) => sizeNorm(s) !== sizeNorm(size));
@@ -4759,12 +4772,15 @@ export async function getPoReceivedBoxes(poId) {
   // `batch_id` rides along because a box-less unit's parcel is identified by the tracking
   // number on its BATCH — see the loose-unit handling at the end.
   const rows = await sql`
-    SELECT i.box_id, i.batch_id, i.sku, i.size, max(i.name) AS name, count(*)::int AS qty
+    -- A GS pair received as men's is counted as what the box says (original_sku), the
+    -- same code the supplier's manifest uses (receiving.md "GS received as men's").
+    SELECT i.box_id, i.batch_id, coalesce(i.original_sku, i.sku) AS sku, coalesce(i.original_size, i.size) AS size,
+           max(i.name) AS name, count(*)::int AS qty
     FROM items i
     JOIN batches b ON b.id = i.batch_id
     WHERE b.po_id = ${poId}
-    GROUP BY i.box_id, i.batch_id, i.sku, i.size
-    ORDER BY i.sku, i.size
+    GROUP BY i.box_id, i.batch_id, coalesce(i.original_sku, i.sku), coalesce(i.original_size, i.size)
+    ORDER BY 3, 4
   `;
   const byBox = new Map();
   const looseByBatch = new Map();   // batch_id -> units received with no box row
@@ -5077,11 +5093,12 @@ export async function getPoReconciliation(poId) {
   // arrives weeks later — and keying off the first batch alone silently undercounts the
   // later ones, which would read as a shortage that never clears.
   const received = await sql`
-    SELECT i.sku, i.size, count(*)::int AS qty, max(i.name) AS name
+    SELECT coalesce(i.original_sku, i.sku) AS sku, coalesce(i.original_size, i.size) AS size,
+           count(*)::int AS qty, max(i.name) AS name
     FROM items i
     JOIN batches b ON b.id = i.batch_id
     WHERE b.po_id = ${poId}
-    GROUP BY i.sku, i.size`;
+    GROUP BY 1, 2`;
 
   // Group both sides on (shoe, numeric size) rather than on the literal text, so a
   // difference in notation can't read as a missing pair. Aggregating BY that key also
@@ -8119,4 +8136,14 @@ export async function receiveOnlineOrder(order, counts, actor, detail) {
 export async function deleteOnlineOrder(id) {
   const r = await db()`DELETE FROM online_orders WHERE id = ${id} RETURNING id`;
   return r.length > 0;
+}
+
+// GS received as men's (receiving.md): what this GS code was last received as, so the
+// next box of the same shipment offers it instead of making somebody type it again.
+export async function lastMensFor(gsSku) {
+  const r = await db()`
+    SELECT sku, name, image_url FROM items
+     WHERE upper(original_sku) = ${gsSku}
+     ORDER BY created_at DESC, id DESC LIMIT 1`;
+  return r[0] || null;
 }

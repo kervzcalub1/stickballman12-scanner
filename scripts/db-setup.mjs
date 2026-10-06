@@ -1846,6 +1846,13 @@ await sql(`CREATE INDEX IF NOT EXISTS online_order_events_order_idx ON online_or
 await sql(`ALTER TABLE online_orders ADD COLUMN IF NOT EXISTS cashback NUMERIC(12,2) NOT NULL DEFAULT 0`);
 await sql(`CREATE INDEX IF NOT EXISTS online_orders_track_idx ON online_orders (upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')))`);
 
+// GS received as men's (2026-10-06): the warehouse converts a Grade School pair to the
+// men's style code + size at receiving (Alias lists it there). items.sku / size become the
+// men's; original_sku / original_size keep what the box said, for the record and so PO
+// reconciliation still counts it against the GS line of the manifest (receiving.md).
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS original_sku TEXT`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS original_size TEXT`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',

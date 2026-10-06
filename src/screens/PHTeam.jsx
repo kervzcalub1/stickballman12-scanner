@@ -1066,7 +1066,13 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // held is invisible to every PH surface by design, so there is no row to chip.
   // Without this, the remainder of a pre-sell shipment arrives on New Inventory looking
   // like any other arrival, and the reason half the shipment never appears is unfindable.
-  const preSellChip = (g) => (g.wasPreSell ? <PreSellChip was count={g.wasPreSellCount} /> : null);
+  const preSellChip = (g) => (
+    <>
+      {g.wasPreSell ? <PreSellChip was count={g.wasPreSellCount} /> : null}
+      {/* GS received as men's (receiving.md): listed as this SKU, but the box on the shelf says GS. */}
+      {g.gsBoxes ? <span className="mens-chip" title={`Received as men's. The box says ${g.boxCodes.join(', ')} — that's the code on the shelf.`}>GS box ×{g.gsBoxes}</span> : null}
+    </>
+  );
   const goatConfirmModal = goatConfirm ? (
     <Modal
       type="warn"

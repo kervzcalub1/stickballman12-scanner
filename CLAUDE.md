@@ -38,7 +38,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Stack, server, routing, App.jsx component map, conventions | `docs/context/architecture.md` |
 | DB tables/columns, db.js functions, shim gotchas | `docs/context/data-model.md` |
 | Login/signup, roles, sessions, security/throttling | `docs/context/auth-roles.md` |
-| Receiving wizard, VINs, batches, intake | `docs/context/receiving.md` |
+| Receiving wizard, VINs, batches, intake; **GS received as men's** (`items.original_sku/size`) | `docs/context/receiving.md` |
 | Pre-printed 1ID stickers (`SBM-R-…` roll stock, printer-free intake) | `docs/context/vin-stock.md` |
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
 | Payout Calculator: store cost stack → Alias/StockX payout, profit, ROI, buy call, **supplier presets**; **best platform per size** (calculator, PH grid, Platform Profit report, **New Inventory chip + `platform_quotes` price cache**); **PO shelf price → landed cost** | `docs/context/payout-calculator.md` |

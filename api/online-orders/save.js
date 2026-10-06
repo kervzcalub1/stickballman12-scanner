@@ -1,6 +1,6 @@
 // POST /api/online-orders/save
 //   { id?, store, order_number?, tracking_number?, ordered_on?, coupon, tax, shipping,
-//     gc_pct, cashback, note?, lines:[{ sku, name?, size, qty, unit_price }], allowDuplicateTracking? }
+//     gc_pct, cashback_pct, note?, lines:[{ sku, name?, size, qty, unit_price }], allowDuplicateTracking? }
 //   -> { ok, id }   ·   409 { duplicate:{ id, store } } when another order has the tracking #
 // Create or edit an online order. `lines` are the ACTIVE lines — cancelled ones are
 // history and are changed only through line.js. PH records orders (admin auto-allowed).
@@ -35,15 +35,16 @@ export default async function handler(req, res) {
     tracking_number: text(b.tracking_number, 60),
     ordered_on: realDate(b.ordered_on),
     coupon: money(b.coupon), tax: money(b.tax), shipping: money(b.shipping),
-    gc_pct: money(b.gc_pct), cashback: money(b.cashback),
+    gc_pct: money(b.gc_pct), cashback_pct: money(b.cashback_pct),
     note: text(b.note, 1000),
   };
   if (!o.store) return send(res, 400, { ok: false, error: 'Which store was it bought from?' });
   if (b.ordered_on && !o.ordered_on) return send(res, 400, { ok: false, error: 'That order date isn’t a real date.' });
-  for (const k of ['coupon', 'tax', 'shipping', 'gc_pct', 'cashback']) {
-    if (Number.isNaN(o[k])) return send(res, 400, { ok: false, error: `The ${k === 'gc_pct' ? 'gift card discount' : k} has to be a number from 0 to ${MAX_MONEY.toLocaleString('en-US')}.` });
+  for (const k of ['coupon', 'tax', 'shipping', 'gc_pct', 'cashback_pct']) {
+    if (Number.isNaN(o[k])) return send(res, 400, { ok: false, error: `The ${k === 'gc_pct' ? 'gift card discount' : k === 'cashback_pct' ? 'cashback' : k} has to be a number from 0 to ${MAX_MONEY.toLocaleString('en-US')}.` });
   }
   if (o.gc_pct > 100) return send(res, 400, { ok: false, error: 'The gift card discount is a percentage — 100 at most.' });
+  if (o.cashback_pct > 100) return send(res, 400, { ok: false, error: 'The cashback is a percentage — 100 at most.' });
 
   const raw = Array.isArray(b.lines) ? b.lines.slice(0, 200) : [];
   const lines = [];
@@ -68,9 +69,8 @@ export default async function handler(req, res) {
     // A coupon bigger than what the coming pairs cost would make their cost negative (QA).
     const subtotal = lines.reduce((n, l) => n + l.unit_price * l.qty, 0);
     if (o.coupon > subtotal + 0.005) return send(res, 400, { ok: false, error: `The coupon ($${o.coupon.toFixed(2)}) is more than the shoes cost ($${subtotal.toFixed(2)}).` });
-    // Same for cashback: it can't take the order below $0.
-    const beforeCashback = orderCosts({ ...o, cashback: 0 }, lines).total;
-    if (o.cashback > beforeCashback + 0.005) return send(res, 400, { ok: false, error: `The cashback ($${o.cashback.toFixed(2)}) is more than the order cost ($${beforeCashback.toFixed(2)}).` });
+    // Cashback can't take a pair below $0 (a big gift card % plus a big cashback %).
+    if (orderCosts(o, lines).lines.some((l) => l.each != null && l.each < 0)) return send(res, 400, { ok: false, error: `The cashback (${o.cashback_pct}%) on top of the gift card discount would make a pair cost less than $0.` });
     // A form opened before somebody cancelled (or restored) a line would put that line
     // back as active when saved — the active lines are replaced wholesale. The form sends
     // the active line ids it was built from; if they no longer match, it's stale (QA).
@@ -99,8 +99,8 @@ export default async function handler(req, res) {
     const changes = [];
     if (!before.tracking_number && o.tracking_number) changes.push(`tracking ${o.tracking_number} added — shipped`);
     else if (before.tracking_number !== o.tracking_number) changes.push(`tracking ${before.tracking_number || '—'} → ${o.tracking_number || '—'}`);
-    for (const k of ['coupon', 'tax', 'shipping', 'gc_pct', 'cashback']) {
-      if (Number(before[k]) !== o[k]) changes.push(`${k === 'gc_pct' ? 'gift card %' : k} ${Number(before[k])} → ${o[k]}`);
+    for (const k of ['coupon', 'tax', 'shipping', 'gc_pct', 'cashback_pct']) {
+      if (Number(before[k]) !== o[k]) changes.push(`${k === 'gc_pct' ? 'gift card %' : k === 'cashback_pct' ? 'cashback %' : k} ${Number(before[k])} → ${o[k]}`);
     }
     const beforeUnits = (before.lines || []).filter((l) => !l.cancelled_at).reduce((n, l) => n + Number(l.qty), 0);
     const afterUnits = lines.reduce((n, l) => n + l.qty, 0);

@@ -6,9 +6,11 @@
 //   shipping  — split by PRICE, the same way
 //   gift card — a PERCENTAGE off everything paid (the cards were bought at a discount
 //               and the order was paid with them)
-//   cashback  — DOLLARS paid back on the order, off the whole cost; split by PRICE
+//   cashback  — a PERCENTAGE paid back (Rakuten / card portal), on each pair's price
+//               after the coupon, PRE-tax and pre-shipping (what portals pay on; same
+//               base as the Payout Calculator's cashback)
 //   = actual cost each = (price − coupon each + tax share + shipping share) × (1 − gc%)
-//                        − cashback share
+//                        − (price − coupon each) × cashback%
 //
 // Cancelled lines are left out of the split: the pairs that are actually coming carry
 // the order's coupon, tax and shipping. Pure — the screen and the server use the same
@@ -24,7 +26,7 @@ const cents = (v) => Math.round(v * 100) / 100;
 
 export const isCancelled = (line) => !!(line && (line.cancelled_at || line.cancelled));
 
-// `order`: { coupon, tax, shipping, gc_pct, cashback }; `lines`: [{ qty, unit_price, cancelled_at? }]
+// `order`: { coupon, tax, shipping, gc_pct, cashback_pct }; `lines`: [{ qty, unit_price, cancelled_at? }]
 // → { lines: [{ ...line, each, lineTotal, parts: { price, coupon, tax, shipping, gc, cashback } }],
 //     units, subtotal, total, paid }   (cancelled lines come back with each = null)
 export function orderCosts(order, lines) {
@@ -36,7 +38,7 @@ export function orderCosts(order, lines) {
   const tax = num(o.tax);
   const shipping = num(o.shipping);
   const gc = Math.min(100, Math.max(0, num(o.gc_pct)));
-  const cashback = num(o.cashback);
+  const cbPct = Math.min(100, Math.max(0, num(o.cashback_pct)));
   const couponEach = units ? coupon / units : 0;
   // By price. An order of all-$0 lines (a freebie) has no price to weigh by, so the
   // shares fall back to per unit rather than dividing by zero.
@@ -49,8 +51,8 @@ export function orderCosts(order, lines) {
     const s = shipping * share(price);
     const before = price - couponEach + t + s;
     const g = before * (gc / 100);
-    // Cashback lands after the card discount — it comes back on what was actually spent.
-    const cb = cashback * share(price);
+    // Cashback is a % of the pair's price after the coupon — pre-tax, pre-shipping.
+    const cb = Math.max(0, price - couponEach) * (cbPct / 100);
     const net = before - g - cb;
     return {
       ...l,
@@ -62,6 +64,7 @@ export function orderCosts(order, lines) {
     };
   });
   const paid = subtotal - coupon + tax + shipping;
+  const cashback = active.reduce((n, l) => n + Math.max(0, num(l.unit_price) - couponEach) * (cbPct / 100) * num(l.qty), 0);
   return {
     lines: out,
     units,

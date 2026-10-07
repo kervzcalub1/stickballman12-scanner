@@ -97,7 +97,9 @@ export function EbayReprice({ onHome, onSignOut }) {
 
   const resolved = useMemo(() => (revise?.ok && inv?.ok ? resolveStyles(revise, inv) : null), [revise, inv]);
   const effective = useMemo(() => (resolved ? effectiveStyles(resolved.groups, decisions) : null), [resolved, decisions]);
-  const review = resolved ? resolved.groups.filter((g) => g.issue || g.unverified) : [];
+  // Blocking rows first, so the ones holding up step 3 are at the top of the table.
+  const review = resolved ? resolved.groups.filter((g) => g.issue || g.unverified)
+    .sort((a, b) => (b.issue ? 1 : 0) - (a.issue ? 1 : 0)) : [];
   const jobs = useMemo(() => (effective && !effective.pending.length ? jobsFor(revise, effective.styleAt) : []), [effective, revise]);
   const cached = jobs.filter((j) => cache[cacheKey(j.sku, j.size)]).length;
   const fetchDone = jobs.length > 0 && cached === jobs.length;
@@ -108,6 +110,11 @@ export function EbayReprice({ onHome, onSignOut }) {
   }, [jobs, cache]);
   const pctH = parseMarkup(markup);
 
+  function skipAllPending() {
+    setResult(null);
+    setDecisions((cur) => ({ ...cur, ...Object.fromEntries(effective.pending.map((g) => [g.id, { skip: true }])) }));
+  }
+  const firstPendingRef = useRef(null);
   function decide(id, d) { setResult(null); setDecisions((cur) => { const n = { ...cur }; if (d) n[id] = d; else delete n[id]; return n; }); }
 
   // The network stage. One batch at a time (the server runs 4 lookups of it at once);
@@ -213,7 +220,8 @@ export function EbayReprice({ onHome, onSignOut }) {
           {review.length > 0 ? (
             <>
               <p className="muted sm mt">{effective.pending.length
-                ? <><b>{effective.pending.length} listing{effective.pending.length === 1 ? '' : 's'} need{effective.pending.length === 1 ? 's' : ''} your call</b> before prices are fetched — type the Style ID, or skip it (its prices stay as they are).</>
+                ? <><b>{effective.pending.length} listing{effective.pending.length === 1 ? '' : 's'} need{effective.pending.length === 1 ? 's' : ''} your call</b> before prices are fetched — type the Style ID, or skip it (its prices stay as they are).{' '}
+                  <button type="button" className="btn xs" onClick={skipAllPending}>Skip all {effective.pending.length} remaining</button></>
                 : 'Every listing that needed a decision has one.'}</p>
               <div className="ap-tablewrap">
                 <table className="table er-review">
@@ -227,7 +235,8 @@ export function EbayReprice({ onHome, onSignOut }) {
                             : `From the title, not in the report: ${g.unverified}`;
                       const options = g.issue === 'conflict' ? g.knownStyles : g.issue === 'sku_conflict' ? [...new Set(g.skuConflicts.flatMap(([, st]) => st))] : [];
                       return (
-                        <tr key={g.id} className={g.issue && !d ? 'er-needs' : ''}>
+                        <tr key={g.id} className={g.issue && !d ? 'er-needs' : ''}
+                          ref={g.issue && !d && g.id === effective.pending[0]?.id ? firstPendingRef : undefined}>
                           <td><div className="er-title">{g.title || '(no title)'}</div><div className="muted xs">{g.item ? `#${g.item} · ` : ''}{g.rows.length} size{g.rows.length === 1 ? '' : 's'}</div></td>
                           <td className="xs">{why}{!g.issue && <div className="muted">Not blocking — check it looks right.</div>}</td>
                           <td>
@@ -244,6 +253,23 @@ export function EbayReprice({ onHome, onSignOut }) {
               </div>
             </>
           ) : <p className="er-ok sm mt">✓ Every listing has a Style ID.</p>}
+        </div>
+      )}
+
+      {/* Step 3 used to just not exist until step 2 was settled, which read as "the
+          Fetch prices button is missing" (user, 2026-10-07). Say what it's waiting on. */}
+      {effective && !canPrice && (
+        <div className="card er-step er-waiting">
+          <h3 className="er-step-title"><span className="er-num">3</span> Market prices</h3>
+          {effective.pending.length ? (
+            <>
+              <p className="sm">Waiting on <b>{effective.pending.length} listing{effective.pending.length === 1 ? '' : 's'}</b> in step 2 — give each a Style ID or tick Skip, and <b>Fetch prices</b> appears here.</p>
+              <div className="er-actions">
+                <button type="button" className="btn" onClick={() => firstPendingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>Show me</button>
+                <button type="button" className="btn ghost" onClick={skipAllPending}>Skip all {effective.pending.length} (leave their prices as they are)</button>
+              </div>
+            </>
+          ) : <p className="sm">Nothing to price — no size row in the eBay file has both a Style ID and a Start price.</p>}
         </div>
       )}
 

@@ -137,7 +137,11 @@ test.describe('eBay Reprice page', () => {
     // The blank listing blocks pricing until someone decides.
     await expect(page.getByText('1 listing needs your call')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Fetch prices' })).toHaveCount(0);
-    await page.getByRole('checkbox', { name: 'Skip Mystery Shoe (GS)' }).check();
+    // …and step 3 says so, instead of just not being there.
+    await expect(page.locator('.er-waiting')).toContainText('Waiting on 1 listing in step 2');
+    await page.getByRole('button', { name: 'Skip all 1 remaining', exact: true }).click();
+    await expect(page.getByRole('checkbox', { name: 'Skip Mystery Shoe (GS)' })).toBeChecked();
+    await expect(page.locator('.er-waiting')).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Fetch prices' }).click();
     await expect(page.getByText('4 of 4 priced')).toBeVisible({ timeout: 20_000 });

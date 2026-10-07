@@ -209,6 +209,12 @@ const PATHS = {
     <circle cx="7.5" cy="8.5" r="1.3" />
     <path d="M11 15l3-3 3 3M14 12v6" />
   </>),
+  // eBay Reprice — a price tag with a downward arrow (it only ever cuts)
+  'ebay-reprice': (<>
+    <path d="M3 12V4h8l10 10-8 8L3 12z" />
+    <circle cx="7.5" cy="8.5" r="1.3" />
+    <path d="M14 10v6M11.5 13.5L14 16l2.5-2.5" />
+  </>),
   // Platform Profit — a rising trend line
   profit: (<>
     <path d="M3 17l6-6 4 4 8-8" />

@@ -33,6 +33,7 @@ import { PlatformProfit } from './PlatformProfit.jsx';
 import { OnlineOrders } from './OnlineOrders.jsx';
 import { Receipts } from './Receipts.jsx';
 import { PresellListings } from './PresellListings.jsx';
+import { EbayReprice } from './EbayReprice.jsx';
 import { BuyCarts } from './BuyCarts.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
@@ -82,6 +83,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'online') return <OnlineOrders user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'ebayreprice') return <EbayReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'presellListings') return <PresellListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'receipts') return <Receipts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} cartHref={(id) => `/ph/gift-card-buying?request=${id}`} />;
     // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and

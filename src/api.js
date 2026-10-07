@@ -288,6 +288,8 @@ export const api = {
   receiveOnlineOrder: (id, counts) => post('/api/online-orders/receive', { id, counts }),
   deleteOnlineOrder: (id) => post('/api/online-orders/delete', { id }),
   presellListingsCreate: (body) => post('/api/presell-listings/create', body),
+  // eBay reprice: one batch (≤ 25) of style code + size → market price (api/ebay-reprice/prices.js).
+  ebayRepricePrices: (jobs) => post('/api/ebay-reprice/prices', { jobs }),
   presellListingsList: (params = {}) => get(`/api/presell-listings/list?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString()}`),
   presellListingsAction: (body) => post('/api/presell-listings/action', body),
   presellListingsPrices: (body) => post('/api/presell-listings/prices', body),

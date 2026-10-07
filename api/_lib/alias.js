@@ -338,3 +338,48 @@ async function fetchAliasOrders(pageSize) {
   try { data = await resp.json(); } catch { /* empty */ }
   return { ok: resp.ok, status: resp.status, data };
 }
+
+// ---- Strict variants for bulk repricing (api/ebay-reprice/prices.js) ----
+// aliasCatalogBySku / aliasPriceInsights return null on ANY failure, which is right for
+// best-effort callers but makes "Alias was unhappy" indistinguishable from "no such
+// shoe" — /api/get-price turns the former into a 404, and the eBay reprice run then
+// recorded real shoes as not_listed. These two THROW on an upstream failure (a
+// retryable `upstream` error carrying the HTTP status) and return null ONLY for an
+// honest answer: no catalogue match, or no availability block.
+export class AliasUpstreamError extends Error {
+  constructor(status) { super(`Alias returned ${status}`); this.name = 'AliasUpstreamError'; this.status = status; }
+}
+
+// { catalogId, name, sku } for a style code, null when Alias carries no matching code.
+export async function aliasCatalogLookupStrict(query) {
+  const apiKey = process.env.ALIAS_API_KEY;
+  const q = primarySku(query);
+  if (!apiKey || !q) return null;
+  const r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query: q, limit: String(ALIAS_MATCH_WINDOW) }, timeoutMs: ALIAS_CATALOG_TIMEOUT_MS });
+  if (!r.ok) throw new AliasUpstreamError(r.status);
+  const items = Array.isArray(r.data?.catalog_items) ? r.data.catalog_items : [];
+  const c = items.find((it) => sameSku(q, it?.sku));
+  return c?.catalog_id ? { catalogId: c.catalog_id, name: c.name || c.nickname || null, sku: c.sku || null } : null;
+}
+
+// The four availability prices in CENTS (null = none / 0) for one size and basis.
+export async function aliasAvailabilityCentsStrict({ catalogId, size, consigned }) {
+  const apiKey = process.env.ALIAS_API_KEY;
+  const sizeNum = size == null ? '' : (String(size).match(/[\d.]+/)?.[0] ?? '');
+  if (!apiKey || !catalogId || sizeNum === '') return null;
+  const r = await aliasApiGet('/api/v1/pricing_insights/availability', {
+    token: apiKey,
+    query: {
+      catalog_id: String(catalogId), size: sizeNum,
+      product_condition: DEFAULT_PRODUCT_CONDITION, packaging_condition: DEFAULT_PACKAGING_CONDITION,
+      region_id: GI_REGION_ID, consigned: consigned ? true : false,
+    },
+  });
+  if (!r.ok) throw new AliasUpstreamError(r.status);
+  const a = r.data?.availability || {};
+  const cents = (c) => { const n = c == null || c === '' ? NaN : Math.round(Number(c)); return Number.isFinite(n) && n > 0 ? n : null; };
+  return {
+    globalIndicator: cents(a.global_indicator_price_cents), lowestListing: cents(a.lowest_listing_price_cents),
+    highestOffer: cents(a.highest_offer_price_cents), lastSold: cents(a.last_sold_listing_price_cents),
+  };
+}

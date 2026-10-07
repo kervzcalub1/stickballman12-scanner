@@ -5649,3 +5649,47 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
   span.ap-pill.none { flex: 1; justify-content: center; }
   .ap-pairs .ap-shoe { min-width: 0; }
 }
+
+/* eBay Reprice (PH) — src/screens/EbayReprice.jsx */
+.er-step-title { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 16px; }
+.er-num {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%;
+  font-size: 13px; font-weight: 800; color: var(--primary); background: rgba(79,124,255,0.14); border: 1px solid rgba(79,124,255,0.35);
+}
+.er-files { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 10px; }
+.er-file { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 12px; border: 1px dashed var(--border); background: var(--panel-2); }
+.er-file.ok { border-style: solid; border-color: rgba(95,197,138,0.5); }
+.er-file.bad { border-style: solid; border-color: rgba(236,143,143,0.6); }
+.er-file-label { font-weight: 700; font-size: 14px; }
+.er-file input[type="file"] { font-size: 13px; color: var(--muted); }
+.er-file-name { font-size: 12px; font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+.er-file-ok, .er-ok { color: #5fc58a; }
+.er-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.er-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); }
+.er-stat b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.er-stat span { font-size: 12px; color: var(--muted); }
+.er-stat.ok b { color: #5fc58a; }
+.er-stat.warn b { color: #e0b05f; }
+.er-stat.bad b { color: #ec8f8f; }
+.er-review td { vertical-align: top; }
+.er-review tr.er-needs td { background: rgba(224,176,95,0.06); }
+.er-title { font-weight: 600; max-width: 380px; }
+.er-style-input { width: 170px; }
+.er-opts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.er-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.er-controls { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; margin-top: 8px; }
+.er-markup { display: flex; flex-direction: column; gap: 4px; }
+.er-markup-field { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+.er-markup-field input { width: 80px; text-align: right; font-size: 16px; font-weight: 700; }
+.er-dry { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.er-result { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.er-result-head { font-size: 14px; }
+.er-verify { padding: 10px 14px; border-radius: 10px; font-size: 13px; }
+.er-verify ul { margin: 6px 0 0; padding-left: 4px; list-style: none; }
+.er-verify.pass { border: 1px solid rgba(95,197,138,0.5); background: rgba(95,197,138,0.1); color: #5fc58a; }
+.er-verify.fail { border: 1px solid rgba(236,143,143,0.6); background: rgba(236,143,143,0.12); color: #ec8f8f; }
+.er-verify li { color: var(--text); }
+@media (max-width: 600px) {
+  .er-actions .btn { width: 100%; justify-content: center; }
+  .er-style-input { width: 100%; }
+}

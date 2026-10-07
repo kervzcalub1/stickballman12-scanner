@@ -5592,7 +5592,7 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 .ph-home .home-tools .home-card { align-items: center; gap: 11px; padding: 10px 12px 10px 15px; }
 .ph-home .home-tools .home-card-icon { width: 32px; height: 32px; padding: 7px; border-radius: 9px; }
 .ph-home .home-tools .home-card-title { font-size: 14.5px; line-height: 1.25; }
-.ph-home .home-tools .home-card-sub { -webkit-line-clamp: 1; font-size: 12px; }
+.ph-home .home-tools .home-card-sub { -webkit-line-clamp: 2; font-size: 12px; line-height: 1.35; }
 .ph-home .home-tools .card-badges { margin-top: 4px; gap: 4px; }
 .ph-home .home-tools .card-badge { font-size: 10.5px; padding: 1px 7px; }
 .ph-home .home-section { margin-bottom: 16px; }

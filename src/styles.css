@@ -5539,3 +5539,104 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 .ap-chip.sold { color: #c79bff; border-color: rgba(199,155,255,0.45); background: rgba(199,155,255,0.1); }
 .ap-chip.bad { color: #e08f8f; border-color: rgba(224,143,143,0.45); background: rgba(224,143,143,0.1); }
 @media (max-width: 640px) { .ap-plat .ap-price { margin-left: 0; } }
+
+/* PH "Pages" menu in the top bar (common.jsx PagesMenu): jump between PH pages without
+   going back through Home. A popover under the button; full-width sheet on a phone. */
+.pages-menu { position: relative; }
+.pages-menu-btn .icon, .pages-menu-btn svg { width: 15px; height: 15px; }
+.pages-menu-btn { display: inline-flex; align-items: center; gap: 6px; }
+.pages-menu-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60;
+  width: 300px; max-height: min(70vh, 620px); overflow-y: auto; padding: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+}
+.pages-menu-group + .pages-menu-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
+.pages-menu-head {
+  display: flex; align-items: center; gap: 7px; padding: 6px 8px 4px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted);
+}
+.pages-menu-head::before { content: ''; width: 7px; height: 7px; border-radius: 2px; background: var(--accent); }
+.pages-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 6px 8px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 14px; text-align: left; cursor: pointer;
+}
+.pages-menu-item:hover { background: var(--panel-2); }
+.pages-menu-item.on { background: var(--accent-tint); color: var(--accent); font-weight: 600; }
+.pages-menu-icon { width: 18px; height: 18px; flex: none; color: var(--accent); }
+.pages-menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pages-menu-count {
+  font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; font-variant-numeric: tabular-nums;
+  color: #e9c46a; background: rgba(233, 196, 106, 0.16); border: 1px solid rgba(233, 196, 106, 0.4);
+}
+@media (max-width: 600px) {
+  .pages-menu { position: static; }
+  /* A bottom sheet on a phone: the wrapped top bar puts the button at a height that
+     varies by page, and the thumb is at the bottom anyway. */
+  .pages-menu-pop { position: fixed; left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-height: 75vh; padding: 8px; }
+  .pages-menu-item { min-height: 44px; }
+}
+
+/* A DateRangeBar `right` slot holding a seg + a button (Rescale Requests) ran off a
+   phone screen — "All" and "+ New request" were unreachable at 390px. Let it wrap. */
+@media (max-width: 600px) {
+  .cal-bar .ph-edit-actions { display: flex; flex-wrap: wrap; width: 100%; }
+  .cal-bar .ph-edit-actions .seg { flex-wrap: wrap; gap: 6px; }
+  .cal-bar .ph-edit-actions .seg-btn { flex: 0 0 auto; padding: 8px 12px; }
+}
+
+/* PH home (PHTeam.jsx): five-card sections fit one row at the 1040px app width. */
+.ph-home .home-tools { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+@media (max-width: 560px) { .ph-home .home-tools { grid-template-columns: 1fr; } }
+
+/* Pre-sell Listings → Listings: one row per pair, StockX + Alias as ON/OFF pills that
+   open their own menu, and a "More…" menu for the row (PresellListings.jsx). */
+.ap-pairs td { vertical-align: middle; }
+.ap-pairs .ap-size, .ap-pairs .ap-date { text-align: center; white-space: nowrap; }
+.ap-pairs th:nth-child(2), .ap-pairs th:nth-child(4) { text-align: center; }
+.ap-pills { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.ap-pill-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.ap-pill-price { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ap-drop {
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-width: 128px; min-height: 30px; padding: 4px 10px 4px 12px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+.ap-drop:disabled { opacity: 0.55; cursor: default; }
+.ap-drop-caret { font-size: 10px; opacity: 0.8; }
+.ap-pill.on      { color: #5fc58a; border-color: rgba(95,197,138,0.5);  background: rgba(95,197,138,0.14); }
+.ap-pill.off     { color: #ec8f8f; border-color: rgba(236,143,143,0.5); background: rgba(236,143,143,0.14); }
+.ap-pill.pending { color: #6fa8ff; border-color: rgba(111,168,255,0.5); background: rgba(111,168,255,0.12); }
+.ap-pill.sold    { color: #c79bff; border-color: rgba(199,155,255,0.5); background: rgba(199,155,255,0.12); }
+.ap-pill.none    { color: var(--muted); border-style: dashed; background: transparent; }
+span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px; min-height: 30px; padding: 4px 12px; border-radius: 999px; border: 1px dashed var(--border); font-size: 13px; }
+.ap-more { min-width: 104px; background: #2a2f3a; border-color: #3a4150; text-transform: uppercase; letter-spacing: 0.4px; font-size: 12px; }
+.ap-menu {
+  position: fixed; z-index: 1000; padding: 5px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--border); box-shadow: 0 14px 36px rgba(0,0,0,0.45);
+}
+.ap-menu-head { padding: 6px 9px 7px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); margin-bottom: 4px; overflow-wrap: anywhere; }
+.ap-menu-item {
+  display: block; width: 100%; min-height: 36px; padding: 7px 9px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text); font-size: 14px; text-align: left; cursor: pointer;
+}
+.ap-menu-item:hover { background: var(--panel-2); }
+.ap-menu-item.danger { color: #ec8f8f; }
+/* Phone: each pair is a card — shoe + size on top, the two pills, then date + More. */
+@media (max-width: 600px) {
+  .ap-pairs thead { display: none; }
+  .ap-pairs, .ap-pairs tbody { display: block; width: 100%; }
+  .ap-pairs tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .ap-pairs tr:last-child { border-bottom: 0; }
+  .ap-pairs td { display: block; padding: 0; border: 0; }
+  .ap-pairs td:nth-child(3) { grid-column: 1 / -1; }
+  .ap-pairs .ap-size { font-weight: 700; }
+  .ap-pairs .ap-size::before { content: 'Size '; font-weight: 400; color: var(--muted); }
+  .ap-pairs .ap-date { text-align: left; display: flex; gap: 6px; align-items: baseline; }
+  .ap-pills { flex-wrap: nowrap; }
+  .ap-pill-wrap { flex: 1; align-items: stretch; text-align: center; }
+  .ap-pill-wrap .ap-drop, span.ap-pill.none { min-width: 0; width: 100%; min-height: 38px; }
+  span.ap-pill.none { flex: 1; justify-content: center; }
+  .ap-pairs .ap-shoe { min-width: 0; }
+}

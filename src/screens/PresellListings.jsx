@@ -6,14 +6,15 @@
 // Pre-sell keeps its OWN stock: one row per SKU + size with how many pairs we have; each
 // pair can be listed once per platform, every sale deducts, and once a size is sold out the
 // listings left on the other platform come down by themselves (presell-worker.js).
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import { TopBar, Modal, CopyText, ShoeThumb } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { isUpcCode } from '../lib/codes.js';
-import { PH_DATETIME } from '../lib/format.js';
+import { PH_DATE, PH_DATETIME } from '../lib/format.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -458,6 +459,28 @@ function ListingsTab({ onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(`${row.sku} ${row.size} (${PLAT[row.platform]}): ${err.message}`); }
     finally { setBusyId(null); }
   }
+  // A row-level action ("Switch both off", "Delete both") — one listing at a time, so a
+  // failure on one platform is reported without stopping the other.
+  async function actMany(list, action) {
+    for (const l of list) await act(l, action);
+  }
+  // One row per PAIR, the way the team's sheet reads: a stock row's StockX and Alias
+  // listings matched up oldest-first (pair 1 = the first listing on each platform), so
+  // a size with 2 pairs is 2 rows, each with its own StockX and Alias pill.
+  const pairs = useMemo(() => {
+    const groups = new Map();
+    for (const r of [...(rows || [])].reverse()) {
+      const g = groups.get(r.stock_id) || { stock_id: r.stock_id, sku: r.sku, name: r.name, image: r.image, size: r.size, alias: [], stockx: [], latest: r.created_at };
+      g[r.platform]?.push(r);
+      g.latest = r.created_at;
+      groups.set(r.stock_id, g);
+    }
+    return [...groups.values()]
+      .sort((a, b) => new Date(b.latest) - new Date(a.latest))
+      .flatMap((g) => Array.from({ length: Math.max(g.alias.length, g.stockx.length) }, (_, i) => ({
+        key: `${g.stock_id}-${i}`, sku: g.sku, name: g.name, image: g.image, size: g.size, alias: g.alias[i] || null, stockx: g.stockx[i] || null,
+      })));
+  }, [rows]);
   return (
     <>
       <div className="card">
@@ -469,33 +492,41 @@ function ListingsTab({ onSignOut }) {
       </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">
-        {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">{q ? `Nothing matches “${q}”.` : 'Nothing here.'}</p> : (
+        {rows == null ? <p className="muted">Loading…</p> : !pairs.length ? <p className="muted">{q ? `Nothing matches “${q}”.` : 'Nothing here.'}</p> : (
           <div className="ap-tablewrap">
-            <table className="table">
-              <thead><tr><th>Shoe</th><th>Size</th><th>Platform</th><th>Price</th><th>Status</th><th>Listing id</th><th>Listed</th><th /></tr></thead>
+            <table className="table ap-pairs">
+              <thead><tr><th>Product details</th><th>Size</th><th>Platform</th><th>Listing date</th><th>Options</th></tr></thead>
               <tbody>
-                {rows.map((r) => {
-                  const [label, tone] = STATUS[r.status] || [r.status, 'muted'];
-                  const busy = busyId === r.id;
-                  const open = ['live', 'off'].includes(r.status);
+                {pairs.map((p) => {
+                  const open = [p.stockx, p.alias].filter((l) => l && OPEN.includes(l.status));
+                  const busy = [p.stockx, p.alias].some((l) => l && busyId === l.id);
+                  const errs = [p.stockx, p.alias].filter((l) => l?.last_error);
+                  const first = [p.stockx, p.alias].filter(Boolean).sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0];
                   return (
-                    <tr key={r.id}>
-                      <td><div className="ap-shoe"><ShoeThumb url={r.image} size={36} /><div><b>{r.sku}</b><div className="muted xs">{r.name}</div></div></div></td>
-                      <td>{r.size}</td>
-                      <td>{PLAT[r.platform]}</td>
-                      <td>{money(r.price_cents)}</td>
-                      <td><span className={`ap-chip ${tone}`}>{label}</span>{r.last_error && <div className="error xs" title={r.last_error}>{r.last_error}</div>}</td>
-                      <td><CopyText text={r.external_id || ''} className="ap-mono">{r.external_id || '—'}</CopyText></td>
-                      <td className="muted xs">{when(r.created_at)}<div>{r.created_by}</div></td>
-                      <td className="ap-actions">
-                        {open && (
-                          <>
-                            <button type="button" className="btn sm ghost" disabled={busy} onClick={() => act(r, r.status === 'live' ? 'deactivate' : 'activate')}>{r.status === 'live' ? 'Switch off' : 'Go live'}</button>
-                            <button type="button" className="btn sm ghost" disabled={busy} onClick={() => setEditing(r)}>Edit</button>
-                          </>
-                        )}
-                        {r.external_id && <button type="button" className="btn sm ghost" disabled={busy} onClick={() => act(r, 'refresh')} title={`Re-read this listing from ${PLAT[r.platform]}`}>↻</button>}
-                        {open && <button type="button" className="btn sm ghost danger" disabled={busy} onClick={() => setDeleting(r)}>Delete</button>}
+                    <tr key={p.key}>
+                      <td>
+                        <div className="ap-shoe"><ShoeThumb url={p.image} size={36} /><div><b>{p.sku}</b><div className="muted xs">{p.name}</div></div></div>
+                        {errs.map((l) => <div key={l.id} className="error xs" title={l.last_error}>{PLAT[l.platform]}: {l.last_error}</div>)}
+                      </td>
+                      <td className="ap-size">{p.size}</td>
+                      <td>
+                        <div className="ap-pills">
+                          {['stockx', 'alias'].filter((pl) => !platform || pl === platform).map((pl) => (
+                            <PlatformPill key={pl} platform={pl} listing={p[pl]} busy={busy}
+                              onAct={act} onEdit={setEditing} onDelete={(l) => setDeleting([l])} />
+                          ))}
+                        </div>
+                      </td>
+                      <td className="ap-date"><b>{first ? PH_DATE.format(new Date(first.created_at)) : '—'}</b><div className="muted xs">{first?.created_by || ''}</div></td>
+                      <td>
+                        <DropMenu label="More…" className="ap-more" disabled={busy}
+                          head={first ? `Listed ${when(first.created_at)}${first.created_by ? ` by ${first.created_by}` : ''}` : null}
+                          items={[
+                            { label: 'Switch both on', hidden: !open.some((l) => l.status === 'off'), onClick: () => actMany(open.filter((l) => l.status === 'off'), 'activate') },
+                            { label: 'Switch both off', hidden: !open.some((l) => l.status === 'live'), onClick: () => actMany(open.filter((l) => l.status === 'live'), 'deactivate') },
+                            { label: 'Re-read from the marketplaces', hidden: ![p.stockx, p.alias].some((l) => l?.external_id), onClick: () => actMany([p.stockx, p.alias].filter((l) => l?.external_id), 'refresh') },
+                            { label: open.length > 1 ? 'Delete both' : 'Delete listing', danger: true, hidden: !open.length, onClick: () => setDeleting(open) },
+                          ]} />
                       </td>
                     </tr>
                   );
@@ -507,12 +538,84 @@ function ListingsTab({ onSignOut }) {
       </div>
       {editing && <EditListing row={editing} onSignOut={onSignOut} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {deleting && (
-        <Modal type="warn" title={`Delete ${deleting.sku} size ${deleting.size} from ${PLAT[deleting.platform]}?`}
-          message="The listing is removed from the marketplace. The pair stays in pre-sell stock — list it again from the Stock tab." onClose={() => setDeleting(null)}>
+        <Modal type="warn" title={`Delete ${deleting[0].sku} size ${deleting[0].size} from ${deleting.map((l) => PLAT[l.platform]).join(' and ')}?`}
+          message={`${deleting.length > 1 ? 'Both listings are' : 'The listing is'} removed from the marketplace. The pair stays in pre-sell stock — list it again from the Stock tab.`} onClose={() => setDeleting(null)}>
           <button type="button" className="btn ghost" onClick={() => setDeleting(null)}>Cancel</button>
-          <button type="button" className="btn danger" onClick={() => { const r = deleting; setDeleting(null); act(r, 'delete'); }}>Delete from {PLAT[deleting.platform]}</button>
+          <button type="button" className="btn danger" onClick={() => { const ls = deleting; setDeleting(null); actMany(ls, 'delete'); }}>Delete from {deleting.map((l) => PLAT[l.platform]).join(' + ')}</button>
         </Modal>
       )}
+    </>
+  );
+}
+
+const OPEN = ['live', 'off'];
+// What each listing status reads as on its pill — the sheet's "StockX (ON)" / "Alias (OFF)".
+const PILL = { live: ['ON', 'on'], off: ['OFF', 'off'], pending: ['PENDING', 'pending'], failed: ['FAILED', 'off'], sold: ['SOLD', 'sold'], deleted: ['DELETED', 'none'] };
+
+// One platform's listing for a pair: a coloured pill that opens that listing's actions.
+function PlatformPill({ platform, listing: l, busy, onAct, onEdit, onDelete }) {
+  if (!l) return <span className="ap-pill none" title={`Not listed on ${PLAT[platform]} — list it from the Stock tab`}>{PLAT[platform]} (—)</span>;
+  const [word, tone] = PILL[l.status] || [String(l.status).toUpperCase(), 'none'];
+  const open = OPEN.includes(l.status);
+  return (
+    <div className="ap-pill-wrap">
+      <DropMenu label={`${PLAT[platform]} (${word})`} className={`ap-pill ${tone}`} disabled={busy}
+        title={`${PLAT[platform]} · ${STATUS[l.status]?.[0] || l.status} · ${money(l.price_cents)}`}
+        head={l.external_id ? `${PLAT[platform]} listing ${l.external_id}` : null}
+        items={[
+          { label: l.status === 'live' ? 'Switch off' : 'Go live', hidden: !open, onClick: () => onAct(l, l.status === 'live' ? 'deactivate' : 'activate') },
+          { label: platform === 'alias' ? 'Edit price / size…' : 'Edit price…', hidden: !open, onClick: () => onEdit(l) },
+          { label: `Re-read from ${PLAT[platform]}`, hidden: !l.external_id, onClick: () => onAct(l, 'refresh') },
+          { label: 'Copy listing id', hidden: !l.external_id, onClick: () => navigator.clipboard?.writeText(l.external_id).catch(() => {}) },
+          { label: `Delete from ${PLAT[platform]}`, danger: true, hidden: !open, onClick: () => onDelete(l) },
+        ]} />
+      <span className="ap-pill-price">{money(l.price_cents)}</span>
+    </div>
+  );
+}
+
+// A button that opens a small menu. Portalled + fixed so the table's horizontal scroll
+// box can't clip it; closes on outside tap, Escape, scroll or resize.
+function DropMenu({ label, className = '', items, head, disabled, title }) {
+  const [pos, setPos] = useState(null);
+  const btn = useRef(null);
+  const pop = useRef(null);
+  const shown = items.filter((i) => !i.hidden);
+  useEffect(() => {
+    if (!pos) return undefined;
+    const close = () => setPos(null);
+    const onDown = (e) => { if (!pop.current?.contains(e.target) && !btn.current?.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close);
+    };
+  }, [pos]);
+  function toggle() {
+    if (pos) return setPos(null);
+    const r = btn.current.getBoundingClientRect();
+    const w = 230;
+    const below = window.innerHeight - r.bottom > 220;
+    setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - w - 8)), ...(below ? { top: r.bottom + 4 } : { bottom: window.innerHeight - r.top + 4 }), width: w });
+  }
+  return (
+    <>
+      <button type="button" ref={btn} className={`ap-drop ${className}`} disabled={disabled || !shown.length} title={title}
+        aria-haspopup="menu" aria-expanded={!!pos} onClick={toggle}>
+        <span>{label}</span><span className="ap-drop-caret" aria-hidden="true">▾</span>
+      </button>
+      {pos && createPortal(
+        <div className="ap-menu" role="menu" ref={pop} style={pos}>
+          {head && <div className="ap-menu-head">{head}</div>}
+          {shown.map((i) => (
+            <button key={i.label} type="button" role="menuitem" className={`ap-menu-item${i.danger ? ' danger' : ''}`}
+              onClick={() => { setPos(null); i.onClick(); }}>{i.label}</button>
+          ))}
+        </div>, document.body)}
     </>
   );
 }

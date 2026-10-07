@@ -190,6 +190,41 @@ const PATHS = {
     <path d="M18 3v4a5 5 0 0 1-5 5" />
     <path d="M15 18l3 3 3-3" />
   </>),
+  // These five used to fall back to the Inventory magnifier or borrow the bar chart, so
+  // Receipts, Pre-sell Listings and Price Inquiry wore one glyph on the PH home.
+  // Receipts — a till receipt with a torn bottom edge
+  receipts: (<>
+    <path d="M6 3h12v18l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5L6 21V3z" />
+    <path d="M9 8h6M9 12h6M9 16h3" />
+  </>),
+  // Online Orders — a browser window with a cart
+  'online-orders': (<>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M3 8h18" />
+    <path d="M8 12h1.5l1.2 4h4.6l1-3H10.2" />
+  </>),
+  // Pre-sell Listings — a tag going up (listed out to the stores)
+  'presell-listings': (<>
+    <path d="M3 12V4h8l10 10-8 8L3 12z" />
+    <circle cx="7.5" cy="8.5" r="1.3" />
+    <path d="M11 15l3-3 3 3M14 12v6" />
+  </>),
+  // Platform Profit — a rising trend line
+  profit: (<>
+    <path d="M3 17l6-6 4 4 8-8" />
+    <path d="M15 7h6v6" />
+  </>),
+  // Price Inquiry — a tag under a magnifier
+  inquiry: (<>
+    <circle cx="10.5" cy="10.5" r="6.5" />
+    <path d="M15.5 15.5L21 21" />
+    <path d="M10.5 7.5v6M8.5 9.2c0-.8.9-1.2 2-1.2s2 .5 2 1.2c0 1.6-4 .9-4 2.6 0 .7.9 1.2 2 1.2s2-.4 2-1.2" />
+  </>),
+  // New Batch (Purchase Order) — a document with a plus
+  'po-new': (<>
+    <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z" />
+    <path d="M14 3v6h6M12 12v6M9 15h6" />
+  </>),
 };
 
 export function NavIcon({ name, ...props }) {
@@ -269,6 +304,9 @@ const INLINE = {
   pencil: (<>
     <path d="M12 20h9" />
     <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </>),
+  menu: (<>
+    <path d="M4 6h16M4 12h16M4 18h16" />
   </>),
 };
 

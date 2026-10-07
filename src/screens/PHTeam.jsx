@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
-import { TopBar, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText, Modal, RemoveUnitsModal } from '../components/common.jsx';
+import { TopBar, PageNavContext, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText, Modal, RemoveUnitsModal } from '../components/common.jsx';
 import { RescaleRequestModal } from '../components/RescaleRequestModal.jsx';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
@@ -18,7 +18,7 @@ import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized, PRICE_BASES,
   phListingStatus, PH_TABS, phTabOf, rescaleRequestFor, requiredFlags,
   phPathForPage, phPageForPath, HEARTBEAT_MS, PRESENCE_POLL_MS, IDLE_RELEASE_MS, LIST_POLL_MS,
-  phSearchTokens, phRowMatches,
+  phSearchTokens, phRowMatches, PH_HOME_SECTIONS, PH_ATTENTION,
 } from '../lib/ph.js';
 import { clearQuery, useQueryParam, writeParam } from '../lib/urlstate.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
@@ -65,191 +65,136 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
-  if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'costs') return <ItemCosts onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'online') return <OnlineOrders user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'presellListings') return <PresellListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'receipts') return <Receipts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} cartHref={(id) => `/ph/gift-card-buying?request=${id}`} />;
-  // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and
-  // never touches the staff router, so without a route here a PH team member who was
-  // ticked for gift cards had nowhere to go — which is the exact case the privilege model
-  // exists to support.
-  if (page === 'buycarts') return <BuyCarts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'postatus') return <PoOverview onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  // PH closes out the stragglers too — they're the ones chasing the supplier over a
-  // shortage, so making them wait on warehouse just parked POs in the queue.
-  if (page === 'reconcile') return <Reconciliation canReconcile onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'sop') return <Sop user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page === 'deleted') return <DeletedItems onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  // The warehouse Inventory page, same component. `canEditStock={false}`: PH looks
-  // stock up (and can still correct a miscount), but status changes and shelving are
-  // warehouse work — and warehouse-only server-side, so the buttons would 403.
-  // PH can't change stock from Inventory, but cost is theirs to fix (set-cost allows
-  // ph_team), so the "Edit cost" hop to /ph/costs stays on.
-  if (page === 'inventory') return <Inventory canEditStock={false} onOpenCosts={(q) => { goPage('costs'); writeParam('q', q); }} onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  // The warehouse Batches page, same component, `readOnly`. PH prices what the warehouse
-  // receives, so "which batch did this parcel become, and what was in it" is their
-  // question too — but adding boxes, finishing and renumbering are warehouse work (and
-  // warehouse-only server-side). The list and detail are filtered for PH_EXCLUDED_KINDS
-  // on the server, not here.
-  if (page === 'batches') return <BatchPage readOnly onHome={() => goPage(null)} onSignOut={onSignOut} />;
-  if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  const canBuyNav = hasAnyPriv(user);
+  const nav = {
+    page,
+    sections: PH_HOME_SECTIONS.map((sec) => ({ ...sec, cards: sec.cards.filter((c) => !c.priv || canBuyNav) })),
+    // The menu shows the same "work waiting" number the home's Needs-attention tile does.
+    badge: (key) => { const a = PH_ATTENTION.find((x) => x.key === key); return a && counts ? counts[a.count] : null; },
+    go: goPage,
+  };
+  function phScreen() {
+    if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'costs') return <ItemCosts onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'imagefinder') return <ImageFinder onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'inquiry') return <PriceInquiry onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'online') return <OnlineOrders user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'presellListings') return <PresellListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'receipts') return <Receipts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} cartHref={(id) => `/ph/gift-card-buying?request=${id}`} />;
+    // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and
+    // never touches the staff router, so without a route here a PH team member who was
+    // ticked for gift cards had nowhere to go — which is the exact case the privilege model
+    // exists to support.
+    if (page === 'buycarts') return <BuyCarts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'postatus') return <PoOverview onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    // PH closes out the stragglers too — they're the ones chasing the supplier over a
+    // shortage, so making them wait on warehouse just parked POs in the queue.
+    if (page === 'reconcile') return <Reconciliation canReconcile onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'sop') return <Sop user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'deleted') return <DeletedItems onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    // The warehouse Inventory page, same component. `canEditStock={false}`: PH looks
+    // stock up (and can still correct a miscount), but status changes and shelving are
+    // warehouse work — and warehouse-only server-side, so the buttons would 403.
+    // PH can't change stock from Inventory, but cost is theirs to fix (set-cost allows
+    // ph_team), so the "Edit cost" hop to /ph/costs stays on.
+    if (page === 'inventory') return <Inventory canEditStock={false} onOpenCosts={(q) => { goPage('costs'); writeParam('q', q); }} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    // The warehouse Batches page, same component, `readOnly`. PH prices what the warehouse
+    // receives, so "which batch did this parcel become, and what was in it" is their
+    // question too — but adding boxes, finishing and renumbering are warehouse work (and
+    // warehouse-only server-side). The list and detail are filtered for PH_EXCLUDED_KINDS
+    // on the server, not here.
+    if (page === 'batches') return <BatchPage readOnly onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    return null;
+  }
+  const screen = phScreen();
+  // Sub-pages get the top bar's Pages menu through this context; home has its own cards.
+  if (screen) return <PageNavContext.Provider value={nav}>{screen}</PageNavContext.Provider>;
+  const canBuy = hasAnyPriv(user);
+  const attention = counts ? PH_ATTENTION.filter((a) => (counts[a.count] || 0) > 0) : [];
+  const now = attention.filter((a) => a.tier === 'now');
+  const backlog = attention.filter((a) => a.tier !== 'now');
   return (
     <div className="app">
       <TopBar onSignOut={onSignOut} onHome={onExit} />
       <div className="home-greeting">Hi {user.name} <span className="role-badge">{roleLabel(user.role)}</span></div>
-      {/* Sections run daily work first, reference last: the two listing worklists,
-          then the PO side, then the queues that block a listing, then the read-only
-          lookups you dip into, then Help. A card is filed by what the person is doing
-          when they reach for it — not by which screen it happens to open. */}
-      <section className="home-section" data-accent="listing">
-        <h2 className="home-section-title">Pricing &amp; Listing</h2>
-        <div className="home-grid">
-          <button className="home-card" onClick={() => goPage('receiving')}>
-            <span className="home-card-icon"><NavIcon name="receiving" /></span>
-            <span className="home-card-title">New Inventory</span>
-            <span className="home-card-sub">Price &amp; list newly received stock — Intelligent Inventory, Alias, StockX, Shopify</span>
-            <CardBadges badges={counts ? SYNC_BADGES(counts) : []} />
-          </button>
-          <button className="home-card" onClick={() => goPage('rescale')}>
-            <span className="home-card-icon"><NavIcon name="rescale" /></span>
-            <span className="home-card-title">Rescale Stock</span>
-            <span className="home-card-sub">Re-list rescanned units (returns, relistings, recounts, transfers) across the stores</span>
-            <CardBadges badges={counts ? [['Restock', counts.restock_pending]] : []} />
-          </button>
-          <button className="home-card" onClick={() => goPage('imagefinder')}>
-            <span className="home-card-icon"><NavIcon name="image" /></span>
-            <span className="home-card-title">Find Image Listings</span>
-            <span className="home-card-sub">Manage a SKU’s listing photos — upload finished images, or build a branded set from the template (cut out, place, resize), then save</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('profit')}>
-            <span className="home-card-icon"><NavIcon name="payout" /></span>
-            <span className="home-card-title">Platform Profit</span>
-            <span className="home-card-sub">Where each size on hand earns most — Alias vs StockX lowest ask, less fees, less what the pairs cost</span>
-          </button>
-        </div>
-      </section>
-      <section className="home-section" data-accent="orders">
-        <h2 className="home-section-title">Purchase Orders</h2>
-        <div className="home-grid">
-          <button className="home-card" onClick={() => goPage('po')}>
-            <span className="home-card-icon"><NavIcon name="receiving" /></span>
-            <span className="home-card-title">New Batch (Purchase Order)</span>
-            <span className="home-card-sub">Open a supplier batch — labels + tracking numbers — for a supplier to scan out</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('postatus')}>
-            <span className="home-card-icon"><NavIcon name="shipped" /></span>
-            <span className="home-card-title">Purchase Orders</span>
-            <span className="home-card-sub">Every PO you opened — status &amp; live shipment tracking for each label</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('online')}>
-            <span className="home-card-icon"><NavIcon name="shipped" /></span>
-            <span className="home-card-title">Online Orders</span>
-            <span className="home-card-sub">Shoes bought online — tracking, what each pair actually cost, and cancelled pairs’ refunds until they’re back</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('presellListings')}>
-            <span className="home-card-icon"><NavIcon name="report" /></span>
-            <span className="home-card-title">Pre-sell Listings</span>
-            <span className="home-card-sub">Scan or type a SKU and list pairs straight to Alias + StockX — own stock, sales deduct, Telegram on every sale</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('receipts')}>
-            <span className="home-card-icon"><NavIcon name="report" /></span>
-            <span className="home-card-title">Receipts</span>
-            <span className="home-card-sub">Store receipts found in our order mailboxes — where each pair was bought, and by whom</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('reconcile')}>
-            <span className="home-card-icon"><NavIcon name="reconcile" /></span>
-            <span className="home-card-title">PO Reconciliation</span>
-            <span className="home-card-sub">Received vs. supplier manifest — copy a discrepancy report to send the supplier</span>
-            <CardBadges badges={counts ? homeCardBadges('reconcile', counts) : []} />
-          </button>
-        </div>
-      </section>
-      {/* The three queues that stand between a pair and a finished listing. All three
-          carry a count, so they read as work waiting rather than as tools. */}
-      <section className="home-section" data-accent="requests">
-        <h2 className="home-section-title">Queues &amp; Requests</h2>
-        <div className="home-grid">
-          <button className="home-card" onClick={() => goPage('nobox')}>
-            <span className="home-card-icon"><NavIcon name="nobox" /></span>
-            <span className="home-card-title">No Box / Not Ready</span>
-            <span className="home-card-sub">Units bought without a box — not yet postable (view-only; warehouse resolves)</span>
-            <CardBadges badges={counts ? [['No box', counts.no_box]] : []} />
-          </button>
-          <button className="home-card" onClick={() => goPage('costs')}>
-            <span className="home-card-icon"><NavIcon name="sold" /></span>
-            <span className="home-card-title">Costs</span>
-            <span className="home-card-sub">Fill in what a pair cost when the supplier left it off the manifest</span>
-            <CardBadges badges={counts ? [['No cost', counts.missing_cost]] : []} />
-          </button>
-          <button className="home-card" onClick={() => goPage('request')}>
-            <span className="home-card-icon"><NavIcon name="rescalereq" /></span>
-            <span className="home-card-title">Request Rescale</span>
-            <span className="home-card-sub">Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)</span>
-            <CardBadges badges={counts ? [['Pending audit', counts.rescale_requests], ['Audited', counts.rescale_requests_audited, 'ok']] : []} />
-          </button>
-        </div>
-      </section>
-      {/* Answer-a-question screens: you arrive with a SKU, a VIN or a tracking number
-          and leave with a number. Nothing here is a queue, so nothing here badges. */}
-      <section className="home-section" data-accent="inventory">
-        <h2 className="home-section-title">Look Up</h2>
-        <div className="home-grid">
-          <button className="home-card" onClick={() => goPage('inquiry')}>
-            <span className="home-card-icon"><NavIcon name="report" /></span>
-            <span className="home-card-title">Price Inquiry</span>
-            <span className="home-card-sub">Look up live Alias prices for any SKU — lowest ask, highest offer, last sold &amp; Global Indicator</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('payout')}>
-            <span className="home-card-icon"><NavIcon name="payout" /></span>
-            <span className="home-card-title">Payout Calculator</span>
-            <span className="home-card-sub">Cost after discounts vs. what Alias/StockX pay out after fees — is this pair a buy?</span>
-          </button>
-          {/* Only for an account actually ticked for one of the buying duties. */}
-          {hasAnyPriv(user) && (
-            <button className="home-card" onClick={() => goPage('buycarts')}>
-              <span className="home-card-icon"><NavIcon name="buy-carts" /></span>
-              <span className="home-card-title">Buying Requests</span>
-              <span className="home-card-sub">Requests to approve, gift cards to release, and spending to account for</span>
-            </button>
+      {/* What is waiting on PH, before the list of every tool — so the shift starts on
+          the biggest pile, not on reading 19 cards. Renders nothing when all is clear. */}
+      {attention.length > 0 && (
+        <section className="home-section" data-accent="attention">
+          <h2 className="home-section-title">Needs attention</h2>
+          {now.length > 0 && (
+            <div className="home-grid home-attn-grid">
+              {now.map((a) => (
+                <button className="home-card home-attention" key={a.count} onClick={() => goPage(a.key)}>
+                  <span className="home-attention-top">
+                    <span className="home-card-icon"><NavIcon name={a.icon} /></span>
+                    <span className="home-attention-count">{fmtCount(counts[a.count])}</span>
+                  </span>
+                  <span className="home-card-title">{a.label}</span>
+                </button>
+              ))}
+            </div>
           )}
-          <button className="home-card" onClick={() => goPage('inventory')}>
-            <span className="home-card-icon"><NavIcon name="inventory" /></span>
-            <span className="home-card-title">Inventory</span>
-            <span className="home-card-sub">Search every pair we hold — by name keywords, SKU, VIN or shelf — with its detail, history &amp; photos</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('batches')}>
-            <span className="home-card-icon"><NavIcon name="batches" /></span>
-            <span className="home-card-title">Batches</span>
-            <span className="home-card-sub">Find a shipment by the tracking number on any of its boxes — what arrived in it, box by box</span>
-          </button>
-          <button className="home-card" onClick={() => goPage('deleted')}>
-            <span className="home-card-icon"><NavIcon name="deleted" /></span>
-            <span className="home-card-title">Deleted</span>
-            <span className="home-card-sub">Pairs removed from inventory — search by SKU, with the history kept</span>
-          </button>
-        </div>
-      </section>
-      {/* Last, and grey: the procedures are a reference you go to deliberately, not a
-          queue — so they sit below the work rather than competing with it. */}
-      <section className="home-section" data-accent="help">
-        <h2 className="home-section-title">Help</h2>
-        <div className="home-grid">
-          <button className="home-card" onClick={() => goPage('sop')}>
-            <span className="home-card-icon"><NavIcon name="sop" /></span>
-            <span className="home-card-title">SOP &amp; Help</span>
-            <span className="home-card-sub">Step-by-step procedures for every screen, searchable, plus FAQ</span>
-          </button>
-        </div>
-      </section>
+          {backlog.length > 0 && (
+            <div className="home-backlog">
+              <span className="home-backlog-label">Backlog</span>
+              {backlog.map((a) => (
+                <button className="home-attention home-backlog-item" key={a.count} onClick={() => goPage(a.key)}>
+                  <span className="home-backlog-icon"><NavIcon name={a.icon} /></span>
+                  <span className="home-attention-count">{fmtCount(counts[a.count])}</span>
+                  <span className="home-backlog-name">{a.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+      {/* Same compact icon-beside-text cards as the staff home, a little narrower
+          (`ph-home`) so a five-card section is one row on a laptop instead of 4 + 1. */}
+      <div className="ph-home">
+        {PH_HOME_SECTIONS.map((section) => {
+          const cards = section.cards.filter((c) => !c.priv || canBuy);
+          if (!cards.length) return null;
+          return (
+            <section className="home-section" key={section.title} data-accent={section.accent}>
+              <h2 className="home-section-title">{section.title}</h2>
+              <div className="home-grid home-tools">
+                {cards.map((c) => (
+                  <button className="home-card" key={c.key} title={c.sub} onClick={() => goPage(c.key)}>
+                    <span className="home-card-icon"><NavIcon name={c.icon} /></span>
+                    <span className="home-card-text">
+                      <span className="home-card-title">{c.title}</span>
+                      <span className="home-card-sub">{c.sub}</span>
+                      <CardBadges badges={phCardBadges(c.key, counts)} />
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
+}
+
+const fmtCount = (n) => Number(n || 0).toLocaleString('en-US');
+
+// Count pills under a PH home card (and the number beside it in the Pages menu).
+function phCardBadges(key, c) {
+  if (!c) return [];
+  if (key === 'receiving') return SYNC_BADGES(c);
+  if (key === 'rescale') return [['Restock', c.restock_pending]];
+  if (key === 'nobox') return [['No box', c.no_box]];
+  if (key === 'costs') return [['No cost', c.missing_cost]];
+  if (key === 'request') return [['Pending audit', c.rescale_requests], ['Audited', c.rescale_requests_audited, 'ok']];
+  if (key === 'reconcile') return homeCardBadges('reconcile', c);
+  return [];
 }
 
 // The market for the New Inventory chip. Reads what anyone priced in the last 12 hours

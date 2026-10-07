@@ -453,3 +453,53 @@ export const HEARTBEAT_MS = 10_000;       // keep MY lock alive (well under the 
 export const PRESENCE_POLL_MS = 2_000;    // how fast OTHERS see a lock appear/clear — kept snappy
 export const IDLE_RELEASE_MS = 60 * 60 * 1000; // 1 hour — PH needs time to process the upload
 export const LIST_POLL_MS = 15_000;       // quietly re-fetch the list (new shoes / others' saved edits)
+
+// The PH workspace's pages, grouped the way the home screen shows them — daily listing
+// work first, reference last. One list feeds BOTH the home cards and the top bar's
+// "Pages" menu on every PH sub-page, so the two can't drift. `icon` is a NavIcon key.
+// `priv: true` = drawn only for an account holding a buying privilege.
+export const PH_HOME_SECTIONS = [
+  { title: 'Pricing & Listing', accent: 'listing', cards: [
+    { key: 'receiving', icon: 'receiving', title: 'New Inventory', sub: 'Price & list newly received stock — Intelligent Inventory, Alias, StockX, Shopify' },
+    { key: 'rescale', icon: 'rescale', title: 'Rescale Stock', sub: 'Re-list rescanned units (returns, relistings, recounts, transfers) across the stores' },
+    { key: 'imagefinder', icon: 'image', title: 'Find Image Listings', sub: 'Manage a SKU’s listing photos — upload finished images, or build a branded set from the template' },
+    { key: 'profit', icon: 'profit', title: 'Platform Profit', sub: 'Where each size on hand earns most — Alias vs StockX lowest ask, less fees, less what the pairs cost' },
+    { key: 'presellListings', icon: 'presell-listings', title: 'Pre-sell Listings', sub: 'Scan or type a SKU and list pairs straight to Alias + StockX — own stock, Telegram on every sale' },
+  ] },
+  { title: 'Queues & Requests', accent: 'requests', cards: [
+    { key: 'costs', icon: 'costs', title: 'Costs', sub: 'Fill in what a pair cost when the supplier left it off the manifest' },
+    { key: 'request', icon: 'rescalereq', title: 'Request Rescale', sub: 'Flag a SKU for the warehouse to recount / rescan (mismatch, quantity…)' },
+    { key: 'nobox', icon: 'nobox', title: 'No Box / Not Ready', sub: 'Units bought without a box — not yet postable (view-only; warehouse resolves)' },
+  ] },
+  { title: 'Purchase Orders', accent: 'orders', cards: [
+    { key: 'po', icon: 'po-new', title: 'New Batch (Purchase Order)', sub: 'Open a supplier batch — labels + tracking numbers — for a supplier to scan out' },
+    { key: 'postatus', icon: 'inbound', title: 'Purchase Orders', sub: 'Every PO you opened — status & live shipment tracking for each label' },
+    { key: 'reconcile', icon: 'reconcile', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — copy a discrepancy report to send the supplier' },
+    { key: 'online', icon: 'online-orders', title: 'Online Orders', sub: 'Shoes bought online — tracking, what each pair actually cost, and cancelled pairs’ refunds' },
+    { key: 'receipts', icon: 'receipts', title: 'Receipts', sub: 'Store receipts found in our order mailboxes — where each pair was bought, and by whom' },
+    { key: 'buycarts', icon: 'buy-carts', title: 'Buying Requests', sub: 'Requests to approve, gift cards to release, and spending to account for', priv: true },
+  ] },
+  { title: 'Look Up', accent: 'inventory', cards: [
+    { key: 'inventory', icon: 'inventory', title: 'Inventory', sub: 'Search every pair we hold — by name, SKU, VIN or shelf — with its detail, history & photos' },
+    { key: 'inquiry', icon: 'inquiry', title: 'Price Inquiry', sub: 'Live Alias prices for any SKU — lowest ask, highest offer, last sold & Global Indicator' },
+    { key: 'payout', icon: 'payout', title: 'Payout Calculator', sub: 'Cost after discounts vs. what Alias/StockX pay out after fees — is this pair a buy?' },
+    { key: 'batches', icon: 'batches', title: 'Batches', sub: 'Find a shipment by the tracking number on any of its boxes — what arrived in it, box by box' },
+    { key: 'deleted', icon: 'deleted', title: 'Deleted', sub: 'Pairs removed from inventory — search by SKU, with the history kept' },
+  ] },
+  { title: 'Help', accent: 'help', cards: [
+    { key: 'sop', icon: 'sop', title: 'SOP & Help', sub: 'Step-by-step procedures for every screen, searchable, plus FAQ' },
+  ] },
+];
+
+// "Needs attention" on the PH home: work waiting on PH, biggest lever first. `tier: 'now'`
+// draws an amber tile; the rest sit in the backlog row. `count` is a pending-counts key.
+// New Inventory counts pairs not yet on ALIAS — the one store every listable pair needs
+// (GOAT-only pairs skip StockX/Shopify/II), so it's an honest "still to list" number.
+export const PH_ATTENTION = [
+  { key: 'receiving', icon: 'receiving', label: 'Not on Alias yet', count: 'not_alias', tier: 'now' },
+  { key: 'rescale', icon: 'rescale', label: 'Restock to re-list', count: 'restock_pending', tier: 'now' },
+  { key: 'request', icon: 'rescalereq', label: 'Rescale audits to close', count: 'rescale_requests_audited', tier: 'now' },
+  { key: 'reconcile', icon: 'reconcile', label: 'POs to reconcile', count: 'po_to_reconcile', tier: 'now' },
+  { key: 'costs', icon: 'costs', label: 'Pairs without a cost', count: 'missing_cost' },
+  { key: 'nobox', icon: 'nobox', label: 'No box (warehouse)', count: 'no_box' },
+];

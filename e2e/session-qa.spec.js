@@ -425,14 +425,15 @@ test.describe('Session QA · PH home + status filter empty-state', () => {
   test('PH home renders the 5 sections, daily work first and Help last', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await page.goto('/ph');
-    for (const name of ['Pricing & Listing', 'Purchase Orders', 'Queues & Requests', 'Look Up', 'Help']) {
+    const order = ['Pricing & Listing', 'Queues & Requests', 'Purchase Orders', 'Look Up', 'Help'];
+    for (const name of order) {
       await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
     }
     // Order matters as much as membership: the worklists sit above the reference
-    // screens, so a shift starts at the top of the page.
-    await expect(page.locator('.home-section-title')).toHaveText([
-      'Pricing & Listing', 'Purchase Orders', 'Queues & Requests', 'Look Up', 'Help',
-    ]);
+    // screens, so a shift starts at the top of the page. "Needs attention" sits above
+    // them all but only when something is waiting, so it's left out of the comparison.
+    const titles = (await page.locator('.home-section-title').allTextContents()).filter((t) => t !== 'Needs attention');
+    expect(titles).toEqual(order);
     // A lookup is not a queue — nothing under Look Up or Help may carry a count badge.
     await expect(page.locator('.home-section:has(> .home-section-title:text-is("Look Up")) .card-badge')).toHaveCount(0);
   });

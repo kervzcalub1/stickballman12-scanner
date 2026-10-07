@@ -2,14 +2,14 @@
 // status/sync indicators, modals (Modal, HistoryModal, PreferencesModal), the
 // calendar switcher, size chips, the Yes/No flag control, the label print dialog,
 // and the rescale reported-vs-actual table.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import { STATUS_MAP, statusLabel } from '../statuses.js';
 import { EST_FMT, PH_DATETIME, estDate, periodLabel, shiftAnchor } from '../lib/format.js';
 import { SYNC_FIELDS, sumQty } from '../lib/constants.js';
 import { eventLabel, dedupeEvents, eventPhotos } from '../lib/history.js';
-import { Icon } from './NavIcons.jsx';
+import { Icon, NavIcon } from './NavIcons.jsx';
 import { onLiveState } from '../lib/live.js';
 import { compareSizes } from '../lib/codes.js';
 import { priceBasisChip } from '../lib/ph.js';
@@ -338,10 +338,61 @@ export function NumField({ label, value, onChange, prefix, suffix, placeholder =
   );
 }
 
+// The PH workspace provides this so every PH sub-page's TopBar can offer a "Pages" menu —
+// jump straight from New Inventory to Costs without the round trip through Home. The
+// staff app provides nothing, so its TopBar is unchanged. Value: { page, sections,
+// badge(key) → number|null, go(key) }.
+export const PageNavContext = createContext(null);
+
+function PagesMenu({ nav }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  return (
+    <div className="pages-menu" ref={ref}>
+      <button type="button" className="btn ghost sm pages-menu-btn" aria-haspopup="menu" aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}>
+        <Icon name="menu" /> <span className="pages-menu-label">Pages</span>
+      </button>
+      {/* Rendered only while open — the titles would otherwise duplicate every page's
+          heading in the DOM. */}
+      {open && (
+        <div className="pages-menu-pop" role="menu">
+          {nav.sections.map((s) => (
+            <div className="pages-menu-group" key={s.title} data-accent={s.accent}>
+              <div className="pages-menu-head">{s.title}</div>
+              {s.cards.map((c) => {
+                const n = nav.badge(c.key);
+                return (
+                  <button type="button" role="menuitem" key={c.key}
+                    className={`pages-menu-item${c.key === nav.page ? ' on' : ''}`}
+                    onClick={() => { setOpen(false); if (c.key !== nav.page) nav.go(c.key); }}>
+                    <span className="pages-menu-icon"><NavIcon name={c.icon || c.key} /></span>
+                    <span className="pages-menu-name">{c.title}</span>
+                    {n > 0 && <span className="pages-menu-count">{Number(n).toLocaleString('en-US')}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TopBar({ title, onHome, onSignOut, right }) {
   // The 🔔 Alerts panel (Telegram alerts + preferences) — here so every app, warehouse,
   // PH and supplier, reaches it the same way. `?alerts=1` survives a refresh.
   const [alertsOpen, setAlertsOpen] = useQueryParam('alerts');
+  const nav = useContext(PageNavContext);
   return (
     <header className="topbar">
       <div className="brand">
@@ -351,6 +402,7 @@ export function TopBar({ title, onHome, onSignOut, right }) {
       <EstClock />
       <div className="topbar-actions">
         {right}
+        {nav && onHome && <PagesMenu nav={nav} />}
         {onHome && <button className="btn ghost sm" onClick={onHome}>← Home</button>}
         <button type="button" className="btn ghost sm topbar-bell" aria-label="Alerts" title="Alerts"
           onClick={() => setAlertsOpen('1')}><Icon name="bell" /></button>

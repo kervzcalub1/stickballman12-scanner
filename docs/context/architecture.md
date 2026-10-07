@@ -157,6 +157,13 @@ PH-team users route separately under `/ph/*` inside `PHTeamApp` (its own
 `PH_PATHS` map + `phPageForPath`/`phPathForPage` + pushState/popstate), since
 `ph_team` short-circuits before the warehouse/admin `view` routing. `onAuthed`
 skips the URL rewrite for `ph_team` so a `/ph/...` deep link survives login.
+**PH home + Pages menu (2026-10-08):** the PH home's cards and its "Needs attention"
+tiles come from `PH_HOME_SECTIONS` / `PH_ATTENTION` in `src/lib/ph.js` — add a PH page
+there, not as hand-written JSX. Every PH sub-page is wrapped in `PageNavContext`
+(`common.jsx`), which makes its `TopBar` show a **Pages** menu (same list + the
+attention counts) so PH can jump page-to-page without going Home. The staff app
+provides no context, so its TopBar is unchanged. The menu renders only while open —
+a closed menu would duplicate every page title in the DOM and trip `getByText`.
 
 **Page state lives in the query string** (`src/lib/urlstate.js`, `useQueryParam(key)` /
 `useQueryDateRange(defaultMode)` for a DateRangeBar's `{mode, anchor}` as `?dm=&da=`).

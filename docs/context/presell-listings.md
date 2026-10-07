@@ -31,8 +31,13 @@ holds back units of a shipment we own. Here a pair is **never an inventory unit*
 - **Stock**: per SKU+size pairs / sold / left, live+other per platform, **List N**
   (top up a platform), **Pairs…** (set the count; can't go below sold; cuts take down extras).
 - **Listings**: Both/Alias/StockX × Open/Live/Not live/Pending/Sold/Deleted, search by
-  SKU/name/listing id. Go live / Switch off, **Edit** (price; size on Alias only — the
-  pair moves to that size's stock row), ↻ re-read, Delete.
+  SKU/name/listing id. **One row per PAIR** (owner's sheet layout, 2026-10-08): a stock
+  row's StockX and Alias listings are matched oldest-first (pair 1 = first listing on
+  each), so a size with 2 pairs is 2 rows. Platform column = two pills, "StockX (ON)" /
+  "Alias (OFF)" (green/red; PENDING blue, SOLD violet, "(—)" = not listed on it), each
+  a menu: Go live / Switch off, **Edit** (price; size on Alias only — the pair moves to
+  that size's stock row), re-read, copy id, Delete. **More…** = the row: switch both
+  on/off, re-read both, delete both. Grouping is client-side (`ListingsTab` `pairs`).
 - **Sales**: every sale, price, payout, order #, whether the Telegram post went out.
 
 ## Market prices — each platform's OWN words (owner, 2026-10-07)

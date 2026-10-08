@@ -7,14 +7,13 @@ Reprice", a 3-step page; `/ph/shopify-reprice` still opens this one.)
 PH team only (admin auto-allowed server-side). Card in the PH home's Pricing & Listing
 section; route `shopifylistings` in `PH_PATHS`.
 
-## ⚠ Needs the `write_products` scope
-The "Stickballman12 AI" Dev Dashboard app's installation has read scopes only. Checked
-2026-10-07 after the user approved it: a FRESHLY exchanged token still came back without
-`write_products`, so the store's installation hadn't picked the scope up (version not
-Released, or the update not approved under Settings → Apps). Until it has, Save comes back
-`code: 'denied'` with that instruction and nothing changes. Once it has: re-run
-`node scripts/shopify-auth.mjs` (new token into `.env`) and put the new token in Railway —
-a token keeps the scopes it was minted with.
+## Needs the `write_products` scope — granted 2026-10-08
+Without it, Save comes back `code: 'denied'` and nothing changes. Releasing the app version
+was not enough: the store only took the scope once the owner opened the app's
+`/admin/oauth/install?client_id=…` link and approved (`docs/context/shopify.md` →
+*Getting a token*). Tokens carry the scopes they were minted with, and they now renew
+themselves on a 401, so no token needs pasting after a scope change — the next refusal
+mints one with the new scopes (or restart the server to drop the old one).
 
 ## Files
 | | |

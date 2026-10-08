@@ -60,7 +60,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders** | `docs/context/purchase-orders.md` |
 | Empty shoe boxes end to end: order → declare → receive → shelve → put on a pair | `docs/context/empty-boxes.md` |
 | Buying requests (was "gift-card buying"): request → approve → cards → receipt → audit → reconciled; **`users.privileges`**; **Telegram approval cards, direct to the Bot API** | `docs/context/buy-cart.md` |
-| **Email receipts**: Make sweep → `POST /api/receipts/ingest` → `email_receipts`; buyer by registered purchase email (`user_purchase_emails`), store location, Receipts page | `docs/context/receipts.md` |
+| **Email receipts**: **"Check mailboxes" button** → Make fetches mail since the last check → `POST /api/receipts/ingest-raw` (parsed on OUR server) → `email_receipts`; buyer by registered purchase email (`user_purchase_emails`), store location, Receipts page | `docs/context/receipts.md` |
 | **Online Orders**: PH's online buys — tracking, actual cost per pair (coupon/tax/shipping/gift card), per-line cancel + **refund trail**, warehouse "Expected" + count-in (its own list, not a PO) | `docs/context/online-orders.md` |
 | Merging duplicates (superadmin): one supplier typed twice, one inbound received as two batches | `docs/context/merge-tools.md` |
 | StockX / Alias / KicksDB, Alias auto-relogin, proxies | `docs/context/integrations.md` |

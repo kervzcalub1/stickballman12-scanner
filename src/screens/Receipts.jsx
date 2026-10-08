@@ -1,7 +1,7 @@
 // Receipts — every store receipt found in our order mailboxes (docs/context/receipts.md).
 //
-// The Make "Receipt sweep" files each receipt email here on its own — spam folders
-// included — with where it was bought (the store's address, city, state, ZIP off the
+// "Check mailboxes" (MailboxCheck below) has Make fetch the mail since the last check and
+// our server parses and files each receipt — spam folders included — with where it was bought (the store's address, city, state, ZIP off the
 // receipt) and who bought it (the address it was sent to, matched against the emails
 // buyers registered). So nobody has to wait for Joey to send his receipts in, and
 // Council's buys can be told from Joey's by store and state.
@@ -12,13 +12,66 @@ import { TopBar } from '../components/common.jsx';
 import { PurchaseEmails } from '../components/PurchaseEmails.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
-import { PH_DATE, PH_DATETIME } from '../lib/format.js';
+import { PH_DATE, PH_DATETIME, estToday } from '../lib/format.js';
 
 const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const when = (ts) => (ts ? `${PH_DATETIME.format(new Date(ts))} EST` : '—');
 const STORE_LABEL = { footlocker: 'Foot Locker', kidsfootlocker: 'Kids Foot Locker', champs: 'Champs Sports', nike: 'Nike', adidas: 'adidas' };
 const storeLabel = (s) => STORE_LABEL[s] || s || 'Unknown store';
 const inSpam = (folder) => /spam|bulk|junk/i.test(String(folder || ''));
+// "Check mailboxes" — the sweep runs only when someone asks (api/receipts/sweep.js). It
+// looks at the mail since the last check (minus an hour of overlap); "From a date…" goes
+// further back for a catch-up. Make fetches in the background and each receipt appears in
+// the list as it is filed (live), so the button only has to say it started.
+function MailboxCheck({ onSignOut }) {
+  const [st, setSt] = useState(null);       // { configured, last: { at, since, by } }
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [pickDate, setPickDate] = useState(false);
+  const [since, setSince] = useState('');
+  async function read() {
+    try { setSt(await api.receiptSweepStatus()); } catch (e) { if (e.unauthorized) onSignOut(); }
+  }
+  useEffect(() => { read(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLive(['app_settings'], read, { mount: false });
+  async function run() {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const r = await api.receiptSweep(pickDate && since ? { since } : {});
+      setMsg(`Checking mail since ${when(r.since)} — receipts appear below as they're filed (usually within a few minutes).`);
+      setPickDate(false); setSince('');
+      read();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  if (st && !st.configured) return null;
+  const last = st?.last;
+  return (
+    <div className="rc-check">
+      <button type="button" className="btn sm primary" disabled={busy || !st || (pickDate && !since)} onClick={run}>
+        {busy ? 'Starting…' : pickDate ? 'Check from this date' : '↻ Check mailboxes'}
+      </button>
+      {pickDate ? (
+        <>
+          <input type="date" value={since} max={estToday()} onChange={(e) => setSince(e.target.value)} aria-label="Check mail since" />
+          <button type="button" className="btn sm ghost" onClick={() => { setPickDate(false); setSince(''); }}>Cancel</button>
+        </>
+      ) : (
+        <button type="button" className="btn sm ghost" onClick={() => setPickDate(true)}
+          title="Look further back than the last check — for receipts that came in while nobody checked">
+          From a date…
+        </button>
+      )}
+      <span className="muted sm">
+        {last ? `Last checked ${when(last.at)}${last.by ? ` by ${last.by}` : ''}` : 'Never checked — the first check looks at the last 3 days.'}
+      </span>
+      {msg && <div className="notice sm rc-check-msg">{msg}</div>}
+      {err && <div className="error sm rc-check-msg">{err}</div>}
+    </div>
+  );
+}
+
 const place = (r) => [r.city, [r.state, r.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
 
 export function Receipts({ user, onHome, onSignOut, cartHref = (id) => `/buy-carts?request=${id}` }) {
@@ -53,6 +106,7 @@ export function Receipts({ user, onHome, onSignOut, cartHref = (id) => `/buy-car
           Store receipts found in our order mailboxes (spam included), filed automatically. The buyer is matched by the
           address the receipt was sent to — buyers add theirs on their Buying Requests page.
         </p>
+        <MailboxCheck onSignOut={onSignOut} />
         {(data?.byBuyer || []).length > 0 && (
           <div className="rc-buyers" role="group" aria-label="By buyer">
             <button type="button" className={`rc-chip ${!buyer ? 'on' : ''}`} onClick={() => setBuyer('')}>Everyone</button>
@@ -84,7 +138,7 @@ export function Receipts({ user, onHome, onSignOut, cartHref = (id) => `/buy-car
 
       <div className="card">
         {!data ? <p className="muted">Loading…</p> : !rows.length ? (
-          <p className="muted">No receipts{buyer || store || state || from || to || q ? ' match these filters' : ' yet — they appear here as the mailbox sweep files them'}.</p>
+          <p className="muted">No receipts{buyer || store || state || from || to || q ? ' match these filters' : ' yet — press “Check mailboxes” above to look for new ones'}.</p>
         ) : (
           <>
             <p className="muted sm">{rows.length} receipt{rows.length === 1 ? '' : 's'} · {money(shownTotal)}</p>

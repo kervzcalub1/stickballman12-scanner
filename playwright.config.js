@@ -88,6 +88,9 @@ export default defineConfig({
     env: {
       TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', E2E_NO_RATE_LIMIT: '1',
       RECEIPT_INGEST_KEY: process.env.RECEIPT_INGEST_KEY,
+      // "Check mailboxes" starts a FAKE Make on localhost (e2e/receipts-check.spec.js listens
+      // there) — the suite must never start the real sweep scenario.
+      RECEIPT_SWEEP_HOOK_URL: 'http://127.0.0.1:5197/hook',
       // Telegram is pointed at a FAKE Bot API on localhost (e2e/buy-cart.spec.js starts it
       // for the tests that read it) with a fake token — so the real bot's token is never
       // used by this server, and nothing can reach the real group whether or not the fake

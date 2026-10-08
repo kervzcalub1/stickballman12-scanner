@@ -2073,6 +2073,27 @@ await sql(`
     PRIMARY KEY (platform, order_id)
   )`);
 
+// Shopify Reprice (PH, docs/context/shopify-reprice.md): one row per variant price the
+// app actually CHANGED on Shopify — Shopify keeps no price history of its own, so this
+// is the only record of who moved a live price, from what, to what, and why (market +
+// markup). Written only after Shopify confirms the update.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shopify_price_changes (
+    id            BIGSERIAL PRIMARY KEY,
+    variant_id    TEXT NOT NULL,
+    product_id    TEXT,
+    product_title TEXT,
+    style         TEXT,
+    size          TEXT,
+    old_price     NUMERIC(10,2) NOT NULL,
+    new_price     NUMERIC(10,2) NOT NULL,
+    market_cents  INTEGER,
+    markup_pct    NUMERIC(6,2),
+    changed_by    TEXT,
+    changed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shopify_price_changes_at_idx ON shopify_price_changes (changed_at DESC)`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',

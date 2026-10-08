@@ -337,3 +337,80 @@ export async function shopifyInventoryForSku(sku) {
   cacheSet(cacheKey, out, 10 * 60 * 1000);
   return out;
 }
+
+/* ------------------------------------------------------------------ */
+/* Shopify Reprice (PH) — docs/context/shopify-reprice.md              */
+/* ------------------------------------------------------------------ */
+
+// Why a refusal happened, in words that send the reader to the right fix.
+function failure(r, what) {
+  if (r.unauthorized) return { error: 'Shopify rejected our access token — it is revoked or wrong. Reset SHOPIFY_ACCESS_TOKEN.', code: 'unauthorized' };
+  if (r.denied) {
+    return what === 'write'
+      ? { error: 'Shopify refused the price change: the app needs the write_products scope. Add it to the “Stickballman12 AI” app in the Dev Dashboard, release, and approve it on the store.', code: 'denied' }
+      : { error: 'Shopify refused: the app needs the read_products scope.', code: 'denied' };
+  }
+  return { error: r.errors?.map((e) => e.message).join(' | ') || `Shopify answered ${r.status}`, code: 'error' };
+}
+
+const VARIANTS_QUERY = `query Variants($after: String) {
+  productVariants(first: 250, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges { node {
+      id sku title price inventoryQuantity
+      selectedOptions { name value }
+      product { id title status }
+    } }
+  }
+}`;
+
+// Every variant in the store (≈ 3,900 → ~16 pages), with the style code read off the
+// PRODUCT title the same way the sales feed does — the variant `sku` is an internal
+// number here ("10019029"), so it is used only when it looks like a style code itself.
+export async function shopifyAllVariants() {
+  if (!shopifyConfigured()) return { error: 'Shopify is not configured on the server.', code: 'config' };
+  const out = [];
+  let after = null;
+  for (let page = 0; page < 80; page++) {
+    const r = await gql(VARIANTS_QUERY, { after });
+    if (!r.ok) return failure(r, 'read');
+    const conn = r.data?.productVariants;
+    for (const { node: v } of conn?.edges || []) {
+      const size = (v.selectedOptions || []).find((o) => /size/i.test(o.name))?.value ?? v.title;
+      const skuStyle = /[A-Z]/i.test(v.sku || '') && /\d/.test(v.sku || '') && String(v.sku).length >= 5 ? String(v.sku).toUpperCase() : null;
+      out.push({
+        variantId: v.id, productId: v.product?.id || null, productTitle: v.product?.title || '',
+        status: v.product?.status || null, sku: v.sku || '', size: String(size ?? '').trim(),
+        price: v.price, qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity),
+        style: styleFromTitle(v.product?.title) || skuStyle,
+      });
+    }
+    if (!conn?.pageInfo?.hasNextPage) return { variants: out };
+    after = conn.pageInfo.endCursor;
+  }
+  return { variants: out, truncated: true };
+}
+
+// The price Shopify holds RIGHT NOW for each variant id — read just before writing, so a
+// price someone changed after the pull is never overwritten blind.
+export async function shopifyVariantPrices(ids) {
+  const r = await gql(`query Prices($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id price product { id } } } }`, { ids });
+  if (!r.ok) return failure(r, 'read');
+  return { prices: new Map((r.data?.nodes || []).filter(Boolean).map((n) => [n.id, { price: n.price, productId: n.product?.id }])) };
+}
+
+// Set prices on some variants of ONE product. Returns { ok } or { error, code } — and
+// Shopify's per-variant userErrors when it accepted the call but refused a row.
+export async function shopifyUpdateVariantPrices(productId, variants) {
+  const r = await gql(`mutation Reprice($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants { id price }
+      userErrors { field message }
+    }
+  }`, { productId, variants: variants.map((v) => ({ id: v.id, price: v.price })) });
+  if (!r.ok) return failure(r, 'write');
+  const res = r.data?.productVariantsBulkUpdate;
+  const errs = res?.userErrors || [];
+  if (errs.length) return { error: errs.map((e) => e.message).join(' | '), code: 'rejected' };
+  return { ok: true, updated: new Map((res?.productVariants || []).map((v) => [v.id, v.price])) };
+}

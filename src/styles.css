@@ -5694,3 +5694,31 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
   .er-style-input { width: 100%; }
 }
 .er-waiting { border-color: rgba(224,176,95,0.45); background: linear-gradient(180deg, rgba(224,176,95,0.07), transparent 70%); }
+
+/* Shopify Reprice (PH) — src/screens/ShopifyReprice.jsx (reuses the er-* step styles) */
+.sr-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 8px; }
+.sr-tabs .seg-btn { flex: 0 0 auto; padding: 6px 12px; font-size: 13px; }
+.sr-bulk { margin: 4px 0 8px; }
+.sr-table td { vertical-align: middle; }
+.sr-title { font-weight: 600; max-width: 420px; }
+.sr-down { color: #5fc58a; font-weight: 700; white-space: nowrap; }
+.sr-up { color: #e0b05f; font-weight: 700; white-space: nowrap; }
+.sr-big td { background: rgba(236,143,143,0.07); }
+.sr-flag { margin-left: 6px; font-size: 11px; font-weight: 700; color: #ec8f8f; }
+.sr-apply {
+  position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between;
+  margin: 12px -16px -16px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--panel);
+}
+.sr-apply .progress { flex: 1; min-width: 220px; }
+/* Phone: each variant is a card — tick + product on top, the numbers in a labelled row. */
+@media (max-width: 600px) {
+  .sr-plan thead { display: none; }
+  .sr-plan, .sr-plan tbody { display: block; width: 100%; }
+  .sr-plan tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .sr-plan td { display: block; padding: 0; border: 0; }
+  .sr-plan td.sr-prod { flex: 1 1 calc(100% - 40px); }
+  .sr-plan td[data-label]::before { content: attr(data-label); display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
+  .sr-title { max-width: none; }
+  .sr-plan tr.sr-big { background: rgba(236,143,143,0.07); padding-left: 6px; padding-right: 6px; border-radius: 8px; }
+  .sr-plan tr.sr-big td { background: none; }
+}

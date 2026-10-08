@@ -10,35 +10,17 @@
 //                the two downloads
 // The parsing / editing / verifying is all src/lib/ebayReprice.js — pure, and checked
 // byte-for-byte against the skill's own output for the 9.1.2026 run.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api.js';
-import { TopBar, ProgressBar } from '../components/common.jsx';
-import { useUnsavedGuard } from '../hooks.js';
+import React, { useMemo, useRef, useState } from 'react';
+import { TopBar } from '../components/common.jsx';
+import { useMarketPrices, MarketPricesStep } from '../components/MarketPrices.jsx';
 import { estToday } from '../lib/format.js';
 import {
-  readReviseFile, readInventoryFile, resolveStyles, effectiveStyles, jobsFor, cacheKey,
+  readReviseFile, readInventoryFile, resolveStyles, effectiveStyles, jobsFor,
   parseMarkup, multiplierLabel, repriceDollars, applyReprice, verifyOutput, outputName, reportText,
 } from '../lib/ebayReprice.js';
 
-const BATCH = 20;
-const MAX_TRIES = 10;                 // an `error` gets ten spaced tries before it is "unresolved"
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const money = (cents) => `$${(cents / 100).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Prices are cached per EST day in this browser, so a reload (or a second run the same
-// day) resumes instead of starting over. Best effort: private mode just means no resume.
-const cacheStoreKey = () => `ebay-reprice:prices:${estToday()}`;
-function loadCache() {
-  try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith('ebay-reprice:prices:') && k !== cacheStoreKey()) localStorage.removeItem(k);
-    }
-    return JSON.parse(localStorage.getItem(cacheStoreKey()) || '{}') || {};
-  } catch { return {}; }
-}
-function saveCache(c) { try { localStorage.setItem(cacheStoreKey(), JSON.stringify(c)); } catch { /* full / private */ } }
 
 function download(name, text) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
@@ -72,15 +54,9 @@ export function EbayReprice({ onHome, onSignOut }) {
   const [invFile, setInvFile] = useState(null);
   const [inv, setInv] = useState(null);
   const [decisions, setDecisions] = useState({});
-  const [cache, setCache] = useState(loadCache);
-  const [fetchState, setFetchState] = useState({ running: false, unresolved: [], startedAt: 0, doneThisRun: 0, pausedFor: 0, error: '' });
-  const stopRef = useRef(false);
-  const cacheRef = useRef(cache);
   const [markup, setMarkup] = useState('12');   // never remembered: every fresh run starts at 12 %
   const [dryRun, setDryRun] = useState(false);
   const [result, setResult] = useState(null);
-  useUnsavedGuard(fetchState.running);
-  useEffect(() => () => { stopRef.current = true; }, []);
 
   async function pickRevise(f) {
     setReviseFile(f); setResult(null); setDecisions({});
@@ -101,13 +77,7 @@ export function EbayReprice({ onHome, onSignOut }) {
   const review = resolved ? resolved.groups.filter((g) => g.issue || g.unverified)
     .sort((a, b) => (b.issue ? 1 : 0) - (a.issue ? 1 : 0)) : [];
   const jobs = useMemo(() => (effective && !effective.pending.length ? jobsFor(revise, effective.styleAt) : []), [effective, revise]);
-  const cached = jobs.filter((j) => cache[cacheKey(j.sku, j.size)]).length;
-  const fetchDone = jobs.length > 0 && cached === jobs.length;
-  const tally = useMemo(() => {
-    const t = { ok: 0, null_price: 0, not_listed: 0, bad_size: 0 };
-    for (const j of jobs) { const s = cache[cacheKey(j.sku, j.size)]?.status; if (s in t) t[s]++; }
-    return t;
-  }, [jobs, cache]);
+  const mp = useMarketPrices(jobs, onSignOut);
   const pctH = parseMarkup(markup);
 
   function skipAllPending() {
@@ -117,80 +87,15 @@ export function EbayReprice({ onHome, onSignOut }) {
   const firstPendingRef = useRef(null);
   function decide(id, d) { setResult(null); setDecisions((cur) => { const n = { ...cur }; if (d) n[id] = d; else delete n[id]; return n; }); }
 
-  // The network stage. One batch at a time (the server runs 4 lookups of it at once);
-  // `error` answers go back in the queue with a growing delay; a 429 from our own server
-  // pauses EVERYTHING, not just the batch that hit it. Nothing unresolved is ever cached
-  // as an answer, so it can't reach the reprice step dressed up as "no data".
-  async function runFetch() {
-    stopRef.current = false;
-    const tries = new Map();
-    const notBefore = new Map();
-    const unresolved = [];
-    let queue = jobs.filter((j) => !cacheRef.current[cacheKey(j.sku, j.size)]);
-    let backoff = 0;
-    setFetchState({ running: true, unresolved: [], startedAt: Date.now(), doneThisRun: 0, pausedFor: 0, error: '' });
-    let done = 0;
-    while (queue.length && !stopRef.current) {
-      const now = Date.now();
-      const ready = queue.filter((j) => (notBefore.get(cacheKey(j.sku, j.size)) || 0) <= now).slice(0, BATCH);
-      if (!ready.length) { await sleep(Math.max(250, Math.min(...queue.map((j) => notBefore.get(cacheKey(j.sku, j.size)) || 0)) - now)); continue; }
-      let results;
-      try {
-        results = (await api.ebayRepricePrices(ready)).results || [];
-        backoff = 0;
-      } catch (err) {
-        if (err.unauthorized) { stopRef.current = true; onSignOut(); return; }
-        if (err.status === 429) {
-          const wait = Math.min(60, 5 * 2 ** backoff++) * 1000;
-          setFetchState((s) => ({ ...s, pausedFor: wait / 1000 }));
-          await sleep(wait);
-          setFetchState((s) => ({ ...s, pausedFor: 0 }));
-          continue;
-        }
-        results = ready.map((j) => ({ ...j, status: 'error', error: err.message }));
-      }
-      const next = { ...cacheRef.current };
-      const settled = new Set();
-      for (const r of results) {
-        const k = cacheKey(r.sku, r.size);
-        if (r.status === 'error') {
-          const t = (tries.get(k) || 0) + 1;
-          tries.set(k, t);
-          if (t >= MAX_TRIES) { unresolved.push({ ...r, tries: t }); settled.add(k); } else notBefore.set(k, Date.now() + 2000 * t);
-        } else {
-          next[k] = { status: r.status, valueCents: r.valueCents ?? null, label: r.label || null, name: r.name || null };
-          settled.add(k);
-          done++;
-        }
-      }
-      queue = queue.filter((j) => !settled.has(cacheKey(j.sku, j.size)));
-      cacheRef.current = next;
-      setCache(next);
-      saveCache(next);
-      setFetchState((s) => ({ ...s, doneThisRun: done, unresolved: [...unresolved] }));
-    }
-    setFetchState((s) => ({ ...s, running: false, unresolved: [...unresolved] }));
-  }
-
-  function clearSaved() {
-    cacheRef.current = {};
-    setCache({});
-    saveCache({});
-    setResult(null);
-  }
-
   function run() {
     if (pctH == null) return;
-    const out = applyReprice(revise, effective.styleAt, cacheRef.current, pctH, { dryRun });
+    const out = applyReprice(revise, effective.styleAt, mp.cacheRef.current, pctH, { dryRun });
     const verify = out.text ? verifyOutput(reviseText, out.text) : null;
     setResult({ ...out, verify, pctH, dryRun, name: outputName(reviseFile?.name, estToday()) });
   }
 
-  const remaining = jobs.length - cached;
-  const elapsed = fetchState.running && fetchState.doneThisRun ? (Date.now() - fetchState.startedAt) / fetchState.doneThisRun : 0;
-  const eta = elapsed ? Math.ceil((remaining * elapsed) / 60000) : null;
   const canPrice = !!effective && !effective.pending.length && jobs.length > 0;
-  const canRun = fetchDone && !fetchState.running && !fetchState.unresolved.length && pctH != null;
+  const canRun = mp.ready && pctH != null;
 
   return (
     <div className="app">
@@ -273,31 +178,7 @@ export function EbayReprice({ onHome, onSignOut }) {
         </div>
       )}
 
-      {canPrice && (
-        <div className="card er-step">
-          <h3 className="er-step-title"><span className="er-num">3</span> Market prices</h3>
-          <p className="muted sm">{fmt(jobs.length)} style + size lookups. Saved in this browser for today, so a reload picks up where it stopped. Keep this tab open while it runs — about 15–20 minutes for a full file.</p>
-          <ProgressBar value={jobs.length ? cached / jobs.length : 0}
-            label={`${fmt(cached)} of ${fmt(jobs.length)} priced${fetchState.running && eta != null ? ` · about ${eta} min left` : ''}${fetchState.pausedFor ? ` · server busy, pausing ${fetchState.pausedFor}s` : ''}`} />
-          <div className="er-stats mt">
-            <Stat n={fmt(tally.ok)} label="priced" />
-            <Stat n={fmt(tally.null_price)} label="no market data" />
-            <Stat n={fmt(tally.not_listed)} label="not on Alias" tone={tally.not_listed > 20 ? 'warn' : ''} />
-            <Stat n={fmt(fetchState.unresolved.length)} label="failed (Alias errors)" tone={fetchState.unresolved.length ? 'bad' : ''} />
-          </div>
-          {tally.not_listed > 20 && <p className="muted xs">Lots of “not on Alias” usually means a wrong Style ID in step 2, not a quiet market.</p>}
-          {fetchState.unresolved.length > 0 && !fetchState.running && (
-            <div className="error mt">{fmt(fetchState.unresolved.length)} lookup{fetchState.unresolved.length === 1 ? '' : 's'} still failed after {MAX_TRIES} tries ({fetchState.unresolved[0].error}). Repricing waits until they resolve — press Retry.</div>
-          )}
-          <div className="er-actions">
-            {fetchState.running
-              ? <button type="button" className="btn" onClick={() => { stopRef.current = true; }}>Pause</button>
-              : <button type="button" className="btn primary" disabled={fetchDone && !fetchState.unresolved.length} onClick={runFetch}>
-                {fetchState.unresolved.length ? 'Retry failed' : fetchDone ? '✓ All prices fetched' : cached ? `Resume (${fmt(remaining)} left)` : 'Fetch prices'}</button>}
-            {!fetchState.running && cached > 0 && <button type="button" className="btn ghost sm" onClick={clearSaved} title="Forget today’s saved prices and fetch everything again">Clear saved prices</button>}
-          </div>
-        </div>
-      )}
+      {canPrice && <MarketPricesStep mp={mp} num={3} hint="Keep this tab open while it runs — about 15–20 minutes for a full file." onCleared={() => setResult(null)} />}
 
       {canPrice && (
         <div className="card er-step">
@@ -315,7 +196,7 @@ export function EbayReprice({ onHome, onSignOut }) {
             <label className="er-dry"><input type="checkbox" checked={dryRun} onChange={(e) => { setDryRun(e.target.checked); setResult(null); }} /> Dry run — audit report only, no upload file</label>
             <button type="button" className="btn primary" disabled={!canRun} onClick={run}>{dryRun ? 'Run dry run' : 'Build upload file'}</button>
           </div>
-          {!fetchDone && <p className="muted xs">Waiting for every price in step 3.</p>}
+          {!mp.done && <p className="muted xs">Waiting for every price in step 3.</p>}
 
           {result && (
             <div className="er-result">

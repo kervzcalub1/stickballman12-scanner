@@ -23,7 +23,7 @@ const SKU_X = `E2E-COST-X-${stamp}`;   // PO: priced 80 / 90 by size
 const SKU_Y = `E2E-COST-Y-${stamp}`;   // PO: no cost declared
 const SKU_Z = `E2E-COST-Z-${stamp}`;   // PO: 60, overridden on the card
 const SKU_P = `E2E-COST-P-${stamp}`;   // preset PO: shelf 150, no line tip
-const SKU_Q = `E2E-COST-Q-${stamp}`;   // preset PO: shelf 100, line tip 7 (beats the preset's 5)
+const SKU_Q = `E2E-COST-Q-${stamp}`;   // preset PO: shelf 100, line tip 7 — IGNORED, the preset's 5 prices it
 const SKU_N = `E2E-COST-N-${stamp}`;   // no-preset PO: shelf 70 → cost left BLANK
 const ALL = [SKU_A, SKU_B, SKU_C, SKU_X, SKU_Y, SKU_Z, SKU_P, SKU_Q, SKU_N];
 // A zero-cost stack for the per-size test: with it, landed = shelf exactly, so that test
@@ -247,8 +247,9 @@ test('a PO shelf price lands as shelf + the supplier preset’s costs', async ({
   // 150 − 8% gift card = 138, + 8.25% tax = 149.39, + $5 tip + $8.25 shipping = 162.64
   await expect(costSrc(card(SKU_P))).toContainText(`shelf + ${PRESET_SUPPLIER}’s costs`);
   await expect(costBox(card(SKU_P))).toHaveAttribute('placeholder', '162.64');
-  // The line's own $7 tip wins over the preset's $5: 92 + 7.59 + 7 + 8.25 = 114.84
-  await expect(costBox(card(SKU_Q))).toHaveAttribute('placeholder', '114.84');
+  // The line's $7 tip is ignored — always the preset's $5 (owner, 2026-10-08):
+  // 92 + 7.59 + 5 + 8.25 = 112.84
+  await expect(costBox(card(SKU_Q))).toHaveAttribute('placeholder', '112.84');
 
   await page.getByRole('button', { name: /Next →/ }).click();
   await page.getByRole('button', { name: 'Submit box' }).click();
@@ -256,7 +257,7 @@ test('a PO shelf price lands as shelf + the supplier preset’s costs', async ({
   await expect(page.locator('.modal.success, .modal')).toContainText(/Box saved/i);
 
   expect(await costsOnFile(SKU_P)).toEqual([{ size: '9', cost: 162.64 }]);
-  expect(await costsOnFile(SKU_Q)).toEqual([{ size: '9', cost: 114.84 }]);
+  expect(await costsOnFile(SKU_Q)).toEqual([{ size: '9', cost: 112.84 }]);
   const shelf = await q('SELECT sku, shelf_price FROM items WHERE sku = ANY($1) ORDER BY sku', [[SKU_P, SKU_Q]]);
   expect(shelf.map((r) => Number(r.shelf_price))).toEqual([150, 100]);
 });

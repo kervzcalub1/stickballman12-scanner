@@ -133,7 +133,7 @@ export default async function handler(req, res) {
     const plan = await buildPlan();
     let filled = 0;
     for (const g of plan.groups) {
-      const how = `${money(g.shelf)} shelf through the “${g.preset}” preset${g.tip != null ? ` (line tip ${money(g.tip)})` : ''}`;
+      const how = `${money(g.shelf)} shelf through the “${g.preset}” preset`;
       // Said in the note when the batch was never linked: the PO was found by the parcel's
       // tracking number, so whoever reads the history can check that match.
       const via = g.byTracking ? ` — batch not linked to the PO; matched by tracking ${g.tracking}` : '';

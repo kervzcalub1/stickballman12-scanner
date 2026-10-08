@@ -135,7 +135,10 @@ export function poLineCost(lines, sku, size, poBoxId = null) {
 
 // Shelf price → landed cost, through the SAME register maths as the Payout Calculator
 // (calcCostBreakdown), so a received pair and a calculator line can never disagree.
-// The line's own tip wins over the preset's: the supplier typed it for that pair.
+// The tip is ALWAYS the preset's (owner's rule, 2026-10-08). A tip typed on the PO line
+// used to win, so a line carrying $8 costed DZ2628-110 8W at $78.99 while the Payout
+// Calculator with the same preset said $75.99 — the same pair, two costs. The line's tip
+// is still kept on the PO (and passed in here), it just no longer prices the pair.
 //
 // NO PRESET → NULL, not the shelf price (2026-09-30, the owner's rule). What a supplier
 // declares is only the shelf price; the actual cost is that shelf price PLUS the
@@ -143,10 +146,10 @@ export function poLineCost(lines, sku, size, poBoxId = null) {
 // is not known, and writing shelf + tip would put a number on the pair that looks
 // landed but is short by the tax and shipping. Blank is the honest answer; link a
 // preset to the supplier and the pair can be costed (Costs → Fill costs from POs).
-export function landedFromShelf(shelf, lineTip, preset) {
+export function landedFromShelf(shelf, _lineTip, preset) {
   const s = costOrNull(shelf);
   if (s == null || !preset) return null;
-  const tip = lineTip != null ? lineTip : (preset ? preset.tipAmt : 0);
+  const tip = preset.tipAmt ?? 0;
   const b = calcCostBreakdown({
     shelfPrice: s,
     storePct: preset?.storePct, promoPct: preset?.promoPct, giftPct: preset?.giftPct,

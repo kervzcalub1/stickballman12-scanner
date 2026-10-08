@@ -8517,13 +8517,14 @@ export async function markMarketplaceSaleAlerted(platform, orderId, error = null
               WHERE platform = ${platform} AND order_id = ${orderId}`;
 }
 
-// ---- Shopify Reprice audit (docs/context/shopify-reprice.md) ----
-export async function insertShopifyPriceChanges(rows, actor) {
+// ---- Shopify Listings audit (docs/context/shopify-listings.md) ----
+export async function insertShopifyListingEdits(rows, actor) {
   for (const r of rows) {
-    await db()`INSERT INTO shopify_price_changes (variant_id, product_id, product_title, style, size, old_price, new_price, market_cents, markup_pct, changed_by)
-               VALUES (${r.variantId}, ${r.productId}, ${r.productTitle}, ${r.style}, ${r.size}, ${r.oldPrice}, ${r.newPrice}, ${r.marketCents}, ${r.markupPct}, ${actor})`;
+    await db()`INSERT INTO shopify_listing_edits (target, ref_id, product_id, product_title, style, size, field, old_value, new_value, source, market_cents, markup_pct, changed_by)
+               VALUES (${r.target}, ${r.refId}, ${r.productId}, ${r.productTitle}, ${r.style || null}, ${r.size || null}, ${r.field},
+                       ${r.oldValue}, ${r.newValue}, ${r.source || null}, ${r.marketCents ?? null}, ${r.markupPct ?? null}, ${actor})`;
   }
 }
-export async function recentShopifyPriceChanges(limit = 200) {
-  return db()`SELECT * FROM shopify_price_changes ORDER BY changed_at DESC, id DESC LIMIT ${limit}`;
+export async function recentShopifyListingEdits(limit = 200) {
+  return db()`SELECT * FROM shopify_listing_edits ORDER BY changed_at DESC, id DESC LIMIT ${limit}`;
 }

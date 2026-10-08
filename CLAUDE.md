@@ -43,7 +43,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
 | Payout Calculator: store cost stack → Alias/StockX payout, profit, ROI, buy call, **supplier presets**; **best platform per size** (calculator, PH grid, Platform Profit report, **New Inventory chip + `platform_quotes` price cache**); **PO shelf price → landed cost** | `docs/context/payout-calculator.md` |
 | **eBay Reprice** (PH): revise-price CSV + inventory report → cut listings above market + markup (default 12 %), never up; strict Alias pricing endpoint, verify-gated download | `docs/context/ebay-reprice.md` |
-| **Shopify Reprice** (PH): pull every Shopify variant → set to market + markup BOTH ways, written live via Admin API (**needs `write_products`**); re-read before write, `shopify_price_changes` audit | `docs/context/shopify-reprice.md` |
+| **Shopify Listings** (PH): every Shopify listing as a searchable table — reprice to market + markup (both ways), edit price / compare-at / title / status, save live (**needs `write_products`**); re-read before write, `shopify_listing_edits` audit | `docs/context/shopify-listings.md` |
 | The app-wide advisor: floating button, screen context, its nine read-only tools | `docs/context/advisor.md` |
 | Shopify: the all-channel sales + inventory feed (`api/_lib/shopify.js`) | `docs/context/shopify.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |

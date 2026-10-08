@@ -47,15 +47,18 @@ export function useMarketPrices(jobs, onSignOut) {
     return t;
   }, [jobs, cache]);
 
-  async function run() {
+  // `list` prices just those jobs (Shopify Listings prices what you're looking at);
+  // without it, every job the hook was given. An onClick event is not a list.
+  async function run(list) {
+    const source = Array.isArray(list) ? list : jobs;
     stopRef.current = false;
     const tries = new Map();
     const notBefore = new Map();
     const unresolved = [];
-    let queue = jobs.filter((j) => !cacheRef.current[cacheKey(j.sku, j.size)]);
+    let queue = source.filter((j) => !cacheRef.current[cacheKey(j.sku, j.size)]);
     let backoff = 0;
     let done = 0;
-    setState({ running: true, unresolved: [], startedAt: Date.now(), doneThisRun: 0, pausedFor: 0 });
+    setState({ running: true, unresolved: [], startedAt: Date.now(), doneThisRun: 0, pausedFor: 0, queued: queue.length });
     while (queue.length && !stopRef.current) {
       const now = Date.now();
       const ready = queue.filter((j) => (notBefore.get(cacheKey(j.sku, j.size)) || 0) <= now).slice(0, BATCH);

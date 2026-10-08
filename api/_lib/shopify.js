@@ -339,7 +339,7 @@ export async function shopifyInventoryForSku(sku) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Shopify Reprice (PH) — docs/context/shopify-reprice.md              */
+/* Shopify Listings (PH) — docs/context/shopify-listings.md            */
 /* ------------------------------------------------------------------ */
 
 // Why a refusal happened, in words that send the reader to the right fix.
@@ -357,12 +357,15 @@ const VARIANTS_QUERY = `query Variants($after: String) {
   productVariants(first: 250, after: $after) {
     pageInfo { hasNextPage endCursor }
     edges { node {
-      id sku title price inventoryQuantity
+      id sku title price compareAtPrice inventoryQuantity
       selectedOptions { name value }
-      product { id title status }
+      product { id title status handle featuredMedia { preview { image { url(transform: { maxWidth: 96 }) } } } }
     } }
   }
 }`;
+
+// The store's handle for admin links: "gqmnaa-ks.myshopify.com" → "gqmnaa-ks".
+export const shopifyAdminStore = () => domain().replace(/\.myshopify\.com$/, '');
 
 // Every variant in the store (≈ 3,900 → ~16 pages), with the style code read off the
 // PRODUCT title the same way the sales feed does — the variant `sku` is an internal
@@ -380,8 +383,11 @@ export async function shopifyAllVariants() {
       const skuStyle = /[A-Z]/i.test(v.sku || '') && /\d/.test(v.sku || '') && String(v.sku).length >= 5 ? String(v.sku).toUpperCase() : null;
       out.push({
         variantId: v.id, productId: v.product?.id || null, productTitle: v.product?.title || '',
-        status: v.product?.status || null, sku: v.sku || '', size: String(size ?? '').trim(),
-        price: v.price, qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity),
+        status: v.product?.status || null, handle: v.product?.handle || null,
+        image: v.product?.featuredMedia?.preview?.image?.url || null,
+        sku: v.sku || '', size: String(size ?? '').trim(),
+        price: v.price, compareAt: v.compareAtPrice ?? null,
+        qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity),
         style: styleFromTitle(v.product?.title) || skuStyle,
       });
     }
@@ -391,26 +397,49 @@ export async function shopifyAllVariants() {
   return { variants: out, truncated: true };
 }
 
-// The price Shopify holds RIGHT NOW for each variant id — read just before writing, so a
-// price someone changed after the pull is never overwritten blind.
-export async function shopifyVariantPrices(ids) {
-  const r = await gql(`query Prices($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id price product { id } } } }`, { ids });
+// What Shopify holds RIGHT NOW — read just before writing, so a field someone changed
+// after the pull is never overwritten blind.
+export async function shopifyListingState(variantIds, productIds) {
+  const ids = [...variantIds, ...productIds];
+  if (!ids.length) return { variants: new Map(), products: new Map() };
+  const r = await gql(`query State($ids: [ID!]!) { nodes(ids: $ids) {
+    ... on ProductVariant { id price compareAtPrice product { id } }
+    ... on Product { id title status }
+  } }`, { ids });
   if (!r.ok) return failure(r, 'read');
-  return { prices: new Map((r.data?.nodes || []).filter(Boolean).map((n) => [n.id, { price: n.price, productId: n.product?.id }])) };
+  const variants = new Map();
+  const products = new Map();
+  for (const n of r.data?.nodes || []) {
+    if (!n?.id) continue;
+    if (n.id.includes('/ProductVariant/')) variants.set(n.id, { price: n.price, compareAt: n.compareAtPrice ?? null, productId: n.product?.id });
+    else products.set(n.id, { title: n.title, status: n.status });
+  }
+  return { variants, products };
 }
 
-// Set prices on some variants of ONE product. Returns { ok } or { error, code } — and
-// Shopify's per-variant userErrors when it accepted the call but refused a row.
-export async function shopifyUpdateVariantPrices(productId, variants) {
-  const r = await gql(`mutation Reprice($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+// Price / compare-at on some variants of ONE product. `compareAtPrice: null` clears it.
+export async function shopifyUpdateVariants(productId, variants) {
+  const r = await gql(`mutation Variants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
     productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-      productVariants { id price }
+      productVariants { id price compareAtPrice }
       userErrors { field message }
     }
-  }`, { productId, variants: variants.map((v) => ({ id: v.id, price: v.price })) });
+  }`, { productId, variants });
   if (!r.ok) return failure(r, 'write');
   const res = r.data?.productVariantsBulkUpdate;
   const errs = res?.userErrors || [];
   if (errs.length) return { error: errs.map((e) => e.message).join(' | '), code: 'rejected' };
-  return { ok: true, updated: new Map((res?.productVariants || []).map((v) => [v.id, v.price])) };
+  return { ok: true, updated: new Map((res?.productVariants || []).map((v) => [v.id, { price: v.price, compareAt: v.compareAtPrice ?? null }])) };
+}
+
+// Title and/or status (ACTIVE | DRAFT | ARCHIVED) of one product.
+export async function shopifyUpdateProduct(product) {
+  const r = await gql(`mutation Product($product: ProductUpdateInput!) {
+    productUpdate(product: $product) { product { id title status } userErrors { field message } }
+  }`, { product });
+  if (!r.ok) return failure(r, 'write');
+  const res = r.data?.productUpdate;
+  const errs = res?.userErrors || [];
+  if (errs.length) return { error: errs.map((e) => e.message).join(' | '), code: 'rejected' };
+  return { ok: true, product: res?.product };
 }

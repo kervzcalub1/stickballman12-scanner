@@ -9,8 +9,8 @@ import { api } from '../api.js';
 import { TopBar, PageNavContext, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText, Modal, RemoveUnitsModal } from '../components/common.jsx';
 import { RescaleRequestModal } from '../components/RescaleRequestModal.jsx';
 import { WaitlistModal } from '../components/WaitlistModal.jsx';
-import { waitlistCsv, waitlistCsvName, waitlistDaysLeft } from '../lib/waitlist.js';
-import { downloadCSV } from '../lib/csv.js';
+import { waitlistXlsx, waitlistFileName, waitlistDaysLeft } from '../lib/waitlist.js';
+import { XLSX_MIME } from '../lib/xlsx.js';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { skuCodes } from '../lib/sku.js';
@@ -818,7 +818,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     try {
       const { rows: list } = await api.phWaitlistList();
       if (!list?.length) { setNotice('Nothing is on the waitlist right now.'); return; }
-      downloadCSV(waitlistCsvName(estToday()), waitlistCsv(list));
+      const url = URL.createObjectURL(new Blob([waitlistXlsx(list)], { type: XLSX_MIME }));
+      const a = document.createElement('a');
+      a.href = url; a.download = waitlistFileName(estToday()); a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   function onRescaleSent(res) {
@@ -1239,8 +1242,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
             </div>
             {showPricing && kind === 'receiving' && (
               <button type="button" className="btn ghost sm" onClick={downloadWaitlist}
-                title="Everything on the waitlist (any date) as a CSV — the daily report for the review">
-                ⬇ Waitlist CSV
+                title="Everything on the waitlist (any date) as an Excel file — the daily report for the review">
+                ⬇ Waitlist (Excel)
               </button>
             )}
           </div>

@@ -1,7 +1,7 @@
 // /api/ph/waitlist — hold pairs out of listing until the market corrects (docs/context/waitlist.md)
 //
 //   GET                       -> { ok, rows }      everything on hold, one row per SKU + size
-//   GET ?format=csv           -> text/csv          the same, as the daily report file
+//   GET ?format=xlsx          -> .xlsx             the same, as the daily report file
 //   POST { action:'hold', vins, days, note? }  -> { ok, held, skipped, until }
 //   POST { action:'release', vins }            -> { ok, released }
 //
@@ -9,7 +9,8 @@
 // people who list, because a hold is a listing decision.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, setWaitlist, releaseWaitlist, listWaitlist } from '../_lib/db.js';
-import { waitlistUntil, waitlistCsv, waitlistCsvName, WAITLIST_DEFAULT_DAYS } from '../../src/lib/waitlist.js';
+import { waitlistUntil, waitlistXlsx, waitlistFileName, WAITLIST_DEFAULT_DAYS } from '../../src/lib/waitlist.js';
+import { XLSX_MIME } from '../../src/lib/xlsx.js';
 import { estToday } from '../../src/lib/format.js';
 
 const MAX_VINS = 2000;
@@ -26,11 +27,11 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const rows = await listWaitlist();
-      if (new URL(req.url, 'http://x').searchParams.get('format') === 'csv') {
+      if (new URL(req.url, 'http://x').searchParams.get('format') === 'xlsx') {
         res.statusCode = 200;
-        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-        res.setHeader('Content-Disposition', `attachment; filename="${waitlistCsvName(estToday())}"`);
-        return res.end(waitlistCsv(rows));
+        res.setHeader('Content-Type', XLSX_MIME);
+        res.setHeader('Content-Disposition', `attachment; filename="${waitlistFileName(estToday())}"`);
+        return res.end(Buffer.from(waitlistXlsx(rows)));
       }
       return send(res, 200, { ok: true, rows });
     } catch (e) {

@@ -168,10 +168,10 @@ export function sendAlertMessage(telegramUserId, { html, url = null }) {
   }));
 }
 
-// A file in a private chat (the daily waitlist CSV), the caption carrying the same HTML an
+// A file in a private chat (the daily waitlist report), the caption carrying the same HTML an
 // alert does. Multipart, because sendDocument takes the file itself — there is no URL to
 // hand Telegram that it could fetch. Same queue as every other send.
-export function sendAlertDocument(telegramUserId, { html, filename, content, type = 'text/csv' }) {
+export function sendAlertDocument(telegramUserId, { html, filename, content, type = 'application/octet-stream' }) {
   return enqueue(() => {
     const form = new FormData();
     form.append('chat_id', String(Number(telegramUserId)));

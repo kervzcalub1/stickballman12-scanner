@@ -5,7 +5,7 @@
 //      waitlist_until — nothing has to run for the pair to reappear). This tells the person
 //      who lists, once, so a pair held a month doesn't come back to nobody. The owner's
 //      ask: "don't involve me, I'll forget" — so it is automatic, not a reminder to set.
-//   2. The daily report: everything on hold as a CSV, at the end of the PH shift, for the
+//   2. The daily report: everything on hold as an Excel file, at the end of the PH shift, for the
 //      review (Alex + Kyleen) — sent as a file on Telegram to whoever has it switched on.
 //
 // Runs only where it should: dev and prod share ONE Telegram bot, and a laptop's copy of
@@ -14,7 +14,8 @@
 // =on / =off overrides either way. `npm run dev` never starts it (server.mjs only).
 import { claimWaitlistReturns, listWaitlist } from './db.js';
 import { alertWaitlistBack, alertWaitlistDaily } from './alerts.js';
-import { waitlistCsv, waitlistCsvName } from '../../src/lib/waitlist.js';
+import { waitlistXlsx, waitlistFileName } from '../../src/lib/waitlist.js';
+import { XLSX_MIME } from '../../src/lib/xlsx.js';
 import { estToday } from '../../src/lib/format.js';
 
 const TICK_MS = 5 * 60 * 1000;
@@ -43,7 +44,7 @@ export async function waitlistTick(now = new Date()) {
     lastDailyDay = day;   // set first: a failed send is not retried every 5 minutes
     const rows = await listWaitlist();
     // An empty waitlist is not a report — nothing to review, so nothing is sent.
-    if (rows.length) await alertWaitlistDaily({ day, rows, csv: waitlistCsv(rows), filename: waitlistCsvName(day) });
+    if (rows.length) await alertWaitlistDaily({ day, rows, file: { filename: waitlistFileName(day), content: waitlistXlsx(rows), type: XLSX_MIME } });
   }
   return { back: back.length };
 }

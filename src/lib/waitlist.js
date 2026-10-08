@@ -1,9 +1,10 @@
 // Waitlist — pure helpers shared by the New Inventory Waitlist tab (browser) and the
-// daily report the server sends on Telegram (api/_lib/waitlist-worker.js), so the CSV a
+// daily report the server sends on Telegram (api/_lib/waitlist-worker.js), so the file a
 // person downloads and the one that arrives at the end of the shift are the same file.
 // docs/context/waitlist.md.
 import { estDate, estCivil, ymd } from './format.js';
 import { calcPayout, DEFAULT_FEE_PCT } from './payout.js';
+import { buildXlsx } from './xlsx.js';
 
 // How long a pair is held when nobody says otherwise: a month (the owner's "wait a
 // month before we list it"), with the shorter holds a button away.
@@ -36,8 +37,6 @@ export function waitlistDaysLeft(until, now = new Date()) {
   return Math.max(0, Math.round((b - a) / 86_400_000));
 }
 
-const money = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? '' : Number(v).toFixed(2));
-
 // What a pair would make right now at the cached lowest asks, after each platform's fee
 // — the number the review is deciding on ("has the market come back yet?"). Blank when
 // there is no cost or no ask: "we don't know" must not print as a profit.
@@ -52,33 +51,39 @@ export function waitlistMarketNow(row) {
   return { best: top.label, profit: top.profit };
 }
 
+// The report's columns. Money and counts are real NUMBERS in the file (they sort and sum);
+// everything else is text. VINs are capped narrower — the cell still holds them all.
+const num = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 const COLS = [
-  ['SKU', (r) => r.sku],
-  ['Name', (r) => r.name],
-  ['Size', (r) => r.size],
-  ['Qty', (r) => r.qty],
-  ['Cost ea', (r) => money(r.cost)],
-  ['Global Indicator', (r) => money(r.global_indicator)],
-  ['Final price', (r) => money(r.price)],
-  ['Alias ask (cached)', (r) => money(r.alias_ask)],
-  ['StockX ask (cached)', (r) => money(r.stockx_ask)],
-  ['Best now', (r) => waitlistMarketNow(r).best],
-  ['Profit/pr now', (r) => money(waitlistMarketNow(r).profit)],
-  ['Waitlisted on (EST)', (r) => (r.waitlisted_at ? estDate(r.waitlisted_at) : '')],
-  ['Waitlisted by', (r) => r.waitlisted_by],
-  ['Back on (EST)', (r) => (r.waitlist_until ? estDate(r.waitlist_until) : '')],
-  ['Days left', (r) => waitlistDaysLeft(r.waitlist_until)],
-  ['Reason', (r) => r.note],
-  ['Supplier', (r) => r.suppliers],
-  ['Batch', (r) => r.batches],
-  ['VINs', (r) => r.vins],
+  ['SKU', 'text', (r) => r.sku],
+  ['Name', 'text', (r) => r.name],
+  ['Size', 'text', (r) => r.size],
+  ['Qty', 'int', (r) => num(r.qty)],
+  ['Cost ea', 'money', (r) => num(r.cost)],
+  ['Global Indicator', 'money', (r) => num(r.global_indicator)],
+  ['Final price', 'money', (r) => num(r.price)],
+  ['Alias ask (cached)', 'money', (r) => num(r.alias_ask)],
+  ['StockX ask (cached)', 'money', (r) => num(r.stockx_ask)],
+  ['Best now', 'text', (r) => waitlistMarketNow(r).best],
+  ['Profit/pr now', 'money', (r) => num(waitlistMarketNow(r).profit)],
+  ['Waitlisted on (EST)', 'text', (r) => (r.waitlisted_at ? estDate(r.waitlisted_at) : '')],
+  ['Waitlisted by', 'text', (r) => r.waitlisted_by],
+  ['Back on (EST)', 'text', (r) => (r.waitlist_until ? estDate(r.waitlist_until) : '')],
+  ['Days left', 'int', (r) => waitlistDaysLeft(r.waitlist_until)],
+  ['Reason', 'text', (r) => r.note],
+  ['Supplier', 'text', (r) => r.suppliers],
+  ['Batch', 'text', (r) => r.batches],
+  ['VINs', 'text', (r) => r.vins, 40],
 ];
 
-export function waitlistCsv(rows) {
-  const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const head = COLS.map(([label]) => esc(label)).join(',');
-  const body = (rows || []).map((r) => COLS.map(([, get]) => esc(get(r))).join(',')).join('\n');
-  return `${head}\n${body}`;
+// The daily report as an Excel file — columns sized to their text, header bold and
+// frozen, a filter on every column (src/lib/xlsx.js). A CSV can't carry any of that.
+export function waitlistXlsx(rows) {
+  return buildXlsx({
+    sheetName: 'Waitlist',
+    columns: COLS.map(([label, type, , maxWidth]) => ({ label, type, ...(maxWidth ? { maxWidth } : {}) })),
+    rows: (rows || []).map((r) => COLS.map(([, , get]) => get(r))),
+  });
 }
 
-export const waitlistCsvName = (day) => `waitlist-${day}.csv`;
+export const waitlistFileName = (day) => `waitlist-${day}.xlsx`;

@@ -73,7 +73,7 @@ connection brings it back as **Reconnect** with no "Not now". No migration.
 | `buy.list_reopened` | gift card desk — only once the desk is in play (approved / released / cards issued) | `cart/submit.js` (reopen) | on |
 | `buy.list_reclosed` | gift card desk — closed AGAIN after a re-open: lines added / removed / changed since `list_reopened_at`, and what that means for the cards | `cart/submit.js` (close) | on |
 | `ph.waitlist_back` | PH (admins: shown, off) — one message per batch of returns | `waitlist-worker.js` (claimWaitlistReturns) | on |
-| `ph.waitlist_daily` | admins (PH: shown, off) — a **CSV file** (`sendAlertDocument`), `once` per EST day | `waitlist-worker.js`, 18:00 EST | on |
+| `ph.waitlist_daily` | admins (PH: shown, off) — an **Excel file** (`sendAlertDocument`), `once` per EST day | `waitlist-worker.js`, 18:00 EST | on |
 | `nudge` | whoever the record waits on | `api/nudge.js` | required |
 
 **Links are per reader** (`at(page, query)`): PH lands under `/ph/*`, a supplier on its

@@ -1092,6 +1092,22 @@ await sql(`CREATE INDEX IF NOT EXISTS items_pre_sell_idx ON items (batch_id, sku
    NULL for everything that was never held. */
 await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS presell_freed_at TIMESTAMPTZ`);
 
+/* ---- Waitlist (2026-10-09, docs/context/waitlist.md) ----
+   A pair the market is under water on right now — one cheap ask dragged the price below
+   what we paid — is held OUT of PH's listing for a while (a month by default) so the
+   market can correct before we list into it. `waitlist_until` IS the hold: while it is
+   in the future the pair sits on New Inventory's Waitlist tab and nowhere else PH works;
+   the moment it passes the pair is back on the to-list rows by itself — nothing has to
+   run for the release to happen. `waitlist_alerted_at` is only the Telegram heads-up
+   ("back from the waitlist") having gone, so it goes once. A release by hand sets
+   `waitlist_until` to now(), keeping who held it and why for the CSV and the history. */
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS waitlist_until TIMESTAMPTZ`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS waitlisted_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS waitlisted_by TEXT`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS waitlist_note TEXT`);
+await sql(`ALTER TABLE items ADD COLUMN IF NOT EXISTS waitlist_alerted_at TIMESTAMPTZ`);
+await sql(`CREATE INDEX IF NOT EXISTS items_waitlist_idx ON items (waitlist_until) WHERE waitlist_until IS NOT NULL`);
+
 /* ---- Supplier-raised orders: the manifest comes BEFORE the labels ----
    The original flow was labels-first: PH bought courier labels, raised the order around
    their tracking numbers, and the supplier filled each one. That inverted — we now want

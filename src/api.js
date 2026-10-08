@@ -404,6 +404,9 @@ export const api = {
   // Atomic multi-size group save — one entry per size, all-or-nothing (see phUpdateGroup).
   phUpdateGroup: (sizes, baseEditedAt) => post('/api/ph/update', { sizes, baseEditedAt }),
   phSetGoat: (vins, goatOnly) => post('/api/ph/set-goat', { vins, goatOnly }),
+  // Waitlist (docs/context/waitlist.md): { action:'hold', vins, days, note } | { action:'release', vins }.
+  phWaitlist: (body) => post('/api/ph/waitlist', body),
+  phWaitlistList: () => get('/api/ph/waitlist'),
   phRefreshGi: (vins) => post('/api/ph/refresh-gi', { vins }),
   // Purchase Orders — supplier scan-out (Phase 1). PH creates the PO shell + labels;
   // supplier lists/opens their own, scans items under each label, ships per label.

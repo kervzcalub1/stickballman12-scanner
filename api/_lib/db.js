@@ -382,6 +382,7 @@ export async function recomputeUnlistedPrices(oldMult, newMult) {
       AND (price IS NULL OR abs(price - round(global_indicator * ${om})) < 0.51)
       AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.id = items.batch_id AND b.kind = ANY(${PH_EXCLUDED_KINDS}))
       AND NOT items.pre_sell   -- sold before it landed; not PH's to price
+      AND (items.waitlist_until IS NULL OR items.waitlist_until <= now())  -- held; priced when it comes back
     RETURNING id
   `;
   return rows.length;
@@ -1149,6 +1150,7 @@ export async function getItemsForGiRefresh(vins) {
     WHERE i.vin = ANY(${list}) AND i.status NOT IN ('sold', 'shipped')
       AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH/GI pricing
       AND NOT i.pre_sell                                           -- pre-sell is not listed, so not priced
+      AND (i.waitlist_until IS NULL OR i.waitlist_until <= now())  -- waitlisted: priced when it comes back
   `;
 }
 
@@ -1920,6 +1922,7 @@ export async function phListItems(from, to, kind = null) {
         AND i.status <> 'no_box'      -- no-box units aren't postable; PH never lists them
         AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH entirely
         AND NOT i.pre_sell            -- released units clear the flag; unreleased ones stay out
+        AND (i.waitlist_until IS NULL OR i.waitlist_until <= now())  -- still on the waitlist (waitlist.md)
         AND (${from}::date IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
         AND (${to}::date   IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
       ORDER BY created_at DESC, i.id
@@ -1935,20 +1938,28 @@ export async function phListItems(from, to, kind = null) {
            -- tab takes exactly this reading of its own rescaled event, for the same
            -- reason (pre-sell.md). NULL on everything that was never held, so ordinary
            -- stock is unaffected.
-           coalesce(i.presell_freed_at, i.created_at) AS created_at,
+           -- A pair back from the WAITLIST is dated by the day it came back, for the same
+           -- reason (waitlist.md): held a month, it would otherwise return outside the
+           -- window PH is looking at. While it is still held it keeps its scan date.
+           CASE WHEN i.waitlist_until <= now() THEN greatest(i.waitlist_until, coalesce(i.presell_freed_at, i.created_at)) ELSE coalesce(i.presell_freed_at, i.created_at) END AS created_at,
            i.created_by, i.name, i.sku, i.size, i.gender,
            i.status, i.cost, i.price, i.global_indicator, i.gi_basis,
            i.added_to_intel_inv, i.synced_alias, i.synced_stockx, i.synced_shopify, i.goat_only, i.listed_price,
            i.ph_note, i.first_edit_by, i.first_edit_at, i.last_edit_by, i.last_edit_at,
            i.pre_sell, b.pre_sell AS from_pre_sell,
              i.original_sku, i.original_size,  -- GS received as men's (receiving.md)
+           i.waitlist_until, i.waitlisted_at, i.waitlisted_by, i.waitlist_note,
+           coalesce(i.waitlist_until > now(), false) AS waitlisted,
            (SELECT count(*)::int FROM product_photos p WHERE p.sku = i.sku) AS photo_count,
            (SELECT p.url FROM product_photos p WHERE p.sku = i.sku AND p.angle IN ('side','diagonal','outsole','top','rear')
               ORDER BY CASE p.angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, (p.source = 'ph_edited') DESC, p.created_at LIMIT 1) AS photo_url
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
-    WHERE (${from}::date IS NULL OR (coalesce(i.presell_freed_at, i.created_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
-      AND (${to}::date   IS NULL OR (coalesce(i.presell_freed_at, i.created_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+    -- A pair ON the waitlist is shown whatever the date range: the Waitlist tab is the
+    -- list of everything being held, and a pair held since last month is still held.
+    WHERE (coalesce(i.waitlist_until > now(), false) OR (
+          (${from}::date IS NULL OR ((CASE WHEN i.waitlist_until <= now() THEN greatest(i.waitlist_until, coalesce(i.presell_freed_at, i.created_at)) ELSE coalesce(i.presell_freed_at, i.created_at) END) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR ((CASE WHEN i.waitlist_until <= now() THEN greatest(i.waitlist_until, coalesce(i.presell_freed_at, i.created_at)) ELSE coalesce(i.presell_freed_at, i.created_at) END) AT TIME ZONE 'America/New_York')::date <= ${to}::date)))
       -- In-store buys and existing (old) stock never enter the PH team's world
       -- (New Inventory OR the admin Report): in-store is listed to Alias by hand
       -- off the In-Store Listing page, and existing stock was already synced to II
@@ -1971,7 +1982,7 @@ export async function phListItems(from, to, kind = null) {
       -- restock_pending). Same shape as the no-box rule above: the admin Report
       -- (kind IS NULL) still sees everything.
       AND (${kind}::text IS NULL OR NOT i.restock_pending)
-    ORDER BY coalesce(i.presell_freed_at, i.created_at), i.id
+    ORDER BY CASE WHEN i.waitlist_until <= now() THEN greatest(i.waitlist_until, coalesce(i.presell_freed_at, i.created_at)) ELSE coalesce(i.presell_freed_at, i.created_at) END, i.id
     LIMIT 5000
   `;
 }
@@ -2140,7 +2151,9 @@ export async function pendingCounts() {
              (it.with_box AND it.status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable,
              -- NOT pre_sell for the same reason as the kinds: a unit sold before
              -- it landed is not PH's to list, so it must not inflate the listing backlog.
-             ((b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})) AND NOT it.pre_sell) AS ph_managed,
+             -- A pair on the WAITLIST is held out of listing the same way, until its date.
+             ((b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS})) AND NOT it.pre_sell
+               AND (it.waitlist_until IS NULL OR it.waitlist_until <= now())) AS ph_managed,
              (b.kind = 'instore') AS is_instore,
              it.pre_sell AS is_presell,
              -- An empty shoe box: real stock, but never a pair and never sellable.
@@ -3800,6 +3813,9 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
     LEFT JOIN batches b ON b.id = i.batch_id
     WHERE i.vin = ANY(${allVins}) AND i.status NOT IN ('sold', 'shipped')
       AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
+      -- On the waitlist = held out of listing until its date (waitlist.md). The grid shows
+      -- those rows read-only; this is the guard for a tab that loaded before the hold.
+      AND (i.waitlist_until IS NULL OR i.waitlist_until <= now())
   `;
   if (!curRows.length) return [];
   const curByVin = new Map(curRows.map((r) => [r.vin, r]));
@@ -8532,4 +8548,102 @@ export async function insertShopifyListingEdits(rows, actor) {
 }
 export async function recentShopifyListingEdits(limit = 200) {
   return db()`SELECT * FROM shopify_listing_edits ORDER BY changed_at DESC, id DESC LIMIT ${limit}`;
+}
+
+/* ------------------------------- Waitlist ------------------------------- */
+// docs/context/waitlist.md. A pair the market is under water on is held OUT of PH's
+// listing until `waitlist_until` (a month by default) so the market can correct first.
+// The hold IS the date: phListItems, the badges and the GI refresh all read
+// "waitlist_until in the future" as held, so a pair comes back by itself when it passes.
+
+// Only what PH could list today can be held: New Inventory pairs that are still with us,
+// not on any store yet, and not one of the kinds / states PH never touches. Holding a pair
+// that is already live would mean nothing — the listing is still up.
+export async function setWaitlist({ vins, until, note = null, by }) {
+  const list = [...new Set((vins || []).map((v) => String(v || '').trim().toUpperCase()).filter(Boolean))].slice(0, 2000);
+  if (!list.length) return { held: [], skipped: 0 };
+  const sql = db();
+  const rows = await sql`
+    UPDATE items i SET waitlist_until = ${until}::timestamptz, waitlisted_at = now(), waitlisted_by = ${by || null},
+           waitlist_note = ${note || null}, waitlist_alerted_at = NULL, updated_at = now()
+      FROM items x LEFT JOIN batches b ON b.id = x.batch_id
+     WHERE x.id = i.id AND upper(i.vin) = ANY(${list}::text[])
+       AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue', 'no_box', 'pre_sold')
+       AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
+       AND NOT i.pre_sell AND NOT i.restock_pending
+       AND NOT i.added_to_intel_inv AND NOT i.synced_alias AND NOT i.synced_stockx AND NOT i.synced_shopify
+    RETURNING i.id, i.vin, i.sku, i.size`;
+  if (rows.length) {
+    await sql`
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT u.id, 'waitlisted', ${JSON.stringify({ until, note: note || null })}::jsonb, ${by || null}
+        FROM unnest(${rows.map((r) => r.id)}::bigint[]) AS u(id)`;
+  }
+  return { held: rows, skipped: list.length - rows.length };
+}
+
+// Back on the to-list rows NOW. The date is moved to now() rather than cleared, so who
+// held it and why survive for the history; alerted is set too — the person releasing it
+// is looking at it, so the "back from the waitlist" heads-up would only be noise.
+export async function releaseWaitlist({ vins, by }) {
+  const list = [...new Set((vins || []).map((v) => String(v || '').trim().toUpperCase()).filter(Boolean))].slice(0, 2000);
+  if (!list.length) return [];
+  const sql = db();
+  const rows = await sql`
+    UPDATE items SET waitlist_until = now(), waitlist_alerted_at = now(), updated_at = now()
+     WHERE upper(vin) = ANY(${list}::text[]) AND waitlist_until > now()
+    RETURNING id, vin, sku, size`;
+  if (rows.length) {
+    await sql`
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT u.id, 'waitlist_released', ${JSON.stringify({ early: true })}::jsonb, ${by || null}
+        FROM unnest(${rows.map((r) => r.id)}::bigint[]) AS u(id)`;
+  }
+  return rows;
+}
+
+// Everything on hold right now, one row per SKU + size — the shape the daily report is
+// read in ("how many of what, held since when, until when, and why"). The cached market
+// (platform_quotes, ≤12 h, never an upstream call) rides along so the review can see
+// whether the market has moved without anyone pricing it first.
+export async function listWaitlist() {
+  return await db()`
+    SELECT upper(i.sku) AS sku, i.size, max(i.name) AS name,
+           count(*)::int AS qty,
+           round(avg(i.cost) FILTER (WHERE i.cost > 0), 2) AS cost,
+           max(i.global_indicator) AS global_indicator, max(i.price) AS price,
+           min(i.waitlisted_at) AS waitlisted_at, max(i.waitlist_until) AS waitlist_until,
+           string_agg(DISTINCT i.waitlisted_by, ', ') AS waitlisted_by,
+           string_agg(DISTINCT i.waitlist_note, ' | ') AS note,
+           string_agg(DISTINCT btrim(b.supplier_name), ', ') AS suppliers,
+           string_agg(DISTINCT b.batch_code, ', ') AS batches,
+           string_agg(i.vin, ' ' ORDER BY i.vin) AS vins,
+           max(q.alias_ask) AS alias_ask, max(q.stockx_ask) AS stockx_ask
+      FROM items i
+      LEFT JOIN batches b ON b.id = i.batch_id
+      LEFT JOIN platform_quotes q ON q.sku = upper(i.sku) AND q.size = i.size AND q.consigned
+                                 AND q.fetched_at > now() - interval '12 hours'
+     WHERE i.waitlist_until > now()
+       AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue')
+     GROUP BY upper(i.sku), i.size
+     ORDER BY max(i.waitlist_until), upper(i.sku), i.size`;
+}
+
+// Pairs whose date has passed and whose "back from the waitlist" heads-up hasn't gone.
+// Claimed in ONE statement (the UPDATE … RETURNING is the claim), so two server
+// instances, or a tick that overlaps a slow one, can never announce a pair twice.
+export async function claimWaitlistReturns() {
+  const sql = db();
+  const rows = await sql`
+    UPDATE items SET waitlist_alerted_at = now()
+     WHERE waitlist_until IS NOT NULL AND waitlist_until <= now() AND waitlist_alerted_at IS NULL
+       AND status NOT IN ('sold', 'shipped', 'missing', 'issue')
+    RETURNING id, vin, upper(sku) AS sku, size, name, waitlist_until`;
+  if (rows.length) {
+    await sql`
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT u.id, 'waitlist_released', ${JSON.stringify({ auto: true })}::jsonb, 'system'
+        FROM unnest(${rows.map((r) => r.id)}::bigint[]) AS u(id)`;
+  }
+  return rows;
 }

@@ -168,6 +168,20 @@ export function sendAlertMessage(telegramUserId, { html, url = null }) {
   }));
 }
 
+// A file in a private chat (the daily waitlist CSV), the caption carrying the same HTML an
+// alert does. Multipart, because sendDocument takes the file itself — there is no URL to
+// hand Telegram that it could fetch. Same queue as every other send.
+export function sendAlertDocument(telegramUserId, { html, filename, content, type = 'text/csv' }) {
+  return enqueue(() => {
+    const form = new FormData();
+    form.append('chat_id', String(Number(telegramUserId)));
+    form.append('caption', html);
+    form.append('parse_mode', 'HTML');
+    form.append('document', new Blob([content], { type }), filename);
+    return tg('sendDocument', {}, { form });
+  });
+}
+
 // The bot's @username, for the t.me deep link. Asked of Telegram once (getMe) and kept —
 // TELEGRAM_BOT_USERNAME skips the call where it is set.
 let botUsername = null;

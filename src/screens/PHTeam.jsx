@@ -8,12 +8,15 @@ import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
 import { TopBar, PageNavContext, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText, Modal, RemoveUnitsModal } from '../components/common.jsx';
 import { RescaleRequestModal } from '../components/RescaleRequestModal.jsx';
+import { WaitlistModal } from '../components/WaitlistModal.jsx';
+import { waitlistCsv, waitlistCsvName, waitlistDaysLeft } from '../lib/waitlist.js';
+import { downloadCSV } from '../lib/csv.js';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { skuCodes } from '../lib/sku.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges, hasAnyPriv } from '../lib/constants.js';
 import { markupSuffix } from '../lib/config.js';
-import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice } from '../lib/format.js';
+import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice, estDate, estToday } from '../lib/format.js';
 import {
   frozenStyle, rightStyle, PH_FLAGS, calcFinalPrice, groupPhSized, PRICE_BASES,
   phListingStatus, PH_TABS, phTabOf, rescaleRequestFor, requiredFlags,
@@ -793,6 +796,31 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     } catch { /* the chip is a courtesy — a failed fetch must not break the grid */ }
   }
   useEffect(() => { loadOpenRequests(); }, [canRescaleRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Waitlist (docs/context/waitlist.md): hold a line — or some of its sizes — out of
+  // listing until the market corrects. New Inventory only, the people who list.
+  const [waitlistFor, setWaitlistFor] = useState(null); // { g, reason }
+  const canWaitlist = canEdit && kind === 'receiving';
+  async function onWaitlisted(res) {
+    setWaitlistFor(null);
+    await load();
+    setNotice(`${res.held} pair${res.held === 1 ? '' : 's'} on the waitlist until ${estDate(res.until)} EST — under ⏸ Waitlist, back on Pending by itself that day (you'll get a Telegram message).${res.skipped ? ` ${res.skipped} skipped: already listed, sold or not on New Inventory.` : ''}`);
+  }
+  async function releaseWaitlisted(g) {
+    setSavingKey(g.key);
+    try {
+      const r = await api.phWaitlist({ action: 'release', vins: g.vins });
+      await load();
+      setNotice(`${r.released} pair${r.released === 1 ? '' : 's'} released from the waitlist — back on Pending to list.`);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setSavingKey(null); }
+  }
+  async function downloadWaitlist() {
+    try {
+      const { rows: list } = await api.phWaitlistList();
+      if (!list?.length) { setNotice('Nothing is on the waitlist right now.'); return; }
+      downloadCSV(waitlistCsvName(estToday()), waitlistCsv(list));
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
   function onRescaleSent(res) {
     setRescaleFor(null);
     setNotice(`Rescale requested for ${res.sku} — ${res.qty} pair${res.qty === 1 ? '' : 's'} reported. The warehouse will count the shelf and you'll see reported vs actual under Rescale Requests.`);
@@ -1085,6 +1113,36 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   // Sold (or shipped) = read-only for PH. The pair has left the building, so there is
   // nothing to list and nothing to correct — "sold is as good as done" (PH_CLOSED_STATUSES
   // in lib/ph.js also files the row under Done, out of the Pending/In-Progress tabs).
+  // ⏸ on a held row: when it comes back, who held it and why.
+  const waitlistChip = (g) => (g.waitlisted ? (
+    <span className="waitlist-chip"
+      title={`On the waitlist${g.waitlisted_by ? ` — held by ${g.waitlisted_by}` : ''}${g.waitlist_note ? `: ${g.waitlist_note}` : ''}. Back on Pending by itself on ${estDate(g.waitlist_until)} EST.`}>
+      ⏸ Back {PH_DATE.format(new Date(g.waitlist_until))} · {waitlistDaysLeft(g.waitlist_until)}d
+    </span>
+  ) : null);
+  // The loss the chip shows, as the default reason — that IS why a line gets held.
+  const waitlistReason = (g) => {
+    const sum = platformChipSummary(g.sizes.map((s) => ({ size: s.size, qty: s.qty, cost: s.cost })), market.quoteFor(g.sku), { goatOnly: !!g.goat_only });
+    if (sum?.state !== 'ok' || !(sum.profitEach < 0)) return '';
+    const where = sum.best === 'mixed' ? 'best platform' : ({ alias: 'Alias', stockx: 'StockX', tie: 'either' }[sum.best] || sum.best);
+    return `Losing about $${Math.abs(Math.round(sum.profitEach))}/pr on ${where} at today's market (${estToday()})`;
+  };
+  const waitlistBtn = (g, cls = '') => (canWaitlist && !g.waitlisted && g.listingState === 'pending' ? (
+    <button className={`btn sm ghost ${cls}`.trim()} disabled={editing.size > 0}
+      title="Hold this off New Inventory until the market corrects — it comes back by itself and you get a Telegram message"
+      onClick={() => setWaitlistFor({ g, reason: waitlistReason(g) })}>
+      ⏸ Waitlist…
+    </button>
+  ) : null);
+  const releaseBtn = (g) => (
+    <span className="ph-edit-actions">
+      <button className="btn sm ghost ph-release-btn" disabled={savingKey === g.key}
+        title="Take it off the waitlist now — back on Pending to list"
+        onClick={() => releaseWaitlisted(g)}>
+        {savingKey === g.key ? '…' : '▶ Release now'}
+      </button>
+    </span>
+  );
   const closedNote = (g) => (
     <span className="muted sm" title="This pair is already sold — there is nothing left for the PH team to list.">
       {g.status === 'shipped' ? 'Shipped — nothing to list' : 'Sold — nothing to list'}
@@ -1172,13 +1230,19 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
             <div className="seg sm">
               {PH_TABS.map((s) => (
                 <button key={s.key} type="button" aria-pressed={statusFilter.has(s.key)}
-                  className={`seg-btn${statusFilter.has(s.key) ? ' on' : ''}${s.key === 'rescale' ? ' rescale' : ''}`}
-                  title={`${tabCounts[s.key] || 0} line${(tabCounts[s.key] || 0) === 1 ? '' : 's'} ${s.label.replace('⟳ ', '')}`}
+                  className={`seg-btn${statusFilter.has(s.key) ? ' on' : ''}${s.key === 'rescale' || s.key === 'waitlist' ? ` ${s.key}` : ''}`}
+                  title={`${tabCounts[s.key] || 0} line${(tabCounts[s.key] || 0) === 1 ? '' : 's'} ${s.label.replace(/^[⟳⏸] /, '')}`}
                   onClick={() => toggleStatus(s.key)}>
                   {s.label} <span className="seg-n" aria-hidden="true">{tabCounts[s.key] || 0}</span>
                 </button>
               ))}
             </div>
+            {showPricing && kind === 'receiving' && (
+              <button type="button" className="btn ghost sm" onClick={downloadWaitlist}
+                title="Everything on the waitlist (any date) as a CSV — the daily report for the review">
+                ⬇ Waitlist CSV
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1216,6 +1280,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                     {splitChip(g)}
                     {platChip(g)}
                     {rescaleStateChip(g) || rescaleChip(g)}
+                    {waitlistChip(g)}
                     {g.priceChanged && <span className="ph-drift" title="Final price changed since it was listed — the store price is now stale">⚠ Price changed</span>}
                   </div>
                   <button type="button" className="ph-card-sizes ph-card-sizes-btn" onClick={() => toggleExpand(g.key)} aria-expanded={open}>
@@ -1303,6 +1368,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                         </span>
                       );
                       if (g.closed) return closedNote(g); // sold/shipped — no Edit, no Remove
+                      if (g.waitlisted) return canWaitlist ? releaseBtn(g) : null; // held: nothing to edit until it's back
                       if (locked) return <span className="presence-badge" title={`${locked} is editing this right now`}>{locked} editing…</span>;
                       return (
                         <span className="ph-edit-actions">
@@ -1319,6 +1385,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                               ⟳ Rescale…
                             </button>
                           )}
+                          {waitlistBtn(g)}
                           {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
                         </span>
                       );
@@ -1359,7 +1426,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                         <td style={frozenStyle(3)} className="ph-frozen ph-frozen-last" title={g.vins.join(', ')}><b>×{g.qty}</b></td>
                         <td className="ph-sizes"><SizesQty sizes={g.sizes} /></td>
                         <td>{g.gender || '—'}</td>
-                        <td className="ph-status-cell"><StatusPill status={g.status} />{rescaleStateChip(g) || rescaleChip(g)}</td>
+                        <td className="ph-status-cell"><StatusPill status={g.status} />{rescaleStateChip(g) || rescaleChip(g)}{waitlistChip(g)}</td>
                         <td><div className="ph-sync-cell"><SyncBadges item={g} goatOnly={g.goat_only} />{goatChip(g)}{preSellChip(g)}</div></td>
                         <td>{g._mixedBy ? <span className="muted">multiple</span> : (g.created_by || '—')}</td>
                         <td style={rightStyle('action', canRescaleRequest)} className="ph-rfrozen ph-rfrozen-first" onClick={(e) => e.stopPropagation()}>
@@ -1371,6 +1438,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                 </span>)
                               : g.closed
                                 ? closedNote(g)
+                                : g.waitlisted
+                                ? (canWaitlist ? releaseBtn(g) : <span className="muted">—</span>)
                                 : (lockHolder(g)
                                   ? <span className="presence-badge" title={`${lockHolder(g)} is editing this right now`}>{lockHolder(g)} editing…</span>
                                   : (<span className="ph-edit-actions">
@@ -1382,6 +1451,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                           ⟳ Rescale…
                                         </button>
                                       )}
+                                      {waitlistBtn(g, 'ph-waitlist-btn')}
                                       {isRescale && <button className="btn sm primary" disabled={savingKey === g.key} onClick={() => markRestockedGroup(g)}>{savingKey === g.key ? '…' : '✓ Restocked'}</button>}
                                     </span>))}
                         </td>
@@ -1610,6 +1680,10 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
           onClose={() => setRescaleFor(null)}
           onDone={onRescaleSent}
         />
+      )}
+      {waitlistFor && (
+        <WaitlistModal group={waitlistFor.g} reason={waitlistFor.reason} onSignOut={onSignOut}
+          onClose={() => setWaitlistFor(null)} onDone={onWaitlisted} />
       )}
       {photosSku && <PhotosModal sku={photosSku} onClose={() => setPhotosSku(null)} onSignOut={onSignOut} />}
     </div>

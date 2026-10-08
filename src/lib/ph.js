@@ -176,7 +176,9 @@ export function groupPhSized(list, isLocked, rescaleIdFor) {
     const sig = FLAG_KEYS.map((f) => (r[f] ? '1' : '0')).join('') + (r.goat_only ? 'G' : '-');
     // Rule 4 — the pairs a rescale request was raised for keep their own row.
     const req = rescaleIdFor ? (rescaleIdFor(r.vin) || '') : '';
-    return `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : estDate(r.created_at)}|#|${req}`;
+    // Rule 5 — pairs on the WAITLIST keep their own row (waitlist.md): holding size 8
+    // must not drag sizes 9 and 10 off the to-list rows with it, and a row is one tab.
+    return `${r.sku || ''}|#|${r.status || ''}|#|${sig}|#|${lstate === 'pending' ? '' : estDate(r.created_at)}|#|${req}|#|${r.waitlisted ? 'W' : ''}`;
   };
   const lockedKeys = new Set();
   if (isLocked) for (const r of list) if (isLocked(r.vin)) lockedKeys.add(naturalKey(r));
@@ -246,6 +248,8 @@ export function groupPhSized(list, isLocked, rescaleIdFor) {
         first_edit_at: null, first_edit_by: null, _hasSubsequent: false, _drift: false,
         last_edit_at: r.last_edit_at, last_edit_by: r.last_edit_by,
         goat_only: true, // "GOAT only" (Alias+II only) — all-units rollup, set just below
+        // On the waitlist (rule 5 keeps a row all-held or all-not): until when, who, why.
+        waitlisted: !!r.waitlisted, waitlist_until: null, waitlisted_by: null, waitlist_note: null,
         // GS received as men's: how many of these pairs sit in a GS box (receiving.md) —
         // the row says so, so whoever pulls one looks for the GS code on the shelf.
         gsBoxes: 0, _boxCodes: new Set(),
@@ -268,6 +272,11 @@ export function groupPhSized(list, isLocked, rescaleIdFor) {
     // Group badge = all units true; the count beside it = how many of them actually are.
     for (const f of FLAG_KEYS) { g._flags[f] = g._flags[f] && !!r[f]; if (r[f]) g._counts[f] += 1; }
     g.goat_only = g.goat_only && !!r.goat_only; // GOAT-only only if every unit is
+    if (r.waitlisted) {
+      if (!g.waitlist_until || r.waitlist_until > g.waitlist_until) g.waitlist_until = r.waitlist_until;
+      if (!g.waitlisted_by && r.waitlisted_by) g.waitlisted_by = r.waitlisted_by;
+      if (!g.waitlist_note && r.waitlist_note) g.waitlist_note = r.waitlist_note;
+    }
     if (r.original_sku) { g.gsBoxes += 1; g._boxCodes.add(`${r.original_sku} ${r.original_size || ''}`.trim()); }
     const sz = r.size || '—';
     let s = g._sizes.get(sz);
@@ -345,6 +354,8 @@ export const PH_LISTING_STATUSES = [
 export const PH_TABS = [
   ...PH_LISTING_STATUSES,
   { key: 'rescale', label: '⟳ Rescale' },
+  // A fifth bucket, same idea (waitlist.md): pairs held out of listing until a date.
+  { key: 'waitlist', label: '⏸ Waitlist' },
 ];
 
 // Is this row in the Rescale bucket, and which request put it there?
@@ -385,6 +396,8 @@ export function rescaleRequestFor(g, byVin) {
 // Once it IS audited the row moves, because now the work is specific to that count:
 // what to list is the warehouse's numbers, not ours.
 export function phTabOf(g, byVin) {
+  // Held first: a held row is not to be listed whatever else is true of it.
+  if (g.waitlisted) return 'waitlist';
   const r = rescaleRequestFor(g, byVin);
   return r && r.status === 'audited' ? 'rescale' : phListingStatus(g);
 }

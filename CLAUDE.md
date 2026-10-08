@@ -52,6 +52,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
 | Pre-sell: shipments sold before they landed (held out of listing, then released) | `docs/context/pre-sell.md` |
+| **Waitlist** (New Inventory ⏸ tab): hold a losing size off listing until a date (1 month default), back by itself + Telegram; **daily CSV** at 18:00 EST (`waitlist-worker`, prod only) | `docs/context/waitlist.md` |
 | **Pre-sell Listings**: scan/SKU → list straight to Alias + StockX (no inventory, no Shopify); own stock (sales deduct, oversell guard), StockX async ops + sales watcher (`PRESELL_WATCH`), Telegram sale posts | `docs/context/presell-listings.md` |
 | No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
 | Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |
@@ -111,7 +112,8 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
   (`docs/context/in-store.md`, `docs/context/existing-stock.md`).
   **`items.pre_sell` is a second, parallel exclusion on the same paths** — a *unit*
   state rather than a batch kind, so it must be guarded alongside the kind check,
-  not instead of it (`docs/context/pre-sell.md`).
+  not instead of it (`docs/context/pre-sell.md`). **`items.waitlist_until > now()`** is a
+  THIRD one on the same paths (`docs/context/waitlist.md`).
 - **A failed scan must say what to do, and leave a row.** "No item found" is a dead end
   on a warehouse floor; the sticker's real state is one call away (`stickerState`), and
   every failure writes to `scan_failures` so "it keeps failing" is answerable from data

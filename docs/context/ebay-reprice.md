@@ -13,7 +13,7 @@ section; route `ebayreprice` in `PH_PATHS`.
 | | |
 |---|---|
 | `src/screens/EbayReprice.jsx` | the page: 4 steps, downloads |
-| `src/components/MarketPrices.jsx` | the step-3 fetch loop + card, SHARED with Shopify Reprice (`shopify-reprice.md`) |
+| `src/components/MarketPrices.jsx` | the step-3 fetch loop + card, SHARED with Shopify Listings (`shopify-listings.md`) |
 | `src/lib/ebayReprice.js` | PURE: raw-line CSV, both readers, StyleID resolution, jobs, markup math, apply, finalize, verify, outputs |
 | `api/ebay-reprice/prices.js` | `POST { jobs:[{sku,size}] }` (≤ 25) → per-job status |
 | `api/_lib/ebay-reprice.js` | `priceStyleSize` — strict Alias lookup + PRICE_HIERARCHY |
@@ -30,7 +30,7 @@ section; route `ebayreprice` in `PH_PATHS`.
    Blank / sizes-disagree / SKU-maps-to-two-styles groups BLOCK until a person types a
    Style ID or ticks Skip. Title codes the report doesn't know are listed, not blocking.
 3. **Prices** — batches of 20 to `api/ebay-reprice/prices`, one at a time (server runs 4
-   lookups concurrently). Cached in `localStorage` per EST day (`reprice:prices:<ymd>`, shared with Shopify Reprice)
+   lookups concurrently). Cached in `localStorage` per EST day (`reprice:prices:<ymd>`, shared with Shopify Listings)
    so a reload resumes; older days are pruned. Pause / Resume / Retry failed / Clear.
 4. **Reprice** — markup % (default **12**, never remembered), dry-run toggle, verify,
    downloads `eBay reprice (M.D.YYYY).csv` (date from the export's filename) and

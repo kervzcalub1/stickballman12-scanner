@@ -289,10 +289,10 @@ export const api = {
   deleteOnlineOrder: (id) => post('/api/online-orders/delete', { id }),
   presellListingsCreate: (body) => post('/api/presell-listings/create', body),
   // eBay reprice: one batch (≤ 25) of style code + size → market price (api/ebay-reprice/prices.js).
-  // Shopify Reprice (PH): pull every variant / write live prices / recent changes.
-  shopifyRepriceVariants: () => get('/api/shopify-reprice/variants'),
-  shopifyRepriceApply: (body) => post('/api/shopify-reprice/apply', body),
-  shopifyRepriceHistory: () => get('/api/shopify-reprice/history'),
+  // Shopify Listings (PH): every variant / save edited fields live / recent edits.
+  shopifyListingsVariants: () => get('/api/shopify-listings/variants'),
+  shopifyListingsSave: (body) => post('/api/shopify-listings/save', body),
+  shopifyListingsHistory: () => get('/api/shopify-listings/history'),
   ebayRepricePrices: (jobs) => post('/api/ebay-reprice/prices', { jobs }),
   presellListingsList: (params = {}) => get(`/api/presell-listings/list?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString()}`),
   presellListingsAction: (body) => post('/api/presell-listings/action', body),

@@ -2094,6 +2094,32 @@ await sql(`
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS shopify_price_changes_at_idx ON shopify_price_changes (changed_at DESC)`);
 
+// Shopify Listings (PH, docs/context/shopify-listings.md): one row per FIELD the app
+// changed on Shopify — price, compare-at, title or status. Shopify keeps no history of
+// these, so this is the only record of who moved a live listing, from what, to what,
+// and (for a market price) why. Written only after Shopify confirms the change.
+// Replaces shopify_price_changes above, which never received a row (write access wasn't
+// granted until after it shipped) and is no longer written.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shopify_listing_edits (
+    id            BIGSERIAL PRIMARY KEY,
+    target        TEXT NOT NULL,              -- 'variant' | 'product'
+    ref_id        TEXT NOT NULL,              -- the variant or product gid
+    product_id    TEXT,
+    product_title TEXT,
+    style         TEXT,
+    size          TEXT,
+    field         TEXT NOT NULL,              -- 'price' | 'compare_at' | 'title' | 'status'
+    old_value     TEXT,
+    new_value     TEXT,
+    source        TEXT,                       -- 'market' | 'manual'
+    market_cents  INTEGER,
+    markup_pct    NUMERIC(6,2),
+    changed_by    TEXT,
+    changed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shopify_listing_edits_at_idx ON shopify_listing_edits (changed_at DESC)`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',

@@ -61,10 +61,15 @@ PH is looking at, and nobody would see it.
   reason is prefilled from the best-platform chip when it shows a loss.
 - A held row: teal chip **⏸ Back 11/07/26 · 30d** (who held it and why are in the tooltip),
   no Edit, and **▶ Release now**. Admins see it read-only.
-- **⬇ Waitlist CSV** beside the tabs: everything on hold, any date.
+- **⬇ Waitlist (Excel)** beside the tabs: everything on hold, any date.
 
 ## The daily report + "back from the waitlist" (`api/_lib/waitlist-worker.js`)
-- **CSV** = `waitlistCsv` (`src/lib/waitlist.js`), one row per SKU + size: qty, cost, GI,
+- **The report is an Excel file (.xlsx), not a CSV** (2026-10-08, owner: columns as wide as
+  their text). A CSV is plain text with nowhere to keep a column width. `waitlistXlsx`
+  (`src/lib/waitlist.js`) → `buildXlsx` (`src/lib/xlsx.js`, a ~100-line writer on `fflate`, no
+  xlsx library): columns sized to the longest value (min 6, max 60, VINs 40), a bold frozen
+  header, a filter on every column, money and counts stored as real numbers (`0.00` / `0`,
+  money rounded to the cent). One row per SKU + size: qty, cost, GI,
   final price, the **cached** Alias/StockX asks (`platform_quotes`, ≤12 h, never an upstream
   call), the best platform and profit/pr at those asks, held on / by / back on / days left,
   reason, supplier, batch, VINs. The download button and the Telegram file are the same file.
@@ -72,7 +77,7 @@ PH is looking at, and nobody would see it.
   (`claimWaitlistReturns` — one UPDATE … RETURNING, so nothing is announced twice) and
   sends **`ph.waitlist_back`** (one message for the lot). Once a day from **18:00 EST** (end of
   the PH night shift; `WAITLIST_REPORT_HOUR_EST` overrides) it sends **`ph.waitlist_daily`**
-  as a **CSV file** (`sendAlertDocument`, multipart `sendDocument`), `once` per EST day. An
+  as an **Excel file** (`sendAlertDocument`, multipart `sendDocument`), `once` per EST day. An
   empty waitlist sends nothing.
 - **Runs on Railway's production environment only** (`RAILWAY_ENVIRONMENT_NAME`, which
   Railway sets itself). Dev and prod share one bot, and a laptop must never DM real people.
@@ -82,13 +87,13 @@ PH is looking at, and nobody would see it.
   either.
 
 ## API — `api/ph/waitlist.js`
-`GET` → `{ rows }` · `GET ?format=csv` → the file · `POST {action:'hold', vins, days, note}` →
+`GET` → `{ rows }` · `GET ?format=xlsx` → the file · `POST {action:'hold', vins, days, note}` →
 `{ held, skipped, until }` (409 when none could be held) · `POST {action:'release', vins}`.
 Reading: PH + admin. Changing: PH + superadmin.
 
 ## Tests
 `e2e/ph-waitlist.spec.js` — hold one size (tab, chip, no Edit), a held pair isn't saved as
-listed, list + CSV + admin can't change it, the date passing brings it back (claimed once),
+listed, list + the .xlsx (frozen header, sized columns, numbers as numbers) + admin can't change it, the date passing brings it back (claimed once),
 Release now.
 
 ## Not built

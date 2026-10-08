@@ -6,6 +6,7 @@ import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { signToken } from '../api/_lib/util.js';
 import { estToday } from '../src/lib/format.js';
+import { unzipSync, strFromU8 } from 'fflate';
 import { loginAs } from './helpers/auth.js';
 
 const WH = { Authorization: `Bearer ${signToken({ uid: 'wl-wh', username: 'wl_wh', name: 'WL Warehouse', role: 'warehouse' })}` };
@@ -73,16 +74,21 @@ test('a held pair cannot be listed: the grid save skips it', async ({ request })
   expect(rows[0].synced_alias).toBe(false);
 });
 
-test('the waitlist reads as one row per SKU + size, and as the daily CSV', async ({ request }) => {
+test('the waitlist reads as one row per SKU + size, and as the daily Excel file', async ({ request }) => {
   const list = await (await request.get('/api/ph/waitlist', { headers: ADMIN })).json();
   const mine = list.rows.filter((r) => r.sku === SKU);
   expect(mine).toEqual([expect.objectContaining({ size: '8', qty: 2, note: 'one $70 ask on size 8, next $133', waitlisted_by: 'E2E PH' })]);
 
-  const csv = await request.get('/api/ph/waitlist?format=csv', { headers: ADMIN });
-  expect(csv.headers()['content-type']).toContain('text/csv');
-  const text = await csv.text();
-  expect(text.split('\n')[0]).toContain('SKU,Name,Size,Qty,Cost ea');
-  expect(text).toContain(`${SKU},QAWL ${SKU},8,2,76.00`);
+  // .xlsx, not CSV: a CSV can't carry column widths, so its long columns arrived squashed.
+  const file = await request.get('/api/ph/waitlist?format=xlsx', { headers: ADMIN });
+  expect(file.headers()['content-type']).toContain('spreadsheetml.sheet');
+  expect(file.headers()['content-disposition']).toMatch(/waitlist-\d{4}-\d{2}-\d{2}\.xlsx/);
+  const sheet = strFromU8(unzipSync(new Uint8Array(await file.body()))['xl/worksheets/sheet1.xml']);
+  expect(sheet).toContain('<pane ySplit="1"');                  // header frozen
+  expect(sheet).toMatch(/<col min="1" max="1" width="\d+" customWidth="1"\/>/);   // sized columns
+  expect(sheet).toContain(`<t xml:space="preserve">${SKU}</t>`);
+  expect(sheet).toMatch(/<c r="D\d+" s="3"><v>2<\/v><\/c>/);    // qty is a number
+  expect(sheet).toMatch(/<c r="E\d+" s="2"><v>76<\/v><\/c>/);   // cost is money
 
   // Only PH changes it — the review (admin) reads.
   const no = await request.post('/api/ph/waitlist', { headers: ADMIN, data: { action: 'release', vins: await vinsOf('8') } });

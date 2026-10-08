@@ -52,7 +52,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
 | Pre-sell: shipments sold before they landed (held out of listing, then released) | `docs/context/pre-sell.md` |
-| **Waitlist** (New Inventory ⏸ tab): hold a losing size off listing until a date (1 month default), back by itself + Telegram; **daily CSV** at 18:00 EST (`waitlist-worker`, prod only) | `docs/context/waitlist.md` |
+| **Waitlist** (New Inventory ⏸ tab): hold a losing size off listing until a date (1 month default), back by itself + Telegram; **daily Excel report** at 18:00 EST (`src/lib/xlsx.js`) (`waitlist-worker`, prod only) | `docs/context/waitlist.md` |
 | **Pre-sell Listings**: scan/SKU → list straight to Alias + StockX (no inventory, no Shopify); own stock (sales deduct, oversell guard), StockX async ops + sales watcher (`PRESELL_WATCH`), Telegram sale posts | `docs/context/presell-listings.md` |
 | No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
 | Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |

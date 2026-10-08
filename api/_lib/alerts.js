@@ -143,7 +143,7 @@ export const ALERT_EVENTS = [
   {
     key: 'ph.waitlist_daily', group: 'Waitlist', emoji: '📋', required: false,
     title: 'Daily waitlist report',
-    when: 'Everything on the waitlist as a CSV, at the end of the PH shift — for the review',
+    when: 'Everything on the waitlist as an Excel file, at the end of the PH shift — for the review',
     who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
     defaultFor: (u) => isAdminRole(u.role),
   },
@@ -609,9 +609,9 @@ export async function alertWaitlistBack(rows) {
   });
 }
 
-// The daily report: everything on hold as a CSV. `once` per EST day, so a restart or a
-// second instance can't send it twice.
-export async function alertWaitlistDaily({ day, rows, csv, filename }) {
+// The daily report: everything on hold as an Excel file (`file` = { filename, content,
+// type }). `once` per EST day, so a restart or a second instance can't send it twice.
+export async function alertWaitlistDaily({ day, rows, file }) {
   const pairs = rows.reduce((n, r) => n + (Number(r.qty) || 0), 0);
   const skus = new Set(rows.map((r) => r.sku)).size;
   return alertUsers('ph.waitlist_daily', {
@@ -622,6 +622,6 @@ export async function alertWaitlistDaily({ day, rows, csv, filename }) {
       ? `${pairs} pair${pairs === 1 ? '' : 's'} on hold across ${skus} SKU${skus === 1 ? '' : 's'}. The file has each SKU + size, why it was held, when it comes back, and what it would make at today's market.`
       : 'Nothing is on the waitlist today.',
     path: at('newinv', 'st=waitlist'),
-    document: rows.length ? { filename, content: csv } : null,
+    document: rows.length ? file : null,
   });
 }

@@ -5791,6 +5791,10 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
   .sl-sizes td[data-label]::before { content: attr(data-label); display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
 }
 
+/* Receipts — "Check mailboxes" (receipts.md). */
+.rc-check { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 4px; }
+.rc-check input[type="date"] { min-height: 32px; }
+.rc-check-msg { flex-basis: 100%; margin: 0; }
 /* "Receive as men's" — men's code found in the catalogue (receiving.md). */
 .mens-found { color: #7bc99a; }
 .mens-cands { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }

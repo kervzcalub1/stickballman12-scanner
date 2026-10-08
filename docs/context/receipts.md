@@ -11,35 +11,56 @@ mailbox by order number (`cart/receipt-email`, buy-cart.md). The ask: file them
 **where** each purchase was made (store, address, city, state, ZIP) and **who** made it,
 so Council's buys can be told from Joey's, without Joey sending his receipts in by hand.
 
-## The two halves
-**Make (the reader)** — a scheduled "Receipt sweep" scenario reads the order mailboxes
-(Gmail incl. Spam, the Yahoo folders incl. Bulk), parses each receipt email with the same
-`parser.js` as the order-number lookup (scenario 6282792), and POSTs one email per call to
-our ingest endpoint. Requested from the Make session on 2026-10-06 with the full contract
-(store_location + recipients added to the parser, spam folders added to the lookup too).
-Status (2026-10-07, from the Make session): **parser done, sweep built but NOT deployed.**
-- `parser.js` (`~/Make.com Stickballman12/receipt-parser/`) has a `mode:"sweep"` entry
-  beside the order-number lookup — one parser for both. It now emits `store_location`
-  (in-store header block; online with no printed address → all null, never invented),
-  `recipients` (from the mail module's **`headersList`**, not `headers`; `original_to` =
+## The two halves — "Check mailboxes" (2026-10-08)
+**The sweep runs only when someone presses the button** on the Receipts page. There's no
+schedule (owner's call). The first version, every 15 min, re-read two days of mail in 11
+folders and ran the parser **inside Make** for each one: ~710 credits a run, ~68k a day.
+It was switched off after one run on Oct 6, so **every receipt after Oct 6 went unfiled**
+until this shipped (a Nike Factory Store receipt, order T09000000CY7BE8, was the report).
+
+**Make (the fetcher)** — scenario **6534162** (Cherry's team 523971), now *"Receipt check —
+on demand"*: webhook **2911453** → router → Gmail `[Gmail]/All Mail` and `[Gmail]/Spam`
+(`after:<since_epoch>`, exact) · each Yahoo folder (IMAP `since` is a whole day, then a
+filter on the exact time) → **POST the raw email** (form fields) to
+`/api/receipts/ingest-raw` with `x-api-key: {{1.key}}`. **No code module and no stored
+secret**: the key comes in with each request from our server. Built by
+`~/Make.com Stickballman12/receipt-parser/build-check-blueprint.js`. The old blueprint
+(with its code modules) is backed up next to it, `sweep-6534162-backup-2026-10-08.json`
+(0600, it holds the old pasted key).
+
+**The button** (`MailboxCheck` in `src/screens/Receipts.jsx` → `api/receipts/sweep.js`):
+- Looks back to **the last check minus an hour** (overlap is free, since receipts dedupe on
+  `message_key`). Never checked → the last 3 days. **"From a date…"** looks back to
+  midnight EST of a chosen day (≤60 days) for a catch-up.
+- A second press within 90 s → 409 (a double-tap mustn't start two runs).
+- Last check in `app_settings.receipt_sweep_last` ({at, since, by}), so "Last checked …
+  by …" shows live. Receipts appear in the list as they're filed (`email_receipts` is
+  live), so the button only says the check started.
+- Staff who see Receipts (warehouse, PH, admin). Hidden when `RECEIPT_SWEEP_HOOK_URL`
+  isn't set.
+
+**Parsing on our server** — `api/_lib/receipt-parser/parser.make.js` is a byte-for-byte copy
+of the Make parser (`~/Make.com Stickballman12/receipt-parser/parser.js`, which the
+order-number lookup 6282792 still runs in Make). It's a function body, not a module, so
+`index.js` wraps it the way its own tests do. **`npm run receipts:sync-parser`** copies it
+over after the parser changes. Its lookups still run from here: Nike UPC → StockX proxy;
+Champs / Foot Locker names → the Make Gemini helper 6286830, which still costs Make
+credits per new name.
+
+`POST /api/receipts/ingest-raw` (form: mailbox, folder, from, subject, date, text, html,
+to, cc, delivered_to, original_to, message_id; ≤4 MB) → parse → not a receipt =
+`{skipped}` · else the same normaliser + `ingestEmailReceipt` as `/ingest`
+(`api/_lib/receipt-ingest.js`).
+
+### Before — the scheduled sweep (2026-10-06, retired)
+The original design, kept for the record: a scheduled Make scenario parsed each email in a
+code module and POSTed the parsed body to `/api/receipts/ingest`, which still exists and
+still works.
+- `parser.js` emits `store_location`, `recipients` (`headersList`; `original_to` =
   X-Forwarded-To / X-Original-To / Resent-To, else the forwarded block's `To:`),
-  `order_number`, and `message_key` = `mailbox|folder|<Message-ID>` (fallback
-  `from~subject~date`). Marketing / shipping notices → `post:false`, not sent; an
-  unsupported store with order # + totals is still sent (`store:null` + warnings).
-  Tests: `test.js` 8/8, `test-sweep.js` 7/7.
-- Spam: Yahoo `Bulk` added to `YAHOO_FOLDERS` (9 folders). **Gmail Spam is NOT in
-  `[Gmail]/All Mail`** — it needs its own `[Gmail]/Spam` search module (in the sweep; a
-  pending edit to 6282792 too).
-- Sweep: `sweep-blueprint.json` — tick → router: Gmail All Mail · Gmail Spam · the 9 Yahoo
-  folders → parse → POST (filter `post = true`), window 2 days, ≤50 mails/folder, every
-  15 min, every module `onerror: Resume`. Key placeholder `__PASTE_RECEIPT_INGEST_KEY__`.
-  **Untested against Make** — on the first run watch the router filter and the
-  `headersList` mapping.
-- Blocked on Kervy: Make MCP re-auth (nothing can be deployed), and `RECEIPT_INGEST_KEY`
-  on Railway (prod ingest answered 503 on 2026-10-07). Deploy order: 6282792 from the new
-  parser + its Gmail Spam module → create the sweep → paste the key.
-- Not needed: headers through Yahoo helper 6283660 — the order-number lookup
-  (`cart/receipt-email`) never reads recipients/location; only the sweep does.
+  `order_number`, `message_key` = `mailbox|folder|<Message-ID>`. Marketing / shipping →
+  `post:false`. Yahoo `Bulk` is in `YAHOO_FOLDERS`, and Gmail Spam needs its own search
+  (it's not in All Mail).
 
 **App (the filer)** — this repo:
 - `POST /api/receipts/ingest` (`x-api-key: RECEIPT_INGEST_KEY`, compared in constant time;

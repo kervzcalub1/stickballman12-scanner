@@ -275,6 +275,9 @@ export const api = {
   // Platform Profit report: on-hand stock per SKU + size with its landed cost.
   platformProfitStock: () => get('/api/ph/platform-profit'),
   // Email receipts + the addresses buyers purchase with (docs/context/receipts.md).
+  // "Check mailboxes" on Receipts (docs/context/receipts.md).
+  receiptSweepStatus: () => get('/api/receipts/sweep'),
+  receiptSweep: (body = {}) => post('/api/receipts/sweep', body),
   receipts: (params = {}) => get(`/api/receipts/list?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString()}`),
   receipt: (id) => get(`/api/receipts/list?id=${encodeURIComponent(id)}`),
   assignReceipt: (id, userId) => post('/api/receipts/assign', { id, userId }),

@@ -568,6 +568,18 @@ stock was built and rejected as unnecessary.
 - **Offered next time:** `GET /api/items/mens-for?sku=GS` (`lastMensFor`) returns what this
   GS code was last received as, prefilled ("Last time … was received as men's") — the
   second box of a shipment is one tap. Never applied on its own.
+- **Found the first time (2026-10-08):** when it was never received as men's,
+  `mens-for` asks the Alias catalogue (`aliasMensCounterpart` in `api/_lib/alias.js`): search
+  the GS name with the kid markers (GS/BG/PS/TD/Grade School/Kids…) taken out, and keep a
+  **men's** result whose name, stripped the same way, is identical. Example: DJ3003-400
+  "Air Jordan 13 Retro GS 'Flint' 2026" → **IW3808-400**. Verified on Flint 13, Chicago
+  Lost & Found 1 (→ DZ5485-612) and Phantom 1 (→ 555088-160). Exactly one exact match → it's
+  prefilled with name and picture, "Found in the Alias catalogue — check the name and
+  picture match", and **Receive** is one tap (no Look up). Otherwise up to 4 men's results
+  are listed to tap. Codes that aren't CODE-COLOR (Alias bundles like
+  `DZ548561200-1014818-XC`) are dropped. One catalogue call, no extra quota. Slow or down →
+  no suggestion, and typing works as before. Why: the men's code is printed nowhere on a GS
+  box, so the first box of a new shoe stopped at this dialog.
 - **The cart keeps the GS code** — the PO manifest, online-order cost and manifest matching
   all match on what the box says. The swap happens only in the commit payload (`asMens`):
   `sku`/`size` = men's (GS `7Y` → `7`, `gsToMensSize`), name/image/colorway = the men's

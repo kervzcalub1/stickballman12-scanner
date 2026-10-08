@@ -209,6 +209,12 @@ const PATHS = {
     <circle cx="7.5" cy="8.5" r="1.3" />
     <path d="M11 15l3-3 3 3M14 12v6" />
   </>),
+  // Shopify Reprice — a shopping bag with up/down arrows (it moves prices both ways)
+  'shopify-reprice': (<>
+    <path d="M5 8h14l-1 13H6L5 8z" />
+    <path d="M9 8V6a3 3 0 0 1 6 0v2" />
+    <path d="M10 13l-1.5-1.5L7 13M8.5 11.5V17M14 15l1.5 1.5L17 15M15.5 16.5V11" />
+  </>),
   // eBay Reprice — a price tag with a downward arrow (it only ever cuts)
   'ebay-reprice': (<>
     <path d="M3 12V4h8l10 10-8 8L3 12z" />

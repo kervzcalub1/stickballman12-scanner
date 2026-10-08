@@ -438,7 +438,7 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', shopifyreprice: '/ph/shopify-reprice' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -464,6 +464,7 @@ export const PH_HOME_SECTIONS = [
     { key: 'rescale', icon: 'rescale', title: 'Rescale Stock', sub: 'Re-list rescanned units (returns, recounts, transfers)' },
     { key: 'imagefinder', icon: 'image', title: 'Find Image Listings', sub: 'Upload or build a SKU’s listing photos' },
     { key: 'profit', icon: 'profit', title: 'Platform Profit', sub: 'Best platform per size — Alias vs StockX, after fees & cost' },
+    { key: 'shopifyreprice', icon: 'shopify-reprice', title: 'Shopify Reprice', sub: 'Set Shopify prices to market + markup — live, both ways' },
     { key: 'ebayreprice', icon: 'ebay-reprice', title: 'eBay Reprice', sub: 'Cut eBay prices above market + markup — CSV in, CSV out' },
     { key: 'presellListings', icon: 'presell-listings', title: 'Pre-sell Listings', sub: 'List pairs straight to Alias + StockX from a scan' },
   ] },

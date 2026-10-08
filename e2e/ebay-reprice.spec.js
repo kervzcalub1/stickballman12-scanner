@@ -124,7 +124,7 @@ test.describe('eBay Reprice page', () => {
       }) } });
     });
     await page.goto('/ph/ebay-reprice');
-    await page.evaluate(() => { try { Object.keys(localStorage).filter((k) => k.startsWith('ebay-reprice:')).forEach((k) => localStorage.removeItem(k)); } catch { /* */ } });
+    await page.evaluate(() => { try { Object.keys(localStorage).filter((k) => k.startsWith('reprice:')).forEach((k) => localStorage.removeItem(k)); } catch { /* */ } });
     await page.reload();
 
     await page.locator('#er-revise').setInputFiles({ name: 'eBay-edit-price-quantity-template-2026-09-01-1.csv', mimeType: 'text/csv', buffer: Buffer.from(REVISE) });

@@ -50,13 +50,17 @@ test.afterAll(async () => {
 
 test('the chip reads remembered prices and prices only what nobody has', async ({ page }) => {
   const priced = [];
+  const hierarchyAsked = [];
   await page.route('**/api/payout/batch', async (route) => {
     const body = route.request().postDataJSON();
     priced.push(...body.skus.map((s) => s.sku));
+    hierarchyAsked.push(body.hierarchy);
     const quotes = {};
     for (const s of body.skus) {
+      // No consigned ask at all, a With You GI of 120: the FJ7126-003 12W case — Alias
+      // must still be compared, at the hierarchy price (2026-10-09).
       quotes[s.sku] = {
-        alias: { configured: true, results: s.sizes.map((size) => ({ size, lowest_listing: 120 })) },
+        alias: { configured: true, results: s.sizes.map((size) => ({ size, lowest_listing: 0, global_indicator: 0, alias_price: 120, alias_basis: 'with_you' })) },
         stockx: { configured: true, results: s.sizes.map((size) => ({ size, lowest_ask: 60 })) },
       };
     }
@@ -77,6 +81,8 @@ test('the chip reads remembered prices and prices only what nobody has', async (
   // A two-day-old quote is not an answer — it was priced again, at today's market.
   await expect(chip(OLD)).toHaveText('Alias +$18/pr');
   expect(priced.sort()).toEqual([FRESH, OLD].sort());
+  // PH asks for the Alias price by the pricing hierarchy, never the bare lowest ask.
+  expect(hierarchyAsked.every((h) => h === true)).toBe(true);
 
   // Tapping the chip opens the line, where "Where to sell" has the per-size table.
   await chip(COSTED).click();

@@ -9,7 +9,7 @@ import {
   refreshItemGi, getPriceMarkupMult,
 } from './db.js';
 import { aliasProductByUpc, aliasCatalogBySku, aliasPriceWithBasis, aliasPriceInsights } from './alias.js';
-import { priceBasisLabel } from './pricing.js';
+import { priceBasisLabel, hasPrice, resolveFromInsights } from './pricing.js';
 
 // Final price = global indicator × markup. The markup is the configurable price
 // margin (default 1.2 = +20%), fetched per call via getPriceMarkupMult().
@@ -234,7 +234,15 @@ export async function giForSkuSizes(sku, sizes) {
 // is included whenever ANY of its fields came back (so a size with only a last
 // sale, no GI, still shows). `consigned` picks the basis explicitly (the Price
 // Inquiry toggle) — no auto-fallback here; the caller chooses.
-export async function priceInquiryForSkuSizes(sku, sizes, { consigned = true } = {}) {
+//
+// `hierarchy: true` (PH's "Where to sell", chip and Platform Profit) ALSO walks the
+// 8-level pricing hierarchy (api/_lib/pricing.js) and adds `alias_price` +
+// `alias_basis` — the same number the PH grid's Global Indicator column shows. Without
+// it, a size whose consigned side was empty read "no ask" on Alias while the grid
+// right above it showed a With You GI (FJ7126-003 12W, 2026-10-09). The With You call
+// is made only when the consigned GI is empty — at most 2 Alias calls per size, as
+// aliasPriceWithBasis.
+export async function priceInquiryForSkuSizes(sku, sizes, { consigned = true, hierarchy = false } = {}) {
   if (!process.env.ALIAS_API_KEY) return { configured: false, results: [] };
   const s = normSku(sku);
   const list = [...new Set((Array.isArray(sizes) ? sizes : []).map((x) => String(x).trim()).filter(Boolean))];
@@ -246,17 +254,23 @@ export async function priceInquiryForSkuSizes(sku, sizes, { consigned = true } =
   for (const size of list) {
     try {
       const p = await aliasPriceInsights({ catalogId, size, consigned });
-      if (!p) continue;
-      const gi = p.globalIndicator;
-      const anyValue = gi != null || p.lowestListing != null || p.highestOffer != null || p.lastSold != null;
-      if (!anyValue) continue;
+      let resolved = null;
+      if (hierarchy) {
+        const withYouP = hasPrice(p?.globalIndicator) && consigned ? null
+          : await aliasPriceInsights({ catalogId, size, consigned: !consigned }).catch(() => null);
+        resolved = consigned ? resolveFromInsights(p, withYouP) : resolveFromInsights(withYouP, p);
+      }
+      const gi = p?.globalIndicator ?? null;
+      const anyValue = gi != null || p?.lowestListing != null || p?.highestOffer != null || p?.lastSold != null;
+      if (!anyValue && !resolved?.value) continue;
       results.push({
         size,
         global_indicator: gi,
         price: gi != null ? roundFinal(gi * mult) : null,
-        lowest_listing: p.lowestListing,
-        highest_offer: p.highestOffer,
-        last_sold: p.lastSold,
+        lowest_listing: p?.lowestListing ?? null,
+        highest_offer: p?.highestOffer ?? null,
+        last_sold: p?.lastSold ?? null,
+        ...(hierarchy ? { alias_price: resolved.value, alias_basis: resolved.basis } : {}),
       });
     } catch { /* skip this size */ }
   }

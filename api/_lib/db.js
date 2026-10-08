@@ -2991,6 +2991,10 @@ export async function savePlatformQuotes(rows, consigned) {
 
 // Quotes younger than `maxAgeHours` for these styles. An older one is not returned at
 // all: a chip saying "StockX +$30" off last week's ask is a confident wrong answer.
+// Rows written before ALIAS_HIERARCHY_SINCE hold the Alias LOWEST CONSIGNED ask, not the
+// hierarchy price (2026-10-09) — read as "not priced" so the chip re-asks rather than
+// calling StockX the winner off a "no ask" that the hierarchy would have filled.
+const ALIAS_HIERARCHY_SINCE = '2026-10-08T16:10:00Z';
 export async function getPlatformQuotes(skus, consigned, maxAgeHours = 12) {
   const list = [...new Set((skus || []).map((x) => String(x || '').trim().toUpperCase()).filter(Boolean))];
   if (!list.length) return [];
@@ -2998,7 +3002,8 @@ export async function getPlatformQuotes(skus, consigned, maxAgeHours = 12) {
     SELECT sku, size, alias_ask, stockx_ask, stockx_inexact, fetched_at
       FROM platform_quotes
      WHERE sku = ANY(${list}::text[]) AND consigned = ${!!consigned}
-       AND fetched_at > now() - make_interval(hours => ${Number(maxAgeHours) || 12})`;
+       AND fetched_at > now() - make_interval(hours => ${Number(maxAgeHours) || 12})
+       AND fetched_at > ${ALIAS_HIERARCHY_SINCE}::timestamptz`;
 }
 
 export async function listPlatformProfitStock() {

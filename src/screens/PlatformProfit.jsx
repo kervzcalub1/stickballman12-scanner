@@ -3,7 +3,7 @@
 // The PH grid answers it for one shoe at a time (PlatformBySize under the size table).
 // This answers it for everything on hand: every SKU + size PH still has to sell, what
 // those pairs landed at (items.cost — the supplier's shelf price run through their cost
-// preset at receiving), and Alias vs StockX lowest ask less each platform's fee.
+// preset at receiving), and Alias (pricing hierarchy) vs StockX lowest ask less each platform's fee.
 //
 // The stock comes from api/ph/platform-profit.js in one call. The MARKET is priced a
 // page of styles at a time through api/payout/batch.js (the endpoint batch analysis
@@ -134,7 +134,7 @@ export function PlatformProfit({ onHome, onSignOut }) {
     try {
       const payload = list.map((g) => ({ sku: g.sku, sizes: g.sizes.map((s) => String(s.size)).slice(0, MAX_SIZES) }));
       // Consigned, like every other PH pricing surface.
-      const res = await api.payoutBatch(payload, true);
+      const res = await api.payoutBatch(payload, true, { hierarchy: true });
       const next = {};
       let sxDown = false;
       for (const g of list) {
@@ -144,7 +144,8 @@ export function PlatformProfit({ onHome, onSignOut }) {
         const a = new Map((r.alias?.results || []).map((x) => [String(x.size), x]));
         const x = new Map((r.stockx?.results || []).map((y) => [String(y.size), y]));
         next[g.sku] = Object.fromEntries(g.sizes.map((s) => [s.size, {
-          alias: ask(a.get(String(s.size))?.lowest_listing),
+          alias: ask(a.get(String(s.size))?.alias_price),
+          aliasBasis: a.get(String(s.size))?.alias_basis || null,
           stockx: ask(x.get(String(s.size))?.lowest_ask),
           stockxInexact: !!x.get(String(s.size))?.inexact,
         }]));
@@ -184,7 +185,7 @@ export function PlatformProfit({ onHome, onSignOut }) {
       <TopBar title="Platform Profit" onHome={onHome} onSignOut={onSignOut} />
       <div className="card">
         <p className="muted sm pp-intro">
-          Every size we’re holding, against its landed cost: Alias (consigned) vs StockX lowest ask, less each
+          Every size we’re holding, against its landed cost: Alias (priced like the PH grid’s GI: consigned, With You when consigned is empty, then lowest …) vs StockX lowest ask, less each
           platform’s fee ({PLATFORMS.map((p) => `${p.label} ${DEFAULT_FEE_PCT[p.key]}%`).join(', ')}). Prices are
           fetched a page at a time and kept for this visit only.
         </p>

@@ -115,8 +115,20 @@ The per-size question is really PH's: *where should THIS stock be listed*. So th
 more places, where each size carries **its own cost** (`items.cost`) instead of the
 calculator's one Final cost:
 - **PH grid, "Where to sell"** — under every group's size table (desktop) and size list
-  (phone), PH + admin only (`showPricing`). Same on-tap fetch, **Alias consigned** like
-  every other PH pricing surface. Sizes with no cost on file rank by payout and say so.
+  (phone), PH + admin only (`showPricing`). Same on-tap fetch. Sizes with no cost on file
+  rank by payout and say so.
+- **On every PH surface (Where to sell, the chip, Platform Profit) Alias is priced by the
+  8-level PRICING HIERARCHY (2026-10-09)** — the same number as the grid's Global
+  Indicator column: GI Consigned → GI With You → Lowest Consigned → Lowest With You →
+  Last Sold … (`api/_lib/pricing.js`). The PH callers send `hierarchy: true` to
+  `api/payout/batch.js`, and `priceInquiryForSkuSizes` adds `alias_price` + `alias_basis`
+  per size (the With You call only when the consigned GI is empty — ≤2 Alias calls per
+  size). The Alias cell shows the grid's basis chip (`WY`, `LOW` …). Why: it used to take
+  the **consigned lowest ask** only, so a size with nothing consigned read "no ask" on
+  Alias and StockX won by default while the grid right above showed a With You GI
+  (FJ7126-003 12W: GI $84 WY, Where to sell "Alias no ask · StockX $72"). StockX stays
+  on its lowest ask. The calculator (no `hierarchy`) still compares lowest asks on the
+  basis it picked.
 - **Platform Profit** (`src/screens/PlatformProfit.jsx`, **`/ph/platform-profit`**, PH
   home → Pricing & Listing). Stock from `api/ph/platform-profit.js`
   (`listPlatformProfitStock`: on hand = `needs_shelf`/`in_stock`/`returned`, **not**
@@ -139,9 +151,12 @@ calculator's one Final cost:
   prices its costed sizes and the tooltip names the pairs left out. **GOAT-only lines compare Alias only.** Tap →
   opens the line to "Where to sell".
   - **Prices are remembered**: `api/payout/batch.js` writes every answered style to
-    **`platform_quotes`** (sku, size, consigned → alias/stockx lowest ask, `fetched_at`;
-    **needs `db:setup`**), so the calculator, "Where to sell", Platform Profit and the chip
-    all feed one cache. A style is stored only when BOTH platforms answered (an outage or
+    **`platform_quotes`** (sku, size, consigned → **alias hierarchy price** / stockx lowest
+    ask, `fetched_at`; **needs `db:setup`**), so "Where to sell", Platform Profit and the
+    chip all feed one cache. **Only a `hierarchy: true` batch writes it** — a calculator
+    batch would file a lowest ask under the same key. Rows older than
+    `ALIAS_HIERARCHY_SINCE` (`api/_lib/db.js`, 2026-10-08 16:10 UTC) held the old lowest
+    ask and are read as not priced. A style is stored only when BOTH platforms answered (an outage or
     an unconfigured StockX must not be written down as "no ask").
   - The chip reads **`GET /api/ph/platform-quotes`** (DB only, never upstream; rows
     **younger than 12 h** — an older ask is not returned at all), then prices up to

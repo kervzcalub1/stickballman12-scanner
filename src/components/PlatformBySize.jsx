@@ -14,6 +14,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { platformBySize, PLATFORMS, DEFAULT_FEE_PCT } from '../lib/payout.js';
+import { BasisChip } from './common.jsx';
 
 const money = (v) => `${Number(v) < 0 ? '−' : ''}$${Math.abs(Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pct = (v) => `${Number(v || 0).toFixed(1)}%`;
@@ -26,7 +27,9 @@ const LABEL = Object.fromEntries(PLATFORMS.map((p) => [p.key, p.label]));
 // `sizes` is `[{ size, cost? }]`. A size's own cost wins over `finalCost` — the PH grid
 // passes what those pairs landed at; the calculator passes one cost for any size.
 // `compact` drops the intro and footnote for the PH grid, where it sits under a table.
-export function PlatformBySize({ sku, sizes: sizeRows, basis, finalCost = 0, fees = DEFAULT_FEE_PCT, currentSize, onPickSize, onSignOut, compact = false, title = 'Best platform by size' }) {
+// `hierarchy` (PH): Alias is priced by the 8-level pricing hierarchy — the GI column's
+// number, With You when consigned is empty — instead of the lowest ask on `basis`.
+export function PlatformBySize({ sku, sizes: sizeRows, basis, hierarchy = false, finalCost = 0, fees = DEFAULT_FEE_PCT, currentSize, onPickSize, onSignOut, compact = false, title = 'Best platform by size' }) {
   const [quotes, setQuotes] = useState(null);   // [{ size, alias, stockx, stockxInexact }]
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -64,7 +67,7 @@ export function PlatformBySize({ sku, sizes: sizeRows, basis, finalCost = 0, fee
       // Sequential chunks: the endpoint de-duplicates by style, so a long size run is
       // split across requests rather than across entries of one.
       for (let i = 0; i < all.length; i += CHUNK) {
-        const res = await api.payoutBatch([{ sku, sizes: all.slice(i, i + CHUNK) }], basis === 'consigned');
+        const res = await api.payoutBatch([{ sku, sizes: all.slice(i, i + CHUNK) }], basis === 'consigned', { hierarchy });
         const q = res.quotes?.[String(sku).toUpperCase()] || Object.values(res.quotes || {})[0];
         if (!q) continue;
         if (q.alias?.error) setError(q.alias.error);
@@ -75,7 +78,8 @@ export function PlatformBySize({ sku, sizes: sizeRows, basis, finalCost = 0, fee
       }
       setQuotes(all.map((s) => ({
         size: s,
-        alias: ask(alias.get(s)?.lowest_listing),
+        alias: ask(hierarchy ? alias.get(s)?.alias_price : alias.get(s)?.lowest_listing),
+        aliasBasis: hierarchy ? alias.get(s)?.alias_basis || null : null,
         stockx: ask(sx.get(s)?.lowest_ask),
         stockxInexact: !!sx.get(s)?.inexact,
       })));
@@ -130,7 +134,7 @@ export function PlatformBySize({ sku, sizes: sizeRows, basis, finalCost = 0, fee
           )}
           <p className="pc-note muted sm">
             Profit is after the platform fee ({PLATFORMS.map((p) => `${p.label} ${pct(fees[p.key])}`).join(', ')}){compact
-              ? `, against each size’s cost on file. Alias ${basis === 'with_you' ? 'With You' : 'Consigned'} lowest ask.`
+              ? `, against each size’s cost on file. ${hierarchy ? 'Alias priced like the GI column (GI Consigned → GI With You → Lowest …); StockX lowest ask.' : `Alias ${basis === 'with_you' ? 'With You' : 'Consigned'} lowest ask.`}`
               : ' and uses the market price — markup isn’t applied here. Tap a size to load it into the calculator.'}
           </p>
         </>
@@ -169,7 +173,7 @@ export function BySizeTable({ rows, onPickSize, currentSize }) {
                 {p ? (
                   <>
                     <span className="pc-bysize-ask">
-                      {money(p.salePrice)}{k === 'stockx' && r.stockxInexact ? <span className="pc-batch-warn" title="StockX matched a different listing for this style"> ≈</span> : null}
+                      {money(p.salePrice)}{k === 'alias' && r.aliasBasis ? <> <BasisChip basis={r.aliasBasis} /></> : null}{k === 'stockx' && r.stockxInexact ? <span className="pc-batch-warn" title="StockX matched a different listing for this style"> ≈</span> : null}
                     </span>
                     <span className={`pc-bysize-profit ${hasCost ? (p.profit >= 0 ? 'up' : 'down') : 'muted'}`}>
                       {hasCost ? `${money(p.profit)} · ${pct(p.roi)}` : `pays ${money(p.payout)}`}

@@ -7,10 +7,12 @@
 // it arrived as (items.original_sku / original_size) for the record. Nothing is written
 // here — the choice rides on the cart line and is applied when the box is submitted.
 //
-// The men's code is offered from the last time this GS code was received as men's, so
-// the second box of a shipment is one tap. A size can be left as GS (untick it) when Alias
+// The men's code is OFFERED, never applied on its own: from the last time this GS code was
+// received as men's, or — the first time — found in the Alias catalogue (the men's product
+// with the same name minus "GS"; api/items/mens-for.js). The warehouse can't read the men's
+// code off a GS box, so the first box of a new shoe used to stop here. A size can be left as GS (untick it) when Alias
 // doesn't take that size as men's.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { gsToMensSize, compareSizes } from '../lib/codes.js';
 
@@ -22,25 +24,34 @@ export function MensConvertModal({ item, onClose, onSave }) {
   const [skip, setSkip] = useState(() => new Set(current?.skip || []));
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
-  const [suggested, setSuggested] = useState(false);
+  const [suggested, setSuggested] = useState('');   // '' | 'history' | 'catalogue'
+  const [finding, setFinding] = useState(false);
+  const [candidates, setCandidates] = useState([]);
+  const typed = useRef(!!current);   // they typed (or it was already set) — a late answer must not overwrite it
   const code = sku.trim().toUpperCase();
   const sizes = [...new Set((item.sizes || []).map((s) => s.size).filter(Boolean))].sort(compareSizes);
 
-  // What this GS code was received as last time — offered, never applied on its own.
+  // What this GS code was received as last time, else what the catalogue says the men's
+  // version is — offered, never applied on its own.
+  const offer = (m, source) => {
+    setSku(m.sku);
+    setProduct({ name: m.name, image: m.image, colorway: m.colorway });
+    setLookedUp(m.sku);
+    setSuggested(source);
+    setErr('');
+  };
   useEffect(() => {
     if (current || !item.sku) return;
-    api.mensFor(item.sku).then((r) => {
-      if (!r?.mens?.sku) return;
-      setSku((s) => s || r.mens.sku);
-      setProduct((p) => p || { name: r.mens.name, image: r.mens.image });
-      setLookedUp((l) => l || r.mens.sku);
-      setSuggested(true);
-    }).catch(() => {});
+    setFinding(true);
+    api.mensFor(item.sku, item.name || '').then((r) => {
+      setCandidates(r?.candidates || []);
+      if (r?.mens?.sku && !typed.current) offer(r.mens, r.mens.source || 'history');
+    }).catch(() => {}).finally(() => setFinding(false));
   }, [item.sku]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function lookUp() {
     if (!code) return;
-    setBusy('look'); setErr(''); setProduct(null); setSuggested(false);
+    setBusy('look'); setErr(''); setProduct(null); setSuggested('');
     try {
       const { product: p } = await api.searchSku(code);
       setProduct(p || null); setLookedUp(code);
@@ -62,14 +73,27 @@ export function MensConvertModal({ item, onClose, onSave }) {
           instead — the GS code and size are kept on each pair for the record.
         </p>
         <div className="sku-edit-row">
-          <input className="input" value={sku} onChange={(e) => { setSku(e.target.value); setSuggested(false); }} placeholder="Men’s style code, e.g. CT8019-100"
+          <input className="input" value={sku} onChange={(e) => { typed.current = true; setSku(e.target.value); setSuggested(''); }} placeholder={finding ? 'Finding the men’s code…' : 'Men’s style code, e.g. CT8019-100'}
             aria-label="Men's style code" autoComplete="off" spellCheck={false} maxLength={40}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookUp(); } }} />
           <button type="button" className="btn" disabled={busy === 'look' || !code} onClick={lookUp}>
             {busy === 'look' ? 'Looking…' : 'Look up'}
           </button>
         </div>
-        {suggested && <p className="muted xs">Last time {item.sku} was received as men’s, it went in as this code.</p>}
+        {suggested === 'history' && <p className="muted xs">Last time {item.sku} was received as men’s, it went in as this code.</p>}
+        {suggested === 'catalogue' && <p className="muted xs mens-found">Found in the Alias catalogue — the men’s version of this shoe. Check the name and picture match.</p>}
+        {!finding && !code && !candidates.length && <p className="muted xs">No men’s version found in the catalogue — type the code if you know it.</p>}
+        {!suggested && candidates.length > 0 && !(product && lookedUp === code) && (
+          <div className="mens-cands">
+            <div className="muted xs">Men’s shoes with a similar name — tap the right one:</div>
+            {candidates.map((c) => (
+              <button key={c.sku} type="button" className="mens-cand" onClick={() => offer(c, 'catalogue')}>
+                {c.image ? <img src={c.image} alt="" /> : null}
+                <span><b>{c.sku}</b><span className="muted xs">{c.name}</span></span>
+              </button>
+            ))}
+          </div>
+        )}
         {product && lookedUp === code && (
           <div className="sku-edit-hit">
             {product.image ? <img src={product.image} alt="" /> : null}

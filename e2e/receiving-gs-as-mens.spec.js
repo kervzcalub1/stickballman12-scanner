@@ -56,10 +56,13 @@ async function startReceive(page) {
 }
 
 test('a GS shoe received as men\'s goes in under the men\'s code + size, and keeps the GS one', async ({ page }) => {
+  // Never received before and nothing in the catalogue (the suite never asks the real Alias).
+  await page.route('**/api/items/mens-for**', (route) => route.fulfill({ json: { ok: true, mens: null, candidates: [] } }));
   const card = await startReceive(page);
   await card.getByRole('button', { name: 'As men’s…' }).click();
   const dlg = page.getByRole('dialog', { name: "Receive as men's" });
   await expect(dlg).toContainText('7Y → 7');
+  await expect(dlg).toContainText('No men’s version found in the catalogue');
   await dlg.getByLabel("Men's style code").fill(MENS);
   // Not before it is looked up — the name has to come with it.
   await expect(dlg.getByRole('button', { name: 'Look it up first' })).toBeDisabled();
@@ -99,6 +102,39 @@ test('the next box of that GS code is offered the same men\'s code; "Keep as GS"
   await card.locator('.mens-chip').click();
   await page.getByRole('dialog', { name: "Receive as men's" }).getByRole('button', { name: 'Keep as GS' }).click();
   await expect(card.getByRole('button', { name: 'As men’s…' })).toBeVisible();
+});
+
+// The first box of a GS code nobody has converted before: the men's code is FOUND in the
+// catalogue (the men's product with the same name minus "GS") — the warehouse can't read it
+// off a GS box. Offered, ready to confirm in one tap; or, when the names don't agree
+// exactly, the men's results are listed to pick from.
+test('the first time, the men\'s code is found in the catalogue and offered', async ({ page }) => {
+  await page.route('**/api/items/mens-for**', (route) => route.fulfill({ json: { ok: true,
+    mens: { sku: 'IW3808-400', name: "Air Jordan 13 Retro 'Flint' 2026", image: '', colorway: 'Navy', source: 'catalogue' }, candidates: [] } }));
+  const card = await startReceive(page);
+  await card.getByRole('button', { name: 'As men’s…' }).click();
+  const dlg = page.getByRole('dialog', { name: "Receive as men's" });
+  await expect(dlg.getByLabel("Men's style code")).toHaveValue('IW3808-400');
+  await expect(dlg).toContainText('Found in the Alias catalogue');
+  await expect(dlg).toContainText("Air Jordan 13 Retro 'Flint' 2026");
+  await expect(dlg.getByRole('button', { name: 'Receive as IW3808-400' })).toBeEnabled();   // no Look up needed
+  await dlg.getByRole('button', { name: 'Cancel' }).click();
+});
+
+test('when the names don\'t agree exactly, the men\'s results are listed to pick from', async ({ page }) => {
+  await page.route('**/api/items/mens-for**', (route) => route.fulfill({ json: { ok: true, mens: null, candidates: [
+    { sku: 'DZ5485-612', name: "Air Jordan 1 Retro High OG 'Chicago Lost & Found'", image: '', colorway: null },
+    { sku: '555088-160', name: "Air Jordan 1 Retro High OG 'Phantom'", image: '', colorway: null },
+  ] } }));
+  const card = await startReceive(page);
+  await card.getByRole('button', { name: 'As men’s…' }).click();
+  const dlg = page.getByRole('dialog', { name: "Receive as men's" });
+  await expect(dlg.getByLabel("Men's style code")).toHaveValue('');
+  await dlg.locator('.mens-cand', { hasText: 'DZ5485-612' }).click();
+  await expect(dlg.getByLabel("Men's style code")).toHaveValue('DZ5485-612');
+  await expect(dlg.locator('.mens-cands')).toHaveCount(0);
+  await expect(dlg.getByRole('button', { name: 'Receive as DZ5485-612' })).toBeEnabled();
+  await dlg.getByRole('button', { name: 'Cancel' }).click();
 });
 
 // The supplier's manifest names the GS code. Pairs received as men's are still the pairs

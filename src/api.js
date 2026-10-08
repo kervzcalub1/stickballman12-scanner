@@ -134,7 +134,7 @@ export const api = {
   inbound: () => get('/api/inbound'),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // GS received as men's: what this GS code was last received as (receiving.md).
-  mensFor: (sku) => get(`/api/items/mens-for?sku=${encodeURIComponent(sku)}`),
+  mensFor: (sku, name = '') => get(`/api/items/mens-for?sku=${encodeURIComponent(sku)}${name ? `&name=${encodeURIComponent(name)}` : ''}`),
   // v4 — receiving / batches
   suppliers: () => get('/api/suppliers'),
   checkTracking: (tracking, exceptBatch = null) => get(`/api/batches/check-tracking?tracking=${encodeURIComponent(tracking)}${exceptBatch ? `&exceptBatch=${encodeURIComponent(exceptBatch)}` : ''}`),

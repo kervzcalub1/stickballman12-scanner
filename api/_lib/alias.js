@@ -208,6 +208,45 @@ export async function aliasCatalogBySku(query) {
   };
 }
 
+// The MEN'S product a Grade School shoe is the kid's version of (receiving.md, "GS received
+// as men's"). The warehouse used to have to know it — "Air Jordan 13 Retro GS 'Flint' 2026"
+// is DJ3003-400 on the box, and the men's code IW3808-400 is printed nowhere they can see.
+// Alias names the whole family alike and says each one's gender, so: search the GS name
+// with the kid markers taken out, and keep a MEN'S result whose name, without them, is the
+// same shoe. One fuzzy search (the same catalogue call as a SKU lookup), no extra quota.
+//
+// → { best: {sku, name, image, colorway} | null, candidates: [...] }. `best` only when the
+// names agree exactly once the markers are stripped; otherwise the men's results are
+// offered and a person picks — a wrong men's code would list the pair as another shoe.
+const KID_MARKERS = /\(?\b(?:GS|BG|PS|TD|Grade School|Big Kids'?|Little Kids'?|Kids'?|Toddler|Preschool|Infant|Youth)\b\)?/gi;
+const shoeKey = (name) => String(name || '').toLowerCase()
+  .replace(KID_MARKERS, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+const toCandidate = (c) => ({
+  sku: String(c.sku || '').trim().replace(/\s+/g, '-').toUpperCase(),
+  name: c.name || c.nickname || null, image: c.main_picture_url || null, colorway: c.colorway || null,
+});
+export async function aliasMensCounterpart(gsSku, gsName = '') {
+  const apiKey = process.env.ALIAS_API_KEY;
+  if (!apiKey) return { best: null, candidates: [] };
+  let name = String(gsName || '').trim();
+  if (!name && gsSku) name = (await aliasCatalogBySku(gsSku).catch(() => null))?.name || '';
+  const want = shoeKey(name);
+  if (!want) return { best: null, candidates: [] };
+  const query = name.replace(KID_MARKERS, ' ').replace(/['"]/g, '').replace(/\s+/g, ' ').trim();
+  const r = await aliasApiGet('/api/v1/catalog', { token: apiKey, query: { query, limit: '10' }, timeoutMs: ALIAS_CATALOG_TIMEOUT_MS });
+  if (!r.ok) return { best: null, candidates: [] };
+  // A style code is CODE-COLOR ("IW3808 400"); Alias also lists bundles and oddities under
+  // codes like "DZ548561200-1014818-XC", which are never the men's pair.
+  const men = (Array.isArray(r.data?.catalog_items) ? r.data.catalog_items : [])
+    .filter((c) => c?.sku && /^(men|unisex)$/i.test(String(c.gender || '')) && !sameSku(gsSku, c.sku)
+      && /^[A-Z0-9]{5,10}[\s-][A-Z0-9]{3}$/i.test(String(c.sku).trim()));
+  const exact = men.filter((c) => shoeKey(c.name || c.nickname) === want);
+  return {
+    best: exact.length === 1 ? toCandidate(exact[0]) : null,
+    candidates: men.slice(0, 4).map(toCandidate),
+  };
+}
+
 // Pricing_insights `availability` for one catalog_id + size, normalized to
 // dollars. Returns { globalIndicator, lowestListing, highestOffer, lastSold } —
 // each a number ≥ 0 or null when the field is missing/invalid. Conditions default

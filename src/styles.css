@@ -1216,6 +1216,24 @@ button.ph-plat-chip { cursor: pointer; }
 .seg-btn .seg-n { font-variant-numeric: tabular-nums; opacity: 0.7; font-size: 11px; margin-left: 4px; }
 .seg-btn.on.rescale { color: #a595ff; border-color: #a595ff; background: rgba(165,149,255,0.14); }
 .seg-btn.on.rescale .seg-n { opacity: 1; }
+/* Waitlist (waitlist.md) — teal: parked on purpose, coming back on a date. Not a
+   problem with the row (rose) and not work in flight elsewhere (blue / violet). */
+.seg-btn.on.waitlist { color: #6cc4d8; border-color: #6cc4d8; background: rgba(108,196,216,0.14); }
+.seg-btn.on.waitlist .seg-n { opacity: 1; }
+.waitlist-chip {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;
+  padding: 1px 6px; border-radius: 5px; margin-left: 6px;
+  color: #6cc4d8; border: 1px solid rgba(108,196,216,0.5); background: rgba(108,196,216,0.12);
+}
+.ph-release-btn { white-space: nowrap; }
+.waitlist-sizes { display: flex; flex-wrap: wrap; gap: 6px; }
+.waitlist-size {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border, rgba(255,255,255,0.15));
+  font-weight: 600; min-height: 36px;
+}
+.waitlist-size.on { border-color: #6cc4d8; background: rgba(108,196,216,0.10); }
+.waitlist-modal .seg { flex-wrap: wrap; }
 
 /* Reported vs actual, inside the row's own drawer — the whole point of the tab is that
    this sits where the listing gets done, not on another screen. */
@@ -1554,6 +1572,8 @@ button.ph-plat-chip { cursor: pointer; }
   border: 1px solid rgba(79, 124, 255, 0.55); background: rgba(79, 124, 255, 0.12); }
 .ph-status-filter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px;
   padding-top: 12px; border-top: 1px solid var(--border); }
+/* Five tabs since the Waitlist: on a phone they wrap rather than run off the edge. */
+.ph-status-filter .seg { flex-wrap: wrap; }
 /* PH grid search — filters the lines already on screen (the date range is what
    widens the net). Full width on a phone so it's a real tap target, not a sliver. */
 .ph-search { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px;

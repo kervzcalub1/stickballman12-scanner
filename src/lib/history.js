@@ -2,6 +2,7 @@
 // PH/admin/warehouse History modal.
 import { statusLabel } from '../statuses.js';
 import { DEFECT_TYPES } from './constants.js';
+import { estDate } from './format.js';
 
 const DEFECT_LABEL = Object.fromEntries(DEFECT_TYPES);
 
@@ -20,6 +21,9 @@ export function eventLabel(e) {
   if (e.type === 'shelved') return `Shelved at ${e.details?.label || e.details?.locationCode || '—'}${e.details?.gotBox ? ' (box found → With Box)' : ''} (by ${by})`;
   if (e.type === 'ph_update') return `${e.details?.text || 'Updated'} ${(e.details?.soldCascade || e.details?.system) ? '(system-generated)' : `(by ${by})`}`;
   if (e.type === 'note') return `Note: ${e.details?.text || ''} (by ${by})`;
+  // Waitlist (waitlist.md): held until a date; released by hand, or by the date itself.
+  if (e.type === 'waitlisted') return `Put on the waitlist until ${e.details?.until ? estDate(e.details.until) : '—'} EST${e.details?.note ? ` — ${e.details.note}` : ''} (by ${by})`;
+  if (e.type === 'waitlist_released') return e.details?.auto ? 'Back from the waitlist — its date came (system-generated)' : `Released from the waitlist early (by ${by})`;
   if (e.type === 'issue') {
     const t = e.details?.defectType;
     const label = t ? (DEFECT_LABEL[t] || t.replace(/_/g, ' ')) : '';

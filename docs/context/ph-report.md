@@ -140,7 +140,9 @@ Pending / In-Progress / Done, plus **⟳ Rescale** (2026-08-27) — a fourth BUC
 fourth listing status. `phListingStatus` stays three-valued and the filter keys on
 `phTabOf`; every tab carries a count, because the page defaults to Pending and rows
 would otherwise vanish silently. Full rules, the all-or-nothing link and the listing
-worksheet: `rescale.md`.
+worksheet: `rescale.md`. **⏸ Waitlist** (2026-10-09) is a fifth bucket: pairs held off
+listing until a date, own row (rule 5 of `groupPhSized`), read-only with ▶ Release now —
+`waitlist.md`.
 
 ## Editable fields (one Edit ⇄ Submit per group)
 - **Per size**: Global indicator (number) → **Final price auto-calculates** = GI ×

@@ -15,7 +15,7 @@
 //
 // Like notify.js this runs AFTER the response has gone (`fireAlert`), and it swallows
 // everything: an alert that fails costs the person a message, never a request.
-import { telegramConfigured, sendAlertMessage } from './telegram.js';
+import { telegramConfigured, sendAlertMessage, sendAlertDocument } from './telegram.js';
 import { alertCandidates, logAlert, setTelegramBroken, alertSentRecently, cartParticipantIds, poParticipantIds,
   getBuyCart, cartListChangesSince } from './db.js';
 import { fundingTarget } from './buycart.js';
@@ -132,6 +132,22 @@ export const ALERT_EVENTS = [
     defaultFor: (u) => u.role === 'warehouse',
   },
   {
+    // Waitlist (waitlist.md). The hold ends by itself on its date; this is the person who
+    // lists being told, so a pair held a month doesn't come back to nobody.
+    key: 'ph.waitlist_back', group: 'Waitlist', emoji: '⏰', required: false,
+    title: 'Back from the waitlist',
+    when: 'Pairs held on the waitlist reach their date and are back on New Inventory to list',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+    defaultFor: (u) => u.role === 'ph_team',
+  },
+  {
+    key: 'ph.waitlist_daily', group: 'Waitlist', emoji: '📋', required: false,
+    title: 'Daily waitlist report',
+    when: 'Everything on the waitlist as a CSV, at the end of the PH shift — for the review',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+    defaultFor: (u) => isAdminRole(u.role),
+  },
+  {
     key: 'nudge', group: 'Nudges', emoji: '🔔', required: true,
     title: 'Nudges',
     when: 'Someone nudges you about a request or an order',
@@ -192,7 +208,7 @@ export function alertHtml({ emoji, title, code = null, body }) {
  * audience). `path` is a string or `(u) => string`. `once` + `ref`: never twice for the
  * same record. Returns { sentTo: [names] }.
  */
-export async function alertUsers(eventKey, { pick = () => true, actorUid = null, ref = null, code = null, body, path = null, once = false }) {
+export async function alertUsers(eventKey, { pick = () => true, actorUid = null, ref = null, code = null, body, path = null, once = false, document = null }) {
   const ev = EVENT[eventKey];
   if (!ev) throw new Error(`unknown alert event ${eventKey}`);
   const sentTo = [];
@@ -213,7 +229,14 @@ export async function alertUsers(eventKey, { pick = () => true, actorUid = null,
       : !eventOn(ev, u) ? 'event turned off' : null;
     if (skip) { await logAlert({ userId: u.id, eventKey, ref, status: 'skipped', reason: skip }).catch(() => {}); continue; }
     try {
-      await sendAlertMessage(u.telegram_user_id, { html, url: urlFor(u) });
+      // `document` ({ filename, content }): the alert IS a file (the daily report) — the
+      // text rides as its caption, and the link goes in it since a file has no button.
+      if (document) {
+        const url = urlFor(u);
+        await sendAlertDocument(u.telegram_user_id, { html: url ? `${html}\n\n${url}` : html, ...document });
+      } else {
+        await sendAlertMessage(u.telegram_user_id, { html, url: urlFor(u) });
+      }
       sentTo.push(u.name || u.username);
       await logAlert({ userId: u.id, eventKey, ref, status: 'sent' }).catch(() => {});
       if (u.telegram_broken_at) await setTelegramBroken(u.id, false).catch(() => {});
@@ -245,6 +268,7 @@ const ROUTES = {
   access:    { main: '/access' },
   po:        { main: '/inbound',       ph: '/ph/purchase-orders', supplier: '/orders' },
   duptrack:  { main: '/dup-tracking' },
+  newinv:    { main: '/report',        ph: '/ph/new-inventory' },
 };
 export const at = (page, query = '') => (u) => {
   const r = ROUTES[page];
@@ -560,4 +584,44 @@ export function alertDuplicateTracking(d, actor) {
       + `${d.prior_supplier && d.prior_supplier !== d.supplier_name ? ` (${d.prior_supplier})` : ''}. Logged — decide whether to follow up.`,
     path: at('duptrack', `d=${Number(d.id)}`),
   }));
+}
+
+// ── Waitlist (waitlist.md) ────────────────────────────────────────────────────
+
+// Pairs whose hold just ended — ONE message for the lot, grouped by shoe, from the worker.
+export async function alertWaitlistBack(rows) {
+  if (!rows?.length) return null;
+  const by = new Map();
+  for (const r of rows) {
+    const k = r.sku || '?';
+    const g = by.get(k) || { name: r.name, sizes: [] };
+    g.sizes.push(r.size);
+    by.set(k, g);
+  }
+  const lines = [...by.entries()].slice(0, 15).map(([sku, g]) => `• ${sku}${g.name ? ` ${g.name}` : ''} — ${g.sizes.join(', ')}`);
+  const more = by.size > 15 ? `\n…and ${by.size - 15} more` : '';
+  const pairs = rows.length;
+  return alertUsers('ph.waitlist_back', {
+    ref: `waitlist-back:${rows.map((r) => r.id).sort((a, b) => a - b).join(',').slice(0, 180)}`,
+    code: `${pairs} pair${pairs === 1 ? '' : 's'}`,
+    body: `Off the waitlist and back on New Inventory to list — check the market before listing:\n${lines.join('\n')}${more}`,
+    path: at('newinv', 'st=pending'),
+  });
+}
+
+// The daily report: everything on hold as a CSV. `once` per EST day, so a restart or a
+// second instance can't send it twice.
+export async function alertWaitlistDaily({ day, rows, csv, filename }) {
+  const pairs = rows.reduce((n, r) => n + (Number(r.qty) || 0), 0);
+  const skus = new Set(rows.map((r) => r.sku)).size;
+  return alertUsers('ph.waitlist_daily', {
+    once: true,
+    ref: `waitlist-daily:${day}`,
+    code: day,
+    body: rows.length
+      ? `${pairs} pair${pairs === 1 ? '' : 's'} on hold across ${skus} SKU${skus === 1 ? '' : 's'}. The file has each SKU + size, why it was held, when it comes back, and what it would make at today's market.`
+      : 'Nothing is on the waitlist today.',
+    path: at('newinv', 'st=waitlist'),
+    document: rows.length ? { filename, content: csv } : null,
+  });
 }

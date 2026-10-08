@@ -197,3 +197,9 @@ if (certPath && keyPath) {
 import('./api/_lib/presell-worker.js')
   .then((m) => m.startPresellWorker())
   .catch((e) => console.error('[presell-worker] failed to start:', e.message));
+
+// Waitlist — "back from the waitlist" alerts + the daily CSV (docs/context/waitlist.md).
+// Production only by default: dev and prod share one Telegram bot.
+import('./api/_lib/waitlist-worker.js')
+  .then((m) => m.startWaitlistWorker())
+  .catch((e) => console.error('[waitlist-worker] failed to start:', e.message));

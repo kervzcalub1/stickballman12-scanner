@@ -1,6 +1,7 @@
 # Shopify — the all-channel sales & inventory feed
 
-Client: `api/_lib/shopify.js`. Env: `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_ACCESS_TOKEN`
+Client: `api/_lib/shopify.js`. Env: `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_CLIENT_ID` +
+`SHOPIFY_SECRET_KEY` (renew the token — see *Getting a token*), `SHOPIFY_ACCESS_TOKEN`
 (optional `SHOPIFY_API_VERSION`, default `2026-07`). Used by `api/advisor/ask.js`
 (`top_sellers`, `sku_history`, `stock_status`) and `api/payout/quote.js` (liquidity).
 
@@ -44,7 +45,7 @@ screen, where a **revoked** token looks perfectly fine because the scopes *are* 
 
 | | What Shopify answers | What we say | Who fixes it |
 |---|---|---|---|
-| `unauthorized` | **401** `Invalid API key or access token` | "Shopify rejected our access token — it is revoked or wrong" (+ a server-log line naming `SHOPIFY_ACCESS_TOKEN`) | mint a new Admin API token and reset the env var |
+| `unauthorized` | **401** `Invalid API key or access token` | Normally nothing: `gql` mints a new token and retries once (see *Getting a token*). Only if THAT fails: "rejected our access token and a new one could not be minted" | check `SHOPIFY_CLIENT_ID` / `SHOPIFY_SECRET_KEY` and that the app is still installed |
 | `denied` | **200** with `Access denied for … field` | "needs the read_products / read_inventory scopes" | re-grant scopes on the existing app |
 
 Symptom that started this: *"what is our best selling last week"* → **"I can't see that
@@ -115,7 +116,26 @@ node scripts/probe-shopify.mjs          # verify the whole chain
 `SHOPIFY_SECRET_KEY` is accepted as well as `SHOPIFY_CLIENT_SECRET` — the dashboard
 calls it one thing and people type the other.
 
+### The token renews itself (2026-10-08)
+A client-credentials token **expires after 24 hours** (`expires_in: 86399`) — Dev Dashboard
+apps don't get permanent `shpat_` tokens. So `gql` renews it:
+- It uses the token it has — `SHOPIFY_ACCESS_TOKEN`, or the one it last minted — **until
+  Shopify refuses it** (401). It never replaces a working token early (owner's call).
+- On a 401 it exchanges `SHOPIFY_CLIENT_ID` + `SHOPIFY_SECRET_KEY` for a new token, keeps
+  it in memory, and retries the request once. A 401 means Shopify never ran the request,
+  so retrying a mutation is safe. Concurrent 401s share one exchange. Log line:
+  `[shopify] access token was refused — minted a new one…`.
+- A minted token lives in memory only; after a restart the env token is tried first,
+  and an expired one costs one 401 + one exchange.
+- With the client id + secret set, `SHOPIFY_ACCESS_TOKEN` is **optional** — nothing needs
+  pasting into Railway again. `shopify-auth.mjs` is now only for local poking around.
+
 **The app must be INSTALLED on the store before the exchange works**; otherwise Shopify
 answers `app_not_installed`, which is a clear error but an easy one to misread as bad
 credentials. Scope changes need a new **Release** and then manual approval on the store —
-they are not applied automatically.
+they are not applied automatically. Releasing alone is NOT enough, and the store's app
+page (Settings → Apps → Stickballman12 AI) shows **no** "update permissions" banner: what
+worked on 2026-10-08 for `write_products` was opening
+`https://<store>.myshopify.com/admin/oauth/install?client_id=<SHOPIFY_CLIENT_ID>` as the
+owner and approving. Check the app page's **Edit** column (Products ✓), or
+`GET /admin/oauth/access_scopes.json` with the token.

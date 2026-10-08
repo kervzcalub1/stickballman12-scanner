@@ -91,6 +91,8 @@ try {
 
 console.log(`\n${ok('Success.')} ${wrote ? 'SHOPIFY_ACCESS_TOKEN written to .env.' : 'Token obtained but NOT saved.'}`);
 if (data.scope) console.log(dim(`granted scopes: ${data.scope}`));
-console.log(`\nStill to do by hand: set the same value in ${bold("Railway's variables")} —`);
-console.log(`  ${bold('node scripts/shopify-auth.mjs --print')}   to display it when you need it there.`);
+// The server renews its own token on a 401 (api/_lib/shopify.js) — this token lasts 24h
+// and Railway needs SHOPIFY_CLIENT_ID + SHOPIFY_SECRET_KEY, not a pasted copy of it.
+console.log(dim(`\nThis token expires in ${Math.round((Number(data.expires_in) || 86400) / 3600)}h. The server renews its own on a 401,`));
+console.log(dim('so Railway needs SHOPIFY_CLIENT_ID + SHOPIFY_SECRET_KEY — not this token.'));
 console.log(`\nVerify:  ${bold('node scripts/probe-shopify.mjs')}\n`);

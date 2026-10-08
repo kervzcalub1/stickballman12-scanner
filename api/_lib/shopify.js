@@ -35,23 +35,75 @@ const MAX_PAGES = 60;          // 15,000 orders — a stop, not a target
 // chat turn. Raise it only alongside a smarter fetch (incremental, or persisted).
 export const MAX_WINDOW_DAYS = 90;
 
+const clientId = () => process.env.SHOPIFY_CLIENT_ID;
+const clientSecret = () => process.env.SHOPIFY_CLIENT_SECRET || process.env.SHOPIFY_SECRET_KEY;
+const canMint = () => !!(clientId() && clientSecret());
+
 export function shopifyConfigured() {
-  return !!(process.env.SHOPIFY_STORE_DOMAIN && process.env.SHOPIFY_ACCESS_TOKEN);
+  return !!(process.env.SHOPIFY_STORE_DOMAIN && (process.env.SHOPIFY_ACCESS_TOKEN || canMint()));
 }
 
 const domain = () => String(process.env.SHOPIFY_STORE_DOMAIN || '')
   .replace(/^https?:\/\//, '').replace(/\/$/, '');
 
-async function gql(query, variables) {
-  const r = await fetch(`https://${domain()}/admin/api/${API_VERSION}/graphql.json`, {
+// The token RENEWS ITSELF (2026-10-08). A Dev Dashboard app's client-credentials token
+// lives 24 hours (`expires_in: 86399`), so a token pasted into Railway was a sales feed
+// and a Save button that died the next day. The token in use is kept until Shopify
+// actually refuses it — SHOPIFY_ACCESS_TOKEN first, then whatever was minted — and only
+// a 401 mints a new one from the client id + secret (the owner's call: use a token until
+// it expires, don't replace a working one early). A revoked token and an expired one
+// look identical from here, and both are fixed the same way. A minted token lives in
+// memory only; after a restart the env token is tried first again.
+let minted = null;   // the token minted after the last refusal
+let minting = null;  // one exchange in flight, shared by everyone who hit the 401 meanwhile
+
+async function mintToken() {
+  const r = await fetch(`https://${domain()}/admin/oauth/access_token`, {
     method: 'POST',
-    headers: {
-      'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ query, variables }),
-    signal: AbortSignal.timeout(30_000),
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ client_id: clientId(), client_secret: clientSecret(), grant_type: 'client_credentials' }),
+    signal: AbortSignal.timeout(15_000),
   });
+  const data = await r.json().catch(() => null);
+  if (!r.ok || !data?.access_token) {
+    // Never log the response body whole — on success it IS the credential.
+    console.error(`[shopify] token exchange failed (${r.status}) ${data?.error || ''} ${data?.error_description || ''}`.trim());
+    return null;
+  }
+  console.log('[shopify] access token was refused — minted a new one from the client credentials.');
+  minted = data.access_token;
+  return minted;
+}
+
+const currentToken = () => minted || process.env.SHOPIFY_ACCESS_TOKEN;
+
+// Mint a replacement for `refused`. Requests that 401'd on the same token share one
+// exchange; one that 401'd on a token ALREADY replaced just takes the replacement.
+async function renewToken(refused) {
+  if (minted && minted !== refused) return minted;
+  if (!minting) minting = mintToken().catch((e) => { console.error(`[shopify] token exchange failed: ${e.message}`); return null; }).finally(() => { minting = null; });
+  return minting;
+}
+
+const post = (token, query, variables) => fetch(`https://${domain()}/admin/api/${API_VERSION}/graphql.json`, {
+  method: 'POST',
+  headers: {
+    'X-Shopify-Access-Token': token,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({ query, variables }),
+  signal: AbortSignal.timeout(30_000),
+});
+
+async function gql(query, variables) {
+  const used = currentToken();
+  let r = used ? await post(used, query, variables) : new Response(null, { status: 401 });
+  // A 401 means Shopify never ran the request, so retrying — mutations included — is
+  // safe. One retry on a freshly minted token; a second 401 is a real refusal.
+  if (r.status === 401 && canMint()) {
+    const fresh = await renewToken(used);
+    if (fresh) r = await post(fresh, query, variables);
+  }
   const data = await r.json().catch(() => null);
   // Shopify answers 200 with an `errors` array for permission problems, so a bare
   // `r.ok` check would read a refusal as success. It is not ALWAYS an array, though:
@@ -158,10 +210,10 @@ export async function shopifySales({ days = 7 } = {}) {
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const r = await gql(ORDERS_QUERY, { q: `created_at:>=${estDaysAgo(d)}`, after });
     if (!r.ok) {
-      if (r.unauthorized) console.error('[shopify] SHOPIFY_ACCESS_TOKEN rejected (401) — the token is wrong, revoked, or from another store.');
+      if (r.unauthorized) console.error('[shopify] access token rejected (401) and no new one could be minted — check SHOPIFY_CLIENT_ID / SHOPIFY_SECRET_KEY and that the app is installed.');
       return {
         error: r.unauthorized
-          ? 'Shopify rejected our access token — it is revoked or wrong, so no sales can be read until it is replaced.'
+          ? 'Shopify rejected our access token and a new one could not be minted, so no sales can be read until that is fixed.'
           : r.denied ? 'not permitted' : 'Shopify sales lookup failed',
         days: d,
       };
@@ -344,7 +396,7 @@ export async function shopifyInventoryForSku(sku) {
 
 // Why a refusal happened, in words that send the reader to the right fix.
 function failure(r, what) {
-  if (r.unauthorized) return { error: 'Shopify rejected our access token — it is revoked or wrong. Reset SHOPIFY_ACCESS_TOKEN.', code: 'unauthorized' };
+  if (r.unauthorized) return { error: 'Shopify rejected our access token, and a new one could not be minted — check SHOPIFY_CLIENT_ID / SHOPIFY_SECRET_KEY and that the app is still installed on the store.', code: 'unauthorized' };
   if (r.denied) {
     return what === 'write'
       ? { error: 'Shopify refused the price change: the app needs the write_products scope. Add it to the “Stickballman12 AI” app in the Dev Dashboard, release, and approve it on the store.', code: 'denied' }

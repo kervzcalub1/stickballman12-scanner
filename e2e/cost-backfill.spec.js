@@ -6,7 +6,7 @@
 // the landed cost out the way receiving does. What has to hold:
 //   · each pair takes ITS OWN label's line (matched by the box's tracking number) when
 //     the same SKU + size is priced differently on two labels;
-//   · landed = shelf through the supplier's preset, the line's own tip beating the preset's;
+//   · landed = shelf through the supplier's preset, always the preset's tip (a line tip is ignored, 2026-10-08);
 //   · a $0 and a real cost are never touched, a size the PO doesn't price is left blank;
 //   · preview writes nothing; admin only; every filled pair gets a history note.
 import { test, expect } from '@playwright/test';
@@ -108,7 +108,7 @@ test('blank costs are filled from their own label on the PO, through the supplie
   const a = await costOf(1); const b = await costOf(2);
   expect(Number(a.cost)).toBeCloseTo(landedFromShelf(150, null, PRESET), 2);   // label 1, preset tip
   expect(Number(a.shelf_price)).toBe(150);
-  expect(Number(b.cost)).toBeCloseTo(landedFromShelf(100, 7, PRESET), 2);      // label 2, its own tip
+  expect(Number(b.cost)).toBeCloseTo(landedFromShelf(100, null, PRESET), 2);   // label 2: its $7 tip ignored
   expect(Number(b.shelf_price)).toBe(100);
   expect(Number((await costOf(3)).cost)).toBe(0);     // $0 is a claim — left alone
   expect(Number((await costOf(4)).cost)).toBe(99);    // a real cost — left alone

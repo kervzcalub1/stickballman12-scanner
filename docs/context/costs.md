@@ -118,7 +118,7 @@ plainly had one (HV6103-300 on PO 49 was the report).
 - **Which line:** `poLineMoney` — the pair's OWN label first (its `batch_boxes.tracking_number`
   = the `po_boxes.tracking_number`, case/space-insensitive), any label after that.
 - **Landed:** `landedFromShelf` with `presetForShipment(po, batch supplier)` — the same code
-  and order receiving uses; line tip beats the preset's. **No preset → SKIPPED** (owner's
+  and order receiving uses; always the preset's tip, never the line's (2026-10-08). **No preset → SKIPPED** (owner's
   rule, 2026-09-30: the declared figure is only the shelf price, the actual cost is shelf +
   the supplier's preset), listed in the preview by PO + supplier (`noPreset`) so a preset
   can be linked first; the next check then fills them.

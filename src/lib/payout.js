@@ -222,7 +222,7 @@ export function platformBySize(quotes, finalCost, feePct = {}) {
       // Within a cent is a tie — naming a winner over rounding would be a coin toss.
       best = edge != null && edge < 0.005 ? 'tie' : top.platform;
     }
-    return { size: q.size, cost, ...per, best, edge, stockxInexact: !!q.stockxInexact };
+    return { size: q.size, cost, ...per, best, edge, stockxInexact: !!q.stockxInexact, aliasBasis: q.aliasBasis || null };
   });
 }
 

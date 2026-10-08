@@ -246,7 +246,7 @@ function useMarketQuotes(groups, enabled, onSignOut) {
     entries.forEach(([sku]) => tried.current.add(sku));
     setPricing((p) => new Set([...p, ...entries.map(([sku]) => sku)]));
     try {
-      const res = await api.payoutBatch(entries.map(([sku, sizes]) => ({ sku, sizes: [...sizes].slice(0, 24) })), true);
+      const res = await api.payoutBatch(entries.map(([sku, sizes]) => ({ sku, sizes: [...sizes].slice(0, 24) })), true, { hierarchy: true });
       const got = [];
       for (const [sku, sizes] of entries) {
         const q = res.quotes?.[sku];
@@ -256,7 +256,7 @@ function useMarketQuotes(groups, enabled, onSignOut) {
         const al = new Map((q.alias?.results || []).map((r) => [String(r.size), r]));
         const sx = new Map((q.stockx?.results || []).map((r) => [String(r.size), r]));
         for (const size of sizes) {
-          const a = Number(al.get(size)?.lowest_listing); const x = Number(sx.get(size)?.lowest_ask);
+          const a = Number(al.get(size)?.alias_price); const x = Number(sx.get(size)?.lowest_ask);
           got.push({ sku, size, alias: a > 0 ? a : null, stockx: x > 0 ? x : null, stockxInexact: sx.get(size)?.inexact === true });
         }
       }
@@ -310,7 +310,7 @@ function PlatformChip({ summary, pricing, uncosted = 0, onOpen }) {
   const where = best === 'mixed' ? `Alias ${split.alias} · StockX ${split.stockx}` : PLATFORM_LABEL[best];
   const tone = profitEach < 0 ? 'loss' : 'gain';
   const detail = (summary.rows || []).map((r) => `US ${r.size}: ${r.best ? `${PLATFORM_LABEL[r.best] || r.best}` : 'no ask'}${r.alias ? ` · Alias $${Math.round(r.alias.payout)}` : ''}${r.stockx ? ` · StockX $${Math.round(r.stockx.payout)}` : ''} payout`).join('\n');
-  const title = `About ${money0(profitEach)} a pair after fees (about $${Math.round(payoutEach)} payout), over ${costedPairs} costed pair${costedPairs === 1 ? '' : 's'}${uncosted ? ` — ${uncosted} pair${uncosted === 1 ? '' : 's'} without a cost left out` : ''}\nLowest asks, Alias consigned; last priced within 12 hours.\n\n${detail}`;
+  const title = `About ${money0(profitEach)} a pair after fees (about $${Math.round(payoutEach)} payout), over ${costedPairs} costed pair${costedPairs === 1 ? '' : 's'}${uncosted ? ` — ${uncosted} pair${uncosted === 1 ? '' : 's'} without a cost left out` : ''}\nStockX lowest ask; Alias by the pricing hierarchy (GI consigned → GI With You → lowest …); last priced within 12 hours.\n\n${detail}`;
   return (
     <button type="button" className={`ph-plat-chip ${best} ${tone}`} title={title}
       onClick={(e) => { e.stopPropagation(); onOpen?.(); }}>
@@ -324,7 +324,8 @@ function PlatformChip({ summary, pricing, uncosted = 0, onOpen }) {
 export function PHGrid({ user, kind = null, onHome, onSignOut }) {
   const canEdit = user?.role === 'ph_team' || user?.role === 'superadmin'; // admin + warehouse are read-only
   const showPricing = user?.role !== 'warehouse'; // GI + Final price hidden from warehouse
-  // Where each size of this shoe earns most: Alias vs StockX lowest ask, less the fee,
+  // Where each size of this shoe earns most: Alias (by the pricing hierarchy — the same
+  // number as the GI column, With You when consigned is empty) vs StockX lowest ask, less the fee,
   // less what THOSE pairs landed at (items.cost — the supplier's shelf price run through
   // their cost preset at receiving). Fetched on a tap: one StockX call per size against a
   // shared daily quota. Consigned, like every other PH pricing surface.
@@ -333,7 +334,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       <PlatformBySize compact title="Where to sell"
         sku={skuCodes(g.sku)[0] || g.sku}
         sizes={g.sizes.map((s) => ({ size: s.size, cost: s.cost }))}
-        basis="consigned" onSignOut={onSignOut} />
+        basis="consigned" hierarchy onSignOut={onSignOut} />
     </div>
   );
   const title = kind === 'rescale' ? 'Rescale Stock' : kind === 'receiving' ? 'New Inventory' : 'Listings & Sync';

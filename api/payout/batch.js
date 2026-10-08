@@ -42,10 +42,10 @@ async function pool(items, n, job) {
   return out;
 }
 
-async function quoteOne({ sku, sizes }, consigned) {
+async function quoteOne({ sku, sizes }, consigned, hierarchy) {
   const out = { alias: { configured: false, results: [] }, stockx: { configured: stockxConfigured(), results: [] } };
   try {
-    const a = await priceInquiryForSkuSizes(sku, sizes, { consigned });
+    const a = await priceInquiryForSkuSizes(sku, sizes, { consigned, hierarchy });
     out.alias = { configured: !!a.configured, results: a.results || [] };
   } catch (e) {
     // Said out loud rather than left as an empty market: "we couldn't ask" and "there
@@ -87,6 +87,9 @@ export default async function handler(req, res) {
 
   const body = await getJsonBody(req);
   const consigned = body.consigned === true;   // the calculator's default is "with you"
+  // PH asks for the Alias price by the pricing hierarchy (alias_price / alias_basis) —
+  // the calculator keeps comparing lowest asks on the basis it picked.
+  const hierarchy = body.hierarchy === true;
   const raw = Array.isArray(body.skus) ? body.skus : [];
   const skus = [];
   const seen = new Set();
@@ -103,7 +106,7 @@ export default async function handler(req, res) {
   if (!skus.length) return send(res, 400, { ok: false, error: 'Nothing to price — every row needs a style code and a size.' });
 
   try {
-    const results = await pool(skus, CONCURRENCY, (s) => quoteOne(s, consigned));
+    const results = await pool(skus, CONCURRENCY, (s) => quoteOne(s, consigned, hierarchy));
     const quotes = {};
     skus.forEach((s, i) => { quotes[s.sku] = results[i]; });
     // Remember what the market said, so the New Inventory chip can read it without
@@ -113,11 +116,14 @@ export default async function handler(req, res) {
     const remember = [];
     skus.forEach((s, i) => {
       const r = results[i];
+      // The cache holds what PH reads — the hierarchy price — so only a PH-shaped batch
+      // writes it; a calculator batch would file a lowest ask under the same key.
+      if (!hierarchy) return;
       if (r.alias?.error || r.stockx?.error || !r.alias?.configured || !r.stockx?.configured) return;
       const al = new Map((r.alias?.results || []).map((x) => [String(x.size), x]));
       const sx = new Map((r.stockx?.results || []).map((x) => [String(x.size), x]));
       for (const size of s.sizes) {
-        remember.push({ sku: s.sku, size, alias: al.get(size)?.lowest_listing, stockx: sx.get(size)?.lowest_ask, stockxInexact: sx.get(size)?.inexact === true });
+        remember.push({ sku: s.sku, size, alias: al.get(size)?.alias_price, stockx: sx.get(size)?.lowest_ask, stockxInexact: sx.get(size)?.inexact === true });
       }
     });
     await savePlatformQuotes(remember, consigned).catch((e) => console.warn('[payout/batch] quote cache:', e.message));

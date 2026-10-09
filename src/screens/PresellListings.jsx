@@ -14,6 +14,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { isUpcCode } from '../lib/codes.js';
+import { parsePresellPaste } from '../lib/presellPaste.js';
 import { PH_DATE, PH_DATETIME, estToday } from '../lib/format.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -165,30 +166,83 @@ function ListNew({ onSignOut, onListed }) {
   const problem = lines.find((l) => !l.alias && !l.stockx) ? 'Every line needs Alias, StockX or both ticked.'
     : lines.find((l) => (l.alias && !(Number(l.aliasPrice) >= 1)) || (l.stockx && !(Number(l.stockxPrice) >= 1))) ? 'Every ticked platform needs a price.' : '';
 
+  // The server takes at most MAX_PER_CALL listings a call (pairs × platforms), so a big cart —
+  // Alex's 145-pair shipment is 290 listings — goes in batches of whole lines, one after the
+  // other. A line is never split across calls: re-sending a line adds its pairs again.
+  const MAX_PER_CALL = 100;
+  const [progress, setProgress] = useState('');
   async function listAll() {
     setListing(true); setError('');
+    const todo = lines.filter((l) => !l.done);
+    const batches = [];
+    for (const l of todo) {
+      const n = (Number(l.qty) || 1) * ((l.alias ? 1 : 0) + (l.stockx ? 1 : 0));
+      const last = batches[batches.length - 1];
+      if (last && last.n + n <= MAX_PER_CALL) { last.lines.push(l); last.n += n; } else batches.push({ lines: [l], n });
+    }
+    const failed = {};
+    const sent = new Set();
+    const total = { created: 0, failed: 0 };
     try {
-      const r = await api.presellListingsCreate({
-        activate,
-        inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
-        items: lines.map((l) => ({
-          sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty: Number(l.qty) || 1,
-          alias: l.alias ? { price: Number(l.aliasPrice) } : null, stockx: l.stockx ? { price: Number(l.stockxPrice) } : null,
-        })),
-      });
-      // Lines that fully listed leave the cart. A line with failures stays, its pairs now in
-      // Stock — so it's retried from the Stock tab's "List" (re-sending would add the qty twice).
-      const failed = {};
-      for (const ln of r.lines || []) {
-        const errs = ['alias', 'stockx'].flatMap((p) => (ln[p]?.results || []).filter((x) => !x.ok).map((x) => `${PLAT[p]}: ${x.error}`));
-        if (errs.length) failed[lineKey(ln.sku, ln.size)] = [...new Set(errs)].join(' · ');
+      for (const [i, b] of batches.entries()) {
+        if (batches.length > 1) setProgress(`Batch ${i + 1} of ${batches.length} (${b.n} listings)…`);
+        const r = await api.presellListingsCreate({
+          activate,
+          inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
+          items: b.lines.map((l) => ({
+            sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty: Number(l.qty) || 1,
+            alias: l.alias ? { price: Number(l.aliasPrice) } : null, stockx: l.stockx ? { price: Number(l.stockxPrice) } : null,
+          })),
+        });
+        for (const l of b.lines) sent.add(l.key);
+        total.created += r.created || 0; total.failed += r.failed || 0;
+        // A line with failures stays (marked done), its pairs now in Stock — retried from the
+        // Stock tab's "List" (re-sending would add the qty twice).
+        for (const ln of r.lines || []) {
+          const errs = ['alias', 'stockx'].flatMap((p) => (ln[p]?.results || []).filter((x) => !x.ok).map((x) => `${PLAT[p]}: ${x.error}`));
+          if (errs.length) failed[lineKey(ln.sku, ln.size)] = [...new Set(errs)].join(' · ');
+        }
       }
-      setLines((ls) => ls.filter((l) => failed[l.key]).map((l) => ({ ...l, error: `${failed[l.key]} — the pairs are in Stock; retry with “List” there.`, done: true })));
-      setResult(r);
+      setResult(total);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setError(`${err.message}${sent.size ? ` — ${sent.size} line${sent.size === 1 ? ' was' : 's were'} already listed and left the cart; what's still here was NOT sent.` : ''}`);
+    } finally {
+      // Lines that went out leave the cart (or stay marked with their failure); unsent ones stay as they were.
+      setLines((ls) => ls.filter((l) => !sent.has(l.key) || failed[l.key])
+        .map((l) => (failed[l.key] ? { ...l, error: `${failed[l.key]} — the pairs are in Stock; retry with “List” there.`, done: true } : l)));
+      setProgress(''); setListing(false); setConfirm(false);
+    }
+  }
+
+  // 📋 Paste Alex's message: parsed into shoes × sizes × pairs, previewed, then added.
+  const [paste, setPaste] = useState(null);   // null = closed · { text, parsed }
+  async function addPasted(parsed) {
+    setBusy(true); setError('');
+    try {
+      // Name + photo from our catalogue lookup, best effort — the message's own name wins.
+      const found = await Promise.all(parsed.shoes.map((s) => api.searchSku(s.sku).then((r) => r.product || null).catch(() => null)));
+      setLines((ls) => {
+        let next = [...ls];
+        parsed.shoes.forEach((s, i) => {
+          const p = found[i];
+          for (const z of s.sizes) {
+            const k = lineKey(s.sku, z.size);
+            const prev = next.find((l) => l.key === k);
+            if (prev) next = next.map((l) => (l.key === k ? { ...l, qty: String((Number(l.qty) || 0) + z.qty) } : l));
+            else next.push({ key: k, sku: s.sku, name: s.name || p?.name || '', image: p?.image || null, upc: null, size: z.size, qty: String(z.qty),
+              alias: true, aliasPrice: allAlias, stockx: true, stockxPrice: allStockx });
+          }
+        });
+        return next;
+      });
+      // Alex's messages are shipments already bought and on their way.
+      setInTransit(true);
+      setPaste(null);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
-    } finally { setListing(false); setConfirm(false); }
+    } finally { setBusy(false); }
   }
 
   return (
@@ -202,7 +256,36 @@ function ListNew({ onSignOut, onListed }) {
           <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">
             <Icon name="camera" /> {showCam ? 'Close camera' : 'Camera'}
           </button>
+          <button type="button" className={`btn ${paste ? 'primary' : 'ghost'}`} onClick={() => setPaste((v) => (v ? null : { text: '', parsed: null }))}
+            title="Paste a message like Alex's — style code, shoe name, then “size x pairs” lines">📋 Paste message</button>
         </form>
+        {paste && (
+          <div className="ap-paste">
+            <textarea className="input" rows={8} value={paste.text} autoFocus
+              placeholder={'JA1091-100\nNike Air Griffey Max 1 \'Cincinnati Reds\'\n\n8 x 12\n8.5 x 14\n9 x 19'}
+              aria-label="Paste the message"
+              onChange={(e) => setPaste({ text: e.target.value, parsed: parsePresellPaste(e.target.value) })} />
+            {paste.parsed && (paste.parsed.shoes.length ? (
+              <div className="ap-paste-preview">
+                {paste.parsed.shoes.map((s) => (
+                  <div key={s.sku}><b>{s.sku}</b>{s.name ? ` · ${s.name}` : ''}
+                    <div className="muted sm">{s.sizes.map((z) => `${z.size} × ${z.qty}`).join(' · ')} — {s.sizes.reduce((n, z) => n + z.qty, 0)} pairs</div>
+                    {s.sizes.some((z) => z.qty > 50) && <div className="error xs">Over 50 pairs in one size can't go in one go — lower it to 50 here and list the rest from Stock → List after.</div>}
+                  </div>
+                ))}
+                {paste.parsed.skipped.length > 0 && (
+                  <div className="muted xs">Not understood (left out): {paste.parsed.skipped.map((x) => `“${x.line}”`).join(', ')}</div>
+                )}
+                <div className="oo-actions">
+                  <button type="button" className="btn ghost" onClick={() => setPaste(null)}>Cancel</button>
+                  <button type="button" className="btn primary" disabled={busy} onClick={() => addPasted(paste.parsed)}>
+                    {busy ? 'Adding…' : `Add ${paste.parsed.pairs} pairs to the list`}</button>
+                </div>
+                <p className="muted xs">Adds every size with its pairs, ticks Alias + StockX and <b>🚚 In transit</b> — set the prices, then Create.</p>
+              </div>
+            ) : <p className="muted sm">Paste the style code, then one line per size like <code>8 x 12</code> (size × pairs).</p>)}
+          </div>
+        )}
         {showCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>
             <CameraScanner mode="rescale" onDetected={(c) => { setShowCam(false); find(c); }} onClose={() => setShowCam(false)} />
@@ -304,7 +387,7 @@ function ListNew({ onSignOut, onListed }) {
           message={`${activate ? 'They go LIVE straight away — buyers can purchase them.' : 'They are created switched OFF — nobody can buy them until you switch them on.'} ${pairs} pair${pairs === 1 ? ' is' : 's are'} added to pre-sell stock.${inTransit ? ' 🚚 In transit: when the warehouse receives them, the unsold listings are deleted automatically.' : ''}`}
           onClose={() => !listing && setConfirm(false)}>
           <button type="button" className="btn ghost" onClick={() => setConfirm(false)} disabled={listing}>Cancel</button>
-          <button type="button" className="btn primary" onClick={listAll} disabled={listing}>{listing ? 'Listing…' : activate ? 'List live' : 'Create switched off'}</button>
+          <button type="button" className="btn primary" onClick={listAll} disabled={listing}>{listing ? (progress || 'Listing…') : activate ? 'List live' : 'Create switched off'}</button>
         </Modal>
       )}
       {result && (

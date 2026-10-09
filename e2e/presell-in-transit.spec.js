@@ -125,3 +125,65 @@ test('the two kinds of sale read differently: source it vs set it aside on arriv
   expect(transit).toContain('Inbound the other 11');
   expect(transit).not.toContain('SOURCE IT');
 });
+
+const ALEX = `JA1091-100
+Nike Air Griffey Max 1 'Cincinnati Reds'
+
+8x 12
+8.5 x 14
+9 x 19
+9.5 x 17
+10 x 26
+10.5 x 14
+11 x 18
+12 x 13
+13 x 12`;
+
+test('paste: Alex\'s message → one shoe, nine sizes, 145 pairs; no-name and multi-shoe messages too', async () => {
+  const { parsePresellPaste } = await import('../src/lib/presellPaste.js');
+  const r = parsePresellPaste(ALEX);
+  expect(r.shoes).toEqual([{ sku: 'JA1091-100', name: "Nike Air Griffey Max 1 'Cincinnati Reds'", sizes: [
+    { size: '8', qty: 12 }, { size: '8.5', qty: 14 }, { size: '9', qty: 19 }, { size: '9.5', qty: 17 }, { size: '10', qty: 26 },
+    { size: '10.5', qty: 14 }, { size: '11', qty: 18 }, { size: '12', qty: 13 }, { size: '13', qty: 12 }] }]);
+  expect(r.pairs).toBe(145);
+  expect(r.skipped).toEqual([]);
+  const two = parsePresellPaste('dd1391-100\n8 x 2\n9×1\n8*1\nKI6956\n7W x 3\nsee you tomorrow\n8-9 x 2');
+  expect(two.shoes).toEqual([
+    { sku: 'DD1391-100', name: '', sizes: [{ size: '8', qty: 3 }, { size: '9', qty: 1 }] },   // the same size twice adds up
+    { sku: 'KI6956', name: '', sizes: [{ size: '7W', qty: 3 }] },
+  ]);
+  expect(two.skipped.map((x) => x.line)).toEqual(['see you tomorrow', '8-9 x 2']);   // never guessed at
+});
+
+test('paste on the page: the cart fills, In transit ticks, and 290 listings go out in batches of ≤100', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const calls = [];
+  await page.route('**/api/sku-search**', (r) => r.fulfill({ json: { ok: true, product: { sku: 'JA1091-100', name: 'Air Griffey', image: null, sizes: [] } } }));
+  await page.route('**/api/presell-listings/prices', (r) => r.fulfill({ json: { ok: true, prices: {} } }));
+  await page.route('**/api/presell-listings/create', async (r) => {
+    const body = r.request().postDataJSON();
+    calls.push(body);
+    await r.fulfill({ json: { ok: true, created: body.items.reduce((n, i) => n + i.qty * ((i.alias ? 1 : 0) + (i.stockx ? 1 : 0)), 0), failed: 0,
+      lines: body.items.map((i) => ({ sku: i.sku, size: i.size, alias: { results: [] }, stockx: { results: [] } })) } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/presell-listings');
+  await page.getByRole('button', { name: '📋 Paste message' }).click();
+  await page.getByLabel('Paste the message').fill(ALEX);
+  await page.getByRole('button', { name: 'Add 145 pairs to the list' }).click();
+  await expect(page.locator('.ap-cart-line')).toHaveCount(9);
+  await expect(page.getByRole('checkbox', { name: /In transit/ })).toBeChecked();
+  for (const [label, v] of [['Alias price for every pair', '250'], ['StockX price for every pair', '260']]) {
+    await page.getByLabel(label).fill(v);
+    await page.getByLabel(label).locator('xpath=following-sibling::button').click();
+  }
+  await page.getByRole('button', { name: /Create 290 listings/ }).click();
+  await page.getByRole('button', { name: 'List live' }).click();
+  await expect(page.getByText('290 listings created')).toBeVisible();
+  expect(calls.length).toBeGreaterThanOrEqual(3);
+  for (const c of calls) {
+    expect(c.inTransit).toBe(true);
+    expect(c.items.reduce((n, i) => n + i.qty * 2, 0)).toBeLessThanOrEqual(100);
+  }
+  expect(calls.flatMap((c) => c.items).reduce((n, i) => n + i.qty, 0)).toBe(145);
+});

@@ -5840,3 +5840,6 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ap-transit-chip { display: inline-block; margin-top: 3px; padding: 1px 7px; border-radius: 5px; font-size: 11px; font-weight: 600;
   color: #e0b05f; border: 1px solid rgba(224,176,95,0.5); background: rgba(224,176,95,0.12); }
 .ap-transit-chip.arrived { color: #5fc58a; border-color: rgba(95,197,138,0.5); background: rgba(95,197,138,0.12); }
+.ap-paste { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.ap-paste textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.ap-paste-preview { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 8px; background: rgba(255,255,255,0.03); }

@@ -779,6 +779,7 @@ function ListingsTab({ onSignOut }) {
     return list.sort((a, b) => (a.sku === b.sku ? sizeNum(a.size) - sizeNum(b.size) : new Date(skuLatest.get(b.sku)) - new Date(skuLatest.get(a.sku))));
   }, [rows]);
   const [openGroups, setOpenGroups] = useState(() => new Set());
+  const [pricesFor, setPricesFor] = useState(null);   // a size card → bulk price edit
   const toggleGroup = (id) => setOpenGroups((o) => { const n = new Set(o); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   return (
     <>
@@ -815,6 +816,10 @@ function ListingsTab({ onSignOut }) {
                     </span>
                     <span className="ap-group-count"><b>{g.n}</b><span className="muted xs">pair{g.n === 1 ? '' : 's'}</span><span className="ap-caret">{isOpen ? '▾' : '▸'}</span></span>
                   </button>
+                  <div className="ap-group-bar">
+                    <button type="button" className="btn sm ghost" onClick={() => setPricesFor(g)}
+                      disabled={![...g.alias, ...g.stockx].some((l) => OPEN.includes(l.status))}>✎ Edit prices</button>
+                  </div>
                   {isOpen && (
                     <div className="ap-group-pairs">
                       {g.pairs.map((p) => {
@@ -852,6 +857,7 @@ function ListingsTab({ onSignOut }) {
         )}
       </div>
       {editing && <EditListing row={editing} onSignOut={onSignOut} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {pricesFor && <BulkPriceDialog group={pricesFor} onSignOut={onSignOut} onClose={() => setPricesFor(null)} onDone={() => { setPricesFor(null); load(); }} />}
       {deleting && (
         <Modal type="warn" title={`Delete ${deleting[0].sku} size ${deleting[0].size} from ${deleting.map((l) => PLAT[l.platform]).join(' and ')}?`}
           message={`${deleting.length > 1 ? 'Both listings are' : 'The listing is'} removed from the marketplace. The pair stays in pre-sell stock — list it again from the Stock tab.`} onClose={() => setDeleting(null)}>
@@ -948,6 +954,69 @@ function DropMenu({ label, className = '', items, head, disabled, title }) {
 }
 
 // Price (both platforms) and size (Alias only — StockX's size IS the listing).
+// ✎ Edit prices (owner, 2026-10-10): every open listing of ONE size, per platform, to a
+// new price — updated ONE listing at a time (the same per-listing update the ⋯ menu uses,
+// each waiting for the last; StockX calls are paced server-side too). A listing StockX is
+// still working on (pending) can't take a new price yet — skipped and counted.
+function BulkPriceDialog({ group: g, onSignOut, onClose, onDone }) {
+  const [basis, setBasis] = useState(loadBasis);
+  const plats = ['alias', 'stockx'].filter((p) => g[p].some((l) => OPEN.includes(l.status) || l.status === 'pending'));
+  const current = (p) => { const ps = [...new Set(g[p].filter((l) => OPEN.includes(l.status)).map((l) => Math.round(Number(l.price_cents) / 100)))]; return ps; };
+  const [price, setPrice] = useState(() => Object.fromEntries(plats.map((p) => [p, current(p).length === 1 ? String(current(p)[0]) : ''])));
+  const [run, setRun] = useState(null);   // { done, total, failed:[], skipped, running }
+  const stop = useRef(false);
+  const aliasMkt = useMarket('alias', plats.includes('alias') ? [{ sku: g.sku, size: g.size }] : [], basis, onSignOut);
+  const sxMkt = useMarket('stockx', plats.includes('stockx') ? [{ sku: g.sku, size: g.size }] : [], basis, onSignOut);
+  const todo = plats.flatMap((p) => (Number(price[p]) >= 1
+    ? g[p].filter((l) => OPEN.includes(l.status) && Math.round(Number(l.price_cents) / 100) !== Math.round(Number(price[p]))).map((l) => ({ l, p }))
+    : []));
+  const pendingSkip = plats.reduce((n, p) => n + (Number(price[p]) >= 1 ? g[p].filter((l) => l.status === 'pending').length : 0), 0);
+  async function go() {
+    stop.current = false;
+    const st = { done: 0, total: todo.length, failed: [], skipped: pendingSkip, running: true };
+    setRun({ ...st });
+    for (const { l, p } of todo) {
+      if (stop.current) break;
+      try { await api.presellListingsAction({ listingId: l.id, action: 'update', price: Number(price[p]) }); }
+      catch (e) { if (e.unauthorized) return onSignOut(); st.failed.push(`${PLAT[p]}: ${e.message}`); }
+      st.done++;
+      setRun({ ...st });
+    }
+    setRun({ ...st, running: false });
+  }
+  const busy = !!run?.running;
+  return (
+    <Dialog title={`Prices · ${g.sku} size ${g.size}`} onClose={() => (busy ? null : (run ? onDone() : onClose()))} busy={busy}>
+      <p className="muted sm">{g.name} — {g.n} pair{g.n === 1 ? '' : 's'}. Every open listing of this size on a platform gets the price you set there; leave a box blank to keep that platform as it is.</p>
+      {plats.map((p) => {
+        const cur = current(p);
+        const open = g[p].filter((l) => OPEN.includes(l.status)).length;
+        return (
+          <div key={p} className="ap-bulkprice">
+            <div className="ap-bulkprice-head"><b>{PLAT[p]}</b><span className="muted xs">{open} open · now {cur.length ? cur.map((c) => `$${c}`).join(' / ') : '—'}</span></div>
+            {p === 'alias' && <div className="ap-basis"><Seg label="Alias price basis" value={basis} onChange={(b) => { saveBasis(b); setBasis(b); }} options={[['consigned', 'Consigned'], ['with_you', 'With You']]} /></div>}
+            <Market platform={p} p={(p === 'alias' ? aliasMkt : sxMkt)(g.sku, g.size)} onPick={(v) => !run && setPrice((x) => ({ ...x, [p]: String(v) }))} />
+            <label className="ap-edit-fields"><span className="muted xs">New {PLAT[p]} price (USD)</span>
+              <input type="number" min="1" step="1" inputMode="decimal" value={price[p] ?? ''} disabled={!!run} placeholder="keep as is"
+                onChange={(e) => setPrice((x) => ({ ...x, [p]: e.target.value }))} aria-label={`New ${PLAT[p]} price`} /></label>
+          </div>
+        );
+      })}
+      {!run && pendingSkip > 0 && <p className="muted xs">{pendingSkip} listing{pendingSkip === 1 ? ' is' : 's are'} still pending on StockX — {pendingSkip === 1 ? 'it' : 'they'} can’t take a new price until settled (↻ Re-check pending, then edit again).</p>}
+      {run && <p className="sm">{run.running ? `Updating ${run.done + 1} of ${run.total}…` : `Done: ${run.done - run.failed.length} updated${run.done < run.total ? ` (stopped after ${run.done} of ${run.total})` : ''}${run.skipped ? ` · ${run.skipped} pending skipped` : ''}.`}</p>}
+      {run?.failed?.length > 0 && <div className="error xs">{[...new Set(run.failed)].join(' · ')}</div>}
+      <div className="modal-actions">
+        {busy ? <button type="button" className="btn" onClick={() => { stop.current = true; }}>Stop</button>
+          : run ? <button type="button" className="btn primary" onClick={onDone}>Close</button>
+            : <>
+              <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+              <button type="button" className="btn primary" disabled={!todo.length} onClick={go}>Update {todo.length} listing{todo.length === 1 ? '' : 's'}</button>
+            </>}
+      </div>
+    </Dialog>
+  );
+}
+
 function EditListing({ row, onSignOut, onClose, onSaved }) {
   const [price, setPrice] = useState(String(Math.round(Number(row.price_cents) / 100)));
   const [size, setSize] = useState(row.size);

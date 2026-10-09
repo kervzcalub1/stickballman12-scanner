@@ -221,6 +221,12 @@ const PATHS = {
     <circle cx="7.5" cy="8.5" r="1.3" />
     <path d="M14 10v6M11.5 13.5L14 16l2.5-2.5" />
   </>),
+  // SHEIN Reprice — a spreadsheet grid with a downward arrow (xlsx in, xlsx out; only cuts)
+  'shein-reprice': (<>
+    <rect x="3" y="4" width="12" height="16" rx="1.5" />
+    <path d="M3 9h12M3 14h12M8 4v16" />
+    <path d="M19 8v10M16.5 15.5L19 18l2.5-2.5" />
+  </>),
   // Platform Profit — a rising trend line
   profit: (<>
     <path d="M3 17l6-6 4 4 8-8" />

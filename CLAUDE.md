@@ -43,6 +43,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | In-Store buying + In-Store Listing (kind='instore', PH-excluded, manual store listing) | `docs/context/in-store.md` |
 | Payout Calculator: store cost stack → Alias/StockX payout, profit, ROI, buy call, **supplier presets**; **best platform per size** (calculator, PH grid, Platform Profit report, **New Inventory chip + `platform_quotes` price cache**); **PO shelf price → landed cost** | `docs/context/payout-calculator.md` |
 | **eBay Reprice** (PH): revise-price CSV + inventory report → cut listings above market + markup (default 12 %), never up; strict Alias pricing endpoint, verify-gated download | `docs/context/ebay-reprice.md` |
+| **SHEIN Reprice** (PH): SHEIN Export Products .xlsx → market + markup (default 15 %, **rounded UP**), never up → SHEIN's own Edit+Price template filled from row 4 (built in, byte-for-byte), verify-gated | `docs/context/shein-reprice.md` |
 | **Shopify Listings** (PH): every Shopify listing as a searchable table — reprice to market + markup (both ways), edit price / compare-at / title / status, save live (**needs `write_products`**); re-read before write, `shopify_listing_edits` audit | `docs/context/shopify-listings.md` |
 | The app-wide advisor: floating button, screen context, its nine read-only tools | `docs/context/advisor.md` |
 | Shopify: the all-channel sales + inventory feed (`api/_lib/shopify.js`) | `docs/context/shopify.md` |

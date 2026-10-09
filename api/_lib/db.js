@@ -8543,9 +8543,14 @@ export async function openPresellListings(stockId) {
                       AND status IN ('pending', 'live', 'off') AND pending_action IS DISTINCT FROM 'delete'
                     ORDER BY created_at DESC, id DESC`;
 }
+// Also a pending row with NO operation to watch (2026-10-10): StockX made the listing but
+// reading it back hit a 429, so the row was left 'pending' with nothing to poll — the worker
+// re-reads those (a minute after their last touch) instead of leaving them pending forever.
 export async function pendingPresellListings(limit = 50) {
-  return await db()`SELECT * FROM presell_listings WHERE status = 'pending' AND pending_op IS NOT NULL
-                     ORDER BY pending_since ASC NULLS FIRST LIMIT ${limit}`;
+  return await db()`SELECT * FROM presell_listings
+                     WHERE status = 'pending' AND (pending_op IS NOT NULL
+                           OR (external_id IS NOT NULL AND updated_at < now() - interval '1 minute'))
+                     ORDER BY pending_since ASC NULLS FIRST, updated_at ASC LIMIT ${limit}`;
 }
 // Our listings by platform id — what a sales poll matches orders against.
 export async function presellListingsByExternal(platform, ids) {

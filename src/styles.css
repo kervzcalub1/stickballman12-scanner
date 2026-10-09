@@ -5855,3 +5855,6 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ap-payout { white-space: nowrap; margin-left: 6px; }
 .ap-payout .pos { color: #5fc58a; }
 .ap-payout .neg { color: #ec8f8f; }
+.ap-stockbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ap-stockbar .oo-search { flex: 1 1 240px; }
+.ap-fill-list { max-height: 180px; overflow: auto; margin: 4px 0 10px; padding-left: 18px; }

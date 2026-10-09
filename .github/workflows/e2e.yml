@@ -8,6 +8,15 @@ on:
 jobs:
   playwright:
     runs-on: ubuntu-latest
+    # The suite runs serially (one shared server + DB per run), ~9 min for ~100 specs. Split
+    # it four ways: each shard is its own runner with its OWN Postgres and dev server, so
+    # they can't interfere, and the whole suite still runs on every PR — ~3–4 min.
+    # (Owner, 2026-10-10: "can we make it faster?" — yes, without checking less.)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: playwright (${{ matrix.shard }}/4)
 
     # Hermetic: ephemeral Postgres + throwaway test secrets. No production creds.
     services:
@@ -54,12 +63,12 @@ jobs:
       # that was never loaded rather than on a defect.
       - name: Seed shelf locations (idempotent)
         run: npm run db:seed-manheim
-      - name: Run E2E
-        run: npm run e2e
+      - name: Run E2E (shard ${{ matrix.shard }} of 4)
+        run: npx playwright test --shard=${{ matrix.shard }}/4
       - name: Upload report on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: playwright-report/
           retention-days: 7

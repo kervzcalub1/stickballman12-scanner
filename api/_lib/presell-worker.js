@@ -23,7 +23,16 @@ async function checkOperations() {
   for (const l of rows) {
     if (l.platform !== 'stockx') continue;
     try {
+      // Nothing to poll (the read-back after create hit a 429): the listing itself is the truth.
+      if (!l.pending_op) {
+        const back = await PLATFORMS.stockx.refresh(l);
+        if (!back.ok && /too many|429/i.test(String(back.error || ''))) break;
+        await applyResult(l, back, 'system', { pending_op: null, pending_action: null });
+        continue;
+      }
       const op = await PLATFORMS.stockx.operation(l);
+      // StockX pushing back: stop this pass instead of hammering it with the rest.
+      if (!op.ok && /too many|429/i.test(String(op.error || ''))) break;
       const stuck = l.pending_since && Date.now() - new Date(l.pending_since).getTime() > STUCK_AFTER_MS;
       if (op.ok && op.opStatus === 'PENDING' && !stuck) continue;
       if (op.ok && op.opStatus === 'FAILED') {

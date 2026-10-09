@@ -131,6 +131,17 @@ answer `{ listingId, operationId, operationStatus }`.
   through — press ↻", never "nothing changed" (seen 2026-10-07: the change HAD landed).
 - "Deactivate" on an inactive listing is refused by StockX ("already inactive").
 
+## StockX rate limit (2026-10-10)
+The first big run (145 pairs) got **429 Too Many Requests** from StockX: 69 StockX listings
+were never made and 28 were made but left `pending` (the read-back after create was the call
+that got the 429, so there was no operation to poll and the worker never looked at them).
+Now: **every StockX call goes through one queue** (`sxFetch` in `api/_lib/stockx.js`) at most
+one per `STOCKX_MIN_GAP_MS` (default 400 ms), and a 429 waits (Retry-After, else 2/4/8/16/32 s)
+and retries before giving up; the wait holds every other StockX call too. The worker stops a
+pass at the first 429, and re-reads pending rows that have a listing id but no operation
+(one minute after their last touch). Missing listings are topped up from **Stock → List N**.
+Better later: StockX's batch listing endpoint (one call for many listings).
+
 ## The watcher (`api/_lib/presell-worker.js`, started by `server.mjs`)
 **Opt-in: `PRESELL_WATCH=on` on ONE environment** — dev and prod share both marketplace
 accounts; two watchers would both act on a sale. Off by default (and in e2e).

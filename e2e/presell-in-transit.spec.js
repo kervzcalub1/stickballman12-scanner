@@ -177,7 +177,7 @@ test('paste on the page: the cart fills, In transit ticks, and 290 listings go o
     await page.getByLabel(label).fill(v);
     await page.getByLabel(label).locator('xpath=following-sibling::button').click();
   }
-  await page.getByRole('button', { name: /Create 290 listings/ }).click();
+  await page.getByRole('button', { name: /List 145 pairs on Alias \+ StockX/ }).click();
   await page.getByRole('button', { name: 'List live' }).click();
   await expect(page.getByText('290 listings created')).toBeVisible();
   expect(calls.length).toBeGreaterThanOrEqual(3);
@@ -222,7 +222,7 @@ test('cost: preset + shelf price → landed cost and payout/profit per platform;
   await expect(page.locator('.ap-cost-out')).toContainText('$123.00');
   await expect(page.getByText('edited for this purchase')).toBeVisible();
   await page.getByLabel('Line 1 StockX price').fill('210');
-  await page.getByRole('button', { name: /Create 2 listings/ }).click();
+  await page.getByRole('button', { name: /List 1 pair on Alias \+ StockX/ }).click();
   await page.getByRole('button', { name: 'List live' }).click();
   await expect(page.getByText('2 listings created')).toBeVisible();
   expect(saved).toHaveLength(0);
@@ -256,9 +256,64 @@ test('after a listing run: ONE "listed" post, built from what went through', asy
   expect(text).toContain('31 pairs · by Kervy');
   expect(text).toContain('JA1091-100 · Air Griffey');
   expect(text).toContain('Shipment: PO 1042 · expected 2026-10-12');
-  expect(text).toContain('8 × 12 · 9 × 19');
+  expect(text).toContain('US 8 — 12 pairs · Alias 12 · StockX 12\nUS 9 — 19 pairs · Alias 19');
+  // Sorted by size, not as text: 9.5 before 10.
+  const sorted = announceLines([{ ...rows[2], size: '10' }, { ...rows[2], size: '9.5' }, { ...rows[2], size: '8' }], '').filter((l) => typeof l === 'string' && l.startsWith('US '));
+  expect(sorted).toEqual(['US 8 — 19 pairs · Alias 19', 'US 9.5 — 19 pairs · Alias 19', 'US 10 — 19 pairs · Alias 19']);
   expect(text).toContain('Alias: 31 listings at $250–$255');
   expect(text).toContain('StockX: 12 listings at $260 (2 not live yet)');
   const plain = announceLines([{ ...rows[0], in_transit: false }], '').map((l) => (typeof l === 'string' ? l : l.b)).join('\n');
   expect(plain).toContain('📝 LISTED — PRE-SELL');
+});
+
+test('↻ Re-check pending re-reads each pending listing ONE AT A TIME', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const pending = Array.from({ length: 5 }, (_, i) => ({ id: 900 + i, stock_id: 1, platform: 'stockx', external_id: `sx-${i}`, status: 'pending',
+    price_cents: 23000, sku: 'JA1091-100', name: 'Air Griffey', size: '10', created_at: new Date().toISOString(), last_error: 'Too Many Requests' }));
+  let inFlight = 0; let maxInFlight = 0; let calls = 0;
+  await page.route('**/api/presell-listings/list**', (r) => {
+    const view = new URL(r.request().url()).searchParams.get('view');
+    return r.fulfill({ json: { ok: true, rows: view === 'pending' || view === 'all' ? pending : [], counts: { all: 5, pending: 5 } } });
+  });
+  await page.route('**/api/presell-listings/action', async (r) => {
+    inFlight++; calls++; maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((res) => setTimeout(res, 150));
+    inFlight--;
+    await r.fulfill({ json: { ok: true, listing: { ...pending[0], status: 'live' } } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/presell-listings?tab=listings');
+  await page.getByRole('button', { name: /Re-check pending \(5\)/ }).click();
+  await expect(page.getByText('Re-checked 5 — 5 settled.')).toBeVisible();
+  expect(calls).toBe(5);
+  expect(maxInFlight).toBe(1);
+});
+
+test('＋ Fill missing listings tops each short size up, ONE size at a time', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const stock = [
+    { id: 1, sku: 'JA1091-100', name: 'Air Griffey', size: '9', qty: 19, sold: 0, alias_live: 19, alias_other: 0, stockx_live: 6, stockx_other: 3 },   // 10 missing
+    { id: 2, sku: 'JA1091-100', name: 'Air Griffey', size: '10', qty: 26, sold: 0, alias_live: 26, alias_other: 0, stockx_live: 5, stockx_other: 4 },  // 17 missing
+    { id: 3, sku: 'JA1091-100', name: 'Air Griffey', size: '11', qty: 2, sold: 0, alias_live: 2, alias_other: 0, stockx_live: 2, stockx_other: 0 },    // full
+  ];
+  const calls = []; let inFlight = 0; let maxInFlight = 0;
+  await page.route('**/api/presell-listings/list**', (r) => r.fulfill({ json: { ok: true, rows: stock } }));
+  await page.route('**/api/presell-listings/action', async (r) => {
+    inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+    const b = r.request().postDataJSON(); calls.push(b);
+    await new Promise((res) => setTimeout(res, 150));
+    inFlight--;
+    const n = b.stockId === 1 ? 10 : 17;
+    await r.fulfill({ json: { ok: true, created: n, results: Array.from({ length: n }, () => ({ ok: true })) } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/presell-listings?tab=stock');
+  await page.getByRole('button', { name: '＋ Fill missing listings' }).click();
+  const dlg = page.getByRole('dialog', { name: 'Fill missing listings' });
+  await expect(dlg).toContainText('27 StockX listings missing across 2 sizes');
+  await dlg.getByLabel('Price for the missing listings').fill('230');
+  await dlg.getByRole('button', { name: 'List 27 on StockX' }).click();
+  await expect(dlg).toContainText('Done: 27 listed.');
+  expect(calls.map((c) => [c.stockId, c.action, c.platform, c.price, c.activate])).toEqual([[1, 'list', 'stockx', 230, true], [2, 'list', 'stockx', 230, true]]);
+  expect(maxInFlight).toBe(1);
 });

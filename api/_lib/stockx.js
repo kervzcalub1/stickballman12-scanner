@@ -85,6 +85,34 @@ export async function stockxAccessToken() {
   return tokenCache.value;
 }
 
+// ONE queue for every StockX call this server makes (2026-10-10). A 145-pair pre-sell run
+// fired its creates back to back while the watcher polled operations, and StockX answered
+// 429 "Too Many Requests": 69 StockX listings were never made and 37 sat pending. StockX
+// doesn't publish its limit, so: calls go out at most one per STOCKX_MIN_GAP_MS (default
+// 400 ms, ~2.5/s), and a 429 waits (Retry-After when StockX sends it, else 2 s, 4 s, 8 s…)
+// and tries again, up to 5 times, before the 429 is handed back to the caller.
+const MIN_GAP_MS = () => Number(process.env.STOCKX_MIN_GAP_MS) || 400;
+let sxNext = 0;
+async function sxSlot() {
+  const now = Date.now();
+  const at = Math.max(now, sxNext);
+  sxNext = at + MIN_GAP_MS();
+  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function sxFetch(url, init, timeoutMs) {
+  for (let attempt = 0; ; attempt++) {
+    await sxSlot();
+    const r = await fetchWithTimeout(url, init, timeoutMs);
+    if (r.status !== 429 || attempt >= 5) return r;
+    const ra = Number(r.headers?.get?.('retry-after'));
+    const wait = Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 60_000) : 2000 * 2 ** attempt;
+    // Everyone else waits too: the limit is per account, not per call.
+    sxNext = Math.max(sxNext, Date.now() + wait);
+    await sleep(wait);
+  }
+}
+
 // GET a v2 path with both credentials attached. Retries ONCE on a 401 with a fresh
 // token: unlike the old bypass host, the official API's token genuinely expires on a
 // clock, so re-minting and retrying is correct rather than a login loop.
@@ -94,7 +122,7 @@ async function sxGet(path, query = {}, { retry = true } = {}) {
     Object.entries(query).filter(([, v]) => v != null && v !== ''),
   ).toString();
   const url = `${STOCKX_BASE}${path}${qs ? `?${qs}` : ''}`;
-  const r = await fetchWithTimeout(url, {
+  const r = await sxFetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
       'x-api-key': process.env.STOCKX_API_KEY,
@@ -340,7 +368,7 @@ export async function stockxPriceForSkuSize(sku, size, { upc } = {}) {
 async function sxCall(method, path, body = null, { query = {}, retry = true } = {}) {
   const token = await stockxAccessToken();
   const qs = new URLSearchParams(Object.entries(query).filter(([, v]) => v != null && v !== '')).toString();
-  const r = await fetchWithTimeout(`${STOCKX_BASE}${path}${qs ? `?${qs}` : ''}`, {
+  const r = await sxFetch(`${STOCKX_BASE}${path}${qs ? `?${qs}` : ''}`, {
     method,
     headers: {
       Authorization: `Bearer ${token}`, 'x-api-key': process.env.STOCKX_API_KEY, Accept: 'application/json',

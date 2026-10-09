@@ -5833,3 +5833,10 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ebl-nowrap { white-space: nowrap; }
 .ebl-table th.num, .ebl-table td.num { text-align: right; }
 .ebl-size-name { padding-left: 18px !important; }
+
+/* Pre-sell Listings — in transit (Alex, 2026-10-10) */
+.ap-transit { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 10px 28px; }
+.ap-transit label { display: flex; flex-direction: column; gap: 3px; flex: 1 1 200px; min-width: 0; }
+.ap-transit-chip { display: inline-block; margin-top: 3px; padding: 1px 7px; border-radius: 5px; font-size: 11px; font-weight: 600;
+  color: #e0b05f; border: 1px solid rgba(224,176,95,0.5); background: rgba(224,176,95,0.12); }
+.ap-transit-chip.arrived { color: #5fc58a; border-color: rgba(95,197,138,0.5); background: rgba(95,197,138,0.12); }

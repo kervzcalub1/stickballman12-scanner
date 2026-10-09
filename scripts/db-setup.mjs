@@ -2078,6 +2078,15 @@ await sql(`
     UNIQUE (platform, external_id)
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_listings_stock_idx ON presell_listings (stock_id)`);
+// IN TRANSIT (2026-10-10, Alex): pairs listed while still on their way, to catch the hype.
+// When the warehouse RECEIVES that SKU + size, every unsold Alias/StockX listing for it is
+// DELETED and the pre-sell group is told, so PH / Nikki list the real pairs properly.
+// Pairs that sold in transit are only reported, not held (owner's call).
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS in_transit BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS transit_note TEXT`);       // PO / tracking / supplier, free text
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS expected_on DATE`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMPTZ`);  // set by the arrival check; NULL = still in transit
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS arrived_batch TEXT`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_listings_pending_idx ON presell_listings (status) WHERE status = 'pending'`);
 await sql(`
   CREATE TABLE IF NOT EXISTS presell_sales (

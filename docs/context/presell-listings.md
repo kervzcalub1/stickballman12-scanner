@@ -40,6 +40,28 @@ holds back units of a shipment we own. Here a pair is **never an inventory unit*
   on/off, re-read both, delete both. Grouping is client-side (`ListingsTab` `pairs`).
 - **Sales**: every sale, price, payout, order #, whether the Telegram post went out.
 
+## In transit — list it before it lands (Alex, 2026-10-10)
+For a hyped shoe still on the truck: list it now, and when it arrives, the listings come
+down so PH / Nikki list the real pairs properly.
+- **List new → ☑ 🚚 In transit** (+ optional PO/tracking note and expected date) →
+  `presell_stock.in_transit`, `transit_note`, `expected_on`. Listing the same SKU + size in
+  transit again **re-arms** it (`arrived_at` cleared); listing it plainly leaves the flag.
+- **Arrival** = the warehouse receives that SKU + size in any batch except Existing Stock
+  (owner's call). `insertItems` → `api/_lib/presell-arrival.js` `onItemsReceived`
+  (fire-and-forget, after the commit; a slow marketplace never holds up a receive). SKU
+  upper-case, size on its digits. `claimPresellArrival` marks the row once (a racing second
+  commit does nothing) → every open listing on both platforms is **DELETED** → one Telegram
+  post to the pre-sell group: 📦 ARRIVED, what was deleted, **sold in transit N of M →
+  warehouse sets N aside, inbound and list only M−N**, and anything that couldn't be deleted.
+- **Pairs sold in transit are NOT held in the system** (owner): the sale post (handleSale)
+  gets a 🚚 IN TRANSIT line plus "Warehouse: when it arrives, set N pair(s) aside — don't
+  inbound; inbound the other M−N". The warehouse physically sets them aside; only the rest is
+  received, so Nikki only ever sees those.
+- **Only where `PRESELL_WATCH=on`** (`arrivalsEnabled`), the one environment that acts on the
+  shared Alias/StockX accounts. Anywhere else a receive never reaches a marketplace.
+- Stock tab chips: 🚚 In transit · exp MM/DD (note in the tooltip) / 📦 Arrived <date>.
+- Tests: `e2e/presell-in-transit.spec.js` (fake marketplaces + Telegram).
+
 ## Market prices — each platform's OWN words (owner, 2026-10-07)
 `POST /api/presell-listings/prices { platform, sku, sizes, consigned }`
 - **Alias**: Global Indicator · Lowest Listing · Last Sold · Highest Offer, toggle

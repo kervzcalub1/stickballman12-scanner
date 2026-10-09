@@ -14,7 +14,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { isUpcCode } from '../lib/codes.js';
-import { PH_DATE, PH_DATETIME } from '../lib/format.js';
+import { PH_DATE, PH_DATETIME, estToday } from '../lib/format.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -117,6 +117,11 @@ function ListNew({ onSignOut, onListed }) {
   // { key, sku, name, image, upc, size, qty, alias:bool, aliasPrice, stockx:bool, stockxPrice, error? }
   const [lines, setLines] = useState([]);
   const [activate, setActivate] = useState(true);
+  // In transit (Alex, 2026-10-10): listed while on the truck; the listings are deleted when
+  // the warehouse receives the SKU + size (api/_lib/presell-arrival.js).
+  const [inTransit, setInTransit] = useState(false);
+  const [transitNote, setTransitNote] = useState('');
+  const [expectedOn, setExpectedOn] = useState('');
   const [basis, setBasis] = useState(loadBasis);
   const [confirm, setConfirm] = useState(false);
   const [listing, setListing] = useState(false);
@@ -165,6 +170,7 @@ function ListNew({ onSignOut, onListed }) {
     try {
       const r = await api.presellListingsCreate({
         activate,
+        inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
         items: lines.map((l) => ({
           sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty: Number(l.qty) || 1,
           alias: l.alias ? { price: Number(l.aliasPrice) } : null, stockx: l.stockx ? { price: Number(l.stockxPrice) } : null,
@@ -268,6 +274,18 @@ function ListNew({ onSignOut, onListed }) {
                   <input type="checkbox" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
                   <span><b>Go live now.</b> Untick to create the listings switched off — switch them on later from “Listings”.</span>
                 </label>
+                <label className="ap-activate">
+                  <input type="checkbox" checked={inTransit} onChange={(e) => setInTransit(e.target.checked)} />
+                  <span><b>🚚 In transit.</b> These pairs are still on their way. When the warehouse <b>receives</b> this SKU + size, every unsold Alias / StockX listing for it is <b>deleted</b> and the pre-sell group is told — then PH lists the real pairs.</span>
+                </label>
+                {inTransit && (
+                  <div className="ap-transit">
+                    <label><span className="muted xs">PO / tracking / supplier (optional)</span>
+                      <input className="input" value={transitNote} maxLength={200} placeholder="e.g. Alex · PO 1042 · 1Z999…" onChange={(e) => setTransitNote(e.target.value)} /></label>
+                    <label><span className="muted xs">Expected (optional)</span>
+                      <input className="input" type="date" value={expectedOn} min={estToday()} onChange={(e) => setExpectedOn(e.target.value)} /></label>
+                  </div>
+                )}
                 <div className="oo-actions">
                   <button type="button" className="btn ghost" onClick={() => setLines([])} disabled={listing}>Clear</button>
                   <button type="button" className="btn primary" disabled={listing || !pairs || !!problem} onClick={() => setConfirm(true)}>
@@ -283,7 +301,7 @@ function ListNew({ onSignOut, onListed }) {
 
       {confirm && (
         <Modal type="warn" title={`${pairs} pair${pairs === 1 ? '' : 's'} → ${listings} listing${listings === 1 ? '' : 's'}?`}
-          message={`${activate ? 'They go LIVE straight away — buyers can purchase them.' : 'They are created switched OFF — nobody can buy them until you switch them on.'} ${pairs} pair${pairs === 1 ? ' is' : 's are'} added to pre-sell stock.`}
+          message={`${activate ? 'They go LIVE straight away — buyers can purchase them.' : 'They are created switched OFF — nobody can buy them until you switch them on.'} ${pairs} pair${pairs === 1 ? ' is' : 's are'} added to pre-sell stock.${inTransit ? ' 🚚 In transit: when the warehouse receives them, the unsold listings are deleted automatically.' : ''}`}
           onClose={() => !listing && setConfirm(false)}>
           <button type="button" className="btn ghost" onClick={() => setConfirm(false)} disabled={listing}>Cancel</button>
           <button type="button" className="btn primary" onClick={listAll} disabled={listing}>{listing ? 'Listing…' : activate ? 'List live' : 'Create switched off'}</button>
@@ -329,7 +347,11 @@ function StockTab({ onSignOut }) {
                   const left = Math.max(0, s.qty - s.sold);
                   return (
                     <tr key={s.id}>
-                      <td><div className="ap-shoe"><ShoeThumb url={s.image} size={36} /><div><b>{s.sku}</b><div className="muted xs">{s.name}</div></div></div></td>
+                      <td><div className="ap-shoe"><ShoeThumb url={s.image} size={36} /><div><b>{s.sku}</b><div className="muted xs">{s.name}</div>
+                        {s.in_transit && (s.arrived_at
+                          ? <span className="ap-transit-chip arrived" title={`Received${s.arrived_batch ? ` in ${s.arrived_batch}` : ''} — the unsold listings were deleted`}>📦 Arrived {PH_DATE.format(new Date(s.arrived_at))}</span>
+                          : <span className="ap-transit-chip" title={s.transit_note || 'Listings come down when the warehouse receives this SKU + size'}>🚚 In transit{s.expected_on ? ` · exp ${String(s.expected_on).slice(5, 10).replace('-', '/')}` : ''}</span>)}
+                      </div></div></td>
                       <td>{s.size}</td>
                       <td className="num">{s.qty}</td><td className="num">{s.sold}</td><td className="num"><b>{left}</b></td>
                       {['alias', 'stockx'].map((p) => {

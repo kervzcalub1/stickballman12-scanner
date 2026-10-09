@@ -161,6 +161,13 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
     `Order: ${orderId}`,
     `Pre-sell stock left: ${left} of ${stock?.qty ?? '?'}`,
   ];
+  // Listed while still on its way (presell-arrival.js) — the pair isn't in the warehouse yet.
+  // The pair is still on the truck: when the shipment lands, the warehouse sets it aside for
+  // this buyer and does NOT inbound it, so PH lists only the rest (owner, 2026-10-10).
+  if (stock?.in_transit && !stock?.arrived_at) {
+    lines.splice(1, 0, `🚚 IN TRANSIT${stock.expected_on ? ` — expected ${String(stock.expected_on).slice(0, 10)}` : ''}${stock.transit_note ? ` · ${stock.transit_note}` : ''}`);
+    lines.push(`Warehouse: when it arrives, set ${Number(stock.sold) === 1 ? '1 pair' : `${stock.sold} pairs`} of size ${stock.size} aside for the buyer${Number(stock.sold) === 1 ? '' : 's'} — don't inbound ${Number(stock.sold) === 1 ? 'it' : 'them'}. Inbound the other ${Math.max(0, Number(stock.qty) - Number(stock.sold))}.`);
+  }
   const down = removed.filter((r) => r.ok);
   const stuck = removed.filter((r) => !r.ok);
   if (down.length) lines.push(`Taken down: ${down.map((r) => PLATFORM_LABEL[r.platform]).join(', ')} (${down.length})`);

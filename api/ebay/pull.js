@@ -18,9 +18,10 @@ async function run(by) {
       (t) => styleFromTitle(t),
       (page, pages, n) => put({ state: 'running', page, pages, listings: n }),
     );
-    const inventoryItems = await inventoryItemCount();
+    const inv = await inventoryItemCount();
     const { removed } = await saveEbayListings(rows, startedAt);
-    await put({ state: 'done', finishedAt: new Date().toISOString(), listings, rows: rows.length, removed, inventoryItems,
+    await put({ state: 'done', finishedAt: new Date().toISOString(), listings, rows: rows.length, removed,
+      inventoryItems: inv.count, inventoryError: inv.error || null,
       noStyle: rows.filter((r) => !r.style).length, noSize: rows.filter((r) => !r.size).length });
   } catch (e) {
     console.error('[ebay/pull]', e.message);

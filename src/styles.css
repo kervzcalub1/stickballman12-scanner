@@ -5812,9 +5812,24 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ebl-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
 .ebl-filters .input { flex: 1 1 260px; min-width: 0; }
 .ebl-filters .seg { flex-wrap: wrap; }
-.ebl-title { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ebl-title { max-width: 420px; line-height: 1.3; }
 .ebl-table td { vertical-align: top; }
 .ebl-note { font-size: 12px; white-space: nowrap; }
 .ebl-note.bad { color: #ec8f8f; }
 .ebl-note.warn { color: #e0b05f; }
 .ebl-note.muted { color: var(--muted, #9aa3b2); }
+.ebl-thumb-cell { width: 64px; }
+.ebl-thumb { width: 56px; height: 56px; object-fit: contain; border-radius: 6px; background: #fff; display: block; }
+.ebl-thumb-empty { background: var(--card-2, rgba(255,255,255,0.06)); }
+.ebl-row.clickable { cursor: pointer; }
+.ebl-row.open td { border-bottom-color: transparent; }
+.ebl-size td { padding-top: 4px; padding-bottom: 4px; background: rgba(255,255,255,0.025); font-size: 13px; }
+.ebl-sku { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.ebl-zero { color: #e0b05f; }
+.ebl-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 3px; }
+.ebl-caret { color: var(--accent, #7aa2ff); font-weight: 600; }
+.ebl-link { color: #9db8ff; text-decoration: none; }
+.ebl-link:hover { text-decoration: underline; }
+.ebl-nowrap { white-space: nowrap; }
+.ebl-table th.num, .ebl-table td.num { text-align: right; }
+.ebl-size-name { padding-left: 18px !important; }

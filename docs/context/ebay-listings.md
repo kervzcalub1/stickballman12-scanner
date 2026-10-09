@@ -52,9 +52,16 @@ PH team + admin can view and pull; only **admin / superadmin** can connect or di
 - **Listing model**: the pull also counts the account's Inventory-API items. 0 = classic
   (Trading API) listings, so price/qty changes later go through Trading calls. Listings
   made one way can't be revised the other way (plan doc).
-- **Ours**: pairs on hand (`items` not sold / shipped / missing / issue) of the same style,
-  sizes compared on digits. Flags: *eBay shows N, we hold M* (oversell risk), *Listed — we
-  hold none*, *We hold N, eBay shows 0*, *No style code in the title*.
+- **The table** (2026-10-10): one row per **listing**: photo (`PictureDetails.GalleryURL`,
+  else the first picture, forced to https), title, item # (links to eBay), the listing's own
+  **Custom label** (`item_sku`), price range, available, sold, watchers. Tap it for its sizes:
+  each size's Custom label, price, available and sold. Filters: *Out of stock on eBay* (every
+  size at 0) and *No style code*. Search covers each size's SKU too.
+- **No comparison with our stock.** The first version set each size against our on-hand
+  count. It mostly showed pairs sold on other channels and never scanned out (7,896 of
+  ~9,400 `items` are `needs_shelf`). Owner: Shopify is the accurate count, so that
+  comparison is a later job against Shopify, not `items`.
+- The listing-model check keeps eBay's error (`inventoryError`) instead of a silent blank.
 
 ## Not built (next phases, see the plan)
 Price/qty updates, list, delist. Each needs the DPL decision first.

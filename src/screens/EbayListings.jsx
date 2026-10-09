@@ -10,15 +10,35 @@ import { estDate, PH_DATETIME } from '../lib/format.js';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const when = (iso) => (iso ? `${PH_DATETIME.format(new Date(iso))} EST` : '—');
-const SHOW = 300;
+const SHOW = 100;   // listings shown before "Show all"
 
-// What each row says about our stock vs eBay's quantity.
-function stockNote(r) {
-  if (!r.style) return { key: 'nostyle', label: 'No style code in the title', tone: 'muted' };
-  if (r.on_hand == null) return r.qty_available > 0 ? { key: 'none', label: 'Listed — we hold none', tone: 'bad' } : { key: 'ok', label: '' };
-  if (r.qty_available > r.on_hand) return { key: 'over', label: `eBay shows ${r.qty_available}, we hold ${r.on_hand}`, tone: 'bad' };
-  if (r.qty_available === 0 && r.on_hand > 0) return { key: 'idle', label: `We hold ${r.on_hand}, eBay shows 0`, tone: 'warn' };
-  return { key: 'ok', label: '' };
+// One listing (the eBay item) with its sizes under it. Price shown as a range when sizes
+// differ; quantities summed.
+function groupListings(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    let g = by.get(r.item_id);
+    if (!g) {
+      g = { item_id: r.item_id, title: r.title, style: r.style, item_sku: r.item_sku, image_url: r.image_url, view_url: r.view_url,
+        watch_count: r.watch_count, listing_type: r.listing_type, start_time: r.start_time, sizes: [], available: 0, sold: 0, min: null, max: null };
+      by.set(r.item_id, g);
+    }
+    g.sizes.push(r);
+    g.available += Number(r.qty_available || 0);
+    g.sold += Number(r.qty_sold || 0);
+    const p = r.price == null ? null : Number(r.price);
+    if (p != null) { g.min = g.min == null ? p : Math.min(g.min, p); g.max = g.max == null ? p : Math.max(g.max, p); }
+  }
+  return [...by.values()];
+}
+const money = (n) => (n == null ? '—' : `$${Number(n).toFixed(2)}`);
+const priceRange = (g) => (g.min == null ? '—' : g.min === g.max ? money(g.min) : `${money(g.min)}–${money(g.max)}`);
+
+function Thumb({ src, alt }) {
+  const [bad, setBad] = useState(false);
+  return src && !bad
+    ? <img className="ebl-thumb" src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setBad(true)} />
+    : <span className="ebl-thumb ebl-thumb-empty" aria-hidden="true" />;
 }
 
 export function EbayListings({ user, onHome, onSignOut }) {
@@ -29,7 +49,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
   const [q, setQ] = useQueryParam('q', '');
-  const [view, setView] = useQueryParam('view', 'all');   // all | over | none | idle | nostyle
+  const [view, setView] = useQueryParam('view', 'all');   // all | out | nostyle
   const [more, setMore] = useState(false);
 
   async function load() {
@@ -71,18 +91,20 @@ export function EbayListings({ user, onHome, onSignOut }) {
     finally { setBusy(''); }
   }
 
-  const annotated = useMemo(() => (rows || []).map((r) => ({ ...r, note: stockNote(r) })), [rows]);
-  const counts = useMemo(() => {
-    const c = { all: annotated.length, over: 0, none: 0, idle: 0, nostyle: 0 };
-    for (const r of annotated) if (r.note.key in c) c[r.note.key]++;
-    return c;
-  }, [annotated]);
+  const listings = useMemo(() => groupListings(rows || []), [rows]);
+  const counts = useMemo(() => ({
+    all: listings.length,
+    out: listings.filter((g) => g.available === 0).length,
+    nostyle: listings.filter((g) => !g.style).length,
+  }), [listings]);
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return annotated.filter((r) => (view === 'all' || r.note.key === view)
-      && (!needle || [r.title, r.style, r.sku, r.item_id, r.size].some((v) => String(v || '').toLowerCase().includes(needle))));
-  }, [annotated, q, view]);
-  const listings = useMemo(() => new Set((rows || []).map((r) => r.item_id)).size, [rows]);
+    return listings.filter((g) => (view === 'all' || (view === 'out' && g.available === 0) || (view === 'nostyle' && !g.style))
+      && (!needle || [g.title, g.style, g.item_sku, g.item_id, ...g.sizes.flatMap((s) => [s.sku, s.size])]
+        .some((v) => String(v || '').toLowerCase().includes(needle))));
+  }, [listings, q, view]);
+  const [open, setOpen] = useState(() => new Set());
+  const toggle = (id) => setOpen((o) => { const n = new Set(o); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   const pullState = st?.pull;
   const running = pullState?.state === 'running';
@@ -95,7 +117,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
 
       <div className="card">
         <h3 className="er-step-title">eBay account</h3>
-        <p className="muted sm">Read-only: this page pulls what’s live on eBay and shows it next to our stock. It never changes a price, quantity or listing — DPL (Shopify → eBay) still does that.</p>
+        <p className="muted sm">Read-only: this page pulls what’s live on eBay — photos, sizes, Custom labels, prices and quantities. It never changes a price, quantity or listing — DPL (Shopify → eBay) still does that.</p>
         {!st ? <p className="muted">Loading…</p> : !st.configured ? (
           <p className="sm">eBay isn’t set up on this server yet{isAdmin && st.missing?.length ? <> — missing <b>{st.missing.join(', ')}</b> on Railway</> : ''}.</p>
         ) : st.connected ? (
@@ -123,6 +145,9 @@ export function EbayListings({ user, onHome, onSignOut }) {
             )}
             {pullState?.state === 'failed' && <span className="error xs">Last pull failed {when(pullState.finishedAt)}: {pullState.error}</span>}
           </div>
+          {pullState?.state === 'done' && pullState.inventoryItems == null && pullState.inventoryError && (
+            <p className="muted xs">Listing model: couldn’t tell — eBay answered {pullState.inventoryError}.</p>
+          )}
           {pullState?.state === 'done' && pullState.inventoryItems != null && (
             <p className="muted xs">
               {pullState.inventoryItems === 0
@@ -137,34 +162,58 @@ export function EbayListings({ user, onHome, onSignOut }) {
         <div className="card">
           <div className="ebl-filters">
             <input type="search" className="input" value={q} onChange={(e) => { setQ(e.target.value); setMore(false); }}
-              placeholder="Search title, style, SKU, item #, size…" aria-label="Search eBay listings" />
+              placeholder="Search title, style, Custom label (SKU), item #, size…" aria-label="Search eBay listings" />
             <div className="seg sm">
-              {[['all', 'All'], ['over', 'eBay > ours'], ['none', 'We hold none'], ['idle', 'Ours, not on eBay'], ['nostyle', 'No style']].map(([k, label]) => (
+              {[['all', 'All'], ['out', 'Out of stock on eBay'], ['nostyle', 'No style code']].map(([k, label]) => (
                 <button key={k} type="button" className={`seg-btn${view === k ? ' on' : ''}`} aria-pressed={view === k}
                   onClick={() => { setView(k); setMore(false); }}>{label} <span className="seg-n" aria-hidden="true">{fmt(counts[k])}</span></button>
               ))}
             </div>
           </div>
-          <p className="muted xs">{fmt(listings)} listings · {fmt(rows.length)} sizes · “ours” = pairs on hand (not sold, shipped, missing or issue) of that style + size.</p>
+          <p className="muted xs">{fmt(listings.length)} listings · {fmt(rows.length)} sizes · as eBay reported them at the last pull. Tap a listing for its sizes.</p>
           <div className="ap-tablewrap">
             <table className="table ebl-table">
-              <thead><tr><th>Listing</th><th>Style</th><th>Size</th><th>Price</th><th>eBay qty</th><th>Sold</th><th>Ours</th><th /></tr></thead>
+              <thead><tr><th aria-label="Photo" /><th>Listing</th><th>Style</th><th>Custom label (SKU)</th><th>Price</th><th className="num">Avail.</th><th className="num">Sold</th><th className="num" title="Watchers">👁</th></tr></thead>
               <tbody>
-                {shown.slice(0, more ? shown.length : SHOW).map((r) => (
-                  <tr key={`${r.item_id}|${r.variation_key}`}>
-                    <td>
-                      <div className="ebl-title">{r.title}</div>
-                      <div className="muted xs">#{r.view_url ? <a href={r.view_url} target="_blank" rel="noreferrer">{r.item_id}</a> : r.item_id}{r.sku ? ` · SKU ${r.sku}` : ''}</div>
-                    </td>
-                    <td>{r.style || <span className="muted">—</span>}</td>
-                    <td>{r.size || <span className="muted">—</span>}</td>
-                    <td>{r.price != null ? `$${Number(r.price).toFixed(2)}` : '—'}</td>
-                    <td>{r.qty_available ?? '—'}</td>
-                    <td>{r.qty_sold ?? 0}</td>
-                    <td>{r.on_hand ?? <span className="muted">0</span>}</td>
-                    <td>{r.note.label && <span className={`ebl-note ${r.note.tone}`}>{r.note.label}</span>}</td>
-                  </tr>
-                ))}
+                {shown.slice(0, more ? shown.length : SHOW).map((g) => {
+                  const isOpen = open.has(g.item_id);
+                  const multi = g.sizes.length > 1 || g.sizes[0]?.size;
+                  return (
+                    <React.Fragment key={g.item_id}>
+                      <tr className={`ebl-row${isOpen ? ' open' : ''}${multi ? ' clickable' : ''}`} onClick={() => multi && toggle(g.item_id)}>
+                        <td className="ebl-thumb-cell"><Thumb src={g.image_url} alt={g.title} /></td>
+                        <td>
+                          <div className="ebl-title">{g.title}</div>
+                          <div className="muted xs ebl-meta">
+                            {multi && <span className="ebl-caret">{isOpen ? '▾' : '▸'} {g.sizes.length} size{g.sizes.length === 1 ? '' : 's'}</span>}
+                            {g.view_url
+                              ? <a className="ebl-link" href={g.view_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{g.item_id} ↗</a>
+                              : <span>#{g.item_id}</span>}
+                            {g.start_time && <span>listed {estDate(g.start_time)}</span>}
+                          </div>
+                        </td>
+                        <td className="ebl-nowrap">{g.style || <span className="muted">—</span>}</td>
+                        <td className="ebl-sku">{g.item_sku || (g.sizes.length === 1 ? g.sizes[0].sku : null) || <span className="muted">—</span>}</td>
+                        <td className="ebl-nowrap">{priceRange(g)}</td>
+                        <td className={`num${g.available === 0 ? ' ebl-zero' : ''}`}>{fmt(g.available)}</td>
+                        <td className="num">{fmt(g.sold)}</td>
+                        <td className="num">{g.watch_count ?? <span className="muted">—</span>}</td>
+                      </tr>
+                      {isOpen && g.sizes.map((s) => (
+                        <tr key={`${g.item_id}|${s.variation_key}`} className="ebl-size">
+                          <td />
+                          <td className="ebl-size-name">Size <b>{s.size || '—'}</b></td>
+                          <td />
+                          <td className="ebl-sku">{s.sku || <span className="muted">—</span>}</td>
+                          <td className="ebl-nowrap">{money(s.price)}</td>
+                          <td className={`num${Number(s.qty_available) === 0 ? ' ebl-zero' : ''}`}>{s.qty_available ?? '—'}</td>
+                          <td className="num">{s.qty_sold ?? 0}</td>
+                          <td />
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

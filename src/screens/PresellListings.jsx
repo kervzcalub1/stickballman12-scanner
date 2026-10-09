@@ -645,6 +645,35 @@ function ListingsTab({ onSignOut }) {
   useEffect(() => { const t = setTimeout(load, q ? 300 : 0); return () => clearTimeout(t); }, [q, view, platform]); // eslint-disable-line react-hooks/exhaustive-deps
   // The watcher flips StockX "Pending…" rows in the DB; live updates bring them in.
   useLive(['presell_listings'], load, { mount: false });
+  // ↻ Re-check pending (owner, 2026-10-10): re-read every PENDING listing from its
+  // marketplace — SEQUENTIALLY, one finishes before the next starts, so a few dozen rows
+  // never turn into a burst (StockX answered 429 to the first big run). Stop any time.
+  const [recheck, setRecheck] = useState(null);   // null · { done, total, fixed, running }
+  const stopRecheck = useRef(false);
+  async function recheckPending() {
+    stopRecheck.current = false;
+    let list = [];
+    try { list = (await api.presellListingsList({ tab: 'listings', view: 'pending', platform })).rows || []; }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); return; }
+    list = list.filter((l) => l.external_id);
+    const st = { done: 0, total: list.length, fixed: 0, running: true };
+    setRecheck({ ...st });
+    for (const l of list) {
+      if (stopRecheck.current) break;
+      try {
+        const r = await api.presellListingsAction({ listingId: l.id, action: 'refresh' });
+        if (r?.listing?.status && r.listing.status !== 'pending') st.fixed++;
+      } catch (err) {
+        if (err.unauthorized) return onSignOut();
+        if (err.status === 429) await new Promise((res) => setTimeout(res, 5000));   // our own server says slow down
+      }
+      st.done++;
+      setRecheck({ ...st });
+    }
+    setRecheck({ ...st, running: false });
+    load();
+  }
+
   async function act(row, action) {
     setBusyId(row.id); setError('');
     try { await api.presellListingsAction({ listingId: row.id, action }); await load(); }
@@ -680,6 +709,11 @@ function ListingsTab({ onSignOut }) {
           <Seg label="Platform" value={platform} onChange={setPlatform} options={[['', 'Both'], ['alias', 'Alias'], ['stockx', 'StockX']]} />
           <Seg label="Show" value={view} onChange={setView} options={[['all', 'Open', counts.all], ['live', 'Live', counts.live], ['off', 'Not live', counts.off], ['pending', 'Pending', counts.pending], ['sold', 'Sold', counts.sold], ['deleted', 'Deleted', counts.deleted]]} />
           <input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU, name or listing id…" aria-label="Search listings" />
+          {recheck?.running
+            ? <button type="button" className="btn sm" onClick={() => { stopRecheck.current = true; }}>Stop · {recheck.done}/{recheck.total}</button>
+            : <button type="button" className="btn sm ghost" disabled={!counts.pending} onClick={recheckPending}
+                title="Re-read every pending listing from Alias / StockX, one at a time">↻ Re-check pending{counts.pending ? ` (${counts.pending})` : ''}</button>}
+          {recheck && !recheck.running && <span className="muted xs">Re-checked {recheck.done} — {recheck.fixed} settled{recheck.done < recheck.total ? ' (stopped)' : ''}.</span>}
         </div>
       </div>
       {error && <div className="error mt">{error}</div>}

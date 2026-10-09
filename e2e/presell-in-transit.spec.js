@@ -262,3 +262,26 @@ test('after a listing run: ONE "listed" post, built from what went through', asy
   const plain = announceLines([{ ...rows[0], in_transit: false }], '').map((l) => (typeof l === 'string' ? l : l.b)).join('\n');
   expect(plain).toContain('📝 LISTED — PRE-SELL');
 });
+
+test('↻ Re-check pending re-reads each pending listing ONE AT A TIME', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const pending = Array.from({ length: 5 }, (_, i) => ({ id: 900 + i, stock_id: 1, platform: 'stockx', external_id: `sx-${i}`, status: 'pending',
+    price_cents: 23000, sku: 'JA1091-100', name: 'Air Griffey', size: '10', created_at: new Date().toISOString(), last_error: 'Too Many Requests' }));
+  let inFlight = 0; let maxInFlight = 0; let calls = 0;
+  await page.route('**/api/presell-listings/list**', (r) => {
+    const view = new URL(r.request().url()).searchParams.get('view');
+    return r.fulfill({ json: { ok: true, rows: view === 'pending' || view === 'all' ? pending : [], counts: { all: 5, pending: 5 } } });
+  });
+  await page.route('**/api/presell-listings/action', async (r) => {
+    inFlight++; calls++; maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((res) => setTimeout(res, 150));
+    inFlight--;
+    await r.fulfill({ json: { ok: true, listing: { ...pending[0], status: 'live' } } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/presell-listings?tab=listings');
+  await page.getByRole('button', { name: /Re-check pending \(5\)/ }).click();
+  await expect(page.getByText('Re-checked 5 — 5 settled.')).toBeVisible();
+  expect(calls).toBe(5);
+  expect(maxInFlight).toBe(1);
+});

@@ -61,7 +61,7 @@ test('receiving the SKU + size deletes every unsold listing, once, and says how 
   expect(st.arrived_at).not.toBeNull();
   expect(st.arrived_batch).toBe(b.batch_code);
   const text = f.sent[0].map((l) => (typeof l === 'string' ? l : l.b)).join('\n');
-  expect(text).toContain('ARRIVED');
+  expect(text).toContain('INBOUNDED');
   expect(text).toContain('Deleted: Alias 2, StockX 2');
   expect(text).toContain('Sold while in transit: 2 of 12');
   expect(text).toContain('inbound and list only 10');
@@ -242,4 +242,23 @@ test('cost is stored on the pre-sell row, computed the same way as everywhere', 
   const again = await S.upsertPresellStock({ sku: SKU, size: '16', addQty: 1 }, 'e2e');
   expect(Number(again.unit_cost)).toBe(123);
   expect(again.cost_stack).toMatchObject({ preset: 'QA', taxPct: 8 });
+});
+
+test('after a listing run: ONE "listed" post, built from what went through', async () => {
+  const { announceLines } = await import('../api/presell-listings/announce.js');
+  const rows = [
+    { sku: 'JA1091-100', name: 'Air Griffey', size: '8', in_transit: true, arrived_at: null, transit_note: 'PO 1042', expected_on: '2026-10-12', platform: 'alias', n: 12, live: 12, min_cents: 25000, max_cents: 25000 },
+    { sku: 'JA1091-100', name: 'Air Griffey', size: '8', in_transit: true, arrived_at: null, transit_note: 'PO 1042', expected_on: '2026-10-12', platform: 'stockx', n: 12, live: 10, min_cents: 26000, max_cents: 26000 },
+    { sku: 'JA1091-100', name: 'Air Griffey', size: '9', in_transit: true, arrived_at: null, transit_note: 'PO 1042', expected_on: '2026-10-12', platform: 'alias', n: 19, live: 19, min_cents: 25500, max_cents: 25500 },
+  ];
+  const text = announceLines(rows, 'Kervy').map((l) => (typeof l === 'string' ? l : l.b)).join('\n');
+  expect(text).toContain('🚚 LISTED — IN-TRANSIT PRE-SELL');
+  expect(text).toContain('31 pairs · by Kervy');
+  expect(text).toContain('JA1091-100 · Air Griffey');
+  expect(text).toContain('Shipment: PO 1042 · expected 2026-10-12');
+  expect(text).toContain('8 × 12 · 9 × 19');
+  expect(text).toContain('Alias: 31 listings at $250–$255');
+  expect(text).toContain('StockX: 12 listings at $260 (2 not live yet)');
+  const plain = announceLines([{ ...rows[0], in_transit: false }], '').map((l) => (typeof l === 'string' ? l : l.b)).join('\n');
+  expect(plain).toContain('📝 LISTED — PRE-SELL');
 });

@@ -210,6 +210,8 @@ function ListNew({ onSignOut, onListed }) {
     const failed = {};
     const sent = new Set();
     const total = { created: 0, failed: 0 };
+    const runStart = new Date().toISOString();
+    const stockIds = new Set();
     try {
       for (const [i, b] of batches.entries()) {
         if (batches.length > 1) setProgress(`Batch ${i + 1} of ${batches.length} (${b.n} listings)…`);
@@ -225,6 +227,7 @@ function ListNew({ onSignOut, onListed }) {
           })),
         });
         for (const l of b.lines) sent.add(l.key);
+        for (const ln of r.lines || []) if (ln.stockId) stockIds.add(ln.stockId);
         total.created += r.created || 0; total.failed += r.failed || 0;
         // A line with failures stays (marked done), its pairs now in Stock — retried from the
         // Stock tab's "List" (re-sending would add the qty twice).
@@ -242,6 +245,9 @@ function ListNew({ onSignOut, onListed }) {
       setLines((ls) => ls.filter((l) => !sent.has(l.key) || failed[l.key])
         .map((l) => (failed[l.key] ? { ...l, error: `${failed[l.key]} — the pairs are in Stock; retry with “List” there.`, done: true } : l)));
       setProgress(''); setListing(false); setConfirm(false);
+      // ONE post to the pre-sell group for the whole run (Alex) — the server builds it from
+      // what actually went through. Best effort: a Telegram hiccup never undoes a listing.
+      if (stockIds.size) api.presellListingsAnnounce({ stockIds: [...stockIds], since: runStart }).catch(() => {});
     }
   }
 

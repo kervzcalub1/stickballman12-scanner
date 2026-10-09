@@ -8790,3 +8790,21 @@ export async function listEbayListings() {
               CASE WHEN regexp_replace(coalesce(e.size, ''), '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
                    THEN regexp_replace(e.size, '[^0-9.]', '', 'g')::numeric END NULLS FIRST, e.variation_key`;
 }
+
+// What a listing run just put up, for the "listed" post to the pre-sell group: per stock row
+// (SKU + size), the listings created since `since` that went through (not failed/deleted),
+// counted and priced per platform. Read from OUR rows, not from what the browser claims.
+export async function presellAnnounceRows(stockIds, since) {
+  const ids = (stockIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0);
+  if (!ids.length) return [];
+  return await db()`
+    SELECT s.id, s.sku, s.name, s.size, s.qty, s.sold, s.in_transit, s.arrived_at, s.transit_note, s.expected_on, s.unit_cost,
+           l.platform, count(*)::int AS n, min(l.price_cents)::int AS min_cents, max(l.price_cents)::int AS max_cents,
+           count(*) FILTER (WHERE l.status = 'live')::int AS live
+      FROM presell_stock s
+      JOIN presell_listings l ON l.stock_id = s.id
+     WHERE s.id = ANY(${ids}::bigint[]) AND l.created_at >= ${since}::timestamptz - interval '10 seconds'
+       AND l.status NOT IN ('failed', 'deleted')
+     GROUP BY s.id, l.platform
+     ORDER BY s.sku, s.size, l.platform`;
+}

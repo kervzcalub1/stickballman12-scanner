@@ -74,6 +74,15 @@ of WHOLE lines (Alex's 145 pairs = 290 listings → 3 calls) with progress on th
 line is never split (re-sending a line adds its pairs again). A failure mid-way names what
 already went. One size over 50 pairs is flagged in the preview (the per-line limit).
 
+## The "listed" post (Alex, 2026-10-10)
+After a listing run (one paste can be several create calls), the page calls
+`POST /api/presell-listings/announce { stockIds, since }` once. The server builds ONE post to
+the pre-sell group from OUR rows (listings created since the run started, not failed/deleted):
+**🚚 LISTED — IN-TRANSIT PRE-SELL** or **📝 LISTED — PRE-SELL**, total pairs + who, per shoe:
+shipment note/expected, `size × pairs`, and per platform the count and price range ("(N not
+live yet)" while StockX confirms). Best effort: a Telegram failure never undoes a listing.
+The arrival post reads **📦 INBOUNDED — in-transit pre-sell arrived, listings taken down**.
+
 ## Cost for the purchase (2026-10-10)
 Cart → **Supplier preset (costs)** (the Payout Calculator presets) → **✎ Edit for this
 purchase** (tax, gift card, store, promo, cashback %, tip and shipping $). Edits apply to

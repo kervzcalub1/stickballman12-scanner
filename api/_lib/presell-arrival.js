@@ -34,7 +34,7 @@ export async function takeDownArrived(stock, batchCode, { platforms = PLATFORMS,
   const sold = Number(stock.sold || 0);
   const count = (p) => removed.filter((r) => r.ok && r.platform === p).length;
   const lines = [
-    '📦 ARRIVED — in-transit listings taken down',
+    '📦 INBOUNDED — in-transit pre-sell arrived, listings taken down',
     { b: stock.name || stock.sku },
     `${stock.sku} · size ${stock.size}${batchCode ? ` · received in ${batchCode}` : ''}`,
     removed.some((r) => r.ok)

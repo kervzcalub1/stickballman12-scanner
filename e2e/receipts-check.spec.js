@@ -57,13 +57,15 @@ test.afterAll(async () => {
   await db.query(`DELETE FROM email_receipts WHERE order_number = $1 OR message_key LIKE $2`, [ORDER, `%e2e-rcc-${stamp}%`]);
   await db.query(`DELETE FROM user_purchase_emails WHERE user_id = $1`, [buyerId]);
   await db.query(`DELETE FROM users WHERE id = $1`, [buyerId]);
-  await db.query(`DELETE FROM app_settings WHERE key = 'receipt_sweep_last'`);
+  await db.query(`DELETE FROM app_settings WHERE key IN ('receipt_sweep_last', 'receipt_ingest_rejected')`);
   await db.end();
 });
 
 test('a raw receipt email is parsed and filed here, under the buyer it was sent to', async ({ request }) => {
   expect((await raw(request, nikeEmail(), null)).status()).toBe(401);
   expect((await raw(request, nikeEmail(), 'wrong')).status()).toBe(401);
+  // A bounce is kept (length only, never the key) — Make's history wouldn't show it.
+  await expect.poll(async () => JSON.parse((await db.query(`SELECT value FROM app_settings WHERE key = 'receipt_ingest_rejected'`)).rows[0]?.value || 'null')?.key_length).toBe(5);
 
   const first = await (await raw(request, nikeEmail())).json();
   expect(first).toMatchObject({ ok: true, duplicate: false, buyerMatched: true });

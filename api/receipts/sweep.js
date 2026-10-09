@@ -66,7 +66,11 @@ export default async function handler(req, res) {
     // What the last run handed us, per folder, and what became of it — the only place a run
     // that filed nothing can be explained (Make's history says SUCCESS whatever we answered).
     const folders = await sweepRunFolders(last?.at).catch(() => []);
-    return send(res, 200, { ok: true, configured: configured(), last, nearCap, folders });
+    // An email turned away for a bad key since the last check started: the whole run bounced.
+    let rejected = null;
+    try { rejected = JSON.parse((await getSetting('receipt_ingest_rejected')) || 'null'); } catch { /* none */ }
+    if (rejected && last?.at && Date.parse(rejected.at) < Date.parse(last.at)) rejected = null;
+    return send(res, 200, { ok: true, configured: configured(), last, nearCap, folders, rejected });
   }
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   if (!configured()) return send(res, 503, { ok: false, error: 'Mailbox checks are not set up on this server (RECEIPT_SWEEP_HOOK_URL).' });

@@ -58,7 +58,10 @@ secret**: the key comes in with each request from our server. Built by
   `GET /api/receipts/sweep` returns them as `folders`. The page prints "Last check read N emails:
   X filed, Y already filed, Z not receipts" (per-folder detail in the tooltip). Make's run
   history says SUCCESS whatever we answered, so this line is where a run that filed nothing
-  gets explained.
+  gets explained. A request turned away for a **bad key** (401) can't be counted per folder, so
+  the last one is kept in `app_settings.receipt_ingest_rejected` ({at, key_length}, never the
+  key). If it's newer than the last check, the page shows a red "Emails from the last check
+  were turned away" line.
 - Make's POST steps have **`handleErrors` on** (2026-10-10). Before, a 4xx/5xx from us read as
   SUCCESS in the run history.
 - A second press within 90 s → 409 (a double-tap mustn't start two runs).

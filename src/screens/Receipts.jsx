@@ -66,6 +66,11 @@ function MailboxCheck({ onSignOut }) {
       <span className="muted sm">
         {last ? `Last checked ${when(last.at)}${last.by ? ` by ${last.by}` : ''}` : 'Never checked — the first check looks at the last 3 days.'}
       </span>
+      {st?.rejected && (
+        <div className="error sm rc-check-msg">
+          Emails from the last check were turned away (wrong mailbox key, last at {when(st.rejected.at)}) — nothing from it could be filed. Tell the developer.
+        </div>
+      )}
       {st?.folders?.length > 0 && (() => {
         // What the last check handed our server and what became of it — Make's own history
         // says "success" whatever happened, so this line is where a run that filed nothing shows.

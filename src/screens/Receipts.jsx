@@ -16,7 +16,10 @@ import { PH_DATE, PH_DATETIME, estToday } from '../lib/format.js';
 
 const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const when = (ts) => (ts ? `${PH_DATETIME.format(new Date(ts))} EST` : '—');
-const STORE_LABEL = { footlocker: 'Foot Locker', kidsfootlocker: 'Kids Foot Locker', champs: 'Champs Sports', nike: 'Nike', adidas: 'adidas' };
+// cardcenter / cardcash are GIFT-CARD purchases (a total, no pairs) — said in the name so the row
+// doesn't read as a broken receipt (parser 2026-10-10).
+const STORE_LABEL = { footlocker: 'Foot Locker', kidsfootlocker: 'Kids Foot Locker', champs: 'Champs Sports', nike: 'Nike', adidas: 'adidas',
+  snipes: 'SNIPES', cardcenter: 'CardCenter (gift cards)', cardcash: 'CardCash (gift cards)' };
 const storeLabel = (s) => STORE_LABEL[s] || s || 'Unknown store';
 const inSpam = (folder) => /spam|bulk|junk/i.test(String(folder || ''));
 // "Check mailboxes" — the sweep runs only when someone asks (api/receipts/sweep.js). It

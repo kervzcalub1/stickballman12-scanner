@@ -52,6 +52,11 @@ function detectStore(text, from, subject) {
   const hay = (text + ' ' + from + ' ' + subject).toLowerCase();
   // Foot Locker Inc. family shares one receipt format (parseChamps). Check these BEFORE nike:
   // their item names contain "NIKE" and would otherwise be misdetected.
+  // Gift-card resellers name the brand they sell cards for, so their mail is full of "Nike" /
+  // "Foot Locker". They must be classified BEFORE the shoe stores or they are read as one.
+  if (/cardcenter|card ?center llc/.test(hay)) return 'cardcenter';
+  if (/cardcash/.test(hay)) return 'cardcash';
+  if (/snipesusa|\bsnipes\b/.test(hay)) return 'snipes';
   if (/champssports|champs sports/.test(hay)) return 'champs';
   if (/kidsfootlocker|kids foot locker/.test(hay)) return 'kidsfootlocker';
   if (/footlocker|foot locker/.test(hay)) return 'footlocker';
@@ -87,6 +92,32 @@ function parseChamps(lines) {
       name, sku: code.length === 15 ? code.slice(0, 12) : code, upc: null, style_id: null, size, qty,
       list_price: price, discount: price !== null && final !== null ? r2(price * qty - final) : r2(promos),
       unit_price: final !== null && qty ? r2(final / qty) : null, final_price: final, raw_code: code, lookup: null,
+    });
+  });
+  return items;
+}
+
+// Foot Locker family ONLINE order confirmation: name / "Size 06.0" / "Qty 1" / "$140.00".
+// No 15-digit code, so parseChamps finds nothing; this runs as its fallback.
+function parseFlOnline(lines) {
+  const items = [];
+  lines.forEach((l, i) => {
+    const sm = l.match(/^size\s+(\d{1,2}(?:\.\d)?)\s*$/i);
+    if (!sm) return;
+    let ni = i - 1; while (ni >= 0 && !lines[ni]) ni--;
+    const name = ni >= 0 ? lines[ni].replace(/^\d{2}\/\d{2}\s+/, '') : null;
+    if (!name || /^(qty|size|\$)/i.test(name)) return;
+    let qty = 1, price = null;
+    for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+      const t = lines[j]; if (!t) continue;
+      const q = t.match(/^qty\s*:?\s*(\d+)$/i); if (q) { qty = +q[1]; continue; }
+      const p = t.match(/^\$\s*([\d,]+\.\d{2})$/); if (p) { price = num(p[1]); break; }
+      if (/^size\s/i.test(t)) break;
+    }
+    items.push({
+      name, sku: null, upc: null, style_id: null, size: String(parseFloat(sm[1])), qty,
+      list_price: price, discount: null, unit_price: price,
+      final_price: price !== null ? r2(price * qty) : null, raw_code: name + ' | ' + l, lookup: null,
     });
   });
   return items;
@@ -195,7 +226,12 @@ function parseAdidas(lines) {
 }
 
 function parseByStore(store, lines) {
-  if (store === 'champs' || store === 'footlocker' || store === 'kidsfootlocker') return parseChamps(lines);
+  if (store === 'cardcenter' || store === 'cardcash') return [];   // gift cards, not shoes — filed for total/order/text
+  if (store === 'snipes') return parseSnipes(lines);
+  if (store === 'champs' || store === 'footlocker' || store === 'kidsfootlocker') {
+    const inStore = parseChamps(lines);
+    return inStore.length ? inStore : parseFlOnline(lines);
+  }
   if (store === 'nike') return parseNike(lines);
   if (store === 'adidas') return parseAdidas(lines);
   return [];
@@ -211,8 +247,17 @@ function parseTotals(lines) {
     const l = lines[i];
     const m = l.match(moneyEnd);
     if (m && !/^\$?\s*-?[\d,]+\.\d{2}\s*T?$/.test(l)) return num(m[1]);   // label + value on one line
-    let j = i + 1; while (j < lines.length && !lines[j]) j++;
-    if (j < lines.length && moneyOnly.test(lines[j])) return num(lines[j]);      // value on the next line
+    // the amount can sit one or two non-blank lines below the label — Foot Locker's online
+    // receipt puts a count between them:  "SUBTOTAL" / "(6 items)" / "$840.00"
+    let seen = 0;
+    for (let j = i + 1; j < lines.length && seen < 2; j++) {
+      if (!lines[j]) continue;
+      seen++;
+      if (moneyOnly.test(lines[j])) return num(lines[j]);
+      if (/(sub)?total|tax|shipping|delivery|discount|savings/i.test(lines[j])) return null;   // next label: give up
+      const tail = lines[j].match(/\$\s*(-?[\d,]+\.\d{2})\s*T?$/);
+      if (tail && lines[j].length < 80) return num(tail[1]);
+    }
     return null;
   };
   const t = { subtotal: null, tax: null, shipping: null, total: null, item_count_stated: null };
@@ -227,7 +272,8 @@ function parseTotals(lines) {
       if (t[key] === null && re.test(l)) { const v = valueFor(i); if (v !== null) t[key] = v; }
     }
     if (t.item_count_stated === null) {
-      const c = l.match(/\bitems?\s*\((\d+)\)/i) || l.match(/^(?:total\s+)?items?\s*[:#]?\s*(\d+)\s*$/i) || l.match(/^(\d+)\s+items?\b/i)
+      const c = l.match(/\bitems?\s*\((\d+)\)/i) || l.match(/\((\d+)\s*items?\)/i)
+        || l.match(/^(?:total\s+)?items?\s*[:#]?\s*(\d+)\s*$/i) || l.match(/^(\d+)\s+items?\b/i)
         || l.match(/^sub\s*-?\s*total\b[^\[\n]*\[(\d+)\]/i);   // adidas: "SUBTOTAL [11] … USD 280.39"
       if (c) t.item_count_stated = +c[1];
     }
@@ -242,12 +288,16 @@ function toIso(d) {
 // In-store receipts print a header block: "<MALL NAME> <STREET>" / [more street] / "CITY, ST 12345"
 // / "United States" / phone, plus "Store: <number>". Online receipts usually print none of it → nulls.
 const STATE_ZIP = /^(.+?),\s*([A-Z]{2})\.?\s+(\d{5})(?:-\d{4})?\s*$/;
-function parseStoreLocation(lines) {
+function parseStoreLocation(lines, store) {
   const loc = { name: null, store_number: null, address: null, city: null, state: null, zip: null };
+  // A gift-card order has no store of purchase; the only address in it is the reseller's own
+  // corporate footer, which must not be filed as "where the buy was made".
+  if (store === 'cardcenter' || store === 'cardcash') return loc;
   for (const l of lines) {
     const m = l.match(/\bstore\s*(?:#|no\.?|number)?\s*[:#]\s*([A-Z0-9-]{3,12})\b/i);
     if (m) { loc.store_number = m[1]; break; }
   }
+  if (!loc.store_number) loc.store_number = labelledValue(lines, /^store\s*(?:#|no\.?|number)?\s*:?\s*$/i, /^([A-Za-z0-9-]{3,12})$/);
   // the address block sits in the first ~40 lines; take the FIRST city/state/zip line there
   let ci = -1;
   for (let i = 0; i < Math.min(lines.length, 40); i++) {
@@ -255,7 +305,14 @@ function parseStoreLocation(lines) {
   }
   if (ci < 0) return loc;
   const cm = lines[ci].match(STATE_ZIP);
-  loc.city = cm[1].replace(/^[\s,.-]+|[\s,.-]+$/g, '') || null;
+  let cityRaw = cm[1].replace(/^[\s,.-]+|[\s,.-]+$/g, '');
+  let inlineStreet = null;
+  if (/\d/.test(cityRaw)) {
+    // "2000 Route 38 Suite 2155 Cherry Hill" → street "2000 Route 38 Suite 2155", city "Cherry Hill"
+    const sp = cityRaw.match(/^(.*(?:\d|\b(?:ste|suite|rd|road|route|ave|avenue|st|street|dr|drive|blvd|ln|lane|way|pkwy|hwy|unit)\b)[^A-Za-z]*)\s+([A-Za-z][A-Za-z.'\- ]{1,40})$/i);
+    if (sp) { inlineStreet = sp[1].trim(); cityRaw = sp[2].trim(); }
+  }
+  loc.city = cityRaw || null;
   loc.state = cm[2].toUpperCase();
   loc.zip = cm[3];
   // walk back over the lines above it: they are the name + street (skip blanks/boilerplate)
@@ -268,9 +325,14 @@ function parseStoreLocation(lines) {
     // a forwarded receipt puts the original mail headers right above the store's address block
     if (/^(from|to|cc|bcc|date|sent|subject|reply-to)\s*:/i.test(l)) continue;
     if (/@|-{2,}\s*forwarded message/i.test(l)) continue;
-    above.unshift(l);
+    const cleaned = l.replace(/\s*\[https?:[^\]]*\]?/gi, '').trim();   // flexreceipts tracking links
+    if (!cleaned || /^[A-Za-z][A-Za-z ]{1,20}:$/.test(cleaned)) continue; // bare label e.g. "Address:"
+    above.unshift(cleaned);
   }
-  if (above.length) {
+  if (inlineStreet && above.length) {
+    loc.name = above[above.length - 1].replace(/\s{2,}/g, ' ').trim() || null;
+    loc.address = inlineStreet;
+  } else if (above.length) {
     const first = above[0];
     // "YORK GALLERIA 2899 WHITEFORD RD STE 265" → name + street; a line starting with the number is all street
     const sm = first.match(/^(.*?[A-Za-z])\s+(\d+\s+[A-Za-z0-9].*)$/);
@@ -278,10 +340,52 @@ function parseStoreLocation(lines) {
     else if (/^\d/.test(first)) { loc.name = null; }
     else { loc.name = first; above.shift(); }
     const street = above.join(' ').replace(/\s{2,}/g, ' ').trim();
-    loc.address = street || null;
+    loc.address = street || inlineStreet || null;
   }
+  if (!loc.address && inlineStreet) loc.address = inlineStreet;
   if (loc.name) loc.name = loc.name.replace(/\s{2,}/g, ' ').trim() || null;
   return loc;
+}
+
+// Several senders put the label on its own line and the value beneath it.
+function labelledValue(lines, labelRe, valueRe) {
+  for (let i = 0; i < lines.length; i++) {
+    if (!labelRe.test(lines[i])) continue;
+    for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+      if (!lines[j]) continue;
+      const m = lines[j].match(valueRe);
+      return m ? m[1] : null;
+    }
+  }
+  return null;
+}
+
+// ---------- SNIPES in-store e-receipt (flexreceipts) ----------
+// "AIR FORCE 1 KOBE WHI [tracking-url]" / "SKU: 15425800029" / "Size: 9.5" / "Qty: 1 × $150.00"
+function parseSnipes(lines) {
+  const items = [];
+  lines.forEach((l, i) => {
+    const sm = l.match(/^sku\s*:\s*([A-Za-z0-9-]{4,})\s*$/i);
+    if (!sm) return;
+    let ni = i - 1; while (ni >= 0 && !lines[ni]) ni--;
+    // the name line carries a trailing [https://…] tracking link
+    let name = ni >= 0 ? lines[ni].replace(/\s*\[https?:[^\]]*\]?\s*$/i, '').trim() : null;
+    if (name && /^product image$/i.test(name)) name = null;
+    let size = null, qty = 1, unit = null;
+    for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+      const t = lines[j]; if (!t) continue;
+      const z = t.match(/^size\s*:\s*([\d.]+[A-Za-z]*)\s*$/i); if (z) { size = z[1]; continue; }
+      const q = t.match(/^qty\s*:\s*(\d+)\s*[x×]\s*\$\s*([\d,]+\.\d{2})/i);
+      if (q) { qty = +q[1]; unit = num(q[2]); break; }
+      if (/^sku\s*:/i.test(t)) break;
+    }
+    items.push({
+      name, sku: sm[1], upc: null, style_id: null, size, qty,
+      list_price: unit, discount: null, unit_price: unit,
+      final_price: unit !== null ? r2(unit * qty) : null, raw_code: l, lookup: null,
+    });
+  });
+  return items;
 }
 
 // ---------- order number ----------
@@ -289,14 +393,25 @@ function parseStoreLocation(lines) {
 // Everything else: the first explicit order/invoice label. Never a phone, date or money amount.
 function parseOrderNumber(lines, store) {
   const text = lines.join('\n');
+  if (store === 'cardcash') {
+    const v = labelledValue(lines, /^order\s*(?:number|no\.?|#)?\s*:?\s*$/i, /^([A-Za-z0-9][A-Za-z0-9_-]{3,48})$/);
+    if (v) return v;
+  }
+  if (store === 'snipes') {
+    const v = labelledValue(lines, /^trans(?:action)?\s*#?\s*:?\s*$/i, /^([A-Za-z0-9][A-Za-z0-9_-]{3,48})$/);
+    if (v) return v;
+  }
   if (store === 'champs' || store === 'footlocker' || store === 'kidsfootlocker') {
     const m = text.match(/^\s*(?:trans(?:action)?)\s*[:#]\s*(\d{4,12})\s*$/im) || text.match(/\btrans(?:action)?\s*[:#]\s*(\d{4,12})\b/i);
     if (m) return m[1];
   }
-  const m = text.match(/\b(?:order|invoice|receipt|confirmation)\s*(?:number|no\.?|id|#)?\s*[:#]\s*([A-Z0-9][A-Z0-9_-]{3,24})\b/i)
-    || text.match(/\b(?:order|invoice)\s*#\s*([A-Z0-9][A-Z0-9_-]{3,24})\b/i)
-    || text.match(/\btrans(?:action)?\s*[:#]\s*([A-Z0-9][A-Z0-9_-]{3,24})\b/i);
-  return m ? m[1] : null;
+  // (?![A-Za-z0-9_-]) stops us keeping a truncated head of a longer id, e.g. a 36-char GUID.
+  const m = text.match(/\b(?:order|invoice|receipt|confirmation)\s*(?:number|no\.?|id|#)?\s*[:#]\s*([A-Za-z0-9][A-Za-z0-9_-]{3,48})(?![A-Za-z0-9_-])/i)
+    || text.match(/\b(?:order|invoice)\s*#\s*([A-Za-z0-9][A-Za-z0-9_-]{3,48})(?![A-Za-z0-9_-])/i)
+    || text.match(/\btrans(?:action)?\s*[:#]\s*([A-Za-z0-9][A-Za-z0-9_-]{3,48})(?![A-Za-z0-9_-])/i);
+  if (m) return m[1];
+  return labelledValue(lines, /^(?:order|invoice|receipt|confirmation|trans(?:action)?)\s*(?:number|no\.?|id|#)?\s*:?\s*$/i,
+    /^([A-Za-z0-9][A-Za-z0-9_-]{3,48})$/);
 }
 
 // ---------- recipients ----------
@@ -465,7 +580,7 @@ async function run(input) {
 
   const payload = {
     ok: true, transaction_id: tid, store, mailbox: box.mailbox, folder: box.folder,
-    store_location: parseStoreLocation(lines),
+    store_location: parseStoreLocation(lines, store),
     // headers_list is only mapped for the Gmail module; a Yahoo hit falls back to the forwarded
     // block in the body (the helper 6283660 does not return headers yet).
     recipients: parseRecipients(box.folder === '[Gmail]/All Mail' ? input : {}, lines),
@@ -524,7 +639,7 @@ async function sweep(input) {
     subject: subject || null,
     recipients: parseRecipients(input, lines),
     store: store || null,
-    store_location: parseStoreLocation(lines),
+    store_location: parseStoreLocation(lines, store),
     order_number: orderNumber,
     totals: { subtotal: totals.subtotal, tax: totals.tax, shipping: totals.shipping, total: totals.total },
     items: items.map(it => ({ name: it.name, style_id: it.style_id, sku: it.sku, upc: it.upc, size: it.size, qty: it.qty, final_price: it.final_price })),

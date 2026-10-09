@@ -288,3 +288,32 @@ test('↻ Re-check pending re-reads each pending listing ONE AT A TIME', async (
   expect(calls).toBe(5);
   expect(maxInFlight).toBe(1);
 });
+
+test('＋ Fill missing listings tops each short size up, ONE size at a time', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const stock = [
+    { id: 1, sku: 'JA1091-100', name: 'Air Griffey', size: '9', qty: 19, sold: 0, alias_live: 19, alias_other: 0, stockx_live: 6, stockx_other: 3 },   // 10 missing
+    { id: 2, sku: 'JA1091-100', name: 'Air Griffey', size: '10', qty: 26, sold: 0, alias_live: 26, alias_other: 0, stockx_live: 5, stockx_other: 4 },  // 17 missing
+    { id: 3, sku: 'JA1091-100', name: 'Air Griffey', size: '11', qty: 2, sold: 0, alias_live: 2, alias_other: 0, stockx_live: 2, stockx_other: 0 },    // full
+  ];
+  const calls = []; let inFlight = 0; let maxInFlight = 0;
+  await page.route('**/api/presell-listings/list**', (r) => r.fulfill({ json: { ok: true, rows: stock } }));
+  await page.route('**/api/presell-listings/action', async (r) => {
+    inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+    const b = r.request().postDataJSON(); calls.push(b);
+    await new Promise((res) => setTimeout(res, 150));
+    inFlight--;
+    const n = b.stockId === 1 ? 10 : 17;
+    await r.fulfill({ json: { ok: true, created: n, results: Array.from({ length: n }, () => ({ ok: true })) } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/presell-listings?tab=stock');
+  await page.getByRole('button', { name: '＋ Fill missing listings' }).click();
+  const dlg = page.getByRole('dialog', { name: 'Fill missing listings' });
+  await expect(dlg).toContainText('27 StockX listings missing across 2 sizes');
+  await dlg.getByLabel('Price for the missing listings').fill('230');
+  await dlg.getByRole('button', { name: 'List 27 on StockX' }).click();
+  await expect(dlg).toContainText('Done: 27 listed.');
+  expect(calls.map((c) => [c.stockId, c.action, c.platform, c.price, c.activate])).toEqual([[1, 'list', 'stockx', 230, true], [2, 'list', 'stockx', 230, true]]);
+  expect(maxInFlight).toBe(1);
+});

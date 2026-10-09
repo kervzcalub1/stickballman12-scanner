@@ -497,6 +497,7 @@ function StockTab({ onSignOut }) {
   const [error, setError] = useState('');
   const [qtyFor, setQtyFor] = useState(null);
   const [listFor, setListFor] = useState(null);   // { stock, platform }
+  const [fill, setFill] = useState(false);
   async function load() {
     try { const r = await api.presellListingsList({ tab: 'stock', q: q.trim() }); setRows(r.rows || []); setError(''); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
@@ -505,7 +506,11 @@ function StockTab({ onSignOut }) {
   useLive(['presell_stock', 'presell_listings'], load, { mount: false });
   return (
     <>
-      <div className="card"><input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU or name…" aria-label="Search pre-sell stock" /></div>
+      <div className="card ap-stockbar">
+        <input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU or name…" aria-label="Search pre-sell stock" />
+        <button type="button" className="btn sm" disabled={!rows?.length} onClick={() => setFill(true)}
+          title="Create the listings a platform is short of — every size shown, one size at a time">＋ Fill missing listings</button>
+      </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">
         {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">No pre-sell stock yet.</p> : (
@@ -544,6 +549,7 @@ function StockTab({ onSignOut }) {
       </div>
       {qtyFor && <QtyDialog stock={qtyFor} onSignOut={onSignOut} onClose={() => setQtyFor(null)} onDone={() => { setQtyFor(null); load(); }} />}
       {listFor && <ListMoreDialog {...listFor} onSignOut={onSignOut} onClose={() => setListFor(null)} onDone={() => { setListFor(null); load(); }} />}
+      {fill && <FillMissingDialog rows={rows || []} onSignOut={onSignOut} onClose={() => setFill(false)} onDone={() => { setFill(false); load(); }} />}
     </>
   );
 }
@@ -586,6 +592,66 @@ function QtyDialog({ stock, onSignOut, onClose, onDone }) {
       <div className="modal-actions">
         <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
         <button type="button" className="btn primary" onClick={save} disabled={busy || !(Number(qty) >= stock.sold) || Number(qty) === stock.qty}>{busy ? 'Saving…' : 'Save'}</button>
+      </div>
+    </Dialog>
+  );
+}
+
+// ＋ Fill missing listings (owner, 2026-10-10): after StockX's 429s left 69 Griffey pairs
+// with no StockX listing, top every size shown up to its pairs left — ONE size at a time
+// (the same "List N" call per row, each waiting for the last), one price, progress + Stop.
+// New listings pair up with the Alias ones on the Listings tab by themselves (oldest first).
+function FillMissingDialog({ rows, onSignOut, onClose, onDone }) {
+  const [platform, setPlatform] = useState('stockx');
+  const [price, setPrice] = useState('');
+  const [activate, setActivate] = useState(true);
+  const [run, setRun] = useState(null);   // { i, total, made, failed:[] , running }
+  const stop = useRef(false);
+  const short = rows.map((s) => ({ s, n: Math.max(0, s.qty - s.sold) - (s[`${platform}_live`] + s[`${platform}_other`]) })).filter((x) => x.n > 0);
+  const total = short.reduce((k, x) => k + x.n, 0);
+  async function go() {
+    stop.current = false;
+    const st = { i: 0, total: short.length, made: 0, failed: [], running: true };
+    setRun({ ...st });
+    for (const { s } of short) {
+      if (stop.current) break;
+      try {
+        const r = await api.presellListingsAction({ stockId: s.id, action: 'list', platform, price: Number(price), activate });
+        st.made += r.created || 0;
+        const bad = (r.results || []).filter((x) => !x.ok);
+        if (bad.length) st.failed.push(`${s.sku} ${s.size}: ${bad.length} failed (${[...new Set(bad.map((x) => x.error))].join(' · ')})`);
+      } catch (e) {
+        if (e.unauthorized) return onSignOut();
+        st.failed.push(`${s.sku} ${s.size}: ${e.message}`);
+      }
+      st.i++;
+      setRun({ ...st });
+    }
+    setRun({ ...st, running: false });
+  }
+  const busy = !!run?.running;
+  return (
+    <Dialog title="Fill missing listings" onClose={() => (busy ? null : (run ? onDone() : onClose()))} busy={busy}>
+      <Seg label="Platform" value={platform} onChange={(p) => { if (!busy && !run) setPlatform(p); }} options={[['stockx', 'StockX'], ['alias', 'Alias']]} />
+      {!short.length ? <p className="sm mt">Every size shown already has a {PLAT[platform]} listing for each pair left.</p> : (
+        <>
+          <p className="sm mt"><b>{total} {PLAT[platform]} listing{total === 1 ? '' : 's'}</b> missing across {short.length} size{short.length === 1 ? '' : 's'}:</p>
+          <ul className="ap-fill-list xs">{short.map(({ s, n }) => <li key={s.id}>{s.sku} · size {s.size} — {n}</li>)}</ul>
+          <div className="ap-edit-fields"><label><span className="muted xs">{PLAT[platform]} price for all (USD)</span>
+            <input type="number" min="1" step="1" inputMode="decimal" value={price} disabled={!!run} onChange={(e) => setPrice(e.target.value)} aria-label="Price for the missing listings" /></label></div>
+          <label className="ap-activate"><input type="checkbox" checked={activate} disabled={!!run} onChange={(e) => setActivate(e.target.checked)} /><span><b>Go live now</b></span></label>
+        </>
+      )}
+      {run && <p className="sm">{run.running ? `Listing size ${run.i + 1} of ${run.total}…` : `Done: ${run.made} listed${run.i < run.total ? ` (stopped after ${run.i} of ${run.total} sizes)` : ''}.`}</p>}
+      {run?.failed?.length > 0 && <div className="error xs">{run.failed.join(' · ')}</div>}
+      <div className="modal-actions">
+        {busy
+          ? <button type="button" className="btn" onClick={() => { stop.current = true; }}>Stop after this size</button>
+          : run ? <button type="button" className="btn primary" onClick={onDone}>Close</button>
+            : <>
+              <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+              <button type="button" className="btn primary" disabled={!short.length || !(Number(price) >= 1)} onClick={go}>List {total} on {PLAT[platform]}</button>
+            </>}
       </div>
     </Dialog>
   );

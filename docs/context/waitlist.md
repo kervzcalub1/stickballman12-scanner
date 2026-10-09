@@ -55,13 +55,21 @@ PH is looking at, and nobody would see it.
   held outranks everything else). **Rule 5 of `groupPhSized`**: held pairs keep their own row
   (`|#|W` in the key). Holding size 8 must not drag 9 and 10 off the to-list rows, and a
   row belongs to one tab.
-- **⏸ Waitlist…** on a Pending row (PH + superadmin, `kind === 'receiving'`) →
-  `src/components/WaitlistModal.jsx`. You pick which **sizes** (all by default; the loss is
-  usually one size), and how long: 7 / 14 days, **1 month (default)** or 2 months. The
-  reason is prefilled from the best-platform chip when it shows a loss.
+- **Two ways in, nothing in between** (2026-10-09): **⏸ Waitlist…** on a Pending row holds
+  the **entire row** (every size); **⏸ Waitlist…** on a size in the row's per-size detail
+  (desktop size table and the phone drawer, rows with 2+ sizes) holds **that size only**.
+  Both open `src/components/WaitlistModal.jsx` (PH + superadmin, `kind === 'receiving'`)
+  with the group already narrowed — there is no size picker any more. You choose how long:
+  7 / 14 days, **1 month (default)** or 2 months. The reason is prefilled from the
+  best-platform chip (for that size alone on a size hold) when it shows a loss.
 - A held row: teal chip **⏸ Back 11/07/26 · 30d** (who held it and why are in the tooltip),
-  no Edit, and **▶ Release now**. Admins see it read-only.
-- **⬇ Waitlist (Excel)** beside the tabs: everything on hold, any date.
+  no Edit, and **▶ Release now** (the row); each size in its per-size detail has its own
+  **▶ Release** (that size only). Admins see it read-only.
+- **⬇ Waitlist (Excel)** beside the tabs → `WaitlistReportModal`: **On hold now** (the same
+  file as the daily report) or **Waitlisted between…** two EST dates (either may be blank).
+  The dated file lists every pair PUT on the waitlist in those days — still held or not —
+  with a **State** column (On hold / Back on Pending / Sold / Missing / Issue); file name
+  `waitlist-held-<from>[_to_<to>].xlsx`. The date is `waitlisted_at` (a re-hold moves it).
 
 ## The daily report + "back from the waitlist" (`api/_lib/waitlist-worker.js`)
 - **The report is an Excel file (.xlsx), not a CSV** (2026-10-08, owner: columns as wide as
@@ -87,12 +95,14 @@ PH is looking at, and nobody would see it.
   either.
 
 ## API — `api/ph/waitlist.js`
-`GET` → `{ rows }` · `GET ?format=xlsx` → the file · `POST {action:'hold', vins, days, note}` →
+`GET` → `{ rows }` · `GET ?from=YYYY-MM-DD&to=YYYY-MM-DD` → waitlisted in that EST range
+(any state, `state` on each row) · `GET ?format=xlsx` (± the range) → the file · `POST {action:'hold', vins, days, note}` →
 `{ held, skipped, until }` (409 when none could be held) · `POST {action:'release', vins}`.
 Reading: PH + admin. Changing: PH + superadmin.
 
 ## Tests
-`e2e/ph-waitlist.spec.js` — hold one size (tab, chip, no Edit), a held pair isn't saved as
+`e2e/ph-waitlist.spec.js` — hold one size from its per-size ⏸ (tab, chip, no Edit), the row ⏸
+holds the entire row + per-size Release, the date-filtered report (API + modal download), a held pair isn't saved as
 listed, list + the .xlsx (frozen header, sized columns, numbers as numbers) + admin can't change it, the date passing brings it back (claimed once),
 Release now.
 

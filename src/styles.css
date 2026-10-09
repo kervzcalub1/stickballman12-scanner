@@ -1228,12 +1228,14 @@ button.ph-plat-chip { cursor: pointer; }
 .ph-release-btn { white-space: nowrap; }
 .waitlist-sizes { display: flex; flex-wrap: wrap; gap: 6px; }
 .waitlist-size {
-  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border, rgba(255,255,255,0.15));
   font-weight: 600; min-height: 36px;
 }
 .waitlist-size.on { border-color: #6cc4d8; background: rgba(108,196,216,0.10); }
 .waitlist-modal .seg { flex-wrap: wrap; }
+.waitlist-report-dates { display: flex; flex-wrap: wrap; gap: 10px; }
+.waitlist-report-dates .form-modal-label { flex: 1 1 140px; }
 
 /* Reported vs actual, inside the row's own drawer — the whole point of the tab is that
    this sits where the listing gets done, not on another screen. */

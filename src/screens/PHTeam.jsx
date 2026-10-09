@@ -8,9 +8,8 @@ import { autoAnimate } from '@formkit/auto-animate';
 import { api } from '../api.js';
 import { TopBar, PageNavContext, CardBadges, StatusPill, SyncBadges, SizesQty, YesNo, PriceInput, BasisChip, HistoryModal, DateRangeBar, ShoeThumb, CopyText, Modal, RemoveUnitsModal } from '../components/common.jsx';
 import { RescaleRequestModal } from '../components/RescaleRequestModal.jsx';
-import { WaitlistModal } from '../components/WaitlistModal.jsx';
-import { waitlistXlsx, waitlistFileName, waitlistDaysLeft } from '../lib/waitlist.js';
-import { XLSX_MIME } from '../lib/xlsx.js';
+import { WaitlistModal, WaitlistReportModal } from '../components/WaitlistModal.jsx';
+import { waitlistDaysLeft } from '../lib/waitlist.js';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { skuCodes } from '../lib/sku.js';
@@ -796,33 +795,25 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     } catch { /* the chip is a courtesy — a failed fetch must not break the grid */ }
   }
   useEffect(() => { loadOpenRequests(); }, [canRescaleRequest]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Waitlist (docs/context/waitlist.md): hold a line — or some of its sizes — out of
+  // Waitlist (docs/context/waitlist.md): hold the entire row — or one size of it — out of
   // listing until the market corrects. New Inventory only, the people who list.
-  const [waitlistFor, setWaitlistFor] = useState(null); // { g, reason }
+  const [waitlistFor, setWaitlistFor] = useState(null); // { g, reason } — g narrowed to one size for a size hold
+  const [waitlistReport, setWaitlistReport] = useState(false);
   const canWaitlist = canEdit && kind === 'receiving';
   async function onWaitlisted(res) {
     setWaitlistFor(null);
     await load();
     setNotice(`${res.held} pair${res.held === 1 ? '' : 's'} on the waitlist until ${estDate(res.until)} EST — under ⏸ Waitlist, back on Pending by itself that day (you'll get a Telegram message).${res.skipped ? ` ${res.skipped} skipped: already listed, sold or not on New Inventory.` : ''}`);
   }
-  async function releaseWaitlisted(g) {
-    setSavingKey(g.key);
+  // `s` = one size of a held row (its own Release in the per-size detail); none = the row.
+  async function releaseWaitlisted(g, s = null) {
+    setSavingKey(s ? `${g.key}|${s.size}` : g.key);
     try {
-      const r = await api.phWaitlist({ action: 'release', vins: g.vins });
+      const r = await api.phWaitlist({ action: 'release', vins: s ? s.vins : g.vins });
       await load();
       setNotice(`${r.released} pair${r.released === 1 ? '' : 's'} released from the waitlist — back on Pending to list.`);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setSavingKey(null); }
-  }
-  async function downloadWaitlist() {
-    try {
-      const { rows: list } = await api.phWaitlistList();
-      if (!list?.length) { setNotice('Nothing is on the waitlist right now.'); return; }
-      const url = URL.createObjectURL(new Blob([waitlistXlsx(list)], { type: XLSX_MIME }));
-      const a = document.createElement('a');
-      a.href = url; a.download = waitlistFileName(estToday()); a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   function onRescaleSent(res) {
     setRescaleFor(null);
@@ -1137,6 +1128,30 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       ⏸ Waitlist…
     </button>
   ) : null);
+  // The same two, per size, in the row's per-size detail: hold (or release) THAT size only.
+  // Only where the row has more than one size — on a one-size row the row button is it.
+  const sizeWaitlistBtn = (g, s) => {
+    if (!canWaitlist || g.sizes.length < 2 || g.closed) return null;
+    if (g.waitlisted) {
+      const k = `${g.key}|${s.size}`;
+      return (
+        <button type="button" className="btn sm ghost ph-release-btn" disabled={savingKey === k}
+          title={`Take US ${s.size} off the waitlist now — back on Pending to list`}
+          onClick={() => releaseWaitlisted(g, s)}>
+          {savingKey === k ? '…' : '▶ Release'}
+        </button>
+      );
+    }
+    if (g.listingState !== 'pending') return null;
+    const one = { ...g, sizes: [s], vins: s.vins };
+    return (
+      <button type="button" className="btn sm ghost" disabled={editing.size > 0}
+        title={`Hold only US ${s.size} off New Inventory until the market corrects`}
+        onClick={() => setWaitlistFor({ g: one, reason: waitlistReason(one) })}>
+        ⏸ Waitlist…
+      </button>
+    );
+  };
   const releaseBtn = (g) => (
     <span className="ph-edit-actions">
       <button className="btn sm ghost ph-release-btn" disabled={savingKey === g.key}
@@ -1241,8 +1256,8 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
               ))}
             </div>
             {showPricing && kind === 'receiving' && (
-              <button type="button" className="btn ghost sm" onClick={downloadWaitlist}
-                title="Everything on the waitlist (any date) as an Excel file — the daily report for the review">
+              <button type="button" className="btn ghost sm" onClick={() => setWaitlistReport(true)}
+                title="The waitlist as an Excel file — everything on hold now, or what was waitlisted between two dates">
                 ⬇ Waitlist (Excel)
               </button>
             )}
@@ -1340,6 +1355,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                             </span>
                             <span className="ph-sizedetail-hist">
                               <button type="button" className="btn sm ghost" onClick={() => setHistoryFor({ vins: s.vins, title: `${g.name || g.sku || ''} · US ${s.size}` })}>🕘 History</button>
+                              {sizeWaitlistBtn(g, s)}
                             </span>
                           </div>
                         );
@@ -1653,6 +1669,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
                                         <td>
                                           <button type="button" className="btn sm ghost" title="View change history"
                                             onClick={() => setHistoryFor({ vins: s.vins, title: `${g.name || g.sku || ''} · US ${s.size}` })}>🕘 History</button>
+                                          {sizeWaitlistBtn(g, s)}
                                         </td>
                                       </tr>
                                     );
@@ -1684,6 +1701,7 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
           onDone={onRescaleSent}
         />
       )}
+      {waitlistReport && <WaitlistReportModal onSignOut={onSignOut} onClose={() => setWaitlistReport(false)} />}
       {waitlistFor && (
         <WaitlistModal group={waitlistFor.g} reason={waitlistFor.reason} onSignOut={onSignOut}
           onClose={() => setWaitlistFor(null)} onDone={onWaitlisted} />

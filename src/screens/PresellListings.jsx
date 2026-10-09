@@ -754,20 +754,32 @@ function ListingsTab({ onSignOut }) {
   // One row per PAIR, the way the team's sheet reads: a stock row's StockX and Alias
   // listings matched up oldest-first (pair 1 = the first listing on each platform), so
   // a size with 2 pairs is 2 rows, each with its own StockX and Alias pill.
-  const pairs = useMemo(() => {
-    const groups = new Map();
+  // One CARD per SKU + size (owner, 2026-10-10: 26 rows of the same size was overwhelming,
+  // and the team works on phones). The card says how many pairs and what each platform
+  // holds; tapping it opens the pairs — each a StockX + Alias listing matched oldest-first
+  // (pair 1 = the first listing on each platform), with its own pills and menu as before.
+  const sizeNum = (z) => { const m = String(z || '').match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : Infinity; };
+  const groups = useMemo(() => {
+    const by = new Map();
     for (const r of [...(rows || [])].reverse()) {
-      const g = groups.get(r.stock_id) || { stock_id: r.stock_id, sku: r.sku, name: r.name, image: r.image, size: r.size, alias: [], stockx: [], latest: r.created_at };
+      const g = by.get(r.stock_id) || { stock_id: r.stock_id, sku: r.sku, name: r.name, image: r.image, size: r.size, alias: [], stockx: [], latest: r.created_at };
       g[r.platform]?.push(r);
-      g.latest = r.created_at;
-      groups.set(r.stock_id, g);
+      if (new Date(r.created_at) > new Date(g.latest)) g.latest = r.created_at;
+      by.set(r.stock_id, g);
     }
-    return [...groups.values()]
-      .sort((a, b) => new Date(b.latest) - new Date(a.latest))
-      .flatMap((g) => Array.from({ length: Math.max(g.alias.length, g.stockx.length) }, (_, i) => ({
-        key: `${g.stock_id}-${i}`, sku: g.sku, name: g.name, image: g.image, size: g.size, alias: g.alias[i] || null, stockx: g.stockx[i] || null,
-      })));
+    const list = [...by.values()].map((g) => {
+      const n = Math.max(g.alias.length, g.stockx.length);
+      return { ...g, n, pairs: Array.from({ length: n }, (_, i) => ({
+        key: `${g.stock_id}-${i}`, i, sku: g.sku, name: g.name, image: g.image, size: g.size, alias: g.alias[i] || null, stockx: g.stockx[i] || null,
+      })) };
+    });
+    // Shoes by their latest activity; within a shoe, sizes smallest first.
+    const skuLatest = new Map();
+    for (const g of list) if (!skuLatest.has(g.sku) || new Date(g.latest) > new Date(skuLatest.get(g.sku))) skuLatest.set(g.sku, g.latest);
+    return list.sort((a, b) => (a.sku === b.sku ? sizeNum(a.size) - sizeNum(b.size) : new Date(skuLatest.get(b.sku)) - new Date(skuLatest.get(a.sku))));
   }, [rows]);
+  const [openGroups, setOpenGroups] = useState(() => new Set());
+  const toggleGroup = (id) => setOpenGroups((o) => { const n = new Set(o); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   return (
     <>
       <div className="card">
@@ -784,47 +796,58 @@ function ListingsTab({ onSignOut }) {
       </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">
-        {rows == null ? <p className="muted">Loading…</p> : !pairs.length ? <p className="muted">{q ? `Nothing matches “${q}”.` : 'Nothing here.'}</p> : (
-          <div className="ap-tablewrap">
-            <table className="table ap-pairs">
-              <thead><tr><th>Product details</th><th>Size</th><th>Platform</th><th>Listing date</th><th>Options</th></tr></thead>
-              <tbody>
-                {pairs.map((p) => {
-                  const open = [p.stockx, p.alias].filter((l) => l && OPEN.includes(l.status));
-                  const busy = [p.stockx, p.alias].some((l) => l && busyId === l.id);
-                  const errs = [p.stockx, p.alias].filter((l) => l?.last_error);
-                  const first = [p.stockx, p.alias].filter(Boolean).sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0];
-                  return (
-                    <tr key={p.key}>
-                      <td>
-                        <div className="ap-shoe"><ShoeThumb url={p.image} size={36} /><div><b>{p.sku}</b><div className="muted xs">{p.name}</div></div></div>
-                        {errs.map((l) => <div key={l.id} className="error xs" title={l.last_error}>{PLAT[l.platform]}: {l.last_error}</div>)}
-                      </td>
-                      <td className="ap-size">{p.size}</td>
-                      <td>
-                        <div className="ap-pills">
-                          {['stockx', 'alias'].filter((pl) => !platform || pl === platform).map((pl) => (
-                            <PlatformPill key={pl} platform={pl} listing={p[pl]} busy={busy}
-                              onAct={act} onEdit={setEditing} onDelete={(l) => setDeleting([l])} />
-                          ))}
-                        </div>
-                      </td>
-                      <td className="ap-date"><b>{first ? PH_DATE.format(new Date(first.created_at)) : '—'}</b><div className="muted xs">{first?.created_by || ''}</div></td>
-                      <td>
-                        <DropMenu label="More…" className="ap-more" disabled={busy}
-                          head={first ? `Listed ${when(first.created_at)}${first.created_by ? ` by ${first.created_by}` : ''}` : null}
-                          items={[
-                            { label: 'Switch both on', hidden: !open.some((l) => l.status === 'off'), onClick: () => actMany(open.filter((l) => l.status === 'off'), 'activate') },
-                            { label: 'Switch both off', hidden: !open.some((l) => l.status === 'live'), onClick: () => actMany(open.filter((l) => l.status === 'live'), 'deactivate') },
-                            { label: 'Re-read from the marketplaces', hidden: ![p.stockx, p.alias].some((l) => l?.external_id), onClick: () => actMany([p.stockx, p.alias].filter((l) => l?.external_id), 'refresh') },
-                            { label: open.length > 1 ? 'Delete both' : 'Delete listing', danger: true, hidden: !open.length, onClick: () => setDeleting(open) },
-                          ]} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        {rows == null ? <p className="muted">Loading…</p> : !groups.length ? <p className="muted">{q ? `Nothing matches “${q}”.` : 'Nothing here.'}</p> : (
+          <div className="ap-groups">
+            {groups.map((g) => {
+              const isOpen = openGroups.has(g.stock_id);
+              const errs = [...g.alias, ...g.stockx].filter((l) => l.last_error).length;
+              return (
+                <div key={g.stock_id} className={`ap-group${isOpen ? ' open' : ''}`}>
+                  <button type="button" className="ap-group-head" aria-expanded={isOpen} onClick={() => toggleGroup(g.stock_id)}>
+                    <ShoeThumb url={g.image} size={44} />
+                    <span className="ap-group-main">
+                      <span className="ap-group-title"><b>{g.sku}</b> <span className="muted">· size</span> <b>{g.size}</b></span>
+                      <span className="muted xs ap-group-name">{g.name}</span>
+                      <span className="ap-group-chips">
+                        {['stockx', 'alias'].filter((pl) => !platform || pl === platform).map((pl) => <PlatformSummary key={pl} platform={pl} listings={g[pl]} pairs={g.n} />)}
+                      </span>
+                      {errs > 0 && <span className="error xs">{errs} with a problem — open to see</span>}
+                    </span>
+                    <span className="ap-group-count"><b>{g.n}</b><span className="muted xs">pair{g.n === 1 ? '' : 's'}</span><span className="ap-caret">{isOpen ? '▾' : '▸'}</span></span>
+                  </button>
+                  {isOpen && (
+                    <div className="ap-group-pairs">
+                      {g.pairs.map((p) => {
+                        const open = [p.stockx, p.alias].filter((l) => l && OPEN.includes(l.status));
+                        const busy = [p.stockx, p.alias].some((l) => l && busyId === l.id);
+                        const errsP = [p.stockx, p.alias].filter((l) => l?.last_error);
+                        const first = [p.stockx, p.alias].filter(Boolean).sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0];
+                        return (
+                          <div key={p.key} className="ap-pair">
+                            <span className="ap-pair-n muted">#{p.i + 1}</span>
+                            <div className="ap-pills">
+                              {['stockx', 'alias'].filter((pl) => !platform || pl === platform).map((pl) => (
+                                <PlatformPill key={pl} platform={pl} listing={p[pl]} busy={busy}
+                                  onAct={act} onEdit={setEditing} onDelete={(l) => setDeleting([l])} />
+                              ))}
+                            </div>
+                            <DropMenu label="⋯" className="ap-more ap-more-sm" disabled={busy}
+                              head={first ? `Pair #${p.i + 1} · listed ${when(first.created_at)}${first.created_by ? ` by ${first.created_by}` : ''}` : null}
+                              items={[
+                                { label: 'Switch both on', hidden: !open.some((l) => l.status === 'off'), onClick: () => actMany(open.filter((l) => l.status === 'off'), 'activate') },
+                                { label: 'Switch both off', hidden: !open.some((l) => l.status === 'live'), onClick: () => actMany(open.filter((l) => l.status === 'live'), 'deactivate') },
+                                { label: 'Re-read from the marketplaces', hidden: ![p.stockx, p.alias].some((l) => l?.external_id), onClick: () => actMany([p.stockx, p.alias].filter((l) => l?.external_id), 'refresh') },
+                                { label: open.length > 1 ? 'Delete both' : 'Delete listing', danger: true, hidden: !open.length, onClick: () => setDeleting(open) },
+                              ]} />
+                            {errsP.map((l) => <div key={l.id} className="error xs ap-pair-err" title={l.last_error}>{PLAT[l.platform]}: {l.last_error}</div>)}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -843,6 +866,18 @@ function ListingsTab({ onSignOut }) {
 const OPEN = ['live', 'off'];
 // What each listing status reads as on its pill — the sheet's "StockX (ON)" / "Alias (OFF)".
 const PILL = { live: ['ON', 'on'], off: ['OFF', 'off'], pending: ['PENDING', 'pending'], failed: ['FAILED', 'off'], sold: ['SOLD', 'sold'], deleted: ['DELETED', 'none'] };
+
+// A size card's summary for one platform: "StockX 5 ON · 4 PENDING · 17 —" — what the
+// platform holds of the pairs, and how many pairs it has NO listing for (the "—").
+function PlatformSummary({ platform, listings, pairs }) {
+  const c = {};
+  for (const l of listings) c[l.status] = (c[l.status] || 0) + 1;
+  const missing = Math.max(0, pairs - listings.length);
+  const parts = [['live', 'ON', 'on'], ['pending', 'PENDING', 'pending'], ['off', 'OFF', 'off'], ['failed', 'FAILED', 'off'], ['sold', 'SOLD', 'sold'], ['deleted', 'DELETED', 'none']]
+    .filter(([k]) => c[k]).map(([k, label, tone]) => <span key={k} className={`ap-sum ${tone}`}>{c[k]} {label}</span>);
+  if (missing) parts.push(<span key="none" className="ap-sum none" title={`${missing} pair${missing === 1 ? '' : 's'} with no ${PLAT[platform]} listing`}>{missing} —</span>);
+  return <span className="ap-summary"><b>{PLAT[platform]}</b>{parts.length ? parts : <span className="ap-sum none">none</span>}</span>;
+}
 
 // One platform's listing for a pair: a coloured pill that opens that listing's actions.
 function PlatformPill({ platform, listing: l, busy, onAct, onEdit, onDelete }) {

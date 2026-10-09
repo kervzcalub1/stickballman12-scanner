@@ -74,6 +74,15 @@ of WHOLE lines (Alex's 145 pairs = 290 listings → 3 calls) with progress on th
 line is never split (re-sending a line adds its pairs again). A failure mid-way names what
 already went. One size over 50 pairs is flagged in the preview (the per-line limit).
 
+## Listings tab: one card per SKU + size (owner, 2026-10-10)
+26 rows of the same size was overwhelming, and the team is on phones. Now one **card per
+stock row (SKU + size)**: photo, SKU · size, name, **N pairs**, and per platform a summary
+(`StockX 5 ON · 4 PENDING · 17 —`, where "—" = pairs with no listing on that platform;
+`Alias 26 ON`), plus "N with a problem". Shoes by latest activity, sizes smallest first.
+**Tap** → the pairs (#1, #2…), each with its StockX + Alias pills and a "⋯" menu (switch
+both on/off, re-read, delete) as before. Phone layout: pills share the row and shrink, no
+sideways scroll (checked in the test).
+
 ## The "listed" post (Alex, 2026-10-10)
 After a listing run (one paste can be several create calls), the page calls
 `POST /api/presell-listings/announce { stockIds, since }` once. The server builds ONE post to

@@ -317,3 +317,31 @@ test('＋ Fill missing listings tops each short size up, ONE size at a time', as
   expect(calls.map((c) => [c.stockId, c.action, c.platform, c.price, c.activate])).toEqual([[1, 'list', 'stockx', 230, true], [2, 'list', 'stockx', 230, true]]);
   expect(maxInFlight).toBe(1);
 });
+
+test('Listings: one card per SKU + size with the pair count and per-platform summary; tap for the pairs', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const rows = []; let id = 1;
+  const mk = (stock, size, platform, status) => rows.push({ id: id++, stock_id: stock, sku: 'JA1091-100', name: 'Air Griffey', image: null, size, platform, status,
+    price_cents: 23000, external_id: `x${id}`, created_at: new Date(Date.now() - id * 1000).toISOString(), created_by: 'Kervy', last_error: null });
+  for (let i = 0; i < 26; i++) mk(5, '10', 'alias', 'live');
+  for (let i = 0; i < 5; i++) mk(5, '10', 'stockx', 'live');
+  for (let i = 0; i < 4; i++) mk(5, '10', 'stockx', 'pending');
+  for (let i = 0; i < 2; i++) mk(1, '9.5', 'alias', 'live');
+  await page.route('**/api/presell-listings/list**', (r) => r.fulfill({ json: { ok: true, rows, counts: { all: rows.length } } }));
+  await loginAs(page, 'ph_team');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/ph/presell-listings?tab=listings');
+  const cards = page.locator('.ap-group');
+  await expect(cards).toHaveCount(2);
+  await expect(cards.first()).toContainText('size 9.5');            // sizes smallest first
+  const ten = cards.nth(1);
+  await expect(ten.locator('.ap-group-count')).toContainText('26');
+  await expect(ten).toContainText('5 ON');
+  await expect(ten).toContainText('4 PENDING');
+  await expect(ten).toContainText('17 —');                         // pairs with no StockX listing
+  await expect(ten.locator('.ap-pair')).toHaveCount(0);            // closed until tapped
+  await ten.locator('.ap-group-head').click();
+  await expect(ten.locator('.ap-pair')).toHaveCount(26);
+  // No sideways scroll on a phone.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});

@@ -256,7 +256,10 @@ test('after a listing run: ONE "listed" post, built from what went through', asy
   expect(text).toContain('31 pairs · by Kervy');
   expect(text).toContain('JA1091-100 · Air Griffey');
   expect(text).toContain('Shipment: PO 1042 · expected 2026-10-12');
-  expect(text).toContain('8 × 12 · 9 × 19');
+  expect(text).toContain('US 8 — 12 pairs · Alias 12 · StockX 12\nUS 9 — 19 pairs · Alias 19');
+  // Sorted by size, not as text: 9.5 before 10.
+  const sorted = announceLines([{ ...rows[2], size: '10' }, { ...rows[2], size: '9.5' }, { ...rows[2], size: '8' }], '').filter((l) => typeof l === 'string' && l.startsWith('US '));
+  expect(sorted).toEqual(['US 8 — 19 pairs · Alias 19', 'US 9.5 — 19 pairs · Alias 19', 'US 10 — 19 pairs · Alias 19']);
   expect(text).toContain('Alias: 31 listings at $250–$255');
   expect(text).toContain('StockX: 12 listings at $260 (2 not live yet)');
   const plain = announceLines([{ ...rows[0], in_transit: false }], '').map((l) => (typeof l === 'string' ? l : l.b)).join('\n');

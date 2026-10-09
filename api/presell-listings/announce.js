@@ -29,7 +29,13 @@ export function announceLines(rows, by) {
   for (const s of all) {
     lines.push({ b: `${s.sku}${s.name ? ` · ${s.name}` : ''}` });
     if (s.transit && (s.note || s.expected)) lines.push(`Shipment: ${s.note || 'in transit'}${s.expected ? ` · expected ${String(s.expected).slice(0, 10)}` : ''}`);
-    lines.push([...s.sizes.entries()].map(([size, sz]) => `${size} × ${pairs(sz)}`).join(' · '));
+    // One line per size, smallest first (owner, 2026-10-10: one long line was hard to read),
+    // with what each platform holds — a platform that came up short shows on its size.
+    const num = (z) => { const m = String(z).match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : Infinity; };
+    for (const [size, sz] of [...s.sizes.entries()].sort((a, b) => num(a[0]) - num(b[0]) || String(a[0]).localeCompare(String(b[0])))) {
+      const per = ['alias', 'stockx'].filter((p) => sz[p]).map((p) => `${p === 'alias' ? 'Alias' : 'StockX'} ${sz[p].n}`).join(' · ');
+      lines.push(`US ${size} — ${pairs(sz)} pair${pairs(sz) === 1 ? '' : 's'}${per ? ` · ${per}` : ''}`);
+    }
     for (const p of ['alias', 'stockx']) {
       const rs = [...s.sizes.values()].map((sz) => sz[p]).filter(Boolean);
       if (!rs.length) continue;

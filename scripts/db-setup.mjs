@@ -2157,6 +2157,30 @@ await sql(`
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS shopify_listing_edits_at_idx ON shopify_listing_edits (changed_at DESC)`);
 
+// eBay listings — a READ-ONLY copy of what's live on eBay (2026-10-10, docs/context/ebay-listings.md).
+// One row per listing SIZE (a multi-size listing is one row per variation; a single listing
+// is one row with variation_key ''). Replaced on every "Pull from eBay": a row whose
+// pulled_at is older than the last pull has ended on eBay. Today DPL (Shopify → eBay) owns
+// these listings; this is phase 1 of the listings hub (docs/listings-hub-plan.md).
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_listings (
+    item_id        TEXT NOT NULL,
+    variation_key  TEXT NOT NULL DEFAULT '',     -- the variation's SKU, else its specifics; '' = single listing
+    title          TEXT,
+    sku            TEXT,                         -- eBay's Custom label (DPL puts Shopify's SKU here)
+    size           TEXT,                         -- from the variation's size specific
+    style          TEXT,                         -- style code read from the title
+    price          NUMERIC(12,2),
+    currency       TEXT,
+    qty_available  INT,
+    qty_sold       INT,
+    start_time     TIMESTAMPTZ,
+    view_url       TEXT,
+    pulled_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (item_id, variation_key)
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_listings_style_idx ON ebay_listings (upper(style), size)`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -2169,6 +2193,7 @@ const LIVE_TABLES = [
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales',
+  'ebay_listings',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

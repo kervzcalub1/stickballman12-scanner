@@ -40,6 +40,61 @@ holds back units of a shipment we own. Here a pair is **never an inventory unit*
   on/off, re-read both, delete both. Grouping is client-side (`ListingsTab` `pairs`).
 - **Sales**: every sale, price, payout, order #, whether the Telegram post went out.
 
+## In transit — list it before it lands (Alex, 2026-10-10)
+For a hyped shoe still on the truck: list it now, and when it arrives, the listings come
+down so PH / Nikki list the real pairs properly.
+- **List new → ☑ 🚚 In transit** (+ optional PO/tracking note and expected date) →
+  `presell_stock.in_transit`, `transit_note`, `expected_on`. Listing the same SKU + size in
+  transit again **re-arms** it (`arrived_at` cleared); listing it plainly leaves the flag.
+- **Arrival** = the warehouse receives that SKU + size in any batch except Existing Stock
+  (owner's call). `insertItems` → `api/_lib/presell-arrival.js` `onItemsReceived`
+  (fire-and-forget, after the commit; a slow marketplace never holds up a receive). SKU
+  upper-case, size on its digits. `claimPresellArrival` marks the row once (a racing second
+  commit does nothing) → every open listing on both platforms is **DELETED** → one Telegram
+  post to the pre-sell group: 📦 ARRIVED, what was deleted, **sold in transit N of M →
+  warehouse sets N aside, inbound and list only M−N**, and anything that couldn't be deleted.
+- **Pairs sold in transit are NOT held in the system** (owner): the sale post (handleSale)
+  gets a 🚚 IN TRANSIT line plus "Warehouse: when it arrives, set N pair(s) aside — don't
+  inbound; inbound the other M−N". The warehouse physically sets them aside; only the rest is
+  received, so Nikki only ever sees those.
+- **Only where `PRESELL_WATCH=on`** (`arrivalsEnabled`), the one environment that acts on the
+  shared Alias/StockX accounts. Anywhere else a receive never reaches a marketplace.
+- Stock tab chips: 🚚 In transit · exp MM/DD (note in the tooltip) / 📦 Arrived <date>.
+- Tests: `e2e/presell-in-transit.spec.js` (fake marketplaces + Telegram).
+
+## Paste a message (2026-10-10)
+**📋 Paste message** next to Find: Alex's shape (`src/lib/presellPaste.js`) = a style code
+line, an optional name line, then `size x pairs` lines (`8x 12`, `8.5 x 14`, `10 × 26`,
+`9*19`, `7W x 3`). No name is fine; several shoes in one message too (each style code starts
+one). The same size twice adds up. Anything else (`8-9 x 2`, chat text) is listed as *not
+understood* and left out, never guessed. Preview → **Add N pairs** fills the cart (name/photo
+from our SKU lookup when we have one), ticks Alias + StockX and **🚚 In transit**.
+**Batches:** the create endpoint takes ≤ 100 listings a call, so the cart is sent in batches
+of WHOLE lines (Alex's 145 pairs = 290 listings → 3 calls) with progress on the button. A
+line is never split (re-sending a line adds its pairs again). A failure mid-way names what
+already went. One size over 50 pairs is flagged in the preview (the per-line limit).
+
+## The "listed" post (Alex, 2026-10-10)
+After a listing run (one paste can be several create calls), the page calls
+`POST /api/presell-listings/announce { stockIds, since }` once. The server builds ONE post to
+the pre-sell group from OUR rows (listings created since the run started, not failed/deleted):
+**🚚 LISTED — IN-TRANSIT PRE-SELL** or **📝 LISTED — PRE-SELL**, total pairs + who, per shoe:
+shipment note/expected, `size × pairs`, and per platform the count and price range ("(N not
+live yet)" while StockX confirms). Best effort: a Telegram failure never undoes a listing.
+The arrival post reads **📦 INBOUNDED — in-transit pre-sell arrived, listings taken down**.
+
+## Cost for the purchase (2026-10-10)
+Cart → **Supplier preset (costs)** (the Payout Calculator presets) → **✎ Edit for this
+purchase** (tax, gift card, store, promo, cashback %, tip and shipping $). Edits apply to
+THIS purchase only; the saved preset is never written (*edited for this purchase* chip,
+*Reset to the preset*). Per line **Shelf $** (+ *Shelf price for all*) → **Cost** = landed
+cost (`landedFromShelf`, the same formula as receiving and Costs). Under each platform's
+price: **Payout** (default fee: Alias 9.9 %, StockX 10 %) and **profit**. No preset → no
+cost (owner's rule: the shelf price alone isn't the cost); payout still shows.
+Saved on `presell_stock`: `shelf_price`, `unit_cost` (the SERVER recomputes it from the
+stack, not trusting the browser) and `cost_stack` (JSONB snapshot: preset name/id, edited,
+the numbers). A re-list without a cost keeps the one already there.
+
 ## Market prices — each platform's OWN words (owner, 2026-10-07)
 `POST /api/presell-listings/prices { platform, sku, sizes, consigned }`
 - **Alias**: Global Indicator · Lowest Listing · Last Sold · Highest Offer, toggle
@@ -87,7 +142,16 @@ accounts; two watchers would both act on a sale. Off by default (and in e2e).
   Telegram). Cancelled Alias orders are ignored.
 
 ## Telegram — the pre-sell group
-`TELEGRAM_PRESELL_CHAT_ID` (same bot). A sale posts: 💰 SOLD on <platform> · shoe · SKU ·
+`TELEGRAM_PRESELL_CHAT_ID` (same bot). **Two kinds of sale post** (owner, 2026-10-10; they ask
+for opposite actions):
+- **💰 PRE-SELL SALE — <platform> — SOURCE IT**: a row NOT in transit. We don't own the pair;
+  "Alex / supplier: find 1 pair of size N".
+- **🚚 IN-TRANSIT SALE — <platform>**: the supplier already bought it. Shipment note +
+  expected date, "Warehouse: when it arrives, set N pairs aside, don't inbound them; inbound
+  the other M", sold in transit so far. If the row has already ARRIVED (a sale racing the
+  take-down): "pull 1 pair from the shelf for this order".
+
+Both carry: 💰 SOLD on <platform> · shoe · SKU ·
 size · price (payout) · order · stock left · what was taken down (and ⚠️ anything that
 couldn't be). To find a new group's id: add the bot, type **`/chatid`** in the group — the
 webhook answers with it (works wherever the webhook points, i.e. prod). Unset → the sale is

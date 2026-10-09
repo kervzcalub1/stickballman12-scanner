@@ -291,6 +291,7 @@ export const api = {
   receiveOnlineOrder: (id, counts) => post('/api/online-orders/receive', { id, counts }),
   deleteOnlineOrder: (id) => post('/api/online-orders/delete', { id }),
   presellListingsCreate: (body) => post('/api/presell-listings/create', body),
+  presellListingsAnnounce: (body) => post('/api/presell-listings/announce', body),
   // eBay reprice: one batch (≤ 25) of style code + size → market price (api/ebay-reprice/prices.js).
   // Shopify Listings (PH): every variant / save edited fields live / recent edits.
   shopifyListingsVariants: () => get('/api/shopify-listings/variants'),

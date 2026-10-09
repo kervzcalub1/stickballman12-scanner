@@ -1054,6 +1054,13 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
     try { await claimVinStock(rollClaims); }
     catch (e) { console.warn('[insertItems] vin_stock claim:', e.message); }
   }
+  // In-transit pre-sell listings (presell-arrival.js): pairs of a SKU + size listed while
+  // on their way come down now that they're here. Fire-and-forget, after the commit — a
+  // marketplace being slow must never hold up (or fail) a warehouse receive. Imported
+  // lazily: presell-arrival imports this file.
+  import('./presell-arrival.js')
+    .then((m) => m.onItemsReceived(batchId, items))
+    .catch((e) => console.error('[insertItems] presell arrival:', e.message));
   return created;
 }
 
@@ -8433,16 +8440,56 @@ export async function listApprovedPeople() {
 // docs/context/presell-listings.md — pairs listed on Alias / StockX straight from a scan.
 
 // The stock row for SKU + size, created on first use; `addQty` pairs are added to it.
-export async function upsertPresellStock({ sku, size, name, image, upc, addQty }, actor) {
+// `inTransit` (Alex, 2026-10-10): the pairs are still on their way — the row is (re)armed
+// for the arrival check (arrived_at cleared), with an optional note + expected date.
+// Listing the same SKU + size again WITHOUT the tick leaves an existing transit flag alone.
+export async function upsertPresellStock({ sku, size, name, image, upc, addQty, inTransit = false, transitNote = null, expectedOn = null,
+  shelfPrice = null, unitCost = null, costStack = null }, actor) {
+  const t = inTransit === true;
+  const stack = costStack ? JSON.stringify(costStack) : null;
   const rows = await db()`
-    INSERT INTO presell_stock (sku, size, name, image, upc, qty, created_by, updated_by)
-    VALUES (${sku}, ${size}, ${name}, ${image}, ${upc}, ${addQty}, ${actor}, ${actor})
+    INSERT INTO presell_stock (sku, size, name, image, upc, qty, created_by, updated_by, in_transit, transit_note, expected_on,
+                               shelf_price, unit_cost, cost_stack)
+    VALUES (${sku}, ${size}, ${name}, ${image}, ${upc}, ${addQty}, ${actor}, ${actor}, ${t}, ${t ? transitNote : null}, ${t ? expectedOn : null}::date,
+            ${shelfPrice}, ${unitCost}, ${stack}::jsonb)
     ON CONFLICT (sku, size) DO UPDATE
        SET qty = presell_stock.qty + EXCLUDED.qty,
            name = COALESCE(presell_stock.name, EXCLUDED.name), image = COALESCE(presell_stock.image, EXCLUDED.image),
-           upc = COALESCE(presell_stock.upc, EXCLUDED.upc), updated_by = ${actor}, updated_at = now()
+           upc = COALESCE(presell_stock.upc, EXCLUDED.upc), updated_by = ${actor}, updated_at = now(),
+           in_transit = presell_stock.in_transit OR ${t},
+           transit_note = CASE WHEN ${t} THEN COALESCE(EXCLUDED.transit_note, presell_stock.transit_note) ELSE presell_stock.transit_note END,
+           expected_on = CASE WHEN ${t} THEN COALESCE(EXCLUDED.expected_on, presell_stock.expected_on) ELSE presell_stock.expected_on END,
+           arrived_at = CASE WHEN ${t} THEN NULL ELSE presell_stock.arrived_at END,
+           arrived_batch = CASE WHEN ${t} THEN NULL ELSE presell_stock.arrived_batch END,
+           -- The latest purchase's cost wins; a re-list without a cost keeps the one we had.
+           shelf_price = COALESCE(EXCLUDED.shelf_price, presell_stock.shelf_price),
+           unit_cost = COALESCE(EXCLUDED.unit_cost, presell_stock.unit_cost),
+           cost_stack = COALESCE(EXCLUDED.cost_stack, presell_stock.cost_stack)
     RETURNING *`;
   return rows[0];
+}
+
+// In-transit rows still waiting for their pairs, matching what was just received. SKU
+// compared upper-case, size on its digits ("10.5" = "US 10.5" = "10.5W" — the style code
+// already tells men's from women's).
+export async function presellTransitMatches(pairs) {
+  if (!pairs.length) return [];
+  const json = JSON.stringify(pairs.map((p) => ({ sku: String(p.sku || '').toUpperCase(), sz: String(p.size || '').replace(/[^0-9.]/g, '') })));
+  return await db()`
+    SELECT DISTINCT s.* FROM presell_stock s
+      JOIN jsonb_to_recordset(${json}::jsonb) AS r(sku text, sz text)
+        ON upper(s.sku) = r.sku AND regexp_replace(s.size, '[^0-9.]', '', 'g') = r.sz AND r.sz <> ''
+     WHERE s.in_transit AND s.arrived_at IS NULL`;
+}
+// Mark a row arrived — ONCE: two receiving commits racing can't both act on it.
+export async function claimPresellArrival(id, batchCode) {
+  const rows = await db()`UPDATE presell_stock SET arrived_at = now(), arrived_batch = ${batchCode || null}, updated_at = now()
+                           WHERE id = ${id} AND in_transit AND arrived_at IS NULL RETURNING *`;
+  return rows[0] || null;
+}
+export async function batchKindAndCode(batchId) {
+  const rows = await db()`SELECT kind, batch_code FROM batches WHERE id = ${batchId}`;
+  return rows[0] || null;
 }
 export async function getPresellStock(id) {
   const rows = await db()`SELECT * FROM presell_stock WHERE id = ${id}`;
@@ -8742,4 +8789,22 @@ export async function listEbayListings() {
      ORDER BY e.title, e.item_id,
               CASE WHEN regexp_replace(coalesce(e.size, ''), '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
                    THEN regexp_replace(e.size, '[^0-9.]', '', 'g')::numeric END NULLS FIRST, e.variation_key`;
+}
+
+// What a listing run just put up, for the "listed" post to the pre-sell group: per stock row
+// (SKU + size), the listings created since `since` that went through (not failed/deleted),
+// counted and priced per platform. Read from OUR rows, not from what the browser claims.
+export async function presellAnnounceRows(stockIds, since) {
+  const ids = (stockIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0);
+  if (!ids.length) return [];
+  return await db()`
+    SELECT s.id, s.sku, s.name, s.size, s.qty, s.sold, s.in_transit, s.arrived_at, s.transit_note, s.expected_on, s.unit_cost,
+           l.platform, count(*)::int AS n, min(l.price_cents)::int AS min_cents, max(l.price_cents)::int AS max_cents,
+           count(*) FILTER (WHERE l.status = 'live')::int AS live
+      FROM presell_stock s
+      JOIN presell_listings l ON l.stock_id = s.id
+     WHERE s.id = ANY(${ids}::bigint[]) AND l.created_at >= ${since}::timestamptz - interval '10 seconds'
+       AND l.status NOT IN ('failed', 'deleted')
+     GROUP BY s.id, l.platform
+     ORDER BY s.sku, s.size, l.platform`;
 }

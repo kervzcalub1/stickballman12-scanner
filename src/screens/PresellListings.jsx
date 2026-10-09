@@ -14,7 +14,19 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { isUpcCode } from '../lib/codes.js';
-import { PH_DATE, PH_DATETIME } from '../lib/format.js';
+import { parsePresellPaste } from '../lib/presellPaste.js';
+import { landedFromShelf } from '../lib/costs.js';
+import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
+
+// The cost stack fields a supplier preset carries (payout_presets), in the order the
+// Payout Calculator applies them.
+const STACK_FIELDS = [
+  ['storePct', 'Store discount', '%'], ['promoPct', 'Promo', '%'], ['giftPct', 'Gift card', '%'],
+  ['cashbackPct', 'Cashback', '%'], ['taxPct', 'Sales tax', '%'], ['tipAmt', 'Tip / fee', '$'], ['shippingAmt', 'Shipping', '$'],
+];
+const stackOf = (p) => (p ? Object.fromEntries(STACK_FIELDS.map(([k]) => [k, Number(p[k]) || 0])) : null);
+const money2 = (n) => (n == null || !Number.isFinite(n) ? '—' : `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`);
+import { PH_DATE, PH_DATETIME, estToday } from '../lib/format.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -117,6 +129,27 @@ function ListNew({ onSignOut, onListed }) {
   // { key, sku, name, image, upc, size, qty, alias:bool, aliasPrice, stockx:bool, stockxPrice, error? }
   const [lines, setLines] = useState([]);
   const [activate, setActivate] = useState(true);
+  // In transit (Alex, 2026-10-10): listed while on the truck; the listings are deleted when
+  // the warehouse receives the SKU + size (api/_lib/presell-arrival.js).
+  const [inTransit, setInTransit] = useState(false);
+  const [transitNote, setTransitNote] = useState('');
+  const [expectedOn, setExpectedOn] = useState('');
+  // Cost for this purchase (2026-10-10): a supplier preset, editable for THIS purchase only
+  // (the saved preset is untouched), applied to each line's shelf price → landed cost →
+  // projected payout / profit per platform.
+  const [presets, setPresets] = useState([]);
+  const [presetId, setPresetId] = useState('');
+  const [stack, setStack] = useState(null);       // the stack in use (a preset's, maybe edited)
+  const [stackEdited, setStackEdited] = useState(false);
+  const [editStack, setEditStack] = useState(false);
+  const [allShelf, setAllShelf] = useState('');
+  useEffect(() => { api.payoutPresets().then((r) => setPresets(r.presets || [])).catch(() => {}); }, []);
+  function pickPreset(id) {
+    setPresetId(id);
+    const p = presets.find((x) => String(x.id) === String(id));
+    setStack(stackOf(p)); setStackEdited(false); setEditStack(false);
+  }
+  const costOf = (l) => (stack ? landedFromShelf(l.shelfPrice, null, stack) : null);
   const [basis, setBasis] = useState(loadBasis);
   const [confirm, setConfirm] = useState(false);
   const [listing, setListing] = useState(false);
@@ -160,29 +193,92 @@ function ListNew({ onSignOut, onListed }) {
   const problem = lines.find((l) => !l.alias && !l.stockx) ? 'Every line needs Alias, StockX or both ticked.'
     : lines.find((l) => (l.alias && !(Number(l.aliasPrice) >= 1)) || (l.stockx && !(Number(l.stockxPrice) >= 1))) ? 'Every ticked platform needs a price.' : '';
 
+  // The server takes at most MAX_PER_CALL listings a call (pairs × platforms), so a big cart —
+  // Alex's 145-pair shipment is 290 listings — goes in batches of whole lines, one after the
+  // other. A line is never split across calls: re-sending a line adds its pairs again.
+  const MAX_PER_CALL = 100;
+  const [progress, setProgress] = useState('');
   async function listAll() {
     setListing(true); setError('');
+    const todo = lines.filter((l) => !l.done);
+    const batches = [];
+    for (const l of todo) {
+      const n = (Number(l.qty) || 1) * ((l.alias ? 1 : 0) + (l.stockx ? 1 : 0));
+      const last = batches[batches.length - 1];
+      if (last && last.n + n <= MAX_PER_CALL) { last.lines.push(l); last.n += n; } else batches.push({ lines: [l], n });
+    }
+    const failed = {};
+    const sent = new Set();
+    const total = { created: 0, failed: 0 };
+    const runStart = new Date().toISOString();
+    const stockIds = new Set();
     try {
-      const r = await api.presellListingsCreate({
-        activate,
-        items: lines.map((l) => ({
-          sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty: Number(l.qty) || 1,
-          alias: l.alias ? { price: Number(l.aliasPrice) } : null, stockx: l.stockx ? { price: Number(l.stockxPrice) } : null,
-        })),
-      });
-      // Lines that fully listed leave the cart. A line with failures stays, its pairs now in
-      // Stock — so it's retried from the Stock tab's "List" (re-sending would add the qty twice).
-      const failed = {};
-      for (const ln of r.lines || []) {
-        const errs = ['alias', 'stockx'].flatMap((p) => (ln[p]?.results || []).filter((x) => !x.ok).map((x) => `${PLAT[p]}: ${x.error}`));
-        if (errs.length) failed[lineKey(ln.sku, ln.size)] = [...new Set(errs)].join(' · ');
+      for (const [i, b] of batches.entries()) {
+        if (batches.length > 1) setProgress(`Batch ${i + 1} of ${batches.length} (${b.n} listings)…`);
+        const preset = presets.find((x) => String(x.id) === String(presetId));
+        const r = await api.presellListingsCreate({
+          activate,
+          inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
+          costStack: stack ? { ...stack, preset: preset?.name || null, presetId: preset?.id || null, edited: stackEdited } : null,
+          items: b.lines.map((l) => ({
+            sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty: Number(l.qty) || 1,
+            shelfPrice: Number(l.shelfPrice) > 0 ? Number(l.shelfPrice) : null,
+            alias: l.alias ? { price: Number(l.aliasPrice) } : null, stockx: l.stockx ? { price: Number(l.stockxPrice) } : null,
+          })),
+        });
+        for (const l of b.lines) sent.add(l.key);
+        for (const ln of r.lines || []) if (ln.stockId) stockIds.add(ln.stockId);
+        total.created += r.created || 0; total.failed += r.failed || 0;
+        // A line with failures stays (marked done), its pairs now in Stock — retried from the
+        // Stock tab's "List" (re-sending would add the qty twice).
+        for (const ln of r.lines || []) {
+          const errs = ['alias', 'stockx'].flatMap((p) => (ln[p]?.results || []).filter((x) => !x.ok).map((x) => `${PLAT[p]}: ${x.error}`));
+          if (errs.length) failed[lineKey(ln.sku, ln.size)] = [...new Set(errs)].join(' · ');
+        }
       }
-      setLines((ls) => ls.filter((l) => failed[l.key]).map((l) => ({ ...l, error: `${failed[l.key]} — the pairs are in Stock; retry with “List” there.`, done: true })));
-      setResult(r);
+      setResult(total);
+    } catch (err) {
+      if (err.unauthorized) return onSignOut();
+      setError(`${err.message}${sent.size ? ` — ${sent.size} line${sent.size === 1 ? ' was' : 's were'} already listed and left the cart; what's still here was NOT sent.` : ''}`);
+    } finally {
+      // Lines that went out leave the cart (or stay marked with their failure); unsent ones stay as they were.
+      setLines((ls) => ls.filter((l) => !sent.has(l.key) || failed[l.key])
+        .map((l) => (failed[l.key] ? { ...l, error: `${failed[l.key]} — the pairs are in Stock; retry with “List” there.`, done: true } : l)));
+      setProgress(''); setListing(false); setConfirm(false);
+      // ONE post to the pre-sell group for the whole run (Alex) — the server builds it from
+      // what actually went through. Best effort: a Telegram hiccup never undoes a listing.
+      if (stockIds.size) api.presellListingsAnnounce({ stockIds: [...stockIds], since: runStart }).catch(() => {});
+    }
+  }
+
+  // 📋 Paste Alex's message: parsed into shoes × sizes × pairs, previewed, then added.
+  const [paste, setPaste] = useState(null);   // null = closed · { text, parsed }
+  async function addPasted(parsed) {
+    setBusy(true); setError('');
+    try {
+      // Name + photo from our catalogue lookup, best effort — the message's own name wins.
+      const found = await Promise.all(parsed.shoes.map((s) => api.searchSku(s.sku).then((r) => r.product || null).catch(() => null)));
+      setLines((ls) => {
+        let next = [...ls];
+        parsed.shoes.forEach((s, i) => {
+          const p = found[i];
+          for (const z of s.sizes) {
+            const k = lineKey(s.sku, z.size);
+            const prev = next.find((l) => l.key === k);
+            if (prev) next = next.map((l) => (l.key === k ? { ...l, qty: String((Number(l.qty) || 0) + z.qty) } : l));
+            else next.push({ key: k, sku: s.sku, name: s.name || p?.name || '', image: p?.image || null, upc: null, size: z.size, qty: String(z.qty),
+              alias: true, aliasPrice: allAlias, stockx: true, stockxPrice: allStockx });
+          }
+        });
+        return next;
+      });
+      // Alex's messages are shipments already bought and on their way.
+      setInTransit(true);
+      setPaste(null);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
-    } finally { setListing(false); setConfirm(false); }
+    } finally { setBusy(false); }
   }
 
   return (
@@ -196,7 +292,36 @@ function ListNew({ onSignOut, onListed }) {
           <button type="button" className={`btn ${showCam ? 'primary' : 'ghost'}`} onClick={() => setShowCam((v) => !v)} title="Scan with camera">
             <Icon name="camera" /> {showCam ? 'Close camera' : 'Camera'}
           </button>
+          <button type="button" className={`btn ${paste ? 'primary' : 'ghost'}`} onClick={() => setPaste((v) => (v ? null : { text: '', parsed: null }))}
+            title="Paste a message like Alex's — style code, shoe name, then “size x pairs” lines">📋 Paste message</button>
         </form>
+        {paste && (
+          <div className="ap-paste">
+            <textarea className="input" rows={8} value={paste.text} autoFocus
+              placeholder={'JA1091-100\nNike Air Griffey Max 1 \'Cincinnati Reds\'\n\n8 x 12\n8.5 x 14\n9 x 19'}
+              aria-label="Paste the message"
+              onChange={(e) => setPaste({ text: e.target.value, parsed: parsePresellPaste(e.target.value) })} />
+            {paste.parsed && (paste.parsed.shoes.length ? (
+              <div className="ap-paste-preview">
+                {paste.parsed.shoes.map((s) => (
+                  <div key={s.sku}><b>{s.sku}</b>{s.name ? ` · ${s.name}` : ''}
+                    <div className="muted sm">{s.sizes.map((z) => `${z.size} × ${z.qty}`).join(' · ')} — {s.sizes.reduce((n, z) => n + z.qty, 0)} pairs</div>
+                    {s.sizes.some((z) => z.qty > 50) && <div className="error xs">Over 50 pairs in one size can't go in one go — lower it to 50 here and list the rest from Stock → List after.</div>}
+                  </div>
+                ))}
+                {paste.parsed.skipped.length > 0 && (
+                  <div className="muted xs">Not understood (left out): {paste.parsed.skipped.map((x) => `“${x.line}”`).join(', ')}</div>
+                )}
+                <div className="oo-actions">
+                  <button type="button" className="btn ghost" onClick={() => setPaste(null)}>Cancel</button>
+                  <button type="button" className="btn primary" disabled={busy} onClick={() => addPasted(paste.parsed)}>
+                    {busy ? 'Adding…' : `Add ${paste.parsed.pairs} pairs to the list`}</button>
+                </div>
+                <p className="muted xs">Adds every size with its pairs, ticks Alias + StockX and <b>🚚 In transit</b> — set the prices, then Create.</p>
+              </div>
+            ) : <p className="muted sm">Paste the style code, then one line per size like <code>8 x 12</code> (size × pairs).</p>)}
+          </div>
+        )}
         {showCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>
             <CameraScanner mode="rescale" onDetected={(c) => { setShowCam(false); find(c); }} onClose={() => setShowCam(false)} />
@@ -223,6 +348,35 @@ function ListNew({ onSignOut, onListed }) {
         <h3 className="rows-title">To list {pairs ? `· ${pairs} pair${pairs === 1 ? '' : 's'} → ${listings} listing${listings === 1 ? '' : 's'}` : ''}</h3>
         {!lines.length ? <p className="muted">Nothing yet — scan a box or type a SKU, then tap the sizes.</p> : (
           <>
+            <div className="ap-cost">
+              <div className="ap-cost-row">
+                <label className="muted sm">Supplier preset (costs)
+                  <select className="input" value={presetId} onChange={(e) => pickPreset(e.target.value)} aria-label="Supplier preset">
+                    <option value="">— none (no cost) —</option>
+                    {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </label>
+                {stack && <button type="button" className={`btn sm ${editStack ? 'primary' : 'ghost'}`} onClick={() => setEditStack((v) => !v)}>✎ Edit for this purchase</button>}
+                {stackEdited && <span className="ap-edited xs" title="Changed for this purchase only — the saved preset is untouched">edited for this purchase</span>}
+                <label className="muted sm">Shelf price for all
+                  <span className="ap-inline"><input type="number" min="1" step="0.01" inputMode="decimal" value={allShelf} placeholder="$" onChange={(e) => setAllShelf(e.target.value)} aria-label="Shelf price for every pair" />
+                    <button type="button" className="btn sm" disabled={!(Number(allShelf) > 0)} onClick={() => setLines((ls) => ls.map((l) => ({ ...l, shelfPrice: allShelf })))}>Apply</button></span>
+                </label>
+              </div>
+              {stack && editStack && (
+                <div className="ap-stack">
+                  {STACK_FIELDS.map(([k, label, unit]) => (
+                    <label key={k} className="muted xs">{label} ({unit})
+                      <input className="input" type="number" min="0" step="0.01" inputMode="decimal" value={stack[k]}
+                        onChange={(e) => { setStack((s) => ({ ...s, [k]: e.target.value === '' ? 0 : Number(e.target.value) })); setStackEdited(true); }}
+                        aria-label={`${label} for this purchase`} />
+                    </label>
+                  ))}
+                  <button type="button" className="btn sm ghost" onClick={() => pickPreset(presetId)}>Reset to the preset</button>
+                </div>
+              )}
+              {!stack && <p className="muted xs">Pick the supplier’s preset to turn each shelf price into a landed cost and see the payout and profit per platform. Without one the cost stays blank (the owner’s rule: shelf price alone isn’t the cost).</p>}
+            </div>
             <div className="ap-bulk">
               <div className="ap-basis"><span className="muted xs">Alias prices</span>
                 <Seg label="Alias price basis" value={basis} onChange={(b) => { saveBasis(b); setBasis(b); }} options={[['consigned', 'Consigned'], ['with_you', 'With You']]} />
@@ -244,6 +398,11 @@ function ListNew({ onSignOut, onListed }) {
                     <label className="ap-qtyfield"><span className="muted xs">Pairs</span>
                       <input className="ap-qty" type="number" min="1" max="50" inputMode="numeric" value={l.qty} disabled={l.done}
                         onChange={(e) => setLine(l.key, 'qty', e.target.value)} aria-label={`Line ${i + 1} quantity`} /></label>
+                    <label className="ap-qtyfield"><span className="muted xs">Shelf $</span>
+                      <input className="ap-qty ap-shelf" type="number" min="0" step="0.01" inputMode="decimal" value={l.shelfPrice ?? ''} disabled={l.done}
+                        onChange={(e) => setLine(l.key, 'shelfPrice', e.target.value)} aria-label={`Line ${i + 1} shelf price`} /></label>
+                    <span className="ap-cost-out" title={stack ? 'Shelf price through the supplier preset (landed cost per pair)' : 'Pick a supplier preset to get the cost'}>
+                      <span className="muted xs">Cost</span><b>{money2(costOf(l))}</b></span>
                     <button type="button" className="btn icon ghost remove sm" title="Remove" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>×</button>
                   </div>
                   {l.error && <div className="error xs">{l.error}</div>}
@@ -255,6 +414,16 @@ function ListNew({ onSignOut, onListed }) {
                           <Market platform={p} p={(p === 'alias' ? aliasOf : stockxOf)(l.sku, l.size)} onPick={(v) => setLine(l.key, `${p}Price`, String(v))} />
                           <input className="ap-price" type="number" min="1" step="1" inputMode="decimal" placeholder="$" value={l[`${p}Price`]}
                             onChange={(e) => setLine(l.key, `${p}Price`, e.target.value)} aria-label={`Line ${i + 1} ${PLAT[p]} price`} />
+                          {Number(l[`${p}Price`]) > 0 && (() => {
+                            const c = costOf(l);
+                            const o = calcPayout(p, Number(l[`${p}Price`]), c ?? 0, DEFAULT_FEE_PCT[p]);
+                            return (
+                              <span className="ap-payout xs" title={`${PLAT[p]} fee ${DEFAULT_FEE_PCT[p]}%`}>
+                                Payout <b>{money2(o.payout)}</b>
+                                {c != null && <> · profit <b className={o.profit < 0 ? 'neg' : 'pos'}>{money2(o.profit)}</b></>}
+                              </span>
+                            );
+                          })()}
                         </>
                       )}
                     </div>
@@ -268,6 +437,18 @@ function ListNew({ onSignOut, onListed }) {
                   <input type="checkbox" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
                   <span><b>Go live now.</b> Untick to create the listings switched off — switch them on later from “Listings”.</span>
                 </label>
+                <label className="ap-activate">
+                  <input type="checkbox" checked={inTransit} onChange={(e) => setInTransit(e.target.checked)} />
+                  <span><b>🚚 In transit.</b> These pairs are still on their way. When the warehouse <b>receives</b> this SKU + size, every unsold Alias / StockX listing for it is <b>deleted</b> and the pre-sell group is told — then PH lists the real pairs.</span>
+                </label>
+                {inTransit && (
+                  <div className="ap-transit">
+                    <label><span className="muted xs">PO / tracking / supplier (optional)</span>
+                      <input className="input" value={transitNote} maxLength={200} placeholder="e.g. Alex · PO 1042 · 1Z999…" onChange={(e) => setTransitNote(e.target.value)} /></label>
+                    <label><span className="muted xs">Expected (optional)</span>
+                      <input className="input" type="date" value={expectedOn} min={estToday()} onChange={(e) => setExpectedOn(e.target.value)} /></label>
+                  </div>
+                )}
                 <div className="oo-actions">
                   <button type="button" className="btn ghost" onClick={() => setLines([])} disabled={listing}>Clear</button>
                   <button type="button" className="btn primary" disabled={listing || !pairs || !!problem} onClick={() => setConfirm(true)}>
@@ -283,10 +464,10 @@ function ListNew({ onSignOut, onListed }) {
 
       {confirm && (
         <Modal type="warn" title={`${pairs} pair${pairs === 1 ? '' : 's'} → ${listings} listing${listings === 1 ? '' : 's'}?`}
-          message={`${activate ? 'They go LIVE straight away — buyers can purchase them.' : 'They are created switched OFF — nobody can buy them until you switch them on.'} ${pairs} pair${pairs === 1 ? ' is' : 's are'} added to pre-sell stock.`}
+          message={`${activate ? 'They go LIVE straight away — buyers can purchase them.' : 'They are created switched OFF — nobody can buy them until you switch them on.'} ${pairs} pair${pairs === 1 ? ' is' : 's are'} added to pre-sell stock.${inTransit ? ' 🚚 In transit: when the warehouse receives them, the unsold listings are deleted automatically.' : ''}`}
           onClose={() => !listing && setConfirm(false)}>
           <button type="button" className="btn ghost" onClick={() => setConfirm(false)} disabled={listing}>Cancel</button>
-          <button type="button" className="btn primary" onClick={listAll} disabled={listing}>{listing ? 'Listing…' : activate ? 'List live' : 'Create switched off'}</button>
+          <button type="button" className="btn primary" onClick={listAll} disabled={listing}>{listing ? (progress || 'Listing…') : activate ? 'List live' : 'Create switched off'}</button>
         </Modal>
       )}
       {result && (
@@ -329,7 +510,11 @@ function StockTab({ onSignOut }) {
                   const left = Math.max(0, s.qty - s.sold);
                   return (
                     <tr key={s.id}>
-                      <td><div className="ap-shoe"><ShoeThumb url={s.image} size={36} /><div><b>{s.sku}</b><div className="muted xs">{s.name}</div></div></div></td>
+                      <td><div className="ap-shoe"><ShoeThumb url={s.image} size={36} /><div><b>{s.sku}</b><div className="muted xs">{s.name}</div>
+                        {s.in_transit && (s.arrived_at
+                          ? <span className="ap-transit-chip arrived" title={`Received${s.arrived_batch ? ` in ${s.arrived_batch}` : ''} — the unsold listings were deleted`}>📦 Arrived {PH_DATE.format(new Date(s.arrived_at))}</span>
+                          : <span className="ap-transit-chip" title={s.transit_note || 'Listings come down when the warehouse receives this SKU + size'}>🚚 In transit{s.expected_on ? ` · exp ${String(s.expected_on).slice(5, 10).replace('-', '/')}` : ''}</span>)}
+                      </div></div></td>
                       <td>{s.size}</td>
                       <td className="num">{s.qty}</td><td className="num">{s.sold}</td><td className="num"><b>{left}</b></td>
                       {['alias', 'stockx'].map((p) => {

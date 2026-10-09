@@ -190,6 +190,12 @@ function ListNew({ onSignOut, onListed }) {
   const setLine = (key, k, v) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, [k]: v } : l)));
   const pairs = lines.reduce((n, l) => n + (Number(l.qty) || 0), 0);
   const listings = lines.reduce((n, l) => n + (Number(l.qty) || 0) * ((l.alias ? 1 : 0) + (l.stockx ? 1 : 0)), 0);
+  // Pairs first (owner, 2026-10-10: "292 listings" read like 292 shoes) — per platform it's
+  // one listing per pair, all drawing on the same stock.
+  const onAlias = lines.reduce((n, l) => n + (l.alias ? Number(l.qty) || 0 : 0), 0);
+  const onStockx = lines.reduce((n, l) => n + (l.stockx ? Number(l.qty) || 0 : 0), 0);
+  const platformsLabel = [onAlias && 'Alias', onStockx && 'StockX'].filter(Boolean).join(' + ');
+  const perPlatform = [onAlias && `Alias ${onAlias}`, onStockx && `StockX ${onStockx}`].filter(Boolean).join(' + ');
   const problem = lines.find((l) => !l.alias && !l.stockx) ? 'Every line needs Alias, StockX or both ticked.'
     : lines.find((l) => (l.alias && !(Number(l.aliasPrice) >= 1)) || (l.stockx && !(Number(l.stockxPrice) >= 1))) ? 'Every ticked platform needs a price.' : '';
 
@@ -452,8 +458,9 @@ function ListNew({ onSignOut, onListed }) {
                 <div className="oo-actions">
                   <button type="button" className="btn ghost" onClick={() => setLines([])} disabled={listing}>Clear</button>
                   <button type="button" className="btn primary" disabled={listing || !pairs || !!problem} onClick={() => setConfirm(true)}>
-                    Create {listings} listing{listings === 1 ? '' : 's'}
+                    List {pairs} pair{pairs === 1 ? '' : 's'}{platformsLabel ? ` on ${platformsLabel}` : ''}
                   </button>
+                  <span className="muted xs">{listings} listing{listings === 1 ? '' : 's'} — one per pair on each platform, sharing ONE stock: a sale on either takes one down on the other.</span>
                 </div>
                 {problem && <p className="muted sm">{problem}</p>}
               </>
@@ -463,8 +470,8 @@ function ListNew({ onSignOut, onListed }) {
       </div>
 
       {confirm && (
-        <Modal type="warn" title={`${pairs} pair${pairs === 1 ? '' : 's'} → ${listings} listing${listings === 1 ? '' : 's'}?`}
-          message={`${activate ? 'They go LIVE straight away — buyers can purchase them.' : 'They are created switched OFF — nobody can buy them until you switch them on.'} ${pairs} pair${pairs === 1 ? ' is' : 's are'} added to pre-sell stock.${inTransit ? ' 🚚 In transit: when the warehouse receives them, the unsold listings are deleted automatically.' : ''}`}
+        <Modal type="warn" title={`List ${pairs} pair${pairs === 1 ? '' : 's'}${platformsLabel ? ` on ${platformsLabel}` : ''}?`}
+          message={`${activate ? 'They go LIVE straight away — buyers can purchase them.' : 'They are created switched OFF — nobody can buy them until you switch them on.'} ${pairs} pair${pairs === 1 ? ' is' : 's are'} added to pre-sell stock${perPlatform ? ` — ${perPlatform}` : ''}. Both platforms share that one stock: when a pair sells on either, one listing comes down on the other.${inTransit ? ' 🚚 In transit: when the warehouse receives them, the unsold listings are deleted automatically.' : ''}`}
           onClose={() => !listing && setConfirm(false)}>
           <button type="button" className="btn ghost" onClick={() => setConfirm(false)} disabled={listing}>Cancel</button>
           <button type="button" className="btn primary" onClick={listAll} disabled={listing}>{listing ? (progress || 'Listing…') : activate ? 'List live' : 'Create switched off'}</button>

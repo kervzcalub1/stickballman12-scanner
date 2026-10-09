@@ -177,7 +177,7 @@ test('paste on the page: the cart fills, In transit ticks, and 290 listings go o
     await page.getByLabel(label).fill(v);
     await page.getByLabel(label).locator('xpath=following-sibling::button').click();
   }
-  await page.getByRole('button', { name: /Create 290 listings/ }).click();
+  await page.getByRole('button', { name: /List 145 pairs on Alias \+ StockX/ }).click();
   await page.getByRole('button', { name: 'List live' }).click();
   await expect(page.getByText('290 listings created')).toBeVisible();
   expect(calls.length).toBeGreaterThanOrEqual(3);
@@ -222,7 +222,7 @@ test('cost: preset + shelf price → landed cost and payout/profit per platform;
   await expect(page.locator('.ap-cost-out')).toContainText('$123.00');
   await expect(page.getByText('edited for this purchase')).toBeVisible();
   await page.getByLabel('Line 1 StockX price').fill('210');
-  await page.getByRole('button', { name: /Create 2 listings/ }).click();
+  await page.getByRole('button', { name: /List 1 pair on Alias \+ StockX/ }).click();
   await page.getByRole('button', { name: 'List live' }).click();
   await expect(page.getByText('2 listings created')).toBeVisible();
   expect(saved).toHaveLength(0);

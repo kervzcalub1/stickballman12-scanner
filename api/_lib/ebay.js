@@ -198,8 +198,17 @@ export function rowsFromItem(itemXml, styleOf) {
   const flat = String(itemXml).replace(/<Variations>[\s\S]*<\/Variations>/, '');
   const itemId = unesc(tag(flat, 'ItemID'));
   const title = unesc(tag(flat, 'Title') || '');
+  const pics = tag(flat, 'PictureDetails') || '';
+  // The listing's photo: the gallery thumbnail, else its first picture. Variation photos
+  // (by colour) are under <Variations><Pictures>; the first one fills in when neither exists.
+  const image = unesc(tag(pics, 'GalleryURL') || tags(pics, 'PictureURL')[0]
+    || tags(tag(itemXml, 'Pictures') || '', 'PictureURL')[0] || '') || null;
   const base = {
     item_id: itemId, title, style: styleOf(title) || null,
+    image_url: image ? image.replace(/^http:/, 'https:') : null,
+    item_sku: unesc(tag(flat, 'SKU') || '') || null,
+    watch_count: num(tag(flat, 'WatchCount')),
+    listing_type: tag(flat, 'ListingType') || null,
     currency: attr(flat, 'CurrentPrice', 'currencyID') || attr(flat, 'BuyItNowPrice', 'currencyID') || 'USD',
     start_time: tag(tag(flat, 'ListingDetails') || '', 'StartTime'),
     view_url: unesc(tag(tag(flat, 'ListingDetails') || '', 'ViewItemURL') || '') || null,
@@ -207,7 +216,7 @@ export function rowsFromItem(itemXml, styleOf) {
   if (!variations.length) {
     const ss = tag(flat, 'SellingStatus') || '';
     return [{
-      ...base, variation_key: '', sku: unesc(tag(flat, 'SKU') || '') || null, size: null,
+      ...base, variation_key: '', sku: base.item_sku, size: null,
       price: num(tag(ss, 'CurrentPrice') ?? tag(flat, 'BuyItNowPrice') ?? tag(flat, 'StartPrice')),
       qty_available: num(tag(flat, 'QuantityAvailable')) ?? ((num(tag(flat, 'Quantity')) ?? 0) - (num(tag(ss, 'QuantitySold')) ?? 0)),
       qty_sold: num(tag(ss, 'QuantitySold')) ?? 0,
@@ -249,12 +258,17 @@ export async function fetchActiveListings(styleOf, onPage = () => {}) {
 // How many Inventory-API items the account has — the tell for which listing model DPL
 // uses (Trading-made listings can't be revised through the Inventory API, and the other
 // way round). null = couldn't tell.
+// `{ count }`, or `{ count: null, error }` — the reason is kept on the pull so a blank
+// answer says WHY instead of looking like "no items".
 export async function inventoryItemCount() {
   try {
     const r = await fetch(`${HOST.api()}/sell/inventory/v1/inventory_item?limit=1`, {
-      headers: { Authorization: `Bearer ${await accessToken()}`, 'Content-Language': 'en-US' }, signal: AbortSignal.timeout(20_000),
+      headers: { Authorization: `Bearer ${await accessToken()}`, Accept: 'application/json', 'Accept-Language': 'en-US' },
+      signal: AbortSignal.timeout(20_000),
     });
     const j = await r.json().catch(() => ({}));
-    return r.ok ? Number(j.total ?? 0) : null;
-  } catch { return null; }
+    if (r.ok) return { count: Number(j.total ?? 0) };
+    const e = (j.errors || [])[0];
+    return { count: null, error: `HTTP ${r.status}${e ? ` ${e.errorId || ''}: ${e.longMessage || e.message || ''}` : ''}`.trim() };
+  } catch (e) { return { count: null, error: e.message }; }
 }

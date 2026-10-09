@@ -2180,6 +2180,12 @@ await sql(`
     PRIMARY KEY (item_id, variation_key)
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS ebay_listings_style_idx ON ebay_listings (upper(style), size)`);
+// The table view (2026-10-10): the listing's photo, its own Custom label (a multi-size
+// listing has one above its sizes' labels), and how many people watch it.
+await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS image_url TEXT`);
+await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS item_sku TEXT`);
+await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS watch_count INT`);
+await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS listing_type TEXT`);
 
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',

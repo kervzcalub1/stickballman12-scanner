@@ -63,5 +63,27 @@ PH team + admin can view and pull; only **admin / superadmin** can connect or di
   comparison is a later job against Shopify, not `items`.
 - The listing-model check keeps eBay's error (`inventoryError`) instead of a silent blank.
 
+## Not in Shopify → end them (2026-10-10, owner)
+DPL syncs Shopify → eBay by SKU (our system makes the SKU; DPL copies it to eBay's Custom
+label). An eBay size whose Custom label no Shopify variant has is **orphaned**: a sale there
+deducts nothing anywhere. Found on 10/9: 149 listings / 222 sizes / 279 pairs offered.
+- **Every pull checks it** (`api/_lib/ebay-orphans.js` `shopifyVerdicts`, after the eBay rows
+  are saved; a Shopify failure or truncated list skips the check, never fails the pull):
+  `ebay_listings.in_shopify`, `shopify_verdict` = deleted · size_removed · recreated_on_ebay
+  (same style + size under a NEW SKU that's also on eBay → the old listing is a duplicate) ·
+  recreated_not_synced (new SKU not on eBay) · no_style, and `shopify_new_sku`.
+- **Tab "Not in Shopify — end (N)"**: listings EVERY size of which is not in Shopify (ending a
+  listing ends all its sizes, so a listing with one size still in Shopify is never offered).
+  Cards sorted by pairs still offered; select → **End N on eBay** → confirm → ONE at a time.
+- **`POST /api/ebay/end`** (PH + admin, ≤ 10 ids, the page sends 1): refuses a listing not in
+  the last pull or with any size in_shopify ≠ false; **re-checks every SKU in Shopify LIVE**
+  (`shopifySkusPresent`, exact `sku:` search, one by one) and skips any that came back; then
+  Trading `EndItem` (EndingReason NotAvailable; eBay 1047 "already ended" = done), a row in
+  **`ebay_listing_ends`** (who, when, reason, eBay's error), and the listing leaves our copy.
+- **Scope**: `sell.inventory` (full) was added to SCOPES. A token approved read-only may be
+  refused by EndItem → the page says "Connect eBay again" (admin), then retry.
+- Tab **Ended**: the log.
+- Report scripts for the same check were run by hand on 10/9 (Desktop CSVs).
+
 ## Not built (next phases, see the plan)
 Price/qty updates, list, delist. Each needs the DPL decision first.

@@ -5903,3 +5903,21 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ap-bulkprice { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--border, rgba(255,255,255,0.08)); }
 .ap-bulkprice-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .ap-bulkprice .ap-edit-fields { display: flex; flex-direction: column; gap: 3px; }
+/* eBay Listings — Not in Shopify / Ended (phone-first) */
+.ebl-tabs.seg { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; max-width: 100%; }
+.ebl-tabs .seg-btn { flex: 1 1 auto; white-space: nowrap; }
+.ebl-endbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; position: sticky; top: 0; z-index: 2; background: var(--card, #1b1f27); padding: 6px 0; }
+.ebl-check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+.ebl-orphans { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ebl-orphan { display: grid; grid-template-columns: auto 56px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 10px; cursor: pointer; }
+.ebl-orphan.on { border-color: rgba(236,143,143,0.6); background: rgba(236,143,143,0.06); }
+.ebl-orphan input[type=checkbox] { width: 20px; height: 20px; }
+.ebl-orphan-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ebl-orphan-main .ebl-title { max-width: none; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ebl-orphan-units { display: flex; flex-direction: column; align-items: center; min-width: 44px; }
+.ebl-orphan-units b { font-size: 20px; }
+.ebl-note.ok { color: #5fc58a; }
+@media (max-width: 600px) {
+  .ebl-orphan { grid-template-columns: auto 44px minmax(0, 1fr) auto; gap: 8px; padding: 8px; }
+  .ebl-orphan .ebl-thumb { width: 44px; height: 44px; }
+}

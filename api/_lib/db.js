@@ -8789,7 +8789,8 @@ export async function saveEbayListings(rows, pulledAt) {
 export async function listEbayListings() {
   return await db()`
     SELECT e.item_id, e.variation_key, e.title, e.sku, e.item_sku, e.size, e.style, e.price, e.currency,
-           e.qty_available, e.qty_sold, e.watch_count, e.listing_type, e.image_url, e.start_time, e.view_url, e.pulled_at
+           e.qty_available, e.qty_sold, e.watch_count, e.listing_type, e.image_url, e.start_time, e.view_url, e.pulled_at,
+           e.in_shopify, e.shopify_verdict, e.shopify_new_sku
       FROM ebay_listings e
      ORDER BY e.title, e.item_id,
               CASE WHEN regexp_replace(coalesce(e.size, ''), '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
@@ -8812,4 +8813,29 @@ export async function presellAnnounceRows(stockIds, since) {
        AND l.status NOT IN ('failed', 'deleted')
      GROUP BY s.id, l.platform
      ORDER BY s.sku, s.size, l.platform`;
+}
+
+// The Shopify check on an eBay pull: [{ item_id, variation_key, in_shopify, verdict, new_sku }].
+export async function saveEbayShopifyVerdicts(rows) {
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = JSON.stringify(rows.slice(i, i + 500));
+    await db()`
+      UPDATE ebay_listings e SET in_shopify = x.in_shopify, shopify_verdict = x.verdict, shopify_new_sku = x.new_sku
+        FROM jsonb_to_recordset(${chunk}::jsonb) AS x(item_id text, variation_key text, in_shopify boolean, verdict text, new_sku text)
+       WHERE e.item_id = x.item_id AND e.variation_key = x.variation_key`;
+  }
+}
+export async function ebayListingRows(itemId) {
+  return await db()`SELECT * FROM ebay_listings WHERE item_id = ${String(itemId)}`;
+}
+export async function logEbayEnd({ itemId, title, skus, reason, ok, error, by }) {
+  await db()`INSERT INTO ebay_listing_ends (item_id, title, skus, reason, ok, error, ended_by)
+             VALUES (${itemId}, ${title || null}, ${skus || null}, ${reason || null}, ${ok}, ${error || null}, ${by || null})`;
+}
+// Ended on eBay: gone from our copy until a pull says otherwise.
+export async function dropEbayListing(itemId) {
+  await db()`DELETE FROM ebay_listings WHERE item_id = ${String(itemId)}`;
+}
+export async function recentEbayEnds(limit = 200) {
+  return await db()`SELECT * FROM ebay_listing_ends ORDER BY ended_at DESC LIMIT ${limit}`;
 }

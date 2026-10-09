@@ -8703,3 +8703,45 @@ export async function claimWaitlistReturns() {
   }
   return rows;
 }
+
+/* ------------------------------ eBay listings ------------------------------ */
+// docs/context/ebay-listings.md. A read-only copy of what's live on eBay, replaced on
+// every pull: rows the pull saw are upserted with its time, and rows it didn't see (the
+// listing or size ended) are deleted, so the table is always "eBay as of the last pull".
+export async function saveEbayListings(rows, pulledAt) {
+  const at = new Date(pulledAt).toISOString();
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = JSON.stringify(rows.slice(i, i + 500));
+    await db()`
+      INSERT INTO ebay_listings (item_id, variation_key, title, sku, size, style, price, currency, qty_available, qty_sold, start_time, view_url, pulled_at)
+      SELECT x.item_id, x.variation_key, x.title, x.sku, x.size, x.style, x.price, x.currency, x.qty_available, x.qty_sold, x.start_time, x.view_url, ${at}::timestamptz
+        FROM jsonb_to_recordset(${chunk}::jsonb) AS x(item_id text, variation_key text, title text, sku text, size text, style text,
+             price numeric, currency text, qty_available int, qty_sold int, start_time timestamptz, view_url text)
+      ON CONFLICT (item_id, variation_key) DO UPDATE SET
+        title = EXCLUDED.title, sku = EXCLUDED.sku, size = EXCLUDED.size, style = EXCLUDED.style, price = EXCLUDED.price,
+        currency = EXCLUDED.currency, qty_available = EXCLUDED.qty_available, qty_sold = EXCLUDED.qty_sold,
+        start_time = EXCLUDED.start_time, view_url = EXCLUDED.view_url, pulled_at = EXCLUDED.pulled_at`;
+  }
+  const gone = await db()`DELETE FROM ebay_listings WHERE pulled_at < ${at}::timestamptz RETURNING item_id`;
+  return { saved: rows.length, removed: gone.length };
+}
+
+// Every eBay listing size, with what WE hold of that style + size (on hand = not sold,
+// shipped, missing or issue). Sizes compare on their digits ("US 10.5" vs "10.5").
+export async function listEbayListings() {
+  return await db()`
+    WITH ours AS (
+      SELECT upper(sku) AS style, regexp_replace(coalesce(size, ''), '[^0-9.]', '', 'g') AS sz, count(*)::int AS on_hand
+        FROM items
+       WHERE status NOT IN ('sold', 'shipped', 'missing', 'issue') AND sku IS NOT NULL
+       GROUP BY 1, 2
+    )
+    SELECT e.item_id, e.variation_key, e.title, e.sku, e.size, e.style, e.price, e.currency,
+           e.qty_available, e.qty_sold, e.start_time, e.view_url, e.pulled_at,
+           o.on_hand
+      FROM ebay_listings e
+      LEFT JOIN ours o ON o.style = upper(e.style) AND o.sz = regexp_replace(coalesce(e.size, ''), '[^0-9.]', '', 'g')
+     ORDER BY e.title, e.item_id,
+              CASE WHEN regexp_replace(coalesce(e.size, ''), '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
+                   THEN regexp_replace(e.size, '[^0-9.]', '', 'g')::numeric END NULLS FIRST, e.variation_key`;
+}

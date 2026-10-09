@@ -221,6 +221,12 @@ const PATHS = {
     <circle cx="7.5" cy="8.5" r="1.3" />
     <path d="M14 10v6M11.5 13.5L14 16l2.5-2.5" />
   </>),
+  // eBay Listings — a list with an eye (read-only view of what's live)
+  'ebay-listings': (<>
+    <path d="M4 6h10M4 11h7M4 16h5" />
+    <path d="M12.5 16.5c1.6-2.3 3.2-3.5 5-3.5s3.4 1.2 5 3.5c-1.6 2.3-3.2 3.5-5 3.5s-3.4-1.2-5-3.5z" />
+    <circle cx="17.5" cy="16.5" r="1.4" />
+  </>),
   // SHEIN Reprice — a spreadsheet grid with a downward arrow (xlsx in, xlsx out; only cuts)
   'shein-reprice': (<>
     <rect x="3" y="4" width="12" height="16" rx="1.5" />

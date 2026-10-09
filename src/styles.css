@@ -5804,3 +5804,17 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); color: var(--text); cursor: pointer; }
 .mens-cand img { width: 44px; height: 32px; object-fit: contain; background: #fff; border-radius: 6px; }
 .mens-cand > span { display: flex; flex-direction: column; }
+
+/* eBay Listings (PH, read-only) — docs/context/ebay-listings.md */
+.ebl-account { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.ebl-ok { color: #5fc58a; font-weight: 600; }
+.ebl-pullbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.ebl-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ebl-filters .input { flex: 1 1 260px; min-width: 0; }
+.ebl-filters .seg { flex-wrap: wrap; }
+.ebl-title { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ebl-table td { vertical-align: top; }
+.ebl-note { font-size: 12px; white-space: nowrap; }
+.ebl-note.bad { color: #ec8f8f; }
+.ebl-note.warn { color: #e0b05f; }
+.ebl-note.muted { color: var(--muted, #9aa3b2); }

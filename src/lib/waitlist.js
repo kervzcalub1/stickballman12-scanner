@@ -58,6 +58,8 @@ const COLS = [
   ['SKU', 'text', (r) => r.sku],
   ['Name', 'text', (r) => r.name],
   ['Size', 'text', (r) => r.size],
+  // Where the pairs are now — a dated report also lists holds that have since ended.
+  ['State', 'text', (r) => r.state || 'On hold'],
   ['Qty', 'int', (r) => num(r.qty)],
   ['Cost ea', 'money', (r) => num(r.cost)],
   ['Global Indicator', 'money', (r) => num(r.global_indicator)],
@@ -69,7 +71,7 @@ const COLS = [
   ['Waitlisted on (EST)', 'text', (r) => (r.waitlisted_at ? estDate(r.waitlisted_at) : '')],
   ['Waitlisted by', 'text', (r) => r.waitlisted_by],
   ['Back on (EST)', 'text', (r) => (r.waitlist_until ? estDate(r.waitlist_until) : '')],
-  ['Days left', 'int', (r) => waitlistDaysLeft(r.waitlist_until)],
+  ['Days left', 'int', (r) => (r.state && r.state !== 'On hold' ? null : waitlistDaysLeft(r.waitlist_until))],
   ['Reason', 'text', (r) => r.note],
   ['Supplier', 'text', (r) => r.suppliers],
   ['Batch', 'text', (r) => r.batches],
@@ -86,4 +88,10 @@ export function waitlistXlsx(rows) {
   });
 }
 
-export const waitlistFileName = (day) => `waitlist-${day}.xlsx`;
+// `range` ({ from, to }, EST dates, either blank) names a dated report by what it covers.
+export function waitlistFileName(day, range = null) {
+  const { from, to } = range || {};
+  if (!from && !to) return `waitlist-${day}.xlsx`;
+  if (from && to && from === to) return `waitlist-held-${from}.xlsx`;
+  return `waitlist-held-${from || 'start'}_to_${to || day}.xlsx`;
+}

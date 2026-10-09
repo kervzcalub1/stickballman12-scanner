@@ -8606,9 +8606,19 @@ export async function releaseWaitlist({ vins, by }) {
 // read in ("how many of what, held since when, until when, and why"). The cached market
 // (platform_quotes, ≤12 h, never an upstream call) rides along so the review can see
 // whether the market has moved without anyone pricing it first.
-export async function listWaitlist() {
+//
+// With a date range (`from`/`to`, EST 'YYYY-MM-DD', either may be blank) it is instead
+// every pair WAITLISTED in that range — still held or not — with `state` saying where it
+// is now (On hold / Back on Pending / Sold), so "what did we park last week, and did it
+// come back" is answerable. No range = what's on hold right now (the daily report).
+export async function listWaitlist({ from = null, to = null } = {}) {
+  const ranged = !!(from || to);
   return await db()`
     SELECT upper(i.sku) AS sku, i.size, max(i.name) AS name,
+           CASE WHEN i.waitlist_until > now() THEN 'On hold'
+                WHEN i.status IN ('sold', 'shipped') THEN 'Sold'
+                WHEN i.status IN ('missing', 'issue') THEN initcap(i.status)
+                ELSE 'Back on Pending' END AS state,
            count(*)::int AS qty,
            round(avg(i.cost) FILTER (WHERE i.cost > 0), 2) AS cost,
            max(i.global_indicator) AS global_indicator, max(i.price) AS price,
@@ -8623,10 +8633,13 @@ export async function listWaitlist() {
       LEFT JOIN batches b ON b.id = i.batch_id
       LEFT JOIN platform_quotes q ON q.sku = upper(i.sku) AND q.size = i.size AND q.consigned
                                  AND q.fetched_at > now() - interval '12 hours'
-     WHERE i.waitlist_until > now()
-       AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue')
-     GROUP BY upper(i.sku), i.size
-     ORDER BY max(i.waitlist_until), upper(i.sku), i.size`;
+     WHERE (NOT ${ranged}::boolean AND i.waitlist_until > now()
+            AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue'))
+        OR (${ranged}::boolean AND i.waitlisted_at IS NOT NULL
+            AND (${from || null}::date IS NULL OR (i.waitlisted_at AT TIME ZONE 'America/New_York')::date >= ${from || null}::date)
+            AND (${to || null}::date   IS NULL OR (i.waitlisted_at AT TIME ZONE 'America/New_York')::date <= ${to || null}::date))
+     GROUP BY upper(i.sku), i.size, 4
+     ORDER BY max(i.waitlist_until), upper(i.sku), i.size, 4`;
 }
 
 // Pairs whose date has passed and whose "back from the waitlist" heads-up hasn't gone.

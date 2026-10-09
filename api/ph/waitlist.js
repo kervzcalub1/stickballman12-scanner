@@ -2,6 +2,7 @@
 //
 //   GET                       -> { ok, rows }      everything on hold, one row per SKU + size
 //   GET ?format=xlsx          -> .xlsx             the same, as the daily report file
+//   GET ?from=&to=            -> pairs WAITLISTED in that EST date range (held or since back)
 //   POST { action:'hold', vins, days, note? }  -> { ok, held, skipped, until }
 //   POST { action:'release', vins }            -> { ok, released }
 //
@@ -26,11 +27,14 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     try {
-      const rows = await listWaitlist();
-      if (new URL(req.url, 'http://x').searchParams.get('format') === 'xlsx') {
+      const qs = new URL(req.url, 'http://x').searchParams;
+      const day = (k) => (/^\d{4}-\d{2}-\d{2}$/.test(qs.get(k) || '') ? qs.get(k) : null);
+      const range = { from: day('from'), to: day('to') };
+      const rows = await listWaitlist(range);
+      if (qs.get('format') === 'xlsx') {
         res.statusCode = 200;
         res.setHeader('Content-Type', XLSX_MIME);
-        res.setHeader('Content-Disposition', `attachment; filename="${waitlistFileName(estToday())}"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${waitlistFileName(estToday(), range)}"`);
         return res.end(Buffer.from(waitlistXlsx(rows)));
       }
       return send(res, 200, { ok: true, rows });

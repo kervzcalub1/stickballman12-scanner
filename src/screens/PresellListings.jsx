@@ -199,40 +199,57 @@ function ListNew({ onSignOut, onListed }) {
   const problem = lines.find((l) => !l.alias && !l.stockx) ? 'Every line needs Alias, StockX or both ticked.'
     : lines.find((l) => (l.alias && !(Number(l.aliasPrice) >= 1)) || (l.stockx && !(Number(l.stockxPrice) >= 1))) ? 'Every ticked platform needs a price.' : '';
 
-  // The server takes at most MAX_PER_CALL listings a call (pairs × platforms), so a big cart —
-  // Alex's 145-pair shipment is 290 listings — goes in batches of whole lines, one after the
-  // other. A line is never split across calls: re-sending a line adds its pairs again.
-  const MAX_PER_CALL = 100;
+  // Each create call must finish inside Cloudflare's 100 s, or the browser gets a 524 while the
+  // server carries on (2026-10-10: one size of 18 pairs, 36 listings, took 90 s with StockX
+  // paced). So calls carry at most MAX_PER_CALL listings, and a big size is SPLIT across calls —
+  // safe, because each call ADDS its pairs to the stock row and lists exactly those.
+  // A call that times out (524/504) or fails on the server MAY have gone through, so it counts
+  // as sent: never re-sent from the cart (that would add the pairs twice). The rest stay.
+  const MAX_PER_CALL = 20;
   const [progress, setProgress] = useState('');
   async function listAll() {
     setListing(true); setError('');
     const todo = lines.filter((l) => !l.done);
-    const batches = [];
+    const pieces = [];
     for (const l of todo) {
-      const n = (Number(l.qty) || 1) * ((l.alias ? 1 : 0) + (l.stockx ? 1 : 0));
+      const plats = (l.alias ? 1 : 0) + (l.stockx ? 1 : 0) || 1;
+      const per = Math.max(1, Math.floor(MAX_PER_CALL / plats));
+      for (let left = Number(l.qty) || 1; left > 0; left -= per) pieces.push({ l, qty: Math.min(per, left), n: Math.min(per, left) * plats });
+    }
+    const batches = [];
+    for (const p of pieces) {
       const last = batches[batches.length - 1];
-      if (last && last.n + n <= MAX_PER_CALL) { last.lines.push(l); last.n += n; } else batches.push({ lines: [l], n });
+      if (last && last.n + p.n <= MAX_PER_CALL && !last.pieces.some((x) => x.l.key === p.l.key)) { last.pieces.push(p); last.n += p.n; } else batches.push({ pieces: [p], n: p.n });
     }
     const failed = {};
-    const sent = new Set();
+    const sentQty = {};
     const total = { created: 0, failed: 0 };
     const runStart = new Date().toISOString();
     const stockIds = new Set();
+    let unsure = false;
     try {
       for (const [i, b] of batches.entries()) {
         if (batches.length > 1) setProgress(`Batch ${i + 1} of ${batches.length} (${b.n} listings)…`);
         const preset = presets.find((x) => String(x.id) === String(presetId));
-        const r = await api.presellListingsCreate({
-          activate,
-          inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
-          costStack: stack ? { ...stack, preset: preset?.name || null, presetId: preset?.id || null, edited: stackEdited } : null,
-          items: b.lines.map((l) => ({
-            sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty: Number(l.qty) || 1,
-            shelfPrice: Number(l.shelfPrice) > 0 ? Number(l.shelfPrice) : null,
-            alias: l.alias ? { price: Number(l.aliasPrice) } : null, stockx: l.stockx ? { price: Number(l.stockxPrice) } : null,
-          })),
-        });
-        for (const l of b.lines) sent.add(l.key);
+        let r;
+        try {
+          r = await api.presellListingsCreate({
+            activate,
+            inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
+            costStack: stack ? { ...stack, preset: preset?.name || null, presetId: preset?.id || null, edited: stackEdited } : null,
+            items: b.pieces.map(({ l, qty }) => ({
+              sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty,
+              shelfPrice: Number(l.shelfPrice) > 0 ? Number(l.shelfPrice) : null,
+              alias: l.alias ? { price: Number(l.aliasPrice) } : null, stockx: l.stockx ? { price: Number(l.stockxPrice) } : null,
+            })),
+          });
+        } catch (err) {
+          // Timed out / failed on the server: it may have finished anyway — count it as sent.
+          if (err.unauthorized) throw err;
+          if (!err.status || err.status >= 500) { for (const { l, qty } of b.pieces) sentQty[l.key] = (sentQty[l.key] || 0) + qty; unsure = true; }
+          throw err;
+        }
+        for (const { l, qty } of b.pieces) sentQty[l.key] = (sentQty[l.key] || 0) + qty;
         for (const ln of r.lines || []) if (ln.stockId) stockIds.add(ln.stockId);
         total.created += r.created || 0; total.failed += r.failed || 0;
         // A line with failures stays (marked done), its pairs now in Stock — retried from the
@@ -245,11 +262,17 @@ function ListNew({ onSignOut, onListed }) {
       setResult(total);
     } catch (err) {
       if (err.unauthorized) return onSignOut();
-      setError(`${err.message}${sent.size ? ` — ${sent.size} line${sent.size === 1 ? ' was' : 's were'} already listed and left the cart; what's still here was NOT sent.` : ''}`);
+      setError(unsure
+        ? `The marketplaces were slow and the last batch didn't answer in time — it is most likely still finishing on the server. Don't list those again: in a minute, check the Stock tab and use “＋ Fill missing listings” for anything short. What's still in the cart below was NOT sent — List it when ready.`
+        : `${err.message}${Object.keys(sentQty).length ? ' — the lines already listed left the cart; what is still here was NOT sent.' : ''}`);
     } finally {
-      // Lines that went out leave the cart (or stay marked with their failure); unsent ones stay as they were.
-      setLines((ls) => ls.filter((l) => !sent.has(l.key) || failed[l.key])
-        .map((l) => (failed[l.key] ? { ...l, error: `${failed[l.key]} — the pairs are in Stock; retry with “List” there.`, done: true } : l)));
+      // Sent pairs leave the cart; a partly sent line keeps only what wasn't sent; failures stay marked.
+      setLines((ls) => ls.flatMap((l) => {
+        if (failed[l.key]) return [{ ...l, error: `${failed[l.key]} — the pairs are in Stock; retry with “List” there.`, done: true }];
+        const left = (Number(l.qty) || 0) - (sentQty[l.key] || 0);
+        if (!sentQty[l.key]) return [l];
+        return left > 0 ? [{ ...l, qty: String(left) }] : [];
+      }));
       setProgress(''); setListing(false); setConfirm(false);
       // ONE post to the pre-sell group for the whole run (Alex) — the server builds it from
       // what actually went through. Best effort: a Telegram hiccup never undoes a listing.

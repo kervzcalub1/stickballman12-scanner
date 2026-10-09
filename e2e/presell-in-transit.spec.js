@@ -378,3 +378,36 @@ test('✎ Edit prices: every open listing of a size, per platform, one at a time
   expect(calls.map((c) => [c.action, c.price])).toEqual([['update', 240], ['update', 240], ['update', 240], ['update', 250], ['update', 250]]);
   expect(maxInFlight).toBe(1);
 });
+
+test('a 524 mid-run: the timed-out batch counts as sent (never re-sent), unsent lines stay with the right pairs', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const calls = [];
+  await page.route('**/api/sku-search**', (r) => r.fulfill({ json: { ok: true, product: null } }));
+  await page.route('**/api/presell-listings/prices', (r) => r.fulfill({ json: { ok: true, prices: {} } }));
+  await page.route('**/api/presell-listings/announce', (r) => r.fulfill({ json: { ok: true } }));
+  await page.route('**/api/presell-listings/create', async (r) => {
+    const body = r.request().postDataJSON(); calls.push(body);
+    if (calls.length === 2) return r.fulfill({ status: 524, contentType: 'text/html', body: '<html>A timeout occurred</html>' });
+    await r.fulfill({ json: { ok: true, created: body.items.reduce((n, i) => n + i.qty * 2, 0), failed: 0,
+      lines: body.items.map((i, k) => ({ sku: i.sku, size: i.size, stockId: 100 + k, alias: { results: [] }, stockx: { results: [] } })) } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/presell-listings');
+  await page.getByRole('button', { name: '📋 Paste message' }).click();
+  await page.getByLabel('Paste the message').fill('IQ5495-005\n8 x 18\n8.5 x 19\n9 x 4');
+  await page.getByRole('button', { name: 'Add 41 pairs to the list' }).click();
+  for (const [label, v] of [['Alias price for every pair', '250'], ['StockX price for every pair', '260']]) {
+    await page.getByLabel(label).fill(v);
+    await page.getByLabel(label).locator('xpath=following-sibling::button').click();
+  }
+  await page.getByRole('button', { name: /List 41 pairs on Alias \+ StockX/ }).click();
+  await page.getByRole('button', { name: 'List live' }).click();
+  await expect(page.locator('.error')).toContainText("Don't list those again");
+  // ≤ 20 listings a call (10 pairs on two platforms); stopped at the 524 (call 2).
+  expect(calls).toHaveLength(2);
+  for (const c of calls) expect(c.items.reduce((n, i) => n + i.qty * 2, 0)).toBeLessThanOrEqual(20);
+  // Calls 1–2 carried size 8: 10 + 8 = 18 → all of it counts as sent; 8.5 and 9 untouched.
+  const cart = await page.locator('.ap-cart-line').allInnerTexts();
+  expect(cart.map((t) => t.match(/size (\S+)/)?.[1])).toEqual(['8.5', '9']);
+  await expect(page.getByLabel('Line 1 quantity')).toHaveValue('19');
+});

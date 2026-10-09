@@ -2202,6 +2202,27 @@ await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS image_url TEXT`);
 await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS item_sku TEXT`);
 await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS watch_count INT`);
 await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS listing_type TEXT`);
+// Is this size's Custom label (SKU) a Shopify variant? (2026-10-10, owner.) DPL syncs Shopify →
+// eBay by SKU, so an eBay size whose SKU is gone from Shopify is ORPHANED: a sale there
+// deducts nothing anywhere — an oversell waiting to happen. Checked on every pull.
+//   shopify_verdict: deleted | size_removed | recreated_on_ebay | recreated_not_synced | no_style
+//   shopify_new_sku: the Shopify SKU(s) now used for the same style + size, when re-created
+await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS in_shopify BOOLEAN`);
+await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS shopify_verdict TEXT`);
+await sql(`ALTER TABLE ebay_listings ADD COLUMN IF NOT EXISTS shopify_new_sku TEXT`);
+// Every eBay listing ENDED from this app — who, when, why, and what eBay said.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_listing_ends (
+    id         BIGSERIAL PRIMARY KEY,
+    item_id    TEXT NOT NULL,
+    title      TEXT,
+    skus       TEXT,
+    reason     TEXT,
+    ok         BOOLEAN NOT NULL,
+    error      TEXT,
+    ended_by   TEXT,
+    ended_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
 
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
@@ -2215,7 +2236,7 @@ const LIVE_TABLES = [
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales',
-  'ebay_listings',
+  'ebay_listings', 'ebay_listing_ends',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

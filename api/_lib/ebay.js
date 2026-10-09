@@ -29,12 +29,13 @@ const clientId = () => String(process.env.EBAY_CLIENT_ID || '').trim();
 const clientSecret = () => String(process.env.EBAY_CLIENT_SECRET || '').trim();
 const ruName = () => String(process.env.EBAY_RUNAME || '').trim();
 
-// Read-only scopes. Listing/pricing later needs `sell.inventory` (full) — the owner
-// approves once more then; asking for write access before we write anything would be a
-// promise we haven't earned.
+// Scopes asked for at Connect. Read-only at first; `sell.inventory` (full) added 2026-10-10
+// when ending orphaned listings became the first write. A token approved before that still
+// works for reading — ending tells the admin to Connect again if eBay refuses it.
 export const SCOPES = [
   'https://api.ebay.com/oauth/api_scope',
   'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly',
+  'https://api.ebay.com/oauth/api_scope/sell.inventory',
   'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
 ];
 
@@ -271,4 +272,19 @@ export async function inventoryItemCount() {
     const e = (j.errors || [])[0];
     return { count: null, error: `HTTP ${r.status}${e ? ` ${e.errorId || ''}: ${e.longMessage || e.message || ''}` : ''}`.trim() };
   } catch (e) { return { count: null, error: e.message }; }
+}
+
+// END a listing on eBay (Trading EndItem) — the whole listing, every size. `reason` is eBay's
+// EndingReason. "Already ended" (eBay 1047) counts as done. Auth / scope refusals come back
+// flagged so the page can say "Connect eBay again".
+export async function endEbayItem(itemId, reason = 'NotAvailable') {
+  try {
+    await trading('EndItem', `<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID><EndingReason>${reason}</EndingReason>`);
+    return { ok: true };
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (/1047|already (been )?(closed|ended)/i.test(msg)) return { ok: true, already: true };
+    const auth = /auth|token|scope|permission|insufficient/i.test(msg);
+    return { ok: false, error: msg, auth };
+  }
 }

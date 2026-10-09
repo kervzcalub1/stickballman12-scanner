@@ -6,6 +6,9 @@ import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, setSetting, getSetting, saveEbayListings, listEbayListings } from '../_lib/db.js';
 import { ebayConfigured, fetchActiveListings, inventoryItemCount, accessToken, PULL_KEY } from '../_lib/ebay.js';
 import { styleFromTitle } from '../../src/lib/ebayReprice.js';
+import { saveEbayShopifyVerdicts, listEbayListings as _rows } from '../_lib/db.js';
+import { shopifyAllVariants, shopifyConfigured } from '../_lib/shopify.js';
+import { shopifyVerdicts } from '../_lib/ebay-orphans.js';
 
 const STALE_MS = 15 * 60 * 1000;   // a "running" pull older than this died with the process
 
@@ -20,8 +23,21 @@ async function run(by) {
     );
     const inv = await inventoryItemCount();
     const { removed } = await saveEbayListings(rows, startedAt);
+    // Which sizes' Custom labels Shopify still has (ebay-orphans.js). A Shopify hiccup never
+    // fails the pull — the check just isn't there this time.
+    let orphans = null; let shopifyError = null;
+    if (shopifyConfigured()) {
+      await put({ state: 'running', page: 'shopify', pages: null, listings });
+      const sh = await shopifyAllVariants();
+      if (sh.error || sh.truncated) shopifyError = sh.error || 'Shopify list came back incomplete';
+      else {
+        const v = shopifyVerdicts(await _rows(), sh.variants);
+        await saveEbayShopifyVerdicts(v);
+        orphans = v.filter((x) => !x.in_shopify).length;
+      }
+    }
     await put({ state: 'done', finishedAt: new Date().toISOString(), listings, rows: rows.length, removed,
-      inventoryItems: inv.count, inventoryError: inv.error || null,
+      inventoryItems: inv.count, inventoryError: inv.error || null, orphans, shopifyError,
       noStyle: rows.filter((r) => !r.style).length, noSize: rows.filter((r) => !r.size).length });
   } catch (e) {
     console.error('[ebay/pull]', e.message);

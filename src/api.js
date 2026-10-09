@@ -303,6 +303,8 @@ export const api = {
   ebayDisconnect: () => post('/api/ebay/connect', { disconnect: true }),
   ebayPull: () => post('/api/ebay/pull', {}),
   ebayListings: () => get('/api/ebay/pull'),
+  ebayEnd: (itemIds) => post('/api/ebay/end', { itemIds }),
+  ebayEnds: () => get('/api/ebay/end'),
   presellListingsList: (params = {}) => get(`/api/presell-listings/list?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString()}`),
   presellListingsAction: (body) => post('/api/presell-listings/action', body),
   presellListingsPrices: (body) => post('/api/presell-listings/prices', body),

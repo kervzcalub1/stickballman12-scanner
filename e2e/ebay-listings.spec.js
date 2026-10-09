@@ -82,7 +82,7 @@ test.describe('eBay Listings page', () => {
     await page.getByRole('button', { name: /Out of stock on eBay/ }).click();
     await expect(listingRows).toHaveCount(1);
     await expect(listingRows.first()).toContainText('Mystery Shoe');
-    await page.getByRole('button', { name: /^All/ }).click();
+    await page.getByRole('button', { name: 'All', exact: true }).click();
     await page.getByLabel('Search eBay listings').fill('10077482');   // a size's SKU finds its listing
     await expect(listingRows).toHaveCount(1);
   });
@@ -94,5 +94,66 @@ test.describe('eBay Listings page', () => {
     await page.goto('/ph/ebay-listings');
     await expect(page.getByText('an admin connects the eBay account once')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Connect eBay' })).toHaveCount(0);
+  });
+});
+
+test.describe('eBay listings not in Shopify', () => {
+  test('verdict per size: in Shopify, deleted, size removed, re-created (synced or not), no style', async () => {
+    const { shopifyVerdicts } = await import('../api/_lib/ebay-orphans.js');
+    const variants = [
+      { sku: '100', style: 'DD1391-100', size: '10' },
+      { sku: '200', style: 'FV5029-141', size: '9' },          // FV5029-141 size 9 re-created as 200, which IS on eBay
+      { sku: '300', style: 'HM6469-301', size: '8' },          // HM6469-301 size 8 re-created as 300, NOT on eBay
+      { sku: '400', style: 'KI6956', size: '7' },              // KI6956 exists, but only size 7
+    ];
+    const ebay = [
+      { item_id: 'a', variation_key: '1', sku: '100', title: 'Dunk (DD1391-100)', size: '10' },
+      { item_id: 'b', variation_key: '1', sku: '199', title: 'Jordan 4 (FV5029-141)', size: '9' },
+      { item_id: 'b2', variation_key: '1', sku: '200', title: 'Jordan 4 (FV5029-141)', size: '9' },
+      { item_id: 'c', variation_key: '1', sku: '299', title: 'Kobe 8 (HM6469-301)', size: '8' },
+      { item_id: 'd', variation_key: '1', sku: '399', title: 'Samba (KI6956)', size: '9' },
+      { item_id: 'e', variation_key: '1', sku: '499', title: 'Gone Shoe (ZZ9999-001)', size: '9' },
+      { item_id: 'f', variation_key: '1', sku: '599', title: 'Mystery Shoe', size: '9' },
+    ];
+    const v = Object.fromEntries(shopifyVerdicts(ebay, variants).map((x) => [x.item_id, [x.in_shopify, x.verdict, x.new_sku]]));
+    expect(v).toEqual({
+      a: [true, null, null], b2: [true, null, null],
+      b: [false, 'recreated_on_ebay', '200'],
+      c: [false, 'recreated_not_synced', '300'],
+      d: [false, 'size_removed', null],
+      e: [false, 'deleted', null],
+      f: [false, 'no_style', null],
+    });
+  });
+
+  test('the "Not in Shopify — end" tab: only listings with EVERY size gone; ends one at a time after confirm', async ({ page }) => {
+    const STATUS = { ok: true, configured: true, missing: [], secrets: true, connected: true, user: 'stickballman12', pull: { state: 'done', listings: 3, rows: 4, orphans: 3 } };
+    const r = (item, vk, sku, inShop, verdict, avail) => ({ item_id: item, variation_key: vk, title: `Shoe ${item}`, sku, size: '9', price: '100', qty_available: avail, qty_sold: 0, in_shopify: inShop, shopify_verdict: verdict, image_url: null });
+    const ROWS = [r('111', 'a', '199', false, 'deleted', 2), r('222', 'a', '299', false, 'recreated_not_synced', 1),
+      r('333', 'a', '100', true, null, 1), r('333', 'b', '101', false, 'size_removed', 1)];   // 333: one size still in Shopify → never offered
+    const ends = []; let inFlight = 0; let maxInFlight = 0;
+    await page.route('**/api/ebay/status', (x) => x.fulfill({ json: STATUS }));
+    await page.route('**/api/ebay/pull', (x) => x.fulfill({ json: { ok: true, rows: ROWS } }));
+    await page.route('**/api/ebay/end', async (x) => {
+      if (x.request().method() === 'GET') return x.fulfill({ json: { ok: true, ends: [] } });
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      const b = x.request().postDataJSON(); ends.push(b.itemIds);
+      await new Promise((res) => setTimeout(res, 100)); inFlight--;
+      return x.fulfill({ json: { ok: true, results: b.itemIds.map((itemId) => ({ itemId, ok: true })) } });
+    });
+    await loginAs(page, 'ph_team');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/ph/ebay-listings?tab=orphans');
+    await expect(page.locator('.ebl-orphan')).toHaveCount(2);
+    await expect(page.locator('.ebl-orphans')).not.toContainText('Shoe 333');
+    await expect(page.locator('.ebl-orphan').first()).toContainText('Product deleted in Shopify');
+    await page.getByLabel('Select all').check();
+    await page.getByRole('button', { name: 'End 2 on eBay' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'End 2 on eBay' }).click();
+    await expect(page.getByText('Ended 2 of 2.')).toBeVisible();
+    expect(ends).toEqual([['111'], ['222']]);
+    expect(maxInFlight).toBe(1);
+    const wide = await page.evaluate(() => [...document.querySelectorAll('body *')].filter((el) => el.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 6).map((el) => `${el.tagName}.${el.className} ${Math.round(el.getBoundingClientRect().right)}`));
+    expect(wide).toEqual([]);
   });
 });

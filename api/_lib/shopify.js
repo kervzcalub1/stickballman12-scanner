@@ -449,6 +449,20 @@ export async function shopifyAllVariants() {
   return { variants: out, truncated: true };
 }
 
+// Which of these SKUs a Shopify variant has RIGHT NOW — asked one SKU at a time (exact
+// match), so the answer is Shopify's own, not a cached list's. Ending an eBay listing as
+// "not in Shopify" re-checks here first (api/ebay/end.js).
+export async function shopifySkusPresent(skus) {
+  if (!shopifyConfigured()) throw new Error('Shopify is not configured on the server.');
+  const found = new Set();
+  for (const sku of [...new Set((skus || []).map((s) => String(s || '').trim()).filter(Boolean))]) {
+    const r = await gql(`query($q:String!){ productVariants(first:5, query:$q){ edges{ node{ sku } } } }`, { q: `sku:${JSON.stringify(sku)}` });
+    if (!r.ok) throw new Error(failure(r, 'read')?.error || 'Shopify could not be read.');
+    if ((r.data?.productVariants?.edges || []).some((x) => String(x.node?.sku || '').trim().toUpperCase() === sku.toUpperCase())) found.add(sku.toUpperCase());
+  }
+  return found;
+}
+
 // What Shopify holds RIGHT NOW — read just before writing, so a field someone changed
 // after the pull is never overwritten blind.
 export async function shopifyListingState(variantIds, productIds) {

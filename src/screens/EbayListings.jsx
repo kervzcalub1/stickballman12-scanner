@@ -1,8 +1,8 @@
 // eBay Listings (PH) — a READ-ONLY view of everything live on eBay, next to what we hold
 // (docs/context/ebay-listings.md). Phase 1 of the listings hub (docs/listings-hub-plan.md):
 // connect the account once, pull, look. Nothing on this page changes eBay.
-import React, { useEffect, useMemo, useState } from 'react';
-import { TopBar } from '../components/common.jsx';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { TopBar, Modal } from '../components/common.jsx';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -14,6 +14,15 @@ const SHOW = 100;   // listings shown before "Show all"
 
 // One listing (the eBay item) with its sizes under it. Price shown as a range when sizes
 // differ; quantities summed.
+// Why a listing is not in Shopify (api/_lib/ebay-orphans.js) — the short words for a card.
+const VERDICT = {
+  deleted: ['Product deleted in Shopify', 'bad'],
+  size_removed: ['Size removed in Shopify', 'bad'],
+  recreated_on_ebay: ['Re-created in Shopify — new one is on eBay too (duplicate)', 'warn'],
+  recreated_not_synced: ['Re-created in Shopify — new one NOT on eBay yet', 'warn'],
+  no_style: ['Not in Shopify (no style code in the title)', 'muted'],
+};
+
 function groupListings(rows) {
   const by = new Map();
   for (const r of rows) {
@@ -50,6 +59,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
   const [notice, setNotice] = useState('');
   const [q, setQ] = useQueryParam('q', '');
   const [view, setView] = useQueryParam('view', 'all');   // all | out | nostyle
+  const [tab, setTab] = useQueryParam('tab', 'all');      // all | orphans | ended
   const [more, setMore] = useState(false);
 
   async function load() {
@@ -92,6 +102,8 @@ export function EbayListings({ user, onHome, onSignOut }) {
   }
 
   const listings = useMemo(() => groupListings(rows || []), [rows]);
+  // Listings EVERY size of which is gone from Shopify — the ones that can be ended whole.
+  const orphanListings = useMemo(() => listings.filter((g) => g.sizes.every((s) => s.in_shopify === false)), [listings]);
   const counts = useMemo(() => ({
     all: listings.length,
     out: listings.filter((g) => g.available === 0).length,
@@ -117,7 +129,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
 
       <div className="card">
         <h3 className="er-step-title">eBay account</h3>
-        <p className="muted sm">Read-only: this page pulls what’s live on eBay — photos, sizes, Custom labels, prices and quantities. It never changes a price, quantity or listing — DPL (Shopify → eBay) still does that.</p>
+        <p className="muted sm">Pulls what’s live on eBay — photos, sizes, Custom labels, prices and quantities — and checks each Custom label against Shopify. It never changes a price or quantity (DPL, Shopify → eBay, still does); the one thing it can do is end listings that are no longer in Shopify.</p>
         {!st ? <p className="muted">Loading…</p> : !st.configured ? (
           <p className="sm">eBay isn’t set up on this server yet{isAdmin && st.missing?.length ? <> — missing <b>{st.missing.join(', ')}</b> on Railway</> : ''}.</p>
         ) : st.connected ? (
@@ -139,9 +151,9 @@ export function EbayListings({ user, onHome, onSignOut }) {
         <div className="card">
           <div className="ebl-pullbar">
             <button type="button" className="btn primary" disabled={!!busy || running} onClick={pull}>
-              {running ? `Pulling… page ${pullState.page || 0}${pullState.pages ? ` of ${pullState.pages}` : ''}` : busy === 'pull' ? 'Starting…' : '↻ Pull listings from eBay'}</button>
+              {running ? (pullState.page === 'shopify' ? 'Checking against Shopify…' : `Pulling… page ${pullState.page || 0}${pullState.pages ? ` of ${pullState.pages}` : ''}`) : busy === 'pull' ? 'Starting…' : '↻ Pull listings from eBay'}</button>
             {pullState?.state === 'done' && (
-              <span className="muted sm">Last pulled {when(pullState.finishedAt)}{pullState.by ? ` by ${pullState.by}` : ''} — {fmt(pullState.listings)} listings, {fmt(pullState.rows)} sizes{pullState.removed ? `, ${fmt(pullState.removed)} ended since the pull before` : ''}.</span>
+              <span className="muted sm">Last pulled {when(pullState.finishedAt)}{pullState.by ? ` by ${pullState.by}` : ''} — {fmt(pullState.listings)} listings, {fmt(pullState.rows)} sizes{pullState.removed ? `, ${fmt(pullState.removed)} ended since the pull before` : ''}.{pullState.orphans != null ? ` Shopify check: ${fmt(pullState.orphans)} size${pullState.orphans === 1 ? '' : 's'} not in Shopify.` : pullState.shopifyError ? ` Shopify check skipped: ${pullState.shopifyError}` : ''}</span>
             )}
             {pullState?.state === 'failed' && <span className="error xs">Last pull failed {when(pullState.finishedAt)}: {pullState.error}</span>}
           </div>
@@ -159,6 +171,16 @@ export function EbayListings({ user, onHome, onSignOut }) {
       )}
 
       {rows && rows.length > 0 && (
+        <div className="ebl-tabs seg">
+          <button type="button" className={`seg-btn${tab === 'all' ? ' on' : ''}`} onClick={() => setTab('all')}>All listings <span className="seg-n">{fmt(listings.length)}</span></button>
+          <button type="button" className={`seg-btn${tab === 'orphans' ? ' on' : ''}`} onClick={() => setTab('orphans')}>Not in Shopify — end <span className="seg-n">{fmt(orphanListings.length)}</span></button>
+          <button type="button" className={`seg-btn${tab === 'ended' ? ' on' : ''}`} onClick={() => setTab('ended')}>Ended</button>
+        </div>
+      )}
+      {tab === 'orphans' && rows && <OrphansTab orphans={orphanListings} checked={rows.some((r) => r.in_shopify != null)} isAdmin={isAdmin}
+        onSignOut={onSignOut} onEnded={load} onConnect={connect} />}
+      {tab === 'ended' && <EndedTab onSignOut={onSignOut} />}
+      {tab === 'all' && rows && rows.length > 0 && (
         <div className="card">
           <div className="ebl-filters">
             <input type="search" className="input" value={q} onChange={(e) => { setQ(e.target.value); setMore(false); }}
@@ -222,6 +244,122 @@ export function EbayListings({ user, onHome, onSignOut }) {
         </div>
       )}
       {rows && !rows.length && st?.connected && pullState?.state !== 'running' && <p className="muted mt">No listings yet — press Pull listings from eBay.</p>}
+    </div>
+  );
+}
+
+// ── Not in Shopify — end ────────────────────────────────────────────────────────────────
+// Listings whose every size's Custom label is gone from Shopify (checked on each pull). A
+// sale there deducts nothing anywhere, so they're ended here — one at a time, each re-checked
+// in Shopify live by the server first (api/ebay/end.js). Phone-first cards.
+function OrphansTab({ orphans, checked, isAdmin, onSignOut, onEnded, onConnect }) {
+  const [sel, setSel] = useState(() => new Set());
+  const [confirm, setConfirm] = useState(false);
+  const [run, setRun] = useState(null);   // { done, total, ended, skipped:[], failed:[], running, reconnect }
+  const stop = useRef(false);
+  const sorted = useMemo(() => [...orphans].sort((a, b) => b.available - a.available || String(a.title).localeCompare(String(b.title))), [orphans]);
+  const units = (list) => list.reduce((n, g) => n + g.available, 0);
+  const picked = sorted.filter((g) => sel.has(g.item_id));
+  const toggle = (id) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  async function go() {
+    setConfirm(false);
+    stop.current = false;
+    const st = { done: 0, total: picked.length, ended: 0, skipped: [], failed: [], running: true, reconnect: false };
+    setRun({ ...st });
+    for (const g of picked) {
+      if (stop.current) break;
+      try {
+        const r = await api.ebayEnd([g.item_id]);
+        const x = (r.results || [])[0] || {};
+        if (x.ok) st.ended++;
+        else if (x.skipped) st.skipped.push(`${g.title}: ${x.error}`);
+        else st.failed.push(`${g.title}: ${x.error}`);
+        if (r.needsReconnect) { st.reconnect = true; st.done++; break; }
+      } catch (e) {
+        if (e.unauthorized) return onSignOut();
+        st.failed.push(`${g.title}: ${e.message}`);
+      }
+      st.done++;
+      setRun({ ...st });
+    }
+    setRun({ ...st, running: false });
+    setSel(new Set());
+    onEnded();
+  }
+  if (!checked) return <div className="card"><p className="sm">Not checked against Shopify yet — press <b>Pull listings from eBay</b>; every pull now checks each Custom label against Shopify.</p></div>;
+  return (
+    <div className="card">
+      <p className="sm">These eBay listings’ Custom labels (SKUs) are <b>no longer in Shopify</b>, so a sale on eBay deducts nothing — <b>{fmt(units(sorted))} pairs</b> are still offered across {fmt(sorted.length)} listings. Ending one ends every size of it on eBay. Each is re-checked in Shopify right before it’s ended.</p>
+      {sorted.length > 0 && (
+        <div className="ebl-endbar">
+          <label className="ebl-check"><input type="checkbox" checked={picked.length === sorted.length && sorted.length > 0}
+            onChange={(e) => setSel(e.target.checked ? new Set(sorted.map((g) => g.item_id)) : new Set())} /> Select all</label>
+          {run?.running
+            ? <button type="button" className="btn" onClick={() => { stop.current = true; }}>Stop · {run.done}/{run.total}</button>
+            : <button type="button" className="btn danger" disabled={!picked.length} onClick={() => setConfirm(true)}>End {picked.length || ''} on eBay</button>}
+        </div>
+      )}
+      {run && !run.running && (
+        <div className={run.failed.length || run.reconnect ? 'error mt' : 'notice mt'}>
+          Ended {run.ended} of {run.total}{run.skipped.length ? ` · ${run.skipped.length} skipped` : ''}{run.failed.length ? ` · ${run.failed.length} failed` : ''}.
+          {run.reconnect && <> eBay refused to end listings with the current approval — {isAdmin ? <button type="button" className="btn sm" onClick={onConnect}>Connect eBay again</button> : 'an admin presses Connect eBay again'} (it now asks for permission to end listings), then retry.</>}
+          {[...run.skipped, ...run.failed].slice(0, 8).map((m) => <div key={m} className="xs">{m}</div>)}
+        </div>
+      )}
+      {!sorted.length ? <p className="muted mt">Nothing to end — every eBay listing’s SKU is in Shopify.</p> : (
+        <div className="ebl-orphans">
+          {sorted.map((g) => {
+            const verdicts = [...new Set(g.sizes.map((s) => s.shopify_verdict))];
+            const newSkus = [...new Set(g.sizes.map((s) => s.shopify_new_sku).filter(Boolean))];
+            return (
+              <label key={g.item_id} className={`ebl-orphan${sel.has(g.item_id) ? ' on' : ''}`}>
+                <input type="checkbox" checked={sel.has(g.item_id)} disabled={!!run?.running} onChange={() => toggle(g.item_id)} aria-label={`End ${g.title}`} />
+                <Thumb src={g.image_url} alt={g.title} />
+                <span className="ebl-orphan-main">
+                  <span className="ebl-title">{g.title}</span>
+                  <span className="muted xs">#{g.view_url ? <a className="ebl-link" href={g.view_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{g.item_id} ↗</a> : g.item_id}
+                    {' · '}{g.sizes.length} size{g.sizes.length === 1 ? '' : 's'} · SKU {g.sizes.map((s) => s.sku).filter(Boolean).join(', ') || '—'}</span>
+                  {verdicts.map((v) => <span key={v} className={`ebl-note ${VERDICT[v]?.[1] || 'muted'}`}>{VERDICT[v]?.[0] || 'Not in Shopify'}</span>)}
+                  {newSkus.length > 0 && <span className="muted xs">New Shopify SKU: {newSkus.join(', ')}</span>}
+                </span>
+                <span className="ebl-orphan-units"><b>{g.available}</b><span className="muted xs">on eBay</span></span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {confirm && (
+        <Modal type="warn" title={`End ${picked.length} listing${picked.length === 1 ? '' : 's'} on eBay?`}
+          message={`${fmt(units(picked))} pair${units(picked) === 1 ? '' : 's'} stop being offered. Every size of each listing ends. Each one's SKUs are re-checked in Shopify first — any that came back are skipped. This can't be undone from here (relist from Shopify / DPL).`}
+          onClose={() => setConfirm(false)}>
+          <button type="button" className="btn ghost" onClick={() => setConfirm(false)}>Cancel</button>
+          <button type="button" className="btn danger" onClick={go}>End {picked.length} on eBay</button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function EndedTab({ onSignOut }) {
+  const [ends, setEnds] = useState(null);
+  useEffect(() => { api.ebayEnds().then((r) => setEnds(r.ends || [])).catch((e) => { if (e.unauthorized) onSignOut(); else setEnds([]); }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="card">
+      {!ends ? <p className="muted">Loading…</p> : !ends.length ? <p className="muted">Nothing ended from here yet.</p> : (
+        <div className="ebl-orphans">
+          {ends.map((e) => (
+            <div key={e.id} className="ebl-orphan">
+              <span className={`ebl-note ${e.ok ? 'ok' : 'bad'}`}>{e.ok ? 'Ended' : 'Failed'}</span>
+              <span className="ebl-orphan-main">
+                <span className="ebl-title">{e.title || `#${e.item_id}`}</span>
+                <span className="muted xs">#{e.item_id} · {when(e.ended_at)}{e.ended_by ? ` · ${e.ended_by}` : ''}</span>
+                <span className="muted xs">{e.reason}{e.skus ? ` · SKU ${e.skus}` : ''}</span>
+                {e.error && <span className="error xs">{e.error}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -298,6 +298,15 @@ function parseStoreLocation(lines, store) {
     if (m) { loc.store_number = m[1]; break; }
   }
   if (!loc.store_number) loc.store_number = labelledValue(lines, /^store\s*(?:#|no\.?|number)?\s*:?\s*$/i, /^([A-Za-z0-9-]{3,12})$/);
+
+  // An ONLINE order has no store of purchase — the only address in it is the BUYER's shipping or
+  // billing address, which must never be filed as "where the buy was made". An in-store slip always
+  // identifies its store (a store number, or a Register line); an online confirmation never does.
+  const hay = lines.join('\n');
+  const inStore = loc.store_number !== null || /\bregister\s*[:#]/i.test(hay);
+  if (!inStore && /shipping to|shipping address|billing address|deliver(?:y|ed) to/i.test(hay)) {
+    return { name: null, store_number: null, address: null, city: null, state: null, zip: null };
+  }
   // the address block sits in the first ~40 lines; take the FIRST city/state/zip line there
   let ci = -1;
   for (let i = 0; i < Math.min(lines.length, 40); i++) {

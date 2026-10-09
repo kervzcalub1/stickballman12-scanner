@@ -147,33 +147,48 @@ export async function reconcileStock(stockId, actor = 'system') {
 /* -------------------------------- a sale --------------------------------- */
 const money = (cents) => (cents == null ? '—' : `$${(Number(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`);
 
-export async function handleSale({ listing, platform, orderId, priceCents, payoutCents, soldAt, raw }) {
+export async function handleSale({ listing, platform, orderId, priceCents, payoutCents, soldAt, raw }, { notify = sendPresellSale } = {}) {
   const saleId = await recordPresellSale({ listing, platform, orderId, priceCents, payoutCents, soldAt, raw }, 'system');
   if (!saleId) return null;   // already recorded
   const removed = await reconcileStock(listing.stock_id, 'system');
   const stock = await getPresellStock(listing.stock_id);
   const left = Math.max(0, Number(stock?.qty || 0) - Number(stock?.sold || 0));
-  const lines = [
-    `💰 SOLD on ${PLATFORM_LABEL[platform]}`,
+  // Two kinds of pre-sell, two different messages (owner, 2026-10-10) — they ask for
+  // opposite actions, so they must not read alike:
+  //   · PRE-SELL (no stock): we don't own this pair. Alex finds it, or asks a supplier to.
+  //   · IN TRANSIT: the supplier already bought it and it's on its way. The warehouse sets
+  //     it aside on arrival and inbounds only the rest (presell-arrival.js).
+  const transit = !!stock?.in_transit;
+  const arrived = transit && !!stock?.arrived_at;
+  const sold = Number(stock?.sold || 0);
+  const qty = Number(stock?.qty || 0);
+  const pairs = (n) => `${n} pair${n === 1 ? '' : 's'}`;
+  const lines = transit ? [
+    `🚚 IN-TRANSIT SALE — ${PLATFORM_LABEL[platform]}`,
+    { b: stock?.name || stock?.sku || 'In-transit pair' },
+    `${stock?.sku || ''} · size ${stock?.size || '?'}`,
+    `Price: ${money(priceCents)}${payoutCents != null ? ` (payout ${money(payoutCents)})` : ''}`,
+    `Order: ${orderId}`,
+    `Shipment: ${stock?.transit_note || 'in transit'}${stock?.expected_on ? ` · expected ${String(stock.expected_on).slice(0, 10)}` : ''}`,
+    arrived
+      ? `⚠️ This shipment was ALREADY RECEIVED${stock.arrived_batch ? ` (${stock.arrived_batch})` : ''} — pull 1 pair of size ${stock.size} from the shelf for this order.`
+      : `Warehouse: when it arrives, set ${pairs(sold)} of size ${stock?.size} aside for the buyer${sold === 1 ? '' : 's'} — don't inbound ${sold === 1 ? 'it' : 'them'}. Inbound the other ${Math.max(0, qty - sold)}.`,
+    `Sold in transit so far: ${sold} of ${qty} · left to sell: ${left}`,
+  ] : [
+    `💰 PRE-SELL SALE — ${PLATFORM_LABEL[platform]} — SOURCE IT`,
     { b: stock?.name || stock?.sku || 'Pre-sell pair' },
     `${stock?.sku || ''} · size ${stock?.size || '?'}`,
     `Price: ${money(priceCents)}${payoutCents != null ? ` (payout ${money(payoutCents)})` : ''}`,
     `Order: ${orderId}`,
-    `Pre-sell stock left: ${left} of ${stock?.qty ?? '?'}`,
+    `⚠️ We don't have this pair — Alex / supplier: find 1 pair of size ${stock?.size || '?'}.`,
+    `Pre-sell stock left: ${left} of ${qty}`,
   ];
-  // Listed while still on its way (presell-arrival.js) — the pair isn't in the warehouse yet.
-  // The pair is still on the truck: when the shipment lands, the warehouse sets it aside for
-  // this buyer and does NOT inbound it, so PH lists only the rest (owner, 2026-10-10).
-  if (stock?.in_transit && !stock?.arrived_at) {
-    lines.splice(1, 0, `🚚 IN TRANSIT${stock.expected_on ? ` — expected ${String(stock.expected_on).slice(0, 10)}` : ''}${stock.transit_note ? ` · ${stock.transit_note}` : ''}`);
-    lines.push(`Warehouse: when it arrives, set ${Number(stock.sold) === 1 ? '1 pair' : `${stock.sold} pairs`} of size ${stock.size} aside for the buyer${Number(stock.sold) === 1 ? '' : 's'} — don't inbound ${Number(stock.sold) === 1 ? 'it' : 'them'}. Inbound the other ${Math.max(0, Number(stock.qty) - Number(stock.sold))}.`);
-  }
   const down = removed.filter((r) => r.ok);
   const stuck = removed.filter((r) => !r.ok);
   if (down.length) lines.push(`Taken down: ${down.map((r) => PLATFORM_LABEL[r.platform]).join(', ')} (${down.length})`);
   if (stuck.length) lines.push(`⚠️ Could NOT take down ${stuck.length} listing(s) — check them now: ${stuck.map((r) => `${PLATFORM_LABEL[r.platform]}: ${r.error}`).join('; ')}`);
   try {
-    await sendPresellSale(lines);
+    await notify(lines);
     await markPresellSaleNotified(saleId);
   } catch (e) {
     console.error('[presell] sale message failed:', e.message);

@@ -109,7 +109,16 @@ accounts; two watchers would both act on a sale. Off by default (and in e2e).
   Telegram). Cancelled Alias orders are ignored.
 
 ## Telegram — the pre-sell group
-`TELEGRAM_PRESELL_CHAT_ID` (same bot). A sale posts: 💰 SOLD on <platform> · shoe · SKU ·
+`TELEGRAM_PRESELL_CHAT_ID` (same bot). **Two kinds of sale post** (owner, 2026-10-10; they ask
+for opposite actions):
+- **💰 PRE-SELL SALE — <platform> — SOURCE IT**: a row NOT in transit. We don't own the pair;
+  "Alex / supplier: find 1 pair of size N".
+- **🚚 IN-TRANSIT SALE — <platform>**: the supplier already bought it. Shipment note +
+  expected date, "Warehouse: when it arrives, set N pairs aside, don't inbound them; inbound
+  the other M", sold in transit so far. If the row has already ARRIVED (a sale racing the
+  take-down): "pull 1 pair from the shelf for this order".
+
+Both carry: 💰 SOLD on <platform> · shoe · SKU ·
 size · price (payout) · order · stock left · what was taken down (and ⚠️ anything that
 couldn't be). To find a new group's id: add the bot, type **`/chatid`** in the group — the
 webhook answers with it (works wherever the webhook points, i.e. prod). Unset → the sale is

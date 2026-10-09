@@ -102,3 +102,26 @@ test('listing the same SKU + size in transit again re-arms it; listing it plainl
   const r = (await db.query(`SELECT in_transit, arrived_at, transit_note, qty FROM presell_stock WHERE id = $1`, [id])).rows[0];
   expect(r).toMatchObject({ in_transit: true, arrived_at: null, transit_note: 'PO 2', qty: 14 });
 });
+
+test('the two kinds of sale read differently: source it vs set it aside on arrival', async () => {
+  const { handleSale } = await import('../api/_lib/presell.js');
+  const sale = async (inTransit, size) => {
+    const stock = (await S.upsertPresellStock({ sku: SKU, size, name: 'QA Sale Shoe', addQty: 12, inTransit, transitNote: inTransit ? 'PO 1042' : null }, 'e2e')).id;
+    // One listing — the one that sold — so nothing is left to take down (no marketplace call).
+    const { rows } = await db.query(`INSERT INTO presell_listings (stock_id, platform, external_id, price_cents, status) VALUES ($1, 'alias', $2, 20000, 'live') RETURNING *`, [stock, `${SKU}-sale-${size}`]);
+    const sent = [];
+    await handleSale({ listing: rows[0], platform: 'alias', orderId: `ORD-${size}-${stamp}`, priceCents: 20000, payoutCents: 18000, soldAt: new Date().toISOString(), raw: {} },
+      { notify: async (lines) => { sent.push(lines.map((l) => (typeof l === 'string' ? l : l.b)).join('\n')); } });
+    return sent[0];
+  };
+  const plain = await sale(false, '14');
+  expect(plain).toContain('PRE-SELL SALE — Alias — SOURCE IT');
+  expect(plain).toContain("We don't have this pair");
+  expect(plain).not.toContain('IN-TRANSIT');
+  const transit = await sale(true, '15');
+  expect(transit).toContain('IN-TRANSIT SALE — Alias');
+  expect(transit).toContain('Shipment: PO 1042');
+  expect(transit).toContain('set 1 pair of size 15 aside');
+  expect(transit).toContain('Inbound the other 11');
+  expect(transit).not.toContain('SOURCE IT');
+});

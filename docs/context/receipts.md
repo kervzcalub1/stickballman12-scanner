@@ -32,6 +32,35 @@ secret**: the key comes in with each request from our server. Built by
 - Looks back to **the last check minus an hour** (overlap is free, since receipts dedupe on
   `message_key`). Never checked → the last 3 days. **"From a date…"** looks back to
   midnight EST of a chosen day (≤60 days) for a catch-up.
+- **Make caps each folder search at 300 emails, OLDEST first** (6534162, raised from 100 on
+  2026-10-10). A busy window can stop before the newest mail, and since the next check
+  started from the last *press*, that mail was never read again. That's how order
+  **T09000000CY7BE8** (Nike, Oct 8) went missing: three checks, zero receipts filed. Now
+  `ingest-raw` counts every email it's handed, receipt or not, per mailbox + folder for the
+  current run (**`receipt_sweep_folders`**: run_at = `receipt_sweep_last.at`, fetched, newest
+  date). A folder that came back with **≥ 80 % of the cap** (`RECEIPT_SWEEP_CAP`, default 300;
+  80 % because Yahoo fetches the whole day and Make drops the earlier hours before posting)
+  makes the next check start from **its newest email − 1 h** instead (`resumed` in the reply;
+  the page says "may have stopped early in …"). A new run resets the count. The start only
+  ever moves *back*; dedupe makes re-reading free. Not a callback from Make: ingest-raw
+  already sees every email a run touched.
+  **Blind spot: Yahoo.** IMAP `since` is a whole day, so Make fetches the day and POSTs
+  only the hours after the last check. A Yahoo folder that hit its cap can look quiet to
+  us (5 posted of 300 fetched). So the Yahoo search's cap is raised to **800** instead,
+  which makes truncation unlikely rather than detectable. Inbox and Bulk are the busy ones.
+  Make bills per email actually returned, not per cap, so 800 costs nothing extra on a
+  normal day (a whole 4-day check was ~560 ops in total). **Cost lever:** every press
+  re-fetches Yahoo's whole current day, so five presses a day read that day five times.
+  Fewer, wider checks are cheaper than many narrow ones.
+- **What each run did, per folder:** `receipt_sweep_folders.outcomes` tallies what ingest-raw
+  answered (`filed` / `duplicate` / `skipped:<why>` / `error`), and `empty_bodies` counts emails
+  that arrived with neither text nor html, which points at Make's mapping, not the parser.
+  `GET /api/receipts/sweep` returns them as `folders`. The page prints "Last check read N emails:
+  X filed, Y already filed, Z not receipts" (per-folder detail in the tooltip). Make's run
+  history says SUCCESS whatever we answered, so this line is where a run that filed nothing
+  gets explained.
+- Make's POST steps have **`handleErrors` on** (2026-10-10). Before, a 4xx/5xx from us read as
+  SUCCESS in the run history.
 - A second press within 90 s → 409 (a double-tap mustn't start two runs).
 - Last check in `app_settings.receipt_sweep_last` ({at, since, by}), so "Last checked …
   by …" shows live. Receipts appear in the list as they're filed (`email_receipts` is

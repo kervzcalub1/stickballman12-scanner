@@ -8264,6 +8264,49 @@ export async function lastMensFor(gsSku) {
 // a key we already hold is a duplicate, never a second row. The buyer is matched here,
 // at filing, from user_purchase_emails — and later, when someone registers an address
 // (assignReceiptsForEmail), for the receipts that arrived before they did.
+// One email handed to ingest-raw by the "Check mailboxes" run that started at `runAt`
+// (receipt_sweep_folders, receipts.md): counted per folder, newest date kept — a new run
+// resets the folder's count. Receipt or not, it counts: the cap is on what Make fetched.
+// `outcome` ('filed' | 'duplicate' | 'skipped:<why>' | 'error') is tallied per folder too, and
+// `empty` counts emails that arrived with neither text nor html.
+export async function noteSweepEmail({ mailbox, folder, runAt, date, outcome = 'unknown', empty = false }) {
+  if (!mailbox || !runAt) return;
+  const d = date && !Number.isNaN(Date.parse(date)) ? new Date(date).toISOString() : null;
+  const one = JSON.stringify({ [outcome]: 1 });
+  await db()`
+    INSERT INTO receipt_sweep_folders (mailbox, folder, run_at, fetched, newest, outcomes, empty_bodies)
+    VALUES (${mailbox}, ${folder || ''}, ${runAt}::timestamptz, 1, ${d}::timestamptz, ${one}::jsonb, ${empty ? 1 : 0})
+    ON CONFLICT (mailbox, folder) DO UPDATE SET
+      fetched = CASE WHEN receipt_sweep_folders.run_at = EXCLUDED.run_at THEN receipt_sweep_folders.fetched + 1 ELSE 1 END,
+      newest  = CASE WHEN receipt_sweep_folders.run_at = EXCLUDED.run_at
+                     THEN greatest(receipt_sweep_folders.newest, EXCLUDED.newest) ELSE EXCLUDED.newest END,
+      outcomes = CASE WHEN receipt_sweep_folders.run_at = EXCLUDED.run_at
+                      THEN receipt_sweep_folders.outcomes || jsonb_build_object(${outcome}::text,
+                             coalesce((receipt_sweep_folders.outcomes ->> ${outcome}::text)::int, 0) + 1)
+                      ELSE EXCLUDED.outcomes END,
+      empty_bodies = CASE WHEN receipt_sweep_folders.run_at = EXCLUDED.run_at
+                          THEN receipt_sweep_folders.empty_bodies + EXCLUDED.empty_bodies ELSE EXCLUDED.empty_bodies END,
+      run_at  = EXCLUDED.run_at`;
+}
+
+// Every folder of the run at `runAt`: how many emails, the newest, and what became of them.
+export async function sweepRunFolders(runAt) {
+  if (!runAt) return [];
+  return await db()`
+    SELECT mailbox, folder, fetched, newest, outcomes, empty_bodies FROM receipt_sweep_folders
+     WHERE run_at = ${runAt}::timestamptz ORDER BY mailbox, folder`;
+}
+
+// The folders of the run at `runAt` that came back with at least `atLeast` emails — near
+// Make's cap, so they may have stopped short of the newest mail.
+export async function sweepFoldersNearCap(runAt, atLeast) {
+  if (!runAt) return [];
+  return await db()`
+    SELECT mailbox, folder, fetched, newest FROM receipt_sweep_folders
+     WHERE run_at = ${runAt}::timestamptz AND fetched >= ${atLeast}
+     ORDER BY newest NULLS FIRST`;
+}
+
 export async function ingestEmailReceipt(r) {
   const sql = db();
   const rows = await sql`

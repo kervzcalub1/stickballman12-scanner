@@ -24,7 +24,7 @@ const inSpam = (folder) => /spam|bulk|junk/i.test(String(folder || ''));
 // further back for a catch-up. Make fetches in the background and each receipt appears in
 // the list as it is filed (live), so the button only has to say it started.
 function MailboxCheck({ onSignOut }) {
-  const [st, setSt] = useState(null);       // { configured, last: { at, since, by } }
+  const [st, setSt] = useState(null);       // { configured, last: { at, since, by }, nearCap }
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -39,7 +39,7 @@ function MailboxCheck({ onSignOut }) {
     setBusy(true); setErr(''); setMsg('');
     try {
       const r = await api.receiptSweep(pickDate && since ? { since } : {});
-      setMsg(`Checking mail since ${when(r.since)} — receipts appear below as they're filed (usually within a few minutes).`);
+      setMsg(`Checking mail since ${when(r.since)}${r.resumed?.length ? ` (picking up where the last check stopped in ${r.resumed.join(', ')})` : ''} — receipts appear below as they're filed (usually within a few minutes).`);
       setPickDate(false); setSince('');
       read();
     } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
@@ -66,6 +66,26 @@ function MailboxCheck({ onSignOut }) {
       <span className="muted sm">
         {last ? `Last checked ${when(last.at)}${last.by ? ` by ${last.by}` : ''}` : 'Never checked — the first check looks at the last 3 days.'}
       </span>
+      {st?.folders?.length > 0 && (() => {
+        // What the last check handed our server and what became of it — Make's own history
+        // says "success" whatever happened, so this line is where a run that filed nothing shows.
+        const sum = (k) => st.folders.reduce((n, f) => n + Number(f.outcomes?.[k] || 0), 0);
+        const read = st.folders.reduce((n, f) => n + Number(f.fetched || 0), 0);
+        const empty = st.folders.reduce((n, f) => n + Number(f.empty_bodies || 0), 0);
+        const skipped = read - sum('filed') - sum('duplicate') - sum('error');
+        return (
+          <div className="muted sm rc-check-msg" title={st.folders.map((f) => `${f.mailbox} ${f.folder}: ${f.fetched} — ${Object.entries(f.outcomes || {}).map(([k, v]) => `${k} ${v}`).join(', ')}`).join('\n')}>
+            Last check read {read} email{read === 1 ? '' : 's'}: {sum('filed')} receipt{sum('filed') === 1 ? '' : 's'} filed, {sum('duplicate')} already filed, {skipped} not receipts
+            {sum('error') ? <>, <b>{sum('error')} failed</b></> : null}
+            {empty ? <> — <b>{empty} arrived with no text</b></> : null}.
+          </div>
+        );
+      })()}
+      {st?.nearCap?.length > 0 && (
+        <div className="muted sm rc-check-msg" title="Make reads a limited number of emails per folder, oldest first — a busy stretch can stop before the newest">
+          The last check may have stopped early in {st.nearCap.map((f) => f.folder || f.mailbox).join(', ')} — the next check picks up from there.
+        </div>
+      )}
       {msg && <div className="notice sm rc-check-msg">{msg}</div>}
       {err && <div className="error sm rc-check-msg">{err}</div>}
     </div>

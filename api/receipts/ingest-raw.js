@@ -12,7 +12,7 @@
 // Form fields, not JSON: Make builds a form body from mapped fields safely, while a JSON body
 // assembled from an email's quotes and newlines by string templating breaks on the first one.
 import { send, applySecurity, rateLimit } from '../_lib/util.js';
-import { dbConfigured, ingestEmailReceipt } from '../_lib/db.js';
+import { dbConfigured, ingestEmailReceipt, getSetting, noteSweepEmail } from '../_lib/db.js';
 import { ingestKeyOk, ingestConfigured, normalizeReceiptBody } from '../_lib/receipt-ingest.js';
 import { parseReceiptEmail } from '../_lib/receipt-parser/index.js';
 
@@ -48,15 +48,26 @@ export default async function handler(req, res) {
   const email = Object.fromEntries(FIELDS.map((k) => [k, String(form[k] ?? '')]));
   if (!email.mailbox) return send(res, 400, { ok: false, error: 'mailbox is required.' });
 
+  let outcome = 'error';
   try {
     const out = await parseReceiptEmail(email);
-    if (!out?.post) return send(res, 200, { ok: true, skipped: out?.skip || 'not_a_receipt' });
+    if (!out?.post) { outcome = `skipped:${out?.skip || 'not_a_receipt'}`; return send(res, 200, { ok: true, skipped: out?.skip || 'not_a_receipt' }); }
     const r = normalizeReceiptBody(out.parsed);
-    if (!r) return send(res, 200, { ok: true, skipped: 'no_message_key' });
+    if (!r) { outcome = 'skipped:no_message_key'; return send(res, 200, { ok: true, skipped: 'no_message_key' }); }
     const saved = await ingestEmailReceipt(r);
+    outcome = saved.duplicate ? 'duplicate' : 'filed';
     return send(res, 200, { ok: true, id: saved.id, duplicate: saved.duplicate, buyerMatched: !!saved.buyerUserId });
   } catch (e) {
     console.error('[receipts/ingest-raw]', e.message);
     return send(res, 500, { ok: false, error: 'Could not file the receipt.' });
+  } finally {
+    // Count it against the run it came from, receipt or not (receipt_sweep_folders): that's how
+    // the next check knows a folder hit Make's cap and where to resume — and what became of
+    // each email, since Make's run history shows none of our answers. Never blocks the filing.
+    try {
+      const last = JSON.parse((await getSetting('receipt_sweep_last')) || 'null');
+      await noteSweepEmail({ mailbox: email.mailbox, folder: email.folder, runAt: last?.at, date: email.date, outcome,
+        empty: !email.text.trim() && !email.html.trim() });
+    } catch (e) { console.error('[receipts/ingest-raw] count', e.message); }
   }
 }

@@ -21,7 +21,10 @@ jobs:
     # Hermetic: ephemeral Postgres + throwaway test secrets. No production creds.
     services:
       postgres:
-        image: postgres:16
+        # The official image via AWS's public mirror, not Docker Hub: Docker Hub caps anonymous
+        # pulls, and 4 shards × a few PRs an hour hit it (2026-10-10: every shard failed on
+        # "toomanyrequests" before a single test ran). Same image, no pull limit.
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

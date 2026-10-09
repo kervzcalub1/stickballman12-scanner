@@ -345,3 +345,36 @@ test('Listings: one card per SKU + size with the pair count and per-platform sum
   // No sideways scroll on a phone.
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
+
+test('✎ Edit prices: every open listing of a size, per platform, one at a time; pending skipped', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const rows = []; let id = 1;
+  const mk = (platform, status, cents) => rows.push({ id: id++, stock_id: 5, sku: 'JA1091-100', name: 'Air Griffey', image: null, size: '10', platform, status,
+    price_cents: cents, external_id: `x${id}`, created_at: new Date(Date.now() - id * 1000).toISOString(), created_by: 'Kervy', last_error: null });
+  for (let i = 0; i < 3; i++) mk('alias', 'live', 23000);
+  mk('alias', 'live', 24000);           // already at the new price → not touched
+  for (let i = 0; i < 2; i++) mk('stockx', 'live', 23000);
+  mk('stockx', 'pending', 23000);       // can't take a price yet → skipped
+  const calls = []; let inFlight = 0; let maxInFlight = 0;
+  await page.route('**/api/presell-listings/list**', (r) => r.fulfill({ json: { ok: true, rows, counts: { all: rows.length } } }));
+  await page.route('**/api/presell-listings/prices', (r) => r.fulfill({ json: { ok: true, prices: {} } }));
+  await page.route('**/api/presell-listings/action', async (r) => {
+    inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+    calls.push(r.request().postDataJSON());
+    await new Promise((res) => setTimeout(res, 100));
+    inFlight--;
+    await r.fulfill({ json: { ok: true, listing: {} } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/ph/presell-listings?tab=listings');
+  await page.getByRole('button', { name: '✎ Edit prices' }).click();
+  const dlg = page.getByRole('dialog', { name: /Prices · JA1091-100 size 10/ });
+  await dlg.getByLabel('New Alias price').fill('240');
+  await dlg.getByLabel('New StockX price').fill('250');
+  await expect(dlg).toContainText('1 listing is still pending on StockX');
+  await dlg.getByRole('button', { name: 'Update 5 listings' }).click();
+  await expect(dlg).toContainText('Done: 5 updated · 1 pending skipped.');
+  expect(calls.map((c) => [c.action, c.price])).toEqual([['update', 240], ['update', 240], ['update', 240], ['update', 250], ['update', 250]]);
+  expect(maxInFlight).toBe(1);
+});

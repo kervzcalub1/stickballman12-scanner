@@ -5899,3 +5899,7 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
   .ap-pair span.ap-pill.none { flex: 1 1 0; }
   .ap-more.ap-more-sm { min-width: 38px; width: 38px; padding: 0; }
 }
+.ap-group-bar { display: flex; justify-content: flex-end; gap: 8px; padding: 0 12px 10px; margin-top: -4px; }
+.ap-bulkprice { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--border, rgba(255,255,255,0.08)); }
+.ap-bulkprice-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ap-bulkprice .ap-edit-fields { display: flex; flex-direction: column; gap: 3px; }

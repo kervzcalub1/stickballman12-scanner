@@ -9,6 +9,7 @@ import { dbConfigured, upsertPresellStock } from '../_lib/db.js';
 import { topUp } from '../_lib/presell-create.js';
 import { aliasListingKey } from '../_lib/alias.js';
 import { stockxConfigured } from '../_lib/stockx.js';
+import { landedFromShelf } from '../../src/lib/costs.js';
 
 const MAX_PAIRS = 100;
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
@@ -29,6 +30,17 @@ export default async function handler(req, res) {
   const inTransit = b.inTransit === true;
   const transitNote = inTransit ? text(b.transitNote, 200) : null;
   const expectedOn = inTransit && /^\d{4}-\d{2}-\d{2}$/.test(String(b.expectedOn || '')) ? b.expectedOn : null;
+  // Cost (2026-10-10): the supplier preset as used for THIS purchase (maybe edited), applied
+  // to each line's shelf price. The server computes the landed cost itself — same formula as
+  // everywhere (landedFromShelf) — rather than trusting a number from the browser.
+  const pct = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 0; };
+  const amt = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 10_000 ? n : 0; };
+  const cs = b.costStack && typeof b.costStack === 'object' ? b.costStack : null;
+  const costStack = cs ? {
+    preset: text(cs.preset, 60), presetId: Number(cs.presetId) || null, edited: cs.edited === true,
+    taxPct: pct(cs.taxPct), giftPct: pct(cs.giftPct), storePct: pct(cs.storePct), promoPct: pct(cs.promoPct),
+    cashbackPct: pct(cs.cashbackPct), tipAmt: amt(cs.tipAmt), shippingAmt: amt(cs.shippingAmt),
+  } : null;
   const lines = [];
   for (const [i, l] of (Array.isArray(b.items) ? b.items : []).entries()) {
     const sku = text(l?.sku, 60)?.toUpperCase();
@@ -45,7 +57,10 @@ export default async function handler(req, res) {
       want[p] = c;
     }
     if (!Object.keys(want).length) return send(res, 400, { ok: false, error: `${at}: tick Alias, StockX or both.` });
-    lines.push({ sku, size, qty, want, name: text(l?.name, 200), image: text(l?.image, 500), upc: text(l?.upc, 20) });
+    const shelf = Number(l?.shelfPrice);
+    const shelfPrice = Number.isFinite(shelf) && shelf > 0 && shelf <= 100_000 ? Math.round(shelf * 100) / 100 : null;
+    lines.push({ sku, size, qty, want, name: text(l?.name, 200), image: text(l?.image, 500), upc: text(l?.upc, 20),
+      shelfPrice, unitCost: shelfPrice != null && costStack ? landedFromShelf(shelfPrice, null, costStack) : null });
   }
   if (!lines.length) return send(res, 400, { ok: false, error: 'Add at least one pair to list.' });
   const pairs = lines.reduce((n, l) => n + l.qty * Object.keys(l.want).length, 0);
@@ -58,7 +73,8 @@ export default async function handler(req, res) {
   const out = [];
   try {
     for (const l of lines) {
-      const stock = await upsertPresellStock({ sku: l.sku, size: l.size, name: l.name, image: l.image, upc: l.upc, addQty: l.qty, inTransit, transitNote, expectedOn }, actor);
+      const stock = await upsertPresellStock({ sku: l.sku, size: l.size, name: l.name, image: l.image, upc: l.upc, addQty: l.qty, inTransit, transitNote, expectedOn,
+        shelfPrice: l.shelfPrice, unitCost: l.unitCost, costStack: l.shelfPrice != null ? costStack : null }, actor);
       const row = { sku: l.sku, size: l.size, stockId: Number(stock.id) };
       for (const [platform, priceCents] of Object.entries(l.want)) {
         row[platform] = await topUp(stock, platform, { priceCents, active: activate }, actor, cache);

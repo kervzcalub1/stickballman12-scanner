@@ -8443,11 +8443,15 @@ export async function listApprovedPeople() {
 // `inTransit` (Alex, 2026-10-10): the pairs are still on their way — the row is (re)armed
 // for the arrival check (arrived_at cleared), with an optional note + expected date.
 // Listing the same SKU + size again WITHOUT the tick leaves an existing transit flag alone.
-export async function upsertPresellStock({ sku, size, name, image, upc, addQty, inTransit = false, transitNote = null, expectedOn = null }, actor) {
+export async function upsertPresellStock({ sku, size, name, image, upc, addQty, inTransit = false, transitNote = null, expectedOn = null,
+  shelfPrice = null, unitCost = null, costStack = null }, actor) {
   const t = inTransit === true;
+  const stack = costStack ? JSON.stringify(costStack) : null;
   const rows = await db()`
-    INSERT INTO presell_stock (sku, size, name, image, upc, qty, created_by, updated_by, in_transit, transit_note, expected_on)
-    VALUES (${sku}, ${size}, ${name}, ${image}, ${upc}, ${addQty}, ${actor}, ${actor}, ${t}, ${t ? transitNote : null}, ${t ? expectedOn : null}::date)
+    INSERT INTO presell_stock (sku, size, name, image, upc, qty, created_by, updated_by, in_transit, transit_note, expected_on,
+                               shelf_price, unit_cost, cost_stack)
+    VALUES (${sku}, ${size}, ${name}, ${image}, ${upc}, ${addQty}, ${actor}, ${actor}, ${t}, ${t ? transitNote : null}, ${t ? expectedOn : null}::date,
+            ${shelfPrice}, ${unitCost}, ${stack}::jsonb)
     ON CONFLICT (sku, size) DO UPDATE
        SET qty = presell_stock.qty + EXCLUDED.qty,
            name = COALESCE(presell_stock.name, EXCLUDED.name), image = COALESCE(presell_stock.image, EXCLUDED.image),
@@ -8456,7 +8460,11 @@ export async function upsertPresellStock({ sku, size, name, image, upc, addQty, 
            transit_note = CASE WHEN ${t} THEN COALESCE(EXCLUDED.transit_note, presell_stock.transit_note) ELSE presell_stock.transit_note END,
            expected_on = CASE WHEN ${t} THEN COALESCE(EXCLUDED.expected_on, presell_stock.expected_on) ELSE presell_stock.expected_on END,
            arrived_at = CASE WHEN ${t} THEN NULL ELSE presell_stock.arrived_at END,
-           arrived_batch = CASE WHEN ${t} THEN NULL ELSE presell_stock.arrived_batch END
+           arrived_batch = CASE WHEN ${t} THEN NULL ELSE presell_stock.arrived_batch END,
+           -- The latest purchase's cost wins; a re-list without a cost keeps the one we had.
+           shelf_price = COALESCE(EXCLUDED.shelf_price, presell_stock.shelf_price),
+           unit_cost = COALESCE(EXCLUDED.unit_cost, presell_stock.unit_cost),
+           cost_stack = COALESCE(EXCLUDED.cost_stack, presell_stock.cost_stack)
     RETURNING *`;
   return rows[0];
 }

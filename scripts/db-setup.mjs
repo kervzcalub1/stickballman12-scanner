@@ -2087,6 +2087,13 @@ await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS transit_note TEXT`
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS expected_on DATE`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMPTZ`);  // set by the arrival check; NULL = still in transit
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS arrived_batch TEXT`);
+// What a pre-sell pair COST (2026-10-10): the shelf price, the supplier preset as used for
+// this purchase (edited or not — a snapshot, so changing the preset later doesn't rewrite
+// it), and the landed cost = shelf through that stack (src/lib/costs.js landedFromShelf).
+// For projecting payout / profit when listing, and for profit once it sells.
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS shelf_price NUMERIC(12,2)`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,2)`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS cost_stack JSONB`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_listings_pending_idx ON presell_listings (status) WHERE status = 'pending'`);
 await sql(`
   CREATE TABLE IF NOT EXISTS presell_sales (

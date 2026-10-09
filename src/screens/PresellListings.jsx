@@ -15,6 +15,17 @@ import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { isUpcCode } from '../lib/codes.js';
 import { parsePresellPaste } from '../lib/presellPaste.js';
+import { landedFromShelf } from '../lib/costs.js';
+import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
+
+// The cost stack fields a supplier preset carries (payout_presets), in the order the
+// Payout Calculator applies them.
+const STACK_FIELDS = [
+  ['storePct', 'Store discount', '%'], ['promoPct', 'Promo', '%'], ['giftPct', 'Gift card', '%'],
+  ['cashbackPct', 'Cashback', '%'], ['taxPct', 'Sales tax', '%'], ['tipAmt', 'Tip / fee', '$'], ['shippingAmt', 'Shipping', '$'],
+];
+const stackOf = (p) => (p ? Object.fromEntries(STACK_FIELDS.map(([k]) => [k, Number(p[k]) || 0])) : null);
+const money2 = (n) => (n == null || !Number.isFinite(n) ? '—' : `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`);
 import { PH_DATE, PH_DATETIME, estToday } from '../lib/format.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -123,6 +134,22 @@ function ListNew({ onSignOut, onListed }) {
   const [inTransit, setInTransit] = useState(false);
   const [transitNote, setTransitNote] = useState('');
   const [expectedOn, setExpectedOn] = useState('');
+  // Cost for this purchase (2026-10-10): a supplier preset, editable for THIS purchase only
+  // (the saved preset is untouched), applied to each line's shelf price → landed cost →
+  // projected payout / profit per platform.
+  const [presets, setPresets] = useState([]);
+  const [presetId, setPresetId] = useState('');
+  const [stack, setStack] = useState(null);       // the stack in use (a preset's, maybe edited)
+  const [stackEdited, setStackEdited] = useState(false);
+  const [editStack, setEditStack] = useState(false);
+  const [allShelf, setAllShelf] = useState('');
+  useEffect(() => { api.payoutPresets().then((r) => setPresets(r.presets || [])).catch(() => {}); }, []);
+  function pickPreset(id) {
+    setPresetId(id);
+    const p = presets.find((x) => String(x.id) === String(id));
+    setStack(stackOf(p)); setStackEdited(false); setEditStack(false);
+  }
+  const costOf = (l) => (stack ? landedFromShelf(l.shelfPrice, null, stack) : null);
   const [basis, setBasis] = useState(loadBasis);
   const [confirm, setConfirm] = useState(false);
   const [listing, setListing] = useState(false);
@@ -186,11 +213,14 @@ function ListNew({ onSignOut, onListed }) {
     try {
       for (const [i, b] of batches.entries()) {
         if (batches.length > 1) setProgress(`Batch ${i + 1} of ${batches.length} (${b.n} listings)…`);
+        const preset = presets.find((x) => String(x.id) === String(presetId));
         const r = await api.presellListingsCreate({
           activate,
           inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
+          costStack: stack ? { ...stack, preset: preset?.name || null, presetId: preset?.id || null, edited: stackEdited } : null,
           items: b.lines.map((l) => ({
             sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty: Number(l.qty) || 1,
+            shelfPrice: Number(l.shelfPrice) > 0 ? Number(l.shelfPrice) : null,
             alias: l.alias ? { price: Number(l.aliasPrice) } : null, stockx: l.stockx ? { price: Number(l.stockxPrice) } : null,
           })),
         });
@@ -312,6 +342,35 @@ function ListNew({ onSignOut, onListed }) {
         <h3 className="rows-title">To list {pairs ? `· ${pairs} pair${pairs === 1 ? '' : 's'} → ${listings} listing${listings === 1 ? '' : 's'}` : ''}</h3>
         {!lines.length ? <p className="muted">Nothing yet — scan a box or type a SKU, then tap the sizes.</p> : (
           <>
+            <div className="ap-cost">
+              <div className="ap-cost-row">
+                <label className="muted sm">Supplier preset (costs)
+                  <select className="input" value={presetId} onChange={(e) => pickPreset(e.target.value)} aria-label="Supplier preset">
+                    <option value="">— none (no cost) —</option>
+                    {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </label>
+                {stack && <button type="button" className={`btn sm ${editStack ? 'primary' : 'ghost'}`} onClick={() => setEditStack((v) => !v)}>✎ Edit for this purchase</button>}
+                {stackEdited && <span className="ap-edited xs" title="Changed for this purchase only — the saved preset is untouched">edited for this purchase</span>}
+                <label className="muted sm">Shelf price for all
+                  <span className="ap-inline"><input type="number" min="1" step="0.01" inputMode="decimal" value={allShelf} placeholder="$" onChange={(e) => setAllShelf(e.target.value)} aria-label="Shelf price for every pair" />
+                    <button type="button" className="btn sm" disabled={!(Number(allShelf) > 0)} onClick={() => setLines((ls) => ls.map((l) => ({ ...l, shelfPrice: allShelf })))}>Apply</button></span>
+                </label>
+              </div>
+              {stack && editStack && (
+                <div className="ap-stack">
+                  {STACK_FIELDS.map(([k, label, unit]) => (
+                    <label key={k} className="muted xs">{label} ({unit})
+                      <input className="input" type="number" min="0" step="0.01" inputMode="decimal" value={stack[k]}
+                        onChange={(e) => { setStack((s) => ({ ...s, [k]: e.target.value === '' ? 0 : Number(e.target.value) })); setStackEdited(true); }}
+                        aria-label={`${label} for this purchase`} />
+                    </label>
+                  ))}
+                  <button type="button" className="btn sm ghost" onClick={() => pickPreset(presetId)}>Reset to the preset</button>
+                </div>
+              )}
+              {!stack && <p className="muted xs">Pick the supplier’s preset to turn each shelf price into a landed cost and see the payout and profit per platform. Without one the cost stays blank (the owner’s rule: shelf price alone isn’t the cost).</p>}
+            </div>
             <div className="ap-bulk">
               <div className="ap-basis"><span className="muted xs">Alias prices</span>
                 <Seg label="Alias price basis" value={basis} onChange={(b) => { saveBasis(b); setBasis(b); }} options={[['consigned', 'Consigned'], ['with_you', 'With You']]} />
@@ -333,6 +392,11 @@ function ListNew({ onSignOut, onListed }) {
                     <label className="ap-qtyfield"><span className="muted xs">Pairs</span>
                       <input className="ap-qty" type="number" min="1" max="50" inputMode="numeric" value={l.qty} disabled={l.done}
                         onChange={(e) => setLine(l.key, 'qty', e.target.value)} aria-label={`Line ${i + 1} quantity`} /></label>
+                    <label className="ap-qtyfield"><span className="muted xs">Shelf $</span>
+                      <input className="ap-qty ap-shelf" type="number" min="0" step="0.01" inputMode="decimal" value={l.shelfPrice ?? ''} disabled={l.done}
+                        onChange={(e) => setLine(l.key, 'shelfPrice', e.target.value)} aria-label={`Line ${i + 1} shelf price`} /></label>
+                    <span className="ap-cost-out" title={stack ? 'Shelf price through the supplier preset (landed cost per pair)' : 'Pick a supplier preset to get the cost'}>
+                      <span className="muted xs">Cost</span><b>{money2(costOf(l))}</b></span>
                     <button type="button" className="btn icon ghost remove sm" title="Remove" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>×</button>
                   </div>
                   {l.error && <div className="error xs">{l.error}</div>}
@@ -344,6 +408,16 @@ function ListNew({ onSignOut, onListed }) {
                           <Market platform={p} p={(p === 'alias' ? aliasOf : stockxOf)(l.sku, l.size)} onPick={(v) => setLine(l.key, `${p}Price`, String(v))} />
                           <input className="ap-price" type="number" min="1" step="1" inputMode="decimal" placeholder="$" value={l[`${p}Price`]}
                             onChange={(e) => setLine(l.key, `${p}Price`, e.target.value)} aria-label={`Line ${i + 1} ${PLAT[p]} price`} />
+                          {Number(l[`${p}Price`]) > 0 && (() => {
+                            const c = costOf(l);
+                            const o = calcPayout(p, Number(l[`${p}Price`]), c ?? 0, DEFAULT_FEE_PCT[p]);
+                            return (
+                              <span className="ap-payout xs" title={`${PLAT[p]} fee ${DEFAULT_FEE_PCT[p]}%`}>
+                                Payout <b>{money2(o.payout)}</b>
+                                {c != null && <> · profit <b className={o.profit < 0 ? 'neg' : 'pos'}>{money2(o.profit)}</b></>}
+                              </span>
+                            );
+                          })()}
                         </>
                       )}
                     </div>

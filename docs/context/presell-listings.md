@@ -62,6 +62,30 @@ down so PH / Nikki list the real pairs properly.
 - Stock tab chips: 🚚 In transit · exp MM/DD (note in the tooltip) / 📦 Arrived <date>.
 - Tests: `e2e/presell-in-transit.spec.js` (fake marketplaces + Telegram).
 
+## Paste a message (2026-10-10)
+**📋 Paste message** next to Find: Alex's shape (`src/lib/presellPaste.js`) = a style code
+line, an optional name line, then `size x pairs` lines (`8x 12`, `8.5 x 14`, `10 × 26`,
+`9*19`, `7W x 3`). No name is fine; several shoes in one message too (each style code starts
+one). The same size twice adds up. Anything else (`8-9 x 2`, chat text) is listed as *not
+understood* and left out, never guessed. Preview → **Add N pairs** fills the cart (name/photo
+from our SKU lookup when we have one), ticks Alias + StockX and **🚚 In transit**.
+**Batches:** the create endpoint takes ≤ 100 listings a call, so the cart is sent in batches
+of WHOLE lines (Alex's 145 pairs = 290 listings → 3 calls) with progress on the button. A
+line is never split (re-sending a line adds its pairs again). A failure mid-way names what
+already went. One size over 50 pairs is flagged in the preview (the per-line limit).
+
+## Cost for the purchase (2026-10-10)
+Cart → **Supplier preset (costs)** (the Payout Calculator presets) → **✎ Edit for this
+purchase** (tax, gift card, store, promo, cashback %, tip and shipping $). Edits apply to
+THIS purchase only; the saved preset is never written (*edited for this purchase* chip,
+*Reset to the preset*). Per line **Shelf $** (+ *Shelf price for all*) → **Cost** = landed
+cost (`landedFromShelf`, the same formula as receiving and Costs). Under each platform's
+price: **Payout** (default fee: Alias 9.9 %, StockX 10 %) and **profit**. No preset → no
+cost (owner's rule: the shelf price alone isn't the cost); payout still shows.
+Saved on `presell_stock`: `shelf_price`, `unit_cost` (the SERVER recomputes it from the
+stack, not trusting the browser) and `cost_stack` (JSONB snapshot: preset name/id, edited,
+the numbers). A re-list without a cost keeps the one already there.
+
 ## Market prices — each platform's OWN words (owner, 2026-10-07)
 `POST /api/presell-listings/prices { platform, sku, sizes, consigned }`
 - **Alias**: Global Indicator · Lowest Listing · Last Sold · Highest Offer, toggle

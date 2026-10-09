@@ -57,13 +57,15 @@ test.afterAll(async () => {
   await db.query(`DELETE FROM email_receipts WHERE order_number = $1 OR message_key LIKE $2`, [ORDER, `%e2e-rcc-${stamp}%`]);
   await db.query(`DELETE FROM user_purchase_emails WHERE user_id = $1`, [buyerId]);
   await db.query(`DELETE FROM users WHERE id = $1`, [buyerId]);
-  await db.query(`DELETE FROM app_settings WHERE key = 'receipt_sweep_last'`);
+  await db.query(`DELETE FROM app_settings WHERE key IN ('receipt_sweep_last', 'receipt_ingest_rejected')`);
   await db.end();
 });
 
 test('a raw receipt email is parsed and filed here, under the buyer it was sent to', async ({ request }) => {
   expect((await raw(request, nikeEmail(), null)).status()).toBe(401);
   expect((await raw(request, nikeEmail(), 'wrong')).status()).toBe(401);
+  // A bounce is kept (length only, never the key) — Make's history wouldn't show it.
+  await expect.poll(async () => JSON.parse((await db.query(`SELECT value FROM app_settings WHERE key = 'receipt_ingest_rejected'`)).rows[0]?.value || 'null')?.key_length).toBe(5);
 
   const first = await (await raw(request, nikeEmail())).json();
   expect(first).toMatchObject({ ok: true, duplicate: false, buyerMatched: true });
@@ -113,6 +115,45 @@ test('the next check looks back to the last one (minus an hour); a date looks ba
   const dated = await (await request.post('/api/receipts/sweep', { headers: WH, data: { since: '2026-10-06' } })).json();
   expect(dated.since).toBe('2026-10-06T04:00:00.000Z');   // midnight EDT
   expect((await request.post('/api/receipts/sweep', { headers: WH, data: { since: '2099-01-01' } })).status()).toBe(400);
+});
+
+test('a folder the last run cut off (Make caps each search, oldest first) makes the next check start from the newest email it reached', async ({ request }) => {
+  const MB = `rcc-${stamp}@example.com`;
+  const runAt = new Date(Date.now() - 5 * 60_000).toISOString();   // past the double-tap guard
+  await db.query(`UPDATE app_settings SET value = jsonb_set(value::jsonb, '{at}', to_jsonb($1::text))::text WHERE key = 'receipt_sweep_last'`, [runAt]);
+
+  // ingest-raw counts every email it's handed against the current run, receipt or not.
+  for (const n of [1, 2]) {
+    await raw(request, nikeEmail({ mailbox: MB, subject: 'Just In', text: 'Shop now.', date: `2026-10-0${n}T12:00:00Z`, message_id: `<e2e-rcc-cap-${n}-${stamp}@x>` }));
+  }
+  // Counted after the answer goes out, so wait for it.
+  await expect.poll(async () => (await db.query(`SELECT fetched FROM receipt_sweep_folders WHERE mailbox = $1`, [MB])).rows[0]?.fetched).toBe(2);
+  let row = (await db.query(`SELECT fetched, newest, run_at, outcomes, empty_bodies FROM receipt_sweep_folders WHERE mailbox = $1`, [MB])).rows[0];
+  expect(row.outcomes).toEqual({ 'skipped:not_a_receipt': 2 });   // what became of each, per folder
+  expect(row.empty_bodies).toBe(0);
+  expect(row.newest.toISOString()).toBe('2026-10-02T12:00:00.000Z');
+  expect(row.run_at.toISOString()).toBe(runAt);
+
+  // 2 is nowhere near the cap: the next check starts from the last press, as before.
+  const quiet = await (await request.get('/api/receipts/sweep', { headers: WH })).json();
+  expect(quiet.nearCap.filter((f) => f.mailbox === MB)).toHaveLength(0);
+
+  // At the cap, the folder may have stopped short: resume from its newest email (minus the hour).
+  const newest = new Date(Date.now() - 2 * 86_400_000);
+  await db.query(`UPDATE receipt_sweep_folders SET fetched = 300, newest = $2 WHERE mailbox = $1`, [MB, newest]);
+  const st = await (await request.get('/api/receipts/sweep', { headers: WH })).json();
+  expect(st.nearCap.map((f) => f.mailbox)).toContain(MB);
+  expect(st.folders.find((f) => f.mailbox === MB)).toMatchObject({ fetched: 300 });
+  const next = await (await request.post('/api/receipts/sweep', { headers: WH, data: {} })).json();
+  // To the second — Make takes whole seconds (since_epoch).
+  expect(Math.floor(Date.parse(next.since) / 1000)).toBe(Math.floor((newest.getTime() - 60 * 60_000) / 1000));
+  expect(next.resumed).toContain(`${MB} [Gmail]/All Mail`);
+
+  // A new run resets the count — the cut-off folder isn't re-read forever.
+  await raw(request, nikeEmail({ mailbox: MB, subject: 'Just In', text: 'Shop now.', message_id: `<e2e-rcc-cap-3-${stamp}@x>` }));
+  await expect.poll(async () => (await db.query(`SELECT fetched, outcomes FROM receipt_sweep_folders WHERE mailbox = $1`, [MB])).rows[0])
+    .toMatchObject({ fetched: 1, outcomes: { 'skipped:not_a_receipt': 1 } });
+  await db.query(`DELETE FROM receipt_sweep_folders WHERE mailbox = $1`, [MB]);
 });
 
 test('the Receipts page has the button and says when it last checked', async ({ page }) => {

@@ -2005,6 +2005,27 @@ await sql(`CREATE INDEX IF NOT EXISTS email_receipts_received_idx ON email_recei
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_buyer_idx ON email_receipts (buyer_user_id)`);
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_order_idx ON email_receipts (order_number)`);
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_recipients_idx ON email_receipts USING gin (recipient_addrs)`);
+// What each "Check mailboxes" run actually reached, per mailbox + folder (2026-10-10,
+// receipts.md). Make caps every folder search, oldest first, so a busy window can stop
+// short of the newest mail; the next check then started an hour before the last PRESS and
+// that mail was never read again (order T09000000CY7BE8). ingest-raw counts every email it
+// is handed per run here, and a folder that came back near the cap makes the next check
+// start from the newest email it reached instead.
+await sql(`
+  CREATE TABLE IF NOT EXISTS receipt_sweep_folders (
+    mailbox  TEXT NOT NULL,
+    folder   TEXT NOT NULL,
+    run_at   TIMESTAMPTZ NOT NULL,           -- receipt_sweep_last.at of the run that sent it
+    fetched  INT NOT NULL DEFAULT 0,          -- emails ingest-raw received from it in that run
+    newest   TIMESTAMPTZ,                     -- the newest email's date among them
+    PRIMARY KEY (mailbox, folder)
+  )`);
+// …and what became of them (2026-10-10): Make's run history shows SUCCESS whatever we answer,
+// so a run that files nothing has to be explained from here. outcomes = {"filed":n,
+// "duplicate":n,"skipped:not_a_receipt":n,"skipped:empty":n,…}; empty_bodies = no text AND no
+// html came through (a Make mapping problem, not a parser one).
+await sql(`ALTER TABLE receipt_sweep_folders ADD COLUMN IF NOT EXISTS outcomes JSONB NOT NULL DEFAULT '{}'`);
+await sql(`ALTER TABLE receipt_sweep_folders ADD COLUMN IF NOT EXISTS empty_bodies INT NOT NULL DEFAULT 0`);
 
 // Pre-sell Listings (2026-10-07, docs/context/presell-listings.md): pairs listed on Alias
 // and/or StockX straight from a scan — never an inventory unit, never on Shopify.

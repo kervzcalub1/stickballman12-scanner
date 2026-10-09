@@ -1,7 +1,7 @@
 // /api/receipts/sweep — "Check mailboxes" on the Receipts page (docs/context/receipts.md)
 //
-//   GET                        -> { ok, configured, last: { at, since, by } | null }
-//   POST { since?: 'YYYY-MM-DD' } -> { ok, since, at }  (202-style: Make runs in the background)
+//   GET                        -> { ok, configured, last: { at, since, by } | null, nearCap: [...], folders: [...] }
+//   POST { since?: 'YYYY-MM-DD' } -> { ok, since, at, resumed }  (202-style: Make runs in the background)
 //
 // The sweep runs ONLY when somebody presses the button — not on a schedule (owner, 2026-10-08:
 // the 15-minute schedule re-read two days of mail in 11 folders every run, ~68k credits a day,
@@ -12,10 +12,17 @@
 // costs nothing and a mail that landed mid-run isn't lost. A date picks an earlier start for a
 // catch-up. Make fetches; our server parses and files (api/receipts/ingest-raw.js).
 //
+// Make fetches at most SWEEP_CAP emails per folder search, OLDEST first. A busy window can stop
+// short of the newest mail — and if the next check then started from the last press, that mail
+// was never read again (order T09000000CY7BE8, 2026-10-08: zero receipts filed in three runs).
+// So ingest-raw counts what each run handed it per folder (receipt_sweep_folders), and a folder
+// that came back near the cap makes the next check start from the newest email it reached.
+// The pointer only ever looks back further, never skips ahead; dedupe makes re-reading free.
+//
 // RECEIPT_SWEEP_HOOK_URL = the scenario's webhook. RECEIPT_INGEST_KEY rides along in the call so
 // the scenario can post back without the key ever being pasted into Make.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, getSetting, setSetting } from '../_lib/db.js';
+import { dbConfigured, getSetting, setSetting, sweepFoldersNearCap, sweepRunFolders } from '../_lib/db.js';
 import { estToday } from '../../src/lib/format.js';
 
 const KEY = 'receipt_sweep_last';
@@ -23,6 +30,11 @@ const OVERLAP_MS = 60 * 60 * 1000;          // re-read the hour before the last 
 const FIRST_RUN_MS = 3 * 24 * 60 * 60 * 1000; // never checked: the last 3 days
 const MAX_BACK_DAYS = 60;
 const COOLDOWN_MS = 90 * 1000;               // a double-tap must not start two runs
+// Make's maxResults on each folder search (scenario 6534162, raised 100 → 300 on 2026-10-10).
+// A folder counts as "maybe cut off" a little BELOW the cap: a Yahoo search fetches the whole
+// day and Make filters out the earlier hours before posting, so we see fewer than it fetched.
+const SWEEP_CAP = Number(process.env.RECEIPT_SWEEP_CAP) || 300;
+const NEAR_CAP = Math.max(1, Math.floor(SWEEP_CAP * 0.8));
 
 const hookUrl = () => String(process.env.RECEIPT_SWEEP_HOOK_URL || '').trim();
 const configured = () => !!(hookUrl() && String(process.env.RECEIPT_INGEST_KEY || '').trim());
@@ -48,7 +60,18 @@ export default async function handler(req, res) {
   if (!rateLimit(req, { windowMs: 60_000, max: 20 })) return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
-  if (req.method === 'GET') return send(res, 200, { ok: true, configured: configured(), last: await readLast() });
+  if (req.method === 'GET') {
+    const last = await readLast();
+    const nearCap = await sweepFoldersNearCap(last?.at, NEAR_CAP).catch(() => []);
+    // What the last run handed us, per folder, and what became of it — the only place a run
+    // that filed nothing can be explained (Make's history says SUCCESS whatever we answered).
+    const folders = await sweepRunFolders(last?.at).catch(() => []);
+    // An email turned away for a bad key since the last check started: the whole run bounced.
+    let rejected = null;
+    try { rejected = JSON.parse((await getSetting('receipt_ingest_rejected')) || 'null'); } catch { /* none */ }
+    if (rejected && last?.at && Date.parse(rejected.at) < Date.parse(last.at)) rejected = null;
+    return send(res, 200, { ok: true, configured: configured(), last, nearCap, folders, rejected });
+  }
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   if (!configured()) return send(res, 503, { ok: false, error: 'Mailbox checks are not set up on this server (RECEIPT_SWEEP_HOOK_URL).' });
 
@@ -57,6 +80,7 @@ export default async function handler(req, res) {
   const last = await readLast();
 
   let since;
+  let resumed = [];
   if (body.since) {
     const ymd = String(body.since);
     const d = /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? estMidnight(ymd) : null;
@@ -65,6 +89,14 @@ export default async function handler(req, res) {
     since = d;
   } else {
     since = new Date(last?.at ? Date.parse(last.at) - OVERLAP_MS : now - FIRST_RUN_MS);
+    // A folder the last run may have cut off: start from the newest email it reached instead.
+    resumed = (await sweepFoldersNearCap(last?.at, NEAR_CAP).catch(() => [])).filter((f) => f.newest);
+    for (const f of resumed) {
+      const from = Date.parse(f.newest) - OVERLAP_MS;
+      if (from < since.getTime()) since = new Date(from);
+    }
+    const floor = now - MAX_BACK_DAYS * 86_400_000;
+    if (since.getTime() < floor) since = new Date(floor);
   }
   // After the date is checked: a bad date is the person's to fix whether or not a run is on.
   if (last?.at && now - Date.parse(last.at) < COOLDOWN_MS) {
@@ -94,5 +126,5 @@ export default async function handler(req, res) {
   }
   const at = new Date(now).toISOString();
   await setSetting(KEY, JSON.stringify({ at, since: since.toISOString(), by }), by);
-  return send(res, 200, { ok: true, at, since: since.toISOString() });
+  return send(res, 200, { ok: true, at, since: since.toISOString(), resumed: resumed.map((f) => `${f.mailbox} ${f.folder}`) });
 }

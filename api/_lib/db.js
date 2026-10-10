@@ -8652,16 +8652,20 @@ export async function listPresellStock({ q = null, from = null, to = null } = {}
      GROUP BY s.id, po.id ORDER BY s.updated_at DESC LIMIT 2000`;
 }
 // view: all (open) | live | off | pending | sold | deleted ; platform: '' | alias | stockx
-export async function listPresellListings({ view = 'all', platform = null, q = null, stockId = null } = {}) {
+// from / to (YYYY-MM-DD, EST): listings CREATED in that window — the Listings report.
+export async function listPresellListings({ view = 'all', platform = null, q = null, stockId = null, from = null, to = null, limit = 1000 } = {}) {
   const like = q ? `%${q}%` : null;
   const rows = await db()`
-    SELECT l.*, s.sku, s.name, s.image, s.size
+    SELECT l.*, s.sku, s.name, s.image, s.size, s.unit_cost, s.supplier, s.in_transit, s.arrived_at, po.po_code
       FROM presell_listings l JOIN presell_stock s ON s.id = l.stock_id
+      LEFT JOIN purchase_orders po ON po.id = s.po_id
      WHERE (${view} = 'all' AND l.status IN ('pending', 'live', 'off', 'failed') OR l.status = ${view})
        AND (${platform}::text IS NULL OR l.platform = ${platform})
        AND (${stockId}::bigint IS NULL OR l.stock_id = ${stockId})
        AND (${like}::text IS NULL OR s.sku ILIKE ${like} OR s.name ILIKE ${like} OR l.external_id ILIKE ${like})
-     ORDER BY l.created_at DESC, l.id DESC LIMIT 1000`;
+       AND (${from}::date IS NULL OR (l.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       AND (${to}::date IS NULL OR (l.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+     ORDER BY l.created_at DESC, l.id DESC LIMIT ${limit}`;
   const counts = await db()`
     SELECT count(*) FILTER (WHERE status IN ('pending', 'live', 'off', 'failed'))::int AS all,
            count(*) FILTER (WHERE status = 'live')::int AS live, count(*) FILTER (WHERE status = 'off')::int AS off,

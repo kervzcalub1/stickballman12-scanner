@@ -147,22 +147,32 @@ function SourceFields({ value, onChange, pos, presets }) {
 // 📄 Report (2026-10-10): a date range (EST) → PDF or CSV. Stock = what's left (pairs first
 // listed in the range); Sales = what sold in the range. Built from a fresh read, so the
 // file is whole even when the screen shows a search.
-function ReportBar({ kind, from, to, setFrom, setTo, onSignOut, filtersList = false }) {
+const REPORTS = {
+  stock: { tab: 'stock', file: 'presell-stock', label: 'Listed from', blurb: 'the pairs we have — pairs, sold, left, in transit, supplier, PO, tracking, cost',
+    csv: 'stockReportCsv', pdf: 'stockReportPdf' },
+  listings: { tab: 'listings', file: 'presell-listings', label: 'Created from', blurb: 'every Alias / StockX listing — status, price, est. payout, listing id',
+    csv: 'listingsReportCsv', pdf: 'listingsReportPdf' },
+  sales: { tab: 'sales', file: 'presell-sales', label: 'Sold from', blurb: 'what sold — price, payout, cost, net',
+    csv: 'salesReportCsv', pdf: 'salesReportPdf' },
+};
+// 📄 Report — each tab its own (owner, 2026-10-10): Stock = the pairs we have / sold / left,
+// Listings = every listing (the tab's platform + status filters apply), Sales = what sold.
+// A date range (EST) → PDF or CSV, built from a fresh read so the file is whole even when the
+// screen shows a search. `extra` = the tab's own filters, passed to the read.
+function ReportBar({ kind, from, to, setFrom, setTo, onSignOut, filtersList = false, extra = {}, scope = '' }) {
+  const R = REPORTS[kind];
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   async function download(fmt) {
     setBusy(fmt); setErr('');
     try {
-      const r = await api.presellListingsList({ tab: kind === 'sales' ? 'sales' : 'stock', from, to });
+      const r = await api.presellListingsList({ tab: R.tab, from, to, ...extra });
       const rep = await import('../lib/presellReport.js');
       const now = new Date();
-      const name = `presell-${kind === 'sales' ? 'sales' : 'stock'}_${from || 'start'}_to_${to || estToday()}`;
+      const name = `${R.file}_${from || 'start'}_to_${to || estToday()}`;
       let blob;
-      if (fmt === 'csv') blob = new Blob([kind === 'sales' ? rep.salesReportCsv(r.rows || []) : rep.stockReportCsv(r.rows || [])], { type: 'text/csv;charset=utf-8' });
-      else {
-        const opts = { from, to, generatedAt: `Generated ${estDate(now)} ${estTime(now)} EST` };
-        blob = (await (kind === 'sales' ? rep.salesReportPdf : rep.stockReportPdf)(r.rows || [], opts)).output('blob');
-      }
+      if (fmt === 'csv') blob = new Blob([rep[R.csv](r.rows || [])], { type: 'text/csv;charset=utf-8' });
+      else blob = (await rep[R.pdf](r.rows || [], { from, to, scope, generatedAt: `Generated ${estDate(now)} ${estTime(now)} EST` })).output('blob');
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = `${name}.${fmt}`; a.click();
@@ -174,8 +184,8 @@ function ReportBar({ kind, from, to, setFrom, setTo, onSignOut, filtersList = fa
   }
   return (
     <div className="ap-report">
-      <span className="ap-report-title"><b>📄 Report</b> <span className="muted xs">{kind === 'sales' ? 'what sold' : 'what’s left — pairs, sold, in transit, supplier, PO, tracking, cost'}</span></span>
-      <label><span className="muted xs">{kind === 'sales' ? 'Sold from' : 'Listed from'}</span>
+      <span className="ap-report-title"><b>📄 {kind === 'stock' ? 'Stock' : kind === 'listings' ? 'Listings' : 'Sales'} report</b> <span className="muted xs">{R.blurb}{scope ? ` · ${scope}` : ''}</span></span>
+      <label><span className="muted xs">{R.label}</span>
         <input className="input" type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} aria-label="From date" /></label>
       <label><span className="muted xs">to</span>
         <input className="input" type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} aria-label="To date" /></label>
@@ -1090,7 +1100,9 @@ function ListingsTab({ onSignOut }) {
                 title="Re-read every pending listing from Alias / StockX, one at a time">↻ Re-check pending{counts.pending ? ` (${counts.pending})` : ''}</button>}
           {recheck && !recheck.running && <span className="muted xs">Re-checked {recheck.done} — {recheck.fixed} settled{recheck.done < recheck.total ? ' (stopped)' : ''}.</span>}
         </div>
-        <ReportBar kind="stock" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut} />
+        <ReportBar kind="listings" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut}
+          extra={{ view, platform }}
+          scope={[platform ? PLAT[platform] : 'Alias + StockX', { all: 'open', live: 'live', off: 'not live', pending: 'pending', sold: 'sold', deleted: 'deleted' }[view] || view].join(' · ')} />
       </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">

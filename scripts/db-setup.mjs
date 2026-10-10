@@ -2102,6 +2102,53 @@ await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS supplier TEXT`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id) ON DELETE SET NULL`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[] NOT NULL DEFAULT '{}'`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_stock_po_idx ON presell_stock (po_id) WHERE po_id IS NOT NULL`);
+// MARKET COMPETITION (owner, 2026-10-11): keep our live listings at the market's lowest ask —
+// "undercut" by $1 or "match" it — never more than $5 under the price we set, and follow the
+// market UP without a cap. Each size, each platform, on its own (presell-compete.js).
+//   presell_comp_sku   one row per SKU switched on/off by hand, with its mode. A SKU with no
+//                      row follows "All shoes" (app_settings presell_comp_all / _all_mode).
+//   presell_stock.comp_override   per-size: 'on' | 'off' | NULL = follow the SKU.
+//   presell_stock.comp_base_<platform>_cents   the price WE set — the floor is this − $5.
+//                      Taken from the live price when the size first competes; reset when
+//                      someone edits the price by hand.
+//   presell_comp_log   every move (and every refusal to move), so a change on the platform
+//                      that we didn't make is visible.
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_comp_sku (
+    sku        TEXT PRIMARY KEY,
+    enabled    BOOLEAN NOT NULL DEFAULT true,
+    mode       TEXT NOT NULL DEFAULT 'undercut' CHECK (mode IN ('undercut', 'match')),
+    updated_by TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS comp_override TEXT CHECK (comp_override IN ('on', 'off'))`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS comp_base_alias_cents INTEGER`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS comp_base_stockx_cents INTEGER`);
+// 🔒 LOCK (owner, 2026-10-11): the price this app last set per platform. A price changed
+// outside the app (Alex's Alias bulk reprice) is put back to it. NULL = adopt the live price
+// at the next check (so shipping this never pushes an old price back up).
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS lock_alias_cents INTEGER`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS lock_stockx_cents INTEGER`);
+// Last check per platform, for the screen: { alias: { market, price, action, at }, stockx: {…} }.
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS comp_state JSONB NOT NULL DEFAULT '{}'`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_comp_log (
+    id            BIGSERIAL PRIMARY KEY,
+    stock_id      BIGINT REFERENCES presell_stock(id) ON DELETE CASCADE,
+    platform      TEXT NOT NULL,
+    mode          TEXT,
+    market_cents  INTEGER,
+    from_cents    INTEGER,
+    to_cents      INTEGER,
+    floor_cents   INTEGER,
+    action        TEXT NOT NULL,          -- down | up | hold | floor | drift | error | skip
+    note          TEXT,
+    changed       INTEGER NOT NULL DEFAULT 0,
+    failed        INTEGER NOT NULL DEFAULT 0,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS presell_comp_log_stock_idx ON presell_comp_log (stock_id, created_at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS presell_comp_log_at_idx ON presell_comp_log (created_at DESC)`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_listings_pending_idx ON presell_listings (status) WHERE status = 'pending'`);
 await sql(`
   CREATE TABLE IF NOT EXISTS presell_sales (
@@ -2243,7 +2290,7 @@ const LIVE_TABLES = [
   'online_orders', 'online_order_lines', 'online_order_events',
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
-  'presell_stock', 'presell_listings', 'presell_sales',
+  'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
   'ebay_listings', 'ebay_listing_ends',
 ];
 for (const t of LIVE_TABLES) {

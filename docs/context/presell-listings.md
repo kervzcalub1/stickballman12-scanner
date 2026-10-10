@@ -145,6 +145,36 @@ the numbers). A re-list without a cost keeps the one already there.
   rest". The LISTED and INBOUNDED posts carry supplier · PO (· N tracking numbers).
 - Tests: `e2e/presell-cost-shipment.spec.js`.
 
+## ⚔ Market competition + 🔒 price lock (owner, 2026-10-11)
+Tab **⚔ Compete**. Engine `api/_lib/presell-compete.js`, from the worker every
+`PRESELL_COMP_EVERY_MIN` (default **15**) — only where `PRESELL_WATCH=on`.
+- **🔒 Lock** (`app_settings presell_lock`, ON unless 'off'): every LIVE pre-sell size, competing
+  or not. `presell_stock.lock_<platform>_cents` = the price THIS APP last set; NULL → adopt the
+  live price at the next check (shipping it never pushed Alex's $161 back to the stale $284). A
+  live price ≠ lock (Alex's Alias bulk reprice — it can't be kept off our listings: same account)
+  → put back (`restore`). Lock off → the outside price is kept and logged `drift`. Set by: every
+  engine move, a price edit in the app (action.js update), adoption. Only ONE listing per size is
+  read back each check (a change to only some listings of a size goes unseen until the next move).
+- **Competition**: Undercut $1 / Match lowest ask; never more than **$5 under the price we set**
+  (`comp_base_<platform>_cents`, = the lock when the size first competes; reset by an in-app price
+  edit or "reset floor"); market **up** → follow it (undercut $1 under, no cap); lowest ask = our
+  price → hold (the platform's lowest ask may include OUR listings — then we can't see a rise while
+  we're the lowest). Decision is from the LOCKED price, so an outside change never moves the floor.
+- **2-hour rule** (`compFarCheck`): market under our floor for 2 h straight (`comp_state.far_since`)
+  → the market becomes the new price we set (base), the mode applies from there (`rebase`).
+- **Who takes part** (`compEffective`): master (`presell_comp_master`, off by default) → size
+  override (`comp_override` on/off/NULL) → shoe (`presell_comp_sku`) → All shoes
+  (`presell_comp_all` + `_all_mode`).
+- Per size × platform with live listings and nothing pending: read our listing back, lock check,
+  market (Alias: lower of With You / consigned lowest; StockX: Direct lowest ask), decide, update
+  every live listing one at a time (a 429 ends the pass). `comp_state` JSONB for the screen,
+  `presell_comp_log` = every move / floor / rebase / restore / drift / error.
+- **Telegram**: ONE post per pass with every change (↓ ↑ ⛔ floor ↻ re-based 🔒 put back), grouped
+  by SKU, to the **Pricing Alert (Pre-Sell)** group, `PRICE_ALERT_CHAT_ID` (same bot; split under
+  4096 chars). Unset → logged only, the tab says so.
+- Endpoint `api/presell-listings/compete.js` (GET overview; POST master/lock/all/sku/size/base/run;
+  run = 409 off the live server). Tests: `e2e/presell-compete.spec.js` (fake marketplaces + Telegram).
+
 ## Market prices — each platform's OWN words (owner, 2026-10-07)
 `POST /api/presell-listings/prices { platform, sku, sizes, consigned }`
 - **Alias**: Global Indicator · Lowest Listing · Last Sold · Highest Offer, toggle

@@ -309,6 +309,8 @@ export const api = {
   presellListingsAction: (body) => post('/api/presell-listings/action', body),
   presellListingsPrices: (body) => post('/api/presell-listings/prices', body),
   presellListingsSettings: () => get('/api/presell-listings/settings'),
+  presellCompete: () => get('/api/presell-listings/compete'),
+  presellCompeteSet: (body) => post('/api/presell-listings/compete', body),
   setPresellListingsSettings: (body) => post('/api/presell-listings/settings', body),
   onlineOrderByTracking: (t) => get(`/api/online-orders/by-tracking?t=${encodeURIComponent(t)}`),
   platformQuotes: (skus, consigned = true) => get(`/api/ph/platform-quotes?skus=${encodeURIComponent(skus.join(','))}${consigned ? '' : '&consigned=0'}`),

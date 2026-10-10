@@ -7,11 +7,13 @@
 //   · every 60 s — new orders on Alias (newest first) and StockX (active orders), matched
 //     to OUR listings by the platform's listing id → handleSale (deduct, take down, Telegram).
 //     Skipped entirely while we have nothing listed.
+//   · every 15 min (PRESELL_COMP_EVERY_MIN) — the 🔒 price lock + market competition.
 import { pendingPresellListings, presellListingsByExternal, presellHasOpenListings, updatePresellListing, getSetting, claimMarketplaceSale, markMarketplaceSaleAlerted } from './db.js';
 import { sendPresellSale } from './telegram.js';
 import { PLATFORMS, applyResult, handleSale } from './presell.js';
 import { aliasRecentOrders } from './alias.js';
 import { stockxActiveOrders, stockxConfigured } from './stockx.js';
+import { runCompetition } from './presell-compete.js';
 
 const OPS_EVERY_MS = 12_000;
 const SALES_EVERY_MS = 60_000;
@@ -153,7 +155,10 @@ export function startPresellWorker() {
   started = true;
   loop(checkOperations, OPS_EVERY_MS, 'operations');
   loop(checkSales, SALES_EVERY_MS, 'sales');
-  console.log('[presell-worker] watching StockX operations every 12 s and Alias/StockX sales every 60 s');
+  // 🔒 Price lock + market competition (presell-compete.js): idle while both are off.
+  const compMin = Math.max(5, Number(process.env.PRESELL_COMP_EVERY_MIN) || 15);
+  loop(runCompetition, compMin * 60_000, 'competition');
+  console.log(`[presell-worker] watching StockX operations every 12 s, Alias/StockX sales every 60 s, market competition every ${compMin} min`);
 }
 
 // Exposed so an admin action / test can run one pass on demand.

@@ -9,7 +9,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import {
   dbConfigured, getPresellListing, getPresellStock, setPresellStockQty, upsertPresellStock, updatePresellListing, movePresellListing,
-  updatePresellStockDetails, getPoBrief,
+  updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock,
 } from '../_lib/db.js';
 import { landedFromShelf } from '../../src/lib/costs.js';
 import { cleanCostStack, cleanShelf, parseTrackingList } from '../../src/lib/presellDetails.js';
@@ -143,6 +143,13 @@ async function listingAction(res, b, actor) {
     if (priceCents == null && newSize == null) return send(res, 400, { ok: false, error: 'Nothing to change.' });
     out = await P.update(l, { priceCents: priceCents ?? Number(l.price_cents), sizeValue: newSize ? sizeNumber(newSize) : null });
     if (out.ok && priceCents != null && out.price_cents === undefined && l.platform === 'alias') extra.price_cents = priceCents;
+    // A price set by hand is the new "price we set" for market competition: the $5 floor
+    // is measured from it from now on.
+    // It is also what the 🔒 lock holds the size at from now on.
+    if (out.ok && priceCents != null && !newSize) {
+      await setPresellCompBase(l.stock_id, l.platform, priceCents);
+      await setPresellLock(l.stock_id, l.platform, priceCents);
+    }
     // A size change means this pair is really the other size: it moves to that stock row.
     if (out.ok && newSize) {
       const old = await getPresellStock(l.stock_id);

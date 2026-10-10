@@ -18,6 +18,7 @@ import { parsePresellPaste } from '../lib/presellPaste.js';
 import { landedFromShelf } from '../lib/costs.js';
 import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
 import { parseTrackingList, saleNet } from '../lib/presellDetails.js';
+import { COMP_MODES, compFloor } from '../lib/presellCompete.js';
 
 // The cost stack fields a supplier preset carries (payout_presets), in the order the
 // Payout Calculator applies them.
@@ -211,11 +212,12 @@ export function PresellListings({ onHome, onSignOut }) {
           (Not the shipment <b>Pre-sell</b> screen.)
         </p>
         <Seg label="Section" value={tab} onChange={setTab}
-          options={[['new', 'List new'], ['stock', 'Stock'], ['listings', 'Listings'], ['sales', 'Sales']]} />
+          options={[['new', 'List new'], ['stock', 'Stock'], ['listings', 'Listings'], ['compete', '⚔ Compete'], ['sales', 'Sales']]} />
       </div>
       {tab === 'stock' ? <StockTab onSignOut={onSignOut} />
         : tab === 'listings' ? <ListingsTab onSignOut={onSignOut} />
           : tab === 'sales' ? <SalesTab onSignOut={onSignOut} />
+          : tab === 'compete' ? <CompeteTab onSignOut={onSignOut} />
             : <ListNew onSignOut={onSignOut} onListed={() => setTab('listings')} />}
     </div>
   );
@@ -1452,6 +1454,156 @@ function SalesTab({ onSignOut }) {
             </table>
           </div>
         )}
+      </div>
+    </>
+  );
+}
+
+/* ------------------------------ ⚔ Compete ------------------------------- */
+// Market competition (owner, 2026-10-11; api/_lib/presell-compete.js): keep live listings at
+// the market's lowest ask — undercut by $1 or match it — never more than $5 under the price
+// we set, following the market up. Master switch · "All shoes" · per shoe · per size.
+const ACTION_WORD = { down: '↓ lowered', up: '↑ raised', floor: '⛔ at the $5 floor', hold: 'held', none: 'no market', drift: '⚠ changed outside the app', error: '⚠ error', skip: 'skipped',
+  restore: '🔒 put back (changed outside the app)', rebase: '↻ re-based to the market (under the floor 2 h+)' };
+const c2d = (c) => (c == null ? '—' : `$${(Number(c) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })}`);
+
+function CompeteTab({ onSignOut }) {
+  const [d, setD] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(() => new Set());
+  const [showLog, setShowLog] = useState(false);
+  async function load() {
+    try { setD(await api.presellCompete()); setError(''); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLive(['presell_comp_sku', 'presell_comp_log', 'presell_stock'], load, { mount: false, minGap: 3000 });
+  async function set(body) {
+    setBusy(true); setError('');
+    try { setD(await api.presellCompeteSet(body)); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(false); }
+  }
+  if (!d) return <div className="card">{error ? <div className="error">{error}</div> : <p className="muted">Loading…</p>}</div>;
+  const toggle = (sku) => setOpen((o) => { const n = new Set(o); if (n.has(sku)) n.delete(sku); else n.add(sku); return n; });
+  const competing = d.shoes.reduce((n, s) => n + s.sizes.filter((z) => z.mode).length, 0);
+  return (
+    <>
+      <div className="card ap-comp">
+        <label className="ap-comp-master">
+          <input type="checkbox" checked={d.master} disabled={busy} onChange={(e) => set({ action: 'master', on: e.target.checked })} />
+          <span><b>⚔ Market competition is {d.master ? 'ON' : 'OFF'}</b>
+            <span className="muted xs"> · {competing} size{competing === 1 ? '' : 's'} {d.master ? 'taking part' : 'set to take part (paused)'} · checks every {d.everyMin} min{d.lastRun ? ` · last ${when(d.lastRun)}` : ''}{d.running ? ' · running now…' : ''}</span></span>
+        </label>
+        <label className="ap-comp-master">
+          <input type="checkbox" checked={d.lock} disabled={busy} onChange={(e) => set({ action: 'lock', on: e.target.checked })} />
+          <span><b>🔒 Lock pre-sell prices is {d.lock ? 'ON' : 'OFF'}</b>
+            <span className="muted xs"> · a price changed outside this app (e.g. an Alias bulk reprice) is put back at the next check — every live size, competing or not. Change prices here instead.</span></span>
+        </label>
+        {!d.alertGroup && <p className="error xs">The price-alert Telegram group isn’t set on this server (PRICE_ALERT_CHAT_ID) — changes are logged below but not posted.</p>}
+        <p className="muted xs ap-comp-rules">
+          Every check, per size and per platform: if someone is <b>under</b> us, we go to their price (<b>Match</b>) or $1 under it
+          (<b>Undercut $1</b>) — but never more than <b>$5 under the price we set</b>. If the market goes <b>up</b>, we follow it up (no cap).
+          If the lowest ask is already ours, we hold. If the market stays <b>under the floor for 2 hours</b>, the market becomes the new
+          “price we set” and the mode carries on from there. Only <b>live</b> listings move. Editing a price here makes that the new “price we set”.
+          Every move is posted to the price-alert group.
+        </p>
+        <div className="ap-comp-all">
+          <label className="ap-activate">
+            <input type="checkbox" checked={d.all.on} disabled={busy} onChange={(e) => set({ action: 'all', on: e.target.checked, mode: d.all.mode })} />
+            <span><b>All shoes</b> <span className="muted xs">— every shoe not set on its own below</span></span>
+          </label>
+          <Seg label="Default mode" value={d.all.mode} onChange={(m) => set({ action: 'all', on: d.all.on, mode: m })} options={Object.entries(COMP_MODES)} />
+        </div>
+        <div className="oo-actions">
+          <button type="button" className="btn sm" disabled={busy || !(d.master || d.lock) || d.running || !d.here} onClick={() => set({ action: 'run' })}
+            title={d.here ? 'Check every competing size now' : 'Only the live server moves prices'}>▶ Run now</button>
+          {!d.here && <span className="muted xs">This server doesn’t move prices — only the live one does (PRESELL_WATCH).</span>}
+        </div>
+        {error && <div className="error mt">{error}</div>}
+      </div>
+
+      <div className="card">
+        {!d.shoes.length ? <p className="muted">Nothing listed yet.</p> : (
+          <div className="ap-groups">
+            {d.shoes.map((sh) => {
+              const own = sh.setting;
+              const choice = !own ? 'all' : own.enabled ? 'on' : 'off';
+              const mode = own?.mode || d.all.mode;
+              const on = sh.sizes.filter((z) => z.mode).length;
+              const isOpen = open.has(sh.sku);
+              return (
+                <div key={sh.sku} className={`ap-group${isOpen ? ' open' : ''}`}>
+                  <button type="button" className="ap-group-head" aria-expanded={isOpen} onClick={() => toggle(sh.sku)}>
+                    <ShoeThumb url={sh.image} size={44} />
+                    <span className="ap-group-main">
+                      <span className="ap-group-title"><b>{sh.sku}</b></span>
+                      <span className="muted xs ap-group-name">{sh.name}</span>
+                      <span className="xs">{on ? <span className="ap-comp-on">⚔ {on} of {sh.sizes.length} sizes</span> : <span className="muted">not competing</span>}</span>
+                    </span>
+                    <span className="ap-caret">{isOpen ? '▾' : '▸'}</span>
+                  </button>
+                  <div className="ap-group-bar ap-comp-bar">
+                    <Seg label={`${sh.sku} competition`} value={choice} onChange={(v) => set(v === 'all' ? { action: 'sku', sku: sh.sku, clear: true } : { action: 'sku', sku: sh.sku, enabled: v === 'on', mode })}
+                      options={[['all', `Follow all (${d.all.on ? 'on' : 'off'})`], ['on', 'On'], ['off', 'Off']]} />
+                    {choice !== 'off' && <Seg label={`${sh.sku} mode`} value={mode} onChange={(m) => set({ action: 'sku', sku: sh.sku, enabled: choice === 'all' ? d.all.on : true, mode: m })} options={Object.entries(COMP_MODES)} />}
+                    {d.here && d.master && on > 0 && <button type="button" className="btn sm ghost" disabled={busy || d.running} onClick={() => set({ action: 'run', sku: sh.sku })}>▶ Run this shoe</button>}
+                  </div>
+                  {isOpen && (
+                    <div className="ap-group-pairs">
+                      {sh.sizes.map((z) => (
+                        <div key={z.id} className="ap-comp-size">
+                          <div className="ap-comp-size-head">
+                            <b>Size {z.size}</b>
+                            <span className={z.mode ? 'ap-comp-on xs' : 'muted xs'}>{z.mode ? COMP_MODES[z.mode] : 'off'}</span>
+                            <Seg label={`Size ${z.size}`} value={z.comp_override || 'shoe'} onChange={(v) => set({ action: 'size', stockId: z.id, override: v === 'shoe' ? null : v })}
+                              options={[['shoe', 'Shoe'], ['on', 'On'], ['off', 'Off']]} />
+                          </div>
+                          {['alias', 'stockx'].map((p) => {
+                            const st = z.comp_state?.[p];
+                            const base = z[`comp_base_${p}_cents`];
+                            if (!z[`${p}_live`]) return <div key={p} className="muted xs">{PLAT[p]}: nothing live</div>;
+                            return (
+                              <div key={p} className="xs ap-comp-plat">
+                                <b>{PLAT[p]}</b> {z[`${p}_live`]} live at <b>{c2d(st?.price ?? z[`${p}_price`])}</b>
+                                {st?.market != null && <> · market {c2d(st.market)}</>}
+                                {z[`lock_${p}_cents`] != null && <> · 🔒 {c2d(z[`lock_${p}_cents`])}</>}
+                                {base != null && <> · set {c2d(base)} → floor <b>{c2d(compFloor(base))}</b></>}
+                                {st?.far_since && <span className="error"> · market under the floor since {when(st.far_since)} (re-bases after 2 h)</span>}
+                                {st && <span className="muted"> · {ACTION_WORD[st.action] || st.action} {when(st.at)}</span>}
+                                {base != null && <>{' · '}<button type="button" className="linklike xs" disabled={busy} title="Use the live price as the new “price we set” at the next check"
+                                  onClick={() => set({ action: 'base', stockId: z.id, platform: p })}>reset floor</button></>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <button type="button" className="btn sm ghost" onClick={() => setShowLog((v) => !v)}>{showLog ? '▾' : '▸'} Price changes ({d.log.length})</button>
+        {showLog && (!d.log.length ? <p className="muted">No changes yet.</p> : (
+          <div className="ap-comp-log">
+            {d.log.map((g) => (
+              <div key={g.id} className={`ap-comp-logrow ${g.action}`}>
+                <span className="muted xs">{when(g.created_at)}</span>
+                <span><b>{g.sku}</b> {g.size} · {PLAT[g.platform] || g.platform}</span>
+                <span>{ACTION_WORD[g.action] || g.action}{g.from_cents != null && g.to_cents != null ? ` ${c2d(g.from_cents)} → ${c2d(g.to_cents)}` : ''}
+                  {g.market_cents != null ? <span className="muted"> · market {c2d(g.market_cents)}</span> : null}
+                  {g.changed || g.failed ? <span className="muted"> · {g.changed} moved{g.failed ? `, ${g.failed} failed` : ''}</span> : null}</span>
+                {g.note && <span className="muted xs">{g.note}</span>}
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
     </>
   );

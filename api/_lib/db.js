@@ -8914,3 +8914,78 @@ export async function dropEbayListing(itemId) {
 export async function recentEbayEnds(limit = 200) {
   return await db()`SELECT * FROM ebay_listing_ends ORDER BY ended_at DESC LIMIT ${limit}`;
 }
+
+/* ------------------------ Pre-sell market competition ------------------------ */
+// docs/context/presell-listings.md → "Market competition"; the engine is presell-compete.js.
+const COMP_KEYS = ['presell_comp_master', 'presell_comp_all', 'presell_comp_all_mode', 'presell_comp_last_run', 'presell_lock'];
+export async function presellCompSettings() {
+  const rows = await db()`SELECT key, value FROM app_settings WHERE key = ANY(${COMP_KEYS}::text[])`;
+  const v = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return {
+    master: v.presell_comp_master === 'on',
+    all: { on: v.presell_comp_all === 'on', mode: v.presell_comp_all_mode === 'match' ? 'match' : 'undercut' },
+    lastRun: v.presell_comp_last_run || null,
+    // 🔒 on unless switched off (owner, 2026-10-11).
+    lock: v.presell_lock !== 'off',
+  };
+}
+export async function presellCompSkus() {
+  return await db()`SELECT * FROM presell_comp_sku`;
+}
+export async function setPresellCompSku(sku, { enabled, mode }, actor) {
+  await db()`INSERT INTO presell_comp_sku (sku, enabled, mode, updated_by) VALUES (${sku}, ${enabled}, ${mode}, ${actor})
+             ON CONFLICT (sku) DO UPDATE SET enabled = EXCLUDED.enabled, mode = EXCLUDED.mode, updated_by = EXCLUDED.updated_by, updated_at = now()`;
+}
+export async function clearPresellCompSku(sku) {
+  await db()`DELETE FROM presell_comp_sku WHERE sku = ${sku}`;
+}
+export async function setPresellCompOverride(stockId, override, actor) {
+  await db()`UPDATE presell_stock SET comp_override = ${override}, updated_by = ${actor}, updated_at = now() WHERE id = ${stockId}`;
+}
+// The price WE set for a size on a platform (the floor is this − $5). null = take it from the
+// live price at the next check.
+export async function setPresellCompBase(stockId, platform, cents) {
+  if (platform === 'alias') await db()`UPDATE presell_stock SET comp_base_alias_cents = ${cents} WHERE id = ${stockId}`;
+  else await db()`UPDATE presell_stock SET comp_base_stockx_cents = ${cents} WHERE id = ${stockId}`;
+}
+// The price this app last set (🔒). null = adopt the live price at the next check.
+export async function setPresellLock(stockId, platform, cents) {
+  if (platform === 'alias') await db()`UPDATE presell_stock SET lock_alias_cents = ${cents} WHERE id = ${stockId}`;
+  else await db()`UPDATE presell_stock SET lock_stockx_cents = ${cents} WHERE id = ${stockId}`;
+}
+export async function savePresellCompState(stockId, platform, state) {
+  await db()`UPDATE presell_stock SET comp_state = jsonb_set(coalesce(comp_state, '{}'::jsonb), ${[platform]}::text[], ${JSON.stringify(state)}::jsonb)
+             WHERE id = ${stockId}`;
+}
+export async function insertPresellCompLog(r) {
+  await db()`INSERT INTO presell_comp_log (stock_id, platform, mode, market_cents, from_cents, to_cents, floor_cents, action, note, changed, failed)
+             VALUES (${r.stock_id}, ${r.platform}, ${r.mode || null}, ${r.market_cents ?? null}, ${r.from_cents ?? null}, ${r.to_cents ?? null},
+                     ${r.floor_cents ?? null}, ${r.action}, ${r.note || null}, ${r.changed || 0}, ${r.failed || 0})`;
+}
+export async function listPresellCompLog(limit = 150) {
+  return await db()`
+    SELECT g.*, s.sku, s.size, s.name FROM presell_comp_log g LEFT JOIN presell_stock s ON s.id = g.stock_id
+     ORDER BY g.created_at DESC, g.id DESC LIMIT ${limit}`;
+}
+// Every stock row with something listed, its live listings per platform, and its settings —
+// what the Compete tab shows and what the engine walks.
+export async function presellCompRows() {
+  return await db()`
+    SELECT s.id, s.sku, s.name, s.image, s.size, s.qty, s.sold, s.comp_override, s.comp_base_alias_cents, s.comp_base_stockx_cents, s.comp_state,
+           s.lock_alias_cents, s.lock_stockx_cents,
+           count(l.*) FILTER (WHERE l.platform = 'alias' AND l.status = 'live')::int AS alias_live,
+           count(l.*) FILTER (WHERE l.platform = 'stockx' AND l.status = 'live')::int AS stockx_live,
+           count(l.*) FILTER (WHERE l.platform = 'stockx' AND l.status = 'pending')::int AS stockx_pending,
+           count(l.*) FILTER (WHERE l.platform = 'alias' AND l.status = 'pending')::int AS alias_pending,
+           min(l.price_cents) FILTER (WHERE l.platform = 'alias' AND l.status = 'live')::int AS alias_price,
+           min(l.price_cents) FILTER (WHERE l.platform = 'stockx' AND l.status = 'live')::int AS stockx_price
+      FROM presell_stock s JOIN presell_listings l ON l.stock_id = s.id
+     WHERE l.status IN ('live', 'off', 'pending')
+     GROUP BY s.id
+     ORDER BY s.sku, CASE WHEN regexp_replace(s.size, '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
+                          THEN regexp_replace(s.size, '[^0-9.]', '', 'g')::numeric END NULLS LAST, s.size`;
+}
+export async function livePresellListings(stockId, platform) {
+  return await db()`SELECT * FROM presell_listings WHERE stock_id = ${stockId} AND platform = ${platform} AND status = 'live'
+                    ORDER BY created_at, id`;
+}

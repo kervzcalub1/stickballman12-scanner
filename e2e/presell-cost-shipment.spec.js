@@ -8,7 +8,7 @@ import { signToken } from '../api/_lib/util.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
 import { parseTrackingList, saleNet } from '../src/lib/presellDetails.js';
 import { landedFromShelf } from '../src/lib/costs.js';
-import { stockReportCsv, salesReportCsv } from '../src/lib/presellReport.js';
+import { stockReportCsv, salesReportCsv, listingsReportCsv } from '../src/lib/presellReport.js';
 
 loadEnv();
 test.describe.configure({ mode: 'serial' });
@@ -112,6 +112,14 @@ test('date filters: sales by the day sold, stock by the day listed; the reports 
   const today = (await (await request.get(`/api/presell-listings/list?tab=stock&q=${SKU}`, h)).json()).rows;
   expect(today.length).toBeGreaterThanOrEqual(4);
   expect(stockReportCsv(today)).toContain('1Z999AA10123456784');
+  expect(stockReportCsv(today).split('\n')[0]).not.toContain('Alias');   // stock = pairs, not listings
+  // Listings report: by the day created, the tab's filters apply.
+  const ls = (await (await request.get(`/api/presell-listings/list?tab=listings&view=sold&q=${SKU}`, h)).json()).rows;
+  expect(ls.length).toBeGreaterThanOrEqual(2);
+  const lcsv = listingsReportCsv(ls);
+  expect(lcsv.split('\n')[0]).toContain('Listing id');
+  expect(lcsv).toContain(`${SKU}-sale-11`);
+  expect((await (await request.get(`/api/presell-listings/list?tab=listings&view=sold&q=${SKU}&from=2099-01-01`, h)).json()).rows).toEqual([]);
   expect((await request.get('/api/presell-listings/list?tab=pos', h)).status()).toBe(200);
 });
 
@@ -141,8 +149,15 @@ test('the page: ✎ Cost & shipment saves pasted tracking; the report downloads'
   expect(csv.suggestedFilename()).toMatch(/^presell-stock_.*\.csv$/);
   const [pdf] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '⬇ PDF' }).click()]);
   expect(pdf.suggestedFilename()).toMatch(/\.pdf$/);
+  // Each tab its own report: Listings → every listing, Sales → what sold.
+  await page.getByRole('button', { name: 'Listings', exact: true }).click();
+  await expect(page.getByText('Listings report')).toBeVisible();
+  const [lst] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '⬇ CSV' }).click()]);
+  expect(lst.suggestedFilename()).toMatch(/^presell-listings_.*\.csv$/);
   await page.getByRole('button', { name: 'Sales', exact: true }).click();
-  await expect(page.getByText(/what sold/)).toBeVisible();
+  await expect(page.getByText('Sales report')).toBeVisible();
+  const [sal] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '⬇ PDF' }).click()]);
+  expect(sal.suggestedFilename()).toMatch(/^presell-sales_.*\.pdf$/);
   // Phone width: no sideways scroll on the page itself.
   await page.setViewportSize({ width: 390, height: 800 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);

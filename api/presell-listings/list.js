@@ -1,5 +1,6 @@
 // GET /api/presell-listings/list?tab=stock|listings|sales|pos&view=&platform=&q=&stock=&from=&to=
-// from / to = YYYY-MM-DD (EST): Stock by the day first listed, Sales by the day sold.
+// from / to = YYYY-MM-DD (EST): Stock by the day first listed, Listings by the day created,
+// Sales by the day sold.
 // Pre-sell Listings (docs/context/presell-listings.md) — the three read views.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, listPresellStock, listPresellListings, listPresellSales, presellPoOptions } from '../_lib/db.js';
@@ -24,7 +25,7 @@ export default async function handler(req, res) {
     if (tab === 'pos') return send(res, 200, { ok: true, pos: await presellPoOptions() });
     const platform = ['alias', 'stockx'].includes(p.get('platform')) ? p.get('platform') : null;
     const stockId = Number(p.get('stock')) > 0 ? Number(p.get('stock')) : null;
-    const out = await listPresellListings({ view: VIEWS.has(p.get('view')) ? p.get('view') : 'all', platform, q, stockId });
+    const out = await listPresellListings({ view: VIEWS.has(p.get('view')) ? p.get('view') : 'all', platform, q, stockId, from, to, limit: from || to ? 5000 : 1000 });
     return send(res, 200, { ok: true, ...out });
   } catch (e) {
     console.error('[presell-listings/list]', e.message);

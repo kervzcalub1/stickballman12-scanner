@@ -130,13 +130,16 @@ the numbers). A re-list without a cost keeps the one already there.
   "Cost: not entered — no net figure". Plus supplier · PO · tracking. One function, `saleNet`, for
   the post, the Sales tab (Cost / Net columns + totals) and the report. Cost is read from the stock
   row at the time, so a cost entered after a sale shows in the Sales tab / report (not the old post).
-- **📄 Report** (Stock + Listings tabs → stock report; Sales tab → sales report): from/to dates (EST;
-  stock = day first listed, sales = day sold; on Stock and Sales the list is filtered too) →
-  **⬇ PDF / ⬇ CSV**, built client-side from one fresh read (`src/lib/presellReport.js`, jsPDF lazy,
-  ASCII-only in the PDF). Stock: pairs / sold / left, In transit / Arrived / Pre-sell, supplier, PO,
-  tracking (all in CSV), shelf, preset, cost, left-at-cost, listings + price range per platform.
-  Sales: date/time, platform, order, price, payout (* est.), cost, net, supplier/PO, kind; totals
-  count net only over sales with a cost.
+- **📄 Report — one per tab** (owner, 2026-10-10), from/to dates (EST) → **⬇ PDF / ⬇ CSV**, built
+  client-side from one fresh read (`src/lib/presellReport.js`, jsPDF lazy, ASCII-only in the PDF):
+  - **Stock** (day first listed; list filtered too): the pairs we have — pairs / sold / left, In
+    transit / Arrived / Pre-sell, supplier, PO, tracking (all in CSV), shelf, preset, cost,
+    left-at-cost; PDF has a bold subtotal per SKU.
+  - **Listings** (day the listing was created; the tab's platform + status filter apply, named on
+    the report): every listing — platform, status, price, est. payout (default fee), est. net (only
+    with a cost), listing id, listed by, last problem.
+  - **Sales** (day sold; list filtered too): price, payout (* est.), cost, net, supplier/PO, kind;
+    totals count net only over sales with a cost.
 - **Inbound**: `/api/inbound` returns `presell` (rows linked to the listed POs, `presellByPo`); a
   shipment shows "🏷 Pre-listed N · sold M" and, opened, the sizes with "set M aside, inbound the
   rest". The LISTED and INBOUNDED posts carry supplier · PO (· N tracking numbers).

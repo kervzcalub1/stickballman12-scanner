@@ -1,10 +1,12 @@
 // Pre-sell Listings reports — PDF + CSV (docs/context/presell-listings.md → "Reports").
 //
-// Two reports, each for a date range (EST):
-//   · STOCK  — what's left: every SKU + size first listed in the range, pairs / sold / left,
-//              in transit or arrived, supplier, PO, tracking, cost, what's listed where.
-//              The inbound side reads it to know what's coming and what's already sold.
-//   · SALES  — what sold in the range: price, payout, cost, net per sale, with totals.
+// One report per tab (owner, 2026-10-10), each for a date range (EST):
+//   · STOCK    (Stock tab)    — the pairs we have: per SKU + size first listed in the range,
+//                pairs / sold / left, in transit or arrived, supplier, PO, tracking, cost,
+//                with a subtotal per SKU. The inbound side reads it for what's coming.
+//   · LISTINGS (Listings tab) — every Alias / StockX listing created in the range (the tab's
+//                platform + status filter apply): status, price, est. payout, listing id.
+//   · SALES    (Sales tab)    — what sold in the range: price, payout, cost, net, totals.
 // Built client-side from what the tab already loaded; CSV and PDF come from the SAME rows,
 // so the two files can never disagree. jsPDF is lazy-loaded.
 //
@@ -12,14 +14,13 @@
 // drops em-dashes and middots silently (see batchReport.js).
 import { lazyImport } from './chunkLoad.js';
 import { toCsv } from './manifestCsv.js';
-import { estDate, estTime } from './format.js';
+import { estDate, estTime, estClock } from './format.js';
 import { saleNet } from './presellDetails.js';
 
 const PLAT = { alias: 'Alias', stockx: 'StockX' };
 const n2 = (v) => (v == null || !Number.isFinite(Number(v)) ? '' : Number(v).toFixed(2));
 const usd = (v) => (v == null || !Number.isFinite(Number(v)) ? '-' : `${Number(v) < 0 ? '-' : ''}$${Math.abs(Number(v)).toFixed(2)}`);
 const cents = (c) => (c == null ? null : Number(c) / 100);
-const range = (a, b) => (a == null ? '' : a === b ? `$${Math.round(a / 100)}` : `$${Math.round(a / 100)}-${Math.round(b / 100)}`);
 const sizeNum = (z) => { const m = String(z || '').match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : Infinity; };
 
 // Where a stock row stands, in words the floor uses.
@@ -45,10 +46,6 @@ export function stockReportRows(rows) {
         shelf: s.shelf_price != null ? Number(s.shelf_price) : null, cost,
         preset: s.cost_stack?.preset || '',
         leftValue: cost != null ? Math.round(cost * left * 100) / 100 : null,
-        alias: `${s.alias_live || 0} live${s.alias_other ? ` / ${s.alias_other} other` : ''}`,
-        aliasPrice: range(s.alias_min_cents, s.alias_max_cents),
-        stockx: `${s.stockx_live || 0} live${s.stockx_other ? ` / ${s.stockx_other} other` : ''}`,
-        stockxPrice: range(s.stockx_min_cents, s.stockx_max_cents),
       };
     });
 }
@@ -60,7 +57,7 @@ export function salesReportRows(rows) {
       const net = saleNet(x);
       const at = x.sold_at || x.created_at;
       return {
-        date: estDate(at), time: estTime(at), sku: x.sku || '', name: x.name || '', size: x.size || '',
+        date: estDate(at), time: estTime(at), at, sku: x.sku || '', name: x.name || '', size: x.size || '',
         platform: PLAT[x.platform] || x.platform, order: x.order_id,
         price: net.price, payout: net.payout, payoutEst: net.estimated, cost: net.cost, net: net.profit,
         supplier: x.supplier || '', po: x.po_code || '',
@@ -93,7 +90,6 @@ export function stockReportCsv(rows) {
     ['listed', 'Listed (EST)'], ['sku', 'SKU'], ['name', 'Name'], ['size', 'Size'], ['qty', 'Pairs'], ['sold', 'Sold'], ['left', 'Left'],
     ['state', 'Status'], ['supplier', 'Supplier'], ['po', 'PO'], ['tracking', 'Tracking numbers'], ['note', 'Shipment note'],
     ['shelf', 'Shelf $'], ['preset', 'Preset'], ['cost', 'Cost $ / pair'], ['leftValue', 'Left at cost $'],
-    ['alias', 'Alias listings'], ['aliasPrice', 'Alias price'], ['stockx', 'StockX listings'], ['stockxPrice', 'StockX price'],
   ], stockReportRows(rows).map((r) => ({ ...r, shelf: n2(r.shelf), cost: n2(r.cost), leftValue: n2(r.leftValue) })));
 }
 export function salesReportCsv(rows) {
@@ -169,15 +165,21 @@ async function tablePdf({ title, subtitle, summary, cols, cells, footer }) {
     return doc;
   }
   head();
-  cells.forEach((row, ri) => {
+  // A row is string[] — or { bold, cells } for a subtotal line (ruled above, bold).
+  cells.forEach((item, ri) => {
+    const row = Array.isArray(item) ? item : item.cells;
     if (y > PAGE_H - MARGIN - 10) { doc.addPage(); header(); head(); }
-    if (ri % 2) { doc.setFillColor(...ZEBRA); doc.rect(MARGIN, y, right - MARGIN, 5.5, 'F'); }
+    if (!Array.isArray(item) && item.bold) {
+      doc.setDrawColor(...HAIR); doc.line(MARGIN, y, right, y);
+      doc.setFont('helvetica', 'bold');
+    } else if (ri % 2) { doc.setFillColor(...ZEBRA); doc.rect(MARGIN, y, right - MARGIN, 5.5, 'F'); }
     let x = MARGIN;
     row.forEach((text, i) => {
       const t = fit(text, widths[i]);
       if (cols[i][2]) doc.text(t, x + widths[i] - 1.5, y + 3.9, { align: 'right' }); else doc.text(t, x + 1.5, y + 3.9);
       x += widths[i];
     });
+    doc.setFont('helvetica', 'normal');
     y += 5.5;
   });
   if (footer) {
@@ -193,18 +195,81 @@ const rangeLabel = (from, to) => (from && to ? `${from} to ${to}` : from ? `from
 export async function stockReportPdf(rows, { from, to, generatedAt }) {
   const rs = stockReportRows(rows);
   const t = stockTotals(rs);
-  return tablePdf({
-    title: 'Pre-sell stock - what is left',
-    subtitle: `Listed ${rangeLabel(from, to)} (EST)  |  ${generatedAt}`,
-    summary: [['SKU x size', String(t.lines)], ['Pairs', String(t.qty)], ['Sold', String(t.sold)], ['Left', String(t.left)],
-      ['Left in transit', String(t.inTransit)], ['Left at cost', `${usd(t.leftValue)}${t.noCost ? ` (${t.noCost} no cost)` : ''}`]],
-    cols: [['SKU', 26], ['Name', 0], ['Size', 12], ['Pairs', 12, true], ['Sold', 11, true], ['Left', 11, true], ['Status', 32],
-      ['Supplier / PO', 34], ['Tracking', 30], ['Cost', 16, true], ['Alias', 26], ['StockX', 26]],
-    cells: rs.map((r) => [r.sku, r.name, r.size, String(r.qty), String(r.sold), String(r.left), r.state,
+  // One line per size, then a bold subtotal per SKU (when it has more than one size).
+  const cells = [];
+  for (let i = 0; i < rs.length; i++) {
+    const r = rs[i];
+    cells.push([r.sku, r.name, r.size, String(r.qty), String(r.sold), String(r.left), r.state,
       [r.supplier, r.po].filter(Boolean).join(' / ') || '-',
       r.trackingCount ? `${r.tracking.split(' ')[0]}${r.trackingCount > 1 ? ` +${r.trackingCount - 1}` : ''}` : '-',
-      usd(r.cost), `${r.alias}${r.aliasPrice ? ` ${r.aliasPrice}` : ''}`, `${r.stockx}${r.stockxPrice ? ` ${r.stockxPrice}` : ''}`]),
-    footer: 'Cost = shelf price through the supplier preset (landed). Blank cost = none entered. Full tracking lists are in the CSV.',
+      usd(r.cost), usd(r.leftValue)]);
+    if (rs[i + 1]?.sku !== r.sku) {
+      const g = rs.filter((x) => x.sku === r.sku);
+      if (g.length > 1) {
+        const gt = stockTotals(g);
+        cells.push({ bold: true, cells: [`${r.sku} total`, `${g.length} sizes`, '', String(gt.qty), String(gt.sold), String(gt.left), '', '', '', '',
+          gt.leftValue ? usd(gt.leftValue) : '-'] });
+      }
+    }
+  }
+  return tablePdf({
+    title: 'Pre-sell stock report - have / sold / left',
+    subtitle: `Listed ${rangeLabel(from, to)} (EST)  |  ${generatedAt}`,
+    summary: [['SKU x size', String(t.lines)], ['Pairs we have', String(t.qty)], ['Sold', String(t.sold)], ['Left', String(t.left)],
+      ['Left in transit', String(t.inTransit)], ['Left at cost', `${usd(t.leftValue)}${t.noCost ? ` (${t.noCost} no cost)` : ''}`]],
+    cols: [['SKU', 28], ['Name', 0], ['Size', 12], ['Pairs', 13, true], ['Sold', 12, true], ['Left', 12, true], ['Status', 34],
+      ['Supplier / PO', 36], ['Tracking', 32], ['Cost', 17, true], ['Left at cost', 21, true]],
+    cells,
+    footer: 'Cost = shelf price through the supplier preset (landed). "-" = none entered. Full tracking lists are in the CSV.',
+  });
+}
+
+/* ------------------------------- Listings -------------------------------- */
+const STATUS_WORD = { pending: 'Pending', live: 'Live', off: 'Not live', sold: 'Sold', deleted: 'Deleted', failed: 'Failed' };
+export function listingsReportRows(rows) {
+  return [...(rows || [])]
+    .sort((a, b) => String(a.sku).localeCompare(String(b.sku)) || sizeNum(a.size) - sizeNum(b.size)
+      || String(a.platform).localeCompare(String(b.platform)) || new Date(a.created_at) - new Date(b.created_at))
+    .map((l) => {
+      // Payout if it sold at this price (default fee); net only when a cost was entered.
+      const m = saleNet({ platform: l.platform, price_cents: l.price_cents, payout_cents: null, unit_cost: l.unit_cost });
+      return {
+        listed: estDate(l.created_at), time: estTime(l.created_at), at: l.created_at, sku: l.sku, name: l.name || '', size: l.size,
+        platform: PLAT[l.platform] || l.platform, status: STATUS_WORD[l.status] || l.status,
+        price: m.price, payout: m.payout, cost: m.cost, net: m.profit,
+        listingId: l.external_id || '', by: l.created_by || '', error: l.last_error || '',
+        supplier: l.supplier || '', po: l.po_code || '',
+      };
+    });
+}
+export function listingsTotals(rs) {
+  const by = (k, v) => rs.filter((r) => r[k] === v).length;
+  return {
+    count: rs.length, live: by('status', 'Live'), off: by('status', 'Not live'), pending: by('status', 'Pending'),
+    sold: by('status', 'Sold'), gone: by('status', 'Deleted') + by('status', 'Failed'),
+    alias: by('platform', 'Alias'), stockx: by('platform', 'StockX'),
+  };
+}
+export function listingsReportCsv(rows) {
+  return toCsv([
+    ['listed', 'Listed (EST)'], ['time', 'Time'], ['sku', 'SKU'], ['name', 'Name'], ['size', 'Size'], ['platform', 'Platform'], ['status', 'Status'],
+    ['price', 'Price $'], ['payout', 'Est. payout $'], ['cost', 'Cost $'], ['net', 'Est. net $'], ['listingId', 'Listing id'], ['by', 'Listed by'],
+    ['supplier', 'Supplier'], ['po', 'PO'], ['error', 'Last problem'],
+  ], listingsReportRows(rows).map((r) => ({ ...r, price: n2(r.price), payout: n2(r.payout), cost: n2(r.cost), net: n2(r.net) })));
+}
+export async function listingsReportPdf(rows, { from, to, generatedAt, scope = '' }) {
+  const rs = listingsReportRows(rows);
+  const t = listingsTotals(rs);
+  return tablePdf({
+    title: 'Pre-sell listings report',
+    subtitle: `Created ${rangeLabel(from, to)} (EST)${scope ? `  |  ${scope}` : ''}  |  ${generatedAt}`,
+    summary: [['Listings', String(t.count)], ['Alias / StockX', `${t.alias} / ${t.stockx}`], ['Live', String(t.live)], ['Not live', String(t.off)],
+      ['Pending', String(t.pending)], ['Sold', String(t.sold)], ['Deleted / failed', String(t.gone)]],
+    cols: [['Listed (EST)', 30], ['SKU', 26], ['Name', 0], ['Size', 12], ['Platform', 16], ['Status', 18],
+      ['Price', 16, true], ['Est. payout', 20, true], ['Est. net', 18, true], ['Listing id', 44]],
+    cells: rs.map((r) => [`${r.listed} ${estClock(r.at)}`, r.sku, r.name, r.size, r.platform, r.status,
+      usd(r.price), usd(r.payout), usd(r.net), r.listingId || '-']),
+    footer: 'Est. payout = price less the default fee (Alias 9.9%, StockX 10%). Est. net = that payout - cost, only where a cost was entered.',
   });
 }
 
@@ -212,13 +277,13 @@ export async function salesReportPdf(rows, { from, to, generatedAt }) {
   const rs = salesReportRows(rows);
   const t = salesTotals(rs);
   return tablePdf({
-    title: 'Pre-sell sales',
+    title: 'Pre-sell sales report',
     subtitle: `Sold ${rangeLabel(from, to)} (EST)  |  ${generatedAt}`,
     summary: [['Sales', String(t.count)], ['Sold for', usd(t.price)], ['Payout', `${usd(t.payout)}${t.estimated ? ` (${t.estimated} est.)` : ''}`],
       ['Cost', `${usd(t.cost)}${t.noCost ? ` (${t.noCost} no cost)` : ''}`], ['Net', usd(t.net)]],
     cols: [['Sold (EST)', 30], ['SKU', 26], ['Name', 0], ['Size', 12], ['Platform', 16], ['Order', 30],
       ['Price', 17, true], ['Payout', 19, true], ['Cost', 17, true], ['Net', 17, true], ['Supplier / PO', 30]],
-    cells: rs.map((r) => [`${r.date} ${r.time}`, r.sku, r.name, r.size, r.platform, r.order,
+    cells: rs.map((r) => [`${r.date} ${estClock(r.at)}`, r.sku, r.name, r.size, r.platform, r.order,
       usd(r.price), `${usd(r.payout)}${r.payoutEst ? '*' : ''}`, usd(r.cost), usd(r.net), [r.supplier, r.po].filter(Boolean).join(' / ') || '-']),
     footer: `Payout = the platform's own figure; * = estimated from the default fee (Alias 9.9%, StockX 10%). Net = payout - cost; totals count only sales with a cost.`,
   });

@@ -17,7 +17,7 @@ import { isUpcCode } from '../lib/codes.js';
 import { parsePresellPaste } from '../lib/presellPaste.js';
 import { landedFromShelf } from '../lib/costs.js';
 import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
-import { parseTrackingList, saleNet } from '../lib/presellDetails.js';
+import { parseTrackingList, saleNet, pairsLeft, listableOn, pairsOwed } from '../lib/presellDetails.js';
 import { COMP_MODES, compFloor } from '../lib/presellCompete.js';
 
 // The cost stack fields a supplier preset carries (payout_presets), in the order the
@@ -634,6 +634,7 @@ function StockTab({ onSignOut }) {
   const [listFor, setListFor] = useState(null);   // { stock, platform }
   const [fill, setFill] = useState(false);
   const [detailsFor, setDetailsFor] = useState(null);   // { sku, focus }
+  const [restoreFor, setRestoreFor] = useState(null);   // a SKU
   const [presets, setPresets] = useState([]);
   useEffect(() => { api.payoutPresets().then((r) => setPresets(r.presets || [])).catch(() => {}); }, []);
   const pos = usePresellPos();
@@ -661,14 +662,20 @@ function StockTab({ onSignOut }) {
               <thead><tr><th>Shoe</th><th>Size</th><th className="num">Pairs</th><th className="num">Sold</th><th className="num">Left</th><th className="num">Cost</th><th>Alias</th><th>StockX</th><th /></tr></thead>
               <tbody>
                 {rows.map((s) => {
-                  const left = Math.max(0, s.qty - s.sold);
+                  const left = pairsLeft(s);
                   const tracks = s.tracking_numbers || [];
                   return (
                     <tr key={s.id}>
                       <td><div className="ap-shoe"><ShoeThumb url={s.image} size={36} /><div><b>{s.sku}</b><div className="muted xs">{s.name}</div>
                         {s.in_transit && (s.arrived_at
-                          ? <span className="ap-transit-chip arrived" title={`Received${s.arrived_batch ? ` in ${s.arrived_batch}` : ''} — the unsold listings were deleted`}>📦 Arrived {PH_DATE.format(new Date(s.arrived_at))}</span>
-                          : <span className="ap-transit-chip" title={s.transit_note || 'Listings come down when the warehouse receives this SKU + size'}>🚚 In transit{s.expected_on ? ` · exp ${String(s.expected_on).slice(5, 10).replace('-', '/')}` : ''}</span>)}
+                          ? <span className="ap-transit-chip arrived" title={`Every pair received${s.arrived_batch ? ` (last in ${s.arrived_batch})` : ''}`}>📦 All arrived {PH_DATE.format(new Date(s.arrived_at))}</span>
+                          : <span className="ap-transit-chip" title={s.transit_note || 'Arrivals are counted by the pair; a listing comes down when PH lists an arrived pair'}>🚚 In transit{s.expected_on ? ` · exp ${String(s.expected_on).slice(5, 10).replace('-', '/')}` : ''}</span>)}
+                        {Number(s.arrived_qty) > 0 && !s.arrived_at && (
+                          <div className="muted xs" title="Arrived pairs first cover buyers who bought in transit (set aside); the rest go to PH. A pre-sell listing comes down when PH lists one of them.">
+                            📦 {s.arrived_qty} of {s.qty} arrived · {Number(s.arrived_qty) - Number(s.released_qty)} set aside · {s.released_qty} to PH
+                            {pairsOwed(s) > 0 ? ` · ${pairsOwed(s)} still owed` : ''}
+                          </div>
+                        )}
                         {(s.supplier || s.po_code || tracks.length > 0) && (
                           <div className="muted xs ap-source-line" title={tracks.join('\n')}>
                             {[s.supplier, s.po_code, tracks.length && `${tracks.length} tracking`].filter(Boolean).join(' · ')}
@@ -682,14 +689,18 @@ function StockTab({ onSignOut }) {
                       </td>
                       {['alias', 'stockx'].map((p) => {
                         const open = s[`${p}_live`] + s[`${p}_other`];
+                        const can = listableOn(s, p);
                         return (
                           <td key={p}>
                             <span className="xs">{s[`${p}_live`]} live{s[`${p}_other`] ? ` · ${s[`${p}_other`]} other` : ''}</span>
-                            {left > open && <button type="button" className="btn sm ghost ap-list-more" onClick={() => setListFor({ stock: s, platform: p })}>List {left - open}</button>}
+                            {can > open && <button type="button" className="btn sm ghost ap-list-more" onClick={() => setListFor({ stock: s, platform: p })}>List {can - open}</button>}
                           </td>
                         );
                       })}
                       <td className="ap-row-actions">
+                        {['alias', 'stockx'].some((p) => listableOn(s, p) > s[`${p}_live`] + s[`${p}_other`]) && (
+                          <button type="button" className="btn sm" onClick={() => setRestoreFor(s.sku)} title="List every size of this shoe that's short, on both platforms, in one go">↺ Restore</button>
+                        )}
                         <button type="button" className="btn sm ghost" onClick={() => setDetailsFor({ sku: s.sku, focus: s.id })} title="Cost, supplier, PO, tracking numbers, in transit">✎ Cost &amp; shipment</button>
                         <button type="button" className="btn sm ghost" onClick={() => setQtyFor(s)}>Pairs…</button>
                       </td>
@@ -704,11 +715,111 @@ function StockTab({ onSignOut }) {
       {qtyFor && <QtyDialog stock={qtyFor} onSignOut={onSignOut} onClose={() => setQtyFor(null)} onDone={() => { setQtyFor(null); load(); }} />}
       {listFor && <ListMoreDialog {...listFor} onSignOut={onSignOut} onClose={() => setListFor(null)} onDone={() => { setListFor(null); load(); }} />}
       {fill && <FillMissingDialog rows={rows || []} onSignOut={onSignOut} onClose={() => setFill(false)} onDone={() => { setFill(false); load(); }} />}
+      {restoreFor && <RestoreDialog rows={(rows || []).filter((r) => r.sku === restoreFor)} onSignOut={onSignOut} onClose={() => setRestoreFor(null)} onDone={() => { setRestoreFor(null); load(); }} />}
       {detailsFor && (
         <DetailsDialog rows={(rows || []).filter((r) => r.sku === detailsFor.sku)} focus={detailsFor.focus} presets={presets} pos={pos}
           onSignOut={onSignOut} onClose={() => setDetailsFor(null)} onDone={() => { setDetailsFor(null); load(); }} />
       )}
     </>
+  );
+}
+
+// ↺ Restore (2026-10-11, after the arrival rule wrongly deleted a shipment's listings): every
+// size of a shoe that is short on a platform, listed back in one go — per size and platform
+// a price (pre-filled with the last one we had; "Use current lowest ask" fills today's
+// market). Runs the same "List N" call per size, one at a time, with progress + Stop.
+function RestoreDialog({ rows, onSignOut, onClose, onDone }) {
+  const sizeNum = (z) => { const m = String(z || '').match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : Infinity; };
+  const short = [...rows].sort((a, b) => sizeNum(a.size) - sizeNum(b.size))
+    .map((s) => ({ s, need: Object.fromEntries(['alias', 'stockx'].map((p) => [p, Math.max(0, listableOn(s, p) - (s[`${p}_live`] + s[`${p}_other`]))])) }))
+    .filter((x) => x.need.alias || x.need.stockx);
+  const [price, setPrice] = useState(() => Object.fromEntries(short.flatMap(({ s }) => ['alias', 'stockx'].map((p) => [`${s.id}|${p}`, s[`${p}_last_cents`] ? String(Math.round(s[`${p}_last_cents`] / 100)) : '']))));
+  const [activate, setActivate] = useState(true);
+  const [run, setRun] = useState(null);
+  const [mkBusy, setMkBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const stop = useRef(false);
+  const sku = rows[0]?.sku;
+  async function useMarket() {
+    setMkBusy(true); setErr('');
+    try {
+      const sizes = short.map(({ s }) => s.size);
+      const [a, x] = await Promise.all([
+        api.presellListingsPrices({ platform: 'alias', sku, sizes, consigned: false }),
+        api.presellListingsPrices({ platform: 'stockx', sku, sizes }),
+      ]);
+      const ac = await api.presellListingsPrices({ platform: 'alias', sku, sizes, consigned: true }).catch(() => ({ prices: {} }));
+      setPrice((cur) => {
+        const n = { ...cur };
+        for (const { s } of short) {
+          const al = [a.prices?.[s.size]?.lowestListing, ac.prices?.[s.size]?.lowestListing].filter((v) => Number(v) > 0);
+          if (al.length) n[`${s.id}|alias`] = String(Math.round(Math.min(...al)));
+          const sx = x.prices?.[s.size]?.lowestAsk;
+          if (Number(sx) > 0) n[`${s.id}|stockx`] = String(Math.round(sx));
+        }
+        return n;
+      });
+    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setMkBusy(false); }
+  }
+  const jobs = short.flatMap(({ s, need }) => ['alias', 'stockx'].filter((p) => need[p]).map((p) => ({ s, p, n: need[p] })));
+  const missing = jobs.some((j) => !(Number(price[`${j.s.id}|${j.p}`]) >= 1));
+  async function go() {
+    stop.current = false;
+    const st = { i: 0, total: jobs.length, made: 0, failed: [], running: true };
+    setRun({ ...st });
+    for (const j of jobs) {
+      if (stop.current) break;
+      try {
+        const r = await api.presellListingsAction({ stockId: j.s.id, action: 'list', platform: j.p, price: Number(price[`${j.s.id}|${j.p}`]), activate });
+        st.made += r.created || 0;
+        const bad = (r.results || []).filter((x) => !x.ok);
+        if (bad.length) st.failed.push(`Size ${j.s.size} ${PLAT[j.p]}: ${bad.length} failed (${[...new Set(bad.map((x) => x.error))].join(' · ')})`);
+      } catch (e) {
+        if (e.unauthorized) return onSignOut();
+        st.failed.push(`Size ${j.s.size} ${PLAT[j.p]}: ${e.message}`);
+      }
+      st.i++;
+      setRun({ ...st });
+    }
+    setRun({ ...st, running: false });
+  }
+  const busy = !!run?.running;
+  const total = jobs.reduce((k, j) => k + j.n, 0);
+  return (
+    <Dialog title={`↺ Restore ${sku}`} onClose={() => (busy ? null : (run ? onDone() : onClose()))} busy={busy}>
+      {!jobs.length ? <p className="muted">Nothing to restore — every size already has its listings.</p> : (
+        <>
+          <p className="muted sm">{total} listing{total === 1 ? '' : 's'} to create across {short.length} size{short.length === 1 ? '' : 's'} — pairs left, less any arrived pairs PH has already listed. Prices start at the last price each size had.</p>
+          <div className="oo-actions"><button type="button" className="btn sm ghost" disabled={mkBusy || busy} onClick={useMarket}>{mkBusy ? 'Loading…' : 'Use current lowest ask'}</button></div>
+          <div className="ap-restore">
+            <div className="ap-restore-row ap-restore-head muted xs"><span>Size</span><span>Alias</span><span>StockX</span></div>
+            {short.map(({ s, need }) => (
+              <div key={s.id} className="ap-restore-row">
+                <b>{s.size}</b>
+                {['alias', 'stockx'].map((p) => (need[p] ? (
+                  <label key={p} className="ap-restore-cell"><span className="muted xs">{need[p]} ×</span>
+                    <input type="number" min="1" step="1" inputMode="decimal" value={price[`${s.id}|${p}`]} disabled={busy} placeholder="$"
+                      onChange={(e) => setPrice((c) => ({ ...c, [`${s.id}|${p}`]: e.target.value }))} aria-label={`Size ${s.size} ${PLAT[p]} price`} /></label>
+                ) : <span key={p} className="muted xs">✓ listed</span>))}
+              </div>
+            ))}
+          </div>
+          <label className="ap-activate"><input type="checkbox" checked={activate} disabled={busy} onChange={(e) => setActivate(e.target.checked)} /><span><b>Go live now</b></span></label>
+        </>
+      )}
+      {run && <p className="sm">{run.running ? `Listing ${run.i + 1} of ${run.total}…` : `Done — ${run.made} listing${run.made === 1 ? '' : 's'} created${run.i < run.total ? ' (stopped)' : ''}.`}</p>}
+      {run?.failed?.map((f) => <div key={f} className="error xs">{f}</div>)}
+      {err && <div className="error mt">{err}</div>}
+      <div className="modal-actions">
+        {busy ? <button type="button" className="btn" onClick={() => { stop.current = true; }}>Stop</button>
+          : run ? <button type="button" className="btn primary" onClick={onDone}>Close</button>
+            : <>
+              <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+              <button type="button" className="btn primary" disabled={!jobs.length || missing} onClick={go}>{missing ? 'Every row needs a price' : `Restore ${total} listings`}</button>
+            </>}
+      </div>
+    </Dialog>
   );
 }
 
@@ -913,7 +1024,7 @@ function FillMissingDialog({ rows, onSignOut, onClose, onDone }) {
   const [activate, setActivate] = useState(true);
   const [run, setRun] = useState(null);   // { i, total, made, failed:[] , running }
   const stop = useRef(false);
-  const short = rows.map((s) => ({ s, n: Math.max(0, s.qty - s.sold) - (s[`${platform}_live`] + s[`${platform}_other`]) })).filter((x) => x.n > 0);
+  const short = rows.map((s) => ({ s, n: listableOn(s, platform) - (s[`${platform}_live`] + s[`${platform}_other`]) })).filter((x) => x.n > 0);
   const total = short.reduce((k, x) => k + x.n, 0);
   async function go() {
     stop.current = false;
@@ -970,7 +1081,7 @@ function ListMoreDialog({ stock, platform, onSignOut, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const marketOf = useMarket(platform, [{ sku: stock.sku, size: stock.size }], basis, onSignOut);
-  const n = Math.max(0, stock.qty - stock.sold) - (stock[`${platform}_live`] + stock[`${platform}_other`]);
+  const n = listableOn(stock, platform) - (stock[`${platform}_live`] + stock[`${platform}_other`]);
   async function go() {
     setBusy(true); setErr('');
     try {
@@ -1204,7 +1315,7 @@ function PlatformPill({ platform, listing: l, busy, onAct, onEdit, onDelete }) {
   return (
     <div className="ap-pill-wrap">
       <DropMenu label={`${PLAT[platform]} (${word})`} className={`ap-pill ${tone}`} disabled={busy}
-        title={`${PLAT[platform]} · ${STATUS[l.status]?.[0] || l.status} · ${money(l.price_cents)}`}
+        title={`${PLAT[platform]} · ${STATUS[l.status]?.[0] || l.status} · ${money(l.price_cents)}${l.status === 'deleted' ? ` · ${deleteWhy(l)}` : ''}`}
         head={l.external_id ? `${PLAT[platform]} listing ${l.external_id}` : null}
         items={[
           { label: l.status === 'live' ? 'Switch off' : 'Go live', hidden: !open, onClick: () => onAct(l, l.status === 'live' ? 'deactivate' : 'activate') },
@@ -1214,9 +1325,15 @@ function PlatformPill({ platform, listing: l, busy, onAct, onEdit, onDelete }) {
           { label: `Delete from ${PLAT[platform]}`, danger: true, hidden: !open, onClick: () => onDelete(l) },
         ]} />
       <span className="ap-pill-price">{money(l.price_cents)}</span>
+      {l.status === 'deleted' && <span className="ap-pill-why xs">{deleteWhy(l)}</span>}
     </div>
   );
 }
+// Why a listing was deleted, in words (owner, 2026-10-11).
+const deleteWhy = (l) => ({
+  user: `deleted by ${l.updated_by || 'a user'}`, sold_other: 'sold on the other platform', qty_cut: 'pair count lowered',
+  arrived: 'shipment arrived (old rule)', ph_listed: 'PH listed the arrived pair', platform: `deleted on ${PLAT[l.platform]}`,
+}[l.delete_reason] || 'deleted');
 
 // A button that opens a small menu. Portalled + fixed so the table's horizontal scroll
 // box can't clip it; closes on outside tap, Escape, scroll or resize.

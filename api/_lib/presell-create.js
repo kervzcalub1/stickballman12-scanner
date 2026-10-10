@@ -6,7 +6,7 @@
 import { aliasCatalogBySku } from './alias.js';
 import { stockxVariantFor } from './stockx.js';
 import { openPresellListings, insertPresellListing } from './db.js';
-import { PLATFORMS } from './presell.js';
+import { PLATFORMS, presellListable } from './presell.js';
 
 const sizeNumber = (s) => { const m = String(s || '').match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : NaN; };
 
@@ -36,7 +36,8 @@ export async function resolveRef(platform, stock, cache = {}) {
 
 // → { platform, wanted, created, results:[{ ok, id?, status?, error? }] }
 export async function topUp(stock, platform, { priceCents, active }, actor, cache = {}) {
-  const left = Math.max(0, Number(stock.qty) - Number(stock.sold));
+  // Pairs left, less the released pairs PH has already listed on this platform.
+  const left = (await presellListable(stock))[platform];
   const open = (await openPresellListings(stock.id)).filter((l) => l.platform === platform).length;
   const wanted = Math.max(0, left - open);
   const out = { platform, wanted, created: 0, results: [] };

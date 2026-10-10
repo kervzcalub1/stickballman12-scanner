@@ -82,6 +82,7 @@ export default async function handler(req, res) {
     try {
       const rows = await phUpdateGroup(sizeUpdates, by, baseEditedAt);
       if (!rows.length) return send(res, 404, { ok: false, error: 'Those pairs are no longer editable — they may have been sold or removed. Reload the grid.' });
+      afterPhSave(rows);
       return send(res, 200, { ok: true, row: rows[0], rows });
     } catch (e) {
       if (e.conflict) return send(res, 409, { ok: false, error: e.message, conflict: true });
@@ -101,10 +102,22 @@ export default async function handler(req, res) {
   try {
     const rows = await phUpdateItems(vins, fields, by, baseEditedAt);
     if (!rows.length) return send(res, 404, { ok: false, error: 'Those pairs are no longer editable — they may have been sold or removed. Reload the grid.' });
+    afterPhSave(rows);
     return send(res, 200, { ok: true, row: rows[0], rows });
   } catch (e) {
     if (e.conflict) return send(res, 409, { ok: false, error: e.message, conflict: true });
     console.error('[ph/update]', e.message);
     return send(res, 500, { ok: false, error: 'Could not save the change.' });
   }
+}
+
+// PH listed arrived pairs of an in-transit pre-sell shipment (AL / SX) → the same number of
+// pre-sell listings come down on that platform (presell-arrival.js onPhSaved). Fire-and-forget:
+// a slow marketplace must never hold up a PH save. Only acts where PRESELL_WATCH=on.
+function afterPhSave(rows) {
+  const pairs = (rows || []).filter((r) => r?.sku && r?.size).map((r) => ({ sku: r.sku, size: r.size }));
+  if (!pairs.length) return;
+  import('../_lib/presell-arrival.js')
+    .then((m) => m.onPhSaved(pairs))
+    .catch((e) => console.error('[ph/update] presell release:', e.message));
 }

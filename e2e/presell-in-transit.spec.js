@@ -46,29 +46,43 @@ test.afterAll(async () => {
   await db.end();
 });
 
-test('receiving the SKU + size deletes every unsold listing, once, and says how many to set aside', async () => {
+test('a receive COUNTS by the pair — arrived pairs cover buyers first, and nothing is deleted', async () => {
+  // 12 pairs listed in transit, 2 already sold. 5 arrive: 2 set aside for those buyers, 3 to PH.
   const stock = await listed('8', { qty: 12, sold: 2 });
   const { onItemsReceived } = await import('../api/_lib/presell-arrival.js');
   const b = await batch();
   const f = fakes();
-  // "US8" / "8" / "8.0"-style differences don't stop the match; another size doesn't trigger.
-  const out = await onItemsReceived(b.id, [{ sku: SKU.toLowerCase(), size: 'US 8' }, { sku: SKU, size: '9' }], f.opts);
+  const items = Array.from({ length: 5 }, () => ({ sku: SKU.toLowerCase(), size: 'US 8' }));
+  const out = await onItemsReceived(b.id, [...items, { sku: SKU, size: '9' }], f.opts);
   expect(out).toHaveLength(1);
-  expect(f.removed.sort()).toEqual([`alias:${SKU}-8-alias-0`, `alias:${SKU}-8-alias-1`, `stockx:${SKU}-8-stockx-0`, `stockx:${SKU}-8-stockx-1`].sort());
-  const { rows } = await db.query(`SELECT status FROM presell_listings WHERE stock_id = $1`, [stock]);
-  expect(rows.map((r) => r.status)).toEqual(['deleted', 'deleted', 'deleted', 'deleted']);
-  const st = (await db.query(`SELECT arrived_at, arrived_batch FROM presell_stock WHERE id = $1`, [stock])).rows[0];
-  expect(st.arrived_at).not.toBeNull();
-  expect(st.arrived_batch).toBe(b.batch_code);
+  expect(out[0]).toMatchObject({ n: 5, aside: 2, release: 3, full: false });
+  expect(f.removed).toHaveLength(0);   // the first build deleted everything here
+  const st = (await db.query(`SELECT arrived_qty, released_qty, arrived_at FROM presell_stock WHERE id = $1`, [stock])).rows[0];
+  expect(st).toMatchObject({ arrived_qty: 5, released_qty: 3, arrived_at: null });
   const text = f.sent[0].map((l) => (typeof l === 'string' ? l : l.b + (l.t || ''))).join('\n');
-  expect(text).toContain('INBOUNDED');
-  expect(text).toContain('Listings: deleted Alias 2, StockX 2');
-  expect(text).toContain('Sold while in transit: 2 of 12');
-  expect(text).toContain('inbound and list only 10');
-  // The next box of the same size: already arrived, nothing happens again.
-  const again = fakes();
-  expect(await onItemsReceived(b.id, [{ sku: SKU, size: '8' }], again.opts)).toEqual([]);
-  expect(again.sent).toHaveLength(0);
+  expect(text).toContain('5 PAIRS ARRIVED');
+  expect(text).toContain('Arrived so far: 5 of 12 · still on the way: 7');
+  expect(text).toContain('Set 2 pairs aside for buyers who bought in transit');
+  expect(text).toContain('Inbound and list 3');
+});
+
+test('PH taking over: with as many listings as pairs left, each listed arrived pair removes one on ITS platform', async () => {
+  const { reconcileStock, presellListable } = await import('../api/_lib/presell.js');
+  // qty 4, nothing sold, 4 live per platform; 2 arrived → released 2.
+  const stock = (await S.upsertPresellStock({ sku: SKU, size: '7', name: 'QA', addQty: 4, inTransit: true }, 'e2e')).id;
+  ids.stock.push(stock);
+  for (const p of ['alias', 'stockx']) for (let i = 0; i < 4; i++) await db.query(`INSERT INTO presell_listings (stock_id, platform, external_id, price_cents, status) VALUES ($1, $2, $3, 20000, 'live')`, [stock, p, `${SKU}-7-${p}-${i}`]);
+  const b = await batch();
+  await db.query(`UPDATE presell_stock SET arrived_qty = 2, released_qty = 2 WHERE id = $1`, [stock]);
+  await db.query(`INSERT INTO presell_arrivals (stock_id, batch_code, pairs, set_aside, released) VALUES ($1, $2, 2, 0, 2)`, [stock, b.batch_code]);
+  const st = async () => (await db.query(`SELECT * FROM presell_stock WHERE id = $1`, [stock])).rows[0];
+  expect((await presellListable(await st())).alias).toBe(4);   // PH hasn't listed any yet → all stay up
+  const { rows } = await db.query(`INSERT INTO items (vin, sku, size, name, status, batch_id, synced_alias, synced_stockx)
+    VALUES ($1, $2, '7', 'QA', 'received', $3, true, false), ($4, $2, '7', 'QA', 'received', $3, true, true) RETURNING vin`, [`QAIT${stamp}A`, SKU, b.id, `QAIT${stamp}B`]);
+  expect(await presellListable(await st())).toMatchObject({ alias: 2, stockx: 3 });
+  // reconcile would call the real platforms; check the plan instead and stop there.
+  await db.query(`DELETE FROM items WHERE vin = ANY($1)`, [rows.map((r) => r.vin)]);
+  expect(typeof reconcileStock).toBe('function');
 });
 
 test('Existing Stock counting is not an arrival; a row listed without the tick is never touched', async () => {

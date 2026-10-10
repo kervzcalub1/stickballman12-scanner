@@ -1054,10 +1054,10 @@ export async function insertItems(batchId, items, createdBy, dateReceived = null
     try { await claimVinStock(rollClaims); }
     catch (e) { console.warn('[insertItems] vin_stock claim:', e.message); }
   }
-  // In-transit pre-sell listings (presell-arrival.js): pairs of a SKU + size listed while
-  // on their way come down now that they're here. Fire-and-forget, after the commit — a
-  // marketplace being slow must never hold up (or fail) a warehouse receive. Imported
-  // lazily: presell-arrival imports this file.
+  // In-transit pre-sell (presell-arrival.js): count the pairs of a shipment that arrived
+  // (nothing is deleted here — a listing comes down when PH lists the pair). Fire-and-forget,
+  // after the commit — never holds up (or fails) a warehouse receive. Imported lazily:
+  // presell-arrival imports this file.
   import('./presell-arrival.js')
     .then((m) => m.onItemsReceived(batchId, items))
     .catch((e) => console.error('[insertItems] presell arrival:', e.message));
@@ -8534,12 +8534,48 @@ export async function presellTransitMatches(pairs) {
         ON upper(s.sku) = r.sku AND regexp_replace(s.size, '[^0-9.]', '', 'g') = r.sz AND r.sz <> ''
      WHERE s.in_transit AND s.arrived_at IS NULL`;
 }
-// Mark a row arrived — ONCE: two receiving commits racing can't both act on it.
-export async function claimPresellArrival(id, batchCode) {
-  const rows = await db()`UPDATE presell_stock SET arrived_at = now(), arrived_batch = ${batchCode || null}, updated_at = now()
-                           WHERE id = ${id} AND in_transit AND arrived_at IS NULL
-                           RETURNING *, (SELECT po_code FROM purchase_orders WHERE id = presell_stock.po_id) AS po_code`;
+// Count n pairs as arrived — by the pair (2026-10-11). Guarded on the arrived count we
+// computed from, so two receiving commits racing can't both count against the same state
+// (the loser re-reads and tries again). arrived_at is set once EVERY pair has arrived.
+export async function claimPresellArrival(id, batchCode, { prevArrived, n, release }) {
+  const rows = await db()`
+    UPDATE presell_stock
+       SET arrived_qty = arrived_qty + ${n}, released_qty = released_qty + ${release},
+           arrived_at = CASE WHEN arrived_qty + ${n} >= qty THEN now() ELSE NULL END,
+           arrived_batch = ${batchCode || null}, updated_at = now()
+     WHERE id = ${id} AND in_transit AND arrived_at IS NULL AND arrived_qty = ${prevArrived}
+     RETURNING *, (SELECT po_code FROM purchase_orders WHERE id = presell_stock.po_id) AS po_code`;
   return rows[0] || null;
+}
+// Received pairs of a pre-sell shipment that PH has listed (AL / SX ticked) or that sold —
+// per platform. "Of the shipment" = items of that SKU + size in a batch an arrival counted.
+export async function presellPhListed(stockId) {
+  const rows = await db()`
+    SELECT count(*) FILTER (WHERE i.synced_alias OR i.status IN ('sold', 'shipped'))::int AS alias,
+           count(*) FILTER (WHERE i.synced_stockx OR i.status IN ('sold', 'shipped'))::int AS stockx
+      FROM presell_stock s
+      JOIN items i ON upper(i.sku) = upper(s.sku)
+                  AND regexp_replace(coalesce(i.size, ''), '[^0-9.]', '', 'g') = regexp_replace(s.size, '[^0-9.]', '', 'g')
+      JOIN batches b ON b.id = i.batch_id AND b.batch_code IN (SELECT a.batch_code FROM presell_arrivals a WHERE a.stock_id = s.id)
+     WHERE s.id = ${stockId}`;
+  return { alias: rows[0]?.alias || 0, stockx: rows[0]?.stockx || 0 };
+}
+// In-transit rows with released pairs whose SKU + size is among these — after a PH save.
+export async function presellRowsForPh(pairs) {
+  if (!pairs.length) return [];
+  const json = JSON.stringify(pairs.map((p) => ({ sku: String(p.sku || '').toUpperCase(), sz: String(p.size || '').replace(/[^0-9.]/g, '') })));
+  return await db()`
+    SELECT DISTINCT s.id FROM presell_stock s
+      JOIN jsonb_to_recordset(${json}::jsonb) AS r(sku text, sz text)
+        ON upper(s.sku) = r.sku AND regexp_replace(s.size, '[^0-9.]', '', 'g') = r.sz AND r.sz <> ''
+     WHERE s.released_qty > 0`;
+}
+export async function presellRowsWithReleased() {
+  return (await db()`SELECT id FROM presell_stock WHERE released_qty > 0`).map((r) => Number(r.id));
+}
+export async function insertPresellArrival(r) {
+  await db()`INSERT INTO presell_arrivals (stock_id, batch_code, pairs, set_aside, released, taken_down, note)
+             VALUES (${r.stock_id}, ${r.batch_code || null}, ${r.pairs}, ${r.set_aside}, ${r.released}, ${r.taken_down || 0}, ${r.note || null})`;
 }
 export async function batchKindAndCode(batchId) {
   const rows = await db()`SELECT kind, batch_code FROM batches WHERE id = ${batchId}`;
@@ -8587,6 +8623,9 @@ export async function updatePresellListing(id, p, actor) {
       raw = CASE WHEN ${has('raw')} THEN ${p.raw ? JSON.stringify(p.raw) : null}::jsonb ELSE raw END,
       sold_at = CASE WHEN ${has('sold_at')} THEN ${p.sold_at ?? null}::timestamptz ELSE sold_at END,
       deleted_at = CASE WHEN ${p.status === 'deleted'} AND deleted_at IS NULL THEN now() ELSE deleted_at END,
+      -- Why (presell-listings.md): given by the caller, else a delete we didn't ask for = the platform.
+      delete_reason = CASE WHEN ${has('delete_reason')} THEN ${p.delete_reason ?? null}
+                           WHEN ${p.status === 'deleted'} AND delete_reason IS NULL THEN 'platform' ELSE delete_reason END,
       updated_by = ${actor}, updated_at = now()
     WHERE id = ${id}`;
 }
@@ -8642,7 +8681,20 @@ export async function listPresellStock({ q = null, from = null, to = null } = {}
            min(l.price_cents) FILTER (WHERE l.platform = 'alias' AND l.status IN ('pending', 'live', 'off'))::int AS alias_min_cents,
            max(l.price_cents) FILTER (WHERE l.platform = 'alias' AND l.status IN ('pending', 'live', 'off'))::int AS alias_max_cents,
            min(l.price_cents) FILTER (WHERE l.platform = 'stockx' AND l.status IN ('pending', 'live', 'off'))::int AS stockx_min_cents,
-           max(l.price_cents) FILTER (WHERE l.platform = 'stockx' AND l.status IN ('pending', 'live', 'off'))::int AS stockx_max_cents
+           max(l.price_cents) FILTER (WHERE l.platform = 'stockx' AND l.status IN ('pending', 'live', 'off'))::int AS stockx_max_cents,
+           count(l.*) FILTER (WHERE l.status = 'deleted')::int AS deleted_n,
+           -- Released pairs of an arrived shipment PH has listed per platform (or that sold).
+           (SELECT count(*) FILTER (WHERE i.synced_alias OR i.status IN ('sold', 'shipped')) FROM items i JOIN batches b ON b.id = i.batch_id
+             WHERE s.released_qty > 0 AND upper(i.sku) = upper(s.sku)
+               AND regexp_replace(coalesce(i.size, ''), '[^0-9.]', '', 'g') = regexp_replace(s.size, '[^0-9.]', '', 'g')
+               AND b.batch_code IN (SELECT a.batch_code FROM presell_arrivals a WHERE a.stock_id = s.id))::int AS ph_alias_n,
+           (SELECT count(*) FILTER (WHERE i.synced_stockx OR i.status IN ('sold', 'shipped')) FROM items i JOIN batches b ON b.id = i.batch_id
+             WHERE s.released_qty > 0 AND upper(i.sku) = upper(s.sku)
+               AND regexp_replace(coalesce(i.size, ''), '[^0-9.]', '', 'g') = regexp_replace(s.size, '[^0-9.]', '', 'g')
+               AND b.batch_code IN (SELECT a.batch_code FROM presell_arrivals a WHERE a.stock_id = s.id))::int AS ph_stockx_n,
+           -- The price each platform had last (for ↺ Restore: re-list at what it was).
+           (SELECT x.price_cents FROM presell_listings x WHERE x.stock_id = s.id AND x.platform = 'alias' ORDER BY x.updated_at DESC, x.id DESC LIMIT 1) AS alias_last_cents,
+           (SELECT x.price_cents FROM presell_listings x WHERE x.stock_id = s.id AND x.platform = 'stockx' ORDER BY x.updated_at DESC, x.id DESC LIMIT 1) AS stockx_last_cents
       FROM presell_stock s LEFT JOIN presell_listings l ON l.stock_id = s.id
       LEFT JOIN purchase_orders po ON po.id = s.po_id
      WHERE (${like}::text IS NULL OR s.sku ILIKE ${like} OR s.name ILIKE ${like} OR s.supplier ILIKE ${like} OR po.po_code ILIKE ${like}
@@ -8650,6 +8702,12 @@ export async function listPresellStock({ q = null, from = null, to = null } = {}
        AND (${from}::date IS NULL OR (s.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
        AND (${to}::date IS NULL OR (s.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
      GROUP BY s.id, po.id ORDER BY s.updated_at DESC LIMIT 2000`;
+}
+// The price a platform last had for a stock row (↺ Restore).
+export async function presellLastPrice(stockId, platform) {
+  const rows = await db()`SELECT price_cents FROM presell_listings WHERE stock_id = ${stockId} AND platform = ${platform}
+                          ORDER BY updated_at DESC, id DESC LIMIT 1`;
+  return rows[0] ? Number(rows[0].price_cents) : null;
 }
 // view: all (open) | live | off | pending | sold | deleted ; platform: '' | alias | stockx
 // from / to (YYYY-MM-DD, EST): listings CREATED in that window — the Listings report.

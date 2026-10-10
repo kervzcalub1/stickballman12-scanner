@@ -120,6 +120,11 @@ the numbers). A re-list without a cost keeps the one already there.
   so a cost fix never wipes tracking. The server recomputes `unit_cost`; shelf without a preset →
   shelf kept, cost NULL. Stock table: Cost column, "supplier · PO · N tracking" line, a count of
   sizes with no cost.
+- **Sale post layout** (owner, 2026-10-10: too compressed): title, blank line, shoe + SKU/size,
+  then sections split by a `━━━` rule — **💵 MONEY** (Price / Payout / Cost / ✅ NET, one per line,
+  bold labels), **🧾 ORDER** (order, supplier, PO, shipment, tracking), **📦 WAREHOUSE** or
+  **⚠️ SOURCE IT** (what to do). Lines are strings or `{ b, t }` (bold label + plain text) in
+  `sendPresellSale`. The INBOUNDED post uses the same rules.
 - **Sale post NET** (`handleSale`): `Price: $175 → payout $162.75` (the platform's own payout; "(est.)"
   = price less the default fee when it gave none) then `Cost: $X (shelf $Y · preset) → NET $Z`, or
   "Cost: not entered — no net figure". Plus supplier · PO · tracking. One function, `saleNet`, for

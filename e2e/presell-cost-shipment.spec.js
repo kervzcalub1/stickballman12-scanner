@@ -78,19 +78,22 @@ test('the sale post carries cost → NET when a cost is entered, and says so whe
     const { rows } = await db.query(`INSERT INTO presell_listings (stock_id, platform, external_id, price_cents, status) VALUES ($1, 'alias', $2, 17500, 'live') RETURNING *`, [st.id, `${SKU}-sale-${size}`]);
     const sent = [];
     await handleSale({ listing: rows[0], platform: 'alias', orderId: `QACS-${stamp}-${size}`, priceCents: 17500, payoutCents: 16275, soldAt: new Date().toISOString(), raw: {} },
-      { notify: async (lines) => { sent.push(lines.map((l) => (typeof l === 'string' ? l : l.b)).join('\n')); } });
+      { notify: async (lines) => { sent.push(lines.map((l) => (typeof l === 'string' ? l : l.b + (l.t || ''))).join('\n')); } });
     return sent[0];
   };
   const withCost = await sale('11', true);
   const net = Math.round((162.75 - landedFromShelf(110, null, STACK)) * 100) / 100;
-  expect(withCost).toContain('Price: $175 → payout $162.75');
+  expect(withCost).toContain('Price: $175\nPayout: $162.75');
   expect(withCost).toContain(`Cost: $${landedFromShelf(110, null, STACK)}`);
   expect(withCost).toContain('shelf $110 · QA Preset');
-  expect(withCost).toContain(`NET $${net}`);
+  expect(withCost).toContain(`✅ NET: $${net}`);
   expect(withCost).toContain('Supplier: QA Supplier');
+  expect(withCost).toContain('Tracking: 1Z999AA10123456799');
+  // Sections: money, order, then what to do — each after a rule.
+  expect(withCost.split('━━━━━━━━━━━━━━━━').length).toBe(4);
   const without = await sale('12', false);
   expect(without).toContain('Cost: not entered');
-  expect(without).not.toContain('NET');
+  expect(without).not.toContain('NET:');
 });
 
 test('date filters: sales by the day sold, stock by the day listed; the reports read the same rows', async ({ request }) => {

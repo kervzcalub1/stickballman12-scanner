@@ -60,9 +60,9 @@ test('receiving the SKU + size deletes every unsold listing, once, and says how 
   const st = (await db.query(`SELECT arrived_at, arrived_batch FROM presell_stock WHERE id = $1`, [stock])).rows[0];
   expect(st.arrived_at).not.toBeNull();
   expect(st.arrived_batch).toBe(b.batch_code);
-  const text = f.sent[0].map((l) => (typeof l === 'string' ? l : l.b)).join('\n');
+  const text = f.sent[0].map((l) => (typeof l === 'string' ? l : l.b + (l.t || ''))).join('\n');
   expect(text).toContain('INBOUNDED');
-  expect(text).toContain('Deleted: Alias 2, StockX 2');
+  expect(text).toContain('Listings: deleted Alias 2, StockX 2');
   expect(text).toContain('Sold while in transit: 2 of 12');
   expect(text).toContain('inbound and list only 10');
   // The next box of the same size: already arrived, nothing happens again.
@@ -111,11 +111,12 @@ test('the two kinds of sale read differently: source it vs set it aside on arriv
     const { rows } = await db.query(`INSERT INTO presell_listings (stock_id, platform, external_id, price_cents, status) VALUES ($1, 'alias', $2, 20000, 'live') RETURNING *`, [stock, `${SKU}-sale-${size}`]);
     const sent = [];
     await handleSale({ listing: rows[0], platform: 'alias', orderId: `ORD-${size}-${stamp}`, priceCents: 20000, payoutCents: 18000, soldAt: new Date().toISOString(), raw: {} },
-      { notify: async (lines) => { sent.push(lines.map((l) => (typeof l === 'string' ? l : l.b)).join('\n')); } });
+      { notify: async (lines) => { sent.push(lines.map((l) => (typeof l === 'string' ? l : l.b + (l.t || ''))).join('\n')); } });
     return sent[0];
   };
   const plain = await sale(false, '14');
   expect(plain).toContain('PRE-SELL SALE — Alias — SOURCE IT');
+  expect(plain).toContain('⚠️ SOURCE IT');
   expect(plain).toContain("We don't have this pair");
   expect(plain).not.toContain('IN-TRANSIT');
   const transit = await sale(true, '15');
@@ -251,7 +252,7 @@ test('after a listing run: ONE "listed" post, built from what went through', asy
     { sku: 'JA1091-100', name: 'Air Griffey', size: '8', in_transit: true, arrived_at: null, transit_note: 'PO 1042', expected_on: '2026-10-12', platform: 'stockx', n: 12, live: 10, min_cents: 26000, max_cents: 26000 },
     { sku: 'JA1091-100', name: 'Air Griffey', size: '9', in_transit: true, arrived_at: null, transit_note: 'PO 1042', expected_on: '2026-10-12', platform: 'alias', n: 19, live: 19, min_cents: 25500, max_cents: 25500 },
   ];
-  const text = announceLines(rows, 'Kervy').map((l) => (typeof l === 'string' ? l : l.b)).join('\n');
+  const text = announceLines(rows, 'Kervy').map((l) => (typeof l === 'string' ? l : l.b + (l.t || ''))).join('\n');
   expect(text).toContain('🚚 LISTED — IN-TRANSIT PRE-SELL');
   expect(text).toContain('31 pairs · by Kervy');
   expect(text).toContain('JA1091-100 · Air Griffey');
@@ -262,7 +263,7 @@ test('after a listing run: ONE "listed" post, built from what went through', asy
   expect(sorted).toEqual(['US 8 — 19 pairs · Alias 19', 'US 9.5 — 19 pairs · Alias 19', 'US 10 — 19 pairs · Alias 19']);
   expect(text).toContain('Alias: 31 listings at $250–$255');
   expect(text).toContain('StockX: 12 listings at $260 (2 not live yet)');
-  const plain = announceLines([{ ...rows[0], in_transit: false }], '').map((l) => (typeof l === 'string' ? l : l.b)).join('\n');
+  const plain = announceLines([{ ...rows[0], in_transit: false }], '').map((l) => (typeof l === 'string' ? l : l.b + (l.t || ''))).join('\n');
   expect(plain).toContain('📝 LISTED — PRE-SELL');
 });
 

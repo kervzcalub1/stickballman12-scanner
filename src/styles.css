@@ -5947,3 +5947,18 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
   .ebl-orphan { grid-template-columns: auto 44px minmax(0, 1fr) auto; gap: 8px; padding: 8px; }
   .ebl-orphan .ebl-thumb { width: 44px; height: 44px; }
 }
+
+/* ⚔ Pre-sell market competition */
+.ap-comp-master { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; }
+.ap-comp-master input { width: 22px; height: 22px; margin-top: 1px; flex: none; }
+.ap-comp-rules { margin: 8px 0 10px; }
+.ap-comp-all { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.ap-comp-bar { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.ap-comp-on { color: #f0a35b; font-weight: 600; }
+.ap-comp-size { padding: 8px 0; border-top: 1px solid var(--border, rgba(255,255,255,0.08)); }
+.ap-comp-size-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 4px; }
+.ap-comp-plat { margin: 2px 0; line-height: 1.5; }
+.ap-comp-log { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ap-comp-logrow { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); font-size: 13px; }
+.ap-comp-logrow.drift, .ap-comp-logrow.error { background: rgba(224, 143, 63, 0.12); }
+.ap-comp-logrow.floor { background: rgba(236, 143, 143, 0.10); }

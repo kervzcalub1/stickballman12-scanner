@@ -146,7 +146,8 @@ export async function reconcileStock(stockId, actor = 'system') {
 }
 
 /* -------------------------------- a sale --------------------------------- */
-const money = (cents) => (cents == null ? '—' : `$${(Number(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`);
+// Whole dollars stay whole ($175); anything with cents shows both digits ($120.50).
+const money = (cents) => (cents == null ? '—' : `$${(Number(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: Number(cents) % 100 ? 2 : 0, maximumFractionDigits: 2 })}`);
 
 export async function handleSale({ listing, platform, orderId, priceCents, payoutCents, soldAt, raw }, { notify = sendPresellSale } = {}) {
   const saleId = await recordPresellSale({ listing, platform, orderId, priceCents, payoutCents, soldAt, raw }, 'system');
@@ -169,40 +170,53 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
   // print a "profit" that is really just the payout (owner, 2026-10-10).
   const net = saleNet({ platform, price_cents: priceCents, payout_cents: payoutCents, unit_cost: stock?.unit_cost });
   const usd = (n) => money(n == null ? null : Math.round(n * 100));
-  const priceLine = `Price: ${money(priceCents)}${net.payout != null ? ` → payout ${usd(net.payout)}${net.estimated ? ' (est.)' : ''}` : ''}`;
+  const signed = (n) => `${n < 0 ? '−' : ''}${usd(Math.abs(n))}`;
   const preset = stock?.cost_stack?.preset;
-  const costLine = net.cost != null
-    ? `Cost: ${usd(net.cost)}${stock?.shelf_price != null ? ` (shelf ${usd(Number(stock.shelf_price))}${preset ? ` · ${preset}${stock.cost_stack.edited ? ', edited' : ''}` : ''})` : ''} → NET ${net.profit != null ? `${net.profit < 0 ? '−' : ''}${usd(Math.abs(net.profit))}` : '—'}`
-    : `Cost: not entered — no net figure (Pre-sell → Stock → ✎ Cost & shipment)`;
   const tracks = stock?.tracking_numbers || [];
-  const from = [stock?.supplier && `Supplier: ${stock.supplier}`, stock?.po_code,
-    tracks.length && `Tracking: ${tracks.slice(0, 2).join(', ')}${tracks.length > 2 ? ` +${tracks.length - 2} more` : ''}`].filter(Boolean).join(' · ');
-  const lines = transit ? [
-    `🚚 IN-TRANSIT SALE — ${PLATFORM_LABEL[platform]}`,
-    { b: stock?.name || stock?.sku || 'In-transit pair' },
-    `${stock?.sku || ''} · size ${stock?.size || '?'}`,
-    priceLine,
-    costLine,
-    `Order: ${orderId}`,
-    ...(from ? [from] : []),
-    `Shipment: ${stock?.transit_note || 'in transit'}${stock?.expected_on ? ` · expected ${String(stock.expected_on).slice(0, 10)}` : ''}`,
+  // Laid out in sections with a rule between them (owner, 2026-10-10: one block of lines was
+  // too compressed to read) — WHAT sold, the MONEY, WHERE it's from, then what to DO.
+  // { b, t } = a bold label followed by plain text; '' = a blank line.
+  const RULE = '━━━━━━━━━━━━━━━━';
+  const money4 = [
+    { b: '💵 MONEY' },
+    { b: 'Price:', t: ` ${money(priceCents)}` },
+    { b: 'Payout:', t: ` ${usd(net.payout)}${net.estimated ? ' (est. — fee taken off the price)' : ''}` },
+    net.cost != null
+      ? { b: 'Cost:', t: ` ${usd(net.cost)}${stock?.shelf_price != null ? `  (shelf ${usd(Number(stock.shelf_price))}${preset ? ` · ${preset}${stock.cost_stack.edited ? ', edited' : ''}` : ''})` : ''}` }
+      : { b: 'Cost:', t: ' not entered — Pre-sell → Stock → ✎ Cost & shipment' },
+    ...(net.profit != null ? [{ b: `${net.profit < 0 ? '🔻' : '✅'} NET: ${signed(net.profit)}` }] : []),
+  ];
+  const source = [
+    { b: '🧾 ORDER' },
+    { b: 'Order:', t: ` ${orderId}` },
+    ...(stock?.supplier ? [{ b: 'Supplier:', t: ` ${stock.supplier}` }] : []),
+    ...(stock?.po_code ? [{ b: 'PO:', t: ` ${stock.po_code}` }] : []),
+    ...(transit ? [{ b: 'Shipment:', t: ` ${stock?.transit_note || 'in transit'}${stock?.expected_on ? ` · expected ${String(stock.expected_on).slice(0, 10)}` : ''}` }] : []),
+    ...(tracks.length ? [{ b: 'Tracking:', t: ` ${tracks.slice(0, 3).join(', ')}${tracks.length > 3 ? ` +${tracks.length - 3} more` : ''}` }] : []),
+  ];
+  const todo = transit ? [
+    { b: arrived ? '⚠️ WAREHOUSE — ALREADY RECEIVED' : '📦 WAREHOUSE' },
     arrived
-      ? `⚠️ This shipment was ALREADY RECEIVED${stock.arrived_batch ? ` (${stock.arrived_batch})` : ''} — pull 1 pair of size ${stock.size} from the shelf for this order.`
-      : `Warehouse: when it arrives, set ${pairs(sold)} of size ${stock?.size} aside for the buyer${sold === 1 ? '' : 's'} — don't inbound ${sold === 1 ? 'it' : 'them'}. Inbound the other ${Math.max(0, qty - sold)}.`,
+      ? `This shipment was already received${stock.arrived_batch ? ` (${stock.arrived_batch})` : ''} — pull 1 pair of size ${stock.size} from the shelf for this order.`
+      : `When it arrives: set ${pairs(sold)} of size ${stock?.size} aside for the buyer${sold === 1 ? '' : 's'} — don't inbound ${sold === 1 ? 'it' : 'them'}. Inbound the other ${Math.max(0, qty - sold)}.`,
     `Sold in transit so far: ${sold} of ${qty} · left to sell: ${left}`,
   ] : [
-    `💰 PRE-SELL SALE — ${PLATFORM_LABEL[platform]} — SOURCE IT`,
-    { b: stock?.name || stock?.sku || 'Pre-sell pair' },
-    `${stock?.sku || ''} · size ${stock?.size || '?'}`,
-    priceLine,
-    costLine,
-    `Order: ${orderId}`,
-    ...(from ? [from] : []),
-    `⚠️ We don't have this pair — Alex / supplier: find 1 pair of size ${stock?.size || '?'}.`,
+    { b: '⚠️ SOURCE IT' },
+    `We don't have this pair — Alex / supplier: find 1 pair of size ${stock?.size || '?'}.`,
     `Pre-sell stock left: ${left} of ${qty}`,
+  ];
+  const lines = [
+    { b: transit ? `🚚 IN-TRANSIT SALE — ${PLATFORM_LABEL[platform]}` : `💰 PRE-SELL SALE — ${PLATFORM_LABEL[platform]} — SOURCE IT` },
+    '',
+    { b: stock?.name || stock?.sku || (transit ? 'In-transit pair' : 'Pre-sell pair') },
+    `${stock?.sku || ''} · size ${stock?.size || '?'}`,
+    RULE, ...money4,
+    RULE, ...source,
+    RULE, ...todo,
   ];
   const down = removed.filter((r) => r.ok);
   const stuck = removed.filter((r) => !r.ok);
+  if (down.length || stuck.length) lines.push(RULE);
   if (down.length) lines.push(`Taken down: ${down.map((r) => PLATFORM_LABEL[r.platform]).join(', ')} (${down.length})`);
   if (stuck.length) lines.push(`⚠️ Could NOT take down ${stuck.length} listing(s) — check them now: ${stuck.map((r) => `${PLATFORM_LABEL[r.platform]}: ${r.error}`).join('; ')}`);
   try {

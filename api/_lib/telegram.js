@@ -202,6 +202,7 @@ export function sendNote(text) {
 const escHtml = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 export function sendPresellSale(lines) {
   if (!env('TELEGRAM_BOT_TOKEN') || !presellChatId()) return Promise.reject(new Error('TELEGRAM_PRESELL_CHAT_ID is not set'));
-  const text = lines.map((l) => (typeof l === 'string' ? escHtml(l) : `<b>${escHtml(l.b)}</b>`)).join('\n');
+  // A line is plain text, or { b, t } = bold then (optional) plain text.
+  const text = lines.map((l) => (typeof l === 'string' ? escHtml(l) : `<b>${escHtml(l.b)}</b>${l.t ? escHtml(l.t) : ''}`)).join('\n');
   return enqueue(() => tg('sendMessage', { chat_id: presellChatId(), text, parse_mode: 'HTML', disable_web_page_preview: true }));
 }

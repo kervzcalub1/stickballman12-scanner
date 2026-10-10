@@ -33,22 +33,29 @@ export async function takeDownArrived(stock, batchCode, { platforms = PLATFORMS,
   }
   const sold = Number(stock.sold || 0);
   const count = (p) => removed.filter((r) => r.ok && r.platform === p).length;
+  const left = Math.max(0, Number(stock.qty) - sold);
+  // Sections with a rule between them, like the sale post (owner, 2026-10-10).
+  const RULE = '━━━━━━━━━━━━━━━━';
   const lines = [
-    '📦 INBOUNDED — in-transit pre-sell arrived, listings taken down',
+    { b: '📦 INBOUNDED — in-transit pre-sell arrived, listings taken down' },
+    '',
     { b: stock.name || stock.sku },
     `${stock.sku} · size ${stock.size}${batchCode ? ` · received in ${batchCode}` : ''}`,
-    ...([stock.supplier && `Supplier: ${stock.supplier}`, stock.po_code].filter(Boolean).length
-      ? [[stock.supplier && `Supplier: ${stock.supplier}`, stock.po_code].filter(Boolean).join(' · ')] : []),
-    removed.some((r) => r.ok)
-      ? `Deleted: ${['alias', 'stockx'].filter((p) => count(p)).map((p) => `${PLATFORM_LABEL[p]} ${count(p)}`).join(', ')}`
-      : 'Nothing was still listed.',
+    ...(stock.supplier ? [{ b: 'Supplier:', t: ` ${stock.supplier}` }] : []),
+    ...(stock.po_code ? [{ b: 'PO:', t: ` ${stock.po_code}` }] : []),
+    RULE,
+    { b: 'Listings:', t: removed.some((r) => r.ok)
+      ? ` deleted ${['alias', 'stockx'].filter((p) => count(p)).map((p) => `${PLATFORM_LABEL[p]} ${count(p)}`).join(', ')}`
+      : ' nothing was still listed' },
+    RULE,
+    { b: sold ? '⚠️ WAREHOUSE' : '📦 WAREHOUSE' },
     sold
-      ? `⚠️ Sold while in transit: ${sold} of ${stock.qty}. Warehouse: set those ${sold} aside for the buyer${sold === 1 ? '' : 's'} — inbound and list only ${Math.max(0, Number(stock.qty) - sold)}.`
+      ? `Sold while in transit: ${sold} of ${stock.qty}. Set those ${sold} aside for the buyer${sold === 1 ? '' : 's'} — inbound and list only ${left}.`
       : `Sold while in transit: 0 of ${stock.qty} — all ${stock.qty} can be inbounded and listed.`,
     'PH / Nikki: list the arrived pairs as usual.',
   ];
   const stuck = removed.filter((r) => !r.ok);
-  if (stuck.length) lines.push(`⚠️ Could NOT delete ${stuck.length} listing(s) — take them down by hand: ${stuck.map((r) => `${PLATFORM_LABEL[r.platform]}: ${r.error}`).join('; ')}`);
+  if (stuck.length) lines.push(RULE, `⚠️ Could NOT delete ${stuck.length} listing(s) — take them down by hand: ${stuck.map((r) => `${PLATFORM_LABEL[r.platform]}: ${r.error}`).join('; ')}`);
   let notified = true;
   try { await notify(lines); } catch (e) { notified = false; console.error('[presell-arrival] message failed:', e.message); }
   return { stockId: stock.id, removed, sold, notified };

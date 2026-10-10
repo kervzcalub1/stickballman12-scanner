@@ -15,8 +15,10 @@ export function announceLines(rows, by) {
   const shoes = new Map();
   for (const r of rows) {
     const k = r.sku;
-    if (!shoes.has(k)) shoes.set(k, { sku: r.sku, name: r.name, sizes: new Map(), transit: false, note: null, expected: null });
+    if (!shoes.has(k)) shoes.set(k, { sku: r.sku, name: r.name, sizes: new Map(), transit: false, note: null, expected: null, from: new Set(), tracks: new Set() });
     const s = shoes.get(k);
+    for (const f of [r.supplier, r.po_code]) if (f) s.from.add(f);
+    for (const t of r.tracking_numbers || []) s.tracks.add(t);
     if (r.in_transit && !r.arrived_at) { s.transit = true; s.note = s.note || r.transit_note; s.expected = s.expected || r.expected_on; }
     if (!s.sizes.has(r.size)) s.sizes.set(r.size, {});
     s.sizes.get(r.size)[r.platform] = r;
@@ -29,6 +31,7 @@ export function announceLines(rows, by) {
   for (const s of all) {
     lines.push({ b: `${s.sku}${s.name ? ` · ${s.name}` : ''}` });
     if (s.transit && (s.note || s.expected)) lines.push(`Shipment: ${s.note || 'in transit'}${s.expected ? ` · expected ${String(s.expected).slice(0, 10)}` : ''}`);
+    if (s.from.size || s.tracks.size) lines.push([...s.from, s.tracks.size && `${s.tracks.size} tracking number${s.tracks.size === 1 ? '' : 's'}`].filter(Boolean).join(' · '));
     // One line per size, smallest first (owner, 2026-10-10: one long line was hard to read),
     // with what each platform holds — a platform that came up short shows on its size.
     const num = (z) => { const m = String(z).match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : Infinity; };

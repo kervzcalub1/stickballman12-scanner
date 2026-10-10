@@ -2,12 +2,17 @@
 //   Listing: { listingId, action: 'activate'|'deactivate'|'update'|'delete'|'refresh', price?, size? }
 //   Stock:   { stockId,   action: 'qty', qty }                                → set how many pairs we have
 //            { stockId,   action: 'list', platform, price, activate }         → list up to the pairs left
+//   Details: { stockIds:[…], action: 'details', … }  → cost / supplier / PO / tracking / in transit
+//            (only the keys sent change; see detailsAction)
 // Pre-sell Listings (docs/context/presell-listings.md). The row changes only after the
 // platform said yes; a StockX change is PENDING until the watcher confirms it.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import {
   dbConfigured, getPresellListing, getPresellStock, setPresellStockQty, upsertPresellStock, updatePresellListing, movePresellListing,
+  updatePresellStockDetails, getPoBrief,
 } from '../_lib/db.js';
+import { landedFromShelf } from '../../src/lib/costs.js';
+import { cleanCostStack, cleanShelf, parseTrackingList } from '../../src/lib/presellDetails.js';
 import { PLATFORMS, applyResult, reconcileStock } from '../_lib/presell.js';
 import { topUp } from '../_lib/presell-create.js';
 
@@ -23,6 +28,7 @@ export default async function handler(req, res) {
   const b = await getJsonBody(req);
   const actor = user.name || user.username || null;
   try {
+    if (b.action === 'details') return await detailsAction(res, b, actor);
     if (b.stockId != null) return await stockAction(res, b, actor);
     return await listingAction(res, b, actor);
   } catch (e) {
@@ -33,6 +39,50 @@ export default async function handler(req, res) {
       ? 'The marketplace didn’t answer in time — it may still have gone through. Press ↻ on the listing to see where it stands.'
       : 'Could not reach the marketplace — nothing was changed here.' });
   }
+}
+
+// ✎ Cost & shipment (2026-10-10): fix up stock rows after listing — a cost that was never
+// entered (no preset picked, a shelf price forgotten), the supplier, the PO it was bought
+// on, every tracking number, the in-transit details. One call for the rows of a SKU:
+//   { stockIds, cost?: { costStack|null, shelf: { [stockId]: price|null } },
+//     supplier?, poId?, trackingNumbers?, inTransit?, transitNote?, expectedOn? }
+// The landed cost is recomputed HERE from shelf + stack (landedFromShelf); a shelf price
+// without a preset saves the shelf and leaves the cost blank (owner's rule).
+async function detailsAction(res, b, actor) {
+  const ids = [...new Set((Array.isArray(b.stockIds) ? b.stockIds : []).map(Number))].filter((n) => Number.isSafeInteger(n) && n > 0);
+  if (!ids.length || ids.length > 200) return send(res, 400, { ok: false, error: 'Which stock rows?' });
+  const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+  const common = {};
+  if (has('supplier')) common.supplier = String(b.supplier ?? '').trim().slice(0, 80) || null;
+  if (has('poId')) {
+    const poId = Number(b.poId) > 0 ? Number(b.poId) : null;
+    if (poId && !(await getPoBrief(poId))) return send(res, 400, { ok: false, error: 'That purchase order no longer exists.' });
+    common.po_id = poId;
+  }
+  if (has('trackingNumbers')) common.tracking_numbers = parseTrackingList(b.trackingNumbers);
+  if (has('inTransit')) common.in_transit = b.inTransit === true;
+  if (has('transitNote')) common.transit_note = String(b.transitNote ?? '').trim().slice(0, 200) || null;
+  if (has('expectedOn')) common.expected_on = /^\d{4}-\d{2}-\d{2}$/.test(String(b.expectedOn || '')) ? b.expectedOn : null;
+  const cost = b.cost && typeof b.cost === 'object' ? b.cost : null;
+  const stack = cost ? cleanCostStack(cost.costStack) : null;
+  const shelfFor = cost?.shelf && typeof cost.shelf === 'object' ? cost.shelf : {};
+  if (!Object.keys(common).length && !cost) return send(res, 400, { ok: false, error: 'Nothing to change.' });
+  const rows = [];
+  for (const id of ids) {
+    const stock = await getPresellStock(id);
+    if (!stock) continue;
+    const patch = { ...common };
+    if (cost) {
+      // A row missing from `shelf` keeps its shelf price; the stack applies to every row.
+      const shelf = Object.prototype.hasOwnProperty.call(shelfFor, String(id)) ? cleanShelf(shelfFor[id]) : (stock.shelf_price != null ? Number(stock.shelf_price) : null);
+      patch.shelf_price = shelf;
+      patch.cost_stack = stack;
+      patch.unit_cost = shelf != null && stack ? landedFromShelf(shelf, null, stack) : null;
+    }
+    rows.push(await updatePresellStockDetails(id, patch, actor));
+  }
+  if (!rows.length) return send(res, 404, { ok: false, error: 'Those stock rows no longer exist.' });
+  return send(res, 200, { ok: true, rows });
 }
 
 async function stockAction(res, b, actor) {

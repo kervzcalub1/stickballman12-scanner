@@ -59,3 +59,27 @@ export function saleNet({ platform, price_cents, payout_cents, unit_cost }) {
   const profit = payout != null && cost != null ? Math.round((payout - cost) * 100) / 100 : null;
   return { price, payout, estimated, cost, profit };
 }
+
+// ARRIVALS BY THE PAIR + PH TAKES OVER (owner, 2026-10-11). The first build treated ANY
+// receive of a SKU + size as "the shipment arrived" and deleted every listing: Brent received
+// 37 of 213 Jordan 1 Royal pairs and 162 pairs' listings came down. Now:
+//   · a receive only COUNTS: arrived pairs first cover pairs already SOLD in transit (set
+//     aside for the buyers); the rest are RELEASED for PH to list as normal inventory
+//     (presell_stock.arrived_qty / released_qty);
+//   · a pre-sell listing comes down on a platform only once PH has LISTED a released pair
+//     there (the PH grid's AL / SX flag — or the pair sold), one for one. So a pair is never
+//     unlisted in between.
+// ph_alias_n / ph_stockx_n = received pairs of this shipment PH has listed (or sold) there.
+export const pairsLeft = (s) => Math.max(0, Number(s?.qty || 0) - Number(s?.sold || 0));
+export const phTookOver = (s, platform) => Math.min(Number(s?.released_qty || 0), Number(s?.[`ph_${platform}_n`] || 0));
+// How many listings pre-sell may hold on a platform.
+export const listableOn = (s, platform) => Math.max(0, pairsLeft(s) - phTookOver(s, platform));
+// Set aside so far = arrived − released; still owed to buyers = sold − that.
+export const pairsOwed = (s) => Math.max(0, Number(s?.sold || 0) - (Number(s?.arrived_qty || 0) - Number(s?.released_qty || 0)));
+// n pairs just arrived → { n (capped at what was still on the way), aside, release, full }
+export function arrivalSplit(s, n) {
+  const onTheWay = Math.max(0, Number(s.qty) - Number(s.arrived_qty || 0));
+  const got = Math.min(Math.max(0, Number(n) || 0), onTheWay);
+  const aside = Math.min(got, pairsOwed(s));
+  return { n: got, aside, release: got - aside, full: Number(s.arrived_qty || 0) + got >= Number(s.qty) };
+}

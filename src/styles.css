@@ -5962,3 +5962,10 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ap-comp-logrow { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); font-size: 13px; }
 .ap-comp-logrow.drift, .ap-comp-logrow.error { background: rgba(224, 143, 63, 0.12); }
 .ap-comp-logrow.floor { background: rgba(236, 143, 143, 0.10); }
+
+/* ↺ Restore dialog + delete reasons */
+.ap-restore { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; max-height: 50vh; overflow-y: auto; }
+.ap-restore-row { display: grid; grid-template-columns: 48px 1fr 1fr; gap: 8px; align-items: center; }
+.ap-restore-cell { display: flex; align-items: center; gap: 4px; }
+.ap-restore-cell input { width: 100%; min-width: 0; }
+.ap-pill-why { display: block; color: var(--muted, #8a93a6); }

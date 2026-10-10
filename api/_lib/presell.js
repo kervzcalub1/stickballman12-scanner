@@ -18,10 +18,10 @@ import {
   stockxDeleteListing, stockxListingOperation, stockxError,
 } from './stockx.js';
 import {
-  getPresellStock, openPresellListings, updatePresellListing, recordPresellSale, markPresellSaleNotified,
+  getPresellStock, openPresellListings, updatePresellListing, recordPresellSale, markPresellSaleNotified, presellPhListed,
 } from './db.js';
 import { sendPresellSale } from './telegram.js';
-import { saleNet } from '../../src/lib/presellDetails.js';
+import { saleNet, listableOn, pairsOwed } from '../../src/lib/presellDetails.js';
 
 export const PLATFORM_LABEL = { alias: 'Alias', stockx: 'StockX' };
 
@@ -123,18 +123,18 @@ export async function applyResult(listing, out, actor, extra = {}) {
 /* ------------------------- stock: never oversell ------------------------- */
 // After a sale (or a quantity cut): pairs left = qty − sold. A platform may not hold more
 // open listings than that, so the newest extras come down — on BOTH platforms.
-export async function reconcileStock(stockId, actor = 'system') {
+export async function reconcileStock(stockId, actor = 'system', reason = 'sold_other') {
   const stock = await getPresellStock(stockId);
   if (!stock) return [];
-  const left = Math.max(0, Number(stock.qty) - Number(stock.sold));
+  const can = await presellListable(stock);
   const open = await openPresellListings(stockId);
   const removed = [];
   for (const platform of Object.keys(PLATFORMS)) {
     const mine = open.filter((l) => l.platform === platform);
-    for (const l of mine.slice(0, Math.max(0, mine.length - left))) {
+    for (const l of mine.slice(0, Math.max(0, mine.length - can[platform]))) {
       try {
         const out = await PLATFORMS[platform].remove(l);
-        await applyResult(l, out, actor);
+        await applyResult(l, out, actor, out.ok ? { delete_reason: reason } : {});
         removed.push({ platform, id: l.id, ok: out.ok, error: out.error });
       } catch (e) {
         await updatePresellListing(l.id, { last_error: `Take-down failed: ${e.message}` }, actor);
@@ -143,6 +143,13 @@ export async function reconcileStock(stockId, actor = 'system') {
     }
   }
   return removed;
+}
+// How many listings pre-sell may hold per platform: pairs left (qty − sold), less the
+// released pairs of an arrived shipment that PH has listed there (presellDetails.js).
+export async function presellListable(stock) {
+  const ph = Number(stock.released_qty) > 0 ? await presellPhListed(stock.id) : { alias: 0, stockx: 0 };
+  const s = { ...stock, ph_alias_n: ph.alias, ph_stockx_n: ph.stockx };
+  return { alias: listableOn(s, 'alias'), stockx: listableOn(s, 'stockx'), ph };
 }
 
 /* -------------------------------- a sale --------------------------------- */
@@ -198,7 +205,9 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
     { b: arrived ? '⚠️ WAREHOUSE — ALREADY RECEIVED' : '📦 WAREHOUSE' },
     arrived
       ? `This shipment was already received${stock.arrived_batch ? ` (${stock.arrived_batch})` : ''} — pull 1 pair of size ${stock.size} from the shelf for this order.`
-      : `When it arrives: set ${pairs(sold)} of size ${stock?.size} aside for the buyer${sold === 1 ? '' : 's'} — don't inbound ${sold === 1 ? 'it' : 'them'}. Inbound the other ${Math.max(0, qty - sold)}.`,
+      : Number(stock?.arrived_qty) > 0
+        ? `Arrived so far: ${stock.arrived_qty} of ${qty}. Owed to buyers: ${pairs(pairsOwed(stock))} — set ${pairsOwed(stock) === 1 ? 'it' : 'them'} aside from the next pairs of size ${stock?.size} that arrive; don't inbound ${pairsOwed(stock) === 1 ? 'it' : 'them'}.`
+        : `When it arrives: set ${pairs(sold)} of size ${stock?.size} aside for the buyer${sold === 1 ? '' : 's'} — don't inbound ${sold === 1 ? 'it' : 'them'}. Inbound the other ${Math.max(0, qty - sold)}.`,
     `Sold in transit so far: ${sold} of ${qty} · left to sell: ${left}`,
   ] : [
     { b: '⚠️ SOURCE IT' },

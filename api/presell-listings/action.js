@@ -96,7 +96,7 @@ async function stockAction(res, b, actor) {
     if (qty < Number(stock.sold)) return send(res, 400, { ok: false, error: `${stock.sold} already sold — the quantity can't go below that.` });
     await setPresellStockQty(id, qty, actor);
     // Fewer pairs than open listings → the extras come down now.
-    const removed = await reconcileStock(id, actor);
+    const removed = await reconcileStock(id, actor, 'qty_cut');
     return send(res, 200, { ok: true, stock: await getPresellStock(id), removed });
   }
   if (b.action === 'list') {
@@ -163,6 +163,7 @@ async function listingAction(res, b, actor) {
     await updatePresellListing(l.id, { last_error: out.error }, actor);
     return send(res, out.notFound ? 404 : 502, { ok: false, error: out.notFound ? `${l.platform === 'alias' ? 'Alias' : 'StockX'} has no listing with this id any more.` : out.error });
   }
+  if (b.action === 'delete') extra.delete_reason = 'user';
   await applyResult(l, out, actor, extra);
   return send(res, 200, { ok: true, listing: await getPresellListing(l.id) });
 }

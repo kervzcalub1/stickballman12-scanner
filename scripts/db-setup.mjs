@@ -2087,6 +2087,39 @@ await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS transit_note TEXT`
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS expected_on DATE`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMPTZ`);  // set by the arrival check; NULL = still in transit
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS arrived_batch TEXT`);
+// ARRIVALS BY THE PAIR (2026-10-11): the first build took ANY receive of the SKU + size as
+// "arrived" and deleted every listing (37 of 213 pairs came in; 162 pairs' listings went).
+// arrived_qty = pairs of this shipment received so far; released_qty = of those, the ones
+// handed to normal inventory (the rest were set aside for buyers who bought in transit).
+// Pre-sell can still sell qty − sold − released_qty. arrived_at = now set only once EVERY
+// pair has arrived. presell_arrivals = one row per receive that counted, for the record.
+// WHY a listing was deleted (owner, 2026-10-11 — "I did not delete them"): user (by
+// updated_by) · sold_other (a sale on the other platform took this pair's copy down) ·
+// qty_cut (pair count lowered) · arrived (the first, delete-everything arrival rule) ·
+// ph_listed (PH listed the arrived pair on this platform) · platform (gone on the platform).
+await sql(`ALTER TABLE presell_listings ADD COLUMN IF NOT EXISTS delete_reason TEXT`);
+// Backfill, before anything below moves arrived_at; only rows without a reason.
+await sql(`UPDATE presell_listings l SET delete_reason = CASE
+    WHEN l.updated_by = 'arrival' THEN 'arrived'
+    WHEN l.updated_by = 'system' AND s.arrived_at IS NOT NULL AND l.deleted_at >= s.arrived_at THEN 'arrived'
+    WHEN l.updated_by = 'system' THEN 'sold_other'
+    WHEN l.updated_by IN ('competition', 'ph-listed') THEN 'ph_listed'
+    ELSE 'user' END
+  FROM presell_stock s WHERE s.id = l.stock_id AND l.status = 'deleted' AND l.delete_reason IS NULL`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS arrived_qty INTEGER NOT NULL DEFAULT 0`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS released_qty INTEGER NOT NULL DEFAULT 0`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_arrivals (
+    id          BIGSERIAL PRIMARY KEY,
+    stock_id    BIGINT REFERENCES presell_stock(id) ON DELETE CASCADE,
+    batch_code  TEXT,
+    pairs       INTEGER NOT NULL,
+    set_aside   INTEGER NOT NULL,
+    released    INTEGER NOT NULL,
+    taken_down  INTEGER NOT NULL DEFAULT 0,
+    note        TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
 // What a pre-sell pair COST (2026-10-10): the shelf price, the supplier preset as used for
 // this purchase (edited or not — a snapshot, so changing the preset later doesn't rewrite
 // it), and the landed cost = shelf through that stack (src/lib/costs.js landedFromShelf).

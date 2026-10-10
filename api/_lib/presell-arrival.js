@@ -37,6 +37,8 @@ export async function takeDownArrived(stock, batchCode, { platforms = PLATFORMS,
     '📦 INBOUNDED — in-transit pre-sell arrived, listings taken down',
     { b: stock.name || stock.sku },
     `${stock.sku} · size ${stock.size}${batchCode ? ` · received in ${batchCode}` : ''}`,
+    ...([stock.supplier && `Supplier: ${stock.supplier}`, stock.po_code].filter(Boolean).length
+      ? [[stock.supplier && `Supplier: ${stock.supplier}`, stock.po_code].filter(Boolean).join(' · ')] : []),
     removed.some((r) => r.ok)
       ? `Deleted: ${['alias', 'stockx'].filter((p) => count(p)).map((p) => `${PLATFORM_LABEL[p]} ${count(p)}`).join(', ')}`
       : 'Nothing was still listed.',

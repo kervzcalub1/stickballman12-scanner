@@ -21,6 +21,7 @@ import {
   getPresellStock, openPresellListings, updatePresellListing, recordPresellSale, markPresellSaleNotified,
 } from './db.js';
 import { sendPresellSale } from './telegram.js';
+import { saleNet } from '../../src/lib/presellDetails.js';
 
 export const PLATFORM_LABEL = { alias: 'Alias', stockx: 'StockX' };
 
@@ -163,12 +164,27 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
   const sold = Number(stock?.sold || 0);
   const qty = Number(stock?.qty || 0);
   const pairs = (n) => `${n} pair${n === 1 ? '' : 's'}`;
+  // Payout is the platform's own (fee taken); NET = payout − the pair's landed cost, when a
+  // cost was entered (shelf through the supplier's preset). Without one, say so — never
+  // print a "profit" that is really just the payout (owner, 2026-10-10).
+  const net = saleNet({ platform, price_cents: priceCents, payout_cents: payoutCents, unit_cost: stock?.unit_cost });
+  const usd = (n) => money(n == null ? null : Math.round(n * 100));
+  const priceLine = `Price: ${money(priceCents)}${net.payout != null ? ` → payout ${usd(net.payout)}${net.estimated ? ' (est.)' : ''}` : ''}`;
+  const preset = stock?.cost_stack?.preset;
+  const costLine = net.cost != null
+    ? `Cost: ${usd(net.cost)}${stock?.shelf_price != null ? ` (shelf ${usd(Number(stock.shelf_price))}${preset ? ` · ${preset}${stock.cost_stack.edited ? ', edited' : ''}` : ''})` : ''} → NET ${net.profit != null ? `${net.profit < 0 ? '−' : ''}${usd(Math.abs(net.profit))}` : '—'}`
+    : `Cost: not entered — no net figure (Pre-sell → Stock → ✎ Cost & shipment)`;
+  const tracks = stock?.tracking_numbers || [];
+  const from = [stock?.supplier && `Supplier: ${stock.supplier}`, stock?.po_code,
+    tracks.length && `Tracking: ${tracks.slice(0, 2).join(', ')}${tracks.length > 2 ? ` +${tracks.length - 2} more` : ''}`].filter(Boolean).join(' · ');
   const lines = transit ? [
     `🚚 IN-TRANSIT SALE — ${PLATFORM_LABEL[platform]}`,
     { b: stock?.name || stock?.sku || 'In-transit pair' },
     `${stock?.sku || ''} · size ${stock?.size || '?'}`,
-    `Price: ${money(priceCents)}${payoutCents != null ? ` (payout ${money(payoutCents)})` : ''}`,
+    priceLine,
+    costLine,
     `Order: ${orderId}`,
+    ...(from ? [from] : []),
     `Shipment: ${stock?.transit_note || 'in transit'}${stock?.expected_on ? ` · expected ${String(stock.expected_on).slice(0, 10)}` : ''}`,
     arrived
       ? `⚠️ This shipment was ALREADY RECEIVED${stock.arrived_batch ? ` (${stock.arrived_batch})` : ''} — pull 1 pair of size ${stock.size} from the shelf for this order.`
@@ -178,8 +194,10 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
     `💰 PRE-SELL SALE — ${PLATFORM_LABEL[platform]} — SOURCE IT`,
     { b: stock?.name || stock?.sku || 'Pre-sell pair' },
     `${stock?.sku || ''} · size ${stock?.size || '?'}`,
-    `Price: ${money(priceCents)}${payoutCents != null ? ` (payout ${money(payoutCents)})` : ''}`,
+    priceLine,
+    costLine,
     `Order: ${orderId}`,
+    ...(from ? [from] : []),
     `⚠️ We don't have this pair — Alex / supplier: find 1 pair of size ${stock?.size || '?'}.`,
     `Pre-sell stock left: ${left} of ${qty}`,
   ];

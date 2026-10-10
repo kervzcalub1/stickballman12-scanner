@@ -9,7 +9,7 @@
 // src/lib/inbound.js rather than here: the screen, its summary strip and the Home
 // tile all have to agree, and the surest way to make them agree is one function.
 import { send, applySecurity, rateLimit, requireRole } from './_lib/util.js';
-import { listInboundBoxes, dbConfigured } from './_lib/db.js';
+import { listInboundBoxes, presellByPo, dbConfigured } from './_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -21,7 +21,11 @@ export default async function handler(req, res) {
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
   try {
-    return send(res, 200, { ok: true, boxes: await listInboundBoxes() });
+    const boxes = await listInboundBoxes();
+    // Orders that were pre-listed on Alias / StockX (Pre-sell Listings linked to the PO):
+    // the warehouse sees what already sold before the boxes land.
+    const presell = await presellByPo([...new Set(boxes.map((b) => Number(b.po_id)))]);
+    return send(res, 200, { ok: true, boxes, presell });
   } catch (e) {
     console.error('[inbound]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load the inbound feed.' });

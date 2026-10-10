@@ -4546,6 +4546,10 @@ body.keypad-open .keypad-fab, body.keypad-open .advisor-fab { display: none; }
 .inbound-var { font-weight: 700; font-variant-numeric: tabular-nums; }
 .inbound-var.short { color: #e08f8f; }
 .inbound-var.over  { color: #e0a33f; }
+/* Pre-sell Listings linked to the order: listed on Alias / StockX before it landed. */
+.inbound-presell { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: rgba(139, 92, 246, 0.16); color: #a78bfa; white-space: nowrap; }
+.inbound-presell-list { padding: 8px 10px; margin: 4px 0 8px; border-radius: 8px; background: rgba(139, 92, 246, 0.08); }
+.inbound-presell-rows { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
 .inbound-boxes { padding: 4px 14px 12px; border-top: 1px solid var(--border); }
 .inbound-box { padding: 9px 0; border-bottom: 1px solid var(--border); }
 .inbound-box:last-of-type { border-bottom: 0; }
@@ -5857,6 +5861,28 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ap-payout .neg { color: #ec8f8f; }
 .ap-stockbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .ap-stockbar .oo-search { flex: 1 1 240px; }
+/* Where it's from: supplier · PO · tracking numbers (many, pasted). */
+.ap-source { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 12px; margin-top: 10px; }
+.ap-source label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ap-source-track { grid-column: 1 / -1; }
+.ap-source-track textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.ap-source-line { margin-top: 2px; }
+.ap-row-actions { white-space: nowrap; }
+.ap-row-actions .btn + .btn { margin-left: 4px; }
+/* 📄 Report: dates → PDF / CSV. Wraps to rows on a phone. */
+.ap-report { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; width: 100%; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border, rgba(255,255,255,0.08)); }
+.ap-report label { display: flex; flex-direction: column; gap: 2px; }
+.ap-report input[type="date"] { min-width: 0; width: 150px; }
+.ap-report-title { flex: 1 1 100%; }
+.ap-sales-tot { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; }
+.ap-sales-tot .pos, td .pos { color: #5fc58a; }
+.ap-sales-tot .neg, td .neg { color: #ec8f8f; }
+/* ✎ Cost & shipment dialog */
+.ap-details { display: flex; flex-direction: column; gap: 10px; max-height: 70vh; overflow-y: auto; }
+.ap-details-sec { border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 8px; padding: 8px 10px 10px; margin: 0; min-width: 0; }
+.ap-details-sec legend { font-weight: 700; font-size: 13px; padding: 0 4px; }
+.ap-details-shelf { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 8px; }
+@media (max-width: 560px) { .ap-report input[type="date"] { width: 130px; } }
 .ap-fill-list { max-height: 180px; overflow: auto; margin: 4px 0 10px; padding-left: 18px; }
 
 /* Pre-sell Listings — one card per SKU + size (owner, 2026-10-10; phones first) */

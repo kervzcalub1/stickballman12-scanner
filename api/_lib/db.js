@@ -8444,14 +8444,14 @@ export async function listApprovedPeople() {
 // for the arrival check (arrived_at cleared), with an optional note + expected date.
 // Listing the same SKU + size again WITHOUT the tick leaves an existing transit flag alone.
 export async function upsertPresellStock({ sku, size, name, image, upc, addQty, inTransit = false, transitNote = null, expectedOn = null,
-  shelfPrice = null, unitCost = null, costStack = null }, actor) {
+  shelfPrice = null, unitCost = null, costStack = null, supplier = null, poId = null, trackingNumbers = [] }, actor) {
   const t = inTransit === true;
   const stack = costStack ? JSON.stringify(costStack) : null;
   const rows = await db()`
     INSERT INTO presell_stock (sku, size, name, image, upc, qty, created_by, updated_by, in_transit, transit_note, expected_on,
-                               shelf_price, unit_cost, cost_stack)
+                               shelf_price, unit_cost, cost_stack, supplier, po_id, tracking_numbers)
     VALUES (${sku}, ${size}, ${name}, ${image}, ${upc}, ${addQty}, ${actor}, ${actor}, ${t}, ${t ? transitNote : null}, ${t ? expectedOn : null}::date,
-            ${shelfPrice}, ${unitCost}, ${stack}::jsonb)
+            ${shelfPrice}, ${unitCost}, ${stack}::jsonb, ${supplier}, ${poId}::bigint, ${trackingNumbers || []}::text[])
     ON CONFLICT (sku, size) DO UPDATE
        SET qty = presell_stock.qty + EXCLUDED.qty,
            name = COALESCE(presell_stock.name, EXCLUDED.name), image = COALESCE(presell_stock.image, EXCLUDED.image),
@@ -8464,9 +8464,62 @@ export async function upsertPresellStock({ sku, size, name, image, upc, addQty, 
            -- The latest purchase's cost wins; a re-list without a cost keeps the one we had.
            shelf_price = COALESCE(EXCLUDED.shelf_price, presell_stock.shelf_price),
            unit_cost = COALESCE(EXCLUDED.unit_cost, presell_stock.unit_cost),
-           cost_stack = COALESCE(EXCLUDED.cost_stack, presell_stock.cost_stack)
+           cost_stack = COALESCE(EXCLUDED.cost_stack, presell_stock.cost_stack),
+           -- Where it's from: a new value wins, none keeps the old; tracking numbers ADD up.
+           supplier = COALESCE(EXCLUDED.supplier, presell_stock.supplier),
+           po_id = COALESCE(EXCLUDED.po_id, presell_stock.po_id),
+           tracking_numbers = ARRAY(SELECT t FROM unnest(presell_stock.tracking_numbers || EXCLUDED.tracking_numbers) WITH ORDINALITY u(t, o)
+                                     GROUP BY t ORDER BY min(o))
     RETURNING *`;
   return rows[0];
+}
+
+// The PO a pre-sell row is linked to — just enough to check it exists and name it.
+export async function getPoBrief(id) {
+  const rows = await db()`SELECT id, po_code, supplier_name, status FROM purchase_orders WHERE id = ${id}`;
+  return rows[0] || null;
+}
+// POs to link a pre-sell purchase to (the picker): open ones first, newest first.
+export async function presellPoOptions() {
+  return await db()`
+    SELECT p.id, p.po_code, p.supplier_name, p.status, p.tag_code, p.created_at,
+           ARRAY(SELECT b.tracking_number FROM po_boxes b WHERE b.po_id = p.id AND b.tracking_number IS NOT NULL AND b.tracking_number <> ''
+                  ORDER BY b.box_number NULLS LAST, b.id) AS tracking_numbers
+      FROM purchase_orders p
+     WHERE p.status <> 'closed'
+     ORDER BY (p.status = 'reconciled'), p.created_at DESC LIMIT 400`;
+}
+// Edit a stock row after listing (2026-10-10): cost (shelf + the preset as used, cost
+// recomputed by the caller), supplier, PO, tracking numbers, in-transit details. Only the
+// keys present change. Ticking "in transit" on a row that wasn't re-arms the arrival check.
+export async function updatePresellStockDetails(id, p, actor) {
+  const has = (k) => Object.prototype.hasOwnProperty.call(p, k);
+  const rows = await db()`
+    UPDATE presell_stock SET
+      shelf_price = CASE WHEN ${has('shelf_price')} THEN ${p.shelf_price ?? null}::numeric ELSE shelf_price END,
+      unit_cost = CASE WHEN ${has('unit_cost')} THEN ${p.unit_cost ?? null}::numeric ELSE unit_cost END,
+      cost_stack = CASE WHEN ${has('cost_stack')} THEN ${p.cost_stack ? JSON.stringify(p.cost_stack) : null}::jsonb ELSE cost_stack END,
+      supplier = CASE WHEN ${has('supplier')} THEN ${p.supplier ?? null} ELSE supplier END,
+      po_id = CASE WHEN ${has('po_id')} THEN ${p.po_id ?? null}::bigint ELSE po_id END,
+      tracking_numbers = CASE WHEN ${has('tracking_numbers')} THEN ${p.tracking_numbers || []}::text[] ELSE tracking_numbers END,
+      transit_note = CASE WHEN ${has('transit_note')} THEN ${p.transit_note ?? null} ELSE transit_note END,
+      expected_on = CASE WHEN ${has('expected_on')} THEN ${p.expected_on ?? null}::date ELSE expected_on END,
+      arrived_at = CASE WHEN ${has('in_transit')} AND ${p.in_transit === true} AND NOT in_transit THEN NULL ELSE arrived_at END,
+      arrived_batch = CASE WHEN ${has('in_transit')} AND ${p.in_transit === true} AND NOT in_transit THEN NULL ELSE arrived_batch END,
+      in_transit = CASE WHEN ${has('in_transit')} THEN ${p.in_transit === true} ELSE in_transit END,
+      updated_by = ${actor}, updated_at = now()
+    WHERE id = ${id} RETURNING *`;
+  return rows[0] || null;
+}
+// Pre-sell rows linked to these POs — Inbound shows an order as pre-listed, with what sold.
+export async function presellByPo(poIds) {
+  const ids = (poIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0);
+  if (!ids.length) return [];
+  return await db()`
+    SELECT s.id, s.po_id, s.sku, s.name, s.size, s.qty, s.sold, s.in_transit, s.arrived_at, s.supplier
+      FROM presell_stock s WHERE s.po_id = ANY(${ids}::bigint[])
+     ORDER BY s.sku, CASE WHEN regexp_replace(s.size, '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
+                          THEN regexp_replace(s.size, '[^0-9.]', '', 'g')::numeric END NULLS LAST, s.size`;
 }
 
 // In-transit rows still waiting for their pairs, matching what was just received. SKU
@@ -8484,7 +8537,8 @@ export async function presellTransitMatches(pairs) {
 // Mark a row arrived — ONCE: two receiving commits racing can't both act on it.
 export async function claimPresellArrival(id, batchCode) {
   const rows = await db()`UPDATE presell_stock SET arrived_at = now(), arrived_batch = ${batchCode || null}, updated_at = now()
-                           WHERE id = ${id} AND in_transit AND arrived_at IS NULL RETURNING *`;
+                           WHERE id = ${id} AND in_transit AND arrived_at IS NULL
+                           RETURNING *, (SELECT po_code FROM purchase_orders WHERE id = presell_stock.po_id) AS po_code`;
   return rows[0] || null;
 }
 export async function batchKindAndCode(batchId) {
@@ -8492,7 +8546,7 @@ export async function batchKindAndCode(batchId) {
   return rows[0] || null;
 }
 export async function getPresellStock(id) {
-  const rows = await db()`SELECT * FROM presell_stock WHERE id = ${id}`;
+  const rows = await db()`SELECT s.*, po.po_code FROM presell_stock s LEFT JOIN purchase_orders po ON po.id = s.po_id WHERE s.id = ${id}`;
   return rows[0] || null;
 }
 export async function setPresellStockQty(id, qty, actor) {
@@ -8576,17 +8630,26 @@ export async function markPresellSaleNotified(id, error = null) {
   await db()`UPDATE presell_sales SET notified_at = CASE WHEN ${error}::text IS NULL THEN now() ELSE notified_at END, notify_error = ${error} WHERE id = ${id}`;
 }
 // The Stock tab: each SKU + size with how its listings stand per platform.
-export async function listPresellStock({ q = null } = {}) {
+// from / to (YYYY-MM-DD, EST): rows first listed in that window — the report's date filter.
+export async function listPresellStock({ q = null, from = null, to = null } = {}) {
   const like = q ? `%${q}%` : null;
   return await db()`
-    SELECT s.*,
+    SELECT s.*, po.po_code, po.supplier_name AS po_supplier,
            count(l.*) FILTER (WHERE l.platform = 'alias' AND l.status = 'live')::int AS alias_live,
            count(l.*) FILTER (WHERE l.platform = 'alias' AND l.status IN ('pending', 'off'))::int AS alias_other,
            count(l.*) FILTER (WHERE l.platform = 'stockx' AND l.status = 'live')::int AS stockx_live,
-           count(l.*) FILTER (WHERE l.platform = 'stockx' AND l.status IN ('pending', 'off'))::int AS stockx_other
+           count(l.*) FILTER (WHERE l.platform = 'stockx' AND l.status IN ('pending', 'off'))::int AS stockx_other,
+           min(l.price_cents) FILTER (WHERE l.platform = 'alias' AND l.status IN ('pending', 'live', 'off'))::int AS alias_min_cents,
+           max(l.price_cents) FILTER (WHERE l.platform = 'alias' AND l.status IN ('pending', 'live', 'off'))::int AS alias_max_cents,
+           min(l.price_cents) FILTER (WHERE l.platform = 'stockx' AND l.status IN ('pending', 'live', 'off'))::int AS stockx_min_cents,
+           max(l.price_cents) FILTER (WHERE l.platform = 'stockx' AND l.status IN ('pending', 'live', 'off'))::int AS stockx_max_cents
       FROM presell_stock s LEFT JOIN presell_listings l ON l.stock_id = s.id
-     WHERE (${like}::text IS NULL OR s.sku ILIKE ${like} OR s.name ILIKE ${like})
-     GROUP BY s.id ORDER BY s.updated_at DESC LIMIT 1000`;
+      LEFT JOIN purchase_orders po ON po.id = s.po_id
+     WHERE (${like}::text IS NULL OR s.sku ILIKE ${like} OR s.name ILIKE ${like} OR s.supplier ILIKE ${like} OR po.po_code ILIKE ${like}
+            OR array_to_string(s.tracking_numbers, ' ') ILIKE ${like})
+       AND (${from}::date IS NULL OR (s.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       AND (${to}::date IS NULL OR (s.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+     GROUP BY s.id, po.id ORDER BY s.updated_at DESC LIMIT 2000`;
 }
 // view: all (open) | live | off | pending | sold | deleted ; platform: '' | alias | stockx
 export async function listPresellListings({ view = 'all', platform = null, q = null, stockId = null } = {}) {
@@ -8607,10 +8670,16 @@ export async function listPresellListings({ view = 'all', platform = null, q = n
       FROM presell_listings WHERE (${platform}::text IS NULL OR platform = ${platform})`;
   return { rows, counts: counts[0] };
 }
-export async function listPresellSales({ limit = 300 } = {}) {
+// from / to (YYYY-MM-DD, EST) on the day it SOLD. Cost comes from the stock row as it is
+// now, so a cost entered after the sale still shows up in the profit.
+export async function listPresellSales({ limit = 300, from = null, to = null } = {}) {
   return await db()`
-    SELECT x.*, s.sku, s.name, s.image, s.size, l.external_id
+    SELECT x.*, s.sku, s.name, s.image, s.size, s.unit_cost, s.shelf_price, s.cost_stack, s.supplier, s.in_transit, s.arrived_at,
+           s.tracking_numbers, s.transit_note, po.po_code, l.external_id
       FROM presell_sales x LEFT JOIN presell_stock s ON s.id = x.stock_id LEFT JOIN presell_listings l ON l.id = x.listing_id
+      LEFT JOIN purchase_orders po ON po.id = s.po_id
+     WHERE (${from}::date IS NULL OR (COALESCE(x.sold_at, x.created_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       AND (${to}::date IS NULL OR (COALESCE(x.sold_at, x.created_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
      ORDER BY COALESCE(x.sold_at, x.created_at) DESC LIMIT ${limit}`;
 }
 // Anything that could still sell? (the watcher skips the order polls when not)
@@ -8805,13 +8874,15 @@ export async function presellAnnounceRows(stockIds, since) {
   if (!ids.length) return [];
   return await db()`
     SELECT s.id, s.sku, s.name, s.size, s.qty, s.sold, s.in_transit, s.arrived_at, s.transit_note, s.expected_on, s.unit_cost,
+           s.supplier, s.tracking_numbers, po.po_code,
            l.platform, count(*)::int AS n, min(l.price_cents)::int AS min_cents, max(l.price_cents)::int AS max_cents,
            count(*) FILTER (WHERE l.status = 'live')::int AS live
       FROM presell_stock s
       JOIN presell_listings l ON l.stock_id = s.id
+      LEFT JOIN purchase_orders po ON po.id = s.po_id
      WHERE s.id = ANY(${ids}::bigint[]) AND l.created_at >= ${since}::timestamptz - interval '10 seconds'
        AND l.status NOT IN ('failed', 'deleted')
-     GROUP BY s.id, l.platform
+     GROUP BY s.id, po.id, l.platform
      ORDER BY s.sku, s.size, l.platform`;
 }
 

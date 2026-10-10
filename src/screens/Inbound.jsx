@@ -81,6 +81,9 @@ function DueTile({ k, plan, on, onClick }) {
 
 export function Inbound({ onHome, onSignOut, onOpenPo }) {
   const [rows, setRows] = useState(null);
+  // Pre-sell Listings linked to an order (presell-listings.md): pairs already listed on
+  // Alias / StockX before the boxes land — and how many of them have sold.
+  const [presell, setPresell] = useState([]);
   const [error, setError] = useState('');
   // The travelling-state chip (?status=) and the "show fully delivered" fold (?done=1)
   // ride in the URL with the rest of the filters below. A value that isn't a known
@@ -107,15 +110,18 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
 
   async function load() {
     setError('');
-    try { const r = await api.inbound(); setRows(r.boxes || []); }
+    try { const r = await api.inbound(); setRows(r.boxes || []); setPresell(r.presell || []); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // Live (docs/context/live-updates.md): a carrier update, a box shipped or received
   // moves the strip and the progress bar without F5. Filters and open rows are local
   // state and untouched; only the feed is swapped, and only when it changed.
-  useLive(['po_boxes', 'purchase_orders', 'po_lines', 'items', 'batches'], () => api.inbound()
-    .then((r) => { const n = r.boxes || []; setRows((cur) => (JSON.stringify(cur) === JSON.stringify(n) ? cur : n)); })
+  useLive(['po_boxes', 'purchase_orders', 'po_lines', 'items', 'batches', 'presell_stock'], () => api.inbound()
+    .then((r) => {
+      const n = r.boxes || []; setRows((cur) => (JSON.stringify(cur) === JSON.stringify(n) ? cur : n));
+      const p = r.presell || []; setPresell((cur) => (JSON.stringify(cur) === JSON.stringify(p) ? cur : p));
+    })
     .catch((err) => { if (err.unauthorized) onSignOut(); }), { mount: false, minGap: 5000 });
 
   // Filters apply to SHIPMENTS, and the counts are computed from the same filtered
@@ -319,6 +325,9 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
             // a box is what turns up: the pair count only becomes real once somebody
             // has scanned the contents in.
             const pct = s.boxCount ? Math.round((s.delivered / s.boxCount) * 100) : 0;
+            const pre = presell.filter((x) => Number(x.po_id) === s.poId);
+            const preQty = pre.reduce((n, x) => n + Number(x.qty), 0);
+            const preSold = pre.reduce((n, x) => n + Number(x.sold), 0);
             return (
               <div className={`inbound-ship ${INBOUND_STATES[s.state].tone}`} key={s.poId}>
                 <button className="inbound-head" onClick={() => toggle(s.poId)}>
@@ -337,6 +346,11 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
                   )}
                   {short && <span className="inbound-var short">−{s.outstanding} outstanding</span>}
                   {over && <span className="inbound-var over">+{-s.outstanding} over</span>}
+                  {pre.length > 0 && (
+                    <span className="inbound-presell" title="Listed on Alias / StockX before it landed (Pre-sell Listings)">
+                      🏷 Pre-listed {preQty} · sold {preSold}
+                    </span>
+                  )}
                 </button>
                 {isOpen && (
                   <div className="inbound-boxes">
@@ -370,6 +384,19 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
                         </div>
                       );
                     })}
+                    {pre.length > 0 && (
+                      <div className="inbound-presell-list">
+                        <b className="sm">🏷 Pre-listed on Alias / StockX</b>
+                        <span className="muted sm"> — {preSold} sold before it landed: set {preSold === 1 ? 'that pair' : 'those pairs'} aside for the buyer{preSold === 1 ? '' : 's'}, inbound the other {Math.max(0, preQty - preSold)}.</span>
+                        <div className="inbound-presell-rows">
+                          {pre.map((x) => (
+                            <span key={x.id} className="inbound-presell-row sm">
+                              <b>{x.sku}</b> {x.size} · {x.sold}/{x.qty} sold{x.arrived_at ? ' · arrived' : ''}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div className="inbound-actions">
                       <span className="muted sm">
                         Raised {estDate(s.createdAt)}

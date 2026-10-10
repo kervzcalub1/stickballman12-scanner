@@ -104,6 +104,39 @@ Saved on `presell_stock`: `shelf_price`, `unit_cost` (the SERVER recomputes it f
 stack, not trusting the browser) and `cost_stack` (JSONB snapshot: preset name/id, edited,
 the numbers). A re-list without a cost keeps the one already there.
 
+## Cost & shipment after listing · net on the sale post · reports (owner, 2026-10-10)
+- **Where it's from** (List new, under the cost; and the editor below): **Supplier** (typed, or
+  suggested from preset/PO supplier names; picking a preset fills it when blank), **PO** (picker of
+  POs not closed — `list?tab=pos`, with each PO's label tracking numbers), **Tracking numbers**
+  pasted many at once (`parseTrackingList` in `src/lib/presellDetails.js`: any separator, words
+  dropped, 8–40 chars with ≥ 6 digits, de-duped, ≤ 200). Columns on `presell_stock`: `supplier`,
+  `po_id` (→ purchase_orders, ON DELETE SET NULL), `tracking_numbers TEXT[]`. A re-list adds
+  tracking numbers (union) and keeps supplier/PO unless new ones are given.
+- **Stock → ✎ Cost & shipment** (per SKU; every size ticked to start, each keeps its own shelf
+  price): Cost (preset + edit for this purchase + shelf per size → landed cost), Where it's from,
+  In transit (note/expected; ticking it on a row that wasn't re-arms arrival). `POST action
+  {action:'details', stockIds, cost?:{costStack, shelf:{id:price}}, supplier?, poId?,
+  trackingNumbers?, inTransit?, transitNote?, expectedOn?}` — only the sections touched are sent,
+  so a cost fix never wipes tracking. The server recomputes `unit_cost`; shelf without a preset →
+  shelf kept, cost NULL. Stock table: Cost column, "supplier · PO · N tracking" line, a count of
+  sizes with no cost.
+- **Sale post NET** (`handleSale`): `Price: $175 → payout $162.75` (the platform's own payout; "(est.)"
+  = price less the default fee when it gave none) then `Cost: $X (shelf $Y · preset) → NET $Z`, or
+  "Cost: not entered — no net figure". Plus supplier · PO · tracking. One function, `saleNet`, for
+  the post, the Sales tab (Cost / Net columns + totals) and the report. Cost is read from the stock
+  row at the time, so a cost entered after a sale shows in the Sales tab / report (not the old post).
+- **📄 Report** (Stock + Listings tabs → stock report; Sales tab → sales report): from/to dates (EST;
+  stock = day first listed, sales = day sold; on Stock and Sales the list is filtered too) →
+  **⬇ PDF / ⬇ CSV**, built client-side from one fresh read (`src/lib/presellReport.js`, jsPDF lazy,
+  ASCII-only in the PDF). Stock: pairs / sold / left, In transit / Arrived / Pre-sell, supplier, PO,
+  tracking (all in CSV), shelf, preset, cost, left-at-cost, listings + price range per platform.
+  Sales: date/time, platform, order, price, payout (* est.), cost, net, supplier/PO, kind; totals
+  count net only over sales with a cost.
+- **Inbound**: `/api/inbound` returns `presell` (rows linked to the listed POs, `presellByPo`); a
+  shipment shows "🏷 Pre-listed N · sold M" and, opened, the sizes with "set M aside, inbound the
+  rest". The LISTED and INBOUNDED posts carry supplier · PO (· N tracking numbers).
+- Tests: `e2e/presell-cost-shipment.spec.js`.
+
 ## Market prices — each platform's OWN words (owner, 2026-10-07)
 `POST /api/presell-listings/prices { platform, sku, sizes, consigned }`
 - **Alias**: Global Indicator · Lowest Listing · Last Sold · Highest Offer, toggle

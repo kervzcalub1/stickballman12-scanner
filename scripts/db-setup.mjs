@@ -2094,6 +2094,14 @@ await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS arrived_batch TEXT
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS shelf_price NUMERIC(12,2)`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,2)`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS cost_stack JSONB`);
+// Where a pre-sell pair comes FROM (2026-10-10): the supplier (usually a payout preset's
+// name), the PO it was bought on (so Inbound shows the order as pre-listed) and every
+// tracking number of the shipment — a supplier's pre-listed order often has many boxes.
+// Editable after listing; set per SKU + size row (the editor applies to a whole SKU).
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS supplier TEXT`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id) ON DELETE SET NULL`);
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[] NOT NULL DEFAULT '{}'`);
+await sql(`CREATE INDEX IF NOT EXISTS presell_stock_po_idx ON presell_stock (po_id) WHERE po_id IS NOT NULL`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_listings_pending_idx ON presell_listings (status) WHERE status = 'pending'`);
 await sql(`
   CREATE TABLE IF NOT EXISTS presell_sales (

@@ -17,6 +17,7 @@ import { isUpcCode } from '../lib/codes.js';
 import { parsePresellPaste } from '../lib/presellPaste.js';
 import { landedFromShelf } from '../lib/costs.js';
 import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
+import { parseTrackingList, saleNet } from '../lib/presellDetails.js';
 
 // The cost stack fields a supplier preset carries (payout_presets), in the order the
 // Payout Calculator applies them.
@@ -26,7 +27,7 @@ const STACK_FIELDS = [
 ];
 const stackOf = (p) => (p ? Object.fromEntries(STACK_FIELDS.map(([k]) => [k, Number(p[k]) || 0])) : null);
 const money2 = (n) => (n == null || !Number.isFinite(n) ? '—' : `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`);
-import { PH_DATE, PH_DATETIME, estToday } from '../lib/format.js';
+import { PH_DATE, PH_DATETIME, estToday, estDate, estTime } from '../lib/format.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -96,6 +97,97 @@ function useMarket(platform, wanted, basis, onSignOut) {
   return (sku, size) => prices[`${tag}|${sku}|${size}`];
 }
 
+// The POs a pre-sell purchase can be linked to (open ones first), loaded once per screen.
+function usePresellPos() {
+  const [pos, setPos] = useState([]);
+  useEffect(() => { api.presellListingsList({ tab: 'pos' }).then((r) => setPos(r.pos || [])).catch(() => {}); }, []);
+  return pos;
+}
+const poLabel = (p) => `${p.po_code} · ${p.supplier_name}${p.tag_code ? ` · ${p.tag_code}` : ''}${p.status && p.status !== 'draft' ? ` (${p.status})` : ''}`;
+
+// Where the pairs come from (2026-10-10): supplier, the PO they were bought on, and every
+// tracking number of the shipment — pasted many at once (one per line, commas, spaces,
+// or straight out of the supplier's message). value = { supplier, poId, tracking }.
+function SourceFields({ value, onChange, pos, presets }) {
+  const set = (k, v) => onChange({ ...value, [k]: v });
+  const po = pos.find((p) => String(p.id) === String(value.poId));
+  const parsed = parseTrackingList(value.tracking);
+  const poTracks = (po?.tracking_numbers || []).filter((t) => !parsed.includes(String(t).replace(/[^0-9a-z]/gi, '').toUpperCase()));
+  const names = [...new Set([...presets.map((p) => p.name), ...pos.map((p) => p.supplier_name)].filter(Boolean))].sort();
+  return (
+    <div className="ap-source">
+      <label><span className="muted xs">Supplier</span>
+        <input className="input" list="ap-supplier-names" value={value.supplier} maxLength={80} placeholder="e.g. the supplier’s preset name"
+          onChange={(e) => set('supplier', e.target.value)} aria-label="Supplier" />
+        <datalist id="ap-supplier-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
+      </label>
+      <label><span className="muted xs">Purchase order (optional)</span>
+        <select className="input" value={value.poId || ''} aria-label="Purchase order"
+          onChange={(e) => {
+            const p = pos.find((x) => String(x.id) === e.target.value);
+            onChange({ ...value, poId: e.target.value, supplier: value.supplier || p?.supplier_name || '' });
+          }}>
+          <option value="">— not on a PO —</option>
+          {pos.map((p) => <option key={p.id} value={p.id}>{poLabel(p)}</option>)}
+        </select>
+      </label>
+      <label className="ap-source-track"><span className="muted xs">Tracking numbers — paste as many as you have</span>
+        <textarea className="input" rows={3} value={value.tracking} placeholder={'1Z999AA10123456784\n1Z999AA10123456785, 9400111899223197428490'}
+          onChange={(e) => set('tracking', e.target.value)} aria-label="Tracking numbers" />
+        <span className="muted xs">
+          {parsed.length ? `${parsed.length} tracking number${parsed.length === 1 ? '' : 's'}` : 'None yet'}
+          {poTracks.length > 0 && <> · <button type="button" className="linklike" onClick={() => set('tracking', [value.tracking.trim(), ...poTracks].filter(Boolean).join('\n'))}>
+            add the PO’s {poTracks.length} tracking number{poTracks.length === 1 ? '' : 's'}</button></>}
+        </span>
+      </label>
+    </div>
+  );
+}
+
+// 📄 Report (2026-10-10): a date range (EST) → PDF or CSV. Stock = what's left (pairs first
+// listed in the range); Sales = what sold in the range. Built from a fresh read, so the
+// file is whole even when the screen shows a search.
+function ReportBar({ kind, from, to, setFrom, setTo, onSignOut, filtersList = false }) {
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+  async function download(fmt) {
+    setBusy(fmt); setErr('');
+    try {
+      const r = await api.presellListingsList({ tab: kind === 'sales' ? 'sales' : 'stock', from, to });
+      const rep = await import('../lib/presellReport.js');
+      const now = new Date();
+      const name = `presell-${kind === 'sales' ? 'sales' : 'stock'}_${from || 'start'}_to_${to || estToday()}`;
+      let blob;
+      if (fmt === 'csv') blob = new Blob([kind === 'sales' ? rep.salesReportCsv(r.rows || []) : rep.stockReportCsv(r.rows || [])], { type: 'text/csv;charset=utf-8' });
+      else {
+        const opts = { from, to, generatedAt: `Generated ${estDate(now)} ${estTime(now)} EST` };
+        blob = (await (kind === 'sales' ? rep.salesReportPdf : rep.stockReportPdf)(r.rows || [], opts)).output('blob');
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${name}.${fmt}`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      setErr(e.message || 'Could not build the report.');
+    } finally { setBusy(''); }
+  }
+  return (
+    <div className="ap-report">
+      <span className="ap-report-title"><b>📄 Report</b> <span className="muted xs">{kind === 'sales' ? 'what sold' : 'what’s left — pairs, sold, in transit, supplier, PO, tracking, cost'}</span></span>
+      <label><span className="muted xs">{kind === 'sales' ? 'Sold from' : 'Listed from'}</span>
+        <input className="input" type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} aria-label="From date" /></label>
+      <label><span className="muted xs">to</span>
+        <input className="input" type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} aria-label="To date" /></label>
+      {(from || to) && <button type="button" className="btn sm ghost" onClick={() => { setFrom(''); setTo(''); }}>All dates</button>}
+      <button type="button" className="btn sm" disabled={!!busy} onClick={() => download('pdf')}>{busy === 'pdf' ? 'Building…' : '⬇ PDF'}</button>
+      <button type="button" className="btn sm" disabled={!!busy} onClick={() => download('csv')}>{busy === 'csv' ? 'Building…' : '⬇ CSV'}</button>
+      {filtersList && (from || to) && <span className="muted xs">The list below is filtered to these dates too.</span>}
+      {err && <span className="error xs">{err}</span>}
+    </div>
+  );
+}
+
 export function PresellListings({ onHome, onSignOut }) {
   const [tab, setTab] = useQueryParam('tab', 'new');
   return (
@@ -144,10 +236,14 @@ function ListNew({ onSignOut, onListed }) {
   const [editStack, setEditStack] = useState(false);
   const [allShelf, setAllShelf] = useState('');
   useEffect(() => { api.payoutPresets().then((r) => setPresets(r.presets || [])).catch(() => {}); }, []);
+  // Where it comes from: supplier (defaults to the preset's name), PO, tracking numbers.
+  const pos = usePresellPos();
+  const [source, setSource] = useState({ supplier: '', poId: '', tracking: '' });
   function pickPreset(id) {
     setPresetId(id);
     const p = presets.find((x) => String(x.id) === String(id));
     setStack(stackOf(p)); setStackEdited(false); setEditStack(false);
+    if (p && !source.supplier.trim()) setSource((v) => ({ ...v, supplier: p.name }));
   }
   const costOf = (l) => (stack ? landedFromShelf(l.shelfPrice, null, stack) : null);
   const [basis, setBasis] = useState(loadBasis);
@@ -236,6 +332,7 @@ function ListNew({ onSignOut, onListed }) {
           r = await api.presellListingsCreate({
             activate,
             inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
+            supplier: source.supplier.trim(), poId: source.poId ? Number(source.poId) : null, trackingNumbers: parseTrackingList(source.tracking),
             costStack: stack ? { ...stack, preset: preset?.name || null, presetId: preset?.id || null, edited: stackEdited } : null,
             items: b.pieces.map(({ l, qty }) => ({
               sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty,
@@ -404,6 +501,7 @@ function ListNew({ onSignOut, onListed }) {
                   <button type="button" className="btn sm ghost" onClick={() => pickPreset(presetId)}>Reset to the preset</button>
                 </div>
               )}
+              <SourceFields value={source} onChange={setSource} pos={pos} presets={presets} />
               {!stack && <p className="muted xs">Pick the supplier’s preset to turn each shelf price into a landed cost and see the payout and profit per platform. Without one the cost stays blank (the owner’s rule: shelf price alone isn’t the cost).</p>}
             </div>
             <div className="ap-bulk">
@@ -472,8 +570,8 @@ function ListNew({ onSignOut, onListed }) {
                 </label>
                 {inTransit && (
                   <div className="ap-transit">
-                    <label><span className="muted xs">PO / tracking / supplier (optional)</span>
-                      <input className="input" value={transitNote} maxLength={200} placeholder="e.g. Alex · PO 1042 · 1Z999…" onChange={(e) => setTransitNote(e.target.value)} /></label>
+                    <label><span className="muted xs">Shipment note (optional)</span>
+                      <input className="input" value={transitNote} maxLength={200} placeholder="e.g. Alex · 2 boxes · ships Tue" onChange={(e) => setTransitNote(e.target.value)} /></label>
                     <label><span className="muted xs">Expected (optional)</span>
                       <input className="input" type="date" value={expectedOn} min={estToday()} onChange={(e) => setExpectedOn(e.target.value)} /></label>
                   </div>
@@ -516,42 +614,60 @@ function ListNew({ onSignOut, onListed }) {
 /* --------------------------------- Stock --------------------------------- */
 function StockTab({ onSignOut }) {
   const [q, setQ] = useQueryParam('q', '');
+  const [from, setFrom] = useQueryParam('from', '');
+  const [to, setTo] = useQueryParam('to', '');
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
   const [qtyFor, setQtyFor] = useState(null);
   const [listFor, setListFor] = useState(null);   // { stock, platform }
   const [fill, setFill] = useState(false);
+  const [detailsFor, setDetailsFor] = useState(null);   // { sku, focus }
+  const [presets, setPresets] = useState([]);
+  useEffect(() => { api.payoutPresets().then((r) => setPresets(r.presets || [])).catch(() => {}); }, []);
+  const pos = usePresellPos();
   async function load() {
-    try { const r = await api.presellListingsList({ tab: 'stock', q: q.trim() }); setRows(r.rows || []); setError(''); }
+    try { const r = await api.presellListingsList({ tab: 'stock', q: q.trim(), from, to }); setRows(r.rows || []); setError(''); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
-  useEffect(() => { const t = setTimeout(load, q ? 300 : 0); return () => clearTimeout(t); }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const t = setTimeout(load, q ? 300 : 0); return () => clearTimeout(t); }, [q, from, to]); // eslint-disable-line react-hooks/exhaustive-deps
   useLive(['presell_stock', 'presell_listings'], load, { mount: false });
+  const noCost = (rows || []).filter((s) => s.unit_cost == null).length;
   return (
     <>
       <div className="card ap-stockbar">
-        <input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU or name…" aria-label="Search pre-sell stock" />
+        <input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU, name, supplier, PO or tracking…" aria-label="Search pre-sell stock" />
         <button type="button" className="btn sm" disabled={!rows?.length} onClick={() => setFill(true)}
           title="Create the listings a platform is short of — every size shown, one size at a time">＋ Fill missing listings</button>
+        <ReportBar kind="stock" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut} filtersList />
       </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">
-        {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">No pre-sell stock yet.</p> : (
+        {noCost > 0 && <p className="muted sm">{noCost} size{noCost === 1 ? ' has' : 's have'} <b>no cost</b> yet — tap <b>✎ Cost &amp; shipment</b> to add the shelf price and supplier preset.</p>}
+        {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">{from || to ? 'Nothing listed in those dates.' : 'No pre-sell stock yet.'}</p> : (
           <div className="ap-tablewrap">
             <table className="table">
-              <thead><tr><th>Shoe</th><th>Size</th><th className="num">Pairs</th><th className="num">Sold</th><th className="num">Left</th><th>Alias</th><th>StockX</th><th /></tr></thead>
+              <thead><tr><th>Shoe</th><th>Size</th><th className="num">Pairs</th><th className="num">Sold</th><th className="num">Left</th><th className="num">Cost</th><th>Alias</th><th>StockX</th><th /></tr></thead>
               <tbody>
                 {rows.map((s) => {
                   const left = Math.max(0, s.qty - s.sold);
+                  const tracks = s.tracking_numbers || [];
                   return (
                     <tr key={s.id}>
                       <td><div className="ap-shoe"><ShoeThumb url={s.image} size={36} /><div><b>{s.sku}</b><div className="muted xs">{s.name}</div>
                         {s.in_transit && (s.arrived_at
                           ? <span className="ap-transit-chip arrived" title={`Received${s.arrived_batch ? ` in ${s.arrived_batch}` : ''} — the unsold listings were deleted`}>📦 Arrived {PH_DATE.format(new Date(s.arrived_at))}</span>
                           : <span className="ap-transit-chip" title={s.transit_note || 'Listings come down when the warehouse receives this SKU + size'}>🚚 In transit{s.expected_on ? ` · exp ${String(s.expected_on).slice(5, 10).replace('-', '/')}` : ''}</span>)}
+                        {(s.supplier || s.po_code || tracks.length > 0) && (
+                          <div className="muted xs ap-source-line" title={tracks.join('\n')}>
+                            {[s.supplier, s.po_code, tracks.length && `${tracks.length} tracking`].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
                       </div></div></td>
                       <td>{s.size}</td>
                       <td className="num">{s.qty}</td><td className="num">{s.sold}</td><td className="num"><b>{left}</b></td>
+                      <td className="num" title={s.shelf_price != null ? `Shelf $${Number(s.shelf_price).toFixed(2)}${s.cost_stack?.preset ? ` · ${s.cost_stack.preset}` : ''}` : 'No cost entered'}>
+                        {s.unit_cost != null ? money2(Number(s.unit_cost)) : <span className="muted">—</span>}
+                      </td>
                       {['alias', 'stockx'].map((p) => {
                         const open = s[`${p}_live`] + s[`${p}_other`];
                         return (
@@ -561,7 +677,10 @@ function StockTab({ onSignOut }) {
                           </td>
                         );
                       })}
-                      <td><button type="button" className="btn sm ghost" onClick={() => setQtyFor(s)}>Pairs…</button></td>
+                      <td className="ap-row-actions">
+                        <button type="button" className="btn sm ghost" onClick={() => setDetailsFor({ sku: s.sku, focus: s.id })} title="Cost, supplier, PO, tracking numbers, in transit">✎ Cost &amp; shipment</button>
+                        <button type="button" className="btn sm ghost" onClick={() => setQtyFor(s)}>Pairs…</button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -573,7 +692,159 @@ function StockTab({ onSignOut }) {
       {qtyFor && <QtyDialog stock={qtyFor} onSignOut={onSignOut} onClose={() => setQtyFor(null)} onDone={() => { setQtyFor(null); load(); }} />}
       {listFor && <ListMoreDialog {...listFor} onSignOut={onSignOut} onClose={() => setListFor(null)} onDone={() => { setListFor(null); load(); }} />}
       {fill && <FillMissingDialog rows={rows || []} onSignOut={onSignOut} onClose={() => setFill(false)} onDone={() => { setFill(false); load(); }} />}
+      {detailsFor && (
+        <DetailsDialog rows={(rows || []).filter((r) => r.sku === detailsFor.sku)} focus={detailsFor.focus} presets={presets} pos={pos}
+          onSignOut={onSignOut} onClose={() => setDetailsFor(null)} onDone={() => { setDetailsFor(null); load(); }} />
+      )}
     </>
+  );
+}
+
+// ✎ Cost & shipment (2026-10-10): fix a SKU's rows after listing — the cost that was never
+// entered (no preset picked, a shelf price forgotten), the supplier, the PO it was bought on,
+// every tracking number, in transit. Sizes ticked = the rows changed (all of the SKU's
+// sizes to start with — a shipment is per SKU). Only the sections touched are sent, so fixing a cost
+// never wipes tracking numbers and vice versa. The server recomputes the landed cost.
+function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }) {
+  const first = rows.find((r) => r.id === focus) || rows[0];
+  const sizeNum = (z) => { const m = String(z || '').match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : Infinity; };
+  const sorted = [...rows].sort((a, b) => sizeNum(a.size) - sizeNum(b.size));
+  // A shipment is per SKU, so every size is ticked to start with; each keeps its own shelf price.
+  const [picked, setPicked] = useState(() => new Set(rows.map((r) => r.id)));
+  // Cost
+  const firstStack = first.cost_stack || null;
+  const [presetId, setPresetId] = useState(firstStack?.presetId ? String(firstStack.presetId) : '');
+  const [stack, setStack] = useState(firstStack ? Object.fromEntries(STACK_FIELDS.map(([k]) => [k, Number(firstStack[k]) || 0])) : null);
+  const [stackEdited, setStackEdited] = useState(!!firstStack?.edited);
+  const [editStack, setEditStack] = useState(false);
+  const [shelf, setShelf] = useState(() => Object.fromEntries(rows.map((r) => [r.id, r.shelf_price != null ? String(Number(r.shelf_price)) : ''])));
+  const [allShelf, setAllShelf] = useState('');
+  const [costDirty, setCostDirty] = useState(false);
+  function pickPreset(id) {
+    setPresetId(id); setCostDirty(true);
+    const p = presets.find((x) => String(x.id) === String(id));
+    setStack(stackOf(p)); setStackEdited(false); setEditStack(false);
+    if (p && !source.supplier.trim()) { setSource((v) => ({ ...v, supplier: p.name })); setSourceDirty(true); }
+  }
+  // Where from
+  const [source, setSource] = useState(() => ({
+    supplier: first.supplier || '', poId: first.po_id ? String(first.po_id) : '',
+    tracking: [...new Set(rows.flatMap((r) => r.tracking_numbers || []))].join('\n'),
+  }));
+  const [sourceDirty, setSourceDirty] = useState(false);
+  // In transit
+  const [inTransit, setInTransit] = useState(!!first.in_transit);
+  const [note, setNote] = useState(first.transit_note || '');
+  const [expected, setExpected] = useState(first.expected_on ? String(first.expected_on).slice(0, 10) : '');
+  const [transitDirty, setTransitDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const toggle = (id) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const costOf = (id) => (stack ? landedFromShelf(shelf[id], null, stack) : null);
+  async function save() {
+    setBusy(true); setErr('');
+    const ids = sorted.filter((r) => picked.has(r.id)).map((r) => r.id);
+    const preset = presets.find((x) => String(x.id) === String(presetId));
+    const body = { action: 'details', stockIds: ids };
+    if (costDirty) {
+      body.cost = {
+        costStack: stack ? { ...stack, preset: preset?.name || firstStack?.preset || null, presetId: preset?.id || null, edited: stackEdited } : null,
+        shelf: Object.fromEntries(ids.map((id) => [id, shelf[id] === '' ? null : Number(shelf[id])])),
+      };
+    }
+    if (sourceDirty) Object.assign(body, { supplier: source.supplier.trim(), poId: source.poId ? Number(source.poId) : null, trackingNumbers: parseTrackingList(source.tracking) });
+    if (transitDirty) Object.assign(body, { inTransit, transitNote: inTransit ? note.trim() : '', expectedOn: inTransit ? expected : '' });
+    try { await api.presellListingsAction(body); onDone(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); setBusy(false); }
+  }
+  const dirty = costDirty || sourceDirty || transitDirty;
+  const rearm = transitDirty && inTransit && sorted.some((r) => picked.has(r.id) && r.in_transit === false);
+  return (
+    <Dialog title={`${first.sku} — cost & shipment`} onClose={onClose} busy={busy}>
+      <div className="ap-details">
+        <div className="ap-details-sizes">
+          <span className="muted xs">Sizes to change</span>
+          <div className="ap-sizes">
+            {sorted.map((r) => (
+              <button key={r.id} type="button" className={`btn sm ${picked.has(r.id) ? 'primary' : 'ghost'}`} aria-pressed={picked.has(r.id)} onClick={() => toggle(r.id)}
+                title={`${r.qty} pairs · ${r.unit_cost != null ? `cost ${money2(Number(r.unit_cost))}` : 'no cost'}`}>
+                {r.size}{r.unit_cost == null ? ' •' : ''}
+              </button>
+            ))}
+            {rows.length > 1 && <button type="button" className="linklike xs" onClick={() => setPicked(new Set(picked.size === rows.length ? [first.id] : rows.map((r) => r.id)))}>{picked.size === rows.length ? 'just this size' : 'all sizes'}</button>}
+          </div>
+          <span className="muted xs">• = no cost yet</span>
+        </div>
+
+        <fieldset className="ap-details-sec">
+          <legend>Cost</legend>
+          <div className="ap-cost-row">
+            <label className="muted sm">Supplier preset
+              <select className="input" value={presetId} onChange={(e) => pickPreset(e.target.value)} aria-label="Supplier preset">
+                <option value="">{firstStack?.preset && !firstStack.presetId ? `${firstStack.preset} (as saved)` : '— none (no cost) —'}</option>
+                {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+            {stack && <button type="button" className={`btn sm ${editStack ? 'primary' : 'ghost'}`} onClick={() => setEditStack((v) => !v)}>✎ Edit for this purchase</button>}
+            {stackEdited && <span className="ap-edited xs">edited for this purchase</span>}
+            <label className="muted sm">Shelf price for the ticked sizes
+              <span className="ap-inline"><input type="number" min="1" step="0.01" inputMode="decimal" value={allShelf} placeholder="$" onChange={(e) => setAllShelf(e.target.value)} aria-label="Shelf price for the ticked sizes" />
+                <button type="button" className="btn sm" disabled={!(Number(allShelf) > 0)}
+                  onClick={() => { setShelf((sh) => ({ ...sh, ...Object.fromEntries([...picked].map((id) => [id, allShelf])) })); setCostDirty(true); }}>Apply</button></span>
+            </label>
+          </div>
+          {stack && editStack && (
+            <div className="ap-stack">
+              {STACK_FIELDS.map(([k, label, unit]) => (
+                <label key={k} className="muted xs">{label} ({unit})
+                  <input className="input" type="number" min="0" step="0.01" inputMode="decimal" value={stack[k]}
+                    onChange={(e) => { setStack((st) => ({ ...st, [k]: e.target.value === '' ? 0 : Number(e.target.value) })); setStackEdited(true); setCostDirty(true); }}
+                    aria-label={`${label} for this purchase`} />
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="ap-details-shelf">
+            {sorted.filter((r) => picked.has(r.id)).map((r) => (
+              <label key={r.id} className="ap-qtyfield"><span className="muted xs">Size {r.size} shelf $</span>
+                <input className="ap-qty ap-shelf" type="number" min="0" step="0.01" inputMode="decimal" value={shelf[r.id]}
+                  onChange={(e) => { const v = e.target.value; setShelf((sh) => ({ ...sh, [r.id]: v })); setCostDirty(true); }} aria-label={`Size ${r.size} shelf price`} />
+                <span className="xs">→ cost <b>{money2(costOf(r.id))}</b></span>
+              </label>
+            ))}
+          </div>
+          {!stack && <p className="muted xs">Without a preset the cost stays blank (the shelf price alone isn’t the cost).</p>}
+        </fieldset>
+
+        <fieldset className="ap-details-sec">
+          <legend>Where it’s from</legend>
+          <SourceFields value={source} onChange={(v) => { setSource(v); setSourceDirty(true); }} pos={pos} presets={presets} />
+        </fieldset>
+
+        <fieldset className="ap-details-sec">
+          <legend>In transit</legend>
+          <label className="ap-activate">
+            <input type="checkbox" checked={inTransit} onChange={(e) => { setInTransit(e.target.checked); setTransitDirty(true); }} />
+            <span><b>🚚 In transit</b> — when the warehouse receives this SKU + size, the unsold listings are deleted and the group is told.</span>
+          </label>
+          {inTransit && (
+            <div className="ap-transit">
+              <label><span className="muted xs">Shipment note</span>
+                <input className="input" value={note} maxLength={200} onChange={(e) => { setNote(e.target.value); setTransitDirty(true); }} /></label>
+              <label><span className="muted xs">Expected</span>
+                <input className="input" type="date" value={expected} onChange={(e) => { setExpected(e.target.value); setTransitDirty(true); }} /></label>
+            </div>
+          )}
+          {rearm && <p className="muted xs">Ticking this re-arms the arrival check for those sizes.</p>}
+        </fieldset>
+      </div>
+      {err && <div className="error mt">{err}</div>}
+      <div className="modal-actions">
+        <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+        <button type="button" className="btn primary" onClick={save} disabled={busy || !dirty || !picked.size}>
+          {busy ? 'Saving…' : `Save ${picked.size} size${picked.size === 1 ? '' : 's'}`}</button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -716,6 +987,8 @@ function ListMoreDialog({ stock, platform, onSignOut, onClose, onDone }) {
 
 /* ------------------------------- Listings -------------------------------- */
 function ListingsTab({ onSignOut }) {
+  const [from, setFrom] = useQueryParam('from', '');
+  const [to, setTo] = useQueryParam('to', '');
   const [view, setView] = useQueryParam('view', 'all');
   const [platform, setPlatform] = useQueryParam('platform', '');
   const [q, setQ] = useQueryParam('q', '');
@@ -817,6 +1090,7 @@ function ListingsTab({ onSignOut }) {
                 title="Re-read every pending listing from Alias / StockX, one at a time">↻ Re-check pending{counts.pending ? ` (${counts.pending})` : ''}</button>}
           {recheck && !recheck.running && <span className="muted xs">Re-checked {recheck.done} — {recheck.fixed} settled{recheck.done < recheck.total ? ' (stopped)' : ''}.</span>}
         </div>
+        <ReportBar kind="stock" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut} />
       </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">
@@ -1083,6 +1357,8 @@ function EditListing({ row, onSignOut, onClose, onSaved }) {
 
 /* --------------------------------- Sales --------------------------------- */
 function SalesTab({ onSignOut }) {
+  const [from, setFrom] = useQueryParam('from', '');
+  const [to, setTo] = useQueryParam('to', '');
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
   const [cfg, setCfg] = useState(null);
@@ -1095,10 +1371,21 @@ function SalesTab({ onSignOut }) {
     finally { setSaving(false); }
   }
   async function load() {
-    try { const r = await api.presellListingsList({ tab: 'sales' }); setRows(r.rows || []); setError(''); }
+    try { const r = await api.presellListingsList({ tab: 'sales', from, to }); setRows(r.rows || []); setError(''); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [from, to]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Totals for what's shown: payout is the platform's (est. when it gave none), net only
+  // where a cost was entered — a sale without one is counted, not guessed.
+  const tot = useMemo(() => {
+    const t = { n: 0, price: 0, payout: 0, cost: 0, net: 0, noCost: 0 };
+    for (const x of rows || []) {
+      const m = saleNet(x);
+      t.n++; t.price += m.price || 0; t.payout += m.payout || 0;
+      if (m.cost == null) t.noCost++; else { t.cost += m.cost; t.net += m.profit; }
+    }
+    return t;
+  }, [rows]);
   useLive(['presell_sales'], load, { mount: false });
   return (
     <>
@@ -1116,25 +1403,39 @@ function SalesTab({ onSignOut }) {
           </label>
         </div>
       )}
+      <div className="card">
+        <ReportBar kind="sales" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut} filtersList />
+        {rows?.length > 0 && (
+          <div className="ap-sales-tot">
+            <span><b>{tot.n}</b> <span className="muted xs">sale{tot.n === 1 ? '' : 's'}</span></span>
+            <span><b>{money2(tot.price)}</b> <span className="muted xs">sold for</span></span>
+            <span><b>{money2(tot.payout)}</b> <span className="muted xs">payout</span></span>
+            <span><b>{money2(tot.cost)}</b> <span className="muted xs">cost</span></span>
+            <span><b className={tot.net < 0 ? 'neg' : 'pos'}>{money2(tot.net)}</b> <span className="muted xs">net{tot.noCost ? ` · ${tot.noCost} without a cost` : ''}</span></span>
+          </div>
+        )}
+      </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">
-        {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">No pre-sell sales yet — they appear here (and in the Telegram group) within a minute of selling.</p> : (
+        {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">{from || to ? 'No sales in those dates.' : 'No pre-sell sales yet — they appear here (and in the Telegram group) within a minute of selling.'}</p> : (
           <div className="ap-tablewrap">
             <table className="table">
-              <thead><tr><th>Sold</th><th>Shoe</th><th>Size</th><th>Platform</th><th className="num">Price</th><th className="num">Payout</th><th>Order</th><th>Telegram</th></tr></thead>
+              <thead><tr><th>Sold</th><th>Shoe</th><th>Size</th><th>Platform</th><th className="num">Price</th><th className="num">Payout</th><th className="num">Cost</th><th className="num">Net</th><th>Order</th><th>Telegram</th></tr></thead>
               <tbody>
-                {rows.map((x) => (
+                {rows.map((x) => { const m = saleNet(x); return (
                   <tr key={x.id}>
                     <td className="xs">{when(x.sold_at || x.created_at)}</td>
                     <td><div className="ap-shoe"><ShoeThumb url={x.image} size={36} /><div><b>{x.sku}</b><div className="muted xs">{x.name}</div></div></div></td>
                     <td>{x.size}</td>
                     <td>{PLAT[x.platform] || x.platform}</td>
                     <td className="num">{money(x.price_cents)}</td>
-                    <td className="num">{money(x.payout_cents)}</td>
+                    <td className="num" title={m.estimated ? 'Estimated from the default fee — the platform gave no payout' : 'The platform’s payout'}>{money2(m.payout)}{m.estimated ? '*' : ''}</td>
+                    <td className="num" title={x.shelf_price != null ? `Shelf $${Number(x.shelf_price).toFixed(2)}${x.cost_stack?.preset ? ` · ${x.cost_stack.preset}` : ''}` : 'No cost entered — Stock → ✎ Cost & shipment'}>{m.cost != null ? money2(m.cost) : <span className="muted">—</span>}</td>
+                    <td className="num">{m.profit != null ? <b className={m.profit < 0 ? 'neg' : 'pos'}>{money2(m.profit)}</b> : <span className="muted">—</span>}</td>
                     <td><CopyText text={x.order_id} className="ap-mono">{x.order_id}</CopyText></td>
                     <td className="xs">{x.notified_at ? 'Sent' : <span className="error xs" title={x.notify_error || ''}>{x.notify_error ? 'Not sent' : '—'}</span>}</td>
                   </tr>
-                ))}
+                ); })}
               </tbody>
             </table>
           </div>

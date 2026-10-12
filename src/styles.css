@@ -5969,3 +5969,30 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ap-restore-cell { display: flex; align-items: center; gap: 4px; }
 .ap-restore-cell input { width: 100%; min-width: 0; }
 .ap-pill-why { display: block; color: var(--muted, #8a93a6); }
+
+/* Pre-sell Listings → 📦 Fulfill (docs/context/presell-fulfillment.md) */
+.ff-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.ff-search { flex: 1 1 220px; min-width: 0; }
+.ff-pass { margin-top: 6px; }
+.ff-tot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 10px; }
+.ff-late { color: #ec8f8f; }
+.ff-soon { color: #f0b860; }
+.ff-where { display: inline-flex; align-items: center; min-height: 26px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; font-weight: 600; background: transparent; color: inherit; }
+button.ff-where { cursor: pointer; min-height: 32px; }
+.ff-where.ready   { color: #5fc58a; border-color: rgba(95,197,138,0.5);  background: rgba(95,197,138,0.14); }
+.ff-where.shelf   { color: #c79bff; border-color: rgba(199,155,255,0.5); background: rgba(199,155,255,0.12); }
+.ff-where.transit { color: #6fa8ff; border-color: rgba(111,168,255,0.5); background: rgba(111,168,255,0.12); }
+.ff-where.source  { color: #ec8f8f; border-color: rgba(236,143,143,0.5); background: rgba(236,143,143,0.14); }
+button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
+.ff-group { padding-bottom: 6px; }
+.ff-ghead { display: flex; align-items: center; gap: 10px; }
+.ff-gname { flex: 1; min-width: 0; }
+.ff-gname .xs { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ff-gcount { text-align: right; white-space: nowrap; }
+.ff-order { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--border, rgba(255,255,255,0.08)); margin-top: 8px; }
+.ff-o-main, .ff-o-ship { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.ff-o-ship a:not(.btn) { font-variant-numeric: tabular-nums; }
+.ff-plat { font-weight: 700; min-width: 48px; }
+.ff-o-when { font-size: 13px; }
+/* Six sections: let them wrap on a phone instead of scrolling the page sideways. */
+.ap-sections .seg { flex-wrap: wrap; }

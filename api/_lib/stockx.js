@@ -411,6 +411,10 @@ export const stockxDeactivateListing = (id) => sxCall('PUT', `/selling/listings/
 export const stockxDeleteListing = (id) => sxCall('DELETE', `/selling/listings/${encodeURIComponent(id)}`);
 // Sales in progress, newest activity included — matched to our listings by listingId.
 export const stockxActiveOrders = (pageSize = 100) => sxCall('GET', '/selling/orders/active', null, { query: { pageNumber: 1, pageSize } });
+// ONE order — the detail carries `shipment` (label, tracking, shipByDate) the active list
+// leaves out; /shipping-document = the printable instruction PDFs. Both read-only.
+export const stockxGetOrder = (orderNumber) => sxCall('GET', `/selling/orders/${encodeURIComponent(orderNumber)}`);
+export const stockxShippingDocument = (orderNumber) => sxCall('GET', `/selling/orders/${encodeURIComponent(orderNumber)}/shipping-document`);
 
 // The DIRECT market for one size, in StockX's own words (we list DIRECT). Falls back to
 // the headline numbers when the Direct block is absent.

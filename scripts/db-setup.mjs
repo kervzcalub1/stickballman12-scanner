@@ -2200,6 +2200,21 @@ await sql(`
     UNIQUE (platform, order_id)
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_sales_sold_idx ON presell_sales (sold_at DESC)`);
+// Fulfilment (docs/context/presell-fulfillment.md): each platform makes the UPS label AT the
+// sale; we read the order back for its status, label, tracking and ship-by deadline.
+//   ship_state  NULL (not read yet) | to_ship | shipped | cancelled — OUR reading of the
+//               platform's own order_status (kept as-is next to it).
+//   ship_docs   StockX's shipping documents (4x6 instructions, letter, label only).
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS order_status TEXT`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS ship_state TEXT`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS ship_by TIMESTAMPTZ`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS carrier TEXT`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS tracking_number TEXT`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS tracking_url TEXT`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS label_url TEXT`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS ship_docs JSONB`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS ship_state_at TIMESTAMPTZ`);
+await sql(`CREATE INDEX IF NOT EXISTS presell_sales_to_ship_idx ON presell_sales (ship_by) WHERE ship_state IS NULL OR ship_state = 'to_ship'`);
 // Regular (non-pre-sell) sale alerts — a TEST switch (app_settings.sales_alert_all_since,
 // flipped on the Sales tab). One row per marketplace order the watcher has alerted on (or
 // decided not to), so every order posts once at most.

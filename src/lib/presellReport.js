@@ -16,6 +16,7 @@ import { lazyImport } from './chunkLoad.js';
 import { toCsv } from './manifestCsv.js';
 import { estDate, estTime, estClock } from './format.js';
 import { saleNet } from './presellDetails.js';
+import { WHERE, pickGroups, fulfillTotals, timeLeft, urgency, labelLink } from './presellFulfill.js';
 
 const PLAT = { alias: 'Alias', stockx: 'StockX' };
 const n2 = (v) => (v == null || !Number.isFinite(Number(v)) ? '' : Number(v).toFixed(2));
@@ -287,4 +288,128 @@ export async function salesReportPdf(rows, { from, to, generatedAt }) {
       usd(r.price), `${usd(r.payout)}${r.payoutEst ? '*' : ''}`, usd(r.cost), usd(r.net), [r.supplier, r.po].filter(Boolean).join(' / ') || '-']),
     footer: `Payout = the platform's own figure; * = estimated from the default fee (Alias 9.9%, StockX 10%). Net = payout - cost; totals count only sales with a cost.`,
   });
+}
+
+/* ------------------------------ Pick list -------------------------------- */
+// 📦 Fulfill tab (docs/context/presell-fulfillment.md): the pre-sell orders still to ship, one
+// block per SKU + size (pull all the 10.5s at once), most urgent first, with WHERE the pair is
+// (set aside · shelf · in transit · source it), the ship-by deadline and the UPS tracking — a
+// tick box per order. Rows come from assignWhere (src/lib/presellFulfill.js). Letter PORTRAIT.
+
+const shipByText = (v) => (v ? `${estDate(v)} ${estClock(v)}` : 'no deadline');
+export function pickListCsv(rows, now = Date.now()) {
+  const out = [];
+  for (const g of pickGroups(rows)) for (const x of g.orders) {
+    out.push({ shipBy: x.ship_by ? shipByText(x.ship_by) : '', left: timeLeft(x.ship_by, now), sku: g.sku || '', name: g.name || '', size: g.size || '',
+      platform: PLAT[x.platform] || x.platform, order: x.order_id, where: WHERE[x.where]?.word || '', status: x.order_status || 'not read yet',
+      carrier: x.carrier || '', tracking: x.tracking_number || '', label: labelLink(x) || '',
+      supplier: x.supplier || '', po: x.po_code || '' });
+  }
+  return toCsv([
+    ['shipBy', 'Ship by (EST)'], ['left', 'Time left'], ['sku', 'SKU'], ['name', 'Name'], ['size', 'Size'], ['platform', 'Platform'],
+    ['order', 'Order'], ['where', 'Where is the pair'], ['status', 'Platform status'], ['carrier', 'Carrier'], ['tracking', 'Tracking'],
+    ['label', 'Label'], ['supplier', 'Supplier'], ['po', 'PO'],
+  ], out);
+}
+
+export async function pickListPdf(rows, { generatedAt, scope = '', now = Date.now() }) {
+  const mod = await lazyImport(() => import('jspdf'));
+  const JsPDF = mod.jsPDF || mod.default;
+  const W = 215.9; const H = 279.4; const M = 10; const R = W - M;
+  const doc = new JsPDF({ unit: 'mm', format: [W, H], orientation: 'portrait' });
+  const groups = pickGroups(rows);
+  const t = fulfillTotals(rows, now);
+  // x, width (mm) per order column
+  const C = { box: [M, 7], by: [M + 7, 34], left: [M + 41, 20], plat: [M + 61, 15], order: [M + 76, 33], where: [M + 109, 36], track: [M + 145, R - M - 145] };
+  let y = 0; let page = 1;
+  const fit = (text, w) => {
+    let s = ascii(text);
+    while (s.length > 1 && doc.getTextWidth(s) > w - 2) s = s.slice(0, -2);
+    return s !== ascii(text) ? `${s.slice(0, -1)}.` : s;
+  };
+  const top = () => {
+    doc.setFillColor(...ACCENT); doc.rect(0, 0, W, 3, 'F');
+    y = M + 4;
+    doc.setTextColor(...INK); doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
+    doc.text('Pre-sell pick list - orders to ship', M, y);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTED);
+    doc.text(ascii(`${generatedAt}  |  page ${page}`), R, y, { align: 'right' });
+    if (scope) { y += 4.5; doc.text(ascii(scope), M, y); }
+    y += 5;
+  };
+  const colHead = () => {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...MUTED);
+    [['by', 'SHIP BY (EST)'], ['left', 'TIME LEFT'], ['plat', 'PLATFORM'], ['order', 'ORDER #'], ['where', 'WHERE IS THE PAIR'], ['track', 'TRACKING']]
+      .forEach(([k, l]) => doc.text(l, C[k][0] + 1, y + 3));
+    y += 4.5;
+  };
+  const newPage = () => { doc.addPage(); page++; top(); colHead(); };
+  top();
+  // Totals first: what the floor has to do today.
+  const sum = [['To ship', t.toShip], ['Late', t.overdue], ['Due < 24 h', t.today], ['Set aside', t.ready], ['Shelf', t.shelf], ['In transit', t.transit], ['Source it', t.source]];
+  const cw = (R - M) / sum.length;
+  doc.setDrawColor(...HAIR); doc.setLineWidth(0.2); doc.rect(M, y, R - M, 12);
+  sum.forEach(([l, v], i) => {
+    const x = M + i * cw;
+    if (i) doc.line(x, y, x, y + 12);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...MUTED); doc.text(l.toUpperCase(), x + 2, y + 4);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...INK); doc.text(String(v), x + 2, y + 9.8);
+  });
+  y += 16;
+  if (!groups.length) {
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...MUTED);
+    doc.text('Nothing to ship.', M, y + 4);
+    return doc;
+  }
+  colHead();
+  for (const g of groups) {
+    if (y > H - M - 22) newPage();
+    // Group bar: SKU + size big, name, what it takes.
+    doc.setFillColor(...ZEBRA); doc.rect(M, y, R - M, 8, 'F');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...INK);
+    const head = `${g.sku}   size ${g.size}`;
+    doc.text(ascii(head), M + 1.5, y + 5.5);
+    const hw = doc.getTextWidth(ascii(head));
+    const parts = ['ready', 'shelf', 'transit', 'source'].map((w) => [w, g.count(w)]).filter(([, n]) => n)
+      .map(([w, n]) => `${n} ${WHERE[w].short.toLowerCase()}`).join(', ');
+    const right = `${g.orders.length} to ship${parts ? `: ${parts}` : ''}`;
+    doc.setFontSize(8.5);
+    doc.text(ascii(right), R - 1.5, y + 5.5, { align: 'right' });
+    const rw = doc.getTextWidth(ascii(right));
+    doc.setFont('helvetica', 'normal'); doc.setTextColor(...MUTED);
+    doc.text(fit(g.name || '', R - M - hw - rw - 10), M + hw + 5, y + 5.5);
+    y += 9;
+    for (const x of g.orders) {
+      if (y > H - M - 12) { newPage(); doc.setFont('helvetica', 'italic'); doc.setFontSize(7.5); doc.setTextColor(...MUTED); doc.text(ascii(`${g.sku} size ${g.size} (continued)`), M + 1.5, y + 3); y += 4.5; }
+      const u = urgency(x.ship_by, now);
+      doc.setDrawColor(...INK); doc.setLineWidth(0.3); doc.rect(C.box[0] + 1.5, y + 1, 3.6, 3.6);
+      doc.setFontSize(8.5); doc.setTextColor(...INK);
+      doc.setFont('helvetica', u === 'overdue' || u === 'today' ? 'bold' : 'normal');
+      doc.text(fit(shipByText(x.ship_by), C.by[1]), C.by[0] + 1, y + 4);
+      doc.text(fit(`${u === 'overdue' ? '! ' : ''}${timeLeft(x.ship_by, now)}`, C.left[1]), C.left[0] + 1, y + 4);
+      doc.setFont('helvetica', 'normal');
+      doc.text(fit(PLAT[x.platform] || x.platform, C.plat[1]), C.plat[0] + 1, y + 4);
+      doc.text(fit(x.order_id, C.order[1]), C.order[0] + 1, y + 4);
+      doc.setFont('helvetica', 'bold');
+      doc.text(fit(WHERE[x.where]?.short || '', C.where[1]), C.where[0] + 1, y + 4);
+      doc.setFont('helvetica', 'normal');
+      const track = x.tracking_number ? `${x.carrier ? `${x.carrier} ` : ''}${x.tracking_number}` : (labelLink(x) ? 'label made' : 'NO LABEL YET');
+      doc.text(fit(track, C.track[1]), C.track[0] + 1, y + 4);
+      // Platform status when it isn't the ordinary "waiting to ship" one (e.g. card failed).
+      const odd = x.order_status && !/LABEL_GENERATED|^CREATED$/.test(x.order_status) ? x.order_status : (!x.order_status ? 'not read from the platform yet' : '');
+      if (odd || (x.where === 'transit' && (x.transit_note || x.expected_on))) {
+        y += 4.2;
+        doc.setFontSize(7); doc.setTextColor(...MUTED);
+        const note = [odd && `Platform: ${odd}`, x.where === 'transit' && [x.transit_note, x.expected_on && `expected ${String(x.expected_on).slice(0, 10)}`].filter(Boolean).join(', ')].filter(Boolean).join('  |  ');
+        doc.text(fit(note, R - C.by[0]), C.by[0] + 1, y + 3.4);
+      }
+      y += 5.6;
+      doc.setDrawColor(...HAIR); doc.setLineWidth(0.15); doc.line(M, y, R, y);
+    }
+    y += 2.5;
+  }
+  if (y > H - M - 12) { doc.addPage(); page++; top(); }
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...MUTED);
+  doc.text(ascii('Labels: print each order\'s label from the Fulfill tab (Alias PDF, StockX 4x6). Ship by = the platform cancels after it. Tick the box once packed and labelled.'), M, y + 4, { maxWidth: R - M });
+  return doc;
 }

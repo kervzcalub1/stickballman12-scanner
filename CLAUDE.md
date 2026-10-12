@@ -56,6 +56,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Pre-sell: shipments sold before they landed (held out of listing, then released) | `docs/context/pre-sell.md` |
 | **Waitlist** (New Inventory ⏸ tab): hold a losing size off listing until a date (1 month default), back by itself + Telegram; **daily Excel report** at 18:00 EST (`src/lib/xlsx.js`) (`waitlist-worker`, prod only) | `docs/context/waitlist.md` |
 | **Pre-sell Listings**: scan/SKU → list straight to Alias + StockX (no inventory, no Shopify); own stock (sales deduct, oversell guard), StockX async ops + sales watcher (`PRESELL_WATCH`), Telegram sale posts (**net = payout − cost**); **✎ cost & shipment (supplier, PO, many tracking #s) after listing; date-filtered PDF/CSV reports**; PO link shows on Inbound; **⚔ market competition** + 🔒 price lock (undercut $1 / match, $5 floor, follows up, 2-h re-base; puts back outside reprices; posts to PRICE_ALERT_CHAT_ID) | `docs/context/presell-listings.md` |
+| **Pre-sell Fulfilment** (Pre-sell Listings → 📦 Fulfill): both platforms make the UPS label AT the sale; read each order back (status, label, tracking, **ship-by**) until it ships, where-is-the-pair, printable **pick list** PDF/CSV | `docs/context/presell-fulfillment.md` |
 | No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
 | Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |

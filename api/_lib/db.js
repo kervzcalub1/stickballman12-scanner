@@ -8744,6 +8744,55 @@ export async function listPresellSales({ limit = 300, from = null, to = null } =
        AND (${to}::date IS NULL OR (COALESCE(x.sold_at, x.created_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
      ORDER BY COALESCE(x.sold_at, x.created_at) DESC LIMIT ${limit}`;
 }
+// ---- Fulfilment (docs/context/presell-fulfillment.md) ----
+// Sales whose order still needs reading: never read (ship_state NULL) or still to ship.
+// Newest-due first so a short pass (a 429) spends itself on what matters.
+export async function presellSalesToTrack(limit = 300) {
+  return await db()`SELECT id, platform, order_id, ship_state, ship_docs IS NOT NULL AS has_docs
+                      FROM presell_sales WHERE ship_state IS NULL OR ship_state = 'to_ship'
+                     ORDER BY ship_by ASC NULLS FIRST, id ASC LIMIT ${limit}`;
+}
+// Write what the platform said — ONLY when something changed (presell_sales is a live table:
+// an unconditional write every pass would make every open screen re-read for nothing).
+export async function updatePresellSaleShip(id, f) {
+  const docs = f.ship_docs ? JSON.stringify(f.ship_docs) : null;
+  const r = await db()`
+    UPDATE presell_sales SET
+      order_status = ${f.order_status}, ship_state = ${f.ship_state}, ship_by = ${f.ship_by}::timestamptz,
+      carrier = ${f.carrier}, tracking_number = ${f.tracking_number}, tracking_url = ${f.tracking_url},
+      label_url = ${f.label_url}, ship_docs = COALESCE(${docs}::jsonb, ship_docs),
+      ship_state_at = CASE WHEN ship_state IS DISTINCT FROM ${f.ship_state} THEN now() ELSE ship_state_at END
+    WHERE id = ${id}
+      AND (order_status IS DISTINCT FROM ${f.order_status} OR ship_state IS DISTINCT FROM ${f.ship_state}
+           OR ship_by IS DISTINCT FROM ${f.ship_by}::timestamptz OR carrier IS DISTINCT FROM ${f.carrier}
+           OR tracking_number IS DISTINCT FROM ${f.tracking_number} OR tracking_url IS DISTINCT FROM ${f.tracking_url}
+           OR label_url IS DISTINCT FROM ${f.label_url} OR (${docs}::jsonb IS NOT NULL AND ship_docs IS DISTINCT FROM ${docs}::jsonb))
+    RETURNING id`;
+  return r.length > 0;
+}
+// The 📦 Fulfill tab. view: to_ship (incl. not read yet) | shipped | cancelled.
+// shipped_n = this stock row's orders already gone — they used up set-aside pairs.
+export async function listPresellFulfill({ view = 'to_ship', q = null, limit = 2000 } = {}) {
+  const like = q ? `%${q}%` : null;
+  const rows = await db()`
+    SELECT x.id, x.stock_id, x.platform, x.order_id, x.price_cents, x.payout_cents, x.sold_at, x.created_at,
+           x.order_status, x.ship_state, x.ship_by, x.carrier, x.tracking_number, x.tracking_url, x.label_url, x.ship_docs, x.ship_state_at,
+           s.sku, s.name, s.image, s.size, s.qty, s.sold, s.in_transit, s.arrived_at, s.arrived_qty, s.released_qty,
+           s.expected_on, s.transit_note, s.supplier, po.po_code, l.external_id,
+           (SELECT count(*) FROM presell_sales y WHERE y.stock_id = x.stock_id AND y.ship_state = 'shipped')::int AS shipped_n
+      FROM presell_sales x LEFT JOIN presell_stock s ON s.id = x.stock_id LEFT JOIN presell_listings l ON l.id = x.listing_id
+      LEFT JOIN purchase_orders po ON po.id = s.po_id
+     WHERE ((${view} = 'to_ship' AND (x.ship_state IS NULL OR x.ship_state = 'to_ship')) OR x.ship_state = ${view})
+       AND (${like}::text IS NULL OR s.sku ILIKE ${like} OR s.name ILIKE ${like} OR x.order_id ILIKE ${like} OR x.tracking_number ILIKE ${like})
+     ORDER BY x.ship_by ASC NULLS LAST, x.sold_at ASC LIMIT ${limit}`;
+  const counts = await db()`
+    SELECT count(*) FILTER (WHERE ship_state IS NULL OR ship_state = 'to_ship')::int AS to_ship,
+           count(*) FILTER (WHERE ship_state = 'shipped')::int AS shipped,
+           count(*) FILTER (WHERE ship_state = 'cancelled')::int AS cancelled,
+           count(*) FILTER (WHERE ship_state IS NULL)::int AS unread
+      FROM presell_sales`;
+  return { rows, counts: counts[0] };
+}
 // Anything that could still sell? (the watcher skips the order polls when not)
 export async function presellHasOpenListings() {
   const r = await db()`SELECT EXISTS (SELECT 1 FROM presell_listings WHERE status IN ('pending', 'live', 'off')) AS any`;

@@ -310,6 +310,8 @@ export const api = {
   presellListingsPrices: (body) => post('/api/presell-listings/prices', body),
   presellListingsSettings: () => get('/api/presell-listings/settings'),
   presellCompete: () => get('/api/presell-listings/compete'),
+  presellFulfill: (params = {}) => get(`/api/presell-listings/fulfill?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString()}`),
+  presellFulfillSync: () => post('/api/presell-listings/fulfill', { action: 'sync' }),
   presellCompeteSet: (body) => post('/api/presell-listings/compete', body),
   setPresellListingsSettings: (body) => post('/api/presell-listings/settings', body),
   onlineOrderByTracking: (t) => get(`/api/online-orders/by-tracking?t=${encodeURIComponent(t)}`),

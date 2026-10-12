@@ -378,6 +378,19 @@ async function fetchAliasOrders(pageSize) {
   return { ok: resp.ok, status: resp.status, data };
 }
 
+// ONE Alias order by id → { ok, status, data: { order } } (fulfilment: status, label_url,
+// label_tracking_number, cancels_at — docs/context/presell-fulfillment.md). Read-only.
+export async function aliasGetOrder(id) {
+  const key = aliasListingKey();
+  if (!key) return { ok: false, status: 503, data: null };
+  const resp = await fetchWithTimeout(`${ALIAS_API_BASE}/api/v1/orders/${encodeURIComponent(id)}`, {
+    method: 'GET', headers: { accept: 'application/json', 'content-type': 'application/json', Authorization: `Bearer ${key}` },
+  }, ALIAS_LISTING_TIMEOUT_MS);
+  let data = null;
+  try { data = await resp.json(); } catch { /* empty */ }
+  return { ok: resp.ok, status: resp.status, data };
+}
+
 // ---- Strict variants for bulk repricing (api/ebay-reprice/prices.js) ----
 // aliasCatalogBySku / aliasPriceInsights return null on ANY failure, which is right for
 // best-effort callers but makes "Alias was unhappy" indistinguishable from "no such

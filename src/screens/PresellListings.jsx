@@ -19,6 +19,7 @@ import { landedFromShelf } from '../lib/costs.js';
 import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
 import { parseTrackingList, saleNet, pairsLeft, listableOn, pairsOwed } from '../lib/presellDetails.js';
 import { COMP_MODES, compFloor } from '../lib/presellCompete.js';
+import { assignWhere, pickGroups, fulfillTotals, urgency, timeLeft, labelLink, WHERE } from '../lib/presellFulfill.js';
 
 // The cost stack fields a supplier preset carries (payout_presets), in the order the
 // Payout Calculator applies them.
@@ -211,13 +212,14 @@ export function PresellListings({ onHome, onSignOut }) {
           the listings left on the other platform come down by themselves. Sales are posted to the pre-sell Telegram group.
           (Not the shipment <b>Pre-sell</b> screen.)
         </p>
-        <Seg label="Section" value={tab} onChange={setTab}
-          options={[['new', 'List new'], ['stock', 'Stock'], ['listings', 'Listings'], ['compete', '⚔ Compete'], ['sales', 'Sales']]} />
+        <div className="ap-sections"><Seg label="Section" value={tab} onChange={setTab}
+          options={[['new', 'List new'], ['stock', 'Stock'], ['listings', 'Listings'], ['compete', '⚔ Compete'], ['sales', 'Sales'], ['fulfill', '📦 Fulfill']]} /></div>
       </div>
       {tab === 'stock' ? <StockTab onSignOut={onSignOut} />
         : tab === 'listings' ? <ListingsTab onSignOut={onSignOut} />
           : tab === 'sales' ? <SalesTab onSignOut={onSignOut} />
           : tab === 'compete' ? <CompeteTab onSignOut={onSignOut} />
+          : tab === 'fulfill' ? <FulfillTab onSignOut={onSignOut} />
             : <ListNew onSignOut={onSignOut} onListed={() => setTab('listings')} />}
     </div>
   );
@@ -1573,6 +1575,161 @@ function SalesTab({ onSignOut }) {
         )}
       </div>
     </>
+  );
+}
+
+/* ------------------------------ 📦 Fulfill ------------------------------ */
+// docs/context/presell-fulfillment.md. Both platforms make the UPS label AT the sale; this is
+// the warehouse's list of pre-sell orders still to ship — one card per SKU + size (pull all the
+// 10.5s at once), most urgent ship-by first, where each pair is, the label to print — and the
+// same thing as a printable pick list (PDF / CSV).
+const SHIP_VIEW = [['to_ship', 'To ship'], ['shipped', 'Shipped'], ['cancelled', 'Cancelled']];
+const UPLAT = { alias: 'Alias', stockx: 'StockX' };
+
+function FulfillTab({ onSignOut }) {
+  const [view, setView] = useQueryParam('ship', 'to_ship');
+  const [q, setQ] = useQueryParam('fq', '');
+  const [only, setOnly] = useQueryParam('where', '');
+  const [d, setD] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+  const [note, setNote] = useState('');
+  const [now, setNow] = useState(() => Date.now());
+  async function load() {
+    try { setD(await api.presellFulfill({ view, q: q.trim() })); setError(''); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  useEffect(() => { load(); }, [view, q]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLive(['presell_sales', 'presell_stock'], load, { mount: false });
+  // The "time left" words move on by themselves.
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(t); }, []);
+  const rows = useMemo(() => (d ? (view === 'to_ship' ? assignWhere(d.rows) : d.rows) : null), [d, view]);
+  const shown = useMemo(() => (rows && only && view === 'to_ship' ? rows.filter((x) => x.where === only) : rows), [rows, only, view]);
+  const groups = useMemo(() => (shown ? pickGroups(shown) : []), [shown]);
+  const tot = useMemo(() => fulfillTotals(rows || [], now), [rows, now]);
+
+  async function check() {
+    setBusy('sync'); setNote('');
+    try {
+      const r = await api.presellFulfillSync();
+      const p = r.lastPass;
+      setNote(!r.done ? 'Still reading the orders — the list updates by itself as they come in.'
+        : `Read ${p.read} order${p.read === 1 ? '' : 's'}, ${p.changed} changed${p.errors?.length ? ` · ${p.errors.length} couldn’t be read` : ''}${p.stoppedBy ? ` · stopped: ${p.stoppedBy} — the rest on the next pass` : ''}.`);
+      await load();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(''); }
+  }
+  async function download(fmt) {
+    setBusy(fmt); setError('');
+    try {
+      const rep = await import('../lib/presellReport.js');
+      const at = new Date();
+      const scope = [only && `Only: ${WHERE[only].word}`, q.trim() && `Search: ${q.trim()}`].filter(Boolean).join('  |  ');
+      const blob = fmt === 'csv'
+        ? new Blob([rep.pickListCsv(shown, at.getTime())], { type: 'text/csv;charset=utf-8' })
+        : (await rep.pickListPdf(shown, { generatedAt: `Generated ${estDate(at)} ${estTime(at)} EST`, scope, now: at.getTime() })).output('blob');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `presell-pick-list_${estToday()}.${fmt}`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) { setError(err.message || 'Could not build the pick list.'); }
+    finally { setBusy(''); }
+  }
+  const c = d?.counts || {};
+  return (
+    <>
+      <div className="card">
+        <p className="muted sm">
+          Alias and StockX make the <b>UPS label the moment a pair sells</b> — there’s nothing to “fulfil” on the platform. Print the label,
+          pack the pair, hand it to UPS; the order moves on once UPS scans it. Miss the <b>ship-by</b> and the platform cancels the sale.
+        </p>
+        <div className="ff-bar">
+          <Seg label="Orders" value={view} onChange={setView} options={SHIP_VIEW.map(([k, t]) => [k, t, c[k] || 0])} />
+          <input className="input ff-search" placeholder="Search SKU, name, order #, tracking" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search orders" />
+          <button type="button" className="btn sm" disabled={!!busy} onClick={check}>{busy === 'sync' ? 'Checking…' : '↻ Check status now'}</button>
+          {view === 'to_ship' && <>
+            <button type="button" className="btn sm" disabled={!!busy || !shown?.length} onClick={() => download('pdf')}>{busy === 'pdf' ? 'Building…' : '🖨 Pick list PDF'}</button>
+            <button type="button" className="btn sm ghost" disabled={!!busy || !shown?.length} onClick={() => download('csv')}>{busy === 'csv' ? 'Building…' : '⬇ CSV'}</button>
+          </>}
+        </div>
+        <p className="muted xs ff-pass">
+          {d?.lastPass ? `Last checked ${when(d.lastPass.at)}.` : 'Not checked since the server started.'}
+          {d && !d.watching && ' This server doesn’t check by itself (PRESELL_WATCH is off) — use ↻ Check status now.'}
+          {d && d.watching && ' Checked by itself every couple of minutes.'}
+          {c.unread > 0 && ` ${c.unread} order${c.unread === 1 ? '' : 's'} not read from the platform yet.`}
+        </p>
+        {note && <p className="muted sm">{note}</p>}
+        {view === 'to_ship' && rows?.length > 0 && (
+          <div className="ff-tot" role="group" aria-label="Where the pairs are">
+            <span><b>{tot.toShip}</b> <span className="muted xs">to ship</span></span>
+            {tot.overdue > 0 && <span className="ff-late"><b>{tot.overdue}</b> <span className="xs">late</span></span>}
+            {tot.today > 0 && <span className="ff-soon"><b>{tot.today}</b> <span className="xs">due within 24 h</span></span>}
+            {['ready', 'shelf', 'transit', 'source'].map((w) => (
+              <button key={w} type="button" className={`ff-where ${w}${only === w ? ' on' : ''}`} aria-pressed={only === w}
+                onClick={() => setOnly(only === w ? '' : w)} title={only === w ? 'Show all' : `Only: ${WHERE[w].word}`}>
+                {WHERE[w].short} {tot[w]}
+              </button>
+            ))}
+            {tot.noLabel > 0 && <span className="muted xs">{tot.noLabel} without a label yet</span>}
+          </div>
+        )}
+      </div>
+      {error && <div className="error mt">{error}</div>}
+      {shown == null ? <div className="card"><p className="muted">Loading…</p></div>
+        : !shown.length ? <div className="card"><p className="muted">{view === 'to_ship' ? (only || q ? 'Nothing matches.' : 'Nothing to ship — every pre-sell order has gone. 🎉') : 'None.'}</p></div>
+          : groups.map((g) => (
+            <div className="card ff-group" key={g.key}>
+              <div className="ff-ghead">
+                <ShoeThumb url={g.image} size={44} />
+                <div className="ff-gname">
+                  <b>{g.sku} · size {g.size}</b>
+                  <div className="muted xs">{g.name}</div>
+                </div>
+                <div className="ff-gcount"><b>{g.orders.length}</b> <span className="muted xs">{view === 'to_ship' ? 'to ship' : 'order'}{g.orders.length === 1 || view === 'to_ship' ? '' : 's'}</span></div>
+              </div>
+              {g.orders.map((x) => <FulfillOrder key={x.id} x={x} now={now} toShip={view === 'to_ship'} />)}
+            </div>
+          ))}
+    </>
+  );
+}
+
+function FulfillOrder({ x, now, toShip }) {
+  const u = urgency(x.ship_by, now);
+  const label = labelLink(x);
+  const docs = x.ship_docs || {};
+  return (
+    <div className="ff-order">
+      <div className="ff-o-main">
+        <span className="ff-plat">{UPLAT[x.platform] || x.platform}</span>
+        <CopyText text={x.order_id} className="ap-mono">{x.order_id}</CopyText>
+        {toShip && x.where && <span className={`ff-where ${x.where}`}>{WHERE[x.where].word}</span>}
+      </div>
+      <div className="ff-o-when">
+        {toShip ? (x.ship_by
+          ? <span className={u === 'overdue' ? 'ff-late' : u === 'today' ? 'ff-soon' : ''}>Ship by <b>{when(x.ship_by)}</b> · {timeLeft(x.ship_by, now)}</span>
+          : <span className="muted">No ship-by yet</span>)
+          : <span className="muted">{x.ship_state === 'shipped' ? 'Shipped' : 'Cancelled'}{x.ship_state_at ? ` · seen ${when(x.ship_state_at)}` : ''}</span>}
+        <span className="muted xs"> · sold {when(x.sold_at || x.created_at)} · {money(x.price_cents)}</span>
+      </div>
+      <div className="ff-o-ship">
+        {x.tracking_number
+          ? (x.tracking_url
+            ? <a href={x.tracking_url} target="_blank" rel="noreferrer">{x.carrier ? `${x.carrier} ` : ''}{x.tracking_number}</a>
+            : <span>{x.carrier ? `${x.carrier} ` : ''}{x.tracking_number}</span>)
+          : <span className="muted xs">{x.order_status ? 'No tracking yet' : 'Not read from the platform yet'}</span>}
+        {label && <a className="btn sm" href={label} target="_blank" rel="noreferrer">🏷 Label</a>}
+        {docs.thermal && <a className="btn sm ghost" href={docs.thermal} target="_blank" rel="noreferrer" title="StockX’s shipping instructions, 4×6 thermal">Instructions 4×6</a>}
+        {docs.letter && <a className="btn sm ghost" href={docs.letter} target="_blank" rel="noreferrer" title="StockX’s shipping instructions, letter paper">Letter</a>}
+      </div>
+      {(docs.additionalRequired || (x.order_status && !/LABEL_GENERATED|^CREATED$/.test(x.order_status) && toShip) || (x.where === 'transit' && (x.transit_note || x.expected_on))) && (
+        <div className="muted xs">
+          {docs.additionalRequired && <span className="error xs">StockX needs extra documents — print the full instructions, not the label only. </span>}
+          {x.order_status && !/LABEL_GENERATED|^CREATED$/.test(x.order_status) && toShip && <span>Platform status: {x.order_status}. </span>}
+          {x.where === 'transit' && [x.transit_note, x.expected_on && `expected ${String(x.expected_on).slice(0, 10)}`].filter(Boolean).join(' · ')}
+        </div>
+      )}
+    </div>
   );
 }
 

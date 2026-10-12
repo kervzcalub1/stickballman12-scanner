@@ -39,6 +39,7 @@ holds back units of a shipment we own. Here a pair is **never an inventory unit*
   that size's stock row), re-read, copy id, Delete. **More…** = the row: switch both
   on/off, re-read both, delete both. Grouping is client-side (`ListingsTab` `pairs`).
 - **Sales**: every sale, price, payout, order #, whether the Telegram post went out.
+- **📦 Fulfill**: the sold orders still to ship — label, tracking, ship-by, where the pair is, pick list → `presell-fulfillment.md`.
 
 ## In transit — list it before it lands (Alex, 2026-10-10; BY THE PAIR since 2026-10-11)
 For a hyped shoe still on the truck: list it now; as the real pairs arrive and PH lists them,

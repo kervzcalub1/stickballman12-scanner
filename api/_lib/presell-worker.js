@@ -8,6 +8,8 @@
 //     to OUR listings by the platform's listing id → handleSale (deduct, take down, Telegram).
 //     Skipped entirely while we have nothing listed.
 //   · every 15 min (PRESELL_COMP_EVERY_MIN) — the 🔒 price lock + market competition.
+//   · every 2 min — fulfilment: each sale's order read back (status, label, tracking, ship by)
+//     until it ships (presell-fulfill.js; a fresh sale at once, the rest every 10 min).
 import { pendingPresellListings, presellListingsByExternal, presellHasOpenListings, updatePresellListing, getSetting, claimMarketplaceSale, markMarketplaceSaleAlerted } from './db.js';
 import { sendPresellSale } from './telegram.js';
 import { PLATFORMS, applyResult, handleSale } from './presell.js';
@@ -15,6 +17,7 @@ import { aliasRecentOrders } from './alias.js';
 import { stockxActiveOrders, stockxConfigured } from './stockx.js';
 import { runCompetition } from './presell-compete.js';
 import { checkReleased } from './presell-arrival.js';
+import { syncFulfillment } from './presell-fulfill.js';
 
 const OPS_EVERY_MS = 12_000;
 const SALES_EVERY_MS = 60_000;
@@ -162,7 +165,8 @@ export function startPresellWorker() {
   // Safety net for "PH listed an arrived pair → its pre-sell listing comes down" (normally
   // right after the PH save): every 15 min.
   loop(checkReleased, 15 * 60_000, 'released');
-  console.log(`[presell-worker] watching StockX operations every 12 s, Alias/StockX sales every 60 s, market competition every ${compMin} min`);
+  loop(() => syncFulfillment(), 2 * 60_000, 'fulfilment');
+  console.log(`[presell-worker] watching StockX operations every 12 s, Alias/StockX sales every 60 s, market competition every ${compMin} min, fulfilment status every 2 min`);
 }
 
 // Exposed so an admin action / test can run one pass on demand.

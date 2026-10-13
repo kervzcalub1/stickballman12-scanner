@@ -21,6 +21,7 @@ import { BatchPage } from './screens/BatchPage.jsx';
 import { PreSell } from './screens/PreSell.jsx';
 import { Inventory } from './screens/Inventory.jsx';
 import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
+import { EbayListings } from './screens/EbayListings.jsx';
 import { NoBoxReport } from './screens/NoBoxReport.jsx';
 import { ItemCosts } from './screens/ItemCosts.jsx';
 import { BoxLabels } from './screens/BoxLabels.jsx';
@@ -221,6 +222,8 @@ export default function App() {
   // Store receipts the mailbox sweep filed (receipts.md).
   if (view === 'receipts') return withAdvisor(<Receipts user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Pairs listed straight to Alias + StockX from a scan — never inventory (presell-listings.md).
+  // eBay (admin + superadmin): the PH workspace's eBay page, reachable from the admin app.
+  if (view === 'ebay' && isPrivilegedRole(user.role)) return withAdvisor(<EbayListings user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'presell-listings') return withAdvisor(<PresellListings onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'access') return withAdvisor(<CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />);

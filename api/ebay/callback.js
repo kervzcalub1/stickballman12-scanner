@@ -1,14 +1,18 @@
 // GET /api/ebay/callback?code=…&state=…   eBay sends the owner's browser here after they
 // approve (the RuName's "auth accepted" URL). No app login on this request — it's a plain
 // redirect from eBay — so the one-time `state` nonce from /api/ebay/connect is the proof.
-// Always ends by sending the browser back to the eBay Listings page with the outcome.
+// Always ends by sending the browser back to the eBay page that started it (PH workspace
+// or the admin app's /ebay) with the outcome.
 import { applySecurity, rateLimit } from '../_lib/util.js';
-import { finishConnect } from '../_lib/ebay.js';
+import { finishConnect, returnPathForState, RETURN_PATHS } from '../_lib/ebay.js';
 
-const back = (res, q) => { res.statusCode = 302; res.setHeader('Location', `/ph/ebay-listings?${q}`); res.end(); };
+const go = (res, path, q) => { res.statusCode = 302; res.setHeader('Location', `${path}?${q}`); res.end(); };
 
 export default async function handler(req, res) {
   applySecurity(req, res);
+  // Read before finishConnect burns the one-time state that holds it.
+  const path = await returnPathForState().catch(() => RETURN_PATHS[0]);
+  const back = (r, q) => go(r, path, q);
   if (!rateLimit(req, { windowMs: 60_000, max: 10 })) return back(res, 'ebay_error=' + encodeURIComponent('Too many attempts — wait a minute.'));
   const qs = new URL(req.url, 'http://x').searchParams;
   // The owner pressed "No thanks" on eBay, or eBay refused.

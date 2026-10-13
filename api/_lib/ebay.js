@@ -42,9 +42,17 @@ export const SCOPES = [
   'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly',
   'https://api.ebay.com/oauth/api_scope/sell.inventory',
   'https://api.ebay.com/oauth/api_scope/sell.marketing',
+  'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly',
+  'https://api.ebay.com/oauth/api_scope/sell.finances',
   'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
 ];
 const MARKETING_SCOPE = 'https://api.ebay.com/oauth/api_scope/sell.marketing';
+// Orders + the sales report (2026-10-13, docs/context/ebay-orders.md): read orders and
+// tracking (Fulfillment API) and the money side (Finances API). Same story as marketing:
+// a token approved before these keeps everything else working; those tabs ask for Connect.
+const ORDERS_SCOPE = 'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly';
+const FINANCES_SCOPE = 'https://api.ebay.com/oauth/api_scope/sell.finances';
+export const hasScope = (auth, scope) => !!auth?.refresh && (auth.scopes || []).includes(scope);
 
 const AUTH_KEY = 'ebay_auth';     // { refresh (encrypted), refreshExpiresAt, user, scopes, connectedBy, connectedAt }
 const STATE_KEY = 'ebay_oauth_state';
@@ -76,7 +84,9 @@ export async function ebayStatus() {
     connectedAt: auth?.connectedAt || null,
     refreshExpiresAt: auth?.refreshExpiresAt || null,
     // Approved before coupons existed → the Marketing API will refuse it until re-connected.
-    canMarket: !!auth?.refresh && (auth.scopes || []).includes(MARKETING_SCOPE),
+    canMarket: hasScope(auth, MARKETING_SCOPE),
+    canOrders: hasScope(auth, ORDERS_SCOPE),
+    canFinances: hasScope(auth, FINANCES_SCOPE),
     pull: await readJson(PULL_KEY),
   };
 }
@@ -86,9 +96,12 @@ export async function ebayStatus() {
 // The eBay page the owner approves on. `state` is a one-time nonce we keep server-side:
 // the callback arrives as a plain browser redirect (no app login header), so the nonce is
 // what proves the code came from a Connect an admin started here, minutes ago.
-export async function consentUrl(by) {
+// `back` = the page that started it (/ph/ebay-listings for the PH workspace, /ebay for the
+// admin app); the callback returns there.
+export const RETURN_PATHS = ['/ph/ebay-listings', '/ebay'];
+export async function consentUrl(by, back) {
   const nonce = crypto.randomBytes(24).toString('hex');
-  await setSetting(STATE_KEY, JSON.stringify({ nonce, by, at: Date.now() }), by);
+  await setSetting(STATE_KEY, JSON.stringify({ nonce, by, at: Date.now(), back: RETURN_PATHS.includes(back) ? back : RETURN_PATHS[0] }), by);
   const q = new URLSearchParams({
     client_id: clientId(), redirect_uri: ruName(), response_type: 'code', scope: SCOPES.join(' '), state: nonce, prompt: 'login',
   });
@@ -117,6 +130,10 @@ async function tokenCall(form) {
 let access = { token: null, expires: 0 };
 
 // The callback: check the nonce, trade the code, keep the refresh token (encrypted).
+export async function returnPathForState() {
+  const st = await readJson(STATE_KEY);
+  return RETURN_PATHS.includes(st?.back) ? st.back : RETURN_PATHS[0];
+}
 export async function finishConnect({ code, state }) {
   const st = await readJson(STATE_KEY);
   await setSetting(STATE_KEY, '', 'ebay-callback');   // one use, whatever happens next
@@ -393,4 +410,76 @@ export async function ebayCouponAction(promotionId, action) {
   if (action === 'resume') return marketing('POST', `/promotion/${id}/resume`);
   if (action === 'delete') return marketing('DELETE', `/item_promotion/${id}`);
   throw new Error(`Unknown coupon action ${action}`);
+}
+
+/* ------------------------ orders + finances (REST) -------------------------- */
+// docs/context/ebay-orders.md. Fulfillment API = orders (2 years back at most) and their
+// shipping fulfillments (tracking). Finances API = every money movement (5 years back,
+// ≤ 36 months per query) — the sales report is built from it.
+async function rest(host, path, { label = 'eBay' } = {}) {
+  const r = await fetch(`${host}${path}`, {
+    headers: { Authorization: `Bearer ${await accessToken()}`, Accept: 'application/json', 'Accept-Language': 'en-US', 'X-EBAY-C-MARKETPLACE-ID': MARKETPLACE },
+    signal: AbortSignal.timeout(45_000),
+  });
+  const text = await r.text();
+  let j = {};
+  try { j = text ? JSON.parse(text) : {}; } catch { /* not JSON */ }
+  if (!r.ok) {
+    const msg = (j.errors || []).map((e) => e.longMessage || e.message).filter(Boolean).join(' · ');
+    const err = new Error(`${label}: ${msg || `HTTP ${r.status}`}`);
+    err.status = r.status;
+    err.auth = r.status === 401 || r.status === 403 || (j.errors || []).some((e) => Number(e.errorId) === 1100) || isAuthError(msg);
+    throw err;
+  }
+  return j;
+}
+const isoMs = (d) => new Date(d).toISOString();
+
+// Every order created in [from, to) — or, with `modifiedSince`, every order changed since
+// then (the incremental sync). 200 per page.
+export async function fetchEbayOrders({ from, to, modifiedSince }, onPage = () => {}) {
+  const filter = modifiedSince
+    ? `lastmodifieddate:[${isoMs(modifiedSince)}..]`
+    : `creationdate:[${isoMs(from)}..${to ? isoMs(to) : ''}]`;
+  const out = [];
+  for (let offset = 0; offset < 50000; offset += 200) {
+    const j = await rest(HOST.api(), `/sell/fulfillment/v1/order?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}&fieldGroups=TAX_BREAKDOWN`, { label: 'eBay orders' });
+    out.push(...(j.orders || []));
+    onPage(out.length, j.total ?? null);
+    if (!j.next || !(j.orders || []).length) break;
+  }
+  return out;
+}
+export async function fetchShippingFulfillments(orderId) {
+  const j = await rest(HOST.api(), `/sell/fulfillment/v1/order/${encodeURIComponent(orderId)}/shipping_fulfillment`, { label: 'eBay tracking' });
+  return j.fulfillments || [];
+}
+
+// Every money movement between two instants (≤ 36 months), 1,000 per page.
+export async function fetchEbayTransactions({ from, to }, onPage = () => {}) {
+  const filter = `transactionDate:[${isoMs(from)}..${isoMs(to)}]`;
+  const out = [];
+  for (let offset = 0; offset < 200000; offset += 1000) {
+    const j = await rest(HOST.apiz(), `/sell/finances/v1/transaction?filter=${encodeURIComponent(filter)}&limit=1000&offset=${offset}`, { label: 'eBay finances' });
+    out.push(...(j.transactions || []));
+    onPage(out.length, j.total ?? null);
+    if (!j.next || !(j.transactions || []).length) break;
+  }
+  return out;
+}
+// eBay's own totals for a period — what the report's summary is checked against.
+export async function fetchEbayTransactionSummary({ from, to }) {
+  const filter = `transactionDate:[${isoMs(from)}..${isoMs(to)}]`;
+  return rest(HOST.apiz(), `/sell/finances/v1/transaction_summary?filter=${encodeURIComponent(filter)}`, { label: 'eBay finances' });
+}
+
+// A listing's photo when it's no longer in our pull (sold out / ended): Trading GetItem
+// still answers for ended items for a while. null when eBay has nothing.
+export async function ebayItemPicture(itemId) {
+  try {
+    const xml = await trading('GetItem', `<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID><OutputSelector>PictureDetails</OutputSelector><OutputSelector>Variations</OutputSelector>`);
+    const pics = tag(xml, 'PictureDetails') || '';
+    const url = unesc(tag(pics, 'GalleryURL') || tags(pics, 'PictureURL')[0] || tags(tag(xml, 'Pictures') || '', 'PictureURL')[0] || '');
+    return url ? url.replace(/^http:/, 'https:') : null;
+  } catch { return null; }
 }

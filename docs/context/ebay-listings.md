@@ -8,7 +8,9 @@ ownership is settled (plan doc: one owner per field), we only look.
 
 PH team + admin can view and pull; only **admin / superadmin** can connect or disconnect
 (it links the company account). Card in the PH home's Pricing & Listing section; route
-`ebaylistings` in `PH_PATHS`.
+`ebaylistings` in `PH_PATHS`. **Admins** (who can't enter the superadmin-only PH workspace)
+reach the same page at **`/ebay`** (admin home → eBay section, route `ebay`). Connect sends the
+starting page (`back`); the nonce remembers it and the callback returns there.
 
 ## Files
 | | |
@@ -84,6 +86,10 @@ deducts nothing anywhere. Found on 10/9: 149 listings / 222 sizes / 279 pairs of
   refused by EndItem → the page says "Connect eBay again" (admin), then retry.
 - Tab **Ended**: the log.
 - Report scripts for the same check were run by hand on 10/9 (Desktop CSVs).
+
+## Orders + Sales report tabs (2026-10-13)
+`ebay-orders.md`: every order with buyer, shoe, SKU, size, tracking, late/due flags; the sales
+report / statement with CSVs (admin). Scopes `sell.fulfillment.readonly` + `sell.finances`.
 
 ## Reprice + Coupons tabs (2026-10-13)
 **Reprice** sends market + markup to eBay per size (`ebay-api-reprice.md`); **Coupons** makes

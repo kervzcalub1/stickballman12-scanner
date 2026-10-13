@@ -9058,6 +9058,111 @@ export async function recentEbayCouponLog(limit = 200) {
   return await db()`SELECT id, promotion_id, action, code, name, ok, error, done_by, done_at FROM ebay_coupon_log ORDER BY done_at DESC LIMIT ${limit}`;
 }
 
+// eBay orders + transactions (docs/context/ebay-orders.md).
+const ORDER_COLS = ['order_id', 'created_at', 'modified_at', 'buyer', 'status', 'payment_status', 'cancel_state', 'ship_by', 'deliver_by',
+  'subtotal_cents', 'shipping_cents', 'discount_cents', 'tax_cents', 'total_cents', 'fee_cents', 'due_seller_cents', 'refund_cents',
+  'currency', 'lines', 'fulfillment_count'];
+// Upsert orders. Fulfillments are kept unless the row passes its own (`fulfillments` set).
+export async function saveEbayOrders(rows) {
+  for (let i = 0; i < rows.length; i += 300) {
+    const chunk = JSON.stringify(rows.slice(i, i + 300).map((r) => ({ ...r, fulfillments: r.fulfillments ?? null })));
+    await db()`
+      INSERT INTO ebay_orders (order_id, created_at, modified_at, buyer, status, payment_status, cancel_state, ship_by, deliver_by,
+        subtotal_cents, shipping_cents, discount_cents, tax_cents, total_cents, fee_cents, due_seller_cents, refund_cents, currency,
+        lines, fulfillment_count, fulfillments, synced_at)
+      SELECT x.order_id, x.created_at, x.modified_at, x.buyer, x.status, x.payment_status, x.cancel_state, x.ship_by, x.deliver_by,
+        x.subtotal_cents, x.shipping_cents, x.discount_cents, x.tax_cents, x.total_cents, x.fee_cents, x.due_seller_cents, x.refund_cents,
+        x.currency, coalesce(x.lines, '[]'::jsonb), coalesce(x.fulfillment_count, 0), coalesce(x.fulfillments, '[]'::jsonb), now()
+        FROM jsonb_to_recordset(${chunk}::jsonb) AS x(order_id text, created_at timestamptz, modified_at timestamptz, buyer text, status text,
+          payment_status text, cancel_state text, ship_by timestamptz, deliver_by timestamptz, subtotal_cents int, shipping_cents int,
+          discount_cents int, tax_cents int, total_cents int, fee_cents int, due_seller_cents int, refund_cents int, currency text,
+          lines jsonb, fulfillment_count int, fulfillments jsonb)
+      ON CONFLICT (order_id) DO UPDATE SET
+        created_at = EXCLUDED.created_at, modified_at = EXCLUDED.modified_at, buyer = EXCLUDED.buyer, status = EXCLUDED.status,
+        payment_status = EXCLUDED.payment_status, cancel_state = EXCLUDED.cancel_state, ship_by = EXCLUDED.ship_by, deliver_by = EXCLUDED.deliver_by,
+        subtotal_cents = EXCLUDED.subtotal_cents, shipping_cents = EXCLUDED.shipping_cents, discount_cents = EXCLUDED.discount_cents,
+        tax_cents = EXCLUDED.tax_cents, total_cents = EXCLUDED.total_cents, fee_cents = EXCLUDED.fee_cents,
+        due_seller_cents = EXCLUDED.due_seller_cents, refund_cents = EXCLUDED.refund_cents, currency = EXCLUDED.currency,
+        lines = EXCLUDED.lines, fulfillment_count = EXCLUDED.fulfillment_count,
+        fulfillments = CASE WHEN EXCLUDED.fulfillments <> '[]'::jsonb THEN EXCLUDED.fulfillments ELSE ebay_orders.fulfillments END,
+        synced_at = now()`;
+  }
+}
+// order_id → how many fulfillments we already hold (so tracking is only re-read when it changed).
+export async function ebayOrderFulfillmentCounts(ids) {
+  if (!ids.length) return new Map();
+  const rows = await db()`SELECT order_id, jsonb_array_length(fulfillments) AS n FROM ebay_orders WHERE order_id = ANY(${ids}::text[])`;
+  return new Map(rows.map((r) => [r.order_id, Number(r.n)]));
+}
+export async function setEbayOrderFulfillments(orderId, fulfillments) {
+  await db()`UPDATE ebay_orders SET fulfillments = ${JSON.stringify(fulfillments)}::jsonb WHERE order_id = ${orderId}`;
+}
+// Orders created in [fromTs, toTs), PLUS every order still not shipped (a late one must never
+// hide behind a date filter).
+export async function listEbayOrders(fromTs, toTs) {
+  return await db()`
+    SELECT * FROM ebay_orders
+     WHERE (created_at >= ${fromTs}::timestamptz AND created_at < ${toTs}::timestamptz)
+        OR (coalesce(status, '') <> 'FULFILLED' AND jsonb_array_length(fulfillments) = 0 AND coalesce(cancel_state, '') <> 'CANCELED'
+            AND created_at > now() - interval '60 days')
+     ORDER BY created_at DESC`;
+}
+export async function ebayOrdersCreatedBetween(fromTs, toTs) {
+  return await db()`SELECT * FROM ebay_orders WHERE created_at >= ${fromTs}::timestamptz AND created_at < ${toTs}::timestamptz ORDER BY created_at`;
+}
+export async function saveEbayTransactions(rows) {
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = JSON.stringify(rows.slice(i, i + 500));
+    await db()`
+      INSERT INTO ebay_transactions (transaction_id, transaction_type, transaction_date, booking_entry, amount_cents, fee_cents, fee_basis_cents,
+        order_id, buyer, status, memo, payout_id, line_fees, synced_at)
+      SELECT x.transaction_id, x.transaction_type, x.transaction_date, x.booking_entry, x.amount_cents, x.fee_cents, x.fee_basis_cents,
+        x.order_id, x.buyer, x.status, x.memo, x.payout_id, coalesce(x.line_fees, '[]'::jsonb), now()
+        FROM jsonb_to_recordset(${chunk}::jsonb) AS x(transaction_id text, transaction_type text, transaction_date timestamptz, booking_entry text,
+          amount_cents int, fee_cents int, fee_basis_cents int, order_id text, buyer text, status text, memo text, payout_id text, line_fees jsonb)
+      ON CONFLICT (transaction_id, transaction_type) DO UPDATE SET
+        transaction_date = EXCLUDED.transaction_date, booking_entry = EXCLUDED.booking_entry, amount_cents = EXCLUDED.amount_cents,
+        fee_cents = EXCLUDED.fee_cents, fee_basis_cents = EXCLUDED.fee_basis_cents, order_id = EXCLUDED.order_id, buyer = EXCLUDED.buyer,
+        status = EXCLUDED.status, memo = EXCLUDED.memo, payout_id = EXCLUDED.payout_id, line_fees = EXCLUDED.line_fees, synced_at = now()`;
+  }
+}
+export async function ebayTransactionsBetween(fromTs, toTs) {
+  return await db()`SELECT * FROM ebay_transactions WHERE transaction_date >= ${fromTs}::timestamptz AND transaction_date < ${toTs}::timestamptz ORDER BY transaction_date`;
+}
+// item_id → photo: our live pull first, then the GetItem cache.
+export async function ebayItemImages(itemIds) {
+  const ids = [...new Set(itemIds.filter(Boolean).map(String))];
+  if (!ids.length) return new Map();
+  const rows = await db()`
+    SELECT item_id, image_url FROM ebay_item_images WHERE item_id = ANY(${ids}::text[]) AND image_url IS NOT NULL
+    UNION ALL
+    SELECT DISTINCT ON (item_id) item_id, image_url FROM ebay_listings WHERE item_id = ANY(${ids}::text[]) AND image_url IS NOT NULL`;
+  return new Map(rows.map((r) => [r.item_id, r.image_url]));
+}
+// Item ids we have NO photo answer for yet (neither in the pull nor asked before).
+export async function ebayItemsWithoutImage(itemIds) {
+  const ids = [...new Set(itemIds.filter(Boolean).map(String))];
+  if (!ids.length) return [];
+  const rows = await db()`
+    SELECT id FROM unnest(${ids}::text[]) AS id
+     WHERE NOT EXISTS (SELECT 1 FROM ebay_item_images i WHERE i.item_id = id)
+       AND NOT EXISTS (SELECT 1 FROM ebay_listings l WHERE l.item_id = id AND l.image_url IS NOT NULL)`;
+  return rows.map((r) => r.id);
+}
+export async function saveEbayItemImage(itemId, url) {
+  await db()`INSERT INTO ebay_item_images (item_id, image_url) VALUES (${String(itemId)}, ${url || null})
+             ON CONFLICT (item_id) DO UPDATE SET image_url = coalesce(EXCLUDED.image_url, ebay_item_images.image_url), checked_at = now()`;
+}
+// tracking number → 17TRACK status (shipment_tracking, keyed by the normalised number).
+export async function trackingStatusFor(numbers) {
+  const list = [...new Set(numbers.filter(Boolean).map((n) => String(n).toUpperCase().replace(/[^A-Z0-9]/g, '')))];
+  if (!list.length) return new Map();
+  const rows = await db()`
+    SELECT upper(regexp_replace(tracking_number, '[^A-Za-z0-9]', '', 'g')) AS k, tracking_status, tracking_sub_status_descr, last_checkpoint, checked_at
+      FROM shipment_tracking WHERE upper(regexp_replace(tracking_number, '[^A-Za-z0-9]', '', 'g')) = ANY(${list}::text[])`;
+  return new Map(rows.map((r) => [r.k, r]));
+}
+
 /* ------------------------ Pre-sell market competition ------------------------ */
 // docs/context/presell-listings.md → "Market competition"; the engine is presell-compete.js.
 const COMP_KEYS = ['presell_comp_master', 'presell_comp_all', 'presell_comp_all_mode', 'presell_comp_last_run', 'presell_lock'];

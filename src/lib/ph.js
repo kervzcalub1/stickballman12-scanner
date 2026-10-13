@@ -481,7 +481,7 @@ export const PH_HOME_SECTIONS = [
     { key: 'profit', icon: 'profit', title: 'Platform Profit', sub: 'Best platform per size — Alias vs StockX, after fees & cost' },
     { key: 'shopifylistings', icon: 'shopify-reprice', title: 'Shopify Listings', sub: 'Every Shopify listing — search, reprice to market, edit price, title, status' },
     { key: 'ebayreprice', icon: 'ebay-reprice', title: 'eBay Reprice', sub: 'Cut eBay prices above market + markup — CSV in, CSV out' },
-    { key: 'ebaylistings', icon: 'ebay-listings', title: 'eBay Listings', sub: 'Everything live on eBay next to our stock — read-only' },
+    { key: 'ebaylistings', icon: 'ebay-listings', title: 'eBay', sub: 'Orders & late shipments, listings, reprice, coupons' },
     { key: 'sheinreprice', icon: 'shein-reprice', title: 'SHEIN Reprice', sub: 'Cut SHEIN prices above market + markup — export in, Edit+Price file out' },
     { key: 'presellListings', icon: 'presell-listings', title: 'Pre-sell Listings', sub: 'List pairs straight to Alias + StockX from a scan' },
   ] },

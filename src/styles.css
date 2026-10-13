@@ -6073,3 +6073,24 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .ebs-period { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .ebs-period .input { width: auto; flex: 0 1 auto; }
 .er-stat.ok b { color: #5fc58a; }
+
+/* SHEIN ↔ Shopify check (SheinCheck.jsx) */
+.shc-upload { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.shc-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.shc-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(255,255,255,0.1)); background: rgba(255,255,255,0.03); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.shc-tile b { font-size: 22px; line-height: 1.1; }
+.shc-tile span { font-size: 12px; color: var(--muted, #9aa3b2); }
+.shc-tile.bad b { color: #ec8f8f; }
+.shc-tile.warn b { color: #e0b05f; }
+.shc-tile.info b { color: #9db8ff; }
+.shc-tile.ok { cursor: default; }
+.shc-tile.ok b { color: #5fc58a; }
+.shc-tile.on { border-color: var(--primary); background: rgba(79,124,255,0.1); }
+.shc-product { border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 10px; padding: 10px; margin-top: 10px; }
+.shc-head { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 10px; align-items: center; margin-bottom: 6px; }
+.shc-table td { vertical-align: top; }
+.shc-table th.num, .shc-table td.num { text-align: right; }
+.shc-table tr.bad td:first-child { box-shadow: inset 3px 0 0 #ec8f8f; }
+.shc-table tr.warn td:first-child { box-shadow: inset 3px 0 0 #e0b05f; }
+.shc-table .ebo-chip { margin: 0 4px 3px 0; }
+.shc-bad { color: #ec8f8f; font-weight: 700; }

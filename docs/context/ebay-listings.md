@@ -85,5 +85,9 @@ deducts nothing anywhere. Found on 10/9: 149 listings / 222 sizes / 279 pairs of
 - Tab **Ended**: the log.
 - Report scripts for the same check were run by hand on 10/9 (Desktop CSVs).
 
+## Reprice + Coupons tabs (2026-10-13)
+**Reprice** sends market + markup to eBay per size (`ebay-api-reprice.md`); **Coupons** makes
+coded coupons (`ebay-coupons.md`, needs scope `sell.marketing` → Connect eBay again once).
+
 ## Not built (next phases, see the plan)
-Price/qty updates, list, delist. Each needs the DPL decision first.
+Quantity updates, list, delist. Each needs the DPL decision first.

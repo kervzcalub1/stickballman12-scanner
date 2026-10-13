@@ -2327,6 +2327,44 @@ await sql(`
     ended_at   TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 
+// eBay repricing through the API (2026-10-13, docs/context/ebay-api-reprice.md): one row per
+// size sent to eBay — who, the price before and after, the market + markup it came from,
+// and what eBay said.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_price_edits (
+    id            BIGSERIAL PRIMARY KEY,
+    item_id       TEXT NOT NULL,
+    variation_key TEXT NOT NULL DEFAULT '',
+    sku           TEXT,
+    size          TEXT,
+    title         TEXT,
+    old_price     NUMERIC(12,2),
+    new_price     NUMERIC(12,2) NOT NULL,
+    market_cents  INT,
+    markup_pct    NUMERIC(6,2),
+    ok            BOOLEAN NOT NULL,
+    error         TEXT,
+    changed_by    TEXT,
+    changed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_price_edits_at_idx ON ebay_price_edits (changed_at DESC)`);
+// eBay coded coupons made / paused / resumed / deleted from here (2026-10-13,
+// docs/context/ebay-coupons.md). eBay holds the coupons; this is who did what, and the
+// exact request when one was created.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_coupon_log (
+    id            BIGSERIAL PRIMARY KEY,
+    promotion_id  TEXT,
+    action        TEXT NOT NULL,              -- create | pause | resume | delete
+    code          TEXT,
+    name          TEXT,
+    detail        JSONB,
+    ok            BOOLEAN NOT NULL,
+    error         TEXT,
+    done_by       TEXT,
+    done_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -2339,7 +2377,7 @@ const LIVE_TABLES = [
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
-  'ebay_listings', 'ebay_listing_ends',
+  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

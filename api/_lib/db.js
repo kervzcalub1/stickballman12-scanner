@@ -9022,6 +9022,42 @@ export async function recentEbayEnds(limit = 200) {
   return await db()`SELECT * FROM ebay_listing_ends ORDER BY ended_at DESC LIMIT ${limit}`;
 }
 
+// eBay API repricing (docs/context/ebay-api-reprice.md): log every size sent, and keep our
+// copy's price in step with what eBay accepted (the next pull would say the same).
+export async function logEbayPriceEdits(rows, by) {
+  if (!rows.length) return;
+  const chunk = JSON.stringify(rows);
+  await db()`
+    INSERT INTO ebay_price_edits (item_id, variation_key, sku, size, title, old_price, new_price, market_cents, markup_pct, ok, error, changed_by)
+    SELECT x.item_id, x.variation_key, x.sku, x.size, x.title, x.old_price, x.new_price, x.market_cents, x.markup_pct, x.ok, x.error, ${by || null}
+      FROM jsonb_to_recordset(${chunk}::jsonb) AS x(item_id text, variation_key text, sku text, size text, title text,
+           old_price numeric, new_price numeric, market_cents int, markup_pct numeric, ok boolean, error text)`;
+}
+export async function setEbayListingPrices(rows) {
+  if (!rows.length) return;
+  const chunk = JSON.stringify(rows);
+  await db()`
+    UPDATE ebay_listings e SET price = x.price
+      FROM jsonb_to_recordset(${chunk}::jsonb) AS x(item_id text, variation_key text, price numeric)
+     WHERE e.item_id = x.item_id AND e.variation_key = x.variation_key`;
+}
+export async function ebayListingSizes(keys) {
+  const items = [...new Set(keys.map((k) => k.item_id))];
+  if (!items.length) return [];
+  return await db()`SELECT * FROM ebay_listings WHERE item_id = ANY(${items}::text[])`;
+}
+export async function recentEbayPriceEdits(limit = 300) {
+  return await db()`SELECT * FROM ebay_price_edits ORDER BY changed_at DESC, id DESC LIMIT ${limit}`;
+}
+export async function logEbayCoupon({ promotionId, action, code, name, detail, ok, error, by }) {
+  await db()`INSERT INTO ebay_coupon_log (promotion_id, action, code, name, detail, ok, error, done_by)
+             VALUES (${promotionId || null}, ${action}, ${code || null}, ${name || null}, ${detail ? JSON.stringify(detail) : null}::jsonb,
+                     ${ok}, ${error || null}, ${by || null})`;
+}
+export async function recentEbayCouponLog(limit = 200) {
+  return await db()`SELECT id, promotion_id, action, code, name, ok, error, done_by, done_at FROM ebay_coupon_log ORDER BY done_at DESC LIMIT ${limit}`;
+}
+
 /* ------------------------ Pre-sell market competition ------------------------ */
 // docs/context/presell-listings.md → "Market competition"; the engine is presell-compete.js.
 const COMP_KEYS = ['presell_comp_master', 'presell_comp_all', 'presell_comp_all_mode', 'presell_comp_last_run', 'presell_lock'];

@@ -1,12 +1,15 @@
-// eBay Listings (PH) — a READ-ONLY view of everything live on eBay, next to what we hold
-// (docs/context/ebay-listings.md). Phase 1 of the listings hub (docs/listings-hub-plan.md):
-// connect the account once, pull, look. Nothing on this page changes eBay.
+// eBay Listings (PH) — everything live on eBay (docs/context/ebay-listings.md). Phase 1 of
+// the listings hub (docs/listings-hub-plan.md): connect the account once, pull, look. The
+// writes live in their own tabs: Reprice (EbayApiReprice.jsx), Coupons (EbayCoupons.jsx)
+// and ending listings that are no longer in Shopify.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { TopBar, Modal } from '../components/common.jsx';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estDate, PH_DATETIME } from '../lib/format.js';
+import { EbayApiReprice } from './EbayApiReprice.jsx';
+import { EbayCoupons } from './EbayCoupons.jsx';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const when = (iso) => (iso ? `${PH_DATETIME.format(new Date(iso))} EST` : '—');
@@ -59,7 +62,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
   const [notice, setNotice] = useState('');
   const [q, setQ] = useQueryParam('q', '');
   const [view, setView] = useQueryParam('view', 'all');   // all | out | nostyle
-  const [tab, setTab] = useQueryParam('tab', 'all');      // all | orphans | ended
+  const [tab, setTab] = useQueryParam('tab', 'all');      // all | reprice | coupons | orphans | ended
   const [more, setMore] = useState(false);
 
   async function load() {
@@ -129,7 +132,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
 
       <div className="card">
         <h3 className="er-step-title">eBay account</h3>
-        <p className="muted sm">Pulls what’s live on eBay — photos, sizes, Custom labels, prices and quantities — and checks each Custom label against Shopify. It never changes a price or quantity (DPL, Shopify → eBay, still does); the one thing it can do is end listings that are no longer in Shopify.</p>
+        <p className="muted sm">Pulls what’s live on eBay — photos, sizes, Custom labels, prices and quantities — and checks each Custom label against Shopify. From here you can reprice sizes (market + markup), make coupon codes, and end listings that are no longer in Shopify. Quantities are never changed here (DPL, Shopify → eBay, still does that).</p>
         {!st ? <p className="muted">Loading…</p> : !st.configured ? (
           <p className="sm">eBay isn’t set up on this server yet{isAdmin && st.missing?.length ? <> — missing <b>{st.missing.join(', ')}</b> on Railway</> : ''}.</p>
         ) : st.connected ? (
@@ -173,6 +176,8 @@ export function EbayListings({ user, onHome, onSignOut }) {
       {rows && rows.length > 0 && (
         <div className="ebl-tabs seg">
           <button type="button" className={`seg-btn${tab === 'all' ? ' on' : ''}`} onClick={() => setTab('all')}>All listings <span className="seg-n">{fmt(listings.length)}</span></button>
+          <button type="button" className={`seg-btn${tab === 'reprice' ? ' on' : ''}`} onClick={() => setTab('reprice')}>Reprice</button>
+          <button type="button" className={`seg-btn${tab === 'coupons' ? ' on' : ''}`} onClick={() => setTab('coupons')}>Coupons</button>
           <button type="button" className={`seg-btn${tab === 'orphans' ? ' on' : ''}`} onClick={() => setTab('orphans')}>Not in Shopify — end <span className="seg-n">{fmt(orphanListings.length)}</span></button>
           <button type="button" className={`seg-btn${tab === 'ended' ? ' on' : ''}`} onClick={() => setTab('ended')}>Ended</button>
         </div>
@@ -180,6 +185,8 @@ export function EbayListings({ user, onHome, onSignOut }) {
       {tab === 'orphans' && rows && <OrphansTab orphans={orphanListings} checked={rows.some((r) => r.in_shopify != null)} isAdmin={isAdmin}
         onSignOut={onSignOut} onEnded={load} onConnect={connect} />}
       {tab === 'ended' && <EndedTab onSignOut={onSignOut} />}
+      {tab === 'reprice' && rows && rows.length > 0 && <EbayApiReprice listings={listings} isAdmin={isAdmin} onSignOut={onSignOut} onConnect={connect} onChanged={load} />}
+      {tab === 'coupons' && rows && rows.length > 0 && <EbayCoupons listings={listings} isAdmin={isAdmin} onSignOut={onSignOut} onConnect={connect} />}
       {tab === 'all' && rows && rows.length > 0 && (
         <div className="card">
           <div className="ebl-filters">

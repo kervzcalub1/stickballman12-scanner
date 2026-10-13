@@ -1,6 +1,8 @@
-// eBay — READ-ONLY for now (docs/context/ebay-listings.md). Phase 1 of the listings hub
-// (docs/listings-hub-plan.md): connect the seller account once, then pull every active
-// listing and size into `ebay_listings`. Nothing here writes to eBay.
+// eBay (docs/context/ebay-listings.md). Phase 1 of the listings hub (docs/listings-hub-plan.md):
+// connect the seller account once, then pull every active listing and size into
+// `ebay_listings`. The writes: ending orphaned listings, repricing sizes
+// (ReviseInventoryStatus — docs/context/ebay-api-reprice.md) and coded coupons
+// (Marketing API — docs/context/ebay-coupons.md).
 //
 // Today the listings are DPL's (Shopify → eBay app): it owns price, quantity and
 // create/end, and brings eBay orders back into Shopify. Until that ownership is settled,
@@ -32,12 +34,17 @@ const ruName = () => String(process.env.EBAY_RUNAME || '').trim();
 // Scopes asked for at Connect. Read-only at first; `sell.inventory` (full) added 2026-10-10
 // when ending orphaned listings became the first write. A token approved before that still
 // works for reading — ending tells the admin to Connect again if eBay refuses it.
+// `sell.marketing` added 2026-10-13 for coded coupons: a token approved before that keeps
+// working for everything else (the refresh asks only for the scopes it was approved with),
+// and the coupons tab says "Connect eBay again" until it's re-approved.
 export const SCOPES = [
   'https://api.ebay.com/oauth/api_scope',
   'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly',
   'https://api.ebay.com/oauth/api_scope/sell.inventory',
+  'https://api.ebay.com/oauth/api_scope/sell.marketing',
   'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
 ];
+const MARKETING_SCOPE = 'https://api.ebay.com/oauth/api_scope/sell.marketing';
 
 const AUTH_KEY = 'ebay_auth';     // { refresh (encrypted), refreshExpiresAt, user, scopes, connectedBy, connectedAt }
 const STATE_KEY = 'ebay_oauth_state';
@@ -68,6 +75,8 @@ export async function ebayStatus() {
     connectedBy: auth?.connectedBy || null,
     connectedAt: auth?.connectedAt || null,
     refreshExpiresAt: auth?.refreshExpiresAt || null,
+    // Approved before coupons existed → the Marketing API will refuse it until re-connected.
+    canMarket: !!auth?.refresh && (auth.scopes || []).includes(MARKETING_SCOPE),
     pull: await readJson(PULL_KEY),
   };
 }
@@ -287,4 +296,101 @@ export async function endEbayItem(itemId, reason = 'NotAvailable') {
     const auth = /auth|token|scope|permission|insufficient/i.test(msg);
     return { ok: false, error: msg, auth };
   }
+}
+
+/* --------------------------- repricing (Trading) ---------------------------- */
+// docs/context/ebay-api-reprice.md. ReviseInventoryStatus takes up to 4 sizes per call: a
+// variation by ItemID + its SKU (eBay can't address a variation without one), a single
+// listing by ItemID alone. Prices only — quantity is never sent, so DPL's stock stays put.
+const xmlEsc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const isAuthError = (msg) => /auth|token|scope|permission|insufficient|access denied/i.test(String(msg || ''));
+
+async function reviseCall(list) {
+  const body = list.map((c) => `<InventoryStatus><ItemID>${String(c.itemId).replace(/[^0-9]/g, '')}</ItemID>${c.sku ? `<SKU>${xmlEsc(c.sku)}</SKU>` : ''}<StartPrice>${Number(c.price).toFixed(2)}</StartPrice></InventoryStatus>`).join('');
+  await trading('ReviseInventoryStatus', body);
+}
+
+// [{ key, itemId, sku|null, price }] → [{ key, ok, error?, auth? }]. Four at a time; a
+// refused batch is re-sent one by one so each size gets its own answer.
+export async function reviseEbayPrices(changes) {
+  const out = [];
+  for (let i = 0; i < changes.length; i += 4) {
+    const batch = changes.slice(i, i + 4);
+    try { await reviseCall(batch); batch.forEach((c) => out.push({ key: c.key, ok: true })); continue; } catch (e) {
+      if (batch.length === 1) { out.push({ key: batch[0].key, ok: false, error: e.message, auth: isAuthError(e.message) }); continue; }
+    }
+    for (const c of batch) {
+      try { await reviseCall([c]); out.push({ key: c.key, ok: true }); }
+      catch (e) { out.push({ key: c.key, ok: false, error: e.message, auth: isAuthError(e.message) }); }
+    }
+  }
+  return out;
+}
+
+/* ---------------------------- coupons (Marketing) --------------------------- */
+// docs/context/ebay-coupons.md. Coded coupons are Marketing-API "item promotions" of type
+// CODED_COUPON. Everything is on the US site.
+export const MARKETPLACE = 'EBAY_US';
+
+async function marketing(method, path, body) {
+  const r = await fetch(`${HOST.api()}/sell/marketing/v1${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${await accessToken()}`, Accept: 'application/json', 'Content-Type': 'application/json',
+      'Accept-Language': 'en-US', 'Content-Language': 'en-US', 'X-EBAY-C-MARKETPLACE-ID': MARKETPLACE,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(30_000),
+  });
+  const text = await r.text();
+  let j = {};
+  try { j = text ? JSON.parse(text) : {}; } catch { /* not JSON */ }
+  if (!r.ok) {
+    const errs = (j.errors || []).map((e) => `${e.longMessage || e.message || ''}${e.parameters?.length ? ` (${e.parameters.map((p) => `${p.name}=${p.value}`).join(', ')})` : ''}`.trim()).filter(Boolean);
+    const err = new Error(`eBay: ${errs.join(' · ') || `HTTP ${r.status}`}`);
+    err.status = r.status;
+    err.auth = r.status === 401 || r.status === 403 || (j.errors || []).some((e) => Number(e.errorId) === 1100) || isAuthError(errs.join(' '));
+    throw err;
+  }
+  return { json: j, location: r.headers.get('location') || '' };
+}
+
+// Every coded coupon on the account (eBay keeps ended ones too), newest first. Coupons
+// that can still be redeemed (not ENDED) get their full detail: the listings, the $ off,
+// the per-buyer limit. `details` caps how many detail calls one load spends.
+export async function listEbayCoupons({ details = 60 } = {}) {
+  const promos = [];
+  for (let offset = 0; offset < 2000; offset += 200) {
+    const { json } = await marketing('GET', `/promotion?marketplace_id=${MARKETPLACE}&promotion_type=CODED_COUPON&limit=200&offset=${offset}`);
+    promos.push(...(json.promotions || []));
+    if (!json.next || !(json.promotions || []).length) break;
+  }
+  promos.sort((a, b) => String(b.startDate || '').localeCompare(String(a.startDate || '')));
+  let spent = 0;
+  for (const p of promos) {
+    if (p.promotionStatus === 'ENDED' || spent >= details) continue;
+    spent++;
+    try {
+      const { json } = await marketing('GET', `/item_promotion/${encodeURIComponent(p.promotionId)}`);
+      p.listingIds = json.inventoryCriterion?.listingIds || [];
+      p.inventoryItems = (json.inventoryCriterion?.inventoryItems || []).map((x) => x.inventoryReferenceId);
+      p.discountRules = json.discountRules || [];
+      p.couponConfiguration = json.couponConfiguration || null;
+      p.budget = json.budget || null;
+    } catch (e) { p.detailError = e.message; }
+  }
+  return promos;
+}
+
+// → promotionId (from the Location header eBay answers with).
+export async function createEbayCoupon(payload) {
+  const { location } = await marketing('POST', '/item_promotion', payload);
+  return decodeURIComponent(location.split('/').filter(Boolean).pop() || '') || null;
+}
+export async function ebayCouponAction(promotionId, action) {
+  const id = encodeURIComponent(String(promotionId));
+  if (action === 'pause') return marketing('POST', `/promotion/${id}/pause`);
+  if (action === 'resume') return marketing('POST', `/promotion/${id}/resume`);
+  if (action === 'delete') return marketing('DELETE', `/item_promotion/${id}`);
+  throw new Error(`Unknown coupon action ${action}`);
 }

@@ -38,6 +38,7 @@ import { PresellListings } from './PresellListings.jsx';
 import { EbayReprice } from './EbayReprice.jsx';
 import { SheinReprice } from './SheinReprice.jsx';
 import { EbayListings } from './EbayListings.jsx';
+import { SheinCheck } from './SheinCheck.jsx';
 import { ShopifyListings } from './ShopifyListings.jsx';
 import { BuyCarts } from './BuyCarts.jsx';
 import { CreatePO } from './CreatePO.jsx';
@@ -91,6 +92,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'shopifylistings') return <ShopifyListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'ebayreprice') return <EbayReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'sheinreprice') return <SheinReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'sheincheck') return <SheinCheck onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'ebaylistings') return <EbayListings user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'presellListings') return <PresellListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'receipts') return <Receipts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} cartHref={(id) => `/ph/gift-card-buying?request=${id}`} />;

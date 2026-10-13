@@ -2417,6 +2417,24 @@ await sql(`
     checked_at  TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 
+// SHEIN matches (2026-10-13, docs/context/shein-fix.md → "Match screen"): for a SHEIN size
+// (by SHEIN's own SKU code), the Shopify variant SKU a person confirmed it should carry — or
+// "delist". Feeds the fix: a confirmed match is a seller-SKU change to make on SHEIN, and
+// once the export shows SHEIN carrying that SKU, the size sells Shopify's stock again.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_links (
+    shein_sku       TEXT PRIMARY KEY,
+    spu             TEXT,
+    skc             TEXT,
+    shein_size      TEXT,
+    seller_sku_was  TEXT,
+    link_sku        TEXT,
+    decision        TEXT NOT NULL DEFAULT 'link',   -- link | delist
+    source          TEXT,                           -- person | rule | ai | swap (who proposed it; a person confirmed it)
+    decided_by      TEXT,
+    decided_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -2429,7 +2447,7 @@ const LIVE_TABLES = [
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
-  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log', 'ebay_orders',
+  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

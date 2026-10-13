@@ -3,11 +3,15 @@
 // checked: same size? same age group? does SHEIN offer more pairs than Shopify has? does
 // the SKU still exist in Shopify? Read-only — nothing on SHEIN or Shopify changes. The fix
 // list downloads as a CSV.
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { TopBar } from '../components/common.jsx';
 import { api } from '../api.js';
 import { downloadCSV } from '../lib/csv.js';
 import { estToday, PH_DATETIME } from '../lib/format.js';
+import { SheinFixPanel } from './SheinFixPanel.jsx';
+import { SheinMatch } from './SheinMatch.jsx';
+import { useLive } from '../hooks.js';
+import { buildFix } from '../lib/sheinFix.js';
 import { readSheinExport, checkRows, tally, groupByProduct, issuesCsv, exportDate, ISSUES, ISSUE_ORDER } from '../lib/sheinCheck.js';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
@@ -19,7 +23,8 @@ function Thumb({ src }) {
     : <span className="ebl-thumb ebl-thumb-empty" aria-hidden="true" />;
 }
 
-export function SheinCheck({ onHome, onSignOut }) {
+export function SheinCheck({ user, onHome, onSignOut }) {
+  const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
   const [file, setFile] = useState(null);       // { name, rows }
   const [variants, setVariants] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
@@ -28,6 +33,30 @@ export function SheinCheck({ onHome, onSignOut }) {
   const [filter, setFilter] = useState('problems');   // problems | all | <issue key>
   const [q, setQ] = useState('');
   const [shown, setShown] = useState(SHOW);
+  const [tab, setTab] = useState('check');           // check | match | fix
+  const [links, setLinks] = useState({});            // SHEIN SKU → saved match (shein_links)
+  const [orders, setOrders] = useState(null);        // SHEIN order export: { name, bySku, open }
+  const [aiLinks, setAiLinks] = useState({});        // export line → AI link the rules verified
+  const [sheinApi, setSheinApi] = useState(null);
+
+  async function loadLinks() {
+    try { const r = await api.sheinLinks(); setLinks(Object.fromEntries((r.links || []).map((l) => [l.shein_sku, l]))); }
+    catch (e) { if (e.unauthorized) onSignOut(); }
+  }
+  useEffect(() => {
+    loadLinks();
+    api.sheinStatus().then(setSheinApi).catch(() => setSheinApi(null));
+    // Back from SHEIN's approval page.
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('shein_error')) setErr(p.get('shein_error'));
+    if (p.get('shein') || p.get('shein_error')) window.history.replaceState(null, '', window.location.pathname);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLive(['shein_links'], loadLinks, { mount: false });
+  async function connectShein() {
+    setErr('');
+    try { const r = await api.sheinConnect(); window.location.href = r.url; }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+  }
 
   async function loadShopify() {
     setBusy('shopify'); setErr('');
@@ -53,6 +82,7 @@ export function SheinCheck({ onHome, onSignOut }) {
 
   const checked = useMemo(() => (file && variants ? checkRows(file.rows, variants) : null), [file, variants]);
   const t = useMemo(() => (checked ? tally(checked) : null), [checked]);
+  const fix = useMemo(() => (checked ? buildFix(checked, variants, { openBySku: orders?.bySku || {}, aiLinks, decisions: links }) : null), [checked, variants, orders, aiLinks, links]);
   const products = useMemo(() => {
     if (!checked) return [];
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -70,7 +100,7 @@ export function SheinCheck({ onHome, onSignOut }) {
 
   return (
     <div className="app">
-      <TopBar title="SHEIN ↔ Shopify check" onHome={onHome} onSignOut={onSignOut} />
+      <TopBar title="SHEIN listings — check & fix" onHome={onHome} onSignOut={onSignOut} />
       <div className="card">
         <p className="muted sm">Upload SHEIN’s <b>Export Products</b> file (Seller Center → Products → Export). Every SHEIN size is matched to the Shopify variant with the same <b>seller SKU</b> and checked for the wrong size, wrong age group, a SKU that’s gone from Shopify, and more stock on SHEIN than in Shopify. Nothing on SHEIN or Shopify is changed.</p>
         <div className="shc-upload">
@@ -84,11 +114,25 @@ export function SheinCheck({ onHome, onSignOut }) {
           {busy === 'shopify' && !variants && <span className="muted sm">Reading every Shopify variant…</span>}
         </div>
         {variants && <p className="muted xs">Shopify read {PH_DATETIME.format(new Date(loadedAt))} EST · {fmt(variants.length)} variants.</p>}
+        {sheinApi && (
+          <p className="muted xs">SHEIN API: {sheinApi.connected ? <b className="ebl-ok">connected</b>
+            : !sheinApi.configured ? 'waiting for SHEIN to approve our developer app — until then, fixes go through SHEIN’s upload files.'
+              : isAdmin ? <button type="button" className="btn xs" onClick={connectShein}>Connect SHEIN</button> : 'not connected yet — an admin connects it.'}</p>
+        )}
         {stale && <p className="notice xs">This export is from <b>{age}</b>. Sizes don’t change with time, but the stock columns do — export again for an exact stock check.</p>}
         {err && <div className="error mt">{err}</div>}
       </div>
 
       {t && (
+        <div className="ebl-tabs seg">
+          {[['check', 'Problems'], ['match', 'Match sizes'], ['fix', 'Fix & download']].map(([k, l]) => (
+            <button key={k} type="button" className={`seg-btn${tab === k ? ' on' : ''}`} aria-pressed={tab === k} onClick={() => setTab(k)}>{l}</button>
+          ))}
+        </div>
+      )}
+      {t && tab === 'match' && <SheinMatch fix={fix} variants={variants} links={links} sheinApi={sheinApi} onSaved={loadLinks} onSignOut={onSignOut} />}
+      {t && tab === 'fix' && <SheinFixPanel fix={fix} variants={variants} exportName={file?.name} orders={orders} setOrders={setOrders} aiLinks={aiLinks} setAiLinks={setAiLinks} onSignOut={onSignOut} />}
+      {t && tab === 'check' && (
         <>
           <div className="card">
             <div className="shc-tiles">

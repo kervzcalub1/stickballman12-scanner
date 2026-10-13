@@ -224,7 +224,7 @@ export default function App() {
   if (view === 'receipts') return withAdvisor(<Receipts user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Pairs listed straight to Alias + StockX from a scan — never inventory (presell-listings.md).
   // eBay (admin + superadmin): the PH workspace's eBay page, reachable from the admin app.
-  if (view === 'shein-check' && isPrivilegedRole(user.role)) return withAdvisor(<SheinCheck onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'shein-check' && isPrivilegedRole(user.role)) return withAdvisor(<SheinCheck user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'ebay' && isPrivilegedRole(user.role)) return withAdvisor(<EbayListings user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'presell-listings') return withAdvisor(<PresellListings onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);

@@ -29,7 +29,7 @@ const colIndex = (ref) => {
 };
 
 // The zip's entries and where each sheet NAME lives (workbook.xml + its rels).
-function openWorkbook(bytes) {
+export function openWorkbook(bytes) {
   let files;
   try { files = unzipSync(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); } catch { return null; }
   const wb = files['xl/workbook.xml'];
@@ -50,7 +50,7 @@ function openWorkbook(bytes) {
 }
 
 // One sheet as rows of strings, by its position in the sheet: grid[r][c] (0-based).
-function readSheet(book, name) {
+export function readSheet(book, name) {
   const sheet = book.sheets.find((s) => s.name.trim().toLowerCase() === name.toLowerCase());
   if (!sheet || !book.files[sheet.path]) return null;
   const ss = book.files['xl/sharedStrings.xml'];

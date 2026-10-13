@@ -6040,3 +6040,36 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .ebc-code-row { display: flex; gap: 6px; }
 .ebc-code-row .input { flex: 1; min-width: 0; letter-spacing: 0.04em; }
 .ebc-submit { justify-content: flex-end; flex-wrap: wrap; }
+
+/* eBay → Orders (EbayOrders.jsx) + Sales report (EbaySalesReport.jsx) */
+.ebo-range { flex: 0 0 auto; width: auto; }
+.ebo-filters { flex-wrap: wrap; margin: 4px 0 8px; }
+.ebo-table td { vertical-align: top; }
+.ebo-row.bad td:first-child { box-shadow: inset 3px 0 0 #ec8f8f; }
+.ebo-row.warn td:first-child { box-shadow: inset 3px 0 0 #e0b05f; }
+.ebo-line { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: center; }
+.ebo-line + .ebo-line { margin-top: 6px; }
+.ebo-line .ebl-thumb { width: 40px; height: 40px; }
+.ebo-line > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ebo-meta b { color: var(--text); }
+.ebo-track { display: flex; flex-direction: column; gap: 1px; }
+.ebo-track + .ebo-track { margin-top: 6px; }
+.ebo-chip { display: inline-block; white-space: nowrap; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: rgba(255,255,255,0.07); color: var(--muted, #9aa3b2); }
+.ebo-chip.bad { background: rgba(236,143,143,0.16); color: #ec8f8f; }
+.ebo-chip.warn { background: rgba(224,176,95,0.16); color: #e0b05f; }
+.ebo-chip.ok { background: rgba(95,197,138,0.14); color: #5fc58a; }
+.ebo-chip.info { background: rgba(79,124,255,0.14); color: #9db8ff; }
+@media (max-width: 760px) {
+  .ebo-table thead { display: none; }
+  .ebo-table, .ebo-table tbody, .ebo-table tr, .ebo-table td { display: block; width: 100%; box-sizing: border-box; }
+  .ebo-table tr { position: relative; padding: 10px 10px 10px 76px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); min-height: 80px; }
+  .ebo-table td { border: 0 !important; padding: 2px 0 !important; }
+  .ebo-table td.ebl-thumb-cell { position: absolute; left: 10px; top: 10px; width: 56px; }
+  .ebo-table td[data-label]::before { content: attr(data-label); display: inline-block; min-width: 64px; color: var(--muted, #9aa3b2); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-right: 6px; }
+  .ebo-row.bad td:first-child, .ebo-row.warn td:first-child { box-shadow: none; }
+  .ebo-row.bad { box-shadow: inset 3px 0 0 #ec8f8f; }
+  .ebo-row.warn { box-shadow: inset 3px 0 0 #e0b05f; }
+}
+.ebs-period { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.ebs-period .input { width: auto; flex: 0 1 auto; }
+.er-stat.ok b { color: #5fc58a; }

@@ -2365,6 +2365,58 @@ await sql(`
     done_at       TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 
+// eBay orders (2026-10-13, docs/context/ebay-orders.md): every order since the first sync
+// (YTD by default), its shoes (`lines`) and its tracking (`fulfillments`), so late
+// shipments show up and the sales report has the orders behind it. Synced from eBay's
+// Fulfillment API; eBay stays the authority.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_orders (
+    order_id          TEXT PRIMARY KEY,
+    created_at        TIMESTAMPTZ NOT NULL,
+    modified_at       TIMESTAMPTZ,
+    buyer             TEXT,
+    status            TEXT,              -- NOT_STARTED | IN_PROGRESS | FULFILLED
+    payment_status    TEXT,
+    cancel_state      TEXT,              -- NONE_REQUESTED | IN_PROGRESS | CANCELED
+    ship_by           TIMESTAMPTZ,
+    deliver_by        TIMESTAMPTZ,
+    subtotal_cents    INT, shipping_cents INT, discount_cents INT, tax_cents INT, total_cents INT,
+    fee_cents         INT, due_seller_cents INT, refund_cents INT,
+    currency          TEXT,
+    lines             JSONB NOT NULL DEFAULT '[]',
+    fulfillment_count INT NOT NULL DEFAULT 0,
+    fulfillments      JSONB NOT NULL DEFAULT '[]',
+    synced_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_orders_created_idx ON ebay_orders (created_at DESC)`);
+// Every money movement on the eBay account (Finances API) — the sales report / statement.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_transactions (
+    transaction_id    TEXT NOT NULL,
+    transaction_type  TEXT NOT NULL,
+    transaction_date  TIMESTAMPTZ NOT NULL,
+    booking_entry     TEXT,              -- CREDIT | DEBIT
+    amount_cents      INT NOT NULL DEFAULT 0,
+    fee_cents         INT NOT NULL DEFAULT 0,
+    fee_basis_cents   INT NOT NULL DEFAULT 0,
+    order_id          TEXT,
+    buyer             TEXT,
+    status            TEXT,
+    memo              TEXT,
+    payout_id         TEXT,
+    line_fees         JSONB NOT NULL DEFAULT '[]',
+    synced_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (transaction_id, transaction_type)
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_transactions_date_idx ON ebay_transactions (transaction_date)`);
+// A sold shoe's photo once its listing has ended and left the pull (GetItem, once per item).
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_item_images (
+    item_id     TEXT PRIMARY KEY,
+    image_url   TEXT,
+    checked_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -2377,7 +2429,7 @@ const LIVE_TABLES = [
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
-  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log',
+  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log', 'ebay_orders',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

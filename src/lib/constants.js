@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'dup-tracking', 'receipts', 'presell-listings'];
+export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'dup-tracking', 'receipts', 'presell-listings', 'ebay'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -185,6 +185,12 @@ export const HOME_SECTIONS = [
   // with it. No badge, ever.
   { title: 'Help', accent: 'help', cards: [
     { key: 'sop', icon: '📖', title: 'SOP & Help', sub: 'Step-by-step procedures for every screen, searchable, plus FAQ' },
+  ] },
+  // The eBay account (docs/context/ebay-listings.md): the same page the PH workspace has
+  // (listings, orders, sales report, reprice, coupons) — here so an ADMIN can reach it and
+  // connect the account without the superadmin-only PH workspace.
+  { title: 'eBay', adminOnly: true, accent: 'listing', cards: [
+    { key: 'ebay', icon: '🛒', title: 'eBay', sub: 'Orders & late shipments, sales report (CSV), listings, reprice, coupons — and connect the account' },
   ] },
   { title: 'Administration', adminOnly: true, accent: 'orders', cards: [
     { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },

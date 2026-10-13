@@ -203,3 +203,9 @@ import('./api/_lib/presell-worker.js')
 import('./api/_lib/waitlist-worker.js')
   .then((m) => m.startWaitlistWorker())
   .catch((e) => console.error('[waitlist-worker] failed to start:', e.message));
+
+// eBay orders — incremental sync every 30 min so late shipments show by themselves
+// (docs/context/ebay-orders.md). Production only by default; EBAY_ORDERS_WATCH overrides.
+import('./api/_lib/ebay-orders-worker.js')
+  .then((m) => m.startEbayOrdersWorker())
+  .catch((e) => console.error('[ebay-orders-worker] failed to start:', e.message));

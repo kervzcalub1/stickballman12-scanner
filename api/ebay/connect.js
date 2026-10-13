@@ -19,5 +19,5 @@ export default async function handler(req, res) {
   if (!ebayConfigured()) return send(res, 503, { ok: false, error: `eBay isn't set up on this server — missing ${ebayMissing().join(', ')}.` });
   // The token is stored encrypted or not at all (secrets.js fails closed).
   if (!secretsConfigured()) return send(res, 503, { ok: false, error: 'BUY_GC_KEY is not set — the eBay token has to be stored encrypted.' });
-  return send(res, 200, { ok: true, url: await consentUrl(by) });
+  return send(res, 200, { ok: true, url: await consentUrl(by, body.back) });
 }

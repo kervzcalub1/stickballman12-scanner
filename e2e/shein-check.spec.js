@@ -86,7 +86,7 @@ test.describe('SHEIN check page', () => {
     await expect(page.locator('.shc-tile.bad').filter({ hasText: 'More on SHEIN than Shopify' })).toContainText('1');
     await expect(page.locator('.shc-tile.ok b')).toHaveText('2');
     await expect(page.locator('.shc-tile.ok span')).toHaveText('of 4 sizes OK');
-    await expect(page.locator('.notice')).toContainText('This export is from 2026-10-09');
+    await expect(page.locator('p.notice')).toContainText('This export is from 2026-10-09');
     const products = page.locator('.shc-product');
     await expect(products).toHaveCount(2);                                   // problems only; the Samba is clean
     await expect(products.first().locator('tr.bad')).toContainText('10086263');
@@ -97,7 +97,7 @@ test.describe('SHEIN check page', () => {
     await page.locator('.shc-tile').filter({ hasText: 'More on SHEIN' }).click();
     await expect(products).toHaveCount(2);
     await expect(products.first()).toContainText('Nike Air Max 95');
-    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /Fix list/ }).click()]);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '⬇ Fix list (CSV)', exact: true }).click()]);
     expect(dl.suggestedFilename()).toBe('SHEIN check 2026-10-09.csv');
     const wide = await page.evaluate(() => [...document.querySelectorAll('body *')].filter((el) => !el.closest('.ap-tablewrap') && el.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 6).map((el) => `${el.tagName}.${el.className}`));
     expect(wide).toEqual([]);

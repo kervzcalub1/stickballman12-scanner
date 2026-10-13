@@ -6094,3 +6094,25 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .shc-table tr.warn td:first-child { box-shadow: inset 3px 0 0 #e0b05f; }
 .shc-table .ebo-chip { margin: 0 4px 3px 0; }
 .shc-bad { color: #ec8f8f; font-weight: 700; }
+
+/* SHEIN fix panel (SheinFixPanel.jsx) */
+.shf-picks { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; margin-top: 10px; }
+.shf-pick { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px dashed var(--border, rgba(255,255,255,0.18)); border-radius: 10px; cursor: pointer; min-width: 0; }
+.shf-pick:hover { border-color: var(--primary); }
+.shf-pick-label { font-weight: 600; font-size: 13px; }
+.shf .er-stat.bad b { color: #ec8f8f; }
+.shf-ai { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 10px 12px; border-radius: 10px; background: rgba(79,124,255,0.07); }
+.shf-ai > div { flex: 1 1 280px; min-width: 0; }
+.shf-ai p { margin: 2px 0 0; }
+
+/* SHEIN match screen (SheinMatch.jsx) */
+.shm-group { border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 10px; margin-top: 8px; overflow: hidden; }
+.shm-group.open { border-color: rgba(79,124,255,0.5); }
+.shm-head { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 8px 10px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.shm-head .ebo-chip { margin: 2px 6px 0 0; }
+.shm-editor { padding: 0 10px 10px; border-top: 1px solid var(--border, rgba(255,255,255,0.08)); }
+.shm-product { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.shm-found { display: flex; flex-wrap: wrap; gap: 6px; }
+.shm-found .btn.on { border-color: var(--primary); color: var(--primary); }
+.shm-select { min-width: 220px; max-width: 100%; }
+@media (max-width: 640px) { .shm-head { grid-template-columns: 44px minmax(0, 1fr) auto; } .shm-head .ebl-thumb { width: 44px; height: 44px; } .shm-select { min-width: 0; width: 100%; } }

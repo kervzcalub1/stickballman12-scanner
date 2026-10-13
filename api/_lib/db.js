@@ -9163,6 +9163,26 @@ export async function trackingStatusFor(numbers) {
   return new Map(rows.map((r) => [r.k, r]));
 }
 
+// SHEIN matches (docs/context/shein-fix.md → "Match screen").
+export async function listSheinLinks() {
+  return await db()`SELECT * FROM shein_links ORDER BY decided_at DESC`;
+}
+export async function saveSheinLinks(links, by) {
+  const chunk = JSON.stringify(links);
+  await db()`
+    INSERT INTO shein_links (shein_sku, spu, skc, shein_size, seller_sku_was, link_sku, decision, source, decided_by, decided_at)
+    SELECT x.shein_sku, x.spu, x.skc, x.shein_size, x.seller_sku_was, x.link_sku, x.decision, x.source, ${by || null}, now()
+      FROM jsonb_to_recordset(${chunk}::jsonb) AS x(shein_sku text, spu text, skc text, shein_size text, seller_sku_was text,
+           link_sku text, decision text, source text)
+    ON CONFLICT (shein_sku) DO UPDATE SET spu = EXCLUDED.spu, skc = EXCLUDED.skc, shein_size = EXCLUDED.shein_size,
+      seller_sku_was = EXCLUDED.seller_sku_was, link_sku = EXCLUDED.link_sku, decision = EXCLUDED.decision,
+      source = EXCLUDED.source, decided_by = EXCLUDED.decided_by, decided_at = now()`;
+}
+export async function clearSheinLinks(ids) {
+  if (!ids.length) return;
+  await db()`DELETE FROM shein_links WHERE shein_sku = ANY(${ids}::text[])`;
+}
+
 /* ------------------------ Pre-sell market competition ------------------------ */
 // docs/context/presell-listings.md → "Market competition"; the engine is presell-compete.js.
 const COMP_KEYS = ['presell_comp_master', 'presell_comp_all', 'presell_comp_all_mode', 'presell_comp_last_run', 'presell_lock'];

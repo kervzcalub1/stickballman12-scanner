@@ -23,6 +23,7 @@ const COLS = {
   link: (h) => /^Mall link/i.test(h),
   image: (h) => h === 'Main Image',
   brand: (h) => h === 'brand name' || h === 'Brand Name (English)',
+  warehouse: (h) => h === 'Warehouse ID',
 };
 const NEEDED = { sellerSku: 'sellerSKU', size: 'Secondary Specification Value1', qty: 'Current inventory' };
 
@@ -43,7 +44,7 @@ export function readSheinExport(bytes) {
     rows.push({
       line: r + 1, sellerSku: cell(g, 'sellerSku'), size: cell(g, 'size'), qty: Number.isFinite(q) ? q : 0,
       name: cell(g, 'name'), spu: cell(g, 'spu'), skc: cell(g, 'skc'), sheinSku: cell(g, 'sheinSku'),
-      status: cell(g, 'status'), link: cell(g, 'link'), image: cell(g, 'image'), brand: cell(g, 'brand'),
+      status: cell(g, 'status'), link: cell(g, 'link'), image: cell(g, 'image'), brand: cell(g, 'brand'), warehouse: cell(g, 'warehouse'),
     });
   }
   if (!rows.length) return { ok: false, error: 'No product rows in the Product Information sheet.' };

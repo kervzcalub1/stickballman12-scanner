@@ -520,6 +520,9 @@ export const PH_ATTENTION = [
   { key: 'rescale', icon: 'rescale', label: 'Restock to re-list', count: 'restock_pending', tier: 'now' },
   { key: 'request', icon: 'rescalereq', label: 'Rescale audits to close', count: 'rescale_requests_audited', tier: 'now' },
   { key: 'reconcile', icon: 'reconcile', label: 'POs to reconcile', count: 'po_to_reconcile', tier: 'now' },
+  // Shipments received without a manifest, not yet signed off. PH does these audits (they
+  // were logging in as warehouse just to see this tile); `query` opens Batches filtered.
+  { key: 'batches', icon: 'batches', label: 'No manifest — audit', count: 'batches_to_audit', query: { audit: 'pending' }, tier: 'now' },
   { key: 'costs', icon: 'costs', label: 'Pairs without a cost', count: 'missing_cost' },
   { key: 'nobox', icon: 'nobox', label: 'No box (warehouse)', count: 'no_box' },
 ];

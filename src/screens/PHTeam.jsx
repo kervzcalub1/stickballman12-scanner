@@ -119,7 +119,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     // question too — but adding boxes, finishing and renumbering are warehouse work (and
     // warehouse-only server-side). The list and detail are filtered for PH_EXCLUDED_KINDS
     // on the server, not here.
-    if (page === 'batches') return <BatchPage readOnly onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'batches') return <BatchPage readOnly canAudit onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     return null;
   }
@@ -127,6 +127,12 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   // Sub-pages get the top bar's Pages menu through this context; home has its own cards.
   if (screen) return <PageNavContext.Provider value={nav}>{screen}</PageNavContext.Provider>;
   const canBuy = hasAnyPriv(user);
+  // A tile with a `query` opens its screen already filtered (written after goPage, which
+  // clears the old query).
+  const openAttention = (a) => {
+    goPage(a.key);
+    for (const [k, v] of Object.entries(a.query || {})) writeParam(k, v);
+  };
   const attention = counts ? PH_ATTENTION.filter((a) => (counts[a.count] || 0) > 0) : [];
   const now = attention.filter((a) => a.tier === 'now');
   const backlog = attention.filter((a) => a.tier !== 'now');
@@ -142,7 +148,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           {now.length > 0 && (
             <div className="home-grid home-attn-grid">
               {now.map((a) => (
-                <button className="home-card home-attention" key={a.count} onClick={() => goPage(a.key)}>
+                <button className="home-card home-attention" key={a.count} onClick={() => openAttention(a)}>
                   <span className="home-attention-top">
                     <span className="home-card-icon"><NavIcon name={a.icon} /></span>
                     <span className="home-attention-count">{fmtCount(counts[a.count])}</span>
@@ -156,7 +162,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
             <div className="home-backlog">
               <span className="home-backlog-label">Backlog</span>
               {backlog.map((a) => (
-                <button className="home-attention home-backlog-item" key={a.count} onClick={() => goPage(a.key)}>
+                <button className="home-attention home-backlog-item" key={a.count} onClick={() => openAttention(a)}>
                   <span className="home-backlog-icon"><NavIcon name={a.icon} /></span>
                   <span className="home-attention-count">{fmtCount(counts[a.count])}</span>
                   <span className="home-backlog-name">{a.label}</span>
@@ -206,6 +212,7 @@ function phCardBadges(key, c) {
   if (key === 'costs') return [['No cost', c.missing_cost]];
   if (key === 'request') return [['Pending audit', c.rescale_requests], ['Audited', c.rescale_requests_audited, 'ok']];
   if (key === 'reconcile') return homeCardBadges('reconcile', c);
+  if (key === 'batches') return homeCardBadges('batches', c);
   return [];
 }
 

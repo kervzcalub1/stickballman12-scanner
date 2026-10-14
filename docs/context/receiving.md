@@ -550,6 +550,11 @@ against anything, so until a named person signs it off:
   `POST /api/batches/audit` → `auditBatch` sets `audited_at/by/note` **only if
   manifest_received = false AND audited_at IS NULL** (a second signature is 409, never an
   overwrite; a batch received WITH a manifest is 409 too).
+- **PH does these audits too (2026-10-14).** The same tile is in `PH_ATTENTION`
+  (`src/lib/ph.js`, opens `/ph/batches?audit=pending`), and the PH Batches page is
+  `readOnly canAudit` — every other warehouse button stays hidden, but **Mark audited**
+  shows, and `api/batches/audit.js` allows `warehouse` + `ph_team`. (They had been
+  logging in on a warehouse account just to see this tile.)
 The commit confirm prints the flag before the person commits. Schema: four `ADD COLUMN IF
 NOT EXISTS` + a partial index — **run `db:setup` before deploying**. Guarded by
 `e2e/receiving-manifest-audit.spec.js`; every spec that walks Step 1 now answers the

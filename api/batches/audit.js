@@ -9,7 +9,7 @@ import { auditBatch, getBatchWithBoxes, dbConfigured } from '../_lib/db.js';
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['warehouse']);
+  const user = requireRole(req, res, ['warehouse', 'ph_team']);
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 60 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });

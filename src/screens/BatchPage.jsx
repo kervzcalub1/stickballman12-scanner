@@ -25,7 +25,8 @@ const allTracking = (b) => [b?.tracking_number, ...(b?.box_tracking_numbers || [
 // `readOnly` is the PH team's view of this page (2026-08-27). They look a parcel up to
 // see which batch it became and what was in it; adding boxes, finishing, reopening and
 // renumbering are warehouse work — and warehouse-only server-side, so those buttons
-// would 403 anyway. Hiding them is honesty, not decoration.
+// would 403 anyway. Hiding them is honesty, not decoration. The one exception is
+// `canAudit`: PH does the no-manifest audits, so "Mark audited" stays on for them.
 // How many open batches to show at once. The recent list and the search are paged by the
 // SERVER (`pageSize` comes back with them); the open list arrives whole, so it's paged
 // here — same size, so "page 2" means the same number of rows in both cards.
@@ -43,7 +44,7 @@ function AuditChip({ b }) {
     : <span className="audit-chip" title="Received without a manifest — somebody has to confirm everything expected arrived">No manifest · audit pending</span>;
 }
 
-export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenPo = null, onHome, onSignOut, readOnly = false }) {
+export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenPo = null, onHome, onSignOut, readOnly = false, canAudit = !readOnly }) {
   const [open, setOpen] = useState(null);     // open batches
   const [recent, setRecent] = useState(null); // { batches, total, page, pageSize }
   // WHICH BATCH IS OPEN LIVES IN THE URL (?b=), and opening one PUSHES a history entry.
@@ -406,7 +407,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
                             : <>No tracking number on this batch — confirm the contents with the supplier.</>}
                     </p>
                   </div>
-                  {!readOnly && (
+                  {canAudit && (
                     <div className="batch-report-btns">
                       {!b.po_id && trackedPo && onOpenPo && (
                         <button className="btn ghost sm" onClick={() => onOpenPo(trackedPo.id)}>Open {trackedPo.po_code}</button>

@@ -13,7 +13,7 @@
 // re-read. Everything that happened is in shein_order_units.
 // Idempotency: the key carries the goodsId + how many DEFINITE refusals came before, so a
 // request whose answer got lost is resent with the same key and can't take a pair twice.
-import { sheinCall } from './shein.js';
+import { sheinCall, listOf } from './shein.js';
 import { shopifyStockForSku, shopifyAdjustAvailable, shopifyConfigured } from './shopify.js';
 import { getSetting, setSetting, upsertSheinUnits, sheinUnitsKnown, sheinUnitsToAct, markSheinUnit } from './db.js';
 import { unitsFromOrders, unitAction, pickLocation, toSheinTime } from '../../src/lib/sheinLive.js';
@@ -39,7 +39,7 @@ export async function changedOrderNos(from, to) {
     const b = Math.min(a + step, new Date(to).getTime());
     for (let page = 1; page <= 400; page++) {
       const info = await sheinCall('/open-api/order/order-list', { queryType: 2, startTime: toSheinTime(a), endTime: toSheinTime(b), page, pageSize: 30 });
-      const list = info?.orderList || [];
+      const list = listOf(info, 'orderList');
       for (const o of list) if (o?.orderNo) nos.add(String(o.orderNo));
       if (list.length < 30) break;
     }

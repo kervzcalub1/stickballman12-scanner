@@ -136,7 +136,7 @@ export const sheinBrands = () => sheinCall('/open-api/goods/query-brand-list', {
 // One page of every APPROVED listing (codes only: spu / skc / sku codes). 50 a page.
 export async function sheinProductPage(pageNum, pageSize = 50) {
   const info = await sheinCall('/open-api/openapi-business-backend/product/query', { pageNum, pageSize });
-  return Array.isArray(info?.data) ? info.data : [];
+  return listOf(info, 'data');
 }
 // Every SPU code in the store (de-duplicated, in SHEIN's order).
 export async function sheinAllSpus({ max = 400 } = {}) {
@@ -150,20 +150,27 @@ export async function sheinAllSpus({ max = 400 } = {}) {
 }
 // One product: sizes, seller SKUs, prices, shelf state. No stock (that's stock-query).
 export const sheinSpuInfo = (spuName) => sheinCall('/open-api/goods/spu-info', { spuName, languageList: ['en'] });
+// SHEIN's docs show `info` as an object, but some answers come wrapped in a list:
+// stock-query returns info = [{ goodsInventory: [...] }] (seen on prod 2026-10-17 — reading
+// info.goodsInventory gave NOTHING, so every size looked like 0). Take `key` from either.
+export function listOf(info, key) {
+  const parts = Array.isArray(info) ? info : [info];
+  return parts.flatMap((p) => (Array.isArray(p?.[key]) ? p[key] : []));
+}
 // Merchant (virtual) stock for ≤100 SHEIN SKU codes. `warehouseType` 2 is required until
 // SHEIN retires it (2026-12-31); `invType` VI is its replacement and wins when both are sent.
 export async function sheinStock(skuCodes) {
   const out = [];
   for (let i = 0; i < skuCodes.length; i += 100) {
     const info = await sheinCall('/open-api/stock/stock-query', { skuCodeList: skuCodes.slice(i, i + 100), warehouseType: '2', invType: 'VI' });
-    out.push(...(info?.goodsInventory || []));
+    out.push(...listOf(info, 'goodsInventory'));
   }
   return out;
 }
 // Our own warehouses (type 1 = merchant warehouse — the only kind whose stock we may set).
 export async function sheinWarehouses() {
   const info = await sheinCall('/open-api/msc/warehouse/list', {}, { method: 'GET' });
-  return Array.isArray(info?.list) ? info.list : [];
+  return listOf(info, 'list');
 }
 // Set stock: OVERWRITE the TOTAL (sellable + held by open orders) per SKU per warehouse.
 // SHEIN never lets the total go below what orders already hold. ≤100 per call; the
@@ -185,7 +192,7 @@ export async function sheinSetStock(writes) {
 // Is any SKC of this SPU in a review (1 = waiting, 5 = appeal)? SHEIN refuses edits then.
 export async function sheinInReview(spuName) {
   const info = await sheinCall('/open-api/goods/query-document-state', { spuList: [{ spuName }] });
-  return (info?.data || []).some((d) => (d.skcList || []).some((s) => [1, 5].includes(Number(s.documentState))));
+  return listOf(info, 'data').some((d) => (d.skcList || []).some((s) => [1, 5].includes(Number(s.documentState))));
 }
 // Which of these seller SKUs already exist anywhere in the store (incl. products in review).
 export async function sheinSellerSkusTaken(skus) {

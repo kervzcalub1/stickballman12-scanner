@@ -33,6 +33,21 @@ test.describe('SHEIN live — reading the API', () => {
   });
 });
 
+test.describe('SHEIN live — SHEIN’s answer shapes', () => {
+  test('stock-query’s info comes wrapped in a list on prod — read either way (it once read every size as 0)', async () => {
+    const { listOf } = await import('../api/_lib/shein.js');
+    // Exactly what prod returned for the Dunk Low Silver Surfer (2026-10-17), trimmed.
+    const prod = [{ goodsInventory: [{ spuName: 't2608250006402089', skcName: 'st260825000640208958169', skuList: [
+      { skuCode: 'I8mt7fhl8wq5gn', totalInventoryQuantity: 3, totalUsableInventory: 3, warehouseInventoryList: [{ warehouseCode: 'PS111731028586', warehouseType: '2', inventoryQuantity: 3, lockedQuantity: 0, usableInventory: 3, tempLockQuantity: 0 }] }] }] }];
+    expect(listOf(prod, 'goodsInventory')).toHaveLength(1);
+    expect(listOf({ goodsInventory: [1, 2] }, 'goodsInventory')).toEqual([1, 2]);
+    expect(listOf(null, 'goodsInventory')).toEqual([]);
+    const spu = SPU('t2608250006402089', [SKU('I8mt7fhl8wq5gn', '10102780', 'US8')]);
+    const rows = rowsFromSpu(spu, listOf(prod, 'goodsInventory'), { merchant: new Set(['PS111731028586']) });
+    expect(rows[0]).toMatchObject({ sellerSku: '10102780', size: 'US8', qty: 3, held: 0 });
+  });
+});
+
 test.describe('SHEIN live — the plan for one product', () => {
   const VARS = [V('A7', '7', 5), V('A8', '8', 2), V('A9', '9', 4)];
   const rows = (list) => rowsFromSpu(SPU('spu1', list.map(([code, seller, size]) => SKU(code, seller, size))), STOCK(list.map(([code, , , usable, locked]) => [code, usable, locked])), {});

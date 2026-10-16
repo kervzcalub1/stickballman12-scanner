@@ -324,14 +324,18 @@ test.describe('SHEIN live — webhooks', () => {
     expect(shopifyWebhookValid(Buffer.from('{"inventory_item_id":123,"available":9}'), good)).toBe(false);
   });
 
-  test('webhooks: SHEIN’s URL check is answered, a bad signature refused (on /callback too); Shopify unsigned refused', async ({ request }) => {
+  test('webhooks: SHEIN’s URL check is answered, an unverified push ignored (on /callback and /callback. too); Shopify unsigned refused', async ({ request }) => {
     for (const url of ['/api/shein/webhook', '/api/shein/callback']) {
       const probe = await request.post(url, { multipart: { eventData: 'x' } });
       expect(probe.status()).toBe(200);
       expect(await probe.json()).toMatchObject({ ignored: true });
       const forged = await request.post(url, { multipart: { eventData: 'x' }, headers: { 'x-lt-appid': 'nope', 'x-lt-timestamp': String(Date.now()), 'x-lt-signature': 'abcdeXXXX' } });
-      expect(forged.status()).toBe(401);
+      expect(forged.status()).toBe(200);                                   // answered, but…
+      expect(await forged.json()).toMatchObject({ ignored: 'unverified' });  // …nothing is done with it
     }
+    // The URL as SHEIN's console has it saved — with a trailing dot — reaches the same handler.
+    const dotted = await request.post('/api/shein/callback.', { multipart: { eventData: 'x' } });
+    expect(dotted.status()).toBe(200);
     const b = await request.post('/api/shopify/webhook', { data: { inventory_item_id: 1 } });
     expect(b.status()).toBe(401);
   });

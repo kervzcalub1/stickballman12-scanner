@@ -30,7 +30,7 @@ function devApi(env) {
       server.middlewares.use(async (req, res, next) => {
         if (!req.url || !req.url.startsWith('/api/')) return next();
 
-        const route = req.url.split('?')[0].replace(/\/+$/, '');
+        const route = req.url.split('?')[0].replace(/[/.]+$/, '');   // trailing dots too (server.mjs does the same)
         const file = path.join(apiDir, `${route.slice(1)}.js`);
 
         try {

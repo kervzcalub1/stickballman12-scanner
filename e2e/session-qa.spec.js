@@ -369,7 +369,41 @@ test.describe.serial('Session QA · PH New Inventory — GOAT-only + status filt
   });
 });
 
+
+// Some tests below read whatever stock exists. Each CI shard has its OWN fresh database, so
+// "whatever exists" depends on which spec files happened to run before in that shard — adding
+// an unrelated spec reshuffled them and these went red (2026-10-16). They seed their own pairs.
+async function seedPairs(request, tag, items) {
+  const res = await request.post('/api/batches/commit', {
+    headers: authHeaders('warehouse'),
+    data: {
+      batch: { buyer: 'QA', supplier: 'QA Test Supplier', tracking: `QA-${tag}-${Date.now()}`, dateReceived: new Date().toISOString().slice(0, 10), defaultCost: 10 },
+      items: items.map((x) => ({ upc: '', cost: 10, withBox: true, ...x })),
+    },
+  });
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  expect(body.ok).toBe(true);
+  return body.vins;
+}
+async function removePairs(vins) {
+  if (!vins?.length) return;
+  const client = await db();
+  const b = await client.query('SELECT DISTINCT batch_id FROM items WHERE vin = ANY($1)', [vins]);
+  await client.query('DELETE FROM item_events WHERE item_id IN (SELECT id FROM items WHERE vin = ANY($1))', [vins]);
+  await client.query('DELETE FROM items WHERE vin = ANY($1)', [vins]);
+  for (const r of b.rows) await client.query('DELETE FROM batches WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM items WHERE batch_id = $1)', [r.batch_id]);
+}
+
 test.describe('Session QA · Locate Shoe — collapsible grouped results', () => {
+  let seeded = [];
+  test.beforeAll(async ({ request }) => {
+    seeded = await seedPairs(request, 'LOCATE', [
+      { name: 'QA Locate Alpha Shoe', sku: 'QA-LOCATE-A', size: '9' }, { name: 'QA Locate Alpha Shoe', sku: 'QA-LOCATE-A', size: '10' },
+      { name: 'QA Locate Bravo Shoe', sku: 'QA-LOCATE-B', size: '8' },
+    ]);
+  });
+  test.afterAll(async () => { await removePairs(seeded); });
   test('a broad search groups per SKU, collapsed by default, expands on click, shows "size" not "sz"', async ({ page }) => {
     await loginAs(page, 'admin');
     await page.goto('/locations');
@@ -422,6 +456,9 @@ test.describe('Session QA · Locate Shoe — collapsible grouped results', () =>
 });
 
 test.describe('Session QA · PH home + status filter empty-state', () => {
+  let seeded = [];
+  test.beforeAll(async ({ request }) => { seeded = await seedPairs(request, 'PHEMPTY', [{ name: 'QA PH Empty-state Shoe', sku: 'QA-PHEMPTY', size: '10' }]); });
+  test.afterAll(async () => { await removePairs(seeded); });
   test('PH home renders the 5 sections, daily work first and Help last', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await page.goto('/ph');

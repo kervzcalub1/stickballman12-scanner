@@ -10,6 +10,7 @@ import { downloadCSV } from '../lib/csv.js';
 import { estToday, PH_DATETIME } from '../lib/format.js';
 import { SheinFixPanel } from './SheinFixPanel.jsx';
 import { SheinMatch } from './SheinMatch.jsx';
+import { SheinLivePanel } from './SheinLivePanel.jsx';
 import { useLive } from '../hooks.js';
 import { buildFix } from '../lib/sheinFix.js';
 import { readSheinExport, checkRows, tally, groupByProduct, issuesCsv, exportDate, ISSUES, ISSUE_ORDER } from '../lib/sheinCheck.js';
@@ -101,8 +102,9 @@ export function SheinCheck({ user, onHome, onSignOut }) {
   return (
     <div className="app">
       <TopBar title="SHEIN listings — check & fix" onHome={onHome} onSignOut={onSignOut} />
+      {sheinApi?.connected && <SheinLivePanel isAdmin={isAdmin} onSignOut={onSignOut} />}
       <div className="card">
-        <p className="muted sm">Upload SHEIN’s <b>Export Products</b> file (Seller Center → Products → Export). Every SHEIN size is matched to the Shopify variant with the same <b>seller SKU</b> and checked for the wrong size, wrong age group, a SKU that’s gone from Shopify, and more stock on SHEIN than in Shopify. Nothing on SHEIN or Shopify is changed.</p>
+        <p className="muted sm">{sheinApi?.connected && <><b>From an export file</b> (the old way — the live fix above doesn’t need one). </>}Upload SHEIN’s <b>Export Products</b> file (Seller Center → Products → Export). Every SHEIN size is matched to the Shopify variant with the same <b>seller SKU</b> and checked for the wrong size, wrong age group, a SKU that’s gone from Shopify, and more stock on SHEIN than in Shopify. Nothing on SHEIN or Shopify is changed.</p>
         <div className="shc-upload">
           <label className="btn primary">
             {busy === 'file' ? 'Reading…' : file ? 'Choose another export' : 'Choose SHEIN export (.xlsx)'}

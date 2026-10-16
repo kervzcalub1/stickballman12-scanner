@@ -316,6 +316,8 @@ export const api = {
   sheinLinksSave: (links) => post('/api/shein/links', { links }),
   sheinLinksClear: (ids) => post('/api/shein/links', { clear: ids }),
   sheinFixAi: (products) => post('/api/shein-fix/ai', { products }),
+  sheinLive: () => get('/api/shein/live'),
+  sheinLiveAction: (body) => post('/api/shein/live', body),
   ebaySalesReport: (from, to) => get(`/api/ebay/sales-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   ebayCouponCreate: (coupon) => post('/api/ebay/coupons', { action: 'create', coupon }),
   ebayCouponAction: (action, c) => post('/api/ebay/coupons', { action, promotionId: c.promotionId, code: c.couponCode, name: c.name }),

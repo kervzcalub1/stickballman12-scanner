@@ -129,3 +129,95 @@ export async function sheinCall(path, body = {}, { method = 'POST' } = {}) {
 
 // The brands our SHEIN account may list under (the first read once connected).
 export const sheinBrands = () => sheinCall('/open-api/goods/query-brand-list', {});
+
+/* --------------------------- the live fix's calls --------------------------- */
+// docs/shein-api-reference.md has every field; docs/context/shein-live-fix.md how they're used.
+
+// One page of every APPROVED listing (codes only: spu / skc / sku codes). 50 a page.
+export async function sheinProductPage(pageNum, pageSize = 50) {
+  const info = await sheinCall('/open-api/openapi-business-backend/product/query', { pageNum, pageSize });
+  return Array.isArray(info?.data) ? info.data : [];
+}
+// Every SPU code in the store (de-duplicated, in SHEIN's order).
+export async function sheinAllSpus({ max = 400 } = {}) {
+  const seen = new Set();
+  for (let p = 1; p <= max; p++) {
+    const page = await sheinProductPage(p, 50);
+    for (const x of page) if (x?.spuName) seen.add(x.spuName);
+    if (page.length < 50) break;
+  }
+  return [...seen];
+}
+// One product: sizes, seller SKUs, prices, shelf state. No stock (that's stock-query).
+export const sheinSpuInfo = (spuName) => sheinCall('/open-api/goods/spu-info', { spuName, languageList: ['en'] });
+// Merchant (virtual) stock for ≤100 SHEIN SKU codes. `warehouseType` 2 is required until
+// SHEIN retires it (2026-12-31); `invType` VI is its replacement and wins when both are sent.
+export async function sheinStock(skuCodes) {
+  const out = [];
+  for (let i = 0; i < skuCodes.length; i += 100) {
+    const info = await sheinCall('/open-api/stock/stock-query', { skuCodeList: skuCodes.slice(i, i + 100), warehouseType: '2', invType: 'VI' });
+    out.push(...(info?.goodsInventory || []));
+  }
+  return out;
+}
+// Our own warehouses (type 1 = merchant warehouse — the only kind whose stock we may set).
+export async function sheinWarehouses() {
+  const info = await sheinCall('/open-api/msc/warehouse/list', {}, { method: 'GET' });
+  return Array.isArray(info?.list) ? info.list : [];
+}
+// Set stock: OVERWRITE the TOTAL (sellable + held by open orders) per SKU per warehouse.
+// SHEIN never lets the total go below what orders already hold. ≤100 per call; the
+// idempotency key makes a retried call a no-op instead of a second write.
+export async function sheinSetStock(writes) {
+  const failed = [];
+  for (let i = 0; i < writes.length; i += 100) {
+    const info = await sheinCall('/open-api/stock/change-inventory/v2', {
+      updateSkuInventoryQuantityRequests: writes.slice(i, i + 100).map((w) => ({
+        idempotencyKey: w.key, skuCode: w.skuCode, invType: 'VI', warehouseCode: w.warehouseCode || undefined,
+        changeType: 'OVERWRITE', changeQuantity: Math.max(0, Math.round(Number(w.total) || 0)), changeReason: 'Stickballman12 live fix: Shopify stock',
+      })),
+    });
+    const f = info?.failedList;
+    for (const x of Array.isArray(f) ? f : f ? [f] : []) failed.push({ skuCode: x.skuCode, reason: x.reason || x.code || 'refused' });
+  }
+  return { failed };
+}
+// Is any SKC of this SPU in a review (1 = waiting, 5 = appeal)? SHEIN refuses edits then.
+export async function sheinInReview(spuName) {
+  const info = await sheinCall('/open-api/goods/query-document-state', { spuList: [{ spuName }] });
+  return (info?.data || []).some((d) => (d.skcList || []).some((s) => [1, 5].includes(Number(s.documentState))));
+}
+// Which of these seller SKUs already exist anywhere in the store (incl. products in review).
+export async function sheinSellerSkusTaken(skus) {
+  const taken = new Set();
+  for (let i = 0; i < skus.length; i += 200) {
+    const info = await sheinCall('/open-api/goods/product/check-supplierSku-repeated', { supplierSkuList: skus.slice(i, i + 200) });
+    for (const x of Array.isArray(info) ? info : []) if (x.repeated) taken.add(String(x.supplierSku));
+  }
+  return taken;
+}
+// Change seller SKUs on existing sizes of ONE product (partialEdit — SHEIN reviews it).
+// edits: [{ skc, skuCode, supplierSku }]. Returns { ok, version, messages }.
+export async function sheinSetSellerSkus(spuName, edits) {
+  const bySkc = new Map();
+  for (const e of edits) { const a = bySkc.get(e.skc) || []; a.push({ sku_code: e.skuCode, supplier_sku: e.supplierSku }); bySkc.set(e.skc, a); }
+  const info = await sheinCall('/open-api/goods/product/partialEdit', { spu_name: spuName, skc_list: [...bySkc].map(([skc_name, sku_list]) => ({ skc_name, sku_list })) });
+  const messages = (info?.pre_valid_result || []).flatMap((x) => x.messages || []);
+  return { ok: info?.success !== false && !messages.length, version: info?.version || null, messages };
+}
+
+/* ------------------------------- webhooks ------------------------------- */
+// SHEIN's pushes (docs: system page 3b13b1c5…, "Webhook说明"): signed like our calls but with
+// the APP's id + secret (not the store's openKeyId), over the request PATH; the body is
+// form-data `eventData`, AES-encrypted with the app secret (same AES as the get-by-token
+// answer). Returns the decrypted JSON, or null when anything doesn't check out.
+export function sheinOpenWebhook({ headers, path, eventData, now = Date.now() }) {
+  const h = (k) => String(headers?.[k] ?? headers?.[k.toLowerCase()] ?? '').trim();
+  const id = h('x-lt-appid'); const ts = h('x-lt-timestamp'); const sig = h('x-lt-signature');
+  if (!appId() || !appSecret() || id !== appId() || !ts || sig.length < 6 || !eventData) return null;
+  if (Math.abs(now - Number(ts)) > 15 * 60_000) return null;           // a replayed old push
+  const want = sheinSignature(id, appSecret(), path, ts, sig.slice(0, 5));
+  const a = Buffer.from(want); const b = Buffer.from(sig);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try { return JSON.parse(sheinDecryptSecret(eventData, appSecret())); } catch { return null; }
+}

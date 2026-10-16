@@ -22,6 +22,7 @@
 //    grants from read_orders. When they're absent the call degrades to a clear
 //    "not permitted" rather than an error or, worse, a zero — "none left" and "we can't
 //    see it" are opposite answers, and only one of them sends someone to a shelf.
+import crypto from 'node:crypto';
 import { cacheGet, cacheSet } from './util.js';
 import { estDate } from '../../src/lib/format.js';
 
@@ -508,4 +509,128 @@ export async function shopifyUpdateProduct(product) {
   const errs = res?.userErrors || [];
   if (errs.length) return { error: errs.map((e) => e.message).join(' | '), code: 'rejected' };
   return { ok: true, product: res?.product };
+}
+
+// Every variant of these products, read from Shopify RIGHT NOW (no cache) — the SHEIN live
+// fix reads the products a SHEIN listing points at the moment before it writes SHEIN's
+// stock, so a sale on another channel a minute ago is already counted. Same shape as
+// shopifyAllVariants. ≤ 50 products a call (a shoe has ≤ ~40 sizes).
+export async function shopifyProductsLive(productIds) {
+  const ids = [...new Set((productIds || []).filter(Boolean))];
+  const out = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const r = await gql(`query Live($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
+      id title status handle
+      variants(first: 100) { edges { node { id sku title price compareAtPrice inventoryQuantity selectedOptions { name value } } } }
+    } } }`, { ids: ids.slice(i, i + 50) });
+    if (!r.ok) return failure(r, 'read');
+    for (const p of r.data?.nodes || []) {
+      if (!p?.id) continue;
+      for (const { node: v } of p.variants?.edges || []) {
+        const size = (v.selectedOptions || []).find((o) => /size/i.test(o.name))?.value ?? v.title;
+        out.push({
+          variantId: v.id, productId: p.id, productTitle: p.title || '', status: p.status || null, handle: p.handle || null,
+          sku: v.sku || '', size: String(size ?? '').trim(), price: v.price, compareAt: v.compareAtPrice ?? null,
+          qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity), style: styleFromTitle(p.title),
+        });
+      }
+    }
+  }
+  return { variants: out };
+}
+
+// The Shopify variant(s) carrying this exact SKU right now (a SKU the catalogue read didn't
+// have may have been created since). Returns the product ids.
+export async function shopifyProductIdsForSkus(skus) {
+  const found = new Map();
+  for (const sku of [...new Set((skus || []).map((s) => String(s || '').trim()).filter(Boolean))]) {
+    const r = await gql(`query($q:String!){ productVariants(first:5, query:$q){ edges{ node{ sku product { id } } } } }`, { q: `sku:${JSON.stringify(sku)}` });
+    if (!r.ok) return failure(r, 'read');
+    const hit = (r.data?.productVariants?.edges || []).find((x) => String(x.node?.sku || '').trim() === sku);
+    if (hit) found.set(sku, hit.node.product.id);
+  }
+  return { found };
+}
+
+// The inventory behind one exact SKU, RIGHT NOW: the variant, its inventory item, and the
+// "available" quantity at each location. For taking a SHEIN sale off Shopify.
+export async function shopifyStockForSku(sku) {
+  const term = String(sku || '').trim();
+  if (!term) return { error: 'No SKU.', code: 'input' };
+  const r = await gql(`query($q:String!){ productVariants(first:5, query:$q){ edges{ node{
+    id sku title product { id title status }
+    inventoryItem { id tracked inventoryLevels(first: 10) { edges { node { location { id } quantities(names: ["available"]) { name quantity } } } } }
+  } } } }`, { q: `sku:${JSON.stringify(term)}` });
+  if (!r.ok) return failure(r, 'read');
+  const hits = (r.data?.productVariants?.edges || []).map((e) => e.node).filter((v) => String(v.sku || '').trim() === term);
+  if (!hits.length) return { error: `No Shopify variant has SKU ${term}.`, code: 'missing' };
+  if (hits.length > 1) return { error: `${hits.length} Shopify variants share SKU ${term} — fix that in Shopify first.`, code: 'ambiguous' };
+  const v = hits[0];
+  const levels = (v.inventoryItem?.inventoryLevels?.edges || []).map(({ node: l }) => ({
+    // The location's NAME needs read_locations, which the app doesn't have — the id is enough.
+    locationId: l.location?.id, location: String(l.location?.id || '').split('/').pop(), active: true,
+    available: Number((l.quantities || []).find((q) => q.name === 'available')?.quantity ?? 0),
+  })).filter((l) => l.locationId && l.active);
+  return { variantId: v.id, title: `${v.product?.title || ''} · ${v.title || ''}`, productStatus: v.product?.status || null,
+    inventoryItemId: v.inventoryItem?.id || null, tracked: v.inventoryItem?.tracked !== false, levels };
+}
+
+// Change "available" by `delta` at one location — only if it is still `from` (compare-and-
+// set: a sale elsewhere a second ago makes Shopify refuse, and the caller re-reads). The
+// idempotency key makes a retried request a no-op, so one SHEIN unit is never taken twice.
+export async function shopifyAdjustAvailable({ inventoryItemId, locationId, delta, from, key, ref }) {
+  const r = await gql(`mutation Adj($input: InventoryAdjustQuantitiesInput!, $key: String!) {
+    inventoryAdjustQuantities(input: $input) @idempotent(key: $key) {
+      inventoryAdjustmentGroup { createdAt changes { name delta quantityAfterChange } }
+      userErrors { field message code }
+    }
+  }`, { key, input: { reason: 'correction', name: 'available', referenceDocumentUri: ref,
+    changes: [{ inventoryItemId, locationId, delta, changeFromQuantity: from }] } });
+  if (!r.ok) return failure(r, 'write');
+  const res = r.data?.inventoryAdjustQuantities;
+  const errs = res?.userErrors || [];
+  if (errs.length) {
+    const text = errs.map((e) => e.message).join(' | ');
+    return { error: text, code: /changeFrom|compare|stale|does not match|mismatch/i.test(text + errs.map((e) => e.code).join(' ')) ? 'stale' : 'rejected' };
+  }
+  const ch = (res?.inventoryAdjustmentGroup?.changes || []).find((c) => c.name === 'available');
+  return { ok: true, after: ch?.quantityAfterChange ?? (from + delta) };
+}
+
+/* ------------------------- inventory webhook (→ SHEIN) ------------------------- */
+// docs/context/shein-live-fix.md → "Shopify → SHEIN". Shopify tells us the moment a stock
+// level changes; we push that SKU's new number to SHEIN.
+
+// Shopify signs every webhook: base64(HMAC-SHA256(raw body, app secret)).
+export function shopifyWebhookValid(rawBody, hmacHeader) {
+  const secret = String(process.env.SHOPIFY_SECRET_KEY || process.env.SHOPIFY_WEBHOOK_SECRET || '');
+  if (!secret || !rawBody || !hmacHeader) return false;
+  const want = Buffer.from(crypto.createHmac('sha256', secret).update(rawBody).digest('base64'));
+  const got = Buffer.from(String(hmacHeader));
+  return want.length === got.length && crypto.timingSafeEqual(want, got);
+}
+export async function shopifySkuForInventoryItem(inventoryItemId) {
+  const id = String(inventoryItemId).startsWith('gid://') ? String(inventoryItemId) : `gid://shopify/InventoryItem/${inventoryItemId}`;
+  const r = await gql(`query($id: ID!) { inventoryItem(id: $id) { sku variant { sku } } }`, { id });
+  if (!r.ok) return null;
+  return String(r.data?.inventoryItem?.variant?.sku || r.data?.inventoryItem?.sku || '').trim() || null;
+}
+const WEBHOOK_TOPIC = 'INVENTORY_LEVELS_UPDATE';
+export async function shopifyInventoryWebhook(uri) {
+  const r = await gql(`query { webhookSubscriptions(first: 50, topics: [${WEBHOOK_TOPIC}]) { edges { node { id topic uri } } } }`);
+  if (!r.ok) return failure(r, 'read');
+  const subs = (r.data?.webhookSubscriptions?.edges || []).map((e) => e.node);
+  return { subs, mine: subs.find((s) => s.uri === uri) || null };
+}
+export async function shopifyEnsureInventoryWebhook(uri) {
+  const cur = await shopifyInventoryWebhook(uri);
+  if (cur.error) return cur;
+  if (cur.mine) return { ok: true, id: cur.mine.id, existed: true };
+  const r = await gql(`mutation($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
+    webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) { webhookSubscription { id uri } userErrors { field message } }
+  }`, { topic: WEBHOOK_TOPIC, sub: { uri } });
+  if (!r.ok) return failure(r, 'write');
+  const res = r.data?.webhookSubscriptionCreate;
+  if (res?.userErrors?.length) return { error: res.userErrors.map((e) => e.message).join(' | '), code: 'rejected' };
+  return { ok: true, id: res?.webhookSubscription?.id, existed: false };
 }

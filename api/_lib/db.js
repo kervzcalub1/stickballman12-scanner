@@ -9257,3 +9257,118 @@ export async function livePresellListings(stockId, platform) {
   return await db()`SELECT * FROM presell_listings WHERE stock_id = ${stockId} AND platform = ${platform} AND status = 'live'
                     ORDER BY created_at, id`;
 }
+
+/* ------------------------------ SHEIN live sync ------------------------------ */
+// docs/context/shein-live-fix.md. Units = one row per pair a SHEIN order sold.
+
+// Insert new units (due decided by the caller ONCE, at first sight) / refresh known ones.
+export async function upsertSheinUnits(units) {
+  if (!units.length) return;
+  const chunk = JSON.stringify(units);
+  await db()`
+    INSERT INTO shein_order_units (goods_id, order_no, order_status, unit_status, exchange_tag, stock_mode, seller_sku, shein_sku, title, price, order_time, due, shipped_seen, updated_at)
+    SELECT x.goods_id, x.order_no, x.order_status, x.unit_status, x.exchange_tag, x.stock_mode, x.seller_sku, x.shein_sku, x.title, x.price, x.order_time, x.due, x.shipped_seen, now()
+      FROM jsonb_to_recordset(${chunk}::jsonb) AS x(goods_id text, order_no text, order_status int, unit_status int, exchange_tag int, stock_mode int,
+           seller_sku text, shein_sku text, title text, price numeric, order_time timestamptz, due boolean, shipped_seen boolean)
+    ON CONFLICT (goods_id) DO UPDATE SET order_status = EXCLUDED.order_status, unit_status = EXCLUDED.unit_status,
+      exchange_tag = EXCLUDED.exchange_tag, stock_mode = EXCLUDED.stock_mode, seller_sku = EXCLUDED.seller_sku, shein_sku = EXCLUDED.shein_sku,
+      shipped_seen = shein_order_units.shipped_seen OR EXCLUDED.shipped_seen, updated_at = now()`;
+}
+export async function sheinUnitsKnown(goodsIds) {
+  if (!goodsIds.length) return new Set();
+  const rows = await db()`SELECT goods_id FROM shein_order_units WHERE goods_id = ANY(${goodsIds}::text[])`;
+  return new Set(rows.map((r) => r.goods_id));
+}
+// Units that need Shopify touched: a sale to take off, or a cancelled-before-shipping sale to put back.
+export async function sheinUnitsToAct(limit = 200) {
+  return await db()`
+    SELECT * FROM shein_order_units
+     WHERE attempts < 8 AND (
+       (due AND deducted_at IS NULL AND stock_mode = 3 AND exchange_tag IN (1, 3) AND unit_status NOT IN (6))
+       OR (deducted_at IS NOT NULL AND restocked_at IS NULL AND NOT shipped_seen AND (unit_status = 6 OR exchange_tag IN (2, 4))))
+     ORDER BY order_time NULLS LAST, goods_id LIMIT ${limit}`;
+}
+export async function markSheinUnit(goodsId, { deducted = false, restocked = false, variant = null, location = null, before = null, note = null, error = null, failed = false } = {}) {
+  await db()`
+    UPDATE shein_order_units SET
+      deducted_at = CASE WHEN ${deducted} THEN now() ELSE deducted_at END,
+      restocked_at = CASE WHEN ${restocked} THEN now() ELSE restocked_at END,
+      shopify_variant = COALESCE(${variant}, shopify_variant), shopify_location = COALESCE(${location}, shopify_location),
+      shopify_before = COALESCE(${before}::int, shopify_before), note = COALESCE(${note}, note),
+      error = ${error}, attempts = CASE WHEN ${failed} THEN attempts + 1 ELSE attempts END, updated_at = now()
+     WHERE goods_id = ${goodsId}`;
+}
+// Pairs SHEIN sold that are still in the warehouse and NOT yet off Shopify, per seller SKU —
+// what the fix must still hold back from Shopify's number.
+export async function sheinOpenNotDeducted() {
+  const rows = await db()`
+    SELECT seller_sku, count(*)::int AS n FROM shein_order_units
+     WHERE deducted_at IS NULL AND stock_mode = 3 AND exchange_tag IN (1, 3) AND unit_status IN (1, 2, 7) AND seller_sku IS NOT NULL
+     GROUP BY seller_sku`;
+  return new Map(rows.map((r) => [r.seller_sku, r.n]));
+}
+export async function recentSheinUnits(limit = 100) {
+  return await db()`SELECT * FROM shein_order_units ORDER BY COALESCE(order_time, first_seen) DESC LIMIT ${limit}`;
+}
+export async function sheinUnitCounts() {
+  const [r] = await db()`
+    SELECT count(*) FILTER (WHERE deducted_at IS NOT NULL)::int AS deducted,
+           count(*) FILTER (WHERE restocked_at IS NOT NULL)::int AS restocked,
+           count(*) FILTER (WHERE error IS NOT NULL AND deducted_at IS NULL AND due)::int AS failing,
+           count(*) FILTER (WHERE deducted_at >= now() - interval '24 hours')::int AS last24,
+           max(deducted_at) AS last_deducted
+      FROM shein_order_units`;
+  return r || {};
+}
+
+export async function createSheinLiveRun({ mode, by }) {
+  const [r] = await db()`INSERT INTO shein_live_runs (mode, status, phase, started_by) VALUES (${mode}, 'running', 'starting', ${by || null}) RETURNING *`;
+  return r;
+}
+export async function updateSheinLiveRun(id, { status = null, phase = null, total = null, done = null, current = null, counts = null, error = null, finished = false } = {}) {
+  await db()`
+    UPDATE shein_live_runs SET status = COALESCE(${status}, status), phase = COALESCE(${phase}, phase),
+      total = COALESCE(${total}::int, total), done = COALESCE(${done}::int, done), current = COALESCE(${current}, current),
+      counts = COALESCE(${counts == null ? null : JSON.stringify(counts)}::jsonb, counts), error = COALESCE(${error}, error),
+      finished_at = CASE WHEN ${finished} THEN now() ELSE finished_at END, updated_at = now()
+     WHERE id = ${id}`;
+}
+export async function getSheinLiveRun(id) {
+  const [r] = await db()`SELECT * FROM shein_live_runs WHERE id = ${id}`;
+  return r || null;
+}
+export async function latestSheinLiveRun() {
+  const [r] = await db()`SELECT * FROM shein_live_runs ORDER BY id DESC LIMIT 1`;
+  return r || null;
+}
+export async function requestSheinLiveStop(id) {
+  await db()`UPDATE shein_live_runs SET stop_requested = true, updated_at = now() WHERE id = ${id} AND status = 'running'`;
+}
+// A run whose process died (deploy / restart) stops updating; call it what it is.
+export async function markStaleSheinRuns(olderThanSec = 180) {
+  await db()`UPDATE shein_live_runs SET status = 'interrupted', finished_at = now(), updated_at = now()
+              WHERE status = 'running' AND updated_at < now() - make_interval(secs => ${olderThanSec})`;
+}
+export async function addSheinLiveItems(items) {
+  if (!items.length) return;
+  const chunk = JSON.stringify(items);
+  await db()`
+    INSERT INTO shein_live_items (run_id, source, spu, skc, shein_sku, seller_sku, shein_size, product_name, shopify_sku, shopify_size, shopify_product,
+      shopify_qty, held, before_qty, target_qty, after_qty, reason, action, link_to, link_by, wrote, result, error)
+    SELECT x.run_id, COALESCE(x.source, 'walk'), x.spu, x.skc, x.shein_sku, x.seller_sku, x.shein_size, x.product_name, x.shopify_sku, x.shopify_size, x.shopify_product,
+      x.shopify_qty, x.held, x.before_qty, x.target_qty, x.after_qty, x.reason, x.action, x.link_to, x.link_by, x.wrote, x.result, x.error
+      FROM jsonb_to_recordset(${chunk}::jsonb) AS x(run_id bigint, source text, spu text, skc text, shein_sku text, seller_sku text, shein_size text, product_name text,
+           shopify_sku text, shopify_size text, shopify_product text, shopify_qty int, held int, before_qty int, target_qty int, after_qty int,
+           reason text, action text, link_to text, link_by text, wrote text, result text, error text)`;
+}
+export async function listSheinLiveItems(runId, limit = 3000) {
+  return await db()`SELECT * FROM shein_live_items WHERE run_id = ${runId} ORDER BY id LIMIT ${limit}`;
+}
+export async function recentSheinPushes(limit = 100) {
+  return await db()`SELECT * FROM shein_live_items WHERE source = 'push' ORDER BY id DESC LIMIT ${limit}`;
+}
+// The last walk's picture of SHEIN, per SHEIN SKU (for pushing one Shopify change).
+export async function sheinLastWalkFacts() {
+  return await db()`SELECT DISTINCT ON (shein_sku) spu, shein_sku, seller_sku, shein_size, reason FROM shein_live_items
+                     WHERE source = 'walk' AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC`;
+}

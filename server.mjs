@@ -84,7 +84,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '256kb' })); // handlers also fall back to raw-stream parsing
+// `rawBody` is kept for webhooks that sign the exact bytes (Shopify's HMAC — api/shopify/webhook.js).
+app.use(express.json({ limit: '256kb', verify: (req, _res, buf) => { if (req.originalUrl?.startsWith('/api/shopify/webhook')) req.rawBody = Buffer.from(buf); } })); // handlers also fall back to raw-stream parsing
 
 // Resolve a request path to an api handler file, guarding against traversal so a
 // crafted path can never escape the api/ directory.
@@ -203,6 +204,12 @@ import('./api/_lib/presell-worker.js')
 import('./api/_lib/waitlist-worker.js')
   .then((m) => m.startWaitlistWorker())
   .catch((e) => console.error('[waitlist-worker] failed to start:', e.message));
+
+// SHEIN live sync — SHEIN sales off Shopify every minute (behind the webhook) + the live fix
+// walker's heartbeat (docs/context/shein-live-fix.md). Production only by default.
+import('./api/_lib/shein-worker.js')
+  .then((m) => m.startSheinWorker())
+  .catch((e) => console.error('[shein-sync] failed to start:', e.message));
 
 // eBay orders — incremental sync every 30 min so late shipments show by themselves
 // (docs/context/ebay-orders.md). Production only by default; EBAY_ORDERS_WATCH overrides.

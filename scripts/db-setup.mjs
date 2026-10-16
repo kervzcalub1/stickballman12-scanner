@@ -2435,6 +2435,75 @@ await sql(`
     decided_at      TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 
+// SHEIN live sync (2026-10-16, docs/context/shein-live-fix.md). One row per UNIT a SHEIN
+// order sold (SHEIN gives every unit its own goodsId), so a sale is taken off Shopify exactly
+// once (the goodsId is also Shopify's idempotency key) and put back only if SHEIN cancels it
+// before it ships. `due` = this unit is ours to deduct (sold after the switch-on, or open at
+// switch-on when the person chose to include those).
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_order_units (
+    goods_id        TEXT PRIMARY KEY,
+    order_no        TEXT NOT NULL,
+    order_status    INT,
+    unit_status     INT,                 -- newGoodsStatus: 1 pending 2 to ship 4 shipped 5 signed 6 refunded 7 to pick up 8 lost 9 rejected
+    exchange_tag    INT,                 -- 1 normal · 2 swapped out · 3 swapped in · 4 swap deleted
+    stock_mode      INT,                 -- 3 = ships from OUR warehouse (the only kind we touch)
+    seller_sku      TEXT,
+    shein_sku       TEXT,
+    title           TEXT,
+    price           NUMERIC(12,2),
+    order_time      TIMESTAMPTZ,
+    due             BOOLEAN NOT NULL DEFAULT false,
+    shipped_seen    BOOLEAN NOT NULL DEFAULT false,
+    shopify_variant TEXT,
+    shopify_location TEXT,
+    deducted_at     TIMESTAMPTZ,
+    shopify_before  INT,
+    restocked_at    TIMESTAMPTZ,
+    note            TEXT,
+    error           TEXT,
+    attempts        INT NOT NULL DEFAULT 0,
+    first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_sku ON shein_order_units (seller_sku)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_order ON shein_order_units (order_no)`);
+// The live fix walk: one run = every SHEIN product, one at a time; one item = one SHEIN size
+// as the walk found and left it. `source` = walk | push (a single Shopify change pushed).
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_live_runs (
+    id              BIGSERIAL PRIMARY KEY,
+    mode            TEXT NOT NULL,       -- dry | stock | full
+    status          TEXT NOT NULL,       -- running | done | stopped | failed | interrupted
+    phase           TEXT,
+    started_by      TEXT,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at     TIMESTAMPTZ,
+    total           INT NOT NULL DEFAULT 0,
+    done            INT NOT NULL DEFAULT 0,
+    current         TEXT,
+    counts          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error           TEXT,
+    stop_requested  BOOLEAN NOT NULL DEFAULT false
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_live_items (
+    id              BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT,
+    source          TEXT NOT NULL DEFAULT 'walk',
+    at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    spu             TEXT, skc TEXT, shein_sku TEXT, seller_sku TEXT, shein_size TEXT, product_name TEXT,
+    shopify_sku     TEXT, shopify_size TEXT, shopify_product TEXT, shopify_qty INT,
+    held            INT, before_qty INT, target_qty INT, after_qty INT,
+    reason          TEXT, action TEXT, link_to TEXT, link_by TEXT,
+    wrote           TEXT,                -- none | dry | stock | link | stock+link
+    result          TEXT,                -- ok | changed | skipped | failed | mismatch
+    error           TEXT
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_live_items_run ON shein_live_items (run_id, id)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_live_items_at ON shein_live_items (at DESC)`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -2448,6 +2517,7 @@ const LIVE_TABLES = [
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
+  'shein_order_units', 'shein_live_runs', 'shein_live_items',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

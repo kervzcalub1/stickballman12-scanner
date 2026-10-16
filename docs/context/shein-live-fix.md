@@ -15,7 +15,11 @@ its top). The rules are the export fix's (`docs/context/shein-fix.md`), run per 
   app — ours is `https://stickballman12.com/api/shein/callback` (approved 2026-10-13; also the
   sign-in return, GET), so `callback.js` hands POSTs to `webhook.js` (`/api/shein/webhook` works
   too). Subscribe the order event ("订单同步通知 / order_push_notice") in the console. An unsigned
-  POST (SHEIN's "is this URL alive" check) gets 200 and is ignored; a bad signature gets 401. Signed with the APP
+  POST (SHEIN's "is this URL alive" check) and any push whose signature doesn't verify get 200
+  and are IGNORED (logged) — nothing moves without a valid signature; the minute poll catches
+  real orders. The URL is SAVED in SHEIN's console with a trailing dot (`…/callback.`), so both
+  routers (`server.mjs`, `vite.config.js`) strip trailing dots; the signature is tried over the
+  path as called and without the dot. Signed with the APP
   id + secret over the path, body = form-data `eventData` AES-encrypted with the app secret
   (`sheinOpenWebhook`). It only names the order; we read the order from the API ourselves.
 - **Backstop:** every minute (`shein-worker.js`, production only; `SHEIN_SYNC_WATCH=on|off`)

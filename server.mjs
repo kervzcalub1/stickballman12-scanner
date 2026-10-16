@@ -90,7 +90,8 @@ app.use(express.json({ limit: '256kb', verify: (req, _res, buf) => { if (req.ori
 // Resolve a request path to an api handler file, guarding against traversal so a
 // crafted path can never escape the api/ directory.
 function resolveHandler(reqPath) {
-  const route = reqPath.replace(/\/+$/, '').replace(/^\/api\//, '');
+  // Trailing dots too: SHEIN's console has our webhook URL saved as ".../api/shein/callback."
+  const route = reqPath.replace(/[/.]+$/, '').replace(/^\/api\//, '');
   if (!/^[A-Za-z0-9/_-]+$/.test(route)) return null;
   const file = path.join(apiDir, `${route}.js`);
   if (!file.startsWith(apiDir + path.sep)) return null;

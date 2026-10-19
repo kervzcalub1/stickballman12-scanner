@@ -10,18 +10,27 @@
 // and how sure it is; the rules in src/lib/cancellations.js decide the flags, and a person
 // verifies every row. A photo it can't read still files a row WITH the photo, flagged, so a
 // reviewer can type the number off the picture — a failed read never loses the request.
-import { tg, enqueue } from './telegram.js';
+import { tg, enqueue, sendAlertDocument } from './telegram.js';
 import { r2Configured, presignPutUrl } from './r2.js';
 import {
-  createCancellationPhoto, setCancellationPhotoRead, createCancellation, findLiveCancellation,
+  createCancellationPhoto, setCancellationPhotoRead, createCancellation, findLiveCancellation, listCancellationsForDay,
 } from './db.js';
+import { estToday } from '../../src/lib/format.js';
+import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv } from '../../src/lib/cancellations.js';
 import { PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel, FLAGS, BLOCKING } from '../../src/lib/cancellations.js';
 
 // What the bot's "/" menu lists (scripts/telegram-webhook.mjs → setMyCommands).
-export const BOT_COMMANDS = PLATFORMS.map((p) => ({ command: p.cmd, description: `${p.label} — then send the photo(s) of the order to cancel` }));
+export const BOT_COMMANDS = [
+  ...PLATFORMS.map((p) => ({ command: p.cmd, description: `${p.label} — then send the photo(s) of the order to cancel` })),
+  { command: 'msg', description: "Today's cancel message for one platform (pick it)" },
+  { command: 'msgall', description: "Today's cancel messages for every platform" },
+  { command: 'report', description: "Today's cancellations as a CSV file" },
+];
 export const HOW_TO = 'To log an order to cancel: send the platform, then the photo(s) — e.g. /alias and the picture (or put /alias in the photo\'s caption).\n'
   + `Platforms: ${PLATFORMS.map((p) => `/${p.cmd} ${p.label}`).join(' · ')}\n`
-  + 'Or type the number: /stockx 12345678-12345678 - wrong size';
+  + 'Or type the number: /stockx 12345678-12345678 - wrong size\n\n'
+  + "End of shift (today, EST): /msg — pick a platform for its cancel message · /msgall — every platform · /report — a CSV file. "
+  + 'Another day: add the date, e.g. /msgall yesterday or /report 2026-10-19';
 
 const OPENAI_URL = () => process.env.CANCEL_AI_URL || 'https://api.openai.com/v1/chat/completions';
 const MODEL = () => process.env.CANCEL_AI_MODEL || process.env.RECEIPT_AI_MODEL || 'gpt-5.4-mini';
@@ -262,3 +271,64 @@ export const sayTo = (chatId, text, replyTo = null) => enqueue(() => tg('sendMes
   chat_id: chatId, text,
   ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
 }));
+
+// ── End of shift: /msg, /msgall, /report ─────────────────────────────────────────────
+// All by ONE EST day — the warehouse runs these at the end of their shift, and "today"
+// has to be the server's Eastern day, never the phone's.
+const addDaysYmd = (ymd, n) => {
+  const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+/** "", "today", "yesterday", "2026-10-19" → an EST day, or null when it isn't one. */
+export function dayFrom(arg) {
+  const a = String(arg || '').trim().toLowerCase().replace(/^-?all\b\s*/, '');
+  const today = estToday();
+  if (!a || a === 'today') return today;
+  if (a === 'yesterday') return addDaysYmd(today, -1);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(a) && !Number.isNaN(Date.parse(`${a}T12:00:00Z`)) && a <= today) return a;
+  return null;
+}
+const dayName = (ymd) => (ymd === estToday() ? `today (${ymd} EST)` : `${ymd} (EST)`);
+
+/** The footnote for rows that can't go in a message yet. */
+function leftOut(rows) {
+  const c = dayCounts(rows);
+  const bits = [];
+  if (c.noNumber) bits.push(`${c.noNumber} with no order number yet`);
+  if (c.noPlatform) bits.push(`${c.noPlatform} with no platform yet`);
+  return bits.length ? `\n\n⚠️ Not listed: ${bits.join(', ')} — fix them on the Cancellations page, then ask again.` : '';
+}
+
+/** /msg → the picker: one button per platform that has orders that day. */
+export async function msgPicker(ymd) {
+  const rows = await listCancellationsForDay(ymd);
+  const c = dayCounts(rows);
+  const buttons = PLATFORMS.filter((p) => c.by[p.key]).map((p) => ({ text: `${p.label} (${c.by[p.key]})`, callback_data: `cxmsg:${p.key}:${ymd}` }));
+  if (!buttons.length) return { text: `No orders to cancel ${dayName(ymd)}.${leftOut(rows)}` };
+  const keyboard = [];
+  for (let i = 0; i < buttons.length; i += 2) keyboard.push(buttons.slice(i, i + 2));
+  return { text: `Which platform? Orders sent ${dayName(ymd)}:${leftOut(rows)}`, keyboard };
+}
+/** A picker tap / one platform's message. */
+export async function msgFor(platform, ymd) {
+  const rows = await listCancellationsForDay(ymd);
+  return cancelMessage(platform, rows) || `No ${platformLabel(platform)} orders to cancel ${dayName(ymd)}.`;
+}
+/** /msgall */
+export async function msgAll(ymd) {
+  const rows = await listCancellationsForDay(ymd);
+  return (cancelMessageAll(rows) || `No orders to cancel ${dayName(ymd)}.`) + leftOut(rows);
+}
+/** /report → the day's rows as a CSV, rejected ones included (it's the record). */
+export async function sendDayReport(chatId, ymd) {
+  const rows = await listCancellationsForDay(ymd, { withRejected: true });
+  if (!rows.length) return false;
+  const c = dayCounts(rows.filter((r) => r.status !== 'rejected'));
+  const per = PLATFORMS.filter((p) => c.by[p.key]).map((p) => `${p.label} ${c.by[p.key]}`).join(' · ');
+  const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  await sendAlertDocument(chatId, {
+    html: esc(`Cancellations ${dayName(ymd)}: ${rows.length} row${rows.length === 1 ? '' : 's'}${per ? ` — ${per}` : ''}`),
+    filename: `cancellations-${ymd}.csv`, content: cancellationsCsv(rows), type: 'text/csv',
+  });
+  return true;
+}

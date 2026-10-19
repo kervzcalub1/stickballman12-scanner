@@ -420,6 +420,32 @@ label belonging to the box in front of them. It's now stored and downloadable.
   supplier's portal offers the whole sheet plus their own box's label while filling and
   once packed. Covered by `e2e/po-labels-file.spec.js`.
 
+## Paste a list (2026-10-20)
+Suppliers send orders as a message — a SKU, then `size x qty` lines, many shoes at once:
+```
+DZ5485-201
+8.5 x 2
+9 x 3
+IB4025-100 $120     ← optional shelf price ea for every size under it
+10 x 1
+```
+**📋 Paste a list** in the Add-items window (`PoScanModal`, so: supplier on their label, PH
+on a label or the whole-order list) → live preview per SKU (catalogue name, size chips,
+pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po/scan-bulk`.
+- Parser `src/lib/poPaste.js` = the Pre-sell paste (`parsePresellPaste`, same shape) +
+  price on the SKU line, a SKU typed with a space (`DZ5485 201`), and the same SKU in two
+  blocks merged. **Strict**: a line it doesn't understand is listed under "Not added", and
+  the size lines UNDER it are refused rather than given to the shoe above (that line may
+  have been the next shoe's code). Pre-sell keeps its lenient behaviour.
+- `scan-bulk` = `po/scan` / `po/scan-order` for a whole list in ONE request (those are
+  120/min; a real list is more, and a loop that 429s halfway half-declares a label). Same
+  gates (supplier scope, `manifestEditBlock`, per-box vs whole-order scope, whole-order is
+  PH-only), same attribution, same `addPoScan`/`addPoOrderScan` — an existing SKU+size
+  **adds** to its qty, so pasting again tops up. The whole list is validated first.
+- Shoes only (a box needs dimensions on every line). **No UPC** is sent — a SKU lookup's
+  UPC belongs to one size ([[upc-is-per-size]]).
+- E2E: `e2e/po-paste.spec.js`.
+
 ## Who may write a manifest, and when (`manifestEditBlock`)
 One rule, three lifecycles — get this wrong and a supplier is locked out of their own
 order (it happened live 2026-08-14, twice in one day).

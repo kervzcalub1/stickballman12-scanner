@@ -28,8 +28,9 @@ import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '.
 import { decideFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
 import { alertCancellationsLogged } from '../_lib/alerts.js';
-import { downloadTelegramFile, fileCancellationPhoto, fileTypedCancellation, replyText, sayTo, HOW_TO } from '../_lib/cancellations.js';
-import { platformFromCommand, platformLabel } from '../../src/lib/cancellations.js';
+import { downloadTelegramFile, fileCancellationPhoto, fileTypedCancellation, replyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport } from '../_lib/cancellations.js';
+import { platformFromCommand, platformLabel, PLATFORMS } from '../../src/lib/cancellations.js';
+const PLATFORM_KEYS = new Set(PLATFORMS.map((p) => p.key));
 
 const env = (k) => String(process.env[k] || '').trim();
 
@@ -66,6 +67,7 @@ const inOurChat = (chatId) => String(chatId) === telegramChatId();
 async function handleTap(update, cq) {
   // Stop the spinner on the tapper's button first, whatever happens next. Best-effort.
   tg('answerCallbackQuery', { callback_query_id: cq.id }).catch(() => {});
+  if (String(cq.data || '').startsWith('cxmsg:')) return handleCancelMsgTap(cq);
   const chatId = cq.message?.chat?.id;
   // The CARD this tap is about. A tap on the card itself is the card; a tap on the
   // quantity picker "More…" posts is on a message that replies to the card — the answer
@@ -227,7 +229,19 @@ function splitCommand(text) {
 // a slash command is acted on — a bare number typed there (a phone, a price) is chat, not
 // an order to cancel. "/alias, then photos" is remembered per PERSON in a chat, so two
 // people sending for different platforms at once don't take each other's.
-async function handleCancellation(msg, { group = false } = {}) {
+async function handleCancellation(msg, opts = {}) {
+  // Never silent: a photo that fails before its read even starts (live 2026-10-20 — prod
+  // hadn't run db:setup, so noting "/alias" threw and the sender heard nothing) still gets
+  // an answer, so they know to send it again.
+  try {
+    return await fileFromChat(msg, opts);
+  } catch (e) {
+    console.error('[telegram/webhook] cancellation:', e.message);
+    const tag = notifyEnv() === 'dev' ? '[dev] ' : '';
+    return sayTo(msg.chat.id, `${tag}⚠️ That wasn't logged — something went wrong on our side (${e.message.slice(0, 120)}). Please send it again in a few minutes, or tell the team.`, msg.message_id).catch(() => null);
+  }
+}
+async function fileFromChat(msg, { group = false } = {}) {
   const chatId = msg.chat.id;
   const image = msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id
     : /^image\//.test(String(msg.document?.mime_type || '')) ? msg.document.file_id : null;
@@ -240,6 +254,22 @@ async function handleCancellation(msg, { group = false } = {}) {
   if (!who) return say('To send orders to cancel, connect this chat first: open Stickballman12 Inventory, tap 🔔 Alerts, then Connect Telegram.', false);
   if (!CAN_FILE.includes(who.role)) return say("Your account can't log cancellations.", false);
   if (words.cmd === '/help') return say(HOW_TO, false);
+  // End of shift — the day's messages and report (EST). "/msg-all" can't be a Telegram
+  // command (no dashes), so it arrives as /msg + "-all"; /msgall is the menu's spelling.
+  const all = words.cmd === '/msgall' || (words.cmd === '/msg' && /^-?all\b/i.test(words.rest));
+  if (words.cmd === '/msg' || words.cmd === '/msgall' || words.cmd === '/report') {
+    const day = dayFrom(words.rest);
+    if (!day) return say('Which day? Leave it blank for today, or say yesterday, or a date like 2026-10-19 (EST).');
+    if (all) return say(await msgAll(day), false);
+    if (words.cmd === '/msg') {
+      const pick = await msgPicker(day);
+      return enqueue(() => tg('sendMessage', { chat_id: chatId, text: `${tag}${pick.text}`,
+        reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true },
+        ...(pick.keyboard ? { reply_markup: { inline_keyboard: pick.keyboard } } : {}) }));
+    }
+    const sentFile = await sendDayReport(chatId, day);
+    return sentFile ? null : say(`Nothing logged ${day === dayFrom('') ? 'today' : `on ${day}`} (EST).`);
+  }
   // A command that isn't a platform: say so and file nothing — a resend with the right
   // command is one tap, a row on the wrong platform is a wrong cancellation.
   if (words.cmd && !words.platform) return say(`"${words.cmd}" isn't one of the platforms.\n\n${HOW_TO}`);
@@ -281,6 +311,27 @@ async function handleCancellation(msg, { group = false } = {}) {
     }
   });
   return null;
+}
+
+// A platform tapped on the /msg picker → that platform's message, under the picker. Only
+// where the picker can be (the cancellations group or someone's own chat), and only for an
+// account that may file cancellations.
+async function handleCancelMsgTap(cq) {
+  const chatId = cq.message?.chat?.id;
+  const isCancelChat = cq.message?.chat?.type === 'private' || (cancelChatId() && String(chatId) === cancelChatId());
+  if (!chatId || !isCancelChat) return null;
+  const who = await telegramSender(cq.from?.id);
+  const tag = notifyEnv() === 'dev' ? '[dev] ' : '';
+  const reply = (text) => sayTo(chatId, `${tag}${text}`, cq.message.message_id);
+  if (!who || !CAN_FILE.includes(who.role)) return reply('Connect this Telegram first (🔔 Alerts → Connect Telegram) to use these buttons.');
+  const [, platform, day] = String(cq.data).split(':');
+  if (!PLATFORM_KEYS.has(platform) || !/^\d{4}-\d{2}-\d{2}$/.test(day || '')) return null;
+  try {
+    return await reply(await msgFor(platform, day));
+  } catch (e) {
+    console.error('[telegram/webhook] cancel msg:', e.message);
+    return reply(`⚠️ Couldn't build that message (${e.message.slice(0, 120)}).`);
+  }
 }
 
 // What the group sees, worded by the decision itself (`outcome`, `reaction`) — the same

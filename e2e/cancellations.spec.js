@@ -20,6 +20,7 @@ const SECRET = 'e2e-telegram-secret';
 const TG_WH = 7710001; const TG_STRANGER = 7710002;
 let pool; let tgFake; let aiFake; let JPEG;
 const sent = [];          // sendMessage bodies
+const docs = [];          // sendDocument multipart bodies
 let nextRead = null;      // what the fake reader answers next: object | 'fail'
 const prompts = [];       // the text half of every request the reader got
 const WH = { name: 'E2E Cx Warehouse', username: 'e2e_cx_wh', role: 'warehouse' };
@@ -46,7 +47,10 @@ test.beforeAll(async () => {
     req.on('end', () => {
       if (req.url.includes('/file/bot')) { res.setHeader('content-type', 'image/jpeg'); return res.end(JPEG); }
       const method = req.url.split('/').pop();
-      const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+      const raw = Buffer.concat(chunks).toString();
+      let body = {};
+      try { body = JSON.parse(raw || '{}'); } catch { body = { raw }; }   // sendDocument is multipart
+      if (method === 'sendDocument') docs.push(raw);
       res.setHeader('content-type', 'application/json');
       if (method === 'getFile') return res.end(JSON.stringify({ ok: true, result: { file_id: body.file_id, file_path: `photos/${body.file_id}.jpg`, file_size: JPEG.length } }));
       if (method === 'sendMessage') sent.push(body);
@@ -85,6 +89,11 @@ test.afterAll(async () => {
 
 let msgId = 50_000;
 const GROUP = -100555;   // playwright.config TELEGRAM_CANCEL_CHAT_ID
+const tap = (request, from, chat, data) => request.post('/api/telegram/webhook', {
+  headers: { 'x-telegram-bot-api-secret-token': SECRET },
+  data: { update_id: ++msgId, callback_query: { id: `cq${msgId}`, data, from: { id: from },
+    message: { message_id: 1, chat: chat ? { id: chat, type: 'supergroup' } : { id: from, type: 'private' } } } },
+});
 const hook = (request, message) => request.post('/api/telegram/webhook', {
   headers: { 'x-telegram-bot-api-secret-token': SECRET },
   data: { update_id: ++msgId, message: { message_id: msgId,
@@ -275,6 +284,73 @@ test('the cancellations group: photos and commands are filed, chatter (even a nu
   // Someone in the group who isn't connected is told how.
   await hook(request, { from: TG_STRANGER, chat: GROUP, body: { photo: [{ file_id: 'cx-grp-stranger' }], caption: '/ebay' } });
   expect(await lastSaid(GROUP, 3)).toMatch(/connect this chat first/);
+});
+
+test('a failure before the read is answered, not silent', async ({ request }) => {
+  sent.length = 0;
+  // What a server without the cancellation tables does (prod before db:setup).
+  await q('ALTER TABLE cancellation_tg_ctx RENAME TO cancellation_tg_ctx_off');
+  try {
+    await hook(request, photo(TG_WH, `cx-fail-${Date.now()}`, '/alias'));
+    expect(await lastSaid(TG_WH)).toMatch(/That wasn't logged — something went wrong on our side/);
+  } finally {
+    await q('ALTER TABLE cancellation_tg_ctx_off RENAME TO cancellation_tg_ctx');
+  }
+});
+
+test('end of shift: /msg picks a platform, /msgall and /msg-all list them all, /report sends the CSV — by EST day', async ({ request }) => {
+  // A fixed past day, so the expected messages are exact whatever else this database holds.
+  // 23:30 EST on the 4th is the 5th in UTC — it must count as the 4th.
+  const DAY = '2021-03-04';
+  const at = (t) => `('${t}'::timestamp AT TIME ZONE 'America/New_York')`;
+  await q(`DELETE FROM cancellations WHERE sent_by = 'E2E Cx shift'`);
+  const ins = (platform, num, sku, size, status = 'to_review', when = at(`${DAY} 10:00`)) => q(
+    `INSERT INTO cancellations (platform, order_number, order_key, sku, size, status, sent_by, source, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,'E2E Cx shift','app', ${when})`, [platform, num, num ? `CXSHIFT${num.replace(/[^0-9A-Z]/gi, '')}` : null, sku, size, status]);
+  await ins('alias', '176889923', 'CZ1884-010', 'US M 8.5');
+  await ins('alias', '206557037', 'DQ4071-001', '9.5', 'verified', at(`${DAY} 23:30`));
+  await ins('stockx', '11223344-55667788', null, null);
+  await ins('alias', '300000001', 'X', '9', 'rejected');                      // rejected: never asked for
+  await ins('ebay', null, null, null);                                           // no number yet: counted, not listed
+  await ins('sg', '555000111', 'AB1234-001', '10', 'to_review', at('2021-03-03 12:00'));  // the day before
+  sent.length = 0; docs.length = 0;
+
+  await hook(request, { from: TG_WH, chat: GROUP, body: { text: `/msg ${DAY}` } });
+  await expect.poll(() => sent.filter((m) => m.chat_id === GROUP && m.reply_markup).length).toBe(1);
+  const picker = sent.find((m) => m.chat_id === GROUP && m.reply_markup);
+  expect(picker.reply_markup.inline_keyboard.flat().map((b) => b.text)).toEqual(['Alias (2)', 'StockX (1)']);
+  expect(picker.text).toMatch(/1 with no order number yet/);
+
+  await tap(request, TG_WH, GROUP, picker.reply_markup.inline_keyboard[0][0].callback_data);
+  expect(await lastSaid(GROUP, 2)).toBe('[dev] Alias\nPlease cancel the following order(s):\n#176889923 - CZ1884-010 size 8.5\n#206557037 - DQ4071-001 size 9.5');
+  // A stranger's tap does nothing but tell them to connect.
+  await tap(request, TG_STRANGER, GROUP, picker.reply_markup.inline_keyboard[0][0].callback_data);
+  expect(await lastSaid(GROUP, 3)).toMatch(/Connect this Telegram first/);
+
+  for (const [k, text] of [[1, `/msgall ${DAY}`], [2, `/msg-all ${DAY}`]]) {
+    const said = await (async () => { await hook(request, { from: TG_WH, body: { text } }); return lastSaid(TG_WH, k); })();
+    expect(said).toBe('[dev] Alias\nPlease cancel the following order(s):\n#176889923 - CZ1884-010 size 8.5\n#206557037 - DQ4071-001 size 9.5'
+      + '\n\nStockX\nPlease cancel the following order(s):\n#11223344-55667788'
+      + '\n\n⚠️ Not listed: 1 with no order number yet — fix them on the Cancellations page, then ask again.');
+  }
+
+  await hook(request, { from: TG_WH, body: { text: `/report ${DAY}` } });
+  await expect.poll(() => docs.length).toBe(1);
+  expect(docs[0]).toContain(`filename="cancellations-${DAY}.csv"`);
+  expect(docs[0]).toContain('176889923');
+  expect(docs[0]).toContain('300000001');          // the report is the record: rejected rows too
+  expect(docs[0]).not.toContain('555000111');      // …but only that day's
+  await hook(request, { from: TG_WH, body: { text: '/report someday' } });
+  expect(await lastSaid(TG_WH, 3)).toMatch(/Which day\?/);
+
+  // No date = TODAY in EST.
+  await ins('kc', '424242424', 'KC0001-001', '7', 'to_review', 'now()');
+  await hook(request, { from: TG_WH, body: { text: '/msgall' } });
+  // (Other tests in this file log orders today too — so: the heading, and our row under it.)
+  const todayMsg = await lastSaid(TG_WH, 4);
+  expect(todayMsg).toContain('Kicks Crew\nPlease cancel the following order(s):\n');
+  expect(todayMsg).toContain('\n#424242424 - KC0001-001 size 7');
+  await q(`DELETE FROM cancellations WHERE sent_by = 'E2E Cx shift'`);
 });
 
 test('the page: a reviewer fixes the number from the photo, verifies, and marks it cancelled', async ({ page, request }) => {

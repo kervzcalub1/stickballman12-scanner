@@ -34,6 +34,29 @@ the platform. Human verification stays: nothing here cancels anything by itself.
   duplicates ("already logged as #12 by Karon — not added twice").
 - **+ Add by hand** on the page for a picture that never made it to Telegram.
 
+## End of shift: `/msg`, `/msgall`, `/report` (2026-10-20)
+All by ONE **EST day** — the day the rows were SENT (`created_at AT TIME ZONE
+'America/New_York'`, `listCancellationsForDay`); default today, or `yesterday` /
+`2026-10-19` after the command (`dayFrom`; a future or junk date → "Which day?").
+- **`/msg`** → a picker: one button per platform with orders that day, "Alias (2)"
+  (`callback_data cxmsg:<platform>:<day>`, handled before the approval-group check; only
+  in the cancellations group / a private chat, only for a connected filer). A tap answers:
+  ```
+  Alias
+  Please cancel the following order(s):
+  #206557037 - CZ1884-010 size 8.5
+  ```
+  (`cancelMessage`; "US M 8.5" prints as "size 8.5").
+- **`/msgall`** (also typed `/msg-all` / `/msg all` — Telegram commands can't hold a dash)
+  → every platform's block, in `PLATFORMS` order (`cancelMessageAll`).
+- **`/report`** → the day's rows as `cancellations-<day>.csv` (`sendDayReport`, the page's
+  `cancellationsCsv`), rejected rows included — it's the record.
+- Rejected rows are never in a message. A row with no number / no platform is counted in a
+  "⚠️ Not listed: …" footnote, so the message never silently drops an order.
+- Any status that isn't rejected is listed (to review, verified, cancelled): the message is
+  what the warehouse asks the platform for, whether or not PH has verified it yet.
+- `npm run telegram:webhook -- commands` puts `/msg /msgall /report` in the "/" menu.
+
 ## Reading (`api/_lib/cancellations.js`)
 Webhook (`api/telegram/webhook.js` → `handleCancellation`) answers Telegram first and does
 the work after (`setImmediate`): `getFile` → download → `shrinkImage` (sharp, 1600 px JPEG)

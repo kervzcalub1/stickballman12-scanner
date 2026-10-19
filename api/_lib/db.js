@@ -9729,3 +9729,17 @@ export async function getCancellationCtx(key, minutes = 10) {
                             WHERE key = ${key} AND set_at > now() - make_interval(mins => ${minutes}::int)`;
   return rows[0]?.platform || null;
 }
+
+// One EST day of cancellations (the end-of-shift /msg, /msgall, /report on Telegram) —
+// by the day the warehouse SENT them, Eastern time. Rejected rows are not asked for.
+export async function listCancellationsForDay(ymd, { withRejected = false } = {}) {
+  const rows = await db()`
+    SELECT c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note,
+           c.flags, c.source, c.sent_by, c.verified_by, c.submitted_by, c.submitted_at, c.platform_ref,
+           c.rejected_reason, c.created_at
+      FROM cancellations c
+     WHERE (c.created_at AT TIME ZONE 'America/New_York')::date = ${ymd}::date
+       AND (${withRejected} OR c.status <> 'rejected')
+     ORDER BY c.created_at, c.id`;
+  return rows.map((r) => ({ ...r, id: Number(r.id) }));
+}

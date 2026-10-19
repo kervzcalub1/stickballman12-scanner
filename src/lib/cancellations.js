@@ -119,3 +119,36 @@ export function cancellationsCsv(rows) {
     sent: when(r.created_at), submitted: when(r.submitted_at), flags: (r.flags || []).join(' '),
   })));
 }
+
+// ── The end-of-shift message (Telegram /msg, /msgall) ────────────────────────────────
+// What gets pasted to each platform:
+//   Alias
+//   Please cancel the following order(s):
+//   #206557037 - CZ1884-010 size 8.5
+// A row with no order number can't be asked for — it's counted, not listed.
+const shortSize = (v) => String(v ?? '').trim().replace(/^US\s*/i, '').replace(/^M\s+/i, '').trim();
+export function cancelLine(r) {
+  const what = [r.sku, r.size ? `size ${shortSize(r.size)}` : ''].filter(Boolean).join(' ');
+  return `#${String(r.order_number).replace(/^#+/, '')}${what ? ` - ${what}` : ''}`;
+}
+export function cancelMessage(platform, rows) {
+  const mine = (rows || []).filter((r) => r.platform === platform && r.order_number);
+  if (!mine.length) return null;
+  return [platformLabel(platform), 'Please cancel the following order(s):', ...mine.map(cancelLine)].join('\n');
+}
+/** Every platform with rows, in PLATFORMS order, one block each. */
+export function cancelMessageAll(rows) {
+  return PLATFORMS.map((p) => cancelMessage(p.key, rows)).filter(Boolean).join('\n\n') || null;
+}
+/** Per platform: how many can be listed, and how many still have no number / no platform. */
+export function dayCounts(rows) {
+  const by = {};
+  for (const p of PLATFORMS) by[p.key] = 0;
+  let noNumber = 0; let noPlatform = 0;
+  for (const r of rows || []) {
+    if (!r.order_number) noNumber += 1;
+    else if (!by[r.platform] && by[r.platform] !== 0) noPlatform += 1;
+    else by[r.platform] += 1;
+  }
+  return { by, noNumber, noPlatform };
+}

@@ -1,11 +1,12 @@
-// GET /api/undelivered?days=90  ->  { ok, rows }
+// GET /api/undelivered?days=90  ->  { ok, rows, marked }
 //
 // Every tracking number still waiting to land — PO labels + online orders — that the
 // carrier has not delivered and the warehouse has not received (listUndeliveredTracking).
 // Read-only and courier-free: one query over what the 17TRACK webhook already wrote.
 // Selection, sorting and the CSV / PDF export are client-side (src/lib/undelivered.js).
+// `marked` = numbers someone marked delivered by hand (api/undelivered/mark.js), for Undo.
 import { send, applySecurity, rateLimit, requireRole } from './_lib/util.js';
-import { listUndeliveredTracking, dbConfigured } from './_lib/db.js';
+import { listUndeliveredTracking, listManualDelivered, dbConfigured } from './_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -23,8 +24,8 @@ export default async function handler(req, res) {
     return send(res, 400, { ok: false, error: 'days must be a whole number of days, or "all".' });
 
   try {
-    const rows = await listUndeliveredTracking({ days });
-    return send(res, 200, { ok: true, rows });
+    const [rows, marked] = await Promise.all([listUndeliveredTracking({ days }), listManualDelivered({ days })]);
+    return send(res, 200, { ok: true, rows, marked });
   } catch (e) {
     console.error('[undelivered]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load undelivered tracking numbers.' });

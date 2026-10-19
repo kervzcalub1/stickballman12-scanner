@@ -1282,6 +1282,12 @@ await sql(`CREATE INDEX IF NOT EXISTS shipment_tracking_norm_idx
              ON shipment_tracking (upper(regexp_replace(tracking_number, '[^A-Za-z0-9]', '', 'g')))`);
 await sql(`CREATE INDEX IF NOT EXISTS shipment_tracking_unregistered_idx
              ON shipment_tracking (registered_at) WHERE registered_at IS NULL`);
+// Marked delivered BY HAND (docs/context/undelivered.md): 17TRACK can sit on "No update
+// yet" for a parcel the courier's own page shows delivered. Who said so, when, the day it
+// was delivered, and what the row said before — so the mark can be undone exactly.
+for (const col of [
+  'manual_delivered_on DATE', 'manual_by TEXT', 'manual_at TIMESTAMPTZ', 'manual_note TEXT', 'manual_prev JSONB',
+]) await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS ${col}`);
 
 // Seed from what the webhook has already written to po_boxes, so the warehouse pages
 // keep every status they can show today rather than going blank until the next push.

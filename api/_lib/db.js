@@ -4369,10 +4369,16 @@ export async function upsertShipmentTracking(trackingNumber, {
     ON CONFLICT (tracking_number) DO UPDATE SET
       carrier             = COALESCE(EXCLUDED.carrier, shipment_tracking.carrier),
       carrier_key         = COALESCE(EXCLUDED.carrier_key, shipment_tracking.carrier_key),
-      tracking_status     = COALESCE(EXCLUDED.tracking_status, shipment_tracking.tracking_status),
-      tracking_sub_status = COALESCE(EXCLUDED.tracking_sub_status, shipment_tracking.tracking_sub_status),
-      tracking_sub_status_descr = COALESCE(EXCLUDED.tracking_sub_status_descr, shipment_tracking.tracking_sub_status_descr),
-      last_checkpoint     = COALESCE(EXCLUDED.last_checkpoint, shipment_tracking.last_checkpoint),
+      -- A number marked delivered by hand keeps that status: the feed that lagged is not
+      -- allowed to put "Not found" back over what the courier's own page showed.
+      tracking_status     = CASE WHEN shipment_tracking.manual_at IS NOT NULL THEN shipment_tracking.tracking_status
+                                 ELSE COALESCE(EXCLUDED.tracking_status, shipment_tracking.tracking_status) END,
+      tracking_sub_status = CASE WHEN shipment_tracking.manual_at IS NOT NULL THEN shipment_tracking.tracking_sub_status
+                                 ELSE COALESCE(EXCLUDED.tracking_sub_status, shipment_tracking.tracking_sub_status) END,
+      tracking_sub_status_descr = CASE WHEN shipment_tracking.manual_at IS NOT NULL THEN shipment_tracking.tracking_sub_status_descr
+                                 ELSE COALESCE(EXCLUDED.tracking_sub_status_descr, shipment_tracking.tracking_sub_status_descr) END,
+      last_checkpoint     = CASE WHEN shipment_tracking.manual_at IS NOT NULL THEN shipment_tracking.last_checkpoint
+                                 ELSE COALESCE(EXCLUDED.last_checkpoint, shipment_tracking.last_checkpoint) END,
       tracking_events     = COALESCE(EXCLUDED.tracking_events, shipment_tracking.tracking_events),
       checked_at          = now()
     RETURNING tracking_number`;
@@ -9396,6 +9402,10 @@ export async function listUndeliveredTracking({ days = null } = {}) {
       SELECT regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g')
         FROM batches WHERE coalesce(tracking_number, '') <> ''
     ),
+    marked AS (
+      SELECT regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') AS k
+        FROM shipment_tracking WHERE manual_at IS NOT NULL
+    ),
     po AS (
       SELECT 'po'::text AS source, b.id AS ref_id, b.tracking_number, b.carrier, b.carrier_key,
              b.created_at AS added_at, b.shipped_at,
@@ -9442,7 +9452,122 @@ export async function listUndeliveredTracking({ days = null } = {}) {
     SELECT x.* FROM (SELECT * FROM po UNION ALL SELECT * FROM oo) x
      WHERE lower(regexp_replace(coalesce(x.tracking_status, ''), '[^A-Za-z]', '', 'g')) <> 'delivered'
        AND regexp_replace(upper(x.tracking_number), '[^A-Z0-9]', '', 'g') NOT IN (SELECT k FROM received)
+       AND regexp_replace(upper(x.tracking_number), '[^A-Z0-9]', '', 'g') NOT IN (SELECT k FROM marked)
        AND (${d}::int IS NULL OR x.added_at >= now() - make_interval(days => ${d}::int))
      ORDER BY x.added_at DESC, x.ref_id DESC
      LIMIT 2000`;
+}
+
+// ── Marked delivered by hand ─────────────────────────────────────────────────────────
+// 17TRACK can sit on "No update yet" for a parcel UPS's own page shows delivered. Someone
+// who checked the courier's page says so here; the number then reads Delivered everywhere
+// (shipment_tracking + every po_box with it), leaves the Undelivered list, and the PO rolls
+// forward like a real push would. What each row said BEFORE goes into manual_prev, so
+// Undo puts it back exactly. Never registered/stopped here — the caller does that.
+const NORM = (n) => String(n || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+export async function markTrackingDelivered(trackingNumber, { by, on, note } = {}) {
+  const num = normalizeTrackingNumber(trackingNumber);
+  const key = NORM(num);
+  if (!key) return { error: 'bad' };
+  const sql = db();
+  const [t] = await sql`
+    SELECT tracking_number, tracking_status, tracking_sub_status, tracking_sub_status_descr,
+           last_checkpoint, registered_at, manual_at
+      FROM shipment_tracking
+     WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') = ${key}
+     LIMIT 1`;
+  if (t?.manual_at) return { error: 'already' };
+  const boxes = await sql`
+    SELECT id, po_id, status, tracking_status, tracking_sub_status, tracking_sub_status_descr, last_checkpoint
+      FROM po_boxes
+     WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') = ${key}`;
+  const online = await sql`
+    SELECT id FROM online_orders
+     WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') = ${key}`;
+  if (!t && !boxes.length && !online.length) return { error: 'unknown' };
+  const prev = {
+    tracking: t ? { status: t.tracking_status, sub: t.tracking_sub_status, descr: t.tracking_sub_status_descr, checkpoint: t.last_checkpoint } : null,
+    boxes: boxes.map((b) => ({ id: Number(b.id), status: b.status, tracking_status: b.tracking_status,
+      sub: b.tracking_sub_status, descr: b.tracking_sub_status_descr, checkpoint: b.last_checkpoint })),
+  };
+  const checkpoint = `Marked delivered by hand (${on}) by ${by || 'someone'} - checked on the courier's site${note ? ` - ${note}` : ''}`;
+  const rowNum = t?.tracking_number || num;
+  await sql`
+    INSERT INTO shipment_tracking (tracking_number, tracking_status, tracking_sub_status, tracking_sub_status_descr,
+      last_checkpoint, checked_at, manual_delivered_on, manual_by, manual_at, manual_note, manual_prev)
+    VALUES (${rowNum}, 'Delivered', NULL, NULL, ${checkpoint}, now(), ${on}::date, ${by ?? null}, now(),
+      ${note ?? null}, ${JSON.stringify(prev)}::jsonb)
+    ON CONFLICT (tracking_number) DO UPDATE SET
+      tracking_status = 'Delivered', tracking_sub_status = NULL, tracking_sub_status_descr = NULL,
+      last_checkpoint = EXCLUDED.last_checkpoint, checked_at = now(),
+      manual_delivered_on = EXCLUDED.manual_delivered_on, manual_by = EXCLUDED.manual_by,
+      manual_at = now(), manual_note = EXCLUDED.manual_note, manual_prev = EXCLUDED.manual_prev`;
+  const poIds = new Set();
+  for (const b of boxes) {
+    await sql`
+      UPDATE po_boxes SET status = 'delivered', tracking_status = 'Delivered',
+             tracking_sub_status = NULL, tracking_sub_status_descr = NULL,
+             last_checkpoint = ${checkpoint}, checked_at = now()
+       WHERE id = ${b.id}`;
+    poIds.add(Number(b.po_id));
+  }
+  for (const id of poIds) await rollupPoShippedFromTracking(id);
+  return { ok: true, trackingNumber: rowNum, registered: !!t?.registered_at, boxes: boxes.length, online: online.length };
+}
+
+// Undo a hand mark: every row goes back to what manual_prev recorded. A PO already rolled
+// to "shipped" stays there — every label really had left the supplier.
+export async function unmarkTrackingDelivered(trackingNumber) {
+  const key = NORM(normalizeTrackingNumber(trackingNumber));
+  if (!key) return { error: 'bad' };
+  const sql = db();
+  const [t] = await sql`
+    SELECT tracking_number, manual_prev FROM shipment_tracking
+     WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') = ${key} AND manual_at IS NOT NULL
+     LIMIT 1`;
+  if (!t) return { error: 'notmarked' };
+  const prev = t.manual_prev || {};
+  const p = prev.tracking || {};
+  await sql`
+    UPDATE shipment_tracking SET
+      tracking_status = ${p.status ?? null}, tracking_sub_status = ${p.sub ?? null},
+      tracking_sub_status_descr = ${p.descr ?? null}, last_checkpoint = ${p.checkpoint ?? null},
+      manual_delivered_on = NULL, manual_by = NULL, manual_at = NULL, manual_note = NULL, manual_prev = NULL
+     WHERE tracking_number = ${t.tracking_number}`;
+  for (const b of Array.isArray(prev.boxes) ? prev.boxes : []) {
+    // Only a box still on the hand mark goes back: one a real push or a receive has
+    // moved on since is left alone.
+    await sql`
+      UPDATE po_boxes SET status = ${b.status}, tracking_status = ${b.tracking_status ?? null},
+             tracking_sub_status = ${b.sub ?? null}, tracking_sub_status_descr = ${b.descr ?? null},
+             last_checkpoint = ${b.checkpoint ?? null}
+       WHERE id = ${b.id} AND status = 'delivered' AND last_checkpoint LIKE 'Marked delivered by hand%'`;
+  }
+  return { ok: true };
+}
+
+// The hand marks, newest first — the "Marked delivered" tab, with Undo.
+export async function listManualDelivered({ days = null } = {}) {
+  const d = days == null ? null : Math.max(1, Math.min(3650, Number(days) || 90));
+  return await db()`
+    SELECT t.tracking_number, t.carrier, t.carrier_key, t.manual_delivered_on::text AS delivered_on,
+           t.manual_by, t.manual_at, t.manual_note,
+           (SELECT string_agg(DISTINCT p.po_code, ', ') FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
+             WHERE regexp_replace(upper(b.tracking_number), '[^A-Z0-9]', '', 'g')
+                 = regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')) AS po_codes,
+           (SELECT string_agg(DISTINCT p.supplier_name, ', ') FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
+             WHERE regexp_replace(upper(b.tracking_number), '[^A-Z0-9]', '', 'g')
+                 = regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')) AS suppliers,
+           (SELECT array_agg(o.id::int ORDER BY o.id) FROM online_orders o
+             WHERE regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
+                 = regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')) AS online_ids,
+           (SELECT string_agg(DISTINCT o.store, ', ') FROM online_orders o
+             WHERE regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
+                 = regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')) AS stores
+      FROM shipment_tracking t
+     WHERE t.manual_at IS NOT NULL
+       AND (${d}::int IS NULL OR t.manual_at >= now() - make_interval(days => ${d}::int))
+     ORDER BY t.manual_at DESC
+     LIMIT 500`;
 }

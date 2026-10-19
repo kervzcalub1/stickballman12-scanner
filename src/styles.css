@@ -6134,6 +6134,7 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .und-table tr.off td { opacity: .45; }
 .und-table code { font-size: 12.5px; word-break: break-all; }
 .und-new { color: #e0a33f; font-weight: 600; }
+.und-table .und-mark { margin-top: 6px; }
 @media (max-width: 760px) {
   .und-table thead { display: none; }
   .und-table tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--border); }

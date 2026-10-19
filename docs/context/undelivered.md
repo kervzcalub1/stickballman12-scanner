@@ -5,7 +5,7 @@ Shipment Orders) and **`/ph/undelivered`** (PH home → Purchase Orders). Endpoi
 `GET /api/undelivered?days=30|90|180|365|all` (`api/undelivered.js`, warehouse + PH; admin
 auto-allowed) → `listUndeliveredTracking` (end of `api/_lib/db.js`). Rules / CSV / PDF:
 `src/lib/undelivered.js` (pure; PDF reuses `tablePdf` exported from `presellReport.js`).
-Added 2026-10-19. No schema change.
+Added 2026-10-19. "Mark delivered" (below) added the `shipment_tracking.manual_*` columns — needs `db:setup`.
 
 ## Why
 Packages went missing, and finding them meant opening every PO and online order to read
@@ -51,6 +51,25 @@ link to the **courier's own tracking page** with the number filled in.
   stays plain text there; the order detail has the link).
 - The CSV carries the courier URL per row.
 
+## Mark delivered by hand (`POST /api/undelivered/mark`)
+17TRACK can sit on "No update yet" for a parcel the courier's own page shows Delivered.
+Each row has **✓ Mark delivered** → day it was delivered (EST today by default, never in
+the future) + an optional note. `markTrackingDelivered` (end of db.js):
+- `shipment_tracking` gets `tracking_status='Delivered'` plus `manual_delivered_on / manual_by /
+  manual_at / manual_note`, and `manual_prev` = what that row and every `po_box` with the
+  number said before. The row is created if the number had none (most online orders).
+- Every `po_box` with the number → `status='delivered'`, checkpoint "Marked delivered by
+  hand (day) by NAME - checked on the courier's site", then `rollupPoShippedFromTracking`.
+- 17TRACK auto-tracking is stopped if the number was registered.
+- **A later push can't undo it**: `upsertShipmentTracking` keeps status/sub/checkpoint while
+  `manual_at` is set; the list also excludes any `manual_at` number.
+- **Undo** (the "Marked delivered (n)" tab, `?view=marked`): `unmarkTrackingDelivered` puts
+  back `manual_prev`; a box is only reverted while it still carries the hand-mark
+  checkpoint. A PO already rolled to "shipped" stays there.
+- No Telegram "delivered" alert is sent for a hand mark. Warehouse + PH (admin auto).
+Spec: `e2e/undelivered-mark.spec.js`.
+
 ## Not yet
 - Online-order numbers aren't registered with 17TRACK (quota) — see online-orders.md.
 - No "marked as lost / claim filed" state; the export is the hand-off.
+- No bulk mark-delivered (one number at a time, on purpose: each is a courier-page check).

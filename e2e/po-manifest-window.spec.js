@@ -108,6 +108,30 @@ test('a pre_transit label is still the supplier\'s to fill, close and ship', asy
   expect(ship.status(), await ship.text()).toBe(200);
 });
 
+test('a box with no tracking number cannot be marked shipped — there is no label to ship under', async ({ request }) => {
+  const { po, pending } = await partReceivedOrder(request);
+  // A supplier-opened order packs first and asks for labels; until we add the number,
+  // the box has no courier label at all.
+  await q("UPDATE po_boxes SET status = 'pending', tracking_number = NULL WHERE id = $1", [pending.id]);
+  const add = await request.post('/api/po/scan', {
+    headers: auth('supplier', SUPPLIER_UID),
+    data: { poId: po.id, poBoxId: pending.id, sku: SKU, size: '10', qty: 2, name: 'E2E Window Runner' },
+  });
+  expect(add.status(), await add.text()).toBe(200);
+  const close = await request.post('/api/po/close-box', { headers: auth('supplier', SUPPLIER_UID), data: { poBoxId: pending.id } });
+  expect(close.status(), await close.text()).toBe(200);
+
+  const refused = await request.post('/api/po/ship', { headers: auth('supplier', SUPPLIER_UID), data: { poBoxId: pending.id } });
+  expect(refused.status()).toBe(409);
+  expect((await refused.json()).error).toMatch(/no shipping label yet/i);
+  expect((await q('SELECT status FROM po_boxes WHERE id = $1', [pending.id]))[0].status).toBe('packed');
+
+  // Once the number lands, the same box ships.
+  await q('UPDATE po_boxes SET tracking_number = $2 WHERE id = $1', [pending.id, `E2E-WIN-LATE-${Date.now()}`]);
+  const ship = await request.post('/api/po/ship', { headers: auth('supplier', SUPPLIER_UID), data: { poBoxId: pending.id } });
+  expect(ship.status(), await ship.text()).toBe(200);
+});
+
 test('a label that already shipped stays closed — its manifest is the evidence', async ({ request }) => {
   const { po, delivered } = await partReceivedOrder(request);
   const res = await request.post('/api/po/scan', {

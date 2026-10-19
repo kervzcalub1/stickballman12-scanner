@@ -35,6 +35,15 @@ export default async function handler(req, res) {
       return send(res, 409, { ok: false, error: 'Close the box for shipment before shipping it.' });
     if (box.status !== 'packed')
       return send(res, 409, { ok: false, error: 'This label is already shipped.' });
+    // No tracking number = no shipping label exists for this box yet (a supplier-opened
+    // order packs first and asks for labels). Marking it shipped then told the warehouse a
+    // box was on its way that no courier had, and left nothing to track or chase if it
+    // went missing. The label is ours to buy, so the supplier waits for the number.
+    if (!String(box.tracking_number || '').trim())
+      return send(res, 409, {
+        ok: false,
+        error: 'This box has no shipping label yet. Wait until we add its tracking number, put that label on the box, then ship it.',
+      });
     // "Don't ship an empty box." On a WHOLE-ORDER manifest (Path C) a box holds no lines
     // of its own by design — po/scan refuses per-box lines on such an order — so this
     // check made those orders unshippable by anyone, supplier and admin alike. The

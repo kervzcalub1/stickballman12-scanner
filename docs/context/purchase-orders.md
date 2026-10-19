@@ -46,6 +46,13 @@ use them rather than comparing the string:
 `po/ship` and `po/close-box` ask the SECOND question (the sheet going inside the carton is
 the box's own list); reconciliation and `PoLinkBatch`'s preview ask the first.
 
+**`po/ship` refuses a box with no tracking number** (409 "no shipping label yet", 2026-10-19).
+A supplier-opened order packs first and asks for labels; marking a box shipped before we add
+its number told the warehouse a parcel was coming that no courier had. The supplier portal
+hides **Ship label** on such a box and says it is waiting for its label. The box-closed popup
+says to put the manifest **inside** the box (owner's rule; it used to say "attach"). E2E:
+`po-manifest-window.spec.js`.
+
 **The gap is split three ways**, because `expected` now legitimately exceeds `received`
 for most of a shipment's life and printing that as a shortage would cry wolf on every
 order in transit:

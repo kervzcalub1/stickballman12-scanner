@@ -170,7 +170,7 @@ export function SupplierApp({ user, onSignOut }) {
   const staffLabel = `${businessName || 'Stickballman12 LLC'}'s Staff`;
   const [scanBox, setScanBox] = useState(null); // po_box currently being scanned into
   const [closeReview, setCloseReview] = useState(null); // po_box being reviewed before closing
-  // The box that was just closed — drives the "print the manifest, tape it on, seal it"
+  // The box that was just closed — drives the "print the manifest, put it inside, seal it"
   // step. Closing is the moment the contents are final, so it's the only moment the
   // printed sheet is guaranteed to match what's in the box.
   const [packedBox, setPackedBox] = useState(null);
@@ -743,7 +743,10 @@ export function SupplierApp({ user, onSignOut }) {
                       {/* Reprint: the sheet gets torn, soaked, or printed before a late edit. */}
                       <ManifestPrint poId={Number(po.id)} poCode={po.po_code} boxId={Number(box.id)}
                         boxNumber={box.box_number} buttonLabel="Print manifest" onSignOut={onSignOut} />
-                      <button className="btn sm primary" disabled={busy} onClick={() => shipLabel(box)}>Ship label</button>
+                      {/* No tracking number = no label to ship under yet; po/ship refuses it too. */}
+                      {box.tracking_number
+                        ? <button className="btn sm primary" disabled={busy} onClick={() => shipLabel(box)}>Ship label</button>
+                        : <span className="muted sm">Waiting for its shipping label — you can ship once we add the tracking number.</span>}
                     </div>
                   )}
                   {/* Once it's gone, the sheet is only useful as a copy of what was sent. */}
@@ -805,7 +808,7 @@ export function SupplierApp({ user, onSignOut }) {
               </p>
               <ol className="po-pack-steps">
                 <li>Print the manifest below (plain <b>Letter</b> paper).</li>
-                <li>Attach it to the box.</li>
+                <li>Put it <b>inside</b> the box, on top of the shoes.</li>
                 <li>Seal the box.</li>
               </ol>
               <p className="muted sm">
@@ -830,7 +833,7 @@ export function SupplierApp({ user, onSignOut }) {
           <div className="modal-overlay" onClick={() => setCloseReview(null)}>
             <div className="modal confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <h3 className="modal-title">Review Label {closeReview.box_number}</h3>
-              <p className="modal-msg">Check everything you’re shipping under this label. Closing it marks the box <b>ready to ship</b> and gives you the manifest to print and attach — you can still reopen it to edit until you actually ship.</p>
+              <p className="modal-msg">Check everything you’re shipping under this label. Closing it marks the box <b>ready to ship</b> and gives you the manifest to print and put inside the box — you can still reopen it to edit until you actually ship.</p>
               {lines.length === 0 ? <p className="muted">No items scanned yet.</p> : (
                 <ul className="po-lines po-review-lines">
                   {lines.map((l) => (

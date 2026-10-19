@@ -134,6 +134,8 @@ export const api = {
   inbound: () => get('/api/inbound'),
   // PO labels + online orders not delivered and not received (Undelivered Tracking).
   undelivered: (days = '90') => get(`/api/undelivered?days=${encodeURIComponent(days)}`),
+  markDelivered: (number, on, note) => post('/api/undelivered/mark', { number, on, note }),
+  unmarkDelivered: (number) => post('/api/undelivered/mark', { number, undo: true }),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // GS received as men's: what this GS code was last received as (receiving.md).
   mensFor: (sku, name = '') => get(`/api/items/mens-for?sku=${encodeURIComponent(sku)}${name ? `&name=${encodeURIComponent(name)}` : ''}`),

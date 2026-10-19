@@ -13,13 +13,16 @@
 //
 // Every number links to the COURIER's own page — 17TRACK is a relay and can lag behind
 // what UPS itself says, so the courier site is where a "missing" call gets confirmed.
+// When it shows Delivered and 17TRACK still doesn't, "Mark delivered" says so by hand
+// (name + day recorded, Undo on the "Marked delivered" tab).
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar } from '../components/common.jsx';
+import { TopBar, FormModal } from '../components/common.jsx';
 import { TrackingLink } from '../components/TrackingLink.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
-import { estDate, estTime } from '../lib/format.js';
+import { estDate, estTime, estToday } from '../lib/format.js';
+import { orderCode } from '../lib/onlineOrders.js';
 import { courierBulkLinks } from '../lib/carriers.js';
 import { feedStatus, reportRows, rowKey, sortRows, undeliveredCsv, undeliveredPdf, ageDays, SOURCES, codeOf, courierOf } from '../lib/undelivered.js';
 
@@ -34,7 +37,11 @@ export function Undelivered({ onHome, onSignOut }) {
   const [sort, setSort] = useQueryParam('sort', 'new');
   const [skip, setSkip] = useQueryParam('skip', '0');
   const [q, setQ] = useQueryParam('q', '');
+  const [view, setView] = useQueryParam('view', 'open');
   const [rows, setRows] = useState(null);
+  const [marked, setMarked] = useState([]);
+  const [marking, setMarking] = useState(null);   // the row being marked delivered
+  const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [unticked, setUnticked] = useState(() => new Set());
   const [busy, setBusy] = useState('');
@@ -42,7 +49,7 @@ export function Undelivered({ onHome, onSignOut }) {
   async function load() {
     try {
       const r = await api.undelivered(days);
-      setRows(r.rows || []); setError('');
+      setRows(r.rows || []); setMarked(r.marked || []); setError('');
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
   }
   useEffect(() => { load(); }, [days]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -72,6 +79,14 @@ export function Undelivered({ onHome, onSignOut }) {
   });
   const bulk = useMemo(() => courierBulkLinks(picked), [picked]);
   const pairs = picked.reduce((t, r) => t + (Number(r.pairs) || 0), 0);
+
+  async function undo(m) {
+    if (!window.confirm(`Undo "delivered" on ${m.tracking_number}? It goes back to what 17TRACK said.`)) return;
+    try {
+      await api.unmarkDelivered(m.tracking_number);
+      setNote(`${m.tracking_number} is back on the list.`); load();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+  }
 
   async function download(fmt) {
     if (!picked.length) return;
@@ -119,10 +134,40 @@ export function Undelivered({ onHome, onSignOut }) {
               <button key={k} type="button" role="tab" aria-selected={source === k} className={`seg-btn ${source === k ? 'on' : ''}`} onClick={() => setSource(k)}>{l}</button>
             ))}
           </div>
+ <div className="seg sm" role="tablist" aria-label="View">
+            {[['open', 'Not delivered'], ['marked', `Marked delivered${marked.length ? ` (${marked.length})` : ''}`]].map(([k, l]) => (
+              <button key={k} type="button" role="tab" aria-selected={view === k} className={`seg-btn ${view === k ? 'on' : ''}`} onClick={() => setView(k)}>{l}</button>
+            ))}
+          </div>
           <input className="input und-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tracking #, PO / order, supplier or store" aria-label="Search" />
         </div>
         {error && <div className="error mt">{error}</div>}
+        {note && <div className="ok mt" role="status">{note}</div>}
       </div>
+
+      {view === 'marked' ? (
+        <div className="card">
+          {!marked.length ? <p className="muted">Nothing marked delivered by hand in this period.</p> : (
+            <table className="und-table">
+              <thead>
+                <tr><th>Tracking #</th><th>Order</th><th>Supplier / store</th><th>Delivered on</th><th>Marked by</th><th /></tr>
+              </thead>
+              <tbody>
+                {marked.map((m) => (
+                  <tr key={m.tracking_number}>
+                    <td data-label="Tracking #"><code><TrackingLink number={m.tracking_number} carrier={m.carrier_key || m.carrier} /></code></td>
+                    <td data-label="Order">{[m.po_codes, ...(m.online_ids || []).map(orderCode)].filter(Boolean).join(', ') || '—'}</td>
+                    <td data-label="Supplier / store">{[m.suppliers, m.stores].filter(Boolean).join(', ') || '—'}</td>
+                    <td data-label="Delivered on">{m.delivered_on || '—'}</td>
+                    <td data-label="Marked by">{m.manual_by || '—'}<div className="muted xs">{estDate(m.manual_at)} {estTime(m.manual_at)} EST</div>{m.manual_note && <div className="muted xs">{m.manual_note}</div>}</td>
+                    <td data-label=""><button type="button" className="btn sm ghost" onClick={() => undo(m)}>Undo</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : (
 
       <div className="card">
         {!rows ? <p className="muted">Loading…</p> : !shown.length ? (
@@ -175,6 +220,7 @@ export function Undelivered({ onHome, onSignOut }) {
                         <span className={`inbound-chip sm ${fs.tone}`}>{fs.label}</span>
                         {r.last_checkpoint && <div className="muted xs">{r.last_checkpoint}</div>}
                         {r.last_move_at && r.tracking_status && <div className="muted xs">last scan {estDate(r.last_move_at)}</div>}
+                        <button type="button" className="btn xs ghost und-mark" onClick={() => { setNote(''); setMarking(r); }}>✓ Mark delivered</button>
                       </td>
                       <td className="num" data-label="Pairs">{Number(r.pairs) || '—'}</td>
                     </tr>
@@ -185,6 +231,25 @@ export function Undelivered({ onHome, onSignOut }) {
           </>
         )}
       </div>
+      )}
+
+      {marking && (
+        <FormModal
+          title="Mark delivered"
+          message={`${marking.tracking_number} · ${codeOf(marking)}${marking.party ? ` · ${marking.party}` : ''}. Only do this when the courier's own page says Delivered. It leaves this list and reads Delivered on the PO and Inbound; your name is recorded. Undo is on the "Marked delivered" tab.`}
+          submitLabel="Mark delivered"
+          fields={[
+            { name: 'on', label: 'Delivered on (per the courier)', type: 'date', value: estToday(), max: estToday(), required: true },
+            { name: 'note', label: 'Note', placeholder: 'e.g. UPS shows delivered, photo at the dock', maxLength: 300 },
+          ]}
+          onClose={() => setMarking(null)}
+          onSubmit={async (v) => {
+            await api.markDelivered(marking.tracking_number, v.on, v.note);
+            setNote(`${marking.tracking_number} marked delivered.`);
+            setMarking(null); load();
+          }}
+        />
+      )}
     </div>
   );
 }

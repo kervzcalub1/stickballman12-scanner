@@ -9,6 +9,7 @@
 // is what Alexander chose for the Foot Locker one). The warehouse reads.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { TrackingLink } from '../components/TrackingLink.jsx';
 import { TopBar, FormModal } from '../components/common.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -92,7 +93,7 @@ export function TrackingDuplicates({ user, onHome, onSignOut }) {
               {rows.map((r) => (
                 <tr key={r.id} id={`dup-${r.id}`} className={String(r.id) === String(focus) ? 'focus' : ''}>
                   <td data-label="Received">{when(r.detected_at)}{r.detected_by === 'history' ? <div className="muted xs">found in past batches</div> : r.detected_by ? <div className="muted xs">by {r.detected_by}</div> : null}</td>
-                  <td data-label="Tracking #"><code>{r.tracking_number}</code></td>
+                  <td data-label="Tracking #"><code><TrackingLink number={r.tracking_number} /></code></td>
                   <td data-label="Supplier">{r.supplier_name || '—'}</td>
                   <td data-label="This package">{where(r.batch_code, r.box_number, r.batch_id)}</td>
                   <td data-label="Already received as">

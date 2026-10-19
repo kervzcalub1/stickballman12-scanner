@@ -5,6 +5,7 @@
 // the PO — which freezes the snapshot onto it. See docs/context/purchase-orders.md.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { TrackingLink } from '../components/TrackingLink.jsx';
 import { useQueryParam } from '../lib/urlstate.js';
 import { useLive } from '../hooks.js';
 import { poMatchesSearch, reconcileChipOf, expectsAtOrderLevel, hasOrderedList } from '../lib/postatus.js';
@@ -577,7 +578,7 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                   <div className="rcn-rbox" key={b.id ?? `loose-${i}`}>
                     <div className="rcn-rbox-head">
                       <b>{b.box_number ? `Box ${b.box_number}` : 'Not recorded against a box'}</b>
-                      {b.tracking_number && <span className="muted sm"> · {b.tracking_number}</span>}
+                      {b.tracking_number && <span className="muted sm"> · <TrackingLink number={b.tracking_number} /></span>}
                       {/* The number came off the LABEL (its tracking number), not off what
                           was typed while unpacking. Say so where the two disagree, so this
                           sheet can't be read as us quietly renumbering the supplier's box. */}

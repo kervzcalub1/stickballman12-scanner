@@ -203,6 +203,12 @@ const PATHS = {
     <path d="M3 8h18" />
     <path d="M8 12h1.5l1.2 4h4.6l1-3H10.2" />
   </>),
+  // Undelivered Tracking — a parcel with a question mark (where is it?)
+  undelivered: (<>
+    <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z" />
+    <path d="M10 10.2a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6.9v.5" />
+    <path d="M12 16h.01" />
+  </>),
   // Pre-sell Listings — a tag going up (listed out to the stores)
   'presell-listings': (<>
     <path d="M3 12V4h8l10 10-8 8L3 12z" />

@@ -20,6 +20,7 @@ import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoManifestImport } from '../components/PoManifestImport.jsx';
 import { carrierName } from '../lib/carriers.js';
+import { TrackingLink } from '../components/TrackingLink.jsx';
 import { DeliveryStatus } from '../components/DeliveryStatus.jsx';
 import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
@@ -426,7 +427,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                       <div className="po-track muted sm">
                         {carrierName(box.carrier || box.carrier_key) ? <span className="po-carrier">{carrierName(box.carrier || box.carrier_key)}</span> : null}
                         {carrierName(box.carrier || box.carrier_key) && box.tracking_number ? ' · ' : ''}
-                        {box.tracking_number || (carrierName(box.carrier || box.carrier_key) ? '' : '— no tracking #')}
+                        {box.tracking_number ? <TrackingLink number={box.tracking_number} carrier={box.carrier_key || box.carrier} /> : (carrierName(box.carrier || box.carrier_key) ? '' : '— no tracking #')}
                       </div>
                     </div>
                     <div className="po-lbl-side">

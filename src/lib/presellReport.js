@@ -113,7 +113,7 @@ const ZEBRA = [244, 246, 250];
 const ascii = (v) => String(v ?? '').replace(/[–—]/g, '-').replace(/[·•]/g, '|').replace(/[^\x20-\x7e]/g, '');
 
 // cols: [[label, width mm (0 = takes the rest), right-aligned?]], cells: string[][]
-async function tablePdf({ title, subtitle, summary, cols, cells, footer }) {
+export async function tablePdf({ title, subtitle, summary, cols, cells, footer }) {
   const mod = await lazyImport(() => import('jspdf'));
   const JsPDF = mod.jsPDF || mod.default;
   const doc = new JsPDF({ unit: 'mm', format: [PAGE_W, PAGE_H], orientation: 'landscape' });

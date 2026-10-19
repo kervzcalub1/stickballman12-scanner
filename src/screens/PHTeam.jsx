@@ -33,6 +33,7 @@ import { PlatformBySize } from '../components/PlatformBySize.jsx';
 import { platformChipSummary } from '../lib/payout.js';
 import { PlatformProfit } from './PlatformProfit.jsx';
 import { OnlineOrders } from './OnlineOrders.jsx';
+import { Undelivered } from './Undelivered.jsx';
 import { Receipts } from './Receipts.jsx';
 import { PresellListings } from './PresellListings.jsx';
 import { EbayReprice } from './EbayReprice.jsx';
@@ -89,6 +90,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'online') return <OnlineOrders user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'undelivered') return <Undelivered onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'shopifylistings') return <ShopifyListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'ebayreprice') return <EbayReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'sheinreprice') return <SheinReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;

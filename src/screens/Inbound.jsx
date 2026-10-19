@@ -28,6 +28,7 @@ import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
+import { TrackingLink } from '../components/TrackingLink.jsx';
 import {
   INBOUND_STATES, STATE_ORDER, ARRIVAL_BUCKETS, ARRIVAL_ORDER,
   groupShipments, countStates, shipmentHasState, needsAttention, arrivalBucket, arrivalPlan, inboundProgress,
@@ -372,7 +373,7 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
                             {!eta && b.state !== 'delivered' && (
                               <span className="muted sm" title="The carrier has not given a delivery estimate for this parcel">no ETA</span>
                             )}
-                            <span className="box-track muted sm">{b.tracking_number || 'no tracking number'}</span>
+                            <span className="box-track muted sm">{b.tracking_number ? <TrackingLink number={b.tracking_number} carrier={b.carrier} /> : 'no tracking number'}</span>
                             {b.idleDays != null && b.state !== 'delivered' && (
                               <span className="muted sm" title="Since the carrier last scanned it — not since we last looked">
                                 {b.idleDays < 1 ? 'moved today' : `${Math.floor(b.idleDays)}d since last scan`}

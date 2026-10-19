@@ -9372,3 +9372,77 @@ export async function sheinLastWalkFacts() {
   return await db()`SELECT DISTINCT ON (shein_sku) spu, shein_sku, seller_sku, shein_size, reason FROM shein_live_items
                      WHERE source = 'walk' AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC`;
 }
+
+// ---- Undelivered tracking (docs/context/undelivered.md) ---------------------------
+// Every tracking number we are still waiting on, from BOTH places one lives: a PO label
+// (po_boxes) and an online order. One row per number, newest first — the page lets a
+// person untick the ones just added (a parcel two days old is not missing) and exports
+// the rest as the list to chase.
+//
+// "Undelivered" = the carrier has not said Delivered AND the warehouse has not received
+// it. Received is checked by the number itself (a batch box or single-box batch carrying
+// it, case/punctuation ignored), because a parcel the floor has counted in is not missing
+// whatever a stale feed says. An online order also counts as received once counted in;
+// one whose every line was cancelled is not waiting on anything.
+// `days` limits to numbers added in the last N days (null = all).
+// Delivered is matched as the WHOLE status word: 'Undelivered' contains it.
+export async function listUndeliveredTracking({ days = null } = {}) {
+  const d = days == null ? null : Math.max(1, Math.min(3650, Number(days) || 90));
+  return await db()`
+    WITH received AS (
+      SELECT regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') AS k
+        FROM batch_boxes WHERE coalesce(tracking_number, '') <> ''
+      UNION
+      SELECT regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g')
+        FROM batches WHERE coalesce(tracking_number, '') <> ''
+    ),
+    po AS (
+      SELECT 'po'::text AS source, b.id AS ref_id, b.tracking_number, b.carrier, b.carrier_key,
+             b.created_at AS added_at, b.shipped_at,
+             coalesce(t.tracking_status, b.tracking_status) AS tracking_status,
+             coalesce(t.tracking_sub_status, b.tracking_sub_status) AS tracking_sub_status,
+             coalesce(t.tracking_sub_status_descr, b.tracking_sub_status_descr) AS tracking_detail,
+             coalesce(t.last_checkpoint, b.last_checkpoint) AS last_checkpoint,
+             coalesce((b.tracking_events -> 0 ->> 'time')::timestamptz, b.checked_at) AS last_move_at,
+             b.eta_from, b.eta_to, b.status AS box_status, b.kind AS box_kind, b.box_number,
+             p.id AS order_id, p.po_code AS order_code, p.supplier_name AS party, p.status AS order_status,
+             NULL::text AS order_number,
+             to_char(p.created_at AT TIME ZONE 'America/New_York', 'YYYY-MM-DD') AS ordered_on,
+             (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_box_id = b.id)::int AS pairs,
+             true AS has_feed
+        FROM po_boxes b
+        JOIN purchase_orders p ON p.id = b.po_id
+        LEFT JOIN shipment_tracking t
+          ON regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')
+           = regexp_replace(upper(b.tracking_number), '[^A-Z0-9]', '', 'g')
+       WHERE coalesce(btrim(b.tracking_number), '') <> ''
+         AND b.status <> 'delivered'
+    ),
+    oo AS (
+      SELECT 'online'::text AS source, o.id AS ref_id, o.tracking_number, t.carrier, t.carrier_key,
+             o.created_at AS added_at, NULL::timestamptz AS shipped_at,
+             t.tracking_status, t.tracking_sub_status, t.tracking_sub_status_descr AS tracking_detail, t.last_checkpoint,
+             coalesce((t.tracking_events -> 0 ->> 'time')::timestamptz, t.checked_at) AS last_move_at,
+             NULL::date AS eta_from, NULL::date AS eta_to, NULL::text AS box_status, NULL::text AS box_kind,
+             NULL::int AS box_number,
+             o.id AS order_id, NULL::text AS order_code, o.store AS party,
+             NULL::text AS order_status, o.order_number,
+             to_char(o.ordered_on, 'YYYY-MM-DD') AS ordered_on,
+             (SELECT coalesce(sum(l.qty), 0) FROM online_order_lines l
+               WHERE l.order_id = o.id AND l.cancelled_at IS NULL)::int AS pairs,
+             (t.tracking_number IS NOT NULL) AS has_feed
+        FROM online_orders o
+        LEFT JOIN shipment_tracking t
+          ON regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')
+           = regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
+       WHERE coalesce(btrim(o.tracking_number), '') <> ''
+         AND o.received_at IS NULL
+         AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
+    )
+    SELECT x.* FROM (SELECT * FROM po UNION ALL SELECT * FROM oo) x
+     WHERE lower(regexp_replace(coalesce(x.tracking_status, ''), '[^A-Za-z]', '', 'g')) <> 'delivered'
+       AND regexp_replace(upper(x.tracking_number), '[^A-Z0-9]', '', 'g') NOT IN (SELECT k FROM received)
+       AND (${d}::int IS NULL OR x.added_at >= now() - make_interval(days => ${d}::int))
+     ORDER BY x.added_at DESC, x.ref_id DESC
+     LIMIT 2000`;
+}

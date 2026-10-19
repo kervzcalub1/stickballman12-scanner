@@ -10,6 +10,9 @@
 //   · `/start <token>` in a PRIVATE chat → connects that Telegram account to the app
 //     account that minted the token (the Alerts panel's "Connect Telegram"); a plain
 //     `/start` says who this chat is connected as (api/me/telegram.js, api/_lib/alerts.js)
+//   · a PHOTO (or an image sent as a file) in a private chat, from a connected warehouse /
+//     PH / admin account → an order to cancel: read, filed on the Cancellations page, and
+//     answered in the chat; a typed order number does the same (api/_lib/cancellations.js)
 //
 // ALWAYS ANSWERS 200 once the secret checks out. Telegram re-sends any update it didn't get
 // a 2xx for, so a failure here would come back as the same tap again and again; the
@@ -20,10 +23,13 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, askTelegramQty, takeTelegramQty, redeemTelegramLinkToken, userNameByTelegramId } from '../_lib/db.js';
-import { telegramConfigured, telegramChatId, tg, enqueue } from '../_lib/telegram.js';
+import { dbConfigured, askTelegramQty, takeTelegramQty, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
+import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
+import { alertCancellationsLogged } from '../_lib/alerts.js';
+import { downloadTelegramFile, fileCancellationPhoto, fileTypedCancellation, replyText, sayTo, HOW_TO } from '../_lib/cancellations.js';
+import { platformFromCommand, platformLabel } from '../../src/lib/cancellations.js';
 
 const env = (k) => String(process.env[k] || '').trim();
 
@@ -138,6 +144,8 @@ async function handleTap(update, cq) {
 
 async function handleMessage(update, msg) {
   if (msg.chat?.type === 'private') return handlePrivate(update, msg);
+  // The cancellations group (TELEGRAM_CANCEL_CHAT_ID): photos and platform commands only.
+  if (cancelChatId() && String(msg.chat?.id) === cancelChatId()) return handleCancellation(msg, { group: true });
   // `/chatid` in ANY group the bot is in → that group's id, so a new group (e.g. the
   // pre-sell sales group, TELEGRAM_PRESELL_CHAT_ID) can be wired up without a developer.
   if (/^\/chatid(@\w+)?\s*$/i.test(String(msg.text || ''))) {
@@ -168,7 +176,7 @@ async function handleMessage(update, msg) {
 // Pressing it again just repeats the answer, like the Hub's bot did.
 async function handlePrivate(update, msg) {
   const m = /^\/start(?:@\w+)?(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$/.exec(String(msg.text || '').trim());
-  if (!m) return null;
+  if (!m) return handleCancellation(msg);
   const from = msg.from || {};
   const token = m[1] || null;
   if (token) {
@@ -195,6 +203,84 @@ async function handlePrivate(update, msg) {
   if (out.why === 'taken') return say(`This Telegram account is already connected to ${out.other.name}. Disconnect it there first, or ask an admin.`);
   if (out.why === 'account') return say('That account is not active any more.');
   return say('That connect link has expired or was already used. In the app, open 🔔 Alerts and tap Connect Telegram again.');
+}
+
+// A picture (or a typed number) of an order to cancel, in someone's own chat with the bot.
+// Only a connected, approved warehouse / PH / admin account may file one — the chat id is
+// who they are. The platform comes from a command, the owner's way (2026-10-20):
+//   /alias + the photo (the command as the caption)        → that photo, and the album it opens
+//   /alias, then photos                                    → every photo for the next 10 minutes
+//   /stockx 12345678-12345678 - wrong size                 → a typed number
+// The read takes several seconds, so it runs AFTER the webhook has answered Telegram (an
+// update not answered in time is sent again; the photo row is keyed on the message, so a
+// re-send is ignored rather than filed twice).
+const CAN_FILE = ['warehouse', 'ph_team', 'admin', 'superadmin'];
+const CTX_MIN = 10;
+// "/alias wrong size" → { cmd:'/alias', platform:'alias', rest:'wrong size' }; no command → cmd null.
+function splitCommand(text) {
+  const m = /^\s*(\/[A-Za-z]+(?:@\w+)?)\s*([\s\S]*)$/.exec(String(text || ''));
+  if (!m) return { cmd: null, platform: null, rest: String(text || '').trim() };
+  return { cmd: m[1].replace(/@\w+$/, '').toLowerCase(), platform: platformFromCommand(m[1]), rest: m[2].trim() };
+}
+//
+// In the CANCELLATIONS GROUP (TELEGRAM_CANCEL_CHAT_ID) people also talk, so only a photo or
+// a slash command is acted on — a bare number typed there (a phone, a price) is chat, not
+// an order to cancel. "/alias, then photos" is remembered per PERSON in a chat, so two
+// people sending for different platforms at once don't take each other's.
+async function handleCancellation(msg, { group = false } = {}) {
+  const chatId = msg.chat.id;
+  const image = msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id
+    : /^image\//.test(String(msg.document?.mime_type || '')) ? msg.document.file_id : null;
+  const words = splitCommand(image ? msg.caption : msg.text);
+  if (!image && !words.cmd && !words.rest) return null;
+  if (group && !image && !words.cmd) return null;
+  const tag = notifyEnv() === 'dev' ? '[dev] ' : '';
+  const say = (text, reply = true) => sayTo(chatId, `${tag}${text}`, reply ? msg.message_id : null);
+  const who = await telegramSender(msg.from?.id);
+  if (!who) return say('To send orders to cancel, connect this chat first: open Stickballman12 Inventory, tap 🔔 Alerts, then Connect Telegram.', false);
+  if (!CAN_FILE.includes(who.role)) return say("Your account can't log cancellations.", false);
+  if (words.cmd === '/help') return say(HOW_TO, false);
+  // A command that isn't a platform: say so and file nothing — a resend with the right
+  // command is one tap, a row on the wrong platform is a wrong cancellation.
+  if (words.cmd && !words.platform) return say(`"${words.cmd}" isn't one of the platforms.\n\n${HOW_TO}`);
+  const ctx = { who: { id: who.id, name: who.name }, tgChatId: chatId, tgMessageId: msg.message_id };
+  const mine = `chat:${chatId}:${msg.from?.id}`;
+  const album = msg.media_group_id ? `album:${msg.media_group_id}` : null;
+  if (words.platform) {
+    await setCancellationCtx(mine, words.platform);
+    if (album) await setCancellationCtx(album, words.platform);
+  }
+
+  if (!image) {
+    if (!words.rest && words.platform) {
+      return say(`📸 ${platformLabel(words.platform)} — send the photo(s) now. Every photo in the next ${CTX_MIN} minutes is logged as ${platformLabel(words.platform)}.`);
+    }
+    const platform = words.platform || await getCancellationCtx(mine, CTX_MIN);
+    const out = await fileTypedCancellation(words.rest, { ...ctx, platform });
+    if (!out) return say(HOW_TO, false);
+    if (out.filed.length) alertCancellationsLogged(out.filed, who);
+    return say(replyText(out));
+  }
+  setImmediate(async () => {
+    try {
+      // An album's photos arrive together and only ONE carries the caption: give that one
+      // a moment to be noted before reading the others.
+      if (album && !words.platform) await new Promise((r) => setTimeout(r, 1500));
+      const resolvePlatform = async () => (album && await getCancellationCtx(album, CTX_MIN))
+        || getCancellationCtx(mine, CTX_MIN);
+      const platform = words.platform || await resolvePlatform();
+      const buf = await downloadTelegramFile(image);
+      const out = await fileCancellationPhoto(buf, { ...ctx, caption: words.rest || null, platform, resolvePlatform });
+      if (out.filed?.length) alertCancellationsLogged(out.filed, who);
+      let text = replyText(out);
+      if (text && out.filed?.some((r) => !r.platform)) text += `\n\nTip: start with the platform — e.g. /alias and the photo.`;
+      if (text) await say(text);
+    } catch (e) {
+      console.error('[telegram/webhook] cancellation photo:', e.message);
+      await say(`⚠️ Something went wrong saving that picture (${e.message}). Please send it again, or type the order number.`).catch(() => {});
+    }
+  });
+  return null;
 }
 
 // What the group sees, worded by the decision itself (`outcome`, `reaction`) — the same

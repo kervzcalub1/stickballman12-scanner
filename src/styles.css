@@ -6149,3 +6149,43 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .trk-link { color: inherit; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 .trk-link:hover { color: var(--primary); text-decoration-style: solid; }
 .trk-link-via { font-size: .85em; opacity: .7; }
+
+/* Order Cancellations (Cancellations.jsx) */
+.cx-lede { margin: 0 0 12px; line-height: 1.5; }
+.cx-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cx-filters select.input { width: auto; flex: 0 1 auto; }
+.cx-filters .cx-search { flex: 1 1 200px; min-width: 0; }
+.cx-filters .seg { flex-wrap: wrap; max-width: 100%; }
+.cx-filters .seg-btn { flex: 0 0 auto; }
+.cx-bulk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.cx-row { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.cx-row:last-child { border-bottom: 0; }
+.cx-row.cx-rejected { opacity: .6; }
+/* The photo is what the reviewer checks the row against — shown WHOLE (contain, never
+   cropped: a crop hid the order number), big enough to read. */
+.cx-photo { flex: 0 0 240px; width: 240px; height: 260px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
+  background: #fff; padding: 0; cursor: zoom-in; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.cx-photo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cx-photo-none { cursor: default; color: var(--muted); font-size: 12px; text-align: center; line-height: 1.4; background: rgba(127,127,127,.08); height: 90px; }
+.cx-body { flex: 1 1 auto; min-width: 0; }
+.cx-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.cx-form, .cx-read { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 10px; }
+.cx-form label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); min-width: 0; }
+.cx-form .input { font-size: 14px; }
+.cx-read > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 14px; }
+.cx-read > div > span:last-child { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.cx-wide { grid-column: span 2; }
+.cx-full { grid-column: 1 / -1; }
+.cx-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .3px; word-break: break-all; }
+.cx-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cx-trail { margin-top: 6px; }
+.cx-trail:empty { display: none; }
+.cx-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.cx-big { max-width: min(96vw, 900px); max-height: 92vh; overflow: auto; border-radius: 12px; background: #000; }
+.cx-big img { display: block; max-width: 100%; height: auto; }
+@media (max-width: 768px) {
+  .cx-row { flex-direction: column; }
+  .cx-photo { width: 100%; flex-basis: auto; height: 260px; }
+  .cx-photo.cx-photo-none { height: 44px; }
+  .cx-form, .cx-read { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

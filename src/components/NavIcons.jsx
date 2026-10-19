@@ -209,6 +209,12 @@ const PATHS = {
     <path d="M10 10.2a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6.9v.5" />
     <path d="M12 16h.01" />
   </>),
+  // Order Cancellations — an order slip struck through
+  cancellations: (<>
+    <path d="M6 3h9l3 3v15H6z" />
+    <path d="M9 9h6M9 13h4" />
+    <path d="M4 20 20 4" />
+  </>),
   // Pre-sell Listings — a tag going up (listed out to the stores)
   'presell-listings': (<>
     <path d="M3 12V4h8l10 10-8 8L3 12z" />

@@ -31,6 +31,9 @@ export const telegramConfigured = () => !!(env('TELEGRAM_BOT_TOKEN') && env('TEL
 export const telegramChatId = () => env('TELEGRAM_CHAT_ID');
 // Pre-sell Listings sales go to their OWN group (docs/context/presell-listings.md).
 export const presellChatId = () => env('TELEGRAM_PRESELL_CHAT_ID');
+// Order Cancellations get their OWN group too (docs/context/cancellations.md): photos +
+// /alias … sent there are filed exactly like in a private chat with the bot.
+export const cancelChatId = () => env('TELEGRAM_CANCEL_CHAT_ID');
 const apiUrl = (method) => `${env('TELEGRAM_API_BASE') || 'https://api.telegram.org'}/bot${env('TELEGRAM_BOT_TOKEN')}/${method}`;
 
 // One Bot API call. Returns Telegram's `result`, or throws an Error carrying Telegram's

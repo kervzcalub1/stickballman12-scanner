@@ -34,6 +34,7 @@ import { platformChipSummary } from '../lib/payout.js';
 import { PlatformProfit } from './PlatformProfit.jsx';
 import { OnlineOrders } from './OnlineOrders.jsx';
 import { Undelivered } from './Undelivered.jsx';
+import { Cancellations } from './Cancellations.jsx';
 import { Receipts } from './Receipts.jsx';
 import { PresellListings } from './PresellListings.jsx';
 import { EbayReprice } from './EbayReprice.jsx';
@@ -91,6 +92,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'online') return <OnlineOrders user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'undelivered') return <Undelivered onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'cancellations') return <Cancellations onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'shopifylistings') return <ShopifyListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'ebayreprice') return <EbayReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'sheinreprice') return <SheinReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;

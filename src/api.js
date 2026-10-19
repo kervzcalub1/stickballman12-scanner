@@ -136,6 +136,11 @@ export const api = {
   undelivered: (days = '90') => get(`/api/undelivered?days=${encodeURIComponent(days)}`),
   markDelivered: (number, on, note) => post('/api/undelivered/mark', { number, on, note }),
   unmarkDelivered: (number) => post('/api/undelivered/mark', { number, undo: true }),
+  cancellations: (view = 'review', days = '30') => get(`/api/cancellations/list?view=${encodeURIComponent(view)}&days=${encodeURIComponent(days)}`),
+  cancellation: (id) => get(`/api/cancellations/get?id=${encodeURIComponent(id)}`),
+  saveCancellation: (row) => post('/api/cancellations/save', row),
+  cancellationAction: (id, action, extra = {}) => post('/api/cancellations/action', { id, action, ...extra }),
+  cancellationPhoto: (photoId) => downloadBlob(`/api/cancellations/photo?id=${encodeURIComponent(photoId)}`),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // GS received as men's: what this GS code was last received as (receiving.md).
   mensFor: (sku, name = '') => get(`/api/items/mens-for?sku=${encodeURIComponent(sku)}${name ? `&name=${encodeURIComponent(name)}` : ''}`),

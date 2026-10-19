@@ -2510,6 +2510,91 @@ await sql(`
 await sql(`CREATE INDEX IF NOT EXISTS shein_live_items_run ON shein_live_items (run_id, id)`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_live_items_at ON shein_live_items (at DESC)`);
 
+// ── Order cancellations (docs/context/cancellations.md) ─────────────────────────────
+// The warehouse sends the bot a picture of an order to cancel; the AI reads the platform +
+// order number off it; PH/admin check every row against the photo, then cancel it on the
+// platform and mark it submitted. One row per ORDER (a screenshot of three orders is three
+// rows sharing one photo). order_key = the number with punctuation stripped, upper-cased —
+// the duplicate guard: one live row per number (a rejected row doesn't count).
+await sql(`
+  CREATE TABLE IF NOT EXISTS cancellations (
+    id                BIGSERIAL PRIMARY KEY,
+    status            TEXT NOT NULL DEFAULT 'to_review',
+    platform          TEXT,
+    order_number      TEXT,
+    order_key         TEXT,
+    sku               TEXT,
+    size              TEXT,
+    product           TEXT,
+    reason            TEXT,
+    note              TEXT,
+    flags             TEXT[] NOT NULL DEFAULT '{}',
+    ai_confidence     NUMERIC,
+    ai_raw            JSONB,
+    source            TEXT NOT NULL DEFAULT 'telegram',
+    photo_id          BIGINT,
+    sent_by_user_id   BIGINT,
+    sent_by           TEXT,
+    tg_chat_id        BIGINT,
+    tg_message_id     BIGINT,
+    verified_by       TEXT,
+    verified_at       TIMESTAMPTZ,
+    submitted_by      TEXT,
+    submitted_at      TIMESTAMPTZ,
+    platform_ref      TEXT,
+    rejected_reason   TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`ALTER TABLE cancellations DROP CONSTRAINT IF EXISTS cancellations_status_check`);
+await sql(`ALTER TABLE cancellations ADD CONSTRAINT cancellations_status_check
+             CHECK (status IN ('to_review','verified','submitted','rejected'))`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS cancellations_live_key_uq
+             ON cancellations (order_key) WHERE order_key IS NOT NULL AND status <> 'rejected'`);
+await sql(`CREATE INDEX IF NOT EXISTS cancellations_status_idx ON cancellations (status, created_at DESC)`);
+// The pictures themselves. In R2 when it is configured (r2_key); otherwise the bytes live
+// here (downscaled JPEG, ~100–200 KB). tg_* = the Telegram message it came from, so a
+// re-sent update (Telegram retries anything not answered in time) is the same photo.
+await sql(`
+  CREATE TABLE IF NOT EXISTS cancellation_photos (
+    id              BIGSERIAL PRIMARY KEY,
+    r2_key          TEXT,
+    bytes           BYTEA,
+    content_type    TEXT NOT NULL DEFAULT 'image/jpeg',
+    caption         TEXT,
+    tg_chat_id      BIGINT,
+    tg_message_id   BIGINT,
+    read_status     TEXT NOT NULL DEFAULT 'pending',
+    read_error      TEXT,
+    sent_by_user_id BIGINT,
+    sent_by         TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS cancellation_photos_tg_uq
+             ON cancellation_photos (tg_chat_id, tg_message_id) WHERE tg_message_id IS NOT NULL`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS cancellation_events (
+    id               BIGSERIAL PRIMARY KEY,
+    cancellation_id  BIGINT NOT NULL REFERENCES cancellations(id) ON DELETE CASCADE,
+    action           TEXT NOT NULL,
+    actor            TEXT,
+    detail           TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS cancellation_events_idx ON cancellation_events (cancellation_id, created_at)`);
+// "/alias, then the photos": the platform a chat (key 'chat:<id>') or an album
+// ('album:<media_group_id>') named last, good for 10 minutes (cancellationCtx).
+await sql(`
+  CREATE TABLE IF NOT EXISTS cancellation_tg_ctx (
+    key       TEXT PRIMARY KEY,
+    platform  TEXT NOT NULL,
+    set_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -2524,6 +2609,7 @@ const LIVE_TABLES = [
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_live_runs', 'shein_live_items',
+  'cancellations', 'cancellation_photos', 'cancellation_events',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

@@ -4,6 +4,8 @@
 //   npm run telegram:webhook -- set       point it at $APP_BASE_URL/api/telegram/webhook
 //   npm run telegram:webhook -- set <url> point it at <url>/api/telegram/webhook
 //   npm run telegram:webhook -- delete    unhook it (taps then go nowhere)
+//   npm run telegram:webhook -- commands  set the "/" menu of private chats: the cancellation
+//                                         platforms (/alias, /stockx …, docs/context/cancellations.md)
 //
 // A bot has ONE webhook. Setting ours takes it over from Make's "Telegram tap → decision
 // recorded" scenario at once — deactivate that scenario (and the card one) afterwards.
@@ -36,6 +38,16 @@ if (cmd === 'set') {
   });
   console.log(out.ok ? `Bot now posts to ${url}` : `Refused: ${out.description}`);
   if (!out.ok) process.exit(1);
+} else if (cmd === 'commands') {
+  const { BOT_COMMANDS } = await import('../api/_lib/cancellations.js');
+  const commands = [...BOT_COMMANDS, { command: 'help', description: 'How to log an order to cancel' }];
+  // Private chats, and the cancellations group if there is one — never the approval group.
+  const group = String(process.env.TELEGRAM_CANCEL_CHAT_ID || '').trim();
+  for (const scope of [{ type: 'all_private_chats' }, ...(group ? [{ type: 'chat', chat_id: Number(group) }] : [])]) {
+    const out = await call('setMyCommands', { commands, scope });
+    console.log(out.ok ? `Menu set for ${scope.type}${scope.chat_id ? ` ${scope.chat_id}` : ''}: ${commands.map((c) => `/${c.command}`).join(' ')}` : `Refused (${scope.type}): ${out.description}`);
+    if (!out.ok) process.exit(1);
+  }
 } else if (cmd === 'delete') {
   const out = await call('deleteWebhook');
   console.log(out.ok ? 'Webhook removed.' : `Refused: ${out.description}`);

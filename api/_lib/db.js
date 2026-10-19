@@ -7285,6 +7285,14 @@ export async function getRescaleRequestById(id) {
 }
 
 // Who the bot is talking to in a private chat — for a plain /start with no token.
+// Who a private chat with the bot belongs to — only an approved account counts.
+export async function telegramSender(telegramUserId) {
+  if (telegramUserId == null) return null;
+  const rows = await db()`SELECT id, name, username, role FROM users
+                            WHERE telegram_user_id = ${telegramUserId} AND status = 'approved'`;
+  return rows[0] ? { ...rows[0], id: Number(rows[0].id), name: rows[0].name || rows[0].username } : null;
+}
+
 export async function userNameByTelegramId(telegramUserId) {
   const rows = await db()`SELECT id, name FROM users WHERE telegram_user_id = ${telegramUserId}`;
   return rows[0] || null;
@@ -9570,4 +9578,154 @@ export async function listManualDelivered({ days = null } = {}) {
        AND (${d}::int IS NULL OR t.manual_at >= now() - make_interval(days => ${d}::int))
      ORDER BY t.manual_at DESC
      LIMIT 500`;
+}
+
+// ── Order cancellations (docs/context/cancellations.md) ──────────────────────────────
+// The warehouse sends the bot a photo; api/_lib/cancellations.js reads it and files one
+// row per order here. PH/admin compare each row with its photo, verify, cancel on the
+// platform, and mark it submitted. order_key carries the duplicate guard (unique while
+// the row is not rejected — cancellations_live_key_uq).
+// (The column list is written out in each query: the db() shim can't splice a fragment in.)
+
+export async function createCancellationPhoto({ r2Key = null, bytes = null, contentType = 'image/jpeg', caption = null,
+  tgChatId = null, tgMessageId = null, sentByUserId = null, sentBy = null }) {
+  const rows = await db()`
+    INSERT INTO cancellation_photos (r2_key, bytes, content_type, caption, tg_chat_id, tg_message_id, sent_by_user_id, sent_by)
+    VALUES (${r2Key}, ${bytes}, ${contentType}, ${caption}, ${tgChatId}, ${tgMessageId}, ${sentByUserId}, ${sentBy})
+    ON CONFLICT (tg_chat_id, tg_message_id) WHERE tg_message_id IS NOT NULL DO NOTHING
+    RETURNING id`;
+  return rows[0] ? Number(rows[0].id) : null;   // null = this Telegram message was already filed
+}
+export async function setCancellationPhotoRead(id, { status, error = null, r2Key, bytes } = {}) {
+  if (r2Key !== undefined || bytes !== undefined) {
+    await db()`UPDATE cancellation_photos SET r2_key = ${r2Key ?? null}, bytes = ${bytes ?? null} WHERE id = ${id}`;
+  }
+  if (status) await db()`UPDATE cancellation_photos SET read_status = ${status}, read_error = ${error} WHERE id = ${id}`;
+}
+export async function getCancellationPhoto(id) {
+  const rows = await db()`SELECT id, r2_key, bytes, content_type, caption, read_status, read_error, sent_by, created_at
+                            FROM cancellation_photos WHERE id = ${id}`;
+  return rows[0] || null;
+}
+
+/** The live (not rejected) row already holding this number, if any. */
+export async function findLiveCancellation(orderKey) {
+  if (!orderKey) return null;
+  const rows = await db()`SELECT id, status, platform, order_number, sent_by, created_at
+                            FROM cancellations WHERE order_key = ${orderKey} AND status <> 'rejected' LIMIT 1`;
+  return rows[0] || null;
+}
+
+export async function logCancellationEvent(id, action, actor, detail = null) {
+  await db()`INSERT INTO cancellation_events (cancellation_id, action, actor, detail)
+             VALUES (${id}, ${action}, ${actor ?? null}, ${detail})`;
+}
+
+/**
+ * File one order. Returns { row } or { duplicate } — a number already live is never filed
+ * twice; the race between two photos of the same order is settled by the unique index.
+ */
+export async function createCancellation(f) {
+  try {
+    const rows = await db()`
+      INSERT INTO cancellations (status, platform, order_number, order_key, sku, size, product, reason, note, flags,
+        ai_confidence, ai_raw, source, photo_id, sent_by_user_id, sent_by, tg_chat_id, tg_message_id)
+      VALUES ('to_review', ${f.platform ?? null}, ${f.order_number ?? null}, ${f.order_key ?? null}, ${f.sku ?? null},
+        ${f.size ?? null}, ${f.product ?? null}, ${f.reason ?? null}, ${f.note ?? null}, ${f.flags || []}::text[],
+        ${f.ai_confidence ?? null}, ${f.ai_raw ? JSON.stringify(f.ai_raw) : null}::jsonb, ${f.source || 'telegram'},
+        ${f.photo_id ?? null}, ${f.sent_by_user_id ?? null}, ${f.sent_by ?? null}, ${f.tg_chat_id ?? null}, ${f.tg_message_id ?? null})
+      RETURNING id`;
+    const id = Number(rows[0].id);
+    await logCancellationEvent(id, 'created', f.sent_by, f.source === 'telegram' ? 'sent on Telegram' : f.source === 'typed' ? 'number typed to the bot' : 'added in the app');
+    return { row: await getCancellation(id) };
+  } catch (e) {
+    if (e.code === '23505') return { duplicate: await findLiveCancellation(f.order_key) };
+    throw e;
+  }
+}
+
+export async function getCancellation(id) {
+  const rows = await db()`SELECT c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason,   c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by,   c.verified_by, c.verified_at, c.submitted_by, c.submitted_at, c.platform_ref, c.rejected_reason,   c.created_at, c.updated_at FROM cancellations c WHERE c.id = ${id}`;
+  if (!rows[0]) return null;
+  const events = await db()`SELECT action, actor, detail, created_at FROM cancellation_events
+                              WHERE cancellation_id = ${id} ORDER BY created_at, id`;
+  return { ...rows[0], id: Number(rows[0].id), photo_id: rows[0].photo_id == null ? null : Number(rows[0].photo_id), events };
+}
+
+// view: review (to_review) | verified | submitted | rejected | all
+export async function listCancellations({ view = 'review', days = 30 } = {}) {
+  const d = days == null ? null : Math.max(1, Math.min(3650, Number(days) || 30));
+  const status = { review: 'to_review', verified: 'verified', submitted: 'submitted', rejected: 'rejected' }[view] || null;
+  const rows = await db()`
+    SELECT c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason,   c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by,   c.verified_by, c.verified_at, c.submitted_by, c.submitted_at, c.platform_ref, c.rejected_reason,   c.created_at, c.updated_at FROM cancellations c
+     WHERE (${status}::text IS NULL OR c.status = ${status})
+       -- Open work is never hidden by the period: a row still to review or to cancel is
+       -- on the list however old it is. The period only trims the finished tabs.
+       AND (c.status IN ('to_review', 'verified') OR ${d}::int IS NULL
+            OR c.created_at >= now() - make_interval(days => ${d}::int))
+     ORDER BY c.created_at DESC, c.id DESC
+     LIMIT 1000`;
+  const [counts] = await db()`
+    SELECT count(*) FILTER (WHERE status = 'to_review')::int AS review,
+           count(*) FILTER (WHERE status = 'verified')::int AS verified
+      FROM cancellations`;
+  return { rows: rows.map((r) => ({ ...r, id: Number(r.id), photo_id: r.photo_id == null ? null : Number(r.photo_id) })), counts };
+}
+
+/** Edit the fields. The flags are recomputed by the caller (flagsFor) and passed in. */
+export async function updateCancellationFields(id, f, actor) {
+  try {
+    await db()`
+      UPDATE cancellations SET platform = ${f.platform ?? null}, order_number = ${f.order_number ?? null},
+             order_key = ${f.order_key ?? null}, sku = ${f.sku ?? null}, size = ${f.size ?? null},
+             product = ${f.product ?? null}, reason = ${f.reason ?? null}, note = ${f.note ?? null},
+             flags = ${f.flags || []}::text[], updated_at = now()
+       WHERE id = ${id}`;
+  } catch (e) {
+    if (e.code === '23505') return { duplicate: await findLiveCancellation(f.order_key) };
+    throw e;
+  }
+  await logCancellationEvent(id, 'edited', actor, f.changed || null);
+  return { row: await getCancellation(id) };
+}
+
+/** Move a row along. `from` = the statuses it may move from (compare-and-set: two reviewers can't both act). */
+export async function setCancellationStatus(id, { to, from, actor, detail = null, platformRef, rejectedReason, flags }) {
+  let rows;
+  if (to === 'verified') {
+    rows = await db()`UPDATE cancellations SET status = 'verified', verified_by = ${actor}, verified_at = now(),
+                        flags = ${flags || []}::text[], updated_at = now()
+                       WHERE id = ${id} AND status = ANY(${from}) RETURNING id`;
+  } else if (to === 'submitted') {
+    rows = await db()`UPDATE cancellations SET status = 'submitted', submitted_by = ${actor}, submitted_at = now(),
+                        platform_ref = ${platformRef ?? null}, updated_at = now()
+                       WHERE id = ${id} AND status = ANY(${from}) RETURNING id`;
+  } else if (to === 'rejected') {
+    rows = await db()`UPDATE cancellations SET status = 'rejected', rejected_reason = ${rejectedReason ?? null}, updated_at = now()
+                       WHERE id = ${id} AND status = ANY(${from}) RETURNING id`;
+  } else {
+    // Back to review — a failed submission, or a verify/reject taken back. Clears who
+    // verified it: the next verify is a new check.
+    rows = await db()`UPDATE cancellations SET status = 'to_review', verified_by = NULL, verified_at = NULL,
+                        submitted_by = NULL, submitted_at = NULL, rejected_reason = NULL,
+                        flags = ${flags || []}::text[], updated_at = now()
+                       WHERE id = ${id} AND status = ANY(${from}) RETURNING id`;
+  }
+  if (!rows.length) return null;
+  await logCancellationEvent(id, to === 'to_review' ? 'reopened' : to, actor, detail);
+  return getCancellation(id);
+}
+
+// "/alias, then the photos" (docs/context/cancellations.md): what a chat or an album named
+// last. Read back only while fresh — a platform named this morning is not the afternoon's.
+export async function setCancellationCtx(key, platform) {
+  await db()`INSERT INTO cancellation_tg_ctx (key, platform, set_at) VALUES (${key}, ${platform}, now())
+             ON CONFLICT (key) DO UPDATE SET platform = EXCLUDED.platform, set_at = now()`;
+  // Housekeeping: nothing older than a day is ever read again.
+  await db()`DELETE FROM cancellation_tg_ctx WHERE set_at < now() - interval '1 day'`;
+}
+export async function getCancellationCtx(key, minutes = 10) {
+  const rows = await db()`SELECT platform FROM cancellation_tg_ctx
+                            WHERE key = ${key} AND set_at > now() - make_interval(mins => ${minutes}::int)`;
+  return rows[0]?.platform || null;
 }

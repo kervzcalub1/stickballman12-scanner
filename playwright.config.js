@@ -103,6 +103,11 @@ export default defineConfig({
       ALERT_BATCH_MS: '1500',
       // The alerts spec plays 17TRACK at the tracking webhook. No sheet forwarding from tests.
       TRACKING_WEBHOOK_SECRET: 'e2e-tracking-secret', GOOGLE_SHEETS_TRACKING_URL: '',
+      // Order cancellations read photos with a model: the suite points the reader at a FAKE
+      // on localhost (e2e/cancellations.spec.js) and keeps the pictures in the database, so
+      // a run never spends OpenAI money or writes into the real R2 bucket.
+      CANCEL_AI_URL: 'http://127.0.0.1:5196/v1/chat/completions', CANCEL_PHOTOS_IN_DB: '1',
+      TELEGRAM_CANCEL_CHAT_ID: '-100555',
     },
   },
 });

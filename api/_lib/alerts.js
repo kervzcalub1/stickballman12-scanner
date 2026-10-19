@@ -148,6 +148,14 @@ export const ALERT_EVENTS = [
     defaultFor: (u) => isAdminRole(u.role),
   },
   {
+    // Order cancellations (cancellations.md): the warehouse sent the bot a photo; the
+    // reviewers (PH + admin) check it against the photo and cancel it on the platform.
+    key: 'cancel.logged', group: 'Cancellations', emoji: '🛑', required: false,
+    title: 'Order to cancel',
+    when: 'The warehouse sends an order to cancel — check it and cancel it on the platform',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+  },
+  {
     key: 'nudge', group: 'Nudges', emoji: '🔔', required: true,
     title: 'Nudges',
     when: 'Someone nudges you about a request or an order',
@@ -269,6 +277,7 @@ const ROUTES = {
   po:        { main: '/inbound',       ph: '/ph/purchase-orders', supplier: '/orders' },
   duptrack:  { main: '/dup-tracking' },
   newinv:    { main: '/report',        ph: '/ph/new-inventory' },
+  cancellations: { main: '/cancellations', ph: '/ph/cancellations' },
 };
 export const at = (page, query = '') => (u) => {
   const r = ROUTES[page];
@@ -624,4 +633,19 @@ export async function alertWaitlistDaily({ day, rows, file }) {
     path: at('newinv', 'st=waitlist'),
     document: rows.length ? file : null,
   });
+}
+
+// One message per photo, however many orders were on it.
+export function alertCancellationsLogged(rows, by) {
+  if (!rows?.length) return;
+  const nums = rows.map((r) => r.order_number || 'number unreadable').slice(0, 8).join(', ');
+  const flagged = rows.filter((r) => (r.flags || []).length).length;
+  fireAlert(() => alertUsers('cancel.logged', {
+    actorUid: by?.id ?? null,
+    ref: `cancel:${rows[0].id}`,
+    code: rows.length === 1 ? `#${rows[0].id}` : `#${rows[0].id}–#${rows[rows.length - 1].id}`,
+    body: `${by?.name || 'The warehouse'} sent ${rows.length === 1 ? 'an order' : `${rows.length} orders`} to cancel: ${nums}.`
+      + (flagged ? ` ${flagged} need${flagged === 1 ? 's' : ''} a closer look.` : ''),
+    path: at('cancellations'),
+  }));
 }

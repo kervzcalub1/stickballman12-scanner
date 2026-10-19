@@ -20,7 +20,11 @@ const SIZE_LINE = /^(?:us\s*)?(\d{1,2}(?:\.\d)?)\s*([a-z]{0,2})\s*[x×*]\s*(\d{1
 const STYLE_LINE = /^[A-Z0-9]{2,}(?:-[A-Z0-9]{2,4})?$/i;
 const looksLikeStyle = (t) => STYLE_LINE.test(t) && /\d/.test(t) && /[A-Z]|-/i.test(t) && t.replace('-', '').length >= 5;
 
-export function parsePresellPaste(text) {
+// `strict` (the PO paste): a line that isn't understood ENDS the current shoe, so the size
+// lines after it are refused rather than added to the shoe above — that line may well have
+// been the next shoe's code in a shape we don't read, and its sizes on the wrong SKU are a
+// wrong manifest nobody notices.
+export function parsePresellPaste(text, { strict = false } = {}) {
   const shoes = [];
   const skipped = [];
   let cur = null;
@@ -29,7 +33,7 @@ export function parsePresellPaste(text) {
     if (!line) continue;
     const m = line.match(SIZE_LINE);
     if (m) {
-      if (!cur) { skipped.push({ line, why: 'a size before any style code' }); continue; }
+      if (!cur) { skipped.push({ line, why: strict && shoes.length ? 'a size under a line that isn\u2019t a style code' : 'a size before any style code' }); continue; }
       const size = String(Number(m[1])) + (m[2] ? m[2].toUpperCase() : '');
       const qty = Number(m[3]);
       if (!(qty >= 1)) { skipped.push({ line, why: 'quantity 0' }); continue; }
@@ -46,6 +50,7 @@ export function parsePresellPaste(text) {
     // The first plain line after a style code (before any size) is the shoe's name.
     if (cur && !cur.name && !cur.sizes.length) { cur.name = line; continue; }
     skipped.push({ line, why: 'not a style code, a name or "size x quantity"' });
+    if (strict) cur = null;
   }
   const kept = shoes.filter((s) => s.sizes.length);
   for (const s of shoes) if (!s.sizes.length) skipped.push({ line: s.sku, why: 'a style code with no sizes under it' });

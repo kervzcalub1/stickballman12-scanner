@@ -8,6 +8,7 @@ import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { isUpcCode, usSizeChart, compareSizes } from '../lib/codes.js';
 import { DimensionsFields, dimsComplete, dimsToText, emptyDims } from './PoDimensions.jsx';
+import { parsePoPaste } from '../lib/poPaste.js';
 
 const CameraScanner = lazy(() => import('./CameraScanner.jsx'));
 
@@ -167,6 +168,51 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
   const draftRef = useRef(null); draftRef.current = draft; // so the camera callback sees the live draft
   const recentRef = useRef({});                       // code -> last-seen ms (dedup gun/camera re-reads)
   const inputRef = useRef(null);
+  // "Paste a list" — a supplier's "SKU / size x qty" message, many shoes at once
+  // (src/lib/poPaste.js). Shoes only: an empty box needs its dimensions on every line.
+  const [paste, setPaste] = useState(null);           // null = closed; { text, prices: {sku: '120'} }
+  const [lookups, setLookups] = useState({});         // sku -> { state: 'loading'|'ok'|'none', name, colorway, gender }
+  const parsed = paste ? parsePoPaste(paste.text) : null;
+  // Name each pasted SKU from the catalogue — a convenience, never a gate: a SKU the
+  // catalogue doesn't carry is still added, by its code.
+  const pastedSkus = (parsed?.shoes || []).map((x) => x.sku).join('|');
+  useEffect(() => {
+    if (!paste) return undefined;
+    const todo = (parsed?.shoes || []).filter((x) => !lookups[x.sku]).slice(0, 40);
+    if (!todo.length) return undefined;
+    const t = setTimeout(() => {
+      setLookups((m) => ({ ...m, ...Object.fromEntries(todo.map((x) => [x.sku, { state: 'loading' }])) }));
+      for (const x of todo) {
+        api.searchSku(x.sku)
+          .then(({ product: p }) => setLookups((m) => ({ ...m, [x.sku]: p?.name
+            ? { state: 'ok', name: p.name, colorway: p.colorway || '', gender: p.gender || null }
+            : { state: 'none' } })))
+          .catch((e) => { if (e.unauthorized) onSignOut(); setLookups((m) => ({ ...m, [x.sku]: { state: 'none' } })); });
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [pastedSkus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const addPasted = async () => {
+    const shoes = (parsed?.shoes || []).map((x) => {
+      const l = lookups[x.sku] || {};
+      const typed = paste.prices?.[x.sku];
+      const cost = typed !== undefined ? moneyOf(typed) : x.unitCost;
+      return { sku: x.sku, name: x.name || l.name || null, colorway: l.colorway || null, gender: l.gender || null,
+        unitCost: cost ?? null, sizes: x.sizes };
+    });
+    if (!shoes.length) return;
+    setBusy(true); setError('');
+    try {
+      const out = await api.poScanBulk(orderMode ? { poId: Number(po.id), shoes } : { poBoxId: Number(box.id), shoes });
+      for (const line of out.lines || []) recordScan(line);
+      setFlash({ type: 'added', text: `Added ${out.pairs} pair${out.pairs === 1 ? '' : 's'} · ${shoes.length} SKU${shoes.length === 1 ? '' : 's'} to ${targetLabel}` });
+      setPaste(null); onAdded();
+    } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      setError(e.message); onAdded();
+    } finally { setBusy(false); }
+  };
 
   // Merge a server-returned po_line into the running tally (its live incremented qty).
   const recordScan = (line, fallbackName) => setRecent((rs) => {
@@ -375,6 +421,69 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
           <button type="button" className="btn icon ghost" onClick={onClose}>×</button>
         </div>
 
+        {!boxesOrder && !draft && (
+          <div className="po-paste-toggle">
+            <button type="button" className={`btn sm ${paste ? 'primary' : 'ghost'}`} disabled={busy}
+              onClick={() => { setError(''); setPaste((p) => (p ? null : { text: '', prices: {} })); }}>
+              {paste ? '← Scan instead' : '📋 Paste a list'}
+            </button>
+            {!paste && <span className="muted xs">SKU, then “size x qty” lines — many shoes at once</span>}
+          </div>
+        )}
+        {paste ? (
+          <div className="po-paste">
+            <textarea className="input" rows={8} value={paste.text} autoFocus disabled={busy}
+              aria-label="Paste the list"
+              placeholder={'DZ5485-201\n8.5 x 2\n9 x 3\n9.5 x 4\n\nIB4025-100 $120\n10 x 1'}
+              onChange={(e) => setPaste((p) => ({ ...p, text: e.target.value }))} />
+            <p className="muted xs">One shoe per block: the SKU (optionally with its shelf price ea, e.g. <code>$120</code>), then one <code>size x qty</code> per line. Paste as many shoes as you like; the same SKU twice is added together. Sizes already on {targetLabel} go up by the pasted quantity.</p>
+            {parsed?.shoes.length > 0 && (
+              <ul className="po-paste-list">
+                {parsed.shoes.map((x) => {
+                  const l = lookups[x.sku];
+                  const n = x.sizes.reduce((k, z) => k + z.qty, 0);
+                  return (
+                    <li key={x.sku}>
+                      <div className="po-paste-head">
+                        <b>{x.sku}</b>
+                        <span className={`muted xs${l?.state === 'none' ? ' po-paste-warn' : ''}`}>
+                          {x.name || (l?.state === 'ok' ? l.name : l?.state === 'none' ? 'not in the catalogue — added by its SKU' : 'looking up…')}
+                        </span>
+                        <span className="po-paste-n">{n} pair{n === 1 ? '' : 's'}</span>
+                      </div>
+                      <div className="po-paste-sizes">
+                        {[...x.sizes].sort((a, b) => compareSizes(a.size, b.size)).map((z) => (
+                          <span key={z.size} className="size-chip static">{z.size} ×{z.qty}</span>
+                        ))}
+                        <label className="po-size-money po-paste-price">
+                          <span className="muted xs">Shelf price ea</span>
+                          <span className="po-money-input">
+                            <span className="po-money-sym">$</span>
+                            <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00"
+                              value={paste.prices?.[x.sku] ?? (x.unitCost ?? '')}
+                              onChange={(e) => setPaste((p) => ({ ...p, prices: { ...p.prices, [x.sku]: e.target.value } }))} />
+                          </span>
+                        </label>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {parsed?.skipped.length > 0 && (
+              <div className="po-paste-skipped" role="alert">
+                <b>Not added — fix these lines if they matter:</b>
+                <ul>{parsed.skipped.map((k, i) => <li key={i}><code>{k.line}</code> — {k.why}</li>)}</ul>
+              </div>
+            )}
+            <div className="modal-actions">
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => setPaste(null)}>Cancel</button>
+              <button type="button" className="btn primary wide" disabled={busy || !parsed?.pairs} onClick={addPasted}>
+                {busy ? 'Adding…' : parsed?.pairs ? `Add ${parsed.pairs} pair${parsed.pairs === 1 ? '' : 's'} (${parsed.shoes.length} SKU${parsed.shoes.length === 1 ? '' : 's'}) to ${orderMode ? 'order' : 'label'}` : 'Paste a list to add'}
+              </button>
+            </div>
+          </div>
+        ) : (<>
         <form className="searchrow" onSubmit={(e) => { e.preventDefault(); resolve(code, { showInField: true }); }}>
           <input ref={inputRef} autoFocus autoCapitalize="characters" autoCorrect="off"
             placeholder="Scan or type UPC / SKU" value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
@@ -388,11 +497,13 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
           </Suspense>
         )}
 
+        </>)}
+
         <div className="scan-flash-live" role="status" aria-live="polite">
           {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
         </div>
         {error && <div className="error sm mt">{error}</div>}
-        {!draft && !busy && (
+        {!draft && !busy && !paste && (
           <p className="muted sm mt">{boxesOrder
             ? 'Scan or type the SKU printed on the empty box — the shoe’s name fills in, and a scanned UPC fills the size too. Then tap the size each box is for and give its dimensions; a new row starts at the last carton you typed, so a run of sizes is measured once.'
             : 'Scan a shoe’s UPC to begin — its size auto-fills. Add other sizes with the chips, or “+ Custom” if a size isn’t listed. Re-scanning the same shoe bumps its size by 1.'}</p>

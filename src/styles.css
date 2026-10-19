@@ -6189,3 +6189,19 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
   .cx-photo.cx-photo-none { height: 44px; }
   .cx-form, .cx-read { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* PO "Paste a list" (PoScanModal, src/lib/poPaste.js) */
+.po-paste-toggle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.po-paste textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; resize: vertical; }
+.po-paste > p { margin: 6px 0 10px; }
+.po-paste-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.po-paste-list li { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.po-paste-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.po-paste-head .po-paste-n { margin-left: auto; font-weight: 600; font-size: 13px; }
+.po-paste-warn { color: #e0a33f; }
+.po-paste-sizes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.size-chip.static { cursor: default; }
+.po-paste-price { margin-left: auto; }
+.po-paste-skipped { border: 1px solid rgba(233,196,106,0.4); background: rgba(233,196,106,0.10); color: #e9c46a;
+  border-radius: 10px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; }
+.po-paste-skipped ul { margin: 4px 0 0; padding-left: 18px; }

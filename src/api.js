@@ -464,6 +464,7 @@ export const api = {
   poScan: (payload) => post('/api/po/scan', payload),
   // Whole-order manifest (Path C): add a line against the PO itself (no label).
   poScanOrder: (payload) => post('/api/po/scan-order', payload),
+  poScanBulk: (payload) => post('/api/po/scan-bulk', payload),
   poLine: (lineId, patch) => post('/api/po/line', { lineId, ...patch }),
   // Empty-box orders: one carton size across many lines at once. The per-line edit is
   // still `poLine({ dimensions })` — this is the "they all ship in the same box" case.

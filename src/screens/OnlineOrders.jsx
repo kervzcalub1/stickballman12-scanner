@@ -12,6 +12,7 @@
 // Its own list, deliberately not a purchase order (owner's call, 2026-10-01).
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import { TrackingLink } from '../components/TrackingLink.jsx';
 import { TopBar, Modal, FormModal, NumField } from '../components/common.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -194,7 +195,7 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
         <div className="oo-facts">
           <span><span className="muted xs">Order #</span> {o.order_number || '—'}</span>
           <span><span className="muted xs">Ordered</span> {dateOf(o.ordered_on)}</span>
-          <span><span className="muted xs">Tracking</span> {o.tracking_number || <i className="muted">none yet</i>}</span>
+          <span><span className="muted xs">Tracking</span> {o.tracking_number ? <TrackingLink number={o.tracking_number} /> : <i className="muted">none yet</i>}</span>
           {o.received_at && <span><span className="muted xs">Counted in</span> {when(o.received_at)}{o.received_by ? ` · ${o.received_by}` : ''}</span>}
           <span><span className="muted xs">Recorded by</span> {o.created_by || '—'}</span>
         </div>

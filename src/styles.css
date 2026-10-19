@@ -6116,3 +6116,35 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .shm-found .btn.on { border-color: var(--primary); color: var(--primary); }
 .shm-select { min-width: 220px; max-width: 100%; }
 @media (max-width: 640px) { .shm-head { grid-template-columns: 44px minmax(0, 1fr) auto; } .shm-head .ebl-thumb { width: 44px; height: 44px; } .shm-select { min-width: 0; width: 100%; } }
+
+/* ── Undelivered Tracking (src/screens/Undelivered.jsx, undelivered.md) ── */
+.und-lede { margin: 0 0 12px; line-height: 1.5; }
+.und-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.und-filters select.input { flex: 0 1 auto; width: auto; min-width: 0; }
+.und-filters .und-search { flex: 1 1 220px; min-width: 0; }
+.und-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.und-bar-actions { display: flex; gap: 6px; }
+.und-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.und-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.und-table th { text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; padding: 6px; border-bottom: 1px solid var(--border); }
+.und-table td { padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.und-table .num { text-align: right; }
+.und-table .und-tick { width: 28px; }
+.und-table .und-tick input { width: 18px; height: 18px; }
+.und-table tr.off td { opacity: .45; }
+.und-table code { font-size: 12.5px; word-break: break-all; }
+.und-new { color: #e0a33f; font-weight: 600; }
+@media (max-width: 760px) {
+  .und-table thead { display: none; }
+  .und-table tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .und-table td { display: flex; gap: 10px; border: 0; padding: 3px 0; }
+  .und-table td::before { content: attr(data-label); flex: 0 0 110px; font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .und-table td > * { min-width: 0; }
+  .und-table .num { text-align: left; }
+  .und-table .und-tick { width: auto; }
+}
+
+/* A tracking number that opens the courier's own page (TrackingLink.jsx). */
+.trk-link { color: inherit; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+.trk-link:hover { color: var(--primary); text-decoration-style: solid; }
+.trk-link-via { font-size: .85em; opacity: .7; }

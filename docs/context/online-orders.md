@@ -117,4 +117,4 @@ a short count becomes a refund to chase). E2E: `e2e/receiving-online-order.spec.
 
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).
-- No 17TRACK registration of the tracking numbers.
+- No 17TRACK registration of the tracking numbers. They appear on **Undelivered Tracking** as "No courier feed" with a link to the courier's site (`docs/context/undelivered.md`).

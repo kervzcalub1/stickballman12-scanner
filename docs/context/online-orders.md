@@ -12,8 +12,7 @@ Three things, in the owner's words: the **warehouse knows what to expect** from 
 buys, we **keep track of what each pair cost**, and it is **easy to audit** later.
 
 **Deliberately its own list, not a purchase order** (owner's call when offered both).
-Consequence: receiving does NOT yet match an online order by tracking number, so a pair
-received off one doesn't pick up its cost automatically — see "Not yet".
+Receiving matches it by tracking number instead (see "Receive New reads it").
 
 ## The scenarios it was built from (owner, 2026-10-01)
 | Scenario | What the page does |
@@ -119,6 +118,20 @@ a short count becomes a refund to chase). E2E: `e2e/receiving-online-order.spec.
 - Box mode (adding a box to an existing batch) names the box's order under its header.
 - Answers are remembered per number for a minute, so editing one box's tracking doesn't
   re-ask about the others.
+- **The box against its order** (Brent, 2026-10-21 — "like inbounding against a supplier's
+  manifest"): `onlineOrderCheck(order, cartItems)` (src/lib/onlineOrders.js) builds the
+  expected rows from the order's NON-cancelled lines (same code/numeric-size matching) and
+  feeds `manifestSummary`, so it reads exactly like a PO label:
+  - **Review** shows "Box against online order OO-… · store" — expected · received ·
+    missing · extra / not on order, row by row (`ManifestSummary` with `against` /
+    `notOn` / `showHow=false`; a plain receive has no scanned-vs-ticked record).
+  - **At commit**, if it's off, an automatic **`online_order` shipment issue** is added
+    ("Doesn't match the online order", description = every row that differs, expected /
+    received counts) → the ⚠ on Recent and the batch's issue list.
+  - **The "saved" window** repeats it (`OnlineMismatchAlert`, like `ReconcileAlert`) with a
+    link to the order on Online Orders. Counting in is still done there — that's what
+    turns a missing pair into a refund to chase.
+  - Not once the order is already counted in, never on a PO receive / rescale.
 
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).

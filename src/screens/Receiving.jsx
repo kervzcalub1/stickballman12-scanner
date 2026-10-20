@@ -22,7 +22,7 @@ import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineMoney, landedFromShelf, unitCost } from '../lib/costs.js';
-import { onlineLineFor, orderCode as onlineOrderCode } from '../lib/onlineOrders.js';
+import { onlineLineFor, orderCode as onlineOrderCode, onlineOrderCheck, onlineCheckText } from '../lib/onlineOrders.js';
 import { estToday } from '../lib/format.js';
 import { declaresPerBox } from '../lib/postatus.js';
 
@@ -59,6 +59,30 @@ function ReconcileAlert({ rc, onOpen }) {
           <Icon name="reconcile" /> Review &amp; copy the report
         </button>
       )}
+    </div>
+  );
+}
+
+// The online-order twin of ReconcileAlert: the box didn't match what was ordered. The
+// refund side lives on Online Orders (counting it in splits a missing pair off as
+// "not delivered", refund to chase), so this hands over a link to that order.
+function OnlineMismatchAlert({ check }) {
+  const { order, summary: { totals } } = check;
+  const parts = [];
+  if (totals.missing) parts.push(`${totals.missing} short`);
+  if (totals.extra) parts.push(`${totals.extra} extra`);
+  return (
+    <div className="po-mismatch">
+      <div className="po-mismatch-top">
+        <b>{onlineOrderCode(order.id)} doesn’t match the online order</b>
+        <span className="po-flag bad">{parts.join(' · ')}</span>
+      </div>
+      <p className="muted sm">
+        {totals.received} of {totals.expected} ordered pair{totals.expected === 1 ? '' : 's'} came out of the box
+        from {order.store}{order.order_number ? ` #${order.order_number}` : ''}. It’s recorded on the batch as an issue —
+        count the order in so a missing pair becomes a refund to chase.
+      </p>
+      <a className="btn sm" href={`/online-orders?o=${order.id}`}>Open the order on Online Orders</a>
     </div>
   );
 }
@@ -1723,6 +1747,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       receivedCount: i.receivedCount === '' ? null : Number(i.receivedCount),
     })),
     ...(keyNotes.trim() ? [{ type: 'note', description: keyNotes.trim() }] : []),
+    // The box didn't match its online order: on the batch, so Recent shows ⚠ and the
+    // record says what was off long after the screen is gone.
+    ...(onlineOff ? [{
+      type: 'online_order', description: onlineCheckText(onlineOff.order, onlineOff.summary),
+      expectedCount: onlineOff.summary.totals.expected,
+      receivedCount: onlineOff.summary.rows.reduce((n, r) => n + r.received, 0),
+    }] : []),
   ];
   const updateIssue = (key, patch) => setIssues((is) => is.map((i) => (i.key === key ? { ...i, ...patch } : i)));
   const removeIssue = (key) => setIssues((is) => is.filter((i) => i.key !== key));
@@ -1894,6 +1925,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setShowConfirm(true);
   }
   // Shoes received without a box are auto-listed as shipment issues: "SKU Size — No box".
+  // This box against that order — expected vs scanned, like a PO label (Brent, 2026-10-21).
+  // Shown on Review, recorded on the batch as an issue when it's off, and repeated in the
+  // "saved" window. Not once the order has been counted in (that box is already settled).
+  const onlineCheck = activeOnlineOrder && !activeOnlineOrder.received_at && !isRescale && !isPoReceive
+    ? onlineOrderCheck(activeOnlineOrder, items) : null;
+  const onlineOff = onlineCheck && !onlineCheck.totals.clean ? { order: activeOnlineOrder, summary: onlineCheck } : null;
   const autoIssues = items.filter((i) => !i.withBox)
     .flatMap((i) => i.sizes.map((s) => ({ key: `auto-${i.key}-${s.key}`, description: `${i.sku || '?'} ${s.size} — No box` })));
 
@@ -2027,6 +2064,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }
 
   async function doCommit() {
+    // Read now: the cart is cleared before the "saved" window opens.
+    const onlineAtCommit = onlineOff;
     setCommitting(true);
     try {
       let batchRes = null;
@@ -2089,10 +2128,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
             ? { ...s, status: 'received', boxNumber: box.box_number, itemCount: res.count || 0 } : s)));
           setActiveSlot(null); setStep(1);
-          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, inBatchList: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile });
+          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, inBatchList: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile, online: onlineAtCommit });
         } else {
           setStep(1);
-          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile });
+          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile, online: onlineAtCommit });
         }
         return;
       }
@@ -2136,6 +2175,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         vins: batchRes?.vins || [],
         printItems,
         reconcile: batchRes?.reconcile || null,
+        online: onlineAtCommit,
       });
       setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1);
       // noTracking and pre-sell reset with the tracking # for the same reason: left
@@ -2870,6 +2910,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 <ManifestSummary summary={manifestSummary(items)} boxesOrder={isBoxesPo}
                   boxNumber={Number(activeBox?.boxNumber) || (isBoxMode ? null : activeSlot + 1)} />
               )}
+              {onlineCheck && (
+                <ManifestSummary summary={onlineCheck} showHow={false} against="the online order" notOn="Not on order" notOnStat="not on order"
+                  title={`Box against online order ${onlineOrderCode(activeOnlineOrder.id)} · ${activeOnlineOrder.store}`} />
+              )}
               <div className="card">
                 <div className="step-head">
                   <h3 className="rows-title">Review <span className="muted">({totalItems} unit{totalItems === 1 ? '' : 's'} · {items.length} shoe{items.length === 1 ? '' : 's'})</span></h3>
@@ -3225,6 +3269,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               received it is guaranteed to be looking, and a shortage needs someone to
               message the supplier today. Either team can pick it up from the report. */}
           {result.reconcile && <ReconcileAlert rc={result.reconcile} onOpen={onOpenReconcile} />}
+          {result.online && <OnlineMismatchAlert check={result.online} />}
           {result.printItems?.length > 0 && (
             <button className="btn primary" onClick={() => setPrintLabels({ batchCode: result.batchCode, items: result.printItems })}><Icon name="print" /> Print labels</button>
           )}
@@ -3518,7 +3563,9 @@ const SUMMARY_STATE = {
   unexpected: { label: 'Not on PO',  cls: 'over' },
   ok:         { label: 'OK',         cls: 'ok' },
 };
-function ManifestSummary({ summary, boxNumber, boxesOrder = false }) {
+// Also the box against an ONLINE order (`title`, `against`, `notOn` name it; `showHow`
+// off — a plain receive doesn't record scanned vs ticked per size).
+function ManifestSummary({ summary, boxNumber, boxesOrder = false, title = null, against = 'the label', notOn = 'Not on PO', notOnStat = 'not on PO', showHow = true }) {
   const { rows, totals } = summary;
   const unit = boxesOrder ? 'boxes' : 'pairs';
   const off = rows.filter((r) => r.state !== 'ok');
@@ -3528,7 +3575,7 @@ function ManifestSummary({ summary, boxNumber, boxesOrder = false }) {
   return (
     <div className={`card po-summary ${totals.clean ? 'clean' : ''}`}>
       <div className="step-head">
-        <h3 className="rows-title">Box {boxNumber} against its label</h3>
+        <h3 className="rows-title">{title || `Box ${boxNumber} against its label`}</h3>
         <span className={`po-manifest-progress ${totals.clean ? 'done' : ''}`}>
           {totals.received} of {totals.expected} expected {unit} received
         </span>
@@ -3537,13 +3584,13 @@ function ManifestSummary({ summary, boxNumber, boxesOrder = false }) {
         <span className="po-summary-stat"><b>{totals.expected}</b> expected</span>
         <span className="po-summary-stat"><b>{totals.received}</b> received</span>
         <span className={`po-summary-stat ${totals.missing ? 'bad' : ''}`}><b>{totals.missing}</b> missing</span>
-        <span className={`po-summary-stat ${totals.extra ? 'warn' : ''}`}><b>{totals.extra}</b> extra / not on PO</span>
+        <span className={`po-summary-stat ${totals.extra ? 'warn' : ''}`}><b>{totals.extra}</b> extra / {notOnStat}</span>
       </div>
       {/* HOW the box was counted, not just what came out of it. A scanned pair was in
           somebody's hand; a ticked row is a claim about all of it at once. The whole
           point of checking a carton against its label is to verify it, so the part that
           was taken on trust has to survive to the person reading this. */}
-      {(totals.scanned > 0 || totals.byHand > 0) && (
+      {showHow && (totals.scanned > 0 || totals.byHand > 0) && (
         <p className="po-summary-how muted sm">
           <b>{totals.scanned}</b> scanned{totals.byHand > 0 ? <> · <b>{totals.byHand}</b> counted by hand</> : ' — every pair was read off a barcode'}
           {byHandRows.length > 0 && (
@@ -3552,16 +3599,18 @@ function ManifestSummary({ summary, boxNumber, boxesOrder = false }) {
         </p>
       )}
       {totals.clean ? (
-        <p className="muted sm">Everything the label declared came out of the box, and nothing else did.</p>
+        <p className="muted sm">Everything {against} declared came out of the box, and nothing else did.</p>
       ) : (
         <>
-          <p className="muted sm">{off.length} row{off.length === 1 ? '' : 's'} differ{off.length === 1 ? 's' : ''} from the label. A missing pair is recorded as short; an undeclared one as an overage — the reconciliation carries both.</p>
+          <p className="muted sm">{off.length} row{off.length === 1 ? '' : 's'} differ{off.length === 1 ? 's' : ''} from {against}. {against === 'the label'
+            ? 'A missing pair is recorded as short; an undeclared one as an overage — the reconciliation carries both.'
+            : 'It is recorded on the batch as an issue — check the box again, then count it in on Online Orders so a missing pair becomes a refund to chase.'}</p>
           <div className="po-summary-rows">
             {off.map((r) => (
               <div className={`po-summary-row ${r.state}`} key={r.key}>
                 <div className="po-summary-row-head">
                   <span className="po-summary-sku"><b>{r.sku || '—'}</b> · size {r.size}{r.dimensions ? <span className="muted"> · {r.dimensions}</span> : null}</span>
-                  <span className={`po-flag ${SUMMARY_STATE[r.state].cls}`}>{SUMMARY_STATE[r.state].label}</span>
+                  <span className={`po-flag ${SUMMARY_STATE[r.state].cls}`}>{r.state === 'unexpected' ? notOn : SUMMARY_STATE[r.state].label}</span>
                 </div>
                 <div className="po-summary-row-nums muted sm">
                   {r.name ? <span className="po-summary-name">{r.name}</span> : null}
@@ -3729,7 +3778,7 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
                           </div>
                         ))}
                         {detail.issues.map((is) => (
-                          <div className="batch-detail-row issue" key={is.id}>{is.type === 'note' ? '📝' : '⚠'} {issueTypeLabel(is.type)}{is.description ? `: ${is.description}` : ''}{is.type === 'shortfall' ? ` (${is.received_count}/${is.expected_count})` : ''}</div>
+                          <div className="batch-detail-row issue" key={is.id}>{is.type === 'note' ? '📝' : '⚠'} {issueTypeLabel(is.type)}{is.description ? `: ${is.description}` : ''}{is.type === 'shortfall' || is.type === 'online_order' ? ` (${is.received_count}/${is.expected_count})` : ''}</div>
                         ))}
                       </>
                     )}

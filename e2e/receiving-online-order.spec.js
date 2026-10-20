@@ -26,10 +26,15 @@ test.beforeAll(async ({ request }) => {
 });
 
 test.afterAll(async () => {
-  await db.query('DELETE FROM item_events WHERE item_id IN (SELECT id FROM items WHERE sku = $1)', [SKU]);
-  const b = await db.query('SELECT DISTINCT batch_id FROM items WHERE sku = $1', [SKU]);
-  await db.query('DELETE FROM items WHERE sku = $1', [SKU]);
-  for (const { batch_id: id } of b.rows) await db.query('DELETE FROM batches WHERE id = $1', [id]).catch(() => {});
+  // SKU and its suffixed variants (-M, -X, -D).
+  const like = `${SKU}%`;
+  await db.query('DELETE FROM item_events WHERE item_id IN (SELECT id FROM items WHERE sku LIKE $1)', [like]);
+  const b = await db.query('SELECT DISTINCT batch_id FROM items WHERE sku LIKE $1', [like]);
+  await db.query('DELETE FROM items WHERE sku LIKE $1', [like]);
+  for (const { batch_id: id } of b.rows) {
+    await db.query('DELETE FROM shipment_issues WHERE batch_id = $1', [id]).catch(() => {});
+    await db.query('DELETE FROM batches WHERE id = $1', [id]).catch(() => {});
+  }
   await db.query(`DELETE FROM online_orders WHERE store LIKE 'E2E-OO%'`);
   await db.end();
 });
@@ -58,10 +63,13 @@ test('an online order’s parcel says what it holds, and its pairs land at the o
   await expect(card.locator('.recv-item-cost input')).toHaveAttribute('placeholder', '98.00');
 
   await page.getByRole('button', { name: 'Review →' }).click();
+  // Both pairs that were ordered came out — the box matches its order.
+  await expect(page.locator('.po-summary.clean')).toContainText('Everything the online order declared came out of the box');
   await page.getByRole('button', { name: 'Next →' }).click();
   await page.getByRole('button', { name: 'Finish batch' }).click();
   await page.getByRole('button', { name: 'Yes, commit' }).click();
   await expect(page.getByText(/^Batch .* saved$/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.po-mismatch')).toHaveCount(0);
 
   const rows = (await db.query('SELECT cost, shelf_price FROM items WHERE sku = $1', [SKU])).rows;
   expect(rows).toHaveLength(2);
@@ -119,3 +127,54 @@ test('a multi-box receive costs each box from its own online order', async ({ pa
   await expect(card(X).locator('.recv-item-cost-src')).not.toContainText('online order');
 });
 
+
+// Brent, 2026-10-21: "compare what is scanned to what is expected and say if there is a
+// short or over, like inbounding against a supplier's manifest" — on Review, again once
+// the batch is saved, and on the batch so Recent shows it.
+test('a box that doesn’t match its online order: short / not on order on Review, an alert when saved, an issue on the batch', async ({ page, request }) => {
+  const S = `${SKU}-D`; const T = `1ZOOD${stamp}`;
+  const r = await request.post('/api/online-orders/save', { headers: PH, data: { store: 'E2E-OO Foot Locker', order_number: 'P750', tracking_number: T,
+    lines: [{ sku: S, size: '9', qty: 3, unit_price: 100 }, { sku: S, size: '8', qty: 1, unit_price: 100 }] } });
+  expect(r.ok(), await r.text()).toBeTruthy();
+  const code = `OO-${String((await r.json()).id).padStart(4, '0')}`;
+
+  await loginAs(page, 'warehouse');
+  await page.route('**/api/sku-search', (route) => route.fulfill({
+    json: { ok: true, product: { name: 'E2E OO Short Shoe', sku: S, image: '', source: 'manual', scannedSize: '9', sizes: ['8', '9'] } },
+  }));
+  await page.goto('/receiving');
+  await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
+  await page.locator('.track-field input').first().fill(T);
+  await expect(page.locator('.oo-recv-banner').first()).toContainText(code, { timeout: 10_000 });
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+  // Two of the three 9s came out, the 8 didn't.
+  for (let i = 0; i < 2; i += 1) {
+    await page.locator('.scanbar input').first().fill(S);
+    await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+  }
+  await expect(page.locator(`.recv-item[data-sku="${S}"]`)).toBeVisible();
+  await page.getByRole('button', { name: 'Review →' }).click();
+
+  const sum = page.locator('.po-summary').filter({ hasText: `online order ${code}` });
+  await expect(sum).toContainText('4 expected');
+  await expect(sum).toContainText('2 received');
+  await expect(sum).toContainText('2 missing');
+  await expect(sum.locator('.po-summary-row.missing')).toContainText('size 8');
+  await expect(sum.locator('.po-summary-row.short')).toContainText('size 9');
+
+  await page.getByRole('button', { name: 'Next →' }).click();
+  await page.getByRole('button', { name: 'Finish batch' }).click();
+  await page.getByRole('button', { name: 'Yes, commit' }).click();
+  await expect(page.getByText(/^Batch .* saved$/)).toBeVisible({ timeout: 15_000 });
+  const alert = page.locator('.po-mismatch');
+  await expect(alert).toContainText(`${code} doesn’t match the online order`);
+  await expect(alert).toContainText('2 short');
+  await expect(alert.getByRole('link', { name: 'Open the order on Online Orders' })).toBeVisible();
+
+  const issue = (await db.query(`SELECT si.type, si.description, si.expected_count, si.received_count FROM shipment_issues si
+    JOIN items i ON i.batch_id = si.batch_id WHERE i.sku = $1 AND si.type = 'online_order' LIMIT 1`, [S])).rows[0];
+  expect(issue).toMatchObject({ type: 'online_order', expected_count: 4, received_count: 2 });
+  expect(issue.description).toContain(`${S} US 8 missing (0/1)`);
+  expect(issue.description).toContain(`${S} US 9 short (2/3)`);
+});

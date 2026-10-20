@@ -17,6 +17,8 @@
 // function, so the number PH saw while typing is the number that was saved.
 
 import { poLineMoney } from './costs.js';
+import { sizeNum } from './codes.js';
+import { manifestSummary } from './manifestScan.js';
 
 const num = (v) => {
   const n = Number(v);
@@ -114,4 +116,49 @@ export function onlineLineFor(orders, sku, size) {
     return { each: each.shelf, price: price?.shelf ?? null, code: orderCode(o.id) };
   }
   return null;
+}
+
+// Receive New: the box against the online order it is (Brent, 2026-10-21) — the same
+// expected / received / missing / extra the warehouse sees when receiving against a PO,
+// so a pair the store never sent is caught at the bench, not when the refund is chased.
+// Expected = the order's lines still coming (cancelled ones are already settled); matched
+// to the cart on the code with dashes/spaces stripped and the NUMERIC size, the rule
+// onlineLineFor and poLineMoney use. Returns manifestSummary's { rows, totals } shape.
+const bareCode = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
+const lineKey = (sku, size) => {
+  const n = sizeNum(size);
+  return `${bareCode(sku)}|${Number.isNaN(n) ? String(size || '').trim().toUpperCase() : n}`;
+};
+export function onlineOrderCheck(order, items) {
+  const rows = new Map();
+  for (const l of (order?.lines || []).filter((x) => !isCancelled(x))) {
+    const k = lineKey(l.sku, l.size);
+    const r = rows.get(k) || { key: k, sku: l.sku, name: l.name || '', expected: true, sizes: [{ key: 's', size: String(l.size ?? ''), expectedQty: 0, qty: 0 }] };
+    r.sizes[0].expectedQty += Math.max(0, Number(l.qty) || 0);
+    rows.set(k, r);
+  }
+  for (const it of items || []) {
+    if (!it || it.pending) continue;
+    for (const s of it.sizes || []) {
+      const q = Math.max(0, Number(s.qty) || 0);
+      if (!q) continue;
+      const k = lineKey(it.sku || it.code, s.size);
+      const r = rows.get(k) || { key: k, sku: it.sku || it.code || '', name: it.name || '', expected: false, sizes: [{ key: 's', size: String(s.size ?? ''), qty: 0 }] };
+      if (!r.name && it.name) r.name = it.name;
+      r.sizes[0].qty += q;
+      rows.set(k, r);
+    }
+  }
+  return manifestSummary([...rows.values()]);
+}
+
+// One line for the batch's issue list — what an auditor reads months later.
+export function onlineCheckText(order, summary) {
+  const off = (summary?.rows || []).filter((r) => r.state !== 'ok');
+  const what = off.map((r) => {
+    const n = r.state === 'unexpected' || r.state === 'over' ? `+${r.state === 'over' ? r.delta : r.received}` : `${r.received}/${r.expected}`;
+    const label = { missing: 'missing', short: 'short', over: 'extra', unexpected: 'not on the order' }[r.state];
+    return `${r.sku || '?'} US ${r.size} ${label} (${n})`;
+  });
+  return `${orderCode(order.id)} · ${order.store}${order.order_number ? ` #${order.order_number}` : ''}: ${what.join('; ')}`;
 }

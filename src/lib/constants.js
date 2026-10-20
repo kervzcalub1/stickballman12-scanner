@@ -52,7 +52,7 @@ export const ISSUE_TYPES = [
   ['other', 'Other'],
 ];
 export const issueTypeLabel = (t) => (
-  t === 'note' ? 'Key note' : t === 'no_box' ? 'No box'
+  t === 'note' ? 'Key note' : t === 'no_box' ? 'No box' : t === 'online_order' ? 'Doesn’t match the online order'
     : (ISSUE_TYPES.find(([k]) => k === t) || [])[1] || String(t || 'Issue')
 );
 

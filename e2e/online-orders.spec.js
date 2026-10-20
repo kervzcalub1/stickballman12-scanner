@@ -119,6 +119,39 @@ test('ordered 5 → delivered 3: the 2 missing split off as not delivered, refun
   expect(late.status()).toBe(409);
 });
 
+test('5 pairs, the store cancels 3: Partly cancelled, not Cancelled — and a missing pair is not a store cancel', async ({ page, request }) => {
+  const { id } = await (await save(request, { store: 'E2E-OO Partial', order_number: 'P-5',
+    lines: [{ sku: 'OO-PART-1', size: '9', qty: 5, unit_price: 100 }] })).json();
+  let { order } = await get(request, id);
+  const cancel = await request.post('/api/online-orders/line', { headers: PH,
+    data: { lineId: order.lines[0].id, action: 'cancel', qty: 3, reason: 'oot', refund: 'needs_request' } });
+  expect(cancel.ok(), await cancel.text()).toBeTruthy();
+  const has = async (view, oid) => (await list(request, view)).orders.some((o) => o.id === oid);
+  expect(await has('partial', id)).toBe(true);
+  expect(await has('cancelled', id)).toBe(false);
+
+  // The other 2 cancelled as well → the whole order is Cancelled, no longer partial.
+  const whole = (await save(request, { store: 'E2E-OO Partial', order_number: 'P-ALL',
+    lines: [{ sku: 'OO-PART-2', size: '9', qty: 2, unit_price: 100 }] }));
+  const wid = (await whole.json()).id;
+  ({ order } = await get(request, wid));
+  await request.post('/api/online-orders/line', { headers: PH, data: { lineId: order.lines[0].id, action: 'cancel', reason: 'oot', refund: 'refunded', amount: 200 } });
+  expect(await has('cancelled', wid)).toBe(true);
+  expect(await has('partial', wid)).toBe(false);
+
+  // 5 ordered, 3 delivered: the 2 are the warehouse's shortage, not the store's cancel.
+  const short = (await (await save(request, { store: 'E2E-OO Partial', order_number: 'P-SHORT', tracking_number: `1ZE2EPART${Date.now()}`,
+    lines: [{ sku: 'OO-PART-3', size: '9', qty: 5, unit_price: 100 }] })).json()).id;
+  ({ order } = await get(request, short));
+  await request.post('/api/online-orders/receive', { headers: WH, data: { id: short, counts: [{ lineId: order.lines[0].id, got: 3 }] } });
+  expect(await has('partial', short)).toBe(false);
+
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/online-orders?q=P-5');
+  await page.getByRole('button', { name: 'Partly cancelled' }).click();
+  await expect(page.locator('.oo-row').filter({ hasText: 'P-5' })).toContainText('3 of 5 cancelled');
+});
+
 test('who may do what, and one tracking number on two orders is caught', async ({ request }) => {
   expect((await save(request, { store: STORE, lines: [{ sku: 'X', size: '9', qty: 1, unit_price: 1 }] }, WH)).status()).toBe(403);
   const track = `1ZE2EOOD${Date.now()}`;

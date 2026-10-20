@@ -1,4 +1,4 @@
-// GET /api/online-orders/list?q=&view=all|expected|ordered|followup|cancelled
+// GET /api/online-orders/list?q=&view=all|expected|ordered|followup|partial|cancelled
 //   -> { ok, orders:[…shapeOrder], counts:{ needs_request, requested, expected } }
 // Online orders — shoes the PH team bought from an online store (its own list, not a PO).
 // PH records them; the WAREHOUSE reads the same list to know what is on its way
@@ -7,7 +7,7 @@ import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, listOnlineOrders, onlineOrderCounts } from '../_lib/db.js';
 import { shapeOrder } from './_shared.js';
 
-const VIEWS = ['all', 'expected', 'ordered', 'followup', 'cancelled'];
+const VIEWS = ['all', 'expected', 'ordered', 'followup', 'partial', 'cancelled'];
 
 export default async function handler(req, res) {
   applySecurity(req, res);

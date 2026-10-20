@@ -61,6 +61,11 @@ line cancelled → cancelled; tracking → shipped; else ordered.
   → **refunded** (amount REQUIRED — it's what the audit checks). "Not actually back" returns
   it to follow-up. The **Refund follow-up** tab + the row's "N refunds to chase" chip are
   the chase list.
+- **Filter chips** (2026-10-21): **Partly cancelled** = the store cancelled some pairs (any
+  reason but `not_delivered`) and the rest are still coming/here; **Cancelled** = EVERY pair
+  cancelled (was: any cancelled pair, which mixed the two). A warehouse shortage is not a
+  store cancel, so 5-ordered-3-delivered is in neither. Rows say **"3 of 5 cancelled"** and
+  **"N missing"** as separate chips (`listOnlineOrders` view `partial` / `cancelled`).
 - **Undo cancel** for a mistake (not for `not_delivered` — that's the warehouse's count).
 - Pairs on an order already counted in can't be cancelled (they arrived).
 

@@ -32,6 +32,7 @@ const VIEWS = [
   ['expected', 'Expected', 'expected'],
   ['ordered', 'No tracking yet'],
   ['followup', 'Refund follow-up', 'followup'],
+  ['partial', 'Partly cancelled'],
   ['cancelled', 'Cancelled'],
 ];
 
@@ -121,7 +122,7 @@ export function OnlineOrders({ user, onHome, onSignOut }) {
       {error && <div className="error mt">{error}</div>}
       <div className="card">
         {orders == null ? <p className="muted">Loading…</p> : !orders.length ? (
-          <p className="muted">{q ? `Nothing matches “${q}”.` : view === 'expected' ? 'Nothing on its way right now.' : view === 'followup' ? 'No refunds waiting — every cancelled pair is settled.' : 'No online orders yet.'}</p>
+          <p className="muted">{q ? `Nothing matches “${q}”.` : view === 'expected' ? 'Nothing on its way right now.' : view === 'followup' ? 'No refunds waiting — every cancelled pair is settled.' : view === 'partial' ? 'No partly cancelled orders.' : view === 'cancelled' ? 'No fully cancelled orders.' : 'No online orders yet.'}</p>
         ) : (
           <div className="oo-list">
             {orders.map((o) => <OrderRow key={o.id} o={o} onOpen={() => setOpenId(String(o.id), { replace: false })} />)}
@@ -138,7 +139,12 @@ function StagePill({ stage }) {
 
 function OrderRow({ o, onOpen }) {
   const active = o.lines.filter((l) => !isCancelled(l));
-  const cancelledPairs = o.lines.filter(isCancelled).reduce((n, l) => n + l.qty, 0);
+  // The store cancelling pairs and the warehouse finding pairs missing are different
+  // stories, so they get their own chips — "3 of 5 cancelled" is a partly cancelled order.
+  const pairsOf = (ls) => ls.reduce((n, l) => n + l.qty, 0);
+  const missingPairs = pairsOf(o.lines.filter((l) => isCancelled(l) && l.cancel_reason === 'not_delivered'));
+  const cancelledPairs = pairsOf(o.lines.filter((l) => isCancelled(l) && l.cancel_reason !== 'not_delivered'));
+  const orderedPairs = pairsOf(o.lines);
   const chase = o.lines.filter(needsFollowUp);
   return (
     <button type="button" className="oo-row" onClick={onOpen}>
@@ -151,7 +157,8 @@ function OrderRow({ o, onOpen }) {
       </span>
       <span className="oo-row-side">
         <span><b>{o.totals.units}</b> pair{o.totals.units === 1 ? '' : 's'} · <b>{money(o.totals.total)}</b></span>
-        {cancelledPairs > 0 && <span className="oo-chip muted">{cancelledPairs} cancelled / missing</span>}
+        {cancelledPairs > 0 && <span className="oo-chip muted">{cancelledPairs} of {orderedPairs} cancelled</span>}
+        {missingPairs > 0 && <span className="oo-chip muted">{missingPairs} missing</span>}
         {chase.length > 0 && <span className="oo-chip warn">{chase.length} refund{chase.length === 1 ? '' : 's'} to chase</span>}
       </span>
     </button>

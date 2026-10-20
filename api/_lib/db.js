@@ -8007,7 +8007,11 @@ export async function listOnlineOrders({ q = '', view = 'all', limit = 200 } = {
   const like = term ? `%${term.toUpperCase()}%` : null;
   const likeTrack = term ? `%${term.replace(/\s+/g, '').toUpperCase()}%` : null;
   const followup = view === 'followup';
+  // 'cancelled' = the WHOLE order (every pair cancelled). 'partial' = the store cancelled
+  // some pairs and the rest are still coming or here — a pair the warehouse found missing
+  // (not_delivered) is a shortage, not a store cancellation, so it doesn't count.
   const cancelled = view === 'cancelled';
+  const partial = view === 'partial';
   const expected = view === 'expected';
   const ordered = view === 'ordered';
   return await db()`
@@ -8022,8 +8026,11 @@ export async function listOnlineOrders({ q = '', view = 'all', limit = 200 } = {
                         AND (upper(l.sku) LIKE ${like} OR upper(coalesce(l.name, '')) LIKE ${like})))
        AND (${followup} = false OR EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id
                         AND l.cancelled_at IS NOT NULL AND l.refund IN ('needs_request', 'requested')))
-       AND (${cancelled} = false OR EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id
-                        AND l.cancelled_at IS NOT NULL))
+       AND (${cancelled} = false OR (EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id)
+                        AND NOT EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)))
+       AND (${partial} = false OR (EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id
+                        AND l.cancelled_at IS NOT NULL AND l.cancel_reason IS DISTINCT FROM 'not_delivered')
+                        AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)))
        AND (${expected} = false OR (coalesce(btrim(o.tracking_number), '') <> '' AND o.received_at IS NULL
                         AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)))
        AND (${ordered} = false OR (coalesce(btrim(o.tracking_number), '') = '' AND o.received_at IS NULL

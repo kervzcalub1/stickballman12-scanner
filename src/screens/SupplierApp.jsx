@@ -26,7 +26,7 @@ import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
-import { isBoxesOrder, hasLeftSupplier, isSupplierRaised } from '../lib/postatus.js';
+import { isBoxesOrder, hasLeftSupplier, isSupplierRaised, declaresPerBox, hasOrderedList } from '../lib/postatus.js';
 import { hasPriv } from '../lib/constants.js';
 import { useLive, afterTyping } from '../hooks.js';
 
@@ -170,6 +170,7 @@ export function SupplierApp({ user, onSignOut }) {
   const staffLabel = `${businessName || 'Stickballman12 LLC'}'s Staff`;
   const [scanBox, setScanBox] = useState(null); // po_box currently being scanned into
   const [closeReview, setCloseReview] = useState(null); // po_box being reviewed before closing
+  const [pasteOrder, setPasteOrder] = useState(null);    // the PO a whole-order list is being pasted onto
   // The box that was just closed — drives the "print the manifest, put it inside, seal it"
   // step. Closing is the moment the contents are final, so it's the only moment the
   // printed sheet is guaranteed to match what's in the box.
@@ -247,7 +248,7 @@ export function SupplierApp({ user, onSignOut }) {
     } catch (e) { if (e.unauthorized) onSignOut(); }
   }, {
     mount: false,
-    paused: page !== 'orders' || busy || newOpen || !!scanBox || !!closeReview || !!packedBox
+    paused: page !== 'orders' || busy || newOpen || !!scanBox || !!pasteOrder || !!closeReview || !!packedBox
       || lineBusy != null || trackBusy || trackBoxBusy != null,
   });
   // Refresh tracking status. Omit `boxId` to refresh every label at once; pass one to
@@ -452,6 +453,9 @@ export function SupplierApp({ user, onSignOut }) {
   const boxesOrder = isBoxesOrder(po);
   const selfRaised = isSupplierRaised(po);
   const awaitingLabels = !!po?.labels_requested_at;
+  // A whole-order manifest (Path C): ONE list for the purchase, boxes carry no lines of
+  // their own. Either the supplier pasted it here or our team entered it for them.
+  const perBox = declaresPerBox(po);
   // What one declared unit is called. A shipment of empty boxes counts boxes; "12 units"
   // on a page whose every line is a carton reads like a different number entirely.
   const unitsLabel = (n) => `${n} ${boxesOrder ? (n === 1 ? 'box' : 'boxes') : `unit${n === 1 ? '' : 's'}`}`;
@@ -722,8 +726,8 @@ export function SupplierApp({ user, onSignOut }) {
                   {isFilling && (
                     <div className="po-box-actions">
                       <PoLabelDownload poId={Number(po.id)} box={box} onSignOut={onSignOut} />
-                      <button className="btn sm" onClick={() => setScanBox(box)}><Icon name="camera" /> Add {boxesOrder ? 'boxes' : 'items'}</button>
-                      <button className="btn sm primary" disabled={units < 1 || busy} onClick={() => setCloseReview(box)}>Review &amp; close box</button>
+                      {perBox && <button className="btn sm" onClick={() => setScanBox(box)}><Icon name="camera" /> Add {boxesOrder ? 'boxes' : 'items'}</button>}
+                      <button className="btn sm primary" disabled={(perBox && units < 1) || busy} onClick={() => setCloseReview(box)}>Review &amp; close box</button>
                     </div>
                   )}
                   {/* A reship gets the same scan-in, but no close/ship: the warehouse
@@ -761,26 +765,54 @@ export function SupplierApp({ user, onSignOut }) {
             })}
 
             {(() => {
-              // Whole-order manifest (Path C): lines the Stickballman12 team entered for the
-              // whole purchase, not tied to a single label. Read-only on the supplier side.
+              // Whole-order manifest (Path C): ONE list for the whole purchase, not tied to a
+              // label — the supplier often has the full manifest before anything is split
+              // into boxes. They paste it here (po/scan-bulk) and fix it line by line while
+              // the order is a draft; our team may also have entered it for them. Not on a
+              // buying-request order: its order-level list is our receipt, and theirs is
+              // per label. Shoes only (an empty box needs dimensions on every line).
               const orderLines = (detail.lines || []).filter((l) => l.po_box_id == null);
-              if (!orderLines.length) return null;
+              const hasBoxLines = (detail.lines || []).some((l) => l.po_box_id != null);
+              const canPaste = po.status === 'draft' && !boxesOrder && !hasOrderedList(po) && !hasBoxLines;
+              const canEdit = po.status === 'draft' && !hasOrderedList(po);
+              if (!orderLines.length && !canPaste) return null;
               const units = orderLines.reduce((n, l) => n + (l.qty_expected || 0), 0);
               return (
                 <div className="card po-box">
                   <div className="po-card-top">
-                    <div><b>Order manifest</b><div className="po-track muted sm">Entered for the whole purchase</div></div>
+                    <div><b>Order manifest</b><div className="po-track muted sm">One list for the whole purchase — not split by box</div></div>
                     <span className="muted sm">{unitsLabel(units)}</span>
                   </div>
-                  <ul className="po-lines">
-                    {orderLines.map((l) => (
-                      <li key={l.id}>
-                        <span className="po-line-name">{l.name || l.sku}</span>
-                        <span className="po-line-meta">{l.sku} · {`size ${l.size}${boxesOrder ? ` · ${l.dimensions || 'no dimensions'}` : ''}`} · ×{l.qty_expected}</span>
-                        {l.entered_on_behalf && <span className="po-line-attribution muted xs">Entered for you by {staffLabel}</span>}
-                      </li>
-                    ))}
-                  </ul>
+                  {!orderLines.length && (
+                    <p className="muted sm">Have one list for the whole order, not split into boxes yet? Paste it here instead of filling each box — then just close and ship the boxes.</p>
+                  )}
+                  {orderLines.length > 0 && (canEdit ? (
+                    <ul className="po-lines po-lines-edit">
+                      <PoLineHeader boxesOrder={boxesOrder} />
+                      {orderLines.map((l) => (
+                        <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)} boxesOrder={boxesOrder}
+                          onSave={(patch) => patchLine(l, patch)}
+                          attribution={l.entered_on_behalf ? `Entered for you by ${staffLabel}` : null} />
+                      ))}
+                    </ul>
+                  ) : (
+                    <ul className="po-lines">
+                      {orderLines.map((l) => (
+                        <li key={l.id}>
+                          <span className="po-line-name">{l.name || l.sku}</span>
+                          <span className="po-line-meta">{l.sku} · {`size ${l.size}${boxesOrder ? ` · ${l.dimensions || 'no dimensions'}` : ''}`} · ×{l.qty_expected}</span>
+                          {l.entered_on_behalf && <span className="po-line-attribution muted xs">Entered for you by {staffLabel}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  ))}
+                  {canPaste && (
+                    <div className="po-box-actions">
+                      <button className="btn sm" disabled={busy} onClick={() => setPasteOrder(po)}>
+                        📋 {orderLines.length ? 'Paste more to the order manifest' : 'Paste the whole-order manifest'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -790,6 +822,10 @@ export function SupplierApp({ user, onSignOut }) {
 
       {scanBox && (
         <PoScanModal box={scanBox} boxesOrder={boxesOrder} onClose={() => setScanBox(null)}
+          onAdded={refreshDetail} onSignOut={onSignOut} />
+      )}
+      {pasteOrder && (
+        <PoScanModal po={pasteOrder} pasteOnly onClose={() => setPasteOrder(null)}
           onAdded={refreshDetail} onSignOut={onSignOut} />
       )}
 
@@ -804,7 +840,7 @@ export function SupplierApp({ user, onSignOut }) {
             <div className="modal confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <h3 className="modal-title">Label {packedBox.box_number} is closed</h3>
               <p className="modal-msg">
-                <b>{unitsLabel(units)}</b> on this label. Finish the box:
+                {perBox ? <><b>{unitsLabel(units)}</b> on this label. </> : 'This order uses one manifest for the whole order. '}Finish the box:
               </p>
               <ol className="po-pack-steps">
                 <li>Print the manifest below (plain <b>Letter</b> paper).</li>
@@ -834,7 +870,7 @@ export function SupplierApp({ user, onSignOut }) {
             <div className="modal confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <h3 className="modal-title">Review Label {closeReview.box_number}</h3>
               <p className="modal-msg">Check everything you’re shipping under this label. Closing it marks the box <b>ready to ship</b> and gives you the manifest to print and put inside the box — you can still reopen it to edit until you actually ship.</p>
-              {lines.length === 0 ? <p className="muted">No items scanned yet.</p> : (
+              {lines.length === 0 ? <p className="muted">{perBox ? 'No items scanned yet.' : 'This order uses one manifest for the whole order, so nothing is listed per box — just close it once it’s packed.'}</p> : (
                 <ul className="po-lines po-review-lines">
                   {lines.map((l) => (
                     <li key={l.id}>
@@ -850,7 +886,7 @@ export function SupplierApp({ user, onSignOut }) {
                   ))}
                 </ul>
               )}
-              <p className="po-review-total"><b>{unitsLabel(units)}</b> · <b>{lines.length}</b> line{lines.length === 1 ? '' : 's'}</p>
+              {perBox && <p className="po-review-total"><b>{unitsLabel(units)}</b> · <b>{lines.length}</b> line{lines.length === 1 ? '' : 's'}</p>}
               {/* The money as it stands. Anything missing is still fixable — "Keep
                   editing" goes back to the lines, and a closed label can be reopened. */}
               {(m.any || m.blank > 0) && (
@@ -864,7 +900,7 @@ export function SupplierApp({ user, onSignOut }) {
               )}
               <div className="modal-actions">
                 <button type="button" className="btn ghost" disabled={busy} onClick={() => setCloseReview(null)}>Keep editing</button>
-                <button type="button" className="btn primary" disabled={busy || units < 1} onClick={() => doCloseBox(closeReview)}>Close box for shipment</button>
+                <button type="button" className="btn primary" disabled={busy || (perBox && units < 1)} onClick={() => doCloseBox(closeReview)}>Close box for shipment</button>
               </div>
             </div>
           </div>

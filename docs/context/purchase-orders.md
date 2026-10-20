@@ -429,8 +429,8 @@ DZ5485-201
 IB4025-100 $120     ← optional shelf price ea for every size under it
 10 x 1
 ```
-**📋 Paste a list** in the Add-items window (`PoScanModal`, so: supplier on their label, PH
-on a label or the whole-order list) → live preview per SKU (catalogue name, size chips,
+**📋 Paste a list** in the Add-items window (`PoScanModal`, so: supplier or PH, on a label
+or the whole-order list) → live preview per SKU (catalogue name, size chips,
 pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po/scan-bulk`.
 - Parser `src/lib/poPaste.js` = the Pre-sell paste (`parsePresellPaste`, same shape) +
   price on the SKU line, a SKU typed with a space (`DZ5485 201`), and the same SKU in two
@@ -444,6 +444,16 @@ pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po
   **adds** to its qty, so pasting again tops up. The whole list is validated first.
 - Shoes only (a box needs dimensions on every line). **No UPC** is sent — a SKU lookup's
   UPC belongs to one size ([[upc-is-per-size]]).
+- **The supplier's whole-order list** (2026-10-20): suppliers often have ONE manifest for the
+  whole purchase before anything is split into boxes. Supplier portal → order card
+  **"📋 Paste the whole-order manifest"** → `PoScanModal pasteOnly` (no scanner — one-at-a-time
+  `po/scan-order` stays staff-only) → `scan-bulk {poId}` → order lines (`po_box_id` NULL,
+  `entered_on_behalf=false`), `manifest_scope='po'` (Path C). Gates: their own order, PO
+  `draft`, no per-box lines yet, never on `'order+box'` (that order-level list is OUR buying
+  receipt — `po/line` now also refuses a supplier editing it). After that the labels lose
+  **Add items** and **Review & close** works with nothing listed on the box (close-box/ship
+  already check the order list on Path C). The supplier edits the list line by line while
+  the order is a draft. Shoes only, as above.
 - E2E: `e2e/po-paste.spec.js`.
 
 ## Who may write a manifest, and when (`manifestEditBlock`)

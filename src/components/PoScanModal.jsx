@@ -137,7 +137,9 @@ const sameSku = (a, b) => String(a || '').toUpperCase().replace(/[\s-]/g, '') ==
 // `box` = add to a specific shipping label (per-box manifest). `po` (with no box) = add to
 // the whole order (Path C — one list for the whole purchase, no per-box breakdown). Exactly
 // one of the two is passed; everything else is identical.
-export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onSignOut }) {
+// `pasteOnly` = the window opens on "Paste a list" with no scanner behind it — the
+// supplier's whole-order list, where one-at-a-time entry (po/scan-order) is staff-only.
+export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, onClose, onAdded, onSignOut }) {
   const orderMode = !box;
   // Name the target the way the rest of the app does — a reship is "the replacement
   // shipment" everywhere else, so "Label 3" here would read as a fourth original box.
@@ -170,7 +172,7 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
   const inputRef = useRef(null);
   // "Paste a list" — a supplier's "SKU / size x qty" message, many shoes at once
   // (src/lib/poPaste.js). Shoes only: an empty box needs its dimensions on every line.
-  const [paste, setPaste] = useState(null);           // null = closed; { text, prices: {sku: '120'} }
+  const [paste, setPaste] = useState(pasteOnly ? { text: '', prices: {} } : null); // null = closed; { text, prices: {sku: '120'} }
   const [lookups, setLookups] = useState({});         // sku -> { state: 'loading'|'ok'|'none', name, colorway, gender }
   const parsed = paste ? parsePoPaste(paste.text) : null;
   // Name each pasted SKU from the catalogue — a convenience, never a gate: a SKU the
@@ -207,7 +209,7 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
       const out = await api.poScanBulk(orderMode ? { poId: Number(po.id), shoes } : { poBoxId: Number(box.id), shoes });
       for (const line of out.lines || []) recordScan(line);
       setFlash({ type: 'added', text: `Added ${out.pairs} pair${out.pairs === 1 ? '' : 's'} · ${shoes.length} SKU${shoes.length === 1 ? '' : 's'} to ${targetLabel}` });
-      setPaste(null); onAdded();
+      setPaste(pasteOnly ? { text: '', prices: {} } : null); onAdded();
     } catch (e) {
       if (e.unauthorized) return onSignOut();
       setError(e.message); onAdded();
@@ -421,7 +423,7 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
           <button type="button" className="btn icon ghost" onClick={onClose}>×</button>
         </div>
 
-        {!boxesOrder && !draft && (
+        {!boxesOrder && !draft && !pasteOnly && (
           <div className="po-paste-toggle">
             <button type="button" className={`btn sm ${paste ? 'primary' : 'ghost'}`} disabled={busy}
               onClick={() => { setError(''); setPaste((p) => (p ? null : { text: '', prices: {} })); }}>
@@ -477,7 +479,7 @@ export function PoScanModal({ box, po, boxesOrder = false, onClose, onAdded, onS
               </div>
             )}
             <div className="modal-actions">
-              <button type="button" className="btn ghost" disabled={busy} onClick={() => setPaste(null)}>Cancel</button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => (pasteOnly ? onClose() : setPaste(null))}>{pasteOnly ? 'Close' : 'Cancel'}</button>
               <button type="button" className="btn primary wide" disabled={busy || !parsed?.pairs} onClick={addPasted}>
                 {busy ? 'Adding…' : parsed?.pairs ? `Add ${parsed.pairs} pair${parsed.pairs === 1 ? '' : 's'} (${parsed.shoes.length} SKU${parsed.shoes.length === 1 ? '' : 's'}) to ${orderMode ? 'order' : 'label'}` : 'Paste a list to add'}
               </button>

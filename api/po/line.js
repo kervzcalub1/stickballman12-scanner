@@ -7,6 +7,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoLine, getPoBox, getPo, updatePoLine, dbConfigured } from '../_lib/db.js';
 import { manifestEditBlock, parseMoney, isBoxesOrder, normalizeDimensions } from '../_lib/po-manifest.js';
+import { hasOrderedList } from '../../src/lib/postatus.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -51,6 +52,10 @@ export default async function handler(req, res) {
     // A supplier is scoped to their own POs; PH/admin can edit any PO on the team's behalf.
     if (user.role === 'supplier' && !isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
       return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
+    // On an order raised from a buying request the order-level list is OUR receipt, not
+    // the supplier's manifest — theirs is per label.
+    if (user.role === 'supplier' && !isPrivileged(user.role) && !box && hasOrderedList(po))
+      return send(res, 403, { ok: false, error: 'That list is the order’s receipt — edit the items on your labels instead.' });
     // entered_by references users(id); env admin/superadmin have a non-numeric uid, so
     // stamp the on-behalf flag but leave entered_by NULL for them.
     const onBehalf = user.role !== 'supplier';

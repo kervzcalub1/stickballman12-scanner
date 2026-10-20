@@ -1,6 +1,6 @@
 // POST /api/po/scan-bulk  (supplier / ph_team / admin)
 //   { poBoxId, shoes: [{ sku, name?, colorway?, gender?, unitCost?, tip?, sizes: [{ size, qty }] }] }  → one label
-//   { poId,    shoes: [...] }                                                                           → the whole order (PH)
+//   { poId,    shoes: [...] }                                                                           → the whole order (PH, or the supplier on their own draft)
 //   -> { ok, lines, pairs }
 //
 // "Paste a list" in the Add-items window (PoScanModal, src/lib/poPaste.js): a supplier's
@@ -17,7 +17,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, addPoScan, addPoOrderScan, poHasBoxLines, setPoManifestScope, dbConfigured } from '../_lib/db.js';
 import { manifestEditBlock, isReplacementBox, money, isBoxesOrder } from '../_lib/po-manifest.js';
-import { declaresPerBox } from '../../src/lib/postatus.js';
+import { declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 
 const MAX_SHOES = 150;
 const MAX_LINES = 1000;
@@ -63,11 +63,21 @@ export default async function handler(req, res) {
   try {
     let po; let box = null;
     if (orderMode) {
-      // The whole-order list is PH's (po/scan-order is staff-only too).
-      if (user.role === 'supplier' && !isPrivileged(user.role))
-        return send(res, 403, { ok: false, error: 'Add items to one of your labels.' });
       po = await getPo(Number(body.poId));
       if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
+      // A supplier may paste the whole-order list too: they often have ONE manifest for the
+      // whole purchase before anything is split into boxes. Their own order only, only
+      // while it's still a draft (once every label has shipped it's PH's to correct), and
+      // never onto an order raised from a buying request — that order-level list is OUR
+      // receipt ('order+box'), not the supplier's account of what they sent.
+      if (user.role === 'supplier' && !isPrivileged(user.role)) {
+        if (Number(po.supplier_user_id) !== Number(user.uid))
+          return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
+        if (hasOrderedList(po))
+          return send(res, 409, { ok: false, error: 'This order lists what you send per box — add items to one of your labels.' });
+        if (po.status !== 'draft')
+          return send(res, 409, { ok: false, error: 'Every label on this order has shipped — the manifest can no longer be edited here.' });
+      }
       if (po.status !== 'draft' && po.status !== 'receiving')
         return send(res, 409, { ok: false, error: 'This order is already closed — it can no longer be edited.' });
       if (await poHasBoxLines(po.id))
@@ -97,7 +107,7 @@ export default async function handler(req, res) {
       const common = { poId: po.id, sku: l.sku, size: l.size, dimensions: null, qty: l.qty, name: l.name, upc: null,
         colorway: l.colorway, gender: l.gender, unitCost: l.unitCost, tip: l.tip };
       written.push(orderMode
-        ? await addPoOrderScan({ ...common, enteredBy: Number.isInteger(uidNum) ? uidNum : null, enteredOnBehalf: true })
+        ? await addPoOrderScan({ ...common, enteredBy, enteredOnBehalf: onBehalf })
         : await addPoScan({ ...common, poBoxId, enteredBy, enteredOnBehalf: onBehalf }));
     }
     if (orderMode) await setPoManifestScope(po.id, 'po');

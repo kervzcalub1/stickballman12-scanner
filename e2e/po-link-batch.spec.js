@@ -182,11 +182,16 @@ test.describe('PO delete', () => {
     for (const [path, data] of [
       ['/api/po/link-batch', { poId: f.po.id, batchId: f.batchId }],
       ['/api/po/unlink-batch', { poId: f.po.id, batchId: f.batchId }],
-      ['/api/po/delete', { poId: f.po.id, confirm: f.po.po_code }],
     ]) {
       expect((await request.post(path, { headers: auth('supplier'), data })).status(), path).toBe(403);
       expect((await request.post(path, { data })).status(), path).toBe(401);
     }
+    // A supplier may delete only an order of their OWN they raised by mistake
+    // (po-supplier-raised.spec.js); someone else's isn't there to them.
+    const del = { poId: f.po.id, confirm: f.po.po_code };
+    expect((await request.post('/api/po/delete', { headers: auth('supplier'), data: del })).status()).toBe(404);
+    expect((await request.post('/api/po/delete', { data: del })).status()).toBe(401);
+    expect((await q('SELECT 1 FROM purchase_orders WHERE id = $1', [f.po.id])).length).toBe(1);
   });
 });
 

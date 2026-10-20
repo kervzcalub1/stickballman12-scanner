@@ -347,6 +347,15 @@ export function SupplierApp({ user, onSignOut }) {
     catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
   };
+  // Delete an order raised by mistake — only while it's still wholly theirs (their own,
+  // a draft, no labels asked for or on it). The server holds the same line.
+  const deleteOrder = async () => {
+    if (!window.confirm(`Delete ${po.po_code}? Every box and everything listed on them goes with it. This can't be undone.`)) return;
+    setBusy(true); setError('');
+    try { await api.poDelete(Number(po.id), po.po_code); closePo(); await loadList(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+    finally { setBusy(false); }
+  };
   // "I've packed these — send me labels." The handoff back to Stickballman12.
   const askForLabels = async (on = true) => {
     setBusy(true); setError('');
@@ -524,6 +533,11 @@ export function SupplierApp({ user, onSignOut }) {
               {po.status === 'draft' && (
                 <div className="sup-box-tools">
                   <button className="btn sm" disabled={busy} onClick={addBox}>+ Add a box</button>
+                  {/* Raised here by mistake? Theirs to delete until a label is asked for or on
+                      a box — after that we've bought labels, so they ask us. */}
+                  {selfRaised && !awaitingLabels && !detail.boxes.some((b) => b.tracking_number) && (
+                    <button className="btn sm ghost danger" disabled={busy} onClick={deleteOrder}>Delete order</button>
+                  )}
                   {!awaitingLabels ? (
                     <button className="btn sm primary" disabled={busy} onClick={() => askForLabels(true)}>
                       <Icon name="tag" /> Ask for labels
@@ -614,7 +628,10 @@ export function SupplierApp({ user, onSignOut }) {
                     </div>
                     {/* Drop a box you didn't end up packing. Only while it hasn't gone —
                         after that it is a record of something that physically left. */}
-                    {!isReplacement && !isShipped && po.status === 'draft' && (
+                    {/* Never the last one: an order keeps at least one label (the whole order
+                        is deleted instead). */}
+                    {!isReplacement && !isShipped && po.status === 'draft'
+                      && detail.boxes.filter((b) => b.kind !== 'replacement').length > 1 && (
                       <button type="button" className="btn sm ghost sup-box-remove" disabled={busy}
                         title={`Remove box ${box.box_number}`} onClick={() => removeBox(box)}>Remove</button>
                     )}

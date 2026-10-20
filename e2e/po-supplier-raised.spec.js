@@ -139,6 +139,48 @@ test('boxes can be added and removed until one has gone, but never given a track
   expect(await late.text()).toContain('already on its way');
 });
 
+test('a supplier deletes an order they raised by mistake — only while it is still wholly theirs', async ({ request }) => {
+  const del = (po, uid = SUP) => request.post('/api/po/delete', { headers: asSupplier(uid), data: { poId: po.id, confirm: po.po_code } });
+  const exists = async (po) => (await q('SELECT 1 FROM purchase_orders WHERE id = $1', [po.id])).length > 0;
+
+  // Someone else's order is not even there to them.
+  const mine = (await packed(request, 1)).po;
+  expect((await del(mine, OTHER)).status()).toBe(404);
+  // Labels asked for: cancel that first.
+  await q('UPDATE purchase_orders SET labels_requested_at = now() WHERE id = $1', [mine.id]);
+  expect((await del(mine)).status()).toBe(409);
+  await q('UPDATE purchase_orders SET labels_requested_at = NULL WHERE id = $1', [mine.id]);
+  // A shipping label on a box: we've bought it — ask us.
+  const labelled = (await packed(request, 2));
+  await q('UPDATE po_boxes SET tracking_number = $2 WHERE id = $1', [labelled.boxes[0].id, tn()]);
+  expect((await del(labelled.po)).status()).toBe(409);
+  expect(await exists(labelled.po)).toBe(true);
+  // An order WE raised is ours.
+  const ours = (await q(
+    `INSERT INTO purchase_orders (supplier_name, supplier_user_id, raised_by, expected_boxes, status)
+     VALUES ('E2E Raise Supplier', $1, 'ph', 1, 'draft') RETURNING *`, [SUP]))[0];
+  expect((await del(ours)).status()).toBe(403);
+  expect(await exists(ours)).toBe(true);
+  // Their own draft, nothing asked for: gone, boxes and manifest with it.
+  const r = await del(mine);
+  expect(r.ok(), await r.text()).toBeTruthy();
+  expect(await exists(mine)).toBe(false);
+});
+
+test('the portal: Delete order on the supplier\'s own draft; the last box has no Remove', async ({ page, request }) => {
+  const { po } = await packed(request, 1);
+  await page.addInitScript(([t, u]) => { sessionStorage.setItem('sb_session_token', t); sessionStorage.setItem('sb_user', u); },
+    [asSupplier(SUP).Authorization.slice(7), JSON.stringify({ username: `e2e_sup_${SUP}`, name: 'E2E Raise Supplier', role: 'supplier' })]);
+  await page.goto('/orders');
+  await page.locator('.po-card').filter({ hasText: po.po_code }).first().click();
+  await expect(page.getByRole('button', { name: 'Delete order' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Remove$/ })).toHaveCount(0);
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'Delete order' }).click();
+  await expect.poll(async () => (await q('SELECT 1 FROM purchase_orders WHERE id = $1', [po.id])).length).toBe(0);
+  await expect(page.locator('.po-card').filter({ hasText: po.po_code })).toHaveCount(0);
+});
+
 test('asking for labels against nothing is refused — that is the point of the change', async ({ request }) => {
   const po = (await q(
     `INSERT INTO purchase_orders (supplier_name, supplier_user_id, raised_by, expected_boxes, status)

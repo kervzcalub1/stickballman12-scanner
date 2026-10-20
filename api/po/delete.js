@@ -1,17 +1,24 @@
-// POST /api/po/delete  (ph_team / admin)  { poId, confirm }
+// POST /api/po/delete  (supplier / ph_team / admin)  { poId, confirm }
 // Deletes an order raised by mistake, or a duplicate. `confirm` must be the PO's own code
 // typed back — deletion takes the labels, the manifest lines, the resolution and the
 // comment thread with it (all ON DELETE CASCADE) and there is no undo.
 //
 // Refused while a receiving batch is linked: the record of what actually arrived must
 // never disappear with the order. Unlink it first (POST /api/po/unlink-batch).
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+//
+// A SUPPLIER may delete an order only while it is still wholly theirs: one they raised
+// themselves on the portal (an order WE raised is our purchase — they ask us), still a
+// draft, no label requested from us, and no box with a tracking number or gone. Past
+// that point we have bought labels or a carrier has the parcel, and the order is a record
+// both sides rely on.
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { isSupplierRaised } from '../../src/lib/postatus.js';
 import { deletePo, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['ph_team']);   // admin/superadmin are allowed through by requireRole
+  const user = requireRole(req, res, ['ph_team', 'supplier']);   // admin/superadmin are allowed through by requireRole
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 20 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
@@ -26,6 +33,17 @@ export default async function handler(req, res) {
     const { getPoFull } = await import('../_lib/db.js');
     const data = await getPoFull(poId);
     if (!data) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
+    if (user.role === 'supplier' && !isPrivileged(user.role)) {
+      const { po, boxes = [] } = data;
+      if (Number(po.supplier_user_id) !== Number(user.uid))
+        return send(res, 404, { ok: false, error: 'Purchase order not found.' });
+      if (!isSupplierRaised(po))
+        return send(res, 403, { ok: false, error: `${po.po_code} was raised by our team — message us and we'll delete it.` });
+      if (po.status !== 'draft' || boxes.some((b) => b.tracking_number || !['pending', 'packed'].includes(b.status)))
+        return send(res, 409, { ok: false, error: `${po.po_code} already has shipping labels on it — message us and we'll delete it.` });
+      if (po.labels_requested_at)
+        return send(res, 409, { ok: false, error: 'You’ve asked us for labels on this order — cancel the label request first, then delete it.' });
+    }
     // Checked server-side too: the typed code is the confirmation, not a UI formality.
     if (confirm.toUpperCase() !== String(data.po.po_code).toUpperCase()) {
       return send(res, 400, { ok: false, error: `Type ${data.po.po_code} exactly to confirm the deletion.` });

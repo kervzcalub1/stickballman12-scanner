@@ -344,7 +344,10 @@ Pick the batch from the candidates, confirm which received box is which label
 panel with an **Unlink** per batch, and — while nothing is linked — **"Delete this
 purchase order"**.
 - Endpoints: `po/link-candidates` (GET, list + per-batch preview), `po/link-batch`,
-  `po/unlink-batch` (all warehouse/ph_team) and `po/delete` (ph_team/admin).
+  `po/unlink-batch` (all warehouse/ph_team) and `po/delete` (ph_team/admin; **supplier** on
+  their portal — **Delete order** — only for an order THEY raised, still `draft`, no label
+  requested and no box with a tracking number or gone; otherwise "message us"). The portal
+  hides **Remove** on an order's only box, since an order must keep one.
   db: `listPoLinkCandidates`, `getPoLinkPreview`, `linkBatchToPo`, `unlinkBatchFromPo`,
   `deletePo`. `getPoFull` now also returns `batches` (stripped for suppliers).
 - **Linking is per BATCH, not per box** — `batches.po_id` is the join and reconciliation

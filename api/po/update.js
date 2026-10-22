@@ -63,6 +63,8 @@ export default async function handler(req, res) {
       const v = String(body.orderKind ?? '').trim();
       if (!ORDER_KINDS.includes(v))
         return send(res, 400, { ok: false, error: 'An order is either for shoes or for empty shoe boxes.' });
+      if (v === 'boxes' && data.po.by_store)
+        return send(res, 409, { ok: false, error: 'This order is split by store — a store order is always for shoes.' });
       if (v !== (data.po.order_kind || 'shoes')) {
         patch.orderKind = v;
         changed.push(`order kind → ${v === 'boxes' ? 'empty shoe boxes' : 'shoes'}`

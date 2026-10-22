@@ -26,6 +26,7 @@ import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
+import { StoreOrderPanel } from '../components/StoreOrderPanel.jsx';
 import { isBoxesOrder, hasLeftSupplier, isSupplierRaised, declaresPerBox, hasOrderedList } from '../lib/postatus.js';
 import { hasPriv } from '../lib/constants.js';
 import { useLive, afterTyping } from '../hooks.js';
@@ -145,6 +146,8 @@ export function SupplierApp({ user, onSignOut }) {
   const [newTag, setNewTag] = useState('');
   const [newBoxes, setNewBoxes] = useState('1');
   const [newKind, setNewKind] = useState('shoes');
+  // Bought from several stores that each ship their own boxes (a store order).
+  const [newByStore, setNewByStore] = useState(false);
   const [page, setPage] = useState(() => supPageForPath(window.location.pathname));
   const goPage = (p) => {
     setPage(p);
@@ -205,7 +208,7 @@ export function SupplierApp({ user, onSignOut }) {
     setOpenId(id); setDetail(null); setError('');
     writeParam('po', String(id));
     api.poGet(id)
-      .then((r) => { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines }); setBusinessName(r.businessName || ''); setShipTo(r.shipTo || null); })
+      .then((r) => { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] }); setBusinessName(r.businessName || ''); setShipTo(r.shipTo || null); })
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
   const refreshDetail = () => { if (openId) openPo(openId); };
@@ -232,7 +235,7 @@ export function SupplierApp({ user, onSignOut }) {
   // closed, a new order is being opened, or this supplier's own save is in flight — the
   // scan modal is a draft and must never be swapped out from under them.
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'items', 'batches'], async () => {
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'po_stores', 'items', 'batches'], async () => {
     await afterTyping('.app');
     try {
       const n = (await api.poList()).pos || [];
@@ -242,7 +245,7 @@ export function SupplierApp({ user, onSignOut }) {
       const r = await api.poGet(id);
       setDetail((cur) => {
         if (!cur || Number(cur.po?.id) !== Number(id)) return cur;
-        const next = { po: r.po, boxes: r.boxes, lines: r.lines };
+        const next = { po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] };
         return same(cur, next) ? cur : next;
       });
     } catch (e) { if (e.unauthorized) onSignOut(); }
@@ -258,7 +261,7 @@ export function SupplierApp({ user, onSignOut }) {
     setError('');
     try {
       const r = await api.poTrackRefresh(openId, boxId != null ? Number(boxId) : undefined);
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines });
+      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] });
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { if (boxId != null) setTrackBoxBusy(null); else setTrackBusy(false); }
   };
@@ -273,7 +276,7 @@ export function SupplierApp({ user, onSignOut }) {
     setBusy(true); setError('');
     try {
       const r = await api.poCloseBox(Number(box.id));
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines });
+      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] });
       setCloseReview(null);
       setPackedBox(box);
     } catch (e) {
@@ -287,7 +290,7 @@ export function SupplierApp({ user, onSignOut }) {
     setBusy(true); setError('');
     try {
       const r = await api.poReopenBox(Number(box.id));
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines });
+      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] });
     } catch (e) {
       if (e.unauthorized) return onSignOut();
       setError(e.message);
@@ -299,7 +302,7 @@ export function SupplierApp({ user, onSignOut }) {
     setBusy(true);
     try {
       const r = await api.poShip(Number(box.id));
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines });
+      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] });
       loadList();
     } catch (e) {
       if (e.unauthorized) return onSignOut();
@@ -368,8 +371,11 @@ export function SupplierApp({ user, onSignOut }) {
     setBusy(true); setError('');
     try {
       const n = Math.max(1, Math.min(100, parseInt(newBoxes, 10) || 1));
-      const { po } = await api.poCreate({ tagCode: newTag.trim(), notes: '', boxes: n, orderKind: newKind });
-      setNewOpen(false); setNewTag(''); setNewBoxes('1'); setNewKind('shoes');
+      const byStore = newByStore && newKind === 'shoes';
+      const { po } = await api.poCreate(byStore
+        ? { tagCode: newTag.trim(), notes: '', byStore: true, orderKind: 'shoes' }
+        : { tagCode: newTag.trim(), notes: '', boxes: n, orderKind: newKind });
+      setNewOpen(false); setNewTag(''); setNewBoxes('1'); setNewKind('shoes'); setNewByStore(false);
       await loadList();
       openPo(po.id);
     } catch (e) {
@@ -411,11 +417,22 @@ export function SupplierApp({ user, onSignOut }) {
                   ? 'Replacement boxes for pairs that came crushed or with none. You’ll give each one a SKU, size, dimensions and cost.'
                   : 'A shipment of pairs. You’ll give each one a SKU and size.'}</span>
               </label>
-              <div className="sup-new-grid">
-                <label className="sup-new-field"><span className="sup-new-label">How many boxes?</span>
-                  <input type="number" min="1" max="100" inputMode="numeric" value={newBoxes}
-                    onChange={(e) => setNewBoxes(e.target.value)} />
+              {/* Bought from several stores that each ship their own boxes — the list is
+                  written store by store, and boxes are added under the store that ships them. */}
+              {newKind === 'shoes' && (
+                <label className="sup-new-check">
+                  <input type="checkbox" checked={newByStore} onChange={(e) => setNewByStore(e.target.checked)} />
+                  <span>Bought from <b>several stores</b> — each store ships its own boxes
+                    <span className="muted sm"> · you list what each store is sending and its price, then add each store’s boxes</span></span>
                 </label>
+              )}
+              <div className="sup-new-grid">
+                {!(newByStore && newKind === 'shoes') && (
+                  <label className="sup-new-field"><span className="sup-new-label">How many boxes?</span>
+                    <input type="number" min="1" max="100" inputMode="numeric" value={newBoxes}
+                      onChange={(e) => setNewBoxes(e.target.value)} />
+                  </label>
+                )}
                 <label className="sup-new-field"><span className="sup-new-label">Tag / name <span className="muted">(optional)</span></span>
                   <input value={newTag} maxLength={120} placeholder="e.g. Joey JP23 AJ40" onChange={(e) => setNewTag(e.target.value)} />
                 </label>
@@ -469,6 +486,7 @@ export function SupplierApp({ user, onSignOut }) {
   // on a page whose every line is a carton reads like a different number entirely.
   const unitsLabel = (n) => `${n} ${boxesOrder ? (n === 1 ? 'box' : 'boxes') : `unit${n === 1 ? '' : 's'}`}`;
   const linesFor = (boxId) => (detail?.lines || []).filter((l) => Number(l.po_box_id) === Number(boxId));
+  const storeName = (box) => (detail?.stores || []).find((s) => Number(s.id) === Number(box.po_store_id))?.name || '';
   const money = (n) => `$${Number(n || 0).toFixed(2)}`;
   // What ONE line cost, spelled out on the line itself. The box total answers "how
   // much is in this label"; this answers "what did I put against this shoe" — which is
@@ -523,6 +541,8 @@ export function SupplierApp({ user, onSignOut }) {
                 ? <p className="po-shipped-note">✓ All labels shipped — this batch is on its way to the warehouse.</p>
                 : awaitingLabels ? (
                   <p className="muted sm">You’ve asked for labels — we’ll buy them and the tracking numbers will appear on your boxes here. You can keep adding to the boxes until then.</p>
+                ) : po.by_store ? (
+                  <p className="muted sm">Paste what <b>each store</b> is sending and its price, add the boxes each store is shipping, then <b>ask for labels</b>. Send each store its labels — they tape them on and ship. When the list is right, <b>confirm it</b>.</p>
                 ) : selfRaised ? (
                   <p className="muted sm">List what you packed in each box, then <b>ask for labels</b>. We put the tracking numbers on afterwards, so you can print each box’s manifest and seal it while you wait.</p>
                 ) : <p className="muted sm">Match each label to the tracking numbers we sent in the group chat, {boxesOrder ? 'add the empty boxes going in it' : 'scan its items'}, then ship it. The batch closes when every label is shipped.</p>}
@@ -532,7 +552,7 @@ export function SupplierApp({ user, onSignOut }) {
                   physically left. */}
               {po.status === 'draft' && (
                 <div className="sup-box-tools">
-                  <button className="btn sm" disabled={busy} onClick={addBox}>+ Add a box</button>
+                  {!po.by_store && <button className="btn sm" disabled={busy} onClick={addBox}>+ Add a box</button>}
                   {/* Raised here by mistake? Theirs to delete until a label is asked for or on
                       a box — after that we've bought labels, so they ask us. */}
                   {selfRaised && !awaitingLabels && !detail.boxes.some((b) => b.tracking_number) && (
@@ -582,6 +602,11 @@ export function SupplierApp({ user, onSignOut }) {
                 them, they don't upload them. */}
             <PoLabelsFile po={po} onSignOut={onSignOut} />
 
+            {po.by_store && (
+              <StoreOrderPanel detail={detail} onChanged={refreshDetail} onPatchLine={patchLine}
+                lineBusy={lineBusy} staffLabel={staffLabel} onSignOut={onSignOut} />
+            )}
+
             {detail.boxes.map((box) => {
               const lines = linesFor(box.id);
               const units = lines.reduce((n, l) => n + (l.qty_expected || 0), 0);
@@ -620,6 +645,7 @@ export function SupplierApp({ user, onSignOut }) {
                           a label while it hasn't got one is the confusion this flow
                           exists to avoid. */}
                       <b>{isReplacement ? 'Replacement shipment' : `${box.tracking_number ? 'Label' : 'Box'} ${box.box_number}`}</b>
+                      {po.by_store && storeName(box) && <span className="po-store-tag sm"> · {storeName(box)}</span>}
                       <div className="po-track muted sm">
                         {carrierName(box.carrier || box.carrier_key) ? <span className="po-carrier">{carrierName(box.carrier || box.carrier_key)}</span> : null}
                         {carrierName(box.carrier || box.carrier_key) && box.tracking_number ? ' · ' : ''}
@@ -631,7 +657,7 @@ export function SupplierApp({ user, onSignOut }) {
                     {/* Never the last one: an order keeps at least one label (the whole order
                         is deleted instead). */}
                     {!isReplacement && !isShipped && po.status === 'draft'
-                      && detail.boxes.filter((b) => b.kind !== 'replacement').length > 1 && (
+                      && (po.by_store || detail.boxes.filter((b) => b.kind !== 'replacement').length > 1) && (
                       <button type="button" className="btn sm ghost sup-box-remove" disabled={busy}
                         title={`Remove box ${box.box_number}`} onClick={() => removeBox(box)}>Remove</button>
                     )}
@@ -740,7 +766,15 @@ export function SupplierApp({ user, onSignOut }) {
                     </div>
                   )}
 
-                  {isFilling && (
+                  {isFilling && po.by_store && (
+                    <div className="po-box-actions">
+                      <PoLabelDownload poId={Number(po.id)} box={box} onSignOut={onSignOut} />
+                      <span className="muted sm">{box.tracking_number
+                        ? `Send this label to ${storeName(box) || 'the store'} — they tape it on and ship.`
+                        : 'Waiting for its shipping label.'}</span>
+                    </div>
+                  )}
+                  {isFilling && !po.by_store && (
                     <div className="po-box-actions">
                       <PoLabelDownload poId={Number(po.id)} box={box} onSignOut={onSignOut} />
                       {perBox && <button className="btn sm" onClick={() => setScanBox(box)}><Icon name="camera" /> Add {boxesOrder ? 'boxes' : 'items'}</button>}
@@ -788,6 +822,7 @@ export function SupplierApp({ user, onSignOut }) {
               // the order is a draft; our team may also have entered it for them. Not on a
               // buying-request order: its order-level list is our receipt, and theirs is
               // per label. Shoes only (an empty box needs dimensions on every line).
+              if (po.by_store) return null;
               const orderLines = (detail.lines || []).filter((l) => l.po_box_id == null);
               const hasBoxLines = (detail.lines || []).some((l) => l.po_box_id != null);
               const canPaste = po.status === 'draft' && !boxesOrder && !hasOrderedList(po) && !hasBoxLines;

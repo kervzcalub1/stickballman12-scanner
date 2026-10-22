@@ -493,7 +493,7 @@ function drawNote(doc, y, text) {
 // `boxId` narrows 'perbox' to ONE label — the sheet a supplier prints for the box they
 // just closed, to tape to that box before sealing it. The "Box N of M" denominator still
 // counts every label on the order, so a single sheet says which box of the shipment it is.
-export async function buildManifestPdf({ po, boxes = [], lines = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null, receivedBoxes = null, compare = null, boxDiffs = null, prices = false }) {
+export async function buildManifestPdf({ po, boxes = [], lines = [], stores = [], businessName, mode = 'whole', generatedAt = '', boxId = null, shipTo = null, receivedBoxes = null, compare = null, boxDiffs = null, prices = false }) {
   // Shoes, or the empty shoe boxes we buy to replace crushed and missing ones. It swaps
   // the identifying column and the unit noun everywhere on the sheet.
   const boxesOrder = String(po?.order_kind || 'shoes') === 'boxes';
@@ -501,7 +501,42 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], businessNam
   const doc = new jsPDF({ unit: 'mm', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
   const stamp = generatedAt || '';
 
-  if (mode === 'perbox') {
+  if (mode === 'invoice') {
+    // A STORE ORDER's invoice (docs/store-orders-plan.md): the stores never send one, so we
+    // build it from the confirmed list — store by store, each with its pairs and subtotal
+    // at the price each, then the order's total. What gets checked against the card.
+    const title = 'Store Order - Invoice';
+    const confirmed = po?.list_confirmed_at
+      ? `List confirmed by ${po.list_confirmed_by || 'the supplier'} on ${String(po.list_confirmed_at_est || po.list_confirmed_at).slice(0, 10)}`
+      : 'List NOT confirmed yet - draft';
+    const header = () => drawHeader(doc, {
+      businessName, title, po, trackingNumbers: trackingList(boxes), shipTo: null,
+      subtitle: { label: 'Stores', value: String((stores || []).length) },
+      sourceNote: confirmed,
+    });
+    const cont = () => drawContinuedHeader(doc, { businessName, title, po });
+    let y = header();
+    let grandPairs = 0; let grandMoney = 0;
+    for (const st of stores || []) {
+      const items = sortLines((lines || []).filter((l) => l.po_box_id == null && Number(l.po_store_id) === Number(st.id)));
+      if (y + 30 > PAGE_H - 20) { doc.addPage(); y = cont(); }
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...INK);
+      doc.text(String(st.name).replace(/[^\x20-\x7E]/g, '-'), MARGIN, y + 5);
+      y += 8;
+      if (!items.length) { drawNote(doc, y, 'No shoes listed for this store.'); y += 10; continue; }
+      const out = drawItemTable(doc, y, items, cont, true, false);
+      grandPairs += out.total;
+      grandMoney += items.reduce((n, it) => n + (declared(it.unit_cost) || 0) * (Number(it.qty_expected) || 0), 0);
+      y = out.y + 10;
+    }
+    if (y + 20 > PAGE_H - 20) { doc.addPage(); y = cont(); }
+    doc.setDrawColor(...INK); doc.setLineWidth(0.8);
+    doc.line(PAGE_W - MARGIN - 90, y, PAGE_W - MARGIN, y);
+    y += 7;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(...INK);
+    doc.text(`ORDER TOTAL - ${grandPairs} pairs`, PAGE_W - MARGIN - 90, y);
+    doc.text(usd(grandMoney), PAGE_W - MARGIN, y, { align: 'right' });
+  } else if (mode === 'perbox') {
     // One page per box. A box with no items still gets a page (so the count of pages
     // matches the count of labels and nothing looks "missing"). A replacement label is
     // a reship the WAREHOUSE raised, not one of the supplier's — so it doesn't count

@@ -4246,8 +4246,21 @@ export async function listSupplierUsers() {
 }
 
 // Create a PO shell + one po_boxes row per label, atomically (CTE + unnest).
-export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, createdBy, orderKind = 'shoes', raisedBy = 'ph' }) {
+export async function createPo({ supplierName, supplierUserId, tagCode, dateOfPurchase, notes, labels, createdBy, orderKind = 'shoes', raisedBy = 'ph', byStore = false }) {
   const sql = db();
+  // A store order (docs/store-orders-plan.md) is a whole-order list from the start and opens
+  // with NO boxes — they're added per store once the stores are on it.
+  if (byStore) {
+    const po = (await sql`
+      INSERT INTO purchase_orders
+        (supplier_name, supplier_user_id, tag_code, date_of_purchase, expected_boxes, notes, created_by,
+         order_kind, raised_by, by_store, manifest_scope)
+      VALUES (${supplierName}, ${supplierUserId || null}, ${tagCode || null}, ${dateOfPurchase || null},
+              0, ${notes || null}, ${createdBy || null}, 'shoes',
+              ${raisedBy === 'supplier' ? 'supplier' : 'ph'}, true, 'po')
+      RETURNING id`)[0];
+    return getPoFull(po.id);
+  }
   const boxNumbers = labels.map((_, i) => i + 1);
   const trackings = labels.map((l) => (String(l.trackingNumber || '').trim() || null));
   const carrierKeys = labels.map((l) => (Number.isInteger(Number(l.carrierKey)) && Number(l.carrierKey) > 0 ? Number(l.carrierKey) : null));
@@ -4318,13 +4331,14 @@ export async function getPoFull(id) {
     WHERE l.po_id = ${id}
     ORDER BY l.po_box_id, l.sku, l.size
   `;
+  const stores = po.by_store ? await listPoStores(id) : [];
   // Receiving batches attached to this order (usually exactly one). The PO screen shows
   // what the order is actually counting, and can unlink one attached in error.
   const batches = await sql`
     SELECT b.id, b.batch_code, b.status, b.created_at, b.supplier_name, b.date_received,
            (SELECT count(*) FROM items i WHERE i.batch_id = b.id)::int AS units
     FROM batches b WHERE b.po_id = ${id} ORDER BY b.id`;
-  return { po, boxes, lines, batches };
+  return { po, boxes, lines, batches, stores };
 }
 
 // List POs with roll-up counts. Supplier sees only their own; everyone else all.
@@ -4443,10 +4457,14 @@ export async function listInboundBoxes() {
   `;
 }
 
+// The audit snapshot is the frozen store-by-store audit (store orders) — a big JSON blob
+// that belongs on the order's own screen, never on every row of a list.
+const dropAuditSnapshot = (rows) => rows.map(({ audit_snapshot, ...r }) => r);
+
 export async function listPos({ uid, supplierScope }) {
   const sql = db();
   if (supplierScope) {
-    return sql`
+    return dropAuditSnapshot(await sql`
       SELECT p.*,
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'
@@ -4475,9 +4493,9 @@ export async function listPos({ uid, supplierScope }) {
       FROM purchase_orders p
       WHERE p.supplier_user_id = ${uid}
       ORDER BY p.created_at DESC
-    `;
+    `);
   }
-  return sql`
+  return dropAuditSnapshot(await sql`
     SELECT p.*,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'
@@ -4514,7 +4532,7 @@ export async function listPos({ uid, supplierScope }) {
                          GROUP BY l.sku) x), '[]') AS lines
     FROM purchase_orders p
     ORDER BY p.created_at DESC
-  `;
+  `);
 }
 
 // Add/increment an expected line under a label. Re-scanning a SKU+size in the
@@ -4611,7 +4629,7 @@ export async function addPoOrderScan({ poId, sku, size, dimensions = null, qty, 
       VALUES (${poId}, NULL, ${sku}, ${size}, ${name || null}, ${upc || null},
               ${colorway || null}, ${gender || null}, ${qty}, ${unitCost ?? null}, ${tip ?? null},
               ${enteredBy ?? null}, ${!!enteredOnBehalf})
-      ON CONFLICT (po_id, sku, size) WHERE po_box_id IS NULL AND dimensions IS NULL DO UPDATE
+      ON CONFLICT (po_id, sku, size) WHERE po_box_id IS NULL AND dimensions IS NULL AND po_store_id IS NULL DO UPDATE
         SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
             unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
             tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
@@ -4624,11 +4642,171 @@ export async function addPoOrderScan({ poId, sku, size, dimensions = null, qty, 
   return rows[0];
 }
 
+/* ---- Store orders (docs/store-orders-plan.md) ----
+   One supplier buying from many stores of one retailer, each store shipping its own boxes.
+   The whole-order list is split by store (po_lines.po_store_id), each label says which
+   store ships it (po_boxes.po_store_id), and the audit compares what each store declared,
+   what the card was charged and what arrived. A store's charges and receipts are money
+   evidence: nothing here deletes a store that holds any. */
+
+// One spelling per store: trimmed, inner whitespace collapsed. Matched case-insensitively
+// (the unique index is on lower(name)).
+export { normStoreName } from '../../src/lib/storePaste.js';
+
+// The order's stores with what each declared. `declared_total` is NULL when no line is
+// priced — never 0, which would read as "free".
+export async function listPoStores(poId) {
+  const sql = db();
+  return sql`
+    SELECT s.*,
+      (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_store_id = s.id)::int AS declared_units,
+      (SELECT sum(l.qty_expected * l.unit_cost) FROM po_lines l WHERE l.po_store_id = s.id) AS declared_total,
+      (SELECT count(*) FROM po_lines l WHERE l.po_store_id = s.id AND l.unit_cost IS NULL)::int AS unpriced_lines,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_store_id = s.id AND b.kind <> 'replacement')::int AS box_count,
+      (SELECT sum(c.amount) FROM po_store_charges c WHERE c.po_store_id = s.id) AS charged_total,
+      (SELECT count(*) FROM po_store_charges c WHERE c.po_store_id = s.id)::int AS charge_count,
+      (SELECT count(*) FROM po_store_receipts r WHERE r.po_store_id = s.id)::int AS receipt_count
+    FROM po_stores s WHERE s.po_id = ${poId}
+    ORDER BY s.position, s.id`;
+}
+
+export async function getPoStore(id) {
+  const sql = db();
+  return (await sql`SELECT * FROM po_stores WHERE id = ${id}`)[0] || null;
+}
+
+// Every store line on the order with its store's name — for the paste's price check.
+export async function listPoStoreLines(poId) {
+  const sql = db();
+  return sql`
+    SELECT l.*, s.name AS store_name FROM po_lines l JOIN po_stores s ON s.id = l.po_store_id
+     WHERE l.po_id = ${poId} AND l.po_box_id IS NULL`;
+}
+
+// Write a pasted store list. ONE transaction — the stores and every line land, or nothing
+// does (a half-written list is worse than a refused one). The transaction helper takes
+// pre-built queries, so a line finds its store by name in SQL rather than by an id from
+// an earlier step. Re-pasting a line ADDS to its qty, like every other paste.
+// `stores` = [{ name, lines: [{ sku, size, qty, name, colorway, gender, unitCost, tip }] }],
+// already validated and price-checked by the caller.
+export async function writePoStoreList({ poId, stores, enteredBy = null, enteredOnBehalf = false }) {
+  const sql = db();
+  const existing = await sql`SELECT lower(name) AS key, position FROM po_stores WHERE po_id = ${poId}`;
+  const known = new Set(existing.map((r) => r.key));
+  let position = existing.reduce((m, r) => Math.max(m, Number(r.position) || 0), 0);
+  const queries = [];
+  for (const st of stores) {
+    if (!known.has(st.name.toLowerCase())) {
+      known.add(st.name.toLowerCase());
+      position += 1;
+      queries.push(sql`
+        INSERT INTO po_stores (po_id, name, position) VALUES (${poId}, ${st.name}, ${position})
+        ON CONFLICT (po_id, (lower(name))) DO NOTHING`);
+    }
+    for (const l of st.lines) {
+      queries.push(sql`
+        INSERT INTO po_lines (po_id, po_box_id, po_store_id, sku, size, name, colorway, gender,
+                              qty_expected, unit_cost, tip, entered_by, entered_on_behalf)
+        SELECT ${poId}, NULL, s.id, ${l.sku}, ${l.size}, ${l.name || null}, ${l.colorway || null}, ${l.gender || null},
+               ${l.qty}, ${l.unitCost ?? null}, ${l.tip ?? null}, ${enteredBy ?? null}, ${!!enteredOnBehalf}
+          FROM po_stores s WHERE s.po_id = ${poId} AND lower(s.name) = lower(${st.name})
+        ON CONFLICT (po_store_id, sku, size) WHERE po_box_id IS NULL AND dimensions IS NULL AND po_store_id IS NOT NULL
+        DO UPDATE SET qty_expected      = least(999, po_lines.qty_expected + EXCLUDED.qty_expected),
+                      unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+                      tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
+                      name              = COALESCE(EXCLUDED.name, po_lines.name),
+                      entered_by        = EXCLUDED.entered_by,
+                      entered_on_behalf = EXCLUDED.entered_on_behalf,
+                      updated_at        = now()`);
+    }
+  }
+  queries.push(sql`UPDATE purchase_orders SET by_store = true, manifest_scope = 'po' WHERE id = ${poId}`);
+  await sql.transaction(queries);
+}
+
+export async function renamePoStore(id, name) {
+  const sql = db();
+  return (await sql`UPDATE po_stores SET name = ${name} WHERE id = ${id} RETURNING *`)[0] || null;
+}
+
+// Remove a store and its list lines. Refused while it has boxes, or any money evidence —
+// a charge or a receipt is what the audit is settled against.
+export async function removePoStore(id) {
+  const sql = db();
+  const st = (await sql`
+    SELECT s.*,
+      (SELECT count(*) FROM po_boxes b WHERE b.po_store_id = s.id)::int AS boxes,
+      (SELECT count(*) FROM po_store_charges c WHERE c.po_store_id = s.id)::int AS charges,
+      (SELECT count(*) FROM po_store_receipts r WHERE r.po_store_id = s.id)::int AS receipts,
+      (SELECT count(*) FROM po_lines l WHERE l.po_store_id = s.id)::int AS lines
+    FROM po_stores s WHERE s.id = ${id}`)[0];
+  if (!st) return { error: 'That store is no longer on the order.' };
+  if (st.boxes) return { error: `${st.name} still has ${st.boxes} box(es). Remove its boxes first.` };
+  if (st.charges || st.receipts) {
+    return { error: `${st.name} has ${st.charges} charge(s) and ${st.receipts} receipt(s) recorded — that is audit evidence, so the store can't be removed.` };
+  }
+  await sql`DELETE FROM po_stores WHERE id = ${id}`;
+  return { ok: true, store: st, linesRemoved: st.lines };
+}
+
+// Charges or receipts anywhere on the order — deleting it would take audit evidence with it.
+export async function poMoneyEvidence(poId) {
+  const sql = db();
+  return (await sql`
+    SELECT
+      (SELECT count(*) FROM po_store_charges c JOIN po_stores s ON s.id = c.po_store_id WHERE s.po_id = ${poId})::int AS charges,
+      (SELECT count(*) FROM po_store_receipts r JOIN po_stores s ON s.id = r.po_store_id WHERE s.po_id = ${poId})::int AS receipts`)[0];
+}
+
+// The supplier's "this is what the stores told me" — or, with who = null, unlocked by staff.
+// Unlocking also clears "invoice checked": a changed list hasn't been checked.
+export async function setPoListConfirmed(poId, who) {
+  const sql = db();
+  return who
+    ? (await sql`UPDATE purchase_orders SET list_confirmed_at = now(), list_confirmed_by = ${who}
+                 WHERE id = ${poId} RETURNING *`)[0]
+    : (await sql`UPDATE purchase_orders SET list_confirmed_at = NULL, list_confirmed_by = NULL,
+                   invoice_checked_at = NULL, invoice_checked_by = NULL
+                 WHERE id = ${poId} RETURNING *`)[0];
+}
+
+// Staff's optional "invoice checked" mark — informational; it blocks nothing.
+export async function setPoInvoiceChecked(poId, who) {
+  const sql = db();
+  return (await sql`
+    UPDATE purchase_orders SET invoice_checked_at = CASE WHEN ${!!who} THEN now() ELSE NULL END,
+                               invoice_checked_by = ${who || null}
+     WHERE id = ${poId} RETURNING *`)[0];
+}
+
+// Put the order's store-less whole-order lines under one store — how an order entered as a
+// single list before it was by store becomes a store order. Refused if any of those lines is
+// already on that store (merging two declared quantities is a person's decision).
+export async function assignOrderLinesToStore(poId, storeId) {
+  const sql = db();
+  const clash = await sql`
+    SELECT l.sku, l.size FROM po_lines l
+     WHERE l.po_id = ${poId} AND l.po_box_id IS NULL AND l.po_store_id IS NULL AND l.dimensions IS NULL
+       AND EXISTS (SELECT 1 FROM po_lines o WHERE o.po_store_id = ${storeId} AND o.sku = l.sku AND o.size = l.size)`;
+  if (clash.length) {
+    return { error: `That store already lists ${clash.map((c) => `${c.sku} ${c.size}`).join(', ')} — fix those by hand first.` };
+  }
+  const moved = await sql`
+    UPDATE po_lines SET po_store_id = ${storeId}, updated_at = now()
+     WHERE po_id = ${poId} AND po_box_id IS NULL AND po_store_id IS NULL AND dimensions IS NULL
+    RETURNING id`;
+  return { ok: true, moved: moved.length };
+}
+
 // Does this PO already have any per-box manifest lines? Used to keep a PO to a single
 // manifest scope — you can't mix a per-box manifest and a whole-order one.
 export async function poHasBoxLines(poId) {
   const sql = db();
-  const r = await sql`SELECT 1 FROM po_lines WHERE po_id = ${poId} AND po_box_id IS NOT NULL LIMIT 1`;
+  // A reship's manifest doesn't make the order per-box: it's the warehouse's own list for
+  // a replacement, and counting it here locked the whole-order list the moment one existed.
+  const r = await sql`
+    SELECT 1 FROM po_lines l JOIN po_boxes b ON b.id = l.po_box_id
+     WHERE l.po_id = ${poId} AND b.kind <> 'replacement' LIMIT 1`;
   return r.length > 0;
 }
 
@@ -4737,7 +4915,9 @@ export async function updatePoLine(lineId, { size, dimensions, qty, unitCost, ti
       : (line.po_box_id == null
         ? (await sql`
             SELECT * FROM po_lines
-            WHERE po_id = ${line.po_id} AND po_box_id IS NULL AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
+            WHERE po_id = ${line.po_id} AND po_box_id IS NULL AND dimensions IS NULL
+              AND po_store_id IS NOT DISTINCT FROM ${line.po_store_id ?? null}::bigint
+              AND sku = ${line.sku} AND size = ${newSize} AND id <> ${lineId}
           `)
         : (await sql`
             SELECT * FROM po_lines
@@ -5941,6 +6121,12 @@ export async function deletePo(poId) {
         + 'must never take the record of received stock with it.',
     };
   }
+  if (po.by_store) {
+    const ev = await poMoneyEvidence(poId);
+    if (ev.charges || ev.receipts) {
+      return { error: `${po.po_code} has ${ev.charges} card charge(s) and ${ev.receipts} receipt(s) recorded — that is audit evidence, so the order can't be deleted.` };
+    }
+  }
   await sql`DELETE FROM purchase_orders WHERE id = ${poId}`;
   return { ok: true, po };
 }
@@ -6037,7 +6223,7 @@ export async function poBoxReceived(box) {
 // Add labels to an existing order. Numbered on from the highest already there — a label
 // keeps its number for life, because that number is what the warehouse writes on the
 // carton and what every downstream screen calls it.
-export async function addPoLabels(poId, labels, createdBy) {
+export async function addPoLabels(poId, labels, createdBy, { poStoreId = null } = {}) {
   const sql = db();
   const next = (await sql`
     SELECT coalesce(max(box_number), 0) + 1 AS n FROM po_boxes WHERE po_id = ${poId}`)[0].n;
@@ -6045,8 +6231,9 @@ export async function addPoLabels(poId, labels, createdBy) {
   const tracks = labels.map((l) => (String(l.trackingNumber || '').trim() || null));
   const carriers = labels.map((l) => (Number.isInteger(Number(l.carrierKey)) && Number(l.carrierKey) > 0 ? Number(l.carrierKey) : null));
   const rows = await sql`
-    INSERT INTO po_boxes (po_id, box_number, tracking_number, carrier_key, status, kind, created_by)
-    SELECT ${poId}, t.box_number, t.tracking_number, t.carrier_key, 'pending', 'original', ${createdBy || null}
+    INSERT INTO po_boxes (po_id, box_number, tracking_number, carrier_key, status, kind, created_by, po_store_id)
+    SELECT ${poId}, t.box_number, t.tracking_number, t.carrier_key, 'pending', 'original', ${createdBy || null},
+           ${poStoreId ?? null}::bigint
     FROM unnest(${nums}::int[], ${tracks}::text[], ${carriers}::int[]) AS t(box_number, tracking_number, carrier_key)
     RETURNING *`;
   await syncExpectedBoxes(poId);
@@ -6101,7 +6288,8 @@ export async function removePoBox(boxId) {
   }
   const siblings = (await sql`
     SELECT count(*)::int AS n FROM po_boxes WHERE po_id = ${box.po_id} AND kind <> 'replacement'`)[0].n;
-  if (box.kind !== 'replacement' && siblings <= 1) {
+  // A store order opens with no boxes and adds them per store, so it may go back to none.
+  if (box.kind !== 'replacement' && siblings <= 1 && !po?.by_store) {
     return { error: 'An order has to keep at least one label. Delete the whole order instead if it was raised by mistake.' };
   }
   const lines = (await sql`SELECT count(*)::int AS n FROM po_lines WHERE po_box_id = ${boxId}`)[0].n;

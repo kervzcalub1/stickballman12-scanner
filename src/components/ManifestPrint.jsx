@@ -30,7 +30,7 @@ import { loadPrefs, savePrefs } from '../prefs.js';
 // `boxDiffs` adds the DISCREPANCY sheet: only the boxes whose contents disagree with
 // what that label declared. It's the sheet somebody carries into the warehouse, so it's
 // offered only when there is actually something to look at.
-export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Download:', buttonLabel = 'Print box manifest', primary = false, received = null, compare = null, boxDiffs = null, onSignOut }) {
+export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, label = 'Download:', buttonLabel = 'Print box manifest', primary = false, received = null, compare = null, boxDiffs = null, byStore = false, only = null, onSignOut }) {
   const [busy, setBusy] = useState('');   // '' | 'perbox' | 'whole' | 'received' | 'discrepancies'
   const [error, setError] = useState('');
   const [stale, setStale] = useState(false);   // the failure was a stale chunk, not a bad report
@@ -61,6 +61,7 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
     perbox: ['Per box', 'What was declared for this order, one page per label — the only one with tracking numbers. Print it and tick pairs off as you unpack.'],
     whole: ['Whole order', 'Everything declared as one merged list, no boxes. The total — for checking an invoice, or a manifest they just submitted.'],
     received: ['What we received', 'Our own count, box by box, with their list beside it. This is the sheet you send a supplier when a shipment is short.'],
+    invoice: ['Invoice (by store)', 'The store order’s list as an invoice — each store’s pairs and subtotal at the price each, and the order total. What gets checked against the card.'],
     discrepancies: ['Discrepancies by box', 'Only the boxes that disagree, and by how much. The short sheet you carry back into the warehouse to re-check them.'],
   };
   const reportBtn = (mode) => (
@@ -83,7 +84,7 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       // Both formats are built from the SAME inputs, so a CSV can never disagree with
       // the PDF of the same report.
       const input = {
-        po: d.po, boxes: d.boxes, lines: d.lines, businessName: d.businessName, mode, generatedAt,
+        po: d.po, boxes: d.boxes, lines: d.lines, stores: d.stores || [], businessName: d.businessName, mode, generatedAt,
         boxId: mode === 'perbox' ? boxId : null, shipTo: d.shipTo,
         receivedBoxes: received, compare, boxDiffs, prices,
       };
@@ -104,10 +105,11 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
       a.href = url;
       const which = boxId != null && mode === 'perbox'
         ? `box-${boxNumber ?? boxId}`
+        : mode === 'invoice' ? 'by-store'
         : mode === 'received' ? 'received'
           : mode === 'discrepancies' ? 'by-box'
             : (mode === 'perbox' ? 'per-box' : 'whole-order');
-      const kind = mode === 'received' ? 'received' : mode === 'discrepancies' ? 'discrepancies' : 'manifest';
+      const kind = mode === 'received' ? 'received' : mode === 'discrepancies' ? 'discrepancies' : mode === 'invoice' ? 'invoice' : 'manifest';
       a.download = `${kind}-${d.po?.po_code || poCode || poId}-${which}.${fmt}`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -159,14 +161,16 @@ export function ManifestPrint({ poId, poCode, boxId = null, boxNumber = null, la
         <span>Prices</span>
       </label>
       <div className="mf-reports">
-        {reportBtn('perbox')}
-        {reportBtn('whole')}
+        {/* A store order's invoice — the list we build for the stores, who never send one. */}
+        {byStore && reportBtn('invoice')}
+        {!only && reportBtn('perbox')}
+        {!only && reportBtn('whole')}
         {/* Only once something has actually been received — an empty "here's what we got"
             sheet is worse than no sheet in a dispute. */}
-        {received?.length > 0 && reportBtn('received')}
+        {!only && received?.length > 0 && reportBtn('received')}
         {/* Only when a box actually differs: a "discrepancies" sheet listing none of them
             is indistinguishable from one nobody produced. */}
-        {boxDiffs?.some((b) => b.received && b.diffs?.length > 0) && reportBtn('discrepancies')}
+        {!only && boxDiffs?.some((b) => b.received && b.diffs?.length > 0) && reportBtn('discrepancies')}
       </div>
       {error && (
           <span className="mf-print-err sm">

@@ -48,6 +48,8 @@ export default async function handler(req, res) {
     // blind" with every pair reading as an overage. These lines only feed `expected`; the
     // warehouse's own count is recorded independently, so a late manifest can't rewrite
     // what was received.
+    if (po.by_store)
+      return send(res, 409, { ok: false, error: 'This order is split by store — add to the store list instead.' });
     if (po.status !== 'draft' && po.status !== 'receiving')
       return send(res, 409, { ok: false, error: 'This order is already closed — it can no longer be edited.' });
     if (await poHasBoxLines(poId))

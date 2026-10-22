@@ -35,6 +35,7 @@ import { PoAssignLabels } from '../components/PoAssignLabels.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
 import { useLive, afterTyping } from '../hooks.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
+import { StoreOrderPanel } from '../components/StoreOrderPanel.jsx';
 
 const FROZEN = ['reconciled', 'closed'];
 
@@ -74,14 +75,14 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   const [delLine, setDelLine] = useState(null);         // { line } — remove confirm
 
   const load = () => api.poGet(poId)
-    .then((r) => setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [] }))
+    .then((r) => setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [], stores: r.stores || [] }))
     .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null); setBusy(true); setError('');
     api.poGet(poId)
-      .then((r) => { if (!cancelled) setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [] }); })
+      .then((r) => { if (!cancelled) setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [], stores: r.stores || [] }); })
       .catch((e) => { if (cancelled) return; if (e.unauthorized) return onSignOut(); setError(e.message); })
       .finally(() => { if (!cancelled) setBusy(false); });
     return () => { cancelled = true; };
@@ -90,11 +91,11 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   // Live: a supplier scanning into a label, the warehouse receiving a box, a carrier
   // update — the manifest, the counts and the chips move without F5. Quiet: no "Loading…",
   // and held while this person has a dialog open or a save of their own in flight.
-  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'items', 'batches', 'batch_boxes'], async () => {
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'po_stores', 'po_store_charges', 'po_store_receipts', 'items', 'batches', 'batch_boxes'], async () => {
     await afterTyping('.app');
     try {
       const r = await api.poGet(poId);
-      setDetail((cur) => keepSame(cur, { po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [] }));
+      setDetail((cur) => keepSame(cur, { po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [], stores: r.stores || [] }));
     } catch (e) { if (e.unauthorized) onSignOut(); }
   }, {
     mount: false,
@@ -270,7 +271,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                     <Icon name="box" /> Link a received shipment
                   </button>
                 )}
-                <ManifestPrint poId={po.id} poCode={po.po_code} onSignOut={onSignOut} />
+                <ManifestPrint poId={po.id} poCode={po.po_code} byStore={!!po.by_store} onSignOut={onSignOut} />
                 {!FROZEN.includes(po.status) && (
                   <NudgeButton kind="po" id={po.id} targets={[
                     ...(po.supplier_user_id ? [{ to: 'supplier', label: `The supplier (${po.supplier_name})` }] : []),
@@ -291,7 +292,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                   waiting for a tracking number. Buy the labels, then assign them below.
                 </div>
               )}
-              <PoAssignLabels po={po} boxes={boxes} onDone={load} onSignOut={onSignOut} />
+              <PoAssignLabels po={po} boxes={boxes} stores={detail.stores || []} onDone={load} onSignOut={onSignOut} />
               <PoDetailsEdit po={po} boxes={boxes} lineCount={lines.length} onChanged={load} onSignOut={onSignOut} />
 
               {/* The courier's own labels, so the supplier can print the one for the box
@@ -330,10 +331,27 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
               // Enterable while the order is DRAFT *or* being RECEIVED: a supplier who
               // doesn't use the portal often sends their list after the boxes land, and
               // draft-only meant that list could never be entered at all.
+              // A store order's list is split by store — the store panel replaces this block.
+              if (po.by_store) {
+                return (
+                  <StoreOrderPanel detail={detail} staff onChanged={load} onPatchLine={patchLine}
+                    lineBusy={lineBusy} onSignOut={onSignOut} />
+                );
+              }
               const orderLines = lines.filter((l) => l.po_box_id == null);
               const hasBoxLines = lines.some((l) => l.po_box_id != null);
               const canEnter = ['draft', 'receiving'].includes(po.status) && !hasBoxLines;
               if (!orderLines.length && !canEnter) return null;
+              // An order entered as one list before it was by store (e.g. Joey's first order):
+              // put that list under its store, and the order becomes a store order.
+              const assignToStore = async () => {
+                const name = window.prompt('Which store is this list from? (the order becomes split by store)');
+                if (name == null || !name.trim()) return;
+                setBusy(true); setError('');
+                try { await api.poStore(Number(po.id), 'assign_lines', { storeName: name.trim() }); await load(); }
+                catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
+                finally { setBusy(false); }
+              };
               return (
                 <div className="card po-ov-order">
                   <div className="po-ov-order-head">
@@ -363,6 +381,12 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                       each row. */}
                   {boxesOrder && canEditLines(po) && orderLines.length > 1 && (
                     <PoBulkDimensions lines={orderLines} onApplied={load} onSignOut={onSignOut} />
+                  )}
+                  {orderLines.length > 0 && !boxesOrder && canEditLines(po) && (
+                    <button className="btn sm ghost po-ov-fill-btn" disabled={busy} onClick={assignToStore}
+                      title="Bought from several stores? Put this list under its store, then paste the other stores">
+                      Split by store…
+                    </button>
                   )}
                   {canEnter && (
                     <>
@@ -424,6 +448,9 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                       {/* A reship we added to cover a shortage — not one of the supplier's
                           original labels, so don't number it as one. */}
                       <b>{isReplacement ? 'Replacement shipment' : `Label ${box.box_number}`}</b>
+                      {po.by_store && box.po_store_id && (
+                        <span className="po-store-tag sm"> · {(detail.stores || []).find((st) => Number(st.id) === Number(box.po_store_id))?.name || 'store'}</span>
+                      )}
                       <div className="po-track muted sm">
                         {carrierName(box.carrier || box.carrier_key) ? <span className="po-carrier">{carrierName(box.carrier || box.carrier_key)}</span> : null}
                         {carrierName(box.carrier || box.carrier_key) && box.tracking_number ? ' · ' : ''}

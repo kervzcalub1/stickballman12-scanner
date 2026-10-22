@@ -9,6 +9,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { createPo, dbConfigured } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
+import { supplierPoView } from '../_lib/po-supplier-view.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -49,9 +50,16 @@ export default async function handler(req, res) {
   // at all — `boxes` is how many of those to open it with.
   const rawBoxes = Number(body.boxes);
   const boxCount = Number.isInteger(rawBoxes) && rawBoxes > 0 ? Math.min(rawBoxes, 100) : 0;
+  // A store order (docs/store-orders-plan.md): bought from several stores that each ship
+  // their own boxes. It opens with no boxes — they're added under each store.
+  const byStore = body.byStore === true;
 
   if (!supplierName) return send(res, 400, { ok: false, error: bySupplier ? 'Your account has no business name — ask us to set one.' : 'Supplier name is required.' });
-  if (!labels.length && boxCount < 1)
+  if (byStore && orderKind === 'boxes')
+    return send(res, 400, { ok: false, error: 'A store order is for shoes — empty shoe boxes aren’t bought by store.' });
+  if (byStore && (labels.length || boxCount))
+    return send(res, 400, { ok: false, error: 'A store order adds its boxes under each store — open it without boxes.' });
+  if (!byStore && !labels.length && boxCount < 1)
     return send(res, 400, { ok: false, error: 'Say how many boxes this shipment has, or add at least one shipping label.' });
 
   try {
@@ -60,6 +68,7 @@ export default async function handler(req, res) {
       supplierName, supplierUserId, tagCode, dateOfPurchase, notes, orderKind,
       labels: labels.length ? labels : Array.from({ length: boxCount }, () => ({ trackingNumber: '', carrierKey: null })),
       raisedBy: bySupplier ? 'supplier' : 'ph',
+      byStore,
       createdBy: user.name || user.username || '',
     });
     // Register each label's tracking number with 17TRACK now — not only when a supplier
@@ -71,7 +80,7 @@ export default async function handler(req, res) {
       .map((b) => ({ number: b.tracking_number, carrier: b.carrier_key }));
     if (trackItems.length)
       registerTracking(trackItems).catch((e) => console.warn('[po/create] registerTracking:', e.message));
-    return send(res, 200, { ok: true, ...created });
+    return send(res, 200, { ok: true, ...(bySupplier ? supplierPoView(created) : created) });
   } catch (e) {
     console.error('[po/create]', e.message);
     return send(res, 500, { ok: false, error: 'Could not create the purchase order.' });

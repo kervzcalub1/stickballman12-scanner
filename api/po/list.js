@@ -2,6 +2,7 @@
 // ph_team / warehouse / admin see all POs; a supplier sees only their own.
 import { send, applySecurity, requireRole, isPrivileged } from '../_lib/util.js';
 import { listPos, dbConfigured } from '../_lib/db.js';
+import { supplierPoRow } from '../_lib/po-supplier-view.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -16,7 +17,7 @@ export default async function handler(req, res) {
     // A supplier reads the reconciliation note but never which staff member wrote it
     // (same rule as po/get and the on-behalf line attribution).
     if (supplierScope) {
-      return send(res, 200, { ok: true, pos: pos.map(({ reconcile_note_by, ...p }) => p) });
+      return send(res, 200, { ok: true, pos: pos.map(supplierPoRow) });
     }
     return send(res, 200, { ok: true, pos });
   } catch (e) {

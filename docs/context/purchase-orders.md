@@ -9,6 +9,49 @@ the courier carries it, and the **warehouse** receives it back **against the sam
 reconciling what was promised vs. what actually arrived. A batch spans **multiple shipping
 labels** (one tracking number each); it closes only when every label is shipped.
 
+## Store orders — one supplier, many stores (2026-10-23)
+Plan + full reasoning: `docs/store-orders-plan.md` (built in PRs A–E; this section tracks
+what's live). Joey buys from ~15 stores of one retailer and **each store ships its own
+boxes**; there is no invoice, so the order's list — store by store, with the price each — IS
+the invoice, and Kevin audits it against what arrived and the card statement.
+
+- **Schema:** `po_stores` (per order, unique `(po_id, lower(name))`), `po_lines.po_store_id`
+  (order-level lines), `po_boxes.po_store_id` (+ `tracking_source`), `batch_boxes.po_box_id`,
+  `po_store_charges`, `po_store_receipts`, and on the order `by_store`, `list_confirmed_*`,
+  `invoice_checked_*`, `landed_override_*`, `audited_*`, `audit_snapshot`.
+- **Index:** `po_lines_po_sku_size_idx` now covers only lines with NO store
+  (`… AND po_store_id IS NULL`); store lines use `po_lines_po_store_sku_size_idx`
+  `(po_store_id, sku, size)`. **Every writer of store-less whole-order lines must name the full
+  predicate** in its ON CONFLICT — the shorter one can't infer the narrowed index.
+- **Create:** `po/create {byStore:true}` → `by_store`, `manifest_scope='po'`, **no boxes**.
+- **List:** `po/store-list {poId, stores:[{name, shoes}]}` (supplier on their own order / staff).
+  One transaction. Every shoe needs a price; the same store+SKU+size at a different price is
+  refused (never re-priced); re-paste adds qty. Paste format = `src/lib/storePaste.js`
+  (`Store:` lines; each block parsed on its own — the plain PO paste would merge a SKU across
+  stores at the last price).
+- **Stores:** `po/store {action}` — rename / remove (no boxes, no charges/receipts, not
+  confirmed) / confirm (supplier, or staff for them; needs every line priced) / unlock (staff,
+  with a reason; clears invoice checked) / invoice_checked (staff, informational) /
+  assign_lines (staff: put a store-less list under a store → becomes a store order).
+- **Who edits the list:** `orderListEditBlock` (`api/_lib/po-manifest.js`) — supplier until
+  they confirm (draft/shipped/receiving); staff until the audit; every staff edit after
+  confirm is a system comment (before → after). `scan-order` / `scan-bulk` order mode refuse a
+  store order. `poHasBoxLines` ignores replacement labels now.
+- **Boxes:** `label-add {poStoreId}` (required on a store order); `request-labels` needs every
+  box to have a store; a store order may go down to 0 boxes. No charge gate on labels —
+  stores often charge the card at the till (plan §2).
+- **Money evidence:** an order/store with a card charge or receipt can't be deleted/removed.
+- **What a supplier sees:** ONE strip-list, `api/_lib/po-supplier-view.js`
+  (`supplierPoView` / `supplierPoRow`), used by po/get, po/list, track-refresh, close-box, ship,
+  reopen-box, request-labels, create and the store endpoints. Hides the audit/invoice/landed
+  fields, `reconciliation`, charges and credits. `listPos` never returns `audit_snapshot`.
+- **UI:** `src/components/StoreOrderPanel.jsx` (supplier portal + PoDetail): stores with lines,
+  pairs/$ per store and total, boxes per store, paste modal, confirm / reopen / invoice checked.
+  "Invoice (by store)" PDF/CSV = `manifestPdf`/`manifestCsv` mode `invoice`. PoDetail's
+  whole-order block has **Split by store…** (assign_lines). Supplier article
+  `supplier-store-order`.
+- Tests: `e2e/po-store-order.spec.js`.
+
 ## A purchase order can now be raised from a RECEIPT (2026-09-05)
 The buying-request process (`docs/context/buy-cart.md`) ends by raising a PO from the
 buyer's parsed receipt — `raised_by='supplier'`, **`manifest_scope='order+box'`**, tagged

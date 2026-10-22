@@ -24,7 +24,7 @@ import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineMoney, landedFromShelf, unitCost } from '../lib/costs.js';
 import { onlineLineFor, orderCode as onlineOrderCode, onlineOrderCheck, onlineCheckText } from '../lib/onlineOrders.js';
 import { estToday } from '../lib/format.js';
-import { declaresPerBox } from '../lib/postatus.js';
+import { declaresPerBox, trackKey } from '../lib/postatus.js';
 
 // Lazy-loaded so the barcode library only downloads when the camera is opened.
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
@@ -128,6 +128,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [poLabels, setPoLabels] = useState(null);
   const [poCostLines, setPoCostLines] = useState(null); // box mode: the PO's lines, for cost only
   const [boxPoId, setBoxPoId] = useState(null);         // box mode: that PO's id, for its supplier's cost stack
+  const [boxPo, setBoxPo] = useState(null);             // box mode: that PO's { po, stores } — is it a store order
   // What is ALREADY in the box being continued. A reopened box keeps its pairs —
   // `commitBoxItems` only ever appends — but the Items step opened empty, so a row
   // reading "11 items" led straight to a cart saying "0 units". From the floor that
@@ -197,6 +198,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           .then((po) => {
             if (cancelled) return;
             setPoLabels(po.boxes || []);
+            setBoxPo({ po: po.po || po, stores: po.stores || [] });
             // The lines carry what the supplier said each size cost, so a box added
             // later inherits it too.
             setPoCostLines(po.lines || []);
@@ -205,7 +207,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             // also re-runs the Step-1 prefill (supplier, tag, a box slot per label) —
             // that belongs to starting a shipment, not to continuing one.
             // Only for a box with nothing in it yet: see `boxModePo`.
-            if (!mine.length) setReceivingPo({ po: po.po || po, boxes: po.boxes || [], lines: po.lines || [] });
+            if (!mine.length) setReceivingPo({ po: po.po || po, boxes: po.boxes || [], lines: po.lines || [], stores: po.stores || [] });
           })
           .catch(() => { /* fall back to the typed number */ });
       }
@@ -246,7 +248,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const setNoTracking = (v) => setHeader((h) => ({ ...h, noTracking: v, tracking: v ? '' : h.tracking }));
 
   // The label this carton's tracking number belongs to, if it's one of the order's.
-  const normTrack = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  // Alphanumeric only — the server's matcher is the same rule (store-orders-plan §8b).
+  const normTrack = trackKey;
   const trackedLabel = React.useMemo(() => {
     const t = normTrack(header.tracking);
     if (!t || !poLabels?.length) return null;
@@ -292,6 +295,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // thumb's width from the stepper on a phone, and un-ticking used to zero the row
   // silently, throwing away pairs somebody had physically scanned.
   const [clearAsk, setClearAsk] = useState(null); // { item, size, scanned }
+  // A store-order box whose number and label disagree (add-box 409): the reason, and the
+  // person's "receive it not tied to a store" answer for the retry.
+  const [untieAsk, setUntieAsk] = useState(null);
+  const untieOk = useRef(false);
   function applyPo(data) {
     const boxes = data.boxes || [];
     setReceivingPo(data);
@@ -315,7 +322,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // the box the supplier's label 4 is stuck to, or nothing downstream lines up.
     setBoxSlots(boxes.map((b, i) => ({
       tracking: b.tracking_number || '', status: 'pending', boxNumber: Number(b.box_number) || i + 1, itemCount: 0, poBoxId: Number(b.id), boxId: null,
-      kind: b.kind || 'original', ...courierOf(b),
+      kind: b.kind || 'original', labelTracking: b.tracking_number || '', ...storeOf(data, b), ...courierOf(b),
     })));
     setShowPoPicker(false);
     // Resume: if this PO already has a linked receiving batch (returned/refreshed
@@ -332,6 +339,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           return {
             tracking: b.tracking_number || '', poBoxId: Number(b.id), boxNumber: num,
             kind: b.kind || 'original', boxId: bb ? Number(bb.id) : null,
+            labelTracking: b.tracking_number || '', ...storeOf(data, b),
             status: bb?.status === 'received' ? 'received' : 'pending',
             itemCount: bb?.item_count ?? 0,
             // The PO's own row is the fresher source here: the batch box only carries
@@ -344,6 +352,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }
   }
   const clearPo = () => setReceivingPo(null); // unlink; keep whatever's typed
+  // A STORE order (one supplier, many stores): each label is one store's box, and which
+  // store a pair came from is decided by the label its box is received from
+  // (docs/store-orders-plan.md §4.4). The slot carries the store so the box line can say it.
+  const isStorePo = (receivingPo || boxPo)?.po?.by_store === true;
+  function storeOf(data, b) {
+    const st = (data?.stores || []).find((x) => Number(x.id) === Number(b?.po_store_id));
+    return { storeId: b?.po_store_id != null ? Number(b.po_store_id) : null, storeName: st?.name || null };
+  }
 
   // Courier status for a box slot. The warehouse is the team physically waiting for
   // the carton, and until now "where is box 3" meant opening the purchase order. Read
@@ -546,11 +562,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     const tracking = boxTarget?.tracking_number || header.tracking || '';
     const num = boxTarget?.box_number ?? (Number(newBoxNumber) || null);
     const labels = poLabels || [];
-    const label = labels.find((l) => normTrack(l.tracking_number) && normTrack(l.tracking_number) === normTrack(tracking))
+    const byTracking = labels.find((l) => normTrack(l.tracking_number) && normTrack(l.tracking_number) === normTrack(tracking)) || null;
+    const label = byTracking
       || (num != null ? labels.find((l) => Number(l.box_number) === Number(num)) : null)
       || null;
-    return { boxNumber: num, tracking, poBoxId: label?.id ?? null, kind: label?.kind || null };
-  }, [isBoxMode, boxTarget, header.tracking, newBoxNumber, poLabels]);
+    // `tiedLabelId` is only a label the carton's NUMBER says it is — a label guessed from the
+    // typed box number is good enough for a checklist, never for saying whose box it is.
+    return { boxNumber: num, tracking, poBoxId: label?.id ?? null, kind: label?.kind || null,
+      tiedLabelId: byTracking ? Number(byTracking.id) : null,
+      ...storeOf(receivingPo || boxPo, byTracking) };
+  }, [isBoxMode, boxTarget, header.tracking, newBoxNumber, poLabels, receivingPo, boxPo]);
   const activeBox = isBoxMode ? boxModeSlot : boxSlots[activeSlot];
   // Does the box being scanned have a list to TICK OFF?
   //
@@ -578,7 +599,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // earlier receive already used (asked of the server, its own open batch excluded), and
   // two boxes of THIS receive carrying the same number (compared here). Warn, never block:
   // the server logs it when the box is submitted either way.
-  const slotKey = (t) => String(t || '').replace(/\s+/g, '').toUpperCase();
+  const slotKey = trackKey;
   const [slotDup, setSlotDup] = useState({}); // key → { code, supplier } | null
   useEffect(() => {
     if (!isMultiBoxNew || header.noTracking) return undefined;
@@ -595,6 +616,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   }, [boxSlots, activeBatch?.id, isMultiBoxNew, header.noTracking]); // eslint-disable-line react-hooks/exhaustive-deps
   const slotWarning = (i) => {
     const k = slotKey(boxSlots[i]?.tracking);
+    // A store order's box is its label: a number that isn't the label's is the wrong box
+    // (or a store's own label on a box that had none, which is fine). Said here, before
+    // anything is scanned; the server refuses it at submit either way.
+    const own = slotKey(boxSlots[i]?.labelTracking);
+    if (isStorePo && k && own && k !== own) {
+      const other = boxSlots.find((s, j) => j !== i && slotKey(s.labelTracking) === k);
+      return other
+        ? `That is box ${other.boxNumber}'s label${other.storeName ? ` (${other.storeName})` : ''} — open that box instead.`
+        : `Not this box's label (${boxSlots[i].labelTracking}). On a store order each box is received from its own label.`;
+    }
     if (k.length < 6 || header.noTracking) return null;
     const twin = boxSlots.findIndex((s, j) => j !== i && slotKey(s.tracking) === k);
     if (twin >= 0) return `Same tracking number as box ${Number(boxSlots[twin].boxNumber) || twin + 1} — two packages under one number. It will be logged.`;
@@ -1849,7 +1880,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const batchDefaultCost = isBoxMode ? costOrNull(batchContext?.default_cost) : defaultCostNum;
   // The PO line is a SHELF price (2026-09-29); the pair's cost is what landing it really
   // took — shelf through the supplier's preset stack (tax, gift card, shipping, tip).
-  const poMoney = (it, s) => poLineMoney(costLines, it.sku, s.size, activePoBoxId);
+  // On a store order the price is the box's STORE's; a box tied to no store has none.
+  const poMoney = (it, s) => poLineMoney(costLines, it.sku, s.size, activePoBoxId,
+    isStorePo ? (activeBox?.storeId ?? null) : undefined);
   const poLanded = (it, s) => {
     const m = poMoney(it, s);
     return m ? landedFromShelf(m.shelf, m.tip, costPreset) : null;
@@ -1955,7 +1988,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   async function persistBoxSlots(batchId, slots = boxSlots) {
     if (!batchId) return;
     const payload = slots
-      .map((s, i) => ({ boxNumber: Number(s.boxNumber) || i + 1, trackingNumber: (s.tracking || '').trim() }))
+      .map((s, i) => ({ boxNumber: Number(s.boxNumber) || i + 1, trackingNumber: (s.tracking || '').trim(), poBoxId: s.poBoxId ?? null }))
       .filter((x) => x.trackingNumber);
     if (!payload.length) return;
     try { await api.batchSyncBoxes(batchId, payload); }
@@ -2104,7 +2137,19 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         const boxNumber = isBoxMode
           ? (boxTarget?.box_number ?? (Number.isInteger(Number(newBoxNumber)) && Number(newBoxNumber) > 0 ? Number(newBoxNumber) : null))
           : (Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1);
-        const { box } = await api.batchAddBox(batchId, boxTracking, boxNumber);
+        // Which label this box is: the slot's (it came from the label), or in box mode the
+        // label the carton's number reads as. On a store order the server refuses a box
+        // whose number and label disagree — asked here, not lost: the person can receive
+        // it as not tied to a store and tie it on the order later.
+        const poBoxId = isBoxMode ? (activeBox?.tiedLabelId ?? null) : (boxSlots[activeSlot]?.poBoxId ?? null);
+        let box;
+        try {
+          ({ box } = await api.batchAddBox(batchId, boxTracking, boxNumber, { poBoxId, untied: untieOk.current }));
+        } catch (e) {
+          if (isStorePo && e.status === 409 && e.data?.code) { setUntieAsk(e.message); return; }
+          throw e;
+        }
+        untieOk.current = false; setUntieAsk(null);
         const res = await api.boxCommit({
           batchId, boxId: box.id, items: out, unitIssues: flatUnitIssues,
           issues: issuePayload(),
@@ -2229,6 +2274,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       ? <>Adding items to <b>Box {boxTarget.box_number}</b> of <b>{batchContext.batch_code}</b></>
                       : <>Adding a box to <b>{batchContext.batch_code}</b></>}
                     {batchContext.batch_tag ? <> · <Icon name="tag" /> {batchContext.batch_tag}</> : ''} · {batchContext.supplier_name || '—'}
+                    {activeBox?.storeName && <> · <span className="rcv-store-chip">Store: {activeBox.storeName}</span></>}
+                    {isStorePo && !activeBox?.storeName && (
+                      <div className="warn-line">A store order: scan or type the carton’s tracking number so this box is tied to its store.</div>
+                    )}
                   </div>
                 )}
                 {/* Box mode hides the PO block the shipment banner lives in, so the box's own
@@ -2481,6 +2530,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             has to be answerable here — it used to mean opening the PO. */}
                         <DeliveryStatusLine box={{ ...s, tracking_number: s.tracking }} />
                         <span className="box-num">Box {Number(s.boxNumber) || i + 1}</span>
+                        {s.storeName && <span className="rcv-store-chip">Store: {s.storeName}</span>}
                         {s.status === 'received' ? (
                           <>
                             <span className="box-track muted sm">{s.tracking || '—'}</span>
@@ -2493,7 +2543,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                               <span className="box-track muted sm">No tracking number</span>
                             ) : (
                               <span className="track-field box-build-track">
-                                <input value={s.tracking} placeholder="Tracking # (optional)" onChange={(e) => setSlotTracking(i, e.target.value)}
+                                <input value={s.tracking}
+                                  placeholder={isStorePo && !s.labelTracking ? 'Tracking # off the store’s label' : 'Tracking # (optional)'} onChange={(e) => setSlotTracking(i, e.target.value)}
                                   onBlur={() => { if (activeBatch) persistBoxSlots(activeBatch.id); }} />
                                 <button type="button" className="btn sm ghost" title="Scan tracking barcode" onClick={() => { setTrackingSlot(i); setScanTracking(true); }}><Icon name="camera" /></button>
                               </span>
@@ -2533,6 +2584,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   Scanning <b>{boxSlots[activeSlot]?.kind === 'replacement' ? 'the replacement shipment' : `Box ${Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1}`}</b>
                   {boxSlots[activeSlot]?.kind === 'replacement' ? '' : ` of ${boxSlots.length}`} · {activeBatch?.batchCode}
                   {boxSlots[activeSlot]?.tracking ? <> · <Icon name="tag" /> {boxSlots[activeSlot].tracking}</> : ''}
+                  {boxSlots[activeSlot]?.storeName && <> · <span className="rcv-store-chip">Store: {boxSlots[activeSlot].storeName}</span></>}
                 </div>
               )}
               {/* The PO checklist screen, but ONLY when this label actually has a list.
@@ -3232,16 +3284,25 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     {header.manifestReceived === false && <div className="warn-line">Received without a manifest — flagged for audit against {header.tracking?.trim() ? `tracking ${header.tracking.trim()}` : 'its tracking number'}.</div>}
                     <div className="muted">Supplier: {header.supplier || '—'} · Buyer: {header.buyer || '—'}</div>
                     {isMultiBoxNew && activeSlot != null
-                      ? <div className="muted">Box {Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} of {boxSlots.length} · Tracking: {boxSlots[activeSlot]?.tracking || '—'}</div>
+                      ? <div className="muted">Box {Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} of {boxSlots.length} · Tracking: {boxSlots[activeSlot]?.tracking || '—'}{boxSlots[activeSlot]?.storeName ? ` · Store: ${boxSlots[activeSlot].storeName}` : ''}</div>
                       : <div className="muted">Tracking: {header.tracking || '—'} · {header.dateReceived}</div>}
                     {(autoIssues.length + issues.length) > 0 && <div className="muted">{autoIssues.length + issues.length} issue(s) recorded</div>}
                     {flaggedCount > 0 && <div className="muted">{flaggedCount} unit(s) flagged with a defect</div>}
                     <p className="muted sm">Each unit gets its own VIN. History starts “Scanned by you”.</p>
                   </>)}
             </div>
+            {untieAsk && (
+              <div className="warn-line store-untie">
+                <p>{untieAsk}</p>
+                <button type="button" className="btn sm" disabled={committing}
+                  onClick={() => { untieOk.current = true; doCommit(); }}>
+                  Receive it not tied to a store
+                </button>
+              </div>
+            )}
             <div className="modal-actions">
-              <button className="btn ghost" onClick={() => setShowConfirm(false)} disabled={committing}>No</button>
-              <button className="btn primary" onClick={doCommit} disabled={committing}>{committing ? 'Saving…' : 'Yes, commit'}</button>
+              <button className="btn ghost" onClick={() => { setShowConfirm(false); setUntieAsk(null); untieOk.current = false; }} disabled={committing}>No</button>
+              <button className="btn primary" onClick={doCommit} disabled={committing || !!untieAsk}>{committing ? 'Saving…' : 'Yes, commit'}</button>
             </div>
           </div>
         </div>
@@ -3643,7 +3704,7 @@ function PoPickerModal({ onPick, onClose, onSignOut }) {
 
   const load = async (fn) => {
     setBusy(true); setError('');
-    try { const r = await fn(); onPick({ po: r.po, boxes: r.boxes, lines: r.lines }); }
+    try { const r = await fn(); onPick({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] }); }
     catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
   };

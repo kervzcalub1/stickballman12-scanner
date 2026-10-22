@@ -152,7 +152,10 @@ export const api = {
   batchCommit: (payload) => post('/api/batches/commit', payload),
   // v6 — multi-box batches (Feature 7)
   createOpenBatch: (batch) => post('/api/batches/create-open', { batch }),
-  batchAddBox: (batchId, trackingNumber, boxNumber = null) => post('/api/batches/add-box', { batchId, trackingNumber, boxNumber }),
+  // `poBoxId` = the label this box is (store orders must agree with the carton's number);
+  // `untied` = receive a store-order box not tied to a store (tied on the order later).
+  batchAddBox: (batchId, trackingNumber, boxNumber = null, { poBoxId = null, untied = false } = {}) =>
+    post('/api/batches/add-box', { batchId, trackingNumber, boxNumber, poBoxId, untied }),
   batchSyncBoxes: (batchId, boxes) => post('/api/batches/sync-boxes', { batchId, boxes }),
   batchRenumberBox: (batchId, boxId, boxNumber) => post('/api/batches/renumber-box', { batchId, boxId, boxNumber }),
   batchReopenBox: (batchId, boxId) => post('/api/batches/reopen-box', { batchId, boxId }),
@@ -487,6 +490,10 @@ export const api = {
   // about its stores (rename / remove / confirm / unlock / invoice_checked / assign_lines).
   poStoreList: (poId, stores) => post('/api/po/store-list', { poId, stores }),
   poStore: (poId, action, extra = {}) => post('/api/po/store', { poId, action, ...extra }),
+  poStoreTracking: (boxId, trackingNumber, carrierKey) => post('/api/po/store-tracking', { boxId, trackingNumber, carrierKey }),
+  poTieBox: (poId, batchBoxId, poBoxId) => post('/api/po/tie-box', { poId, batchBoxId, poBoxId }),
+  poFillCostsPreview: (poId) => get(`/api/po/fill-costs?poId=${encodeURIComponent(poId)}`),
+  poFillCosts: (poId) => post('/api/po/fill-costs', { poId, apply: true }),
   poRequestLabels: (poId, requested = true) => post('/api/po/request-labels', { poId, requested }),
   // Pre-sell: shipments sold before they landed. Not listed until released.
   presellList: (batchId) => get(`/api/presell/list${batchId ? `?batchId=${batchId}` : ''}`),

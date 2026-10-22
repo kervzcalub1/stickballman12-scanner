@@ -109,14 +109,20 @@ const bareSku = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
 // po-reconciliation-notation-matching). A line for the box being received wins over the
 // same SKU + size declared on another label; a whole-order (Path C) manifest has no box
 // on its lines, so it matches too.
-export function poLineMoney(lines, sku, size, poBoxId = null) {
+//
+// A STORE order (`storeId` passed, even as null): each store bought at its own price, so
+// only the box's store's lines count — and a box tied to no store gets NO price rather
+// than a guess at some other store's (store-orders-plan §8b).
+export function poLineMoney(lines, sku, size, poBoxId = null, storeId = undefined) {
   if (!Array.isArray(lines) || !lines.length) return null;
   const want = bareSku(sku);
   if (!want) return null;
+  if (storeId === null) return null;
   const n = sizeNum(size);
   let any = null;
   for (const l of lines) {
     if (bareSku(l.sku) !== want) continue;
+    if (storeId !== undefined && Number(l.po_store_id) !== Number(storeId)) continue;
     const ln = sizeNum(l.size);
     if (!(Number.isNaN(n) && Number.isNaN(ln)) && ln !== n) continue;
     const shelf = costOrNull(l.unit_cost);
@@ -129,8 +135,8 @@ export function poLineMoney(lines, sku, size, poBoxId = null) {
 }
 
 // The PO's shelf price for the size, or null.
-export function poLineCost(lines, sku, size, poBoxId = null) {
-  return poLineMoney(lines, sku, size, poBoxId)?.shelf ?? null;
+export function poLineCost(lines, sku, size, poBoxId = null, storeId = undefined) {
+  return poLineMoney(lines, sku, size, poBoxId, storeId)?.shelf ?? null;
 }
 
 // Shelf price → landed cost, through the SAME register maths as the Payout Calculator

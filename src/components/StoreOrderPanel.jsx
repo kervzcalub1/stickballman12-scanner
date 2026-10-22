@@ -148,6 +148,35 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
       : 'Confirm this list? It’s what the stores told you they are sending, at these prices. After this, only Stickballman12 can change it.')) return;
     act('confirm');
   };
+  // A store that shipped under ITS OWN label: its tracking number goes on the store's box so
+  // the warehouse can match the carton (po/store-tracking).
+  const storeTracking = (b) => {
+    const t = window.prompt(`Box ${b.box_number}: the tracking number on the store's own label`, b.tracking_source === 'store' ? (b.tracking_number || '') : '');
+    if (t == null || !t.trim()) return;
+    run(() => api.poStoreTracking(Number(b.id), t.trim()));
+  };
+  // Staff: a received box that matched no label — say which label (so which store) it is.
+  const tie = (ub, poBoxId) => run(() => api.poTieBox(Number(po.id), Number(ub.id), poBoxId ? Number(poBoxId) : null));
+  // Staff: pairs received before their price was on the list — cost them from it now.
+  const fillCosts = () => run(async () => {
+    const { plan } = await api.poFillCostsPreview(Number(po.id));
+    if (!plan.fillable) {
+      const why = [
+        plan.noLine ? `${plan.noLine} with no priced line for their store` : '',
+        plan.noPresetPairs ? `${plan.noPresetPairs} because the supplier has no cost preset` : '',
+      ].filter(Boolean).join(', ');
+      throw new Error(`No blank costs to fill${why ? ` — ${why}` : ''}.`);
+    }
+    if (!window.confirm(`Fill the cost of ${plan.fillable} received pair${plan.fillable === 1 ? '' : 's'} from this order's list?`
+      + (plan.noLine ? ` (${plan.noLine} more have no priced line for their store and stay blank.)` : ''))) return;
+    await api.poFillCosts(Number(po.id));
+  });
+  const untied = detail.untied_boxes || [];
+  const untiedPairs = untied.reduce((n, b) => n + (Number(b.units) || 0), 0);
+  const labelName = (b) => {
+    const st = stores.find((x) => Number(x.id) === Number(b.po_store_id));
+    return `Box ${b.box_number}${st ? ` · ${st.name}` : ''}${b.tracking_number ? ` · ${b.tracking_number}` : ''}`;
+  };
   const unlock = () => {
     const note = window.prompt('Why is the list being reopened? (goes on the order’s history)');
     if (note == null || !note.trim()) return;
@@ -178,6 +207,29 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
       </div>
       {error && <div className="po-err" role="alert">{error}</div>}
 
+      {/* Received boxes that belong to NO label, so to no store. Never guessed: a person
+          says which label each one is (store-orders-plan §4.4). */}
+      {staff && untied.length > 0 && (
+        <div className="store-untied" role="alert">
+          <b>Not tied to a store: {pairsWord(untiedPairs)}</b>
+          <span className="muted sm"> — received without a label this order knows. Pick the label each box came under.</span>
+          {untied.map((ub) => (
+            <div key={ub.id ?? `b${ub.batch_id}`} className="store-untied-row sm">
+              <span>
+                {ub.batch_code} · box {ub.box_number ?? '—'}{ub.tracking_number ? ` · ${ub.tracking_number}` : ' · no tracking'} · {pairsWord(Number(ub.units) || 0)}
+              </span>
+              {ub.id != null && !frozen && (
+                <select className="input sm" value="" disabled={busy} aria-label={`Tie box ${ub.box_number} to a label`}
+                  onChange={(e) => e.target.value && tie(ub, e.target.value)}>
+                  <option value="">Tie to…</option>
+                  {boxes.map((b) => <option key={b.id} value={b.id}>{labelName(b)}</option>)}
+                </select>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {!stores.length && (
         <p className="muted sm">
           Paste the list store by store — each store’s name, then the shoes it is sending with the price each.
@@ -189,6 +241,7 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
         const sLines = lines.filter((l) => Number(l.po_store_id) === Number(s.id))
           .sort((a, b) => (a.sku === b.sku ? compareSizes(a.size, b.size) : a.sku.localeCompare(b.sku)));
         const sBoxes = boxes.filter((b) => Number(b.po_store_id) === Number(s.id));
+        const sReceived = sBoxes.reduce((n, b) => n + (Number(b.received_units) || 0), 0);
         return (
           <details key={s.id} className="store-order-store" open={stores.length <= 3}>
             <summary>
@@ -196,6 +249,7 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
               <span className="muted sm">
                 {pairsWord(Number(s.declared_units) || 0)} · {s.declared_total != null ? money(s.declared_total) : 'no price'}
                 {' · '}{s.box_count} box{s.box_count === 1 ? '' : 'es'}
+                {staff && sReceived > 0 ? ` · ${sReceived} received` : ''}
                 {staff && s.charged_total != null ? ` · charged ${money(s.charged_total)}` : ''}
               </span>
             </summary>
@@ -224,8 +278,17 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
             <div className="store-order-boxes sm">
               {sBoxes.length
                 ? sBoxes.map((b) => (
-                  <span key={b.id} className="po-chip">
-                    Box {b.box_number}{b.tracking_number ? ` · ${b.tracking_number}` : ' · no label yet'}
+                  <span key={b.id} className="store-order-box">
+                    <span className="po-chip">
+                      Box {b.box_number}{b.tracking_number ? ` · ${b.tracking_number}` : ' · no label yet'}
+                      {b.tracking_source === 'store' ? ' (store’s label)' : ''}
+                      {staff && Number(b.received_units) > 0 ? ` · ${b.received_units} received` : ''}
+                    </span>
+                    {canAddBox && b.status !== 'received' && (!b.tracking_number || b.tracking_source === 'store') && (
+                      <button type="button" className="btn xs ghost" disabled={busy} onClick={() => storeTracking(b)}>
+                        {b.tracking_number ? 'Change store’s tracking #' : 'Store’s own tracking #'}
+                      </button>
+                    )}
                   </span>
                 ))
                 : <span className="muted">No boxes yet — add each box this store is shipping.</span>}
@@ -259,6 +322,12 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
           <button type="button" className="btn sm ghost" disabled={busy}
             onClick={() => act('invoice_checked', { checked: !po.invoice_checked_at })}>
             {po.invoice_checked_at ? 'Clear “invoice checked”' : 'Mark invoice checked'}
+          </button>
+        )}
+        {staff && !frozen && (detail.batches || []).length > 0 && (
+          <button type="button" className="btn sm ghost" disabled={busy} onClick={fillCosts}
+            title="Pairs received before their price was on the list get the price their store paid">
+            Fill costs from this order’s list
           </button>
         )}
       </div>

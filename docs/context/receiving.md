@@ -247,6 +247,16 @@ and `purchase-orders.md` → "Scan-first, any order".
 4. **Issues** — shipment-level: no-box pairs auto-listed; manual issues addable.
    Finish commits.
 
+## A received box is tied to its LABEL (2026-10-23, store orders)
+`batch_boxes.po_box_id` records which of the order's labels a received box is. Receiving
+sends the slot's label (`poBoxId`) on `add-box` / `sync-boxes`; the server keeps it only
+when the carton's number agrees (`resolveBoxLabel`). On a **store order** (Joey's: each
+store ships its own boxes) the two MUST agree — that tie is which store's pairs these are —
+so a mismatch is refused at submit with a "Receive it not tied to a store" way out (tied
+later on the order). Each box slot shows a **Store:** chip. Tracking numbers now match
+**alphanumeric only** ("1Z-999 AA1" = "1Z999AA1"). Full rules:
+`docs/context/purchase-orders.md` → Store orders → Receiving.
+
 ## The PO banner says whose manifest it is (2026-09-02)
 Once a PO is linked at step 1, the banner has always carried **Print manifest** (Per box /
 Whole order, PDF or CSV) — the sheet the warehouse prints and ticks pairs off as they

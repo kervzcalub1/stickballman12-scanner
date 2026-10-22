@@ -50,7 +50,37 @@ the invoice, and Kevin audits it against what arrived and the card statement.
   "Invoice (by store)" PDF/CSV = `manifestPdf`/`manifestCsv` mode `invoice`. PoDetail's
   whole-order block has **Split by store…** (assign_lines). Supplier article
   `supplier-store-order`.
-- Tests: `e2e/po-store-order.spec.js`.
+- **Receiving (PR C):** every received box is tied to the label it IS —
+  `batch_boxes.po_box_id` — so to that label's store. **One shared matcher** everywhere a
+  received box meets a label (`getPoFull.received_units`, `getPoReceivedBoxes`,
+  `poBoxReceived` → label remove/move, the cost backfill): `po_box_id = label.id`, else (no
+  tie) the **alphanumeric** tracking number (`trackKey`; every tracking compare in db.js uses
+  `regexp_replace(upper(x), '[^A-Z0-9]', '', 'g')`). A tied box never also counts against a
+  label that shares its number. Set by `add-box` (`poBoxId`, both the new-row and
+  existing-slot branches), `sync-boxes` (per slot, only when it agrees), `renumberBatchBox`
+  (inherited like the tracking), `linkBatchToPo`'s box map; `unlinkBatchFromPo` clears it.
+  `resolveBoxLabel(poId, {poBoxId, trackingNumber})` decides; on an ordinary order a
+  disagreement is left to the number (as before), on a **store order it is a 409 with a
+  `code`** (`label_mismatch` / `not_a_label` / `needs_label`) unless `untied:true` ("Receive it
+  not tied to a store" in the submit dialog). A store box whose label had no number yet takes
+  the carton's (`tracking_source='store'`, registered, system comment). Store orders refuse
+  the one-shot `batches/commit` and `create-open {noTracking}`.
+- **Store chip** on each box slot, the scanning box line and the submit dialog
+  (`.rcv-store-chip`); a box slot given another label's number warns with that box + store.
+- **Tie later:** `getPoFull.untied_boxes` (store orders, staff only — stripped for suppliers)
+  = received boxes matching no label; StoreOrderPanel shows "Not tied to a store: N pairs"
+  with a **Tie to…** picker → `po/tie-box {poId, batchBoxId, poBoxId|null}` (warehouse/PH;
+  refused on settled or audited orders; system comment).
+- **Store's own label:** `po/store-tracking {boxId, trackingNumber}` — supplier on their own
+  store box with no number (or one they set), or staff; global one-parcel-one-label check,
+  17TRACK registration. "Store's own tracking #" on each box in StoreOrderPanel.
+- **Cost by store:** `poLineMoney(lines, sku, size, poBoxId, storeId)` — pass `storeId` on a
+  store order: only that store's lines price the pair, and `null` (box tied to no store) →
+  no price, never another store's. Receiving and the cost backfill both pass it.
+  **Fill costs from this order's list** (StoreOrderPanel, staff) → `po/fill-costs` (GET
+  preview / POST apply, ph_team) = the admin cost backfill scoped to one order's linked
+  batches (`api/_lib/cost-backfill.js`, shared with `items/cost-backfill`).
+- Tests: `e2e/po-store-order.spec.js`, `e2e/po-store-receiving.spec.js`.
 
 ## A purchase order can now be raised from a RECEIPT (2026-09-05)
 The buying-request process (`docs/context/buy-cart.md`) ends by raising a PO from the

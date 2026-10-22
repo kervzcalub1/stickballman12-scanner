@@ -36,6 +36,10 @@ export default async function handler(req, res) {
     // draft/shipped/receiving PO — block only already-finished ones.
     if (['reconciled', 'closed'].includes(po.status))
       return send(res, 409, { ok: false, error: `PO ${po.po_code} is already ${po.status} — it can't be received against again.` });
+    // A store order's boxes are told apart by their tracking numbers (which store shipped
+    // which carton), so "this shipment had no tracking at all" can't be true of one.
+    if (po.by_store && h.noTracking === true)
+      return send(res, 409, { ok: false, error: `${po.po_code} is an order bought from several stores — each box is received from its own label, so "No tracking number" can't apply.` });
     // Idempotent: reuse the open batch already receiving this PO (no duplicate).
     const existing = await getOpenBatchForPo(poId);
     if (existing) return send(res, 200, { ok: true, batchCode: existing.batch_code, id: existing.id, reused: true });

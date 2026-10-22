@@ -56,7 +56,13 @@ export default async function handler(req, res) {
     // Changing the number re-points the label at a different parcel, so anything already
     // counted against the OLD number stops being matched to it. Say so rather than
     // silently detaching stock from the label it was received on.
-    const before = await poBoxReceived(box);
+    // Boxes tied to the label itself (batch_boxes.po_box_id) stay with it whatever its
+    // number says; only the ones matched BY the number come loose.
+    const received = await poBoxReceived(box);
+    const before = {
+      units: received.boxRows.filter((r) => r.po_box_id == null).reduce((n, r) => n + (r.units || 0), 0)
+        + received.loose.reduce((n, r) => n + (r.units || 0), 0),
+    };
     const updated = await updatePoBox(boxId, patch);
     if (patch.trackingNumber !== undefined && updated?.tracking_number)
       registerTracking([{ number: updated.tracking_number, carrier: updated.carrier_key }])

@@ -5,7 +5,7 @@
 // only a tracking number scanned — shows on the Batch page. Received boxes are
 // left untouched. Warehouse/admin, open receiving batches only. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { getBatchWithBoxes, syncBatchBoxes, dbConfigured, SHIPMENT_KINDS, claimForTracking } from '../_lib/db.js';
+import { getBatchWithBoxes, syncBatchBoxes, dbConfigured, SHIPMENT_KINDS, claimForTracking, resolveBoxLabel } from '../_lib/db.js';
 import { registerWarehouseTracking } from '../_lib/tracking.js';
 
 const MAX_BOXES = 500;
@@ -22,7 +22,10 @@ export default async function handler(req, res) {
   const body = await getJsonBody(req);
   const batchId = Number(body.batchId);
   const boxes = (Array.isArray(body.boxes) ? body.boxes : [])
-    .map((b) => ({ boxNumber: Number(b?.boxNumber), trackingNumber: String(b?.trackingNumber ?? '').trim().slice(0, 120) }))
+    .map((b) => ({
+      boxNumber: Number(b?.boxNumber), trackingNumber: String(b?.trackingNumber ?? '').trim().slice(0, 120),
+      poBoxId: Number.isInteger(Number(b?.poBoxId)) && Number(b.poBoxId) > 0 ? Number(b.poBoxId) : null,
+    }))
     .filter((b) => Number.isInteger(b.boxNumber) && b.boxNumber > 0);
   if (!Number.isInteger(batchId)) return send(res, 400, { ok: false, error: 'A valid batchId is required.' });
   if (boxes.length > MAX_BOXES) return send(res, 400, { ok: false, error: `Too many boxes (max ${MAX_BOXES}).` });
@@ -31,6 +34,13 @@ export default async function handler(req, res) {
     const found = await getBatchWithBoxes(batchId);
     if (!found || !SHIPMENT_KINDS.includes(found.batch.kind)) return send(res, 404, { ok: false, error: 'Batch not found.' });
     if (found.batch.status !== 'open') return send(res, 409, { ok: false, error: 'This batch is already finished — reopen it to change boxes.' });
+    // A slot's label tie is kept only when its number agrees with that label
+    // (resolveBoxLabel); on no PO there is nothing to tie to.
+    for (const b of boxes) {
+      if (!found.batch.po_id || b.poBoxId == null) { b.poBoxId = null; continue; }
+      const r = await resolveBoxLabel(found.batch.po_id, { poBoxId: b.poBoxId, trackingNumber: b.trackingNumber });
+      b.poBoxId = r.code ? null : r.poBoxId;
+    }
     const synced = await syncBatchBoxes(batchId, boxes, user.name || user.username || '');
     // Every number on the slot list, claimed once. This runs on each blur of a
     // tracking field, so it is called constantly — the claim is what makes that free

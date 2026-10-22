@@ -38,6 +38,7 @@ export function supplierPoView(data) {
   if (out.boxes) out.boxes = hideReceivedUnits(out.boxes);
   if (out.stores) out.stores = out.stores.map(supplierStoreRow);
   delete out.batches;
+  delete out.untied_boxes;
   return out;
 }
 

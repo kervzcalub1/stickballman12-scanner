@@ -402,4 +402,34 @@ test.describe('SHEIN live — the page', () => {
     await expect(page.getByText('would set 9 → 4')).toHaveCount(0);
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
   });
+
+  test('a run bigger than the live list: the page says so, and the CSV fetches every row', async ({ page }) => {
+    const { loginAs } = await import('./helpers/auth.js');
+    const row = (i) => ({ id: i, spu: `spu${i}`, shein_sku: `s${i}`, product_name: `Shoe ${i}`, shein_size: 'US9', seller_sku: `K${i}`, shopify_size: '9', shopify_qty: 1, held: 0, before_qty: 2, target_qty: 1, reason: 'ok', result: 'changed', wrote: 'dry', action: 'would set 2 → 1' });
+    const all = Array.from({ length: 3005 }, (_, i) => row(i + 1));
+    const live = {
+      ok: true, connected: true, configured: true, worker: true, active: null, modes: ['dry', 'stock', 'full'],
+      sync: { orders: 'on' }, unitCounts: { last24: 0, failing: 0 }, units: [], pushes: [],
+      run: { id: 9, mode: 'dry', status: 'done', phase: 'Finished', started_at: '2026-10-22T14:00:00Z', finished_at: '2026-10-22T14:40:00Z', total: 3005, done: 3005,
+        counts: { products: 3005, sizes: 3005, stock_changed: 3005 } },
+      items: all.slice(0, 3000), itemsTotal: 3005,
+    };
+    const asked = [];
+    await page.route('**/api/shein/status', (r) => r.fulfill({ json: { ok: true, configured: true, connected: true } }));
+    await page.route(/\/api\/shein\/live(\?.*)?$/, (r) => {
+      const u = new URL(r.request().url());
+      if (u.searchParams.get('all') === '1') { asked.push(u.searchParams.get('run')); return r.fulfill({ json: { ok: true, items: all } }); }
+      return r.fulfill({ json: live });
+    });
+    await loginAs(page, 'admin');
+    await page.goto('/shein-check');
+    await expect(page.getByText('Showing the first 3,000 of 3,005 sizes', { exact: false })).toBeVisible();
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: /This run \(CSV · 3,005\)/ }).click();
+    const file = await download;
+    const text = await (await import('node:fs/promises')).readFile(await file.path(), 'utf8');
+    expect(asked).toEqual(['9']);
+    expect(text.trim().split('\n')).toHaveLength(3006);   // header + every row, not the 3,000 on screen
+    expect(text).toContain('Shoe 3005');
+  });
 });

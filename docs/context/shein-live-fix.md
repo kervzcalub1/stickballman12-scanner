@@ -81,6 +81,9 @@ relinked or zeroed; **sizes to add** stay a person's job (new SKU via partialEdi
 `src/screens/SheinLivePanel.jsx`, shown above the export upload when SHEIN is connected.
 Live via `useLive` on `shein_live_runs`, `shein_live_items`, `shein_order_units`, `app_settings`.
 A run whose process died is marked `interrupted` (no update for 3 min).
+The page's live list carries the run's first 3,000 sizes (`itemsTotal` = the real count; the page
+says when it's showing fewer). **This run (CSV)** fetches EVERY row (`GET ?run=<id>&all=1`) — a full
+run is 4,000+ sizes, and the CSV used to stop at 3,000.
 
 ## Go-live order
 1. In SHEIN's console → Webhook Setting: subscribe the ORDER event (the callback URL

@@ -9385,6 +9385,10 @@ export async function addSheinLiveItems(items) {
 export async function listSheinLiveItems(runId, limit = 3000) {
   return await db()`SELECT * FROM shein_live_items WHERE run_id = ${runId} ORDER BY id LIMIT ${limit}`;
 }
+export async function countSheinLiveItems(runId) {
+  const r = await db()`SELECT count(*)::int AS n FROM shein_live_items WHERE run_id = ${runId}`;
+  return r[0]?.n || 0;
+}
 export async function recentSheinPushes(limit = 100) {
   return await db()`SELECT * FROM shein_live_items WHERE source = 'push' ORDER BY id DESC LIMIT ${limit}`;
 }

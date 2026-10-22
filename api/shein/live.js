@@ -1,4 +1,5 @@
-// GET  /api/shein/live            -> { ok, connected, run, items, sync, units, unitCounts, pushes, worker }
+// GET  /api/shein/live            -> { ok, connected, run, items (first 3,000), itemsTotal, sync, units, unitCounts, pushes, worker }
+// GET  /api/shein/live?run=<id>&all=1 -> { ok, items } — EVERY row of that run (the CSV)
 // POST /api/shein/live { action }:
 //   start { mode: dry|stock|full, ai }   walk every SHEIN product, one at a time
 //   stop                                 stop after the current product
@@ -8,7 +9,7 @@
 // docs/context/shein-live-fix.md. PH + admin; the two switches that change how SHOPIFY's
 // stock moves are admin-only.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, latestSheinLiveRun, listSheinLiveItems, recentSheinUnits, sheinUnitCounts, recentSheinPushes, requestSheinLiveStop } from '../_lib/db.js';
+import { dbConfigured, latestSheinLiveRun, listSheinLiveItems, countSheinLiveItems, recentSheinUnits, sheinUnitCounts, recentSheinPushes, requestSheinLiveStop } from '../_lib/db.js';
 import { sheinStatus } from '../_lib/shein.js';
 import { startWalk, walkActive, heartbeat, MODES } from '../_lib/shein-live.js';
 import { readSync, writeSync, switchOn, switchOff, actOnUnits } from '../_lib/shein-orders.js';
@@ -27,12 +28,19 @@ export default async function handler(req, res) {
   const by = user.name || user.username || '';
 
   if (req.method === 'GET') {
+    // The CSV wants the whole run; the page's live refresh stays capped (a full run is 4,000+ rows).
+    const qs = new URL(req.url, 'http://x').searchParams;
+    if (qs.get('all') === '1') {
+      const runId = Number(qs.get('run'));
+      if (!Number.isInteger(runId) || runId < 1) return send(res, 400, { ok: false, error: 'Which run?' });
+      return send(res, 200, { ok: true, items: await listSheinLiveItems(runId, 100_000) });
+    }
     await heartbeat();   // keeps a walk alive in THIS process fresh; calls a dead one interrupted
     const [st, run, sync, units, unitCounts, pushes] = await Promise.all([
       sheinStatus().catch(() => null), latestSheinLiveRun(), readSync(), recentSheinUnits(60), sheinUnitCounts(), recentSheinPushes(40),
     ]);
-    const items = run ? await listSheinLiveItems(run.id) : [];
-    return send(res, 200, { ok: true, connected: !!st?.connected, configured: !!st?.configured, run, active: walkActive(), items, sync, units, unitCounts, pushes,
+    const [items, itemsTotal] = run ? await Promise.all([listSheinLiveItems(run.id), countSheinLiveItems(run.id)]) : [[], 0];
+    return send(res, 200, { ok: true, connected: !!st?.connected, configured: !!st?.configured, run, active: walkActive(), items, itemsTotal, sync, units, unitCounts, pushes,
       worker: sheinWorkerEnabled(), modes: MODES });
   }
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });

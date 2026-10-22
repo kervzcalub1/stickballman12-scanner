@@ -52,6 +52,10 @@ const WIPE = [
   'batch_boxes',
   'rescale_requests',
   'edit_locks',
+  'presell_stock_po',
+  'po_store_receipts',
+  'po_store_charges',
+  'po_stores',          // store orders: all hang off purchase_orders
   'po_comments',
   'po_resolutions',
   'po_lines',

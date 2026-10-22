@@ -1013,6 +1013,68 @@ await sql(`ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_order_kind
 // same. `dimensions` is the extra fact a box carries that a pair doesn't; it is not a
 // replacement for the size.
 await sql(`ALTER TABLE po_lines ADD COLUMN IF NOT EXISTS dimensions TEXT`);
+
+/* ---- Store orders (docs/store-orders-plan.md) ----
+   One supplier buys from many stores of one retailer, and each store ships its own boxes.
+   The order's list is split by store, each label says which store ships it, and the audit
+   compares declared vs received vs what the card was charged, store by store.
+   Declared HERE, before the po_lines index block below, because that block will key the
+   whole-order lines on po_store_id (a fresh database runs this file top to bottom). */
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_stores (
+    id              BIGSERIAL PRIMARY KEY,
+    po_id           BIGINT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    position        INT NOT NULL DEFAULT 0,
+    credit_agreed   NUMERIC(12,2),   -- what the supplier agreed to credit for THIS store's shortfall
+    credit_received NUMERIC(12,2),
+    credit_note     TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+// A table UNIQUE can't hold an expression; the name is matched case-insensitively.
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_stores_po_name_idx ON po_stores (po_id, lower(name))`);
+// What the card was ACTUALLY charged, from the statement — many per store (split charges,
+// a later credit is a negative amount). CASCADE in the database so deleting an order can't
+// trip over it; the API refuses to remove a store or an order that holds money evidence.
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_store_charges (
+    id           BIGSERIAL PRIMARY KEY,
+    po_store_id  BIGINT NOT NULL REFERENCES po_stores(id) ON DELETE CASCADE,
+    amount       NUMERIC(12,2) NOT NULL,
+    charged_on   DATE,            -- the statement date (EST civil date)
+    card_last4   TEXT,
+    note         TEXT,
+    entered_by   TEXT,
+    entered_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS po_store_charges_store_idx ON po_store_charges (po_store_id)`);
+await sql(`ALTER TABLE po_lines ADD COLUMN IF NOT EXISTS po_store_id BIGINT REFERENCES po_stores(id) ON DELETE CASCADE`);
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS po_store_id BIGINT REFERENCES po_stores(id) ON DELETE SET NULL`);
+// NULL = a label we bought; 'store' = the store shipped on its own label and we typed its number.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS tracking_source TEXT`);
+// The label a received box was received AGAINST. Until now the tracking string was the only
+// link (and it is optional and editable at receiving); the receiving screen already knows
+// the label it opened the box from.
+await sql(`ALTER TABLE batch_boxes ADD COLUMN IF NOT EXISTS po_box_id BIGINT REFERENCES po_boxes(id) ON DELETE SET NULL`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS by_store BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS list_confirmed_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS list_confirmed_by TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_checked_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_checked_by TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS landed_override_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS landed_override_by TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS landed_override_note TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS audited_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS audited_by TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS audit_note TEXT`);
+await sql(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS audit_snapshot JSONB`);
+// The same shoe and size from two stores is two lines. Added on its own first: the existing
+// whole-order index below still covers every line until the store-order code ships with its
+// replacement (old code's ON CONFLICT can't infer a stricter index — plan §6).
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_store_sku_size_idx
+           ON po_lines (po_store_id, sku, size)
+           WHERE po_box_id IS NULL AND dimensions IS NULL AND po_store_id IS NOT NULL`);
+
 // Which line is "the same line" now depends on the kind of order, so the two kinds get a
 // partial index each and stop overlapping. `dimensions IS NULL` is the shoe half — every
 // row that existed before empty-box orders is in it, so adding the predicate changes
@@ -2011,6 +2073,27 @@ await sql(`CREATE INDEX IF NOT EXISTS email_receipts_received_idx ON email_recei
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_buyer_idx ON email_receipts (buyer_user_id)`);
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_order_idx ON email_receipts (order_number)`);
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_recipients_idx ON email_receipts USING gin (recipient_addrs)`);
+
+// A store's receipt on a store order, WHEN it gave one (paper photo, PDF/screenshot, or an
+// email we already ingested). Optional evidence for the audit — plenty of stores give none.
+// Declared after email_receipts because it points at it.
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_store_receipts (
+    id               BIGSERIAL PRIMARY KEY,
+    po_store_id      BIGINT NOT NULL REFERENCES po_stores(id) ON DELETE CASCADE,
+    r2_key           TEXT,
+    name             TEXT,
+    content_type     TEXT,
+    size_bytes       INT,
+    email_receipt_id BIGINT REFERENCES email_receipts(id) ON DELETE SET NULL,
+    amount           NUMERIC(12,2),   -- the receipt's total, confirmed by a person
+    lines            JSONB,           -- read lines [{sku,size,qty,totalPrice}], when read
+    read_agreed      BOOLEAN,         -- the two reads of the total agreed (NULL = not read)
+    uploaded_by      TEXT,
+    uploaded_by_id   BIGINT,
+    uploaded_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS po_store_receipts_store_idx ON po_store_receipts (po_store_id)`);
 // What each "Check mailboxes" run actually reached, per mailbox + folder (2026-10-10,
 // receipts.md). Make caps every folder search, oldest first, so a busy window can stop
 // short of the newest mail; the next check then started an hour before the last PRESS and
@@ -2141,6 +2224,23 @@ await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS supplier TEXT`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id) ON DELETE SET NULL`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[] NOT NULL DEFAULT '{}'`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_stock_po_idx ON presell_stock (po_id) WHERE po_id IS NOT NULL`);
+// How many of a row's pairs were pre-listed against EACH purchase order. presell_stock is one
+// row per SKU + size across every purchase, so its qty can't say what one PO is good for;
+// the cap ("can't pre-sell more than the order lists") is checked against this.
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_stock_po (
+    stock_id BIGINT NOT NULL REFERENCES presell_stock(id) ON DELETE CASCADE,
+    po_id    BIGINT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    qty      INT NOT NULL DEFAULT 0 CHECK (qty >= 0),
+    PRIMARY KEY (stock_id, po_id)
+  )`);
+// The "orders at risk" count last posted for the row — post again only when it changes.
+await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS at_risk_alerted INT`);
+// Rows linked to a PO before this table existed: their whole qty counts against that PO
+// (the only attribution there is). Idempotent — an existing (stock, PO) row is left alone.
+await sql(`INSERT INTO presell_stock_po (stock_id, po_id, qty)
+           SELECT id, po_id, qty FROM presell_stock WHERE po_id IS NOT NULL
+           ON CONFLICT (stock_id, po_id) DO NOTHING`);
 // MARKET COMPETITION (owner, 2026-10-11): keep our live listings at the market's lowest ask —
 // "undercut" by $1 or "match" it — never more than $5 under the price we set, and follow the
 // market UP without a cap. Each size, each platform, on its own (presell-compete.js).
@@ -2220,6 +2320,9 @@ await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS tracking_url TEXT`
 await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS label_url TEXT`);
 await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS ship_docs JSONB`);
 await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS ship_state_at TIMESTAMPTZ`);
+// The purchase order the sold pair was pre-listed against (the row's po_id at sale time), so
+// "sold 8, arrived 5 → 3 orders at risk" can be counted per order (docs/store-orders-plan.md).
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id) ON DELETE SET NULL`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_sales_to_ship_idx ON presell_sales (ship_by) WHERE ship_state IS NULL OR ship_state = 'to_ship'`);
 // Regular (non-pre-sell) sale alerts — a TEST switch (app_settings.sales_alert_all_since,
 // flipped on the Sales tab). One row per marketplace order the watcher has alerted on (or
@@ -2600,6 +2703,7 @@ const LIVE_TABLES = [
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
   'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
   'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions',
+  'po_stores', 'po_store_charges', 'po_store_receipts', 'presell_stock_po',
   'rescale_requests', 'rescale_request_items',
   'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards',
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',

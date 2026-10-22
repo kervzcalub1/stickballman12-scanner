@@ -32,6 +32,7 @@ export const MODES = ['dry', 'stock', 'full'];
 export const IO = {
   sheinSpuInfo, sheinStock, sheinInReview, sheinSellerSkusTaken, sheinSetSellerSkus, sheinSetStock,
   shopifyProductsLive, shopifyProductIdsForSkus, saveSheinLinks, addSheinLiveItems, sheinOpenNotDeducted, readSync, sheinAiMatch, sheinAiConfigured,
+  readBackWaits: [3_000, 5_000, 10_000],   // ms between read-backs of a size still showing the old stock
 };
 let active = null;   // { runId, promise } — one walk per process
 
@@ -165,8 +166,27 @@ export async function stepProduct(spuName, ctx) {
     const r = await io.sheinSetStock(writes);
     for (const f of r.failed) failedStock.set(String(f.skuCode), f.reason);
     for (const w of writes) if (!failedStock.has(w.sheinSku)) wrote.set(w.sheinSku, (wrote.get(w.sheinSku) || 0) + 1);
-    const back = rowsFromSpu(spu, await io.sheinStock([...new Set(writes.map((w) => w.sheinSku))]), { merchant: ctx.merchant });
-    for (const b of back) after.set(b.sheinSku, b.qty);
+    // Read back only what we wrote (an unwritten size isn't in the answer and would read as 0).
+    // SHEIN accepts a write without refusing it yet can still show the old number for a
+    // while (run 6, 2026-10-22: 268 sizes) — so wait and read again, and write the ones
+    // still wrong once more, before calling it a mismatch.
+    const want = new Map(plan.rows.filter((x) => wrote.has(x.sheinSku)).map((x) => [x.sheinSku, Number(x.newQty || 0)]));
+    const readBack = async () => {
+      const back = rowsFromSpu(spu, await io.sheinStock([...want.keys()]), { merchant: ctx.merchant });
+      for (const b of back) if (want.has(b.sheinSku)) after.set(b.sheinSku, b.qty);
+      return [...want].filter(([k, v]) => after.get(k) !== v).map(([k]) => k);
+    };
+    let wrong = want.size ? await readBack() : [];
+    const waits = io.readBackWaits || IO.readBackWaits;
+    for (let i = 0; wrong.length && i < waits.length; i++) {
+      await new Promise((ok) => setTimeout(ok, waits[i]));
+      if (i === 1) {   // still wrong after the first wait: write those again (new key = a new write)
+        const again = writes.filter((w) => wrong.includes(w.sheinSku)).map((w) => ({ ...w, key: `${w.key}-again` }));
+        const r2 = await io.sheinSetStock(again);
+        for (const f of r2.failed) failedStock.set(String(f.skuCode), f.reason);
+      }
+      wrong = await readBack();
+    }
   }
 
   const counts = { sizes: 0, stock_changed: 0, zeroed: 0, links_changed: 0, links_skipped: 0, needs_person: 0, errors: 0, mismatch: 0 };

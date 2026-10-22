@@ -9489,7 +9489,15 @@ export async function sheinUnitsKnown(goodsIds) {
   return new Set(rows.map((r) => r.goods_id));
 }
 // Units that need Shopify touched: a sale to take off, or a cancelled-before-shipping sale to put back.
-export async function sheinUnitsToAct(limit = 200) {
+// The minute poll gives up on a unit after 8 failed tries (a SKU Shopify doesn't have fails
+// every minute forever); a person's "Retry" (`manual`) tries those again too.
+export async function sheinUnitsToAct({ limit = 200, manual = false } = {}) {
+  if (manual) return await db()`
+    SELECT * FROM shein_order_units
+     WHERE (
+       (due AND deducted_at IS NULL AND stock_mode = 3 AND exchange_tag IN (1, 3) AND unit_status NOT IN (6))
+       OR (deducted_at IS NOT NULL AND restocked_at IS NULL AND NOT shipped_seen AND (unit_status = 6 OR exchange_tag IN (2, 4))))
+     ORDER BY order_time NULLS LAST, goods_id LIMIT ${limit}`;
   return await db()`
     SELECT * FROM shein_order_units
      WHERE attempts < 8 AND (
@@ -9523,7 +9531,8 @@ export async function sheinUnitCounts() {
   const [r] = await db()`
     SELECT count(*) FILTER (WHERE deducted_at IS NOT NULL)::int AS deducted,
            count(*) FILTER (WHERE restocked_at IS NOT NULL)::int AS restocked,
-           count(*) FILTER (WHERE error IS NOT NULL AND deducted_at IS NULL AND due)::int AS failing,
+           count(*) FILTER (WHERE error IS NOT NULL AND deducted_at IS NULL AND due
+                             AND stock_mode = 3 AND exchange_tag IN (1, 3) AND unit_status NOT IN (6))::int AS failing,
            count(*) FILTER (WHERE deducted_at >= now() - interval '24 hours')::int AS last24,
            max(deducted_at) AS last_deducted
       FROM shein_order_units`;

@@ -56,7 +56,7 @@ export default async function handler(req, res) {
         if (run) await requestSheinLiveStop(run.id);
         return send(res, 200, { ok: true });
       }
-      case 'retry': return send(res, 200, { ok: true, ...(await actOnUnits()) });
+      case 'retry': return send(res, 200, { ok: true, ...(await actOnUnits(undefined, { manual: true })) });
       case 'orders_on': case 'orders_off': case 'push_on': case 'push_off': {
         if (!isAdmin(user)) return send(res, 403, { ok: false, error: 'Only an admin can switch the live sync.' });
         if (b.action === 'orders_on') return send(res, 200, { ok: true, ...(await switchOn({ by, openAtStart: !!b.openAtStart })), sync: await readSync() });

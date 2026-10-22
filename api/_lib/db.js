@@ -12,8 +12,8 @@ import { TERMINAL_STATUSES } from './statuses.js';
 import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 // The LOOSE search normaliser (strips every non-alphanumeric), shared with the PO
 // search so both find one parcel the same way. Deliberately imported under another
-// name: this file already has a `trackKey` further down that only strips whitespace,
-// and that one is for MATCHING a label to a box — a stricter job than searching.
+// name: this file also has its own `trackKey` further down, for MATCHING a label to a
+// box. Since 2026-10-23 that is the same alphanumeric rule (store-orders-plan §8b).
 import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
 // number has to canonicalise too — see normalizeTrackingNumber for why.
@@ -760,7 +760,7 @@ export async function previewBatchMerge(sourceId, targetId) {
   const [match] = key ? await sql`
     SELECT id, box_number FROM batch_boxes
      WHERE batch_id = ${targetId}
-       AND upper(replace(coalesce(tracking_number, ''), ' ', '')) = ${key}` : [];
+       AND regexp_replace(upper(coalesce(tracking_number, '')), '[^A-Z0-9]', '', 'g') = ${key}` : [];
   return {
     source, target, boxes, loose, units,
     looseGoesTo: loose > 0
@@ -797,7 +797,7 @@ export async function mergeBatches(sourceId, targetId, actor) {
   if (pre.loose > 0 && key) {
     const [match] = await sql`
       SELECT id FROM batch_boxes WHERE batch_id = ${targetId}
-        AND upper(replace(coalesce(tracking_number, ''), ' ', '')) = ${key}`;
+        AND regexp_replace(upper(coalesce(tracking_number, '')), '[^A-Z0-9]', '', 'g') = ${key}`;
     if (match) looseBoxId = match.id;
     else {
       const [{ n: freeNum }] = await sql`
@@ -1535,7 +1535,7 @@ export async function listBatchBoxes(batchId) {
 // Find a batch's box by its slot number (or null if that slot isn't materialized).
 async function findBatchBoxByNumber(batchId, boxNumber) {
   const rows = await db()`
-    SELECT id, box_number, tracking_number, status
+    SELECT id, box_number, tracking_number, status, po_box_id
     FROM batch_boxes WHERE batch_id = ${batchId} AND box_number = ${boxNumber} LIMIT 1
   `;
   return rows[0] || null;
@@ -1546,60 +1546,126 @@ async function findBatchBoxByNumber(batchId, boxNumber) {
 // syncBatchBoxes) so committing a box re-uses its existing pending row instead of
 // creating a duplicate (fills in tracking if newly provided). Without a boxNumber
 // (the "Add box" flow on the Batch page) it appends next = max+1.
-export async function addBatchBox(batchId, { trackingNumber, boxNumber }, createdBy) {
+//
+// `setLabel` + `poBoxId` record WHICH LABEL this box is (batch_boxes.po_box_id), the
+// first half of the shared label matcher (getPoFull). Only written when the caller has
+// resolved it (`resolveBoxLabel`); `setLabel` with a null poBoxId clears it — a box
+// received "not tied to a store". Without `setLabel` an existing tie is left alone.
+// The existing-slot branch matters most: sync-boxes usually creates the row first.
+export async function addBatchBox(batchId, { trackingNumber, boxNumber, poBoxId = null, setLabel = false }, createdBy) {
   // The shim can't nest sql fragments — branch on whether a box number is given.
   let rows;
+  const pb = setLabel && poBoxId != null ? Number(poBoxId) : null;
   if (Number.isInteger(boxNumber) && boxNumber > 0) {
     const existing = await findBatchBoxByNumber(batchId, boxNumber);
     if (existing) {
-      if (trackingNumber && trackingNumber !== existing.tracking_number) {
+      const trackChanged = !!trackingNumber && trackingNumber !== existing.tracking_number;
+      const labelChanged = setLabel && (existing.po_box_id == null ? null : Number(existing.po_box_id)) !== pb;
+      if (trackChanged || labelChanged) {
         const upd = await db()`
-          UPDATE batch_boxes SET tracking_number = ${trackingNumber}
+          UPDATE batch_boxes
+             SET tracking_number = CASE WHEN ${trackChanged} THEN ${trackingNumber || null}::text ELSE tracking_number END,
+                 po_box_id       = CASE WHEN ${setLabel} THEN ${pb}::bigint ELSE po_box_id END
           WHERE id = ${existing.id}
-          RETURNING id, box_number, tracking_number, status
+          RETURNING id, box_number, tracking_number, status, po_box_id
         `;
         return upd[0];
       }
       return existing;
     }
     rows = await db()`
-      INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
-      VALUES (${batchId}, ${boxNumber}, ${trackingNumber || null}, 'pending', ${createdBy || null})
-      RETURNING id, box_number, tracking_number, status
+      INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by, po_box_id)
+      VALUES (${batchId}, ${boxNumber}, ${trackingNumber || null}, 'pending', ${createdBy || null}, ${pb}::bigint)
+      RETURNING id, box_number, tracking_number, status, po_box_id
     `;
   } else {
     rows = await db()`
-      INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
+      INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by, po_box_id)
       VALUES (
         ${batchId},
         (SELECT coalesce(max(box_number), 0) + 1 FROM batch_boxes WHERE batch_id = ${batchId}),
-        ${trackingNumber || null}, 'pending', ${createdBy || null})
-      RETURNING id, box_number, tracking_number, status
+        ${trackingNumber || null}, 'pending', ${createdBy || null}, ${pb}::bigint)
+      RETURNING id, box_number, tracking_number, status, po_box_id
     `;
   }
   return rows[0];
+}
+
+// WHICH LABEL is the box being received? (store-orders-plan §4.4 / §8b)
+//
+// The slot the warehouse opened says one thing (`poBoxId`, the label it came from) and
+// the carton's tracking number says another; on most orders the number wins quietly —
+// a parcel can be re-taped, and the person holding it can see that. On a STORE order
+// that guess is the whole audit: which store's pairs these are, and so whose card paid
+// for them. So the two must agree there, and a disagreement is returned as a `code`
+// for the caller to refuse:
+//   · `label_mismatch` — the number is another label's, or not the opened label's;
+//   · `not_a_label`    — the number is on none of this order's labels;
+//   · `needs_label`    — no number and no label at all.
+// The answer is `{ poBoxId, label, saveTracking }`; `saveTracking` = the opened label has
+// no number yet (a store that shipped under its own label) and this carton's number is
+// free to become it.
+export async function resolveBoxLabel(poId, { poBoxId = null, trackingNumber = null } = {}) {
+  if (!poId) return { poBoxId: null, label: null };
+  const sql = db();
+  const labels = await sql`
+    SELECT id, box_number, tracking_number, kind, po_store_id FROM po_boxes WHERE po_id = ${poId}`;
+  const key = trackKey(trackingNumber);
+  const byKey = key ? labels.find((l) => trackKey(l.tracking_number) === key) || null : null;
+  const name = (l) => (l.kind === 'replacement' ? 'the replacement label' : `label ${l.box_number}`);
+  if (poBoxId != null) {
+    const label = labels.find((l) => Number(l.id) === Number(poBoxId)) || null;
+    if (!label) return { code: 'not_a_label', error: 'That label is not on this order any more.' };
+    const lk = trackKey(label.tracking_number);
+    if (key && lk && key !== lk) {
+      return {
+        code: 'label_mismatch', label, other: byKey,
+        error: `${trackingNumber} is not ${name(label)}'s number (${label.tracking_number})`
+          + (byKey ? ` — it is ${name(byKey)}'s. Open that box instead.` : '.'),
+      };
+    }
+    if (key && !lk) {
+      if (byKey) {
+        return { code: 'label_mismatch', label, other: byKey,
+          error: `${trackingNumber} is ${name(byKey)}'s number, not ${name(label)}'s. Open that box instead.` };
+      }
+      return { poBoxId: Number(label.id), label, saveTracking: true };
+    }
+    return { poBoxId: Number(label.id), label };
+  }
+  if (byKey) return { poBoxId: Number(byKey.id), label: byKey };
+  return key
+    ? { code: 'not_a_label', error: `${trackingNumber} is not on any of this order's labels.` }
+    : { code: 'needs_label', error: 'This box has no tracking number and no label picked.' };
 }
 
 // Materialize / update a batch's box slots (box_number + tracking) WITHOUT
 // committing items. Called as staff enter box tracking numbers so every expected
 // box — including empty ones and ones with only a tracking # scanned — is
 // persisted and shows on the Batch page. Never disturbs a box already 'received'.
+//
+// A slot's `poBoxId` is written only once the caller has checked it (`resolveBoxLabel`,
+// in the endpoint) — a slot whose number disagrees with its label carries none.
 export async function syncBatchBoxes(batchId, slots, createdBy) {
   const list = Array.isArray(slots) ? slots : [];
   for (const s of list) {
     const n = Number(s?.boxNumber);
     if (!Number.isInteger(n) || n < 1) continue;
     const tracking = String(s?.trackingNumber ?? '').trim().slice(0, 120) || null;
+    const pb = Number.isInteger(Number(s?.poBoxId)) && Number(s.poBoxId) > 0 ? Number(s.poBoxId) : null;
     const existing = await findBatchBoxByNumber(batchId, n);
     if (existing) {
       // Leave received boxes alone; otherwise sync the (possibly cleared) tracking.
       if (existing.status !== 'received' && tracking !== (existing.tracking_number || null)) {
         await db()`UPDATE batch_boxes SET tracking_number = ${tracking} WHERE id = ${existing.id}`;
       }
+      if (existing.status !== 'received' && pb != null && Number(existing.po_box_id) !== pb) {
+        await db()`UPDATE batch_boxes SET po_box_id = ${pb} WHERE id = ${existing.id}`;
+      }
     } else {
       await db()`
-        INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by)
-        VALUES (${batchId}, ${n}, ${tracking}, 'pending', ${createdBy || null})
+        INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, created_by, po_box_id)
+        VALUES (${batchId}, ${n}, ${tracking}, 'pending', ${createdBy || null}, ${pb}::bigint)
       `;
     }
   }
@@ -1620,11 +1686,11 @@ export async function syncBatchBoxes(batchId, slots, createdBy) {
 export async function renumberBatchBox(batchId, boxId, boxNumber) {
   const sql = db();
   const box = (await sql`
-    SELECT id, box_number, status, tracking_number FROM batch_boxes WHERE id = ${boxId} AND batch_id = ${batchId}`)[0];
+    SELECT id, box_number, status, tracking_number, po_box_id FROM batch_boxes WHERE id = ${boxId} AND batch_id = ${batchId}`)[0];
   if (!box) return { error: 'Box not found in this batch.' };
   if (Number(box.box_number) === boxNumber) return { ok: true, absorbed: false, boxes: await listBatchBoxes(batchId) };
   const clash = (await sql`
-    SELECT bx.id, bx.status, bx.tracking_number, (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count
+    SELECT bx.id, bx.status, bx.tracking_number, bx.po_box_id, (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count
     FROM batch_boxes bx
     WHERE bx.batch_id = ${batchId} AND bx.box_number = ${boxNumber} AND bx.id <> ${boxId}
     LIMIT 1`)[0];
@@ -1636,9 +1702,11 @@ export async function renumberBatchBox(batchId, boxId, boxNumber) {
   // The absorbed slot may be the only place this box's tracking number was ever written
   // (typed up front off the PO's label, never re-entered by the person scanning). Inherit
   // it rather than deleting it — an empty tracking field is what breaks the label match.
+  // The label tie (po_box_id) is inherited the same way, and for the same reason.
   const tracking = String(box.tracking_number || '').trim() || (clash ? clash.tracking_number : null) || null;
+  const poBoxId = box.po_box_id ?? (clash ? clash.po_box_id : null) ?? null;
   queries.push(sql`
-    UPDATE batch_boxes SET box_number = ${boxNumber}, tracking_number = ${tracking}
+    UPDATE batch_boxes SET box_number = ${boxNumber}, tracking_number = ${tracking}, po_box_id = ${poBoxId}::bigint
     WHERE id = ${boxId} AND batch_id = ${batchId}`);
   await sql.transaction(queries);
   return { ok: true, absorbed: !!clash, from: Number(box.box_number), boxes: await listBatchBoxes(batchId) };
@@ -3126,21 +3194,23 @@ export async function setItemsCost(vins, cost, by) {
 export async function listCostBackfillCandidates() {
   return db()`
     WITH pbt AS (
-      SELECT upper(regexp_replace(pb.tracking_number, '\\s', '', 'g')) AS t,
+      SELECT regexp_replace(upper(pb.tracking_number), '[^A-Z0-9]', '', 'g') AS t,
              min(pb.po_id) AS po_id, count(DISTINCT pb.po_id)::int AS n
         FROM po_boxes pb JOIN purchase_orders o ON o.id = pb.po_id
        WHERE coalesce(btrim(pb.tracking_number), '') <> '' AND coalesce(o.order_kind, 'shoes') <> 'boxes'
        GROUP BY 1),
     c AS (
       SELECT i.id, i.vin, i.sku, i.size, i.status, b.po_id AS linked_po, b.kind, b.supplier_name,
+             -- The label the box is tied to (store-orders-plan §8b), only on a linked batch.
+             CASE WHEN b.po_id IS NOT NULL THEN bb.po_box_id END AS po_box_id,
              -- nullif: a box row saved with '' (not NULL) must still fall back to the
              -- batch's number (QA pass #2, finding 3).
-             upper(regexp_replace(coalesce(nullif(btrim(bb.tracking_number), ''), b.tracking_number, ''), '\\s', '', 'g')) AS tracking
+             regexp_replace(upper(coalesce(nullif(btrim(bb.tracking_number), ''), b.tracking_number, '')), '[^A-Z0-9]', '', 'g') AS tracking
         FROM items i
         JOIN batches b ON b.id = i.batch_id
         LEFT JOIN batch_boxes bb ON bb.id = i.box_id
        WHERE i.cost IS NULL AND coalesce(btrim(i.sku), '') <> '')
-    SELECT c.id, c.vin, c.sku, c.size, c.status, c.supplier_name, c.tracking,
+    SELECT c.id, c.vin, c.sku, c.size, c.status, c.supplier_name, c.tracking, c.po_box_id,
            coalesce(c.linked_po, CASE WHEN pbt.n = 1 THEN pbt.po_id END) AS po_id,
            (c.linked_po IS NULL AND pbt.n = 1) AS by_tracking,
            (c.linked_po IS NULL AND pbt.n > 1) AS ambiguous
@@ -3166,13 +3236,22 @@ export async function listPoLinesForCost(poIds) {
   const ids = [...new Set((poIds || []).map(Number).filter(Number.isInteger))];
   if (!ids.length) return [];
   return db()`
-    SELECT l.po_id, l.po_box_id, l.sku, l.size, l.unit_cost, l.tip, o.po_code,
-           upper(regexp_replace(coalesce(pb.tracking_number, ''), '\\s', '', 'g')) AS tracking
+    SELECT l.po_id, l.po_box_id, l.po_store_id, l.sku, l.size, l.unit_cost, l.tip, o.po_code
       FROM po_lines l
       JOIN purchase_orders o ON o.id = l.po_id
-      LEFT JOIN po_boxes pb ON pb.id = l.po_box_id
      WHERE l.po_id = ANY(${ids}) AND l.unit_cost IS NOT NULL
      ORDER BY l.po_id, l.po_box_id NULLS FIRST, l.id`;
+}
+
+// The labels of those POs, for the pair's own label (by tie or by number) and its store.
+export async function listPoLabelsForCost(poIds) {
+  const ids = [...new Set((poIds || []).map(Number).filter(Number.isInteger))];
+  if (!ids.length) return [];
+  return db()`
+    SELECT pb.id, pb.po_id, pb.po_store_id, coalesce(o.by_store, false) AS by_store,
+           regexp_replace(upper(coalesce(pb.tracking_number, '')), '[^A-Z0-9]', '', 'g') AS tracking
+      FROM po_boxes pb JOIN purchase_orders o ON o.id = pb.po_id
+     WHERE pb.po_id = ANY(${ids})`;
 }
 
 // Write one group (same landed cost, same shelf, same source) and its history note.
@@ -4097,10 +4176,10 @@ export async function provenanceForVins(vins) {
            (SELECT pb.box_number FROM po_boxes pb
              WHERE pb.po_id = b.po_id
                AND coalesce(pb.tracking_number, '') <> ''
-               AND upper(replace(pb.tracking_number, ' ', '')) =
-                   upper(replace(coalesce(
+               AND regexp_replace(upper(pb.tracking_number), '[^A-Z0-9]', '', 'g') =
+                   regexp_replace(upper(coalesce(
                      (SELECT bx.tracking_number FROM batch_boxes bx WHERE bx.id = i.box_id),
-                     b.tracking_number, ''), ' ', ''))
+                     b.tracking_number, '')), '[^A-Z0-9]', '', 'g')
              LIMIT 1) AS po_label_number
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
@@ -4304,22 +4383,26 @@ export async function getPoFull(id) {
   // "0 declared · 48 received" (staff-only there and here: a supplier must not read our
   // count off the screen before the reconciliation is settled with them).
   //
-  // The join is the TRACKING NUMBER — batch_boxes has no po_box_id, so that string is the
-  // only thing tying a received box to a label (the link-batch preview matches the same
-  // way). The second half covers a receive that never made a box row: a single-box batch
-  // keeps its tracking on the batch itself and leaves items.box_id NULL.
+  // The join is the shared label matcher (2026-10-23): a received box IS a label when
+  // `batch_boxes.po_box_id` says so (set when it was received from that label's slot, or
+  // tied later), and otherwise when its TRACKING NUMBER is the label's. A box tied to a
+  // label never also counts against another label that happens to share its number. The
+  // second half covers a receive that never made a box row: a single-box batch keeps its
+  // tracking on the batch itself and leaves items.box_id NULL.
   const boxes = await sql`
     SELECT b.*,
       (SELECT count(*) FROM items i
          JOIN batch_boxes x ON x.id = i.box_id
          JOIN batches bt   ON bt.id = x.batch_id
-        WHERE bt.po_id = ${id} AND coalesce(b.tracking_number, '') <> ''
-          AND upper(replace(coalesce(x.tracking_number, ''), ' ', '')) = upper(replace(b.tracking_number, ' ', '')))::int
+        WHERE bt.po_id = ${id}
+          AND (x.po_box_id = b.id
+               OR (x.po_box_id IS NULL AND coalesce(b.tracking_number, '') <> ''
+                   AND regexp_replace(upper(coalesce(x.tracking_number, '')), '[^A-Z0-9]', '', 'g') = regexp_replace(upper(b.tracking_number), '[^A-Z0-9]', '', 'g'))))::int
       +
       (SELECT count(*) FROM items i
          JOIN batches bt ON bt.id = i.batch_id
         WHERE bt.po_id = ${id} AND i.box_id IS NULL AND coalesce(b.tracking_number, '') <> ''
-          AND upper(replace(coalesce(bt.tracking_number, ''), ' ', '')) = upper(replace(b.tracking_number, ' ', '')))::int
+          AND regexp_replace(upper(coalesce(bt.tracking_number, '')), '[^A-Z0-9]', '', 'g') = regexp_replace(upper(b.tracking_number), '[^A-Z0-9]', '', 'g'))::int
       AS received_units
     FROM po_boxes b WHERE b.po_id = ${id} ORDER BY b.box_number`;
   // entered_by_name = the staff member who entered/last-edited an on-behalf line, for
@@ -4338,7 +4421,48 @@ export async function getPoFull(id) {
     SELECT b.id, b.batch_code, b.status, b.created_at, b.supplier_name, b.date_received,
            (SELECT count(*) FROM items i WHERE i.batch_id = b.id)::int AS units
     FROM batches b WHERE b.po_id = ${id} ORDER BY b.id`;
-  return { po, boxes, lines, batches, stores };
+  // A store order's received boxes that belong to NO label — so to no store. Shown loudly
+  // with a "tie it to…" picker (store-orders-plan §4.4), never guessed. Staff only:
+  // supplierPoView drops it.
+  const untied_boxes = po.by_store && batches.length
+    ? (await getPoReceivedBoxes(id)).filter((b) => !b.matched_label && b.units > 0)
+      .map((b) => ({ id: b.id, batch_id: b.batch_id, batch_code: b.batch_code, box_number: b.recorded_box_number ?? b.box_number,
+        tracking_number: b.tracking_number, units: b.units, items: b.items }))
+    : [];
+  return { po, boxes, lines, batches, stores, untied_boxes };
+}
+
+// Tie a received box to one of the order's labels after the fact (or untie it with
+// `poBoxId` null): the carton came in without its label, or under a number the order
+// never had. Writes `batch_boxes.po_box_id`, the first half of the shared matcher, so the
+// box — and every pair in it — becomes that label's, and that label's store's.
+export async function tiePoReceivedBox({ poId, batchBoxId, poBoxId = null, actor = null }) {
+  const sql = db();
+  const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return { error: 'Purchase order not found.' };
+  if (PO_FROZEN.includes(po.status)) return { error: `${po.po_code} is ${po.status} — its count is settled. Reopen it first.` };
+  if (po.audited_at) return { error: `${po.po_code} has been audited — undo the audit before changing which store a box came from.` };
+  const box = (await sql`
+    SELECT x.*, bt.batch_code FROM batch_boxes x JOIN batches bt ON bt.id = x.batch_id
+     WHERE x.id = ${batchBoxId} AND bt.po_id = ${poId}`)[0];
+  if (!box) return { error: 'That box is not one received against this order.' };
+  let label = null;
+  if (poBoxId != null) {
+    label = (await sql`SELECT * FROM po_boxes WHERE id = ${poBoxId} AND po_id = ${poId}`)[0];
+    if (!label) return { error: 'That label is not on this order.' };
+  }
+  await sql`UPDATE batch_boxes SET po_box_id = ${label ? Number(label.id) : null}::bigint WHERE id = ${batchBoxId}`;
+  const store = label?.po_store_id
+    ? (await sql`SELECT name FROM po_stores WHERE id = ${label.po_store_id}`)[0]?.name : null;
+  const units = (await sql`SELECT count(*)::int AS n FROM items WHERE box_id = ${batchBoxId}`)[0].n;
+  await addPoComment({
+    poId, kind: 'system', audience: 'internal',
+    body: label
+      ? `Tied received box ${box.box_number} of ${box.batch_code} (${units} pair${units === 1 ? '' : 's'}${box.tracking_number ? `, tracking ${box.tracking_number}` : ''}) to label ${label.box_number}${store ? ` — ${store}` : ''}.`
+      : `Untied received box ${box.box_number} of ${box.batch_code} from its label — its ${units} pair${units === 1 ? '' : 's'} belong to no store until it is tied again.`,
+    author: actor || { id: null, name: null, role: 'system' },
+  }).catch(() => { /* the tie matters, the note doesn't */ });
+  return { ok: true, label, units };
 }
 
 // List POs with roll-up counts. Supplier sees only their own; everyone else all.
@@ -4830,7 +4954,7 @@ export async function setLabelsRequested(poId, by) {
 // of them is written: a half-assigned sheet is worse than a refused one.
 export async function assignPoTracking(poId, assignments) {
   const sql = db();
-  const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  const norm = searchTrackKey;
   const boxes = await sql`SELECT id, box_number, tracking_number, status FROM po_boxes WHERE po_id = ${poId}`;
   const byId = new Map(boxes.map((b) => [Number(b.id), b]));
   const seen = new Set();
@@ -4845,7 +4969,7 @@ export async function assignPoTracking(poId, assignments) {
     seen.add(key);
     const clash = (await sql`
       SELECT b.id, b.box_number, p.po_code FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
-      WHERE upper(replace(coalesce(b.tracking_number, ''), ' ', '')) = ${key} AND b.id <> ${Number(a.boxId)} LIMIT 1`)[0];
+      WHERE regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ${key} AND b.id <> ${Number(a.boxId)} LIMIT 1`)[0];
     if (clash) return { error: `${a.trackingNumber} is already on box ${clash.box_number} of ${clash.po_code}.` };
   }
   await sql.transaction(assignments.map((a) => sql`
@@ -5064,7 +5188,7 @@ export async function getPoReceivedBoxes(poId) {
   const sql = db();
   const boxes = await sql`
     SELECT bx.id, bx.box_number, bx.tracking_number, bx.status, bx.received_at, bx.received_by,
-           b.batch_code, b.id AS batch_id
+           bx.po_box_id, b.batch_code, b.id AS batch_id
     FROM batch_boxes bx
     JOIN batches b ON b.id = bx.batch_id
     WHERE b.po_id = ${poId}
@@ -5100,15 +5224,18 @@ export async function getPoReceivedBoxes(poId) {
   const poBatches = await sql`
     SELECT id, batch_code, tracking_number FROM batches WHERE po_id = ${poId}`;
   const batchById = new Map(poBatches.map((b) => [String(b.id), b]));
-  // Which label each received box actually is, read off its tracking number.
+  // Which label each received box actually is: the label it was tied to (po_box_id),
+  // else the one its tracking number reads as — the shared matcher (getPoFull).
   const labels = await sql`
-    SELECT id, box_number, tracking_number, kind FROM po_boxes
-    WHERE po_id = ${poId} AND coalesce(tracking_number, '') <> ''`;
-  const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
-  const byTracking = new Map(labels.map((l) => [norm(l.tracking_number), l]));
+    SELECT id, box_number, tracking_number, kind, po_store_id FROM po_boxes WHERE po_id = ${poId}`;
+  const norm = searchTrackKey;
+  const byTracking = new Map(labels.filter((l) => norm(l.tracking_number)).map((l) => [norm(l.tracking_number), l]));
+  const labelById = new Map(labels.map((l) => [String(l.id), l]));
   const out = boxes.map((b) => {
     const items = byBox.get(String(b.id)) || [];
-    const label = b.tracking_number ? byTracking.get(norm(b.tracking_number)) : null;
+    const label = b.po_box_id != null
+      ? (labelById.get(String(b.po_box_id)) || null)
+      : (b.tracking_number ? byTracking.get(norm(b.tracking_number)) || null : null);
     const recorded = b.box_number == null ? null : Number(b.box_number);
     const labelNumber = label ? Number(label.box_number) : null;
     return {
@@ -5119,6 +5246,8 @@ export async function getPoReceivedBoxes(poId) {
       recorded_box_number: labelNumber != null && labelNumber !== recorded ? recorded : null,
       label_kind: label ? (label.kind || 'original') : null,
       matched_label: !!label,
+      po_label_id: label ? Number(label.id) : null,
+      po_store_id: label?.po_store_id != null ? Number(label.po_store_id) : null,
       items,
       units: items.reduce((n, i) => n + i.qty, 0),
     };
@@ -5156,6 +5285,7 @@ export async function getPoReceivedBoxes(poId) {
       status: 'received', received_at: null, received_by: null,
       batch_code: batch.batch_code, batch_id: Number(batchId),
       recorded_box_number: null, label_kind: label.kind || 'original', matched_label: true,
+      po_label_id: Number(label.id), po_store_id: label.po_store_id != null ? Number(label.po_store_id) : null,
       items, units: items.reduce((n, i) => n + i.qty, 0),
     });
   }
@@ -5166,7 +5296,7 @@ export async function getPoReceivedBoxes(poId) {
     out.push({
       id: null, box_number: null, tracking_number: null, status: 'received',
       received_at: null, received_by: null, batch_code: out[0]?.batch_code || null, batch_id: null,
-      recorded_box_number: null, label_kind: null, matched_label: false,
+      recorded_box_number: null, label_kind: null, matched_label: false, po_label_id: null, po_store_id: null,
       items: unattributed, units: unattributed.reduce((n, i) => n + i.qty, 0),
     });
   }
@@ -5949,7 +6079,7 @@ export async function listPoLinkCandidates(poId) {
   const po = (await sql`SELECT id, supplier_name FROM purchase_orders WHERE id = ${poId}`)[0];
   if (!po) return [];
   const trackings = (await sql`
-    SELECT upper(replace(coalesce(tracking_number, ''), ' ', '')) AS t
+    SELECT regexp_replace(upper(coalesce(tracking_number, '')), '[^A-Z0-9]', '', 'g') AS t
     FROM po_boxes WHERE po_id = ${poId} AND coalesce(tracking_number, '') <> ''`).map((r) => r.t);
   return sql`
     SELECT b.id, b.batch_code, b.supplier_name, b.tracking_number, b.status, b.created_at,
@@ -5962,9 +6092,9 @@ export async function listPoLinkCandidates(poId) {
       AND b.created_at > now() - interval '120 days'
       AND (
         (coalesce(${po.supplier_name}, '') <> '' AND b.supplier_name ILIKE ${`%${po.supplier_name || ''}%`})
-        OR upper(replace(coalesce(b.tracking_number, ''), ' ', '')) = ANY(${trackings})
+        OR regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ANY(${trackings})
         OR EXISTS (SELECT 1 FROM batch_boxes x WHERE x.batch_id = b.id
-                     AND upper(replace(coalesce(x.tracking_number, ''), ' ', '')) = ANY(${trackings}))
+                     AND regexp_replace(upper(coalesce(x.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ANY(${trackings}))
       )
     ORDER BY b.created_at DESC
     LIMIT 25`;
@@ -5982,7 +6112,7 @@ export async function getPoLinkPreview(poId, batchId) {
            (SELECT count(*) FROM items i WHERE i.box_id = x.id)::int AS units
     FROM batch_boxes x WHERE x.batch_id = ${batchId} ORDER BY x.box_number`;
   const [{ n: units }] = await sql`SELECT count(*)::int AS n FROM items WHERE batch_id = ${batchId}`;
-  const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  const norm = searchTrackKey;
   const byTracking = new Map(labels.filter((l) => l.tracking_number).map((l) => [norm(l.tracking_number), l]));
   // A single-box batch keeps its tracking on the batch itself, not in a box row — it
   // still has to be matchable, so present it as one box.
@@ -6040,6 +6170,10 @@ export async function linkBatchToPo({ poId, batchId, boxMap = [], shipLabels = f
       queries.push(sql`
         UPDATE batch_boxes SET tracking_number = ${label.tracking_number}
         WHERE id = ${Number(m.boxId)} AND batch_id = ${batchId} AND coalesce(tracking_number, '') = ''`);
+      // ...and the tie itself, so the box stays this label's whatever its number says.
+      queries.push(sql`
+        UPDATE batch_boxes SET po_box_id = ${Number(label.id)}
+        WHERE id = ${Number(m.boxId)} AND batch_id = ${batchId} AND po_box_id IS NULL`);
     } else {
       queries.push(sql`
         UPDATE batches SET tracking_number = ${label.tracking_number}
@@ -6085,8 +6219,12 @@ export async function unlinkBatchFromPo({ poId, batchId, actor = null }) {
   // Clear how it was linked along with the link itself — a batch that keeps
   // `po_link_source` after being unlinked would tell a pair's history it came in against
   // an order it no longer belongs to.
-  await sql`UPDATE batches SET po_id = NULL, po_link_source = NULL, po_linked_at = NULL,
-                   po_linked_by = NULL WHERE id = ${batchId}`;
+  // The boxes' label ties go too: they point at THIS order's labels.
+  await sql.transaction([
+    sql`UPDATE batches SET po_id = NULL, po_link_source = NULL, po_linked_at = NULL,
+               po_linked_by = NULL WHERE id = ${batchId}`,
+    sql`UPDATE batch_boxes SET po_box_id = NULL WHERE batch_id = ${batchId}`,
+  ]);
   const rest = await sql`SELECT id FROM batches WHERE po_id = ${poId} ORDER BY id LIMIT 1`;
   const shipped = await sql`
     SELECT 1 FROM po_boxes WHERE po_id = ${poId} AND status NOT IN ('pending', 'packed') LIMIT 1`;
@@ -6148,7 +6286,10 @@ export async function deletePo(poId) {
       nothing claims and the new one reading fully short — worse than not moving it. */
 
 export const PO_FROZEN = ['reconciled', 'closed'];
-const trackKey = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+// Alphanumeric only (2026-10-23): "1Z-999 AA1" off an email and "1Z999AA1" off a scanner are
+// one parcel. Every tracking comparison in this file uses the same rule, in SQL as
+// regexp_replace(upper(x), '[^A-Z0-9]', '', 'g').
+const trackKey = searchTrackKey;
 
 // Header fields. Only the keys actually present in `patch` are written, so a caller
 // editing the notes can't blank the tag code by omission — `null` is a real value here
@@ -6185,11 +6326,11 @@ async function sql_poBoxTracking(key, exceptBoxId) {
   if (exceptBoxId) {
     return await sql`
       SELECT b.*, p.po_code FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
-      WHERE upper(replace(coalesce(b.tracking_number, ''), ' ', '')) = ${key} AND b.id <> ${exceptBoxId} LIMIT 1`;
+      WHERE regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ${key} AND b.id <> ${exceptBoxId} LIMIT 1`;
   }
   return await sql`
     SELECT b.*, p.po_code FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
-    WHERE upper(replace(coalesce(b.tracking_number, ''), ' ', '')) = ${key} LIMIT 1`;
+    WHERE regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ${key} LIMIT 1`;
 }
 
 // What the warehouse has counted into ONE label's box — the same tracking-number join
@@ -6201,20 +6342,26 @@ async function sql_poBoxTracking(key, exceptBoxId) {
 export async function poBoxReceived(box) {
   const sql = db();
   const key = trackKey(box?.tracking_number);
-  if (!key) return { units: 0, boxRows: [], loose: [] };
+  // A box tied to the label by id counts even when the label has no number yet (a store
+  // that hasn't shipped with its own label number) — the shared matcher, as in getPoFull.
   const boxRows = await sql`
-    SELECT x.id, x.batch_id, x.box_number, bt.batch_code,
+    SELECT x.id, x.batch_id, x.box_number, x.po_box_id, bt.batch_code,
            (SELECT count(*)::int FROM items i WHERE i.box_id = x.id) AS units
     FROM batch_boxes x JOIN batches bt ON bt.id = x.batch_id
     WHERE bt.po_id = ${box.po_id}
-      AND upper(replace(coalesce(x.tracking_number, ''), ' ', '')) = ${key}`;
+      AND (x.po_box_id = ${box.id}
+           OR (x.po_box_id IS NULL AND ${key} <> ''
+               AND regexp_replace(upper(coalesce(x.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ${key}))`;
+  if (!key) {
+    return { units: boxRows.reduce((n, r) => n + (r.units || 0), 0), boxRows, loose: [] };
+  }
   const loose = await sql`
     SELECT bt.id AS batch_id, bt.batch_code,
            (SELECT count(*)::int FROM items i WHERE i.batch_id = bt.id AND i.box_id IS NULL) AS units,
            (SELECT count(*)::int FROM batch_boxes x2 WHERE x2.batch_id = bt.id) AS box_count
     FROM batches bt
     WHERE bt.po_id = ${box.po_id}
-      AND upper(replace(coalesce(bt.tracking_number, ''), ' ', '')) = ${key}`;
+      AND regexp_replace(upper(coalesce(bt.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ${key}`;
   const units = boxRows.reduce((n, r) => n + (r.units || 0), 0)
     + loose.reduce((n, r) => n + (r.units || 0), 0);
   return { units, boxRows, loose: loose.filter((r) => r.units > 0) };
@@ -6254,13 +6401,16 @@ export async function syncExpectedBoxes(poId) {
 }
 
 // Correct a label's tracking number / carrier (a typo, or a number that arrived later).
-export async function updatePoBox(boxId, { trackingNumber, carrierKey }) {
+// `trackingSource` = who the number came from ('store' = the store's own label, recorded
+// by the supplier or at receiving; store-orders-plan §8b).
+export async function updatePoBox(boxId, { trackingNumber, carrierKey, trackingSource }) {
   const sql = db();
   const has = (v) => v !== undefined;
   const rows = await sql`
     UPDATE po_boxes SET
       tracking_number = CASE WHEN ${has(trackingNumber)} THEN ${trackingNumber ?? null}::text ELSE tracking_number END,
-      carrier_key     = CASE WHEN ${has(carrierKey)} THEN ${carrierKey ?? null}::int ELSE carrier_key END
+      carrier_key     = CASE WHEN ${has(carrierKey)} THEN ${carrierKey ?? null}::int ELSE carrier_key END,
+      tracking_source = CASE WHEN ${has(trackingSource)} THEN ${trackingSource ?? null}::text ELSE tracking_source END
     WHERE id = ${boxId}
     RETURNING *`;
   return rows[0] || null;
@@ -6403,7 +6553,7 @@ export async function movePoBox(boxId, targetPoId, { createdBy = null } = {}) {
 // the order was created, and a label pointing at someone else's page is worse than none.
 export async function attachPoLabels({ poId, key, name, pages, pageMap = [], uploadedBy = null }) {
   const sql = db();
-  const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+  const norm = searchTrackKey;
   const boxes = await sql`SELECT id, tracking_number FROM po_boxes WHERE po_id = ${poId}`;
   const byTracking = new Map(boxes.filter((b) => b.tracking_number).map((b) => [norm(b.tracking_number), Number(b.id)]));
 

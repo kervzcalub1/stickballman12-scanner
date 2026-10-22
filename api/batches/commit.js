@@ -129,6 +129,10 @@ export default async function handler(req, res) {
     // draft/shipped/receiving PO — block only already-finished ones.
     if (['reconciled', 'closed'].includes(po.status))
       return send(res, 409, { ok: false, error: `PO ${po.po_code} is already ${po.status} — it can't be received against again.` });
+    // A store order is received box by box, each box tied to its label — that tie is what
+    // says which store's pairs these are. A one-shot commit has no box to tie.
+    if (po.by_store)
+      return send(res, 409, { ok: false, error: `${po.po_code} is an order bought from several stores — receive it box by box, from each box's label.` });
     // What arrived is whatever the ORDER says it is, not whatever the client claimed.
     // A boxes order received as a 'receiving' batch would put empty cartons in front of
     // the PH team as sellable stock, which is the one thing this kind exists to prevent.

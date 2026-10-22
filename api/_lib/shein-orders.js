@@ -71,12 +71,13 @@ export async function processOrders(orderNos, { openAtStart = false } = {}) {
 
 // One pass at a time — the webhook and the poll can arrive together.
 let acting = null;
-export function actOnUnits(io = IO) {
-  if (acting) return acting.then(() => actOnUnits(io));
+// `manual` = a person pressed Retry: units the poll gave up on are tried again too.
+export function actOnUnits(io = IO, { manual = false } = {}) {
+  if (acting) return acting.then(() => actOnUnits(io, { manual }));
   acting = (async () => {
     let deducted = 0; let restocked = 0; let failed = 0;
     if (!io.shopifyConfigured()) return { deducted, restocked, failed };
-    for (const u of await io.sheinUnitsToAct()) {
+    for (const u of await io.sheinUnitsToAct({ manual })) {
       const action = unitAction(u);
       if (!action) continue;
       const r = await applyToShopify(u, action, io).catch((e) => ({ error: e.message }));

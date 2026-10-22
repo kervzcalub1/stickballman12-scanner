@@ -36,6 +36,10 @@ its top). The rules are the export fix's (`docs/context/shein-fix.md`), run per 
   with `@idempotent(key: shein-<goodsId>-<action>-<attempts>-<try>)`: a resend after a lost
   answer reuses the key (Shopify answers it as the original — never twice); a new key only
   after a DEFINITE refusal. Shopify at 0 → still taken off, note says **OVERSOLD**.
+- A unit that fails 8 times (`attempts`) is no longer tried by the minute poll — a SKU Shopify
+  doesn't have would otherwise fail every minute forever. It stays in the red "NOT off Shopify"
+  count; the admin **Retry the failed ones** button (`manual`) tries those again too and says
+  how many went through / still fail. The count leaves out units SHEIN refunded or swapped.
 - Location: `SHOPIFY_SHEIN_LOCATION` (id), else the only one, else the clear leader; a tie is
   refused, never guessed. The store has ONE location (2026-10-16). Location NAMES need
   `read_locations`, which the app lacks — we use ids only.

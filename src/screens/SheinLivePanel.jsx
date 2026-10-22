@@ -25,6 +25,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState('');
   const [mode, setMode] = useState('dry');
   const [ai, setAi] = useState(true);
   const [paused4seller, setPaused4seller] = useState(false);
@@ -42,8 +43,16 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
   useLive(['shein_live_runs', 'shein_live_items', 'shein_order_units', 'app_settings'], load, { mount: false, every: d?.run?.status === 'running' ? 5_000 : 60_000 });
 
   async function act(action, extra = {}) {
-    setBusy(action); setErr('');
-    try { await api.sheinLiveAction({ action, ...extra }); await load(); }
+    setBusy(action); setErr(''); setMsg('');
+    try {
+      const r = await api.sheinLiveAction({ action, ...extra });
+      if (action === 'retry') {
+        const n = Number(r?.deducted || 0) + Number(r?.restocked || 0);
+        setMsg(r?.failed ? `Retried: ${fmt(n)} done, ${fmt(r.failed)} still failing — the reason is under each red row in “Latest SHEIN sales”.`
+          : n ? `Retried: ${fmt(n)} done.` : 'Nothing left to retry.');
+      }
+      await load();
+    }
     catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
     finally { setBusy(''); }
   }
@@ -108,6 +117,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
             {Number(uc.failing) > 0 && <button type="button" className="btn sm" disabled={!!busy} onClick={() => act('retry')}>{busy === 'retry' ? 'Retrying…' : 'Retry the failed ones'}</button>}
           </div>
         )}
+        {msg && <p className="sm mt">{msg}</p>}
         {askOrders && (
           <div className="notice mt">
             <p className="sm"><b>From now on, every pair SHEIN sells comes off Shopify within seconds.</b></p>

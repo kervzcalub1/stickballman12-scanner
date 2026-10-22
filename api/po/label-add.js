@@ -69,7 +69,16 @@ export default async function handler(req, res) {
       }
     }
 
-    const boxes = await addPoLabels(poId, wanted, user.name || user.username || '');
+    // A store order's box belongs to the store that ships it; any other order has no stores.
+    let poStoreId = null;
+    if (data.po.by_store) {
+      poStoreId = Number(body.poStoreId);
+      const store = (data.stores || []).find((s) => Number(s.id) === poStoreId);
+      if (!store) return send(res, 400, { ok: false, error: 'Which store ships these boxes? Add them under a store.' });
+    } else if (body.poStoreId != null) {
+      return send(res, 400, { ok: false, error: 'This order isn’t split by store.' });
+    }
+    const boxes = await addPoLabels(poId, wanted, user.name || user.username || '', { poStoreId });
     const trackItems = boxes.filter((b) => b.tracking_number).map((b) => ({ number: b.tracking_number, carrier: b.carrier_key }));
     if (trackItems.length)
       registerTracking(trackItems).catch((e) => console.warn('[po/label-add] registerTracking:', e.message));

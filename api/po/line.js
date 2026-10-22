@@ -5,8 +5,8 @@
 // SKU+size line on the same label merges the two. The supplier edits their own manifest;
 // PH/admin edit ON THEIR BEHALF (re-stamps entered_by + entered_on_behalf on the surviving row).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { getPoLine, getPoBox, getPo, updatePoLine, dbConfigured } from '../_lib/db.js';
-import { manifestEditBlock, parseMoney, isBoxesOrder, normalizeDimensions } from '../_lib/po-manifest.js';
+import { getPoLine, getPoBox, getPo, updatePoLine, addPoComment, dbConfigured } from '../_lib/db.js';
+import { manifestEditBlock, orderListEditBlock, parseMoney, isBoxesOrder, normalizeDimensions } from '../_lib/po-manifest.js';
 import { hasOrderedList } from '../../src/lib/postatus.js';
 
 export default async function handler(req, res) {
@@ -61,7 +61,10 @@ export default async function handler(req, res) {
     const onBehalf = user.role !== 'supplier';
     const uidNum = Number(user.uid);
     const enteredBy = onBehalf && Number.isInteger(uidNum) ? uidNum : null;
-    const blocked = manifestEditBlock({ po, box, onBehalf });
+    // A store order's list is gated on the list (confirmed / audited), not on any label —
+    // stores ship before it's typed, so manifestEditBlock's label window doesn't fit it.
+    const storeLine = !box && po.by_store;
+    const blocked = storeLine ? orderListEditBlock({ po, onBehalf }) : manifestEditBlock({ po, box, onBehalf });
     if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
     // A shoe line has no carton to describe, so dimensions are refused there. A box line
     // carries BOTH — the size it was made for and how big it is — so both are editable.
@@ -71,6 +74,18 @@ export default async function handler(req, res) {
     const { line: updated, removed, merged } = await updatePoLine(lineId, {
       size, dimensions, qty, unitCost, tip, enteredBy, enteredOnBehalf: onBehalf,
     });
+    // A confirmed store list is the invoice the audit is settled against: a correction after
+    // confirmation stays possible for staff, and goes on the order's history, before → after.
+    if (storeLine && po.list_confirmed_at) {
+      const was = `${line.sku} ${line.size} ×${line.qty_expected}${line.unit_cost != null ? ` @ $${Number(line.unit_cost).toFixed(2)}` : ''}`;
+      const now = removed ? 'removed'
+        : `${updated.sku} ${updated.size} ×${updated.qty_expected}${updated.unit_cost != null ? ` @ $${Number(updated.unit_cost).toFixed(2)}` : ''}${merged ? ' (merged)' : ''}`;
+      const who = user.name || user.username || '';
+      await addPoComment({
+        poId: po.id, kind: 'system', body: `${who} changed a confirmed store-list line: ${was} → ${now}.`,
+        author: { id: Number.isInteger(uidNum) ? uidNum : null, name: who, role: user.role },
+      }).catch((e) => console.warn('[po/line] system comment:', e.message));
+    }
     return send(res, 200, { ok: true, line: updated, removed, merged });
   } catch (e) {
     console.error('[po/line]', e.message);

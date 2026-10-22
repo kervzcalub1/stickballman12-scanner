@@ -78,6 +78,8 @@ export default async function handler(req, res) {
         if (po.status !== 'draft')
           return send(res, 409, { ok: false, error: 'Every label on this order has shipped — the manifest can no longer be edited here.' });
       }
+      if (po.by_store)
+        return send(res, 409, { ok: false, error: 'This order is split by store — paste it as a store list (one "Store:" line per store).' });
       if (po.status !== 'draft' && po.status !== 'receiving')
         return send(res, 409, { ok: false, error: 'This order is already closed — it can no longer be edited.' });
       if (await poHasBoxLines(po.id))

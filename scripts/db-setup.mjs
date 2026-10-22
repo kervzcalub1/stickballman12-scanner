@@ -1083,10 +1083,18 @@ await sql(`DROP INDEX IF EXISTS po_lines_box_sku_size_idx`);
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_box_sku_size_idx
            ON po_lines (po_box_id, sku, size)
            WHERE dimensions IS NULL`);
-await sql(`DROP INDEX IF EXISTS po_lines_po_sku_size_idx`);
-await sql(`CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_size_idx
+// Store orders: a whole-order line that belongs to a STORE is keyed by its store
+// (po_lines_po_store_sku_size_idx, above), so the same shoe and size from two stores is two
+// lines. This index keeps covering only the lines with no store. Same name on purpose — the
+// CREATE ... IF NOT EXISTS near the top of this file recreates it under this name on every
+// run — and DROP + CREATE are ONE statement string, which Postgres runs as one implicit
+// transaction, so an ON CONFLICT in flight never finds no index at all. Code that writes
+// these lines must name the full predicate (`AND po_store_id IS NULL`): it still infers the
+// older, broader index on a database this hasn't run on yet; the reverse isn't true.
+await sql(`DROP INDEX IF EXISTS po_lines_po_sku_size_idx;
+           CREATE UNIQUE INDEX IF NOT EXISTS po_lines_po_sku_size_idx
            ON po_lines (po_id, sku, size)
-           WHERE po_box_id IS NULL AND dimensions IS NULL`);
+           WHERE po_box_id IS NULL AND dimensions IS NULL AND po_store_id IS NULL`);
 // The box half. Re-declaring the same shoe, size AND carton under one label increments
 // its qty; a different size, or the same size in a different carton, is its own row.
 //

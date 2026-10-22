@@ -135,7 +135,28 @@ function retitle(cols, boxesOrder) {
   return out;
 }
 
+// A store order's invoice (docs/store-orders-plan.md): one row per store × shoe × size,
+// with the price each and the line total, store name on every row so it sorts and pivots.
+function invoiceRows({ lines = [], stores = [] }) {
+  const out = [];
+  for (const st of stores) {
+    const mine = lines.filter((l) => l.po_box_id == null && Number(l.po_store_id) === Number(st.id))
+      .sort((a, b) => (a.sku === b.sku ? String(a.size).localeCompare(String(b.size), undefined, { numeric: true }) : String(a.sku).localeCompare(String(b.sku))));
+    for (const l of mine) {
+      const c = declared(l.unit_cost);
+      const q = Number(l.qty_expected) || 0;
+      out.push({ store: st.name, name: l.name || '', sku: l.sku || '', size: l.size || '', qty: q,
+        cost: money(c), line: c == null ? '' : money(c * q) });
+    }
+  }
+  return out;
+}
+
 const SHAPES = {
+  invoice: {
+    cols: [['store', 'Store'], ['name', 'Item'], ['sku', 'SKU'], ['size', 'Size'], ['qty', 'Pairs'], ['cost', 'Price each'], ['line', 'Line total']],
+    rows: invoiceRows,
+  },
   perbox: {
     cols: [['box', 'Box'], ['tracking', 'Tracking'], ['name', 'Item'], ['sku', 'SKU'], ['size', 'Size'], ['qty', 'Pairs declared']],
     money: true,

@@ -482,7 +482,11 @@ export const api = {
   poLabelAdd: (poId, labels) => post('/api/po/label-add', { poId, labels }),
   // Manifest-first: the supplier declares BOXES (no tracking yet), asks for labels, and
   // PH assigns the courier's numbers onto those boxes afterwards.
-  poBoxAdd: (poId, boxes) => post('/api/po/label-add', { poId, boxes }),
+  poBoxAdd: (poId, boxes, poStoreId = null) => post('/api/po/label-add', { poId, boxes, ...(poStoreId != null ? { poStoreId } : {}) }),
+  // Store orders (docs/store-orders-plan.md): the store-by-store list, and everything else
+  // about its stores (rename / remove / confirm / unlock / invoice_checked / assign_lines).
+  poStoreList: (poId, stores) => post('/api/po/store-list', { poId, stores }),
+  poStore: (poId, action, extra = {}) => post('/api/po/store', { poId, action, ...extra }),
   poRequestLabels: (poId, requested = true) => post('/api/po/request-labels', { poId, requested }),
   // Pre-sell: shipments sold before they landed. Not listed until released.
   presellList: (batchId) => get(`/api/presell/list${batchId ? `?batchId=${batchId}` : ''}`),

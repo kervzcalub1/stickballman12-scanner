@@ -66,6 +66,32 @@ export function manifestEditBlock({ po, box, onBehalf = false }) {
   return null;
 }
 
+// "Can a STORE ORDER's list still be written?" (docs/store-orders-plan.md §4.2) — the one
+// gate for every writer of a store order's list (store-list, po/store, po/line on a store
+// line). Different from manifestEditBlock on purpose: stores often charge the card at the
+// till and ship before the list is typed, so the list has to stay writable while the boxes
+// are on their way and after they land. What closes it is the supplier confirming it (their
+// side) and the audit (everyone).
+//   · audited, reconciled or archived → frozen for everyone;
+//   · confirmed → the supplier asks us; staff may still correct it (the caller records the edit);
+//   · otherwise the supplier writes it while the order is a draft, shipping or being received.
+export function orderListEditBlock({ po, onBehalf = false }) {
+  if (po.audited_at) {
+    return { code: 409, error: `${po.po_code} has been audited — its list is settled. Ask an auditor to reopen the audit first.` };
+  }
+  if (po.status === 'reconciled' || po.status === 'closed') {
+    return { code: 409, error: `${po.po_code} is already ${po.status} — its list can no longer be edited.` };
+  }
+  if (onBehalf) return null;
+  if (po.list_confirmed_at) {
+    return { code: 409, error: 'You confirmed this list — message us if something needs to change and we’ll fix it.' };
+  }
+  if (!['draft', 'shipped', 'receiving'].includes(po.status)) {
+    return { code: 409, error: 'This order’s list can no longer be edited.' };
+  }
+  return null;
+}
+
 // Is this box a reship the warehouse raised, rather than one of the supplier's own labels?
 export const isReplacementBox = (box) => !!box && box.kind === 'replacement';
 

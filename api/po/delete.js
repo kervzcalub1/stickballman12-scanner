@@ -43,6 +43,8 @@ export default async function handler(req, res) {
         return send(res, 409, { ok: false, error: `${po.po_code} already has shipping labels on it — message us and we'll delete it.` });
       if (po.labels_requested_at)
         return send(res, 409, { ok: false, error: 'You’ve asked us for labels on this order — cancel the label request first, then delete it.' });
+      if (po.list_confirmed_at)
+        return send(res, 409, { ok: false, error: 'You confirmed this order’s store list — message us and we’ll delete it.' });
     }
     // Checked server-side too: the typed code is the confirmation, not a UI formality.
     if (confirm.toUpperCase() !== String(data.po.po_code).toUpperCase()) {

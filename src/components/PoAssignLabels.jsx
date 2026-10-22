@@ -16,7 +16,7 @@ import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { CARRIERS } from '../lib/carriers.js';
 
-export function PoAssignLabels({ po, boxes, onDone, onSignOut }) {
+export function PoAssignLabels({ po, boxes, stores = [], onDone, onSignOut }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState([]);        // [{ boxId, trackingNumber, carrierKey }]
   const [pdfFile, setPdfFile] = useState(null);
@@ -35,7 +35,9 @@ export function PoAssignLabels({ po, boxes, onDone, onSignOut }) {
 
   const start = () => {
     setOpen(true); setError(''); setStatus('');
-    setRows(open_.map((b) => ({ boxId: Number(b.id), boxNumber: b.box_number, trackingNumber: b.tracking_number || '', carrierKey: b.carrier_key || null })));
+    setRows(open_.map((b) => ({ boxId: Number(b.id), boxNumber: b.box_number, trackingNumber: b.tracking_number || '', carrierKey: b.carrier_key || null,
+      // A store order: which store ships this box (and so where its label has to go).
+      store: stores.find((st) => Number(st.id) === Number(b.po_store_id))?.name || '' })));
   };
   const close = () => { setOpen(false); setRows([]); setPdfFile(null); setPdfPages([]); setStatus(''); setError(''); };
   const setRow = (i, patch) => setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -138,7 +140,7 @@ export function PoAssignLabels({ po, boxes, onDone, onSignOut }) {
       <div className="po-assign-rows">
         {rows.map((r, i) => (
           <div className="po-assign-row" key={r.boxId}>
-            <span className="po-assign-box">Box {r.boxNumber}</span>
+            <span className="po-assign-box">Box {r.boxNumber}{r.store ? <span className="muted xs"> · {r.store}</span> : null}</span>
             <input value={r.trackingNumber} placeholder="Tracking number" maxLength={120}
               autoCapitalize="characters" autoCorrect="off"
               onChange={(e) => setRow(i, { trackingNumber: e.target.value, _from: null })} />

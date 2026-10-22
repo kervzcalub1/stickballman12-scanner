@@ -10,6 +10,7 @@
 // there looking answered.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoFull, setLabelsRequested, addPoComment, PO_FROZEN, dbConfigured } from '../_lib/db.js';
+import { supplierPoRow } from '../_lib/po-supplier-view.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -41,6 +42,10 @@ export default async function handler(req, res) {
       if (!own.length) return send(res, 400, { ok: false, error: 'Add the boxes you packed before asking for labels.' });
       const declared = (data.lines || []).reduce((n, l) => n + (Number(l.qty_expected) || 0), 0);
       if (!declared) return send(res, 400, { ok: false, error: 'Nothing is declared on this order yet — add what’s in the boxes first.' });
+      // A store order: each label goes to the store that ships that box, so a box with no
+      // store would be a label nobody knows where to send.
+      if (data.po.by_store && own.some((b) => !b.po_store_id))
+        return send(res, 400, { ok: false, error: 'Every box needs its store — add boxes under each store before asking for labels.' });
     }
 
     const who = user.name || user.username || '';
@@ -52,7 +57,7 @@ export default async function handler(req, res) {
         : `Label request withdrawn by ${who}.`,
       author: { id: Number(user.uid) || null, name: who, role: user.role },
     }).catch((e) => console.warn('[po/request-labels] system comment:', e.message));
-    return send(res, 200, { ok: true, po });
+    return send(res, 200, { ok: true, po: user.role === 'supplier' && !isPrivileged(user.role) ? supplierPoRow(po) : po });
   } catch (e) {
     console.error('[po/request-labels]', e.message);
     return send(res, 500, { ok: false, error: 'Could not send that request.' });

@@ -66,7 +66,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
 | Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
-| Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders**; **📋 Paste a list** (`SKU` + `size x qty` lines, many shoes → `po/scan-bulk`) | `docs/context/purchase-orders.md` |
+| Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders**; **📋 Paste a list** (`SKU` + `size x qty` lines, many shoes → `po/scan-bulk`); **store orders** (one supplier, many stores: list by store = the invoice, boxes per store, supplier strip-list `po-supplier-view.js`; plan `docs/store-orders-plan.md`) | `docs/context/purchase-orders.md` |
 | Empty shoe boxes end to end: order → declare → receive → shelve → put on a pair | `docs/context/empty-boxes.md` |
 | Buying requests (was "gift-card buying"): request → approve → cards → receipt → audit → reconciled; **`users.privileges`**; **Telegram approval cards, direct to the Bot API** | `docs/context/buy-cart.md` |
 | **Email receipts**: **"Check mailboxes" button** → Make fetches mail since the last check → `POST /api/receipts/ingest-raw` (parsed on OUR server) → `email_receipts`; buyer by registered purchase email (`user_purchase_emails`), store location, Receipts page | `docs/context/receipts.md` |

@@ -4,7 +4,8 @@
 // tracking number); pass `poBoxId` to refresh just that ONE label — same result,
 // fewer tracking-API calls/credits. A manual fallback to the webhook push. No-ops if
 // tracking isn't configured (TRACKING_API_KEY unset).
-import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged, hideReceivedUnits } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { supplierPoView } from '../_lib/po-supplier-view.js';
 import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured, upsertShipmentTracking,
   deliveryStateBefore, openOnlineOrdersByTracking } from '../_lib/db.js';
 import { alertDeliveries } from '../_lib/alerts.js';
@@ -88,8 +89,8 @@ export default async function handler(req, res) {
     // Keep the warehouse's Google Sheet in sync on manual pulls too (best-effort, env-gated).
     forwardTrackingToSheet(updates).catch((e) => console.warn('[po/track-refresh] sheet:', e.message));
     const data = await getPoFull(poId);
-    if (user.role === 'supplier' && !isPrivileged(user.role)) data.boxes = hideReceivedUnits(data.boxes);
-    return send(res, 200, { ok: true, updated: updates.length, ...data });
+    const out = user.role === 'supplier' && !isPrivileged(user.role) ? supplierPoView(data) : data;
+    return send(res, 200, { ok: true, updated: updates.length, ...out });
   } catch (e) {
     console.error('[po/track-refresh]', e.message);
     return send(res, 502, { ok: false, error: 'Could not reach the tracking service.' });

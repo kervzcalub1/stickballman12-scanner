@@ -191,7 +191,8 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
               <div className="shc-tile warn"><b>{fmt(c.zeroed)}</b><span>set to 0 (wrong / dead link)</span></div>
               <div className="shc-tile info"><b>{fmt(c.links_changed)}</b><span>{run.mode === 'full' ? 'seller SKUs corrected' : 'seller SKUs to correct'}</span></div>
               <div className="shc-tile warn"><b>{fmt(c.needs_person)}</b><span>need a person</span></div>
-              {(Number(c.errors) + Number(c.mismatch) + Number(c.products_failed)) > 0 && <div className="shc-tile bad"><b>{fmt(Number(c.errors) + Number(c.mismatch) + Number(c.products_failed))}</b><span>errors</span></div>}
+              {(Number(c.errors || 0) + Number(c.products_failed || 0)) > 0 && <div className="shc-tile bad"><b>{fmt(Number(c.errors || 0) + Number(c.products_failed || 0))}</b><span>refused by SHEIN</span></div>}
+              {Number(c.mismatch) > 0 && <div className="shc-tile bad"><b>{fmt(c.mismatch)}</b><span>SHEIN still shows the old stock</span></div>}
             </div>
           </>
         )}

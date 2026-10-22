@@ -180,6 +180,33 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     expect(r.counts).toMatchObject({ stock_changed: 3, zeroed: 2, errors: 0, mismatch: 0 });
   });
 
+  test('SHEIN still shows the old number after a write: wait, write again, read back — and an unwritten size is never a mismatch', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    // s75 already right (Shopify 8 → A8 = 2): not written, so not read back.
+    const f = fakeIO({ spu, stock, shopify });
+    const set = f.io.sheinSetStock; let first = true;
+    f.io.sheinSetStock = async (writes) => {   // the first write of s8 is accepted but doesn't show
+      if (first) { first = false; f.calls.stock.push(...writes); return set(writes.filter((w) => w.skuCode !== 's8')).then(() => ({ failed: [] })); }
+      return set(writes);
+    };
+    f.io.readBackWaits = [0, 0, 0];
+    const r = await stepProduct('spu1', ctxFor(f.io, 'stock', scan()));
+    expect(f.calls.stock.filter((w) => w.skuCode === 's8')).toHaveLength(2);
+    expect(f.calls.stock.find((w) => w.key.endsWith('-again'))).toBeTruthy();
+    expect(f.calls.items.find((i) => i.shein_sku === 's8')).toMatchObject({ after_qty: 0, result: 'changed' });
+    expect(r.counts.mismatch).toBe(0);
+  });
+
+  test('a write SHEIN never takes is reported as a mismatch (after the retries)', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const f = fakeIO({ spu, stock, shopify });
+    f.io.sheinSetStock = async (writes) => { f.calls.stock.push(...writes); return { failed: [] }; };   // accepts, changes nothing
+    f.io.readBackWaits = [0, 0, 0];
+    const r = await stepProduct('spu1', ctxFor(f.io, 'stock', scan()));
+    expect(f.calls.items.find((i) => i.shein_sku === 's8')).toMatchObject({ before_qty: 3, target_qty: 0, after_qty: 3, result: 'mismatch' });
+    expect(r.counts.mismatch).toBe(3);
+  });
+
   test('full mode: the swap is sent to SHEIN and remembered (the size sells once SHEIN shows it)', async () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const f = fakeIO({ spu, stock, shopify });

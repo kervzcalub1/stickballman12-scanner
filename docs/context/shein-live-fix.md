@@ -69,6 +69,12 @@ ON: from `shein_order_units`; OFF: what SHEIN holds, locked + temp-locked). SHEI
 = sellable + what SHEIN already holds for open orders. The old `gsp/goods/change-inventory`
 is retired 2026-12-31 — don't use it. A size stopped on SHEIN (`mallState 2`) isn't written.
 
+**Read back.** Only the sizes we wrote are read back (an unwritten size isn't in SHEIN's answer).
+SHEIN can accept a write with no refusal yet still show the old number (run 6, 2026-10-22: 268
+sizes "set to 0" read back unchanged), so a size still wrong is re-read after 3 s, written once
+more (new key) and re-read after 5 s and 10 s (`IO.readBackWaits`) before it counts as a
+**mismatch** ("SHEIN still shows the old stock" tile, separate from "refused by SHEIN").
+
 **Seller SKUs (full mode)** via `goods/product/partialEdit` (spu + skc + sku_code +
 supplier_sku). SHEIN reviews every edit, refuses edits while a review is open
 (`query-document-state` 1/5 → skipped, next walk), and seller SKUs are unique store-wide

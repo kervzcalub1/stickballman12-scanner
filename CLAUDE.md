@@ -66,7 +66,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
 | Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
-| Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders**; **📋 Paste a list** (`SKU` + `size x qty` lines, many shoes → `po/scan-bulk`); **store orders** (one supplier, many stores: list by store = the invoice, boxes per store, supplier strip-list `po-supplier-view.js`; **every received box tied to its label = its store** (`batch_boxes.po_box_id`, one shared matcher, alphanumeric tracking); plan `docs/store-orders-plan.md`) | `docs/context/purchase-orders.md` |
+| Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders**; **📋 Paste a list** (`SKU` + `size x qty` lines, many shoes → `po/scan-bulk`); **store orders** (one supplier, many stores: list by store = the invoice, boxes per store, supplier strip-list `po-supplier-view.js`; **every received box tied to its label = its store** (`batch_boxes.po_box_id`, one shared matcher, alphanumeric tracking); **Kevin's audit** per store (`po/audit`, `getPoStoreVariance`, landed, charges/receipts read twice, Mark audited = `audit_po` privilege); plan `docs/store-orders-plan.md`) | `docs/context/purchase-orders.md` |
 | Empty shoe boxes end to end: order → declare → receive → shelve → put on a pair | `docs/context/empty-boxes.md` |
 | Buying requests (was "gift-card buying"): request → approve → cards → receipt → audit → reconciled; **`users.privileges`**; **Telegram approval cards, direct to the Bot API** | `docs/context/buy-cart.md` |
 | **Email receipts**: **"Check mailboxes" button** → Make fetches mail since the last check → `POST /api/receipts/ingest-raw` (parsed on OUR server) → `email_receipts`; buyer by registered purchase email (`user_purchase_emails`), store location, Receipts page | `docs/context/receipts.md` |
@@ -97,7 +97,7 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
   stored in the clear (`docs/context/buy-cart.md`).
 - **Roles vs PRIVILEGES.** `users.role` is the one job someone does (warehouse · ph_team ·
   admin · supplier). `users.privileges` is a set of permissions on top — the gift-card
-  duties, plus `request_buying` — the only one a **supplier** can hold, and the switch
+  duties, `audit_po` (store-order audit), plus `request_buying` — the only one a **supplier** can hold, and the switch
   that turns the buying screens on for that account (most suppliers only ship boxes).
   Privileges are read from the DB on every call, NOT from the token, so revoking one
   takes effect at once. Never add a "role" for something one person could hold

@@ -225,6 +225,8 @@ export const PRIVILEGES = [
   // The BUYER's side, and the only privilege a supplier can hold. Most suppliers only
   // ship us boxes; the ones who buy for the company are switched on one by one.
   { key: 'request_buying', label: 'Raise buying requests', hint: 'Buy stock for the company: list what to buy, get funded, send the receipt back', buyer: true },
+  // Store orders: mark an order bought from several stores audited (received vs declared vs card).
+  { key: 'audit_po', label: 'Audit store orders', hint: 'Check a store order’s pairs, receipts and card charges, then mark it audited', notBuying: true },
 ];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
 export const STAFF_PRIVILEGES = PRIVILEGES.filter((p) => !p.buyer);
@@ -235,7 +237,8 @@ export const privilegeLabel = (k) => (PRIVILEGES.find((p) => p.key === k) || {})
 export const hasPriv = (user, key) =>
   isAdminRole(user?.role) || (Array.isArray(user?.privileges) && user.privileges.includes(key));
 // Any of the STAFF duties — what draws the Buying Requests card on the staff homes.
-export const hasAnyPriv = (user) => STAFF_PRIVILEGES.some((p) => hasPriv(user, p.key));
+// audit_po is not a buying duty, so holding only it draws no Buying Requests card.
+export const hasAnyPriv = (user) => STAFF_PRIVILEGES.some((p) => !p.notBuying && hasPriv(user, p.key));
 
 // Two tiers, because they ask for different things. `now` is a queue somebody is
 // waiting on, and it clears in a day: a buyer stuck in a shop, a spend nobody has

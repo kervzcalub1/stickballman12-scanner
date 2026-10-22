@@ -7,7 +7,7 @@
 // pairs and $ (the invoice we build — the stores never send one), and the boxes that store
 // ships. Then the order's totals and where the list stands: being written → confirmed by
 // the supplier → (staff) "invoice checked".
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { PoLineRow, PoLineHeader } from './PoScanModal.jsx';
 import { parseStorePaste } from '../lib/storePaste.js';
@@ -114,6 +114,13 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [pasting, setPasting] = useState(false);
+  // The supplier's own receipts, per store (po/audit, supplier view). A store's receipt —
+  // a photo of the paper or a PDF of the email — is what Kevin checks the card against.
+  const [myReceipts, setMyReceipts] = useState([]);
+  const loadReceipts = () => (staff ? Promise.resolve() : api.poAudit(Number(po.id))
+    .then((r) => setMyReceipts(r.receipts || []))
+    .catch((e) => { if (e.unauthorized) onSignOut(); }));
+  useEffect(() => { if (!staff && stores.length) loadReceipts(); }, [detail]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const audited = !!po.audited_at;
   const frozen = audited || po.status === 'reconciled' || po.status === 'closed';
@@ -171,6 +178,18 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
       + (plan.noLine ? ` (${plan.noLine} more have no priced line for their store and stay blank.)` : ''))) return;
     await api.poFillCosts(Number(po.id));
   });
+  const uploadReceipt = (store, file) => {
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) { setError('That file is over 15 MB — take a smaller photo.'); return; }
+    run(async () => {
+      const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'image/jpeg');
+      const { uploadUrl, key } = await api.poReceiptSign(Number(po.id), Number(store.id), type);
+      const put = await fetch(uploadUrl, { method: 'PUT', body: file, headers: { 'Content-Type': type } });
+      if (!put.ok) throw new Error(`Upload failed (${put.status})`);
+      await api.poReceiptAttach({ poId: Number(po.id), storeId: Number(store.id), key, name: file.name, contentType: type, sizeBytes: file.size });
+      await loadReceipts();
+    });
+  };
   const untied = detail.untied_boxes || [];
   const untiedPairs = untied.reduce((n, b) => n + (Number(b.units) || 0), 0);
   const labelName = (b) => {
@@ -293,6 +312,20 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
                 ))
                 : <span className="muted">No boxes yet — add each box this store is shipping.</span>}
             </div>
+            {!staff && (
+              <div className="store-order-boxes sm">
+                {myReceipts.filter((r) => Number(r.po_store_id) === Number(s.id)).map((r) => (
+                  <span key={r.id} className="po-chip">🧾 {r.name || 'receipt'}{r.amount != null ? ` · ${money(r.amount)}` : ''}</span>
+                ))}
+                {!audited && (
+                  <label className="btn xs">
+                    + Receipt (photo / PDF)
+                    <input type="file" accept="image/*,application/pdf" hidden disabled={busy}
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; uploadReceipt(s, f); }} />
+                  </label>
+                )}
+              </div>
+            )}
             <div className="po-box-actions">
               {canAddBox && <button type="button" className="btn sm" disabled={busy} onClick={() => addBox(s)}>+ Add a box</button>}
               {canEdit && <button type="button" className="btn sm ghost" disabled={busy} onClick={() => rename(s)}>Rename</button>}

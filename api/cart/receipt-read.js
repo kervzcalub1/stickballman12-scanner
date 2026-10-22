@@ -26,45 +26,10 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged 
 import { getBuyCart, getBuyCartFile, logCartEvent, dbConfigured } from '../_lib/db.js';
 import { cartVisibleTo, requireBuyerAccess } from '../_lib/buycart.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
-import { checkReceiptRead } from '../../src/lib/receiptCheck.js';
+import { imageForModel, readReceiptOnce, receiptAiConfigured, RECEIPT_MODEL as MODEL } from '../_lib/receipt-ai.js';
 
-const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
-const MODEL = process.env.RECEIPT_AI_MODEL || process.env.PAYOUT_AI_MODEL || 'gpt-5.4-mini';
-// A receipt is a column of text. Past ~1500px on the long edge the model reads no better
-// and every extra pixel is billed, so this is a cost bound rather than a quality one.
-const MAX_EDGE = 1500;
-const TIMEOUT_MS = 45_000;
-
-export const receiptAiConfigured = () => !!process.env.OPENAI_API_KEY;
-
-const PROMPT = `Read this shop receipt and return JSON only, in this exact shape:
-{"rows":[{"sku":"","size":"","qty":0,"totalPrice":0}],"subtotal":0,"tax":0,"statedTotal":0,"itemsSold":0}
-
-- "sku" is the manufacturer style code printed on the line (e.g. IM4613-400, HJ5996-001).
-- "qty" is the quantity column for that line.
-- "totalPrice" is what was ACTUALLY CHARGED for that line. When a line shows a gross
-  price, then a Discount, then a "Net Price", use the NET price. Never the gross.
-- "subtotal", "tax", "statedTotal" and "itemsSold" are the receipt's OWN printed figures.
-  Use null for any the receipt does not print — never a calculated stand-in, because
-  they are what the lines get checked against.
-- Copy digits exactly as printed. If a line is not legible, LEAVE IT OUT rather than
-  guessing: a missing line is caught by the totals, an invented one is not.`;
-
-/** Fetch from our bucket and shrink. Falls back to the original bytes if sharp can't. */
-async function imageForModel(key) {
-  const buf = await getObject(key);   // already a Buffer
-  try {
-    const sharp = (await import('sharp')).default;
-    const out = await sharp(buf)
-      .rotate()                            // honour EXIF, or a phone-held-sideways receipt arrives on its side
-      .resize({ width: MAX_EDGE, height: MAX_EDGE, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 82 })
-      .toBuffer();
-    return { b64: out.toString('base64'), mime: 'image/jpeg' };
-  } catch {
-    return { b64: buf.toString('base64'), mime: 'image/jpeg' };
-  }
-}
+// The model call itself lives in api/_lib/receipt-ai.js, shared with store-order receipts.
+export { receiptAiConfigured };
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -103,65 +68,9 @@ export default async function handler(req, res) {
     if (String(file.content_type || '').includes('pdf'))
       return send(res, 409, { ok: false, error: 'That is a PDF — its text is read directly, no AI needed.' });
 
-    const { b64, mime } = await imageForModel(file.r2_key);
+    const { rows, subtotal, tax, statedTotal, itemsSold, check, usage } =
+      await readReceiptOnce(await imageForModel(await getObject(file.r2_key)));
 
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
-    let payload;
-    try {
-      const r = await fetch(OPENAI_URL, {
-        method: 'POST',
-        signal: ac.signal,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-        body: JSON.stringify({
-          model: MODEL,
-          response_format: { type: 'json_object' },
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'text', text: PROMPT },
-              { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
-            ],
-          }],
-        }),
-      });
-      if (!r.ok) {
-        const detail = await r.text().catch(() => '');
-        console.error('[cart/receipt-read] openai', r.status, detail.slice(0, 300));
-        return send(res, 502, { ok: false, error: 'The reader did not answer. Try again, or paste the text instead.' });
-      }
-      payload = await r.json();
-    } finally { clearTimeout(timer); }
-
-    let out;
-    try { out = JSON.parse(payload?.choices?.[0]?.message?.content || '{}'); }
-    catch { return send(res, 502, { ok: false, error: 'The reader answered with something unreadable. Paste the text instead.' }); }
-
-    const num = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n * 100) / 100 : null; };
-    const rows = (Array.isArray(out.rows) ? out.rows : []).slice(0, 300).map((r) => {
-      const qty = Math.min(Math.max(parseInt(r.qty, 10) || 1, 1), 999);
-      const totalPrice = num(r.totalPrice);
-      return {
-        sku: String(r.sku ?? '').trim().toUpperCase().slice(0, 40),
-        size: String(r.size ?? '').trim().slice(0, 20) || null,
-        qty,
-        totalPrice,
-        // Derived here, never asked for: a unit price the model states separately is a
-        // second number that can disagree with the two it was derived from.
-        unitPrice: totalPrice != null && qty > 0 ? Math.round((totalPrice / qty) * 100) / 100 : null,
-        name: String(r.name ?? '').trim().slice(0, 200) || null,
-        source: 'ocr',
-      };
-    }).filter((r) => r.sku);
-
-    const subtotal = num(out.subtotal);
-    const statedTotal = num(out.statedTotal);
-    const tax = num(out.tax);
-    const itemsSold = Number.isFinite(Number(out.itemsSold)) ? Number(out.itemsSold) : null;
-    const check = checkReceiptRead({ rows, subtotal, itemsSold, statedTotal, tax });
-
-    // On the trail, because a machine reading is a fact about how these numbers got here.
-    // Whether it AGREED with the receipt is part of that fact, not a detail.
     await logCartEvent({
       cartId, kind: 'receipt_ai_read', actor: user,
       body: `${rows.length} lines read from “${file.name || 'receipt'}” by ${MODEL}`
@@ -170,14 +79,11 @@ export default async function handler(req, res) {
 
     return send(res, 200, {
       ok: true, rows, subtotal, tax, statedTotal, itemsSold, check, model: MODEL,
-      usage: payload?.usage || null,
+      usage,
     });
   } catch (e) {
-    const aborted = e.name === 'AbortError';
     console.error('[cart/receipt-read]', e.message);
-    return send(res, aborted ? 504 : 500, {
-      ok: false,
-      error: aborted ? 'The reader took too long. Try again, or paste the text instead.' : 'Could not read that receipt.',
-    });
+    if (e.status) return send(res, e.status, { ok: false, error: e.message.replace('type it in', 'paste the text') });
+    return send(res, 500, { ok: false, error: 'Could not read that receipt.' });
   }
 }

@@ -21,6 +21,11 @@ export default async function handler(req, res) {
   try {
     const po = await getPo(poId);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
+    // A store order closes only through its audit (Mark audited), which freezes the
+    // per-store table with it — a plain Reconcile would net store A's shortage against
+    // store B's extras and settle the order nobody audited (store-orders-plan §8b).
+    if (po.by_store)
+      return send(res, 409, { ok: false, error: `${po.po_code} is an order bought from several stores — it is closed by its audit (“Mark audited”), not here.` });
     if (po.status !== 'receiving')
       return send(res, 409, { ok: false, error: `PO ${po.po_code} is ${po.status} — only a PO being received can be reconciled.` });
     const data = await snapshotReconciliation(poId);

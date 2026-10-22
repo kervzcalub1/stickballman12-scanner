@@ -4432,6 +4432,320 @@ export async function getPoFull(id) {
   return { po, boxes, lines, batches, stores, untied_boxes };
 }
 
+/* ---- Store orders: the audit (docs/store-orders-plan.md §4.5–4.7, PR D) ------------
+   Kevin audits a store order AFTER it has landed: what each store declared (the list,
+   which is the invoice) against what arrived (every box tied to its label, so its store)
+   against what the card was charged and what the store's receipt says. Short and over are
+   counted per SKU + size and never netted — a missing 9.5 is not paid for by an extra 11.
+   Mark audited freezes the whole table onto the order (audit_snapshot) and reconciles it. */
+
+// Has the order LANDED? Every non-replacement label has a received box, and no receiving
+// batch is still open — or staff said so ("Call it landed", e.g. a box lost and claimed).
+// Before then the audit never says "short": the boxes may simply still be on a truck.
+export async function getPoLanded(poId) {
+  const sql = db();
+  const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return null;
+  const labels = await sql`
+    SELECT id, box_number, status, tracking_number,
+           (tracking_events -> 0 ->> 'time') AS last_event_at
+      FROM po_boxes WHERE po_id = ${poId} AND kind <> 'replacement' ORDER BY box_number`;
+  const received = await getPoReceivedBoxes(poId);
+  const inIds = new Set(received.filter((b) => b.po_label_id != null && (b.status === 'received' || b.units > 0))
+    .map((b) => Number(b.po_label_id)));
+  const [{ open }] = await sql`SELECT count(*) FILTER (WHERE status = 'open')::int AS open FROM batches WHERE po_id = ${poId}`;
+  const missing = labels.filter((l) => !inIds.has(Number(l.id)));
+  // A label the courier says was delivered two days ago that nobody has received: it is
+  // on the premises or lost, and either way someone should go and look.
+  const twoDays = Date.now() - 2 * 864e5;
+  const overdue = missing.filter((l) => l.status === 'delivered'
+    && l.last_event_at && !Number.isNaN(Date.parse(l.last_event_at)) && Date.parse(l.last_event_at) < twoDays);
+  const allIn = labels.length > 0 && missing.length === 0 && open === 0;
+  return {
+    landed: allIn || !!po.landed_override_at,
+    all_in: allIn,
+    override: po.landed_override_at
+      ? { at: po.landed_override_at, by: po.landed_override_by, note: po.landed_override_note } : null,
+    labels: labels.length,
+    labels_in: labels.length - missing.length,
+    open_batches: open,
+    missing: missing.map((l) => ({ id: Number(l.id), box_number: l.box_number, status: l.status })),
+    overdue: overdue.map((l) => ({ id: Number(l.id), box_number: l.box_number })),
+  };
+}
+
+// "Call it landed" (staff, with a reason) — or clear it (note null).
+export async function setPoLandedOverride(poId, who, note) {
+  const sql = db();
+  const rows = note
+    ? await sql`UPDATE purchase_orders SET landed_override_at = now(), landed_override_by = ${who || null},
+                       landed_override_note = ${note} WHERE id = ${poId} RETURNING *`
+    : await sql`UPDATE purchase_orders SET landed_override_at = NULL, landed_override_by = NULL,
+                       landed_override_note = NULL WHERE id = ${poId} RETURNING *`;
+  return rows[0] || null;
+}
+
+// The audit table. One row per store; each row carries its SKUs, each SKU its sizes, so
+// the screen can open a store and then a shoe (quantities lead, money follows).
+//   declared_units / declared_total   the list (the invoice)
+//   receipt_total                     sum of the store's receipts (null = no receipt)
+//   charged_total                     sum of the card charges entered (null = none yet)
+//   received_units                    pairs that came out of the store's boxes
+//   short / over                      per SKU+size, never netted
+//   owed                              Σ short × that line's price — what the store owes us
+//   charged_minus_declared            the card against the list (+ = charged more)
+// Matching is the reconciliation's: dual style codes, size notation, and a GS pair
+// received as men's counted as what the box said (getPoReceivedBoxes).
+export async function getPoStoreVariance(poId) {
+  const sql = db();
+  const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po || !po.by_store) return null;
+  const stores = await listPoStores(poId);
+  const lines = await sql`
+    SELECT po_store_id, sku, size, max(name) AS name, sum(qty_expected)::int AS qty,
+           CASE WHEN sum(qty_expected) > 0 THEN sum(qty_expected * unit_cost) / sum(qty_expected) END AS price,
+           bool_or(unit_cost IS NULL) AS unpriced, max(created_at) AS last_added
+      FROM po_lines WHERE po_id = ${poId} AND po_store_id IS NOT NULL AND po_box_id IS NULL
+     GROUP BY po_store_id, sku, size`;
+  const receipts = await sql`
+    SELECT r.po_store_id, sum(r.amount) AS total, count(*)::int AS n, bool_and(r.amount IS NOT NULL) AS all_amounted
+      FROM po_store_receipts r JOIN po_stores s ON s.id = r.po_store_id
+     WHERE s.po_id = ${poId} GROUP BY r.po_store_id`;
+  const receiptBy = new Map(receipts.map((r) => [String(r.po_store_id), r]));
+  const boxes = await getPoReceivedBoxes(poId);
+  const landed = await getPoLanded(poId);
+
+  const canon = rcCodeGroups([
+    ...lines.map((l) => rcCodes(l.sku)),
+    ...boxes.flatMap((b) => (b.items || []).map((i) => rcCodes(i.sku))),
+  ]);
+  const keyOf = (sku, size) => `${canon(rcCodes(sku))}|${rcSizeNum(size)}`;
+  const money = (n) => (n == null ? null : Math.round(Number(n) * 100) / 100);
+
+  const firstReceivedAt = boxes.map((b) => b.received_at).filter(Boolean).map((t) => Date.parse(t)).sort((a, b) => a - b)[0] || null;
+  let untiedUnits = 0;
+  const recByStore = new Map();     // storeId -> Map(key -> { sku, size, name, qty })
+  for (const b of boxes) {
+    if (b.po_store_id == null) { untiedUnits += Number(b.units) || 0; continue; }
+    const m = recByStore.get(String(b.po_store_id)) || new Map();
+    for (const it of b.items || []) {
+      const k = keyOf(it.sku, it.size);
+      const cur = m.get(k) || { sku: it.sku, size: it.size, name: it.name, qty: 0 };
+      cur.qty += Number(it.qty) || 0;
+      m.set(k, cur);
+    }
+    recByStore.set(String(b.po_store_id), m);
+  }
+
+  const rows = stores.map((st) => {
+    const decl = new Map();
+    for (const l of lines.filter((x) => String(x.po_store_id) === String(st.id))) {
+      const k = keyOf(l.sku, l.size);
+      const cur = decl.get(k) || { sku: l.sku, size: l.size, name: l.name, qty: 0, value: 0, unpriced: false };
+      cur.qty += Number(l.qty) || 0;
+      cur.value += l.price == null ? 0 : Number(l.price) * (Number(l.qty) || 0);
+      cur.unpriced = cur.unpriced || !!l.unpriced;
+      decl.set(k, cur);
+    }
+    const rec = recByStore.get(String(st.id)) || new Map();
+    const sizes = [];
+    for (const k of new Set([...decl.keys(), ...rec.keys()])) {
+      const d = decl.get(k);
+      const r = rec.get(k);
+      const declared = d?.qty || 0;
+      const received = r?.qty || 0;
+      const price = d && d.qty > 0 && !d.unpriced ? d.value / d.qty : null;
+      const short = Math.max(0, declared - received);
+      sizes.push({
+        sku: d?.sku || r.sku, size: d?.size || r.size, name: d?.name || r?.name || null,
+        declared, received, short, over: Math.max(0, received - declared),
+        price: money(price), owed: price == null ? null : money(short * price),
+      });
+    }
+    // SKU → sizes, quantities first.
+    const bySku = new Map();
+    for (const z of sizes) {
+      const g = bySku.get(z.sku) || { sku: z.sku, name: z.name, declared: 0, received: 0, short: 0, over: 0, owed: 0, sizes: [] };
+      g.declared += z.declared; g.received += z.received; g.short += z.short; g.over += z.over;
+      g.owed += z.owed || 0; g.sizes.push(z);
+      bySku.set(z.sku, g);
+    }
+    const skus = [...bySku.values()].map((g) => ({ ...g, owed: money(g.owed) }))
+      .sort((a, b) => (b.short + b.over) - (a.short + a.over) || a.sku.localeCompare(b.sku));
+    const declaredTotal = st.declared_total == null ? null : money(st.declared_total);
+    const charged = st.charged_total == null ? null : money(st.charged_total);
+    const rc = receiptBy.get(String(st.id));
+    const receiptTotal = rc && rc.total != null ? money(rc.total) : null;
+    const sum = (f) => sizes.reduce((n, z) => n + (Number(z[f]) || 0), 0);
+    const lastAdded = lines.filter((x) => String(x.po_store_id) === String(st.id))
+      .map((x) => Date.parse(x.last_added)).filter(Number.isFinite).sort((a, b) => b - a)[0] || null;
+    return {
+      store_id: Number(st.id), name: st.name,
+      declared_units: sum('declared'), declared_total: declaredTotal,
+      receipt_total: receiptTotal, receipt_count: rc?.n || 0,
+      charged_total: charged, charge_count: Number(st.charge_count) || 0,
+      received_units: sum('received'), short: sum('short'), over: sum('over'),
+      owed: money(sizes.reduce((n, z) => n + (z.owed || 0), 0)),
+      unpriced_short: sizes.some((z) => z.short > 0 && z.owed == null),
+      charged_minus_declared: charged != null && declaredTotal != null ? money(charged - declaredTotal) : null,
+      receipt_vs_charged: receiptTotal != null && charged != null ? money(charged - receiptTotal) : null,
+      credit_agreed: st.credit_agreed == null ? null : money(st.credit_agreed),
+      credit_received: st.credit_received == null ? null : money(st.credit_received),
+      credit_note: st.credit_note || null,
+      list_after_receiving: !!(firstReceivedAt && lastAdded && lastAdded > firstReceivedAt),
+      skus,
+    };
+  });
+  const t = (f) => money(rows.reduce((n, r) => n + (Number(r[f]) || 0), 0));
+  const anyCharged = rows.some((r) => r.charged_total != null);
+  return {
+    po_id: Number(po.id), po_code: po.po_code,
+    landed,
+    stores: rows,
+    totals: {
+      declared_units: rows.reduce((n, r) => n + r.declared_units, 0),
+      declared_total: t('declared_total'),
+      receipt_total: rows.some((r) => r.receipt_total != null) ? t('receipt_total') : null,
+      charged_total: anyCharged ? t('charged_total') : null,
+      received_units: rows.reduce((n, r) => n + r.received_units, 0),
+      short: rows.reduce((n, r) => n + r.short, 0),
+      over: rows.reduce((n, r) => n + r.over, 0),
+      owed: t('owed'),
+      // Only the stores charged MORE than they declared — an undercharge elsewhere is not
+      // a refund of it.
+      overcharge: money(rows.reduce((n, r) => n + Math.max(0, Number(r.charged_minus_declared) || 0), 0)),
+      stores_short: rows.filter((r) => r.short > 0).length,
+    },
+    untied_units: untiedUnits,
+    list_after_receiving: rows.some((r) => r.list_after_receiving),
+  };
+}
+
+// Card charges (many per store: split charges, later credits — negative = a credit back).
+export async function listPoStoreCharges(poId) {
+  return db()`
+    SELECT c.* FROM po_store_charges c JOIN po_stores s ON s.id = c.po_store_id
+     WHERE s.po_id = ${poId} ORDER BY c.charged_on NULLS LAST, c.id`;
+}
+export async function addPoStoreCharge({ storeId, amount, chargedOn = null, cardLast4 = null, note = null, enteredBy = null }) {
+  const rows = await db()`
+    INSERT INTO po_store_charges (po_store_id, amount, charged_on, card_last4, note, entered_by)
+    VALUES (${storeId}, ${amount}, ${chargedOn}::date, ${cardLast4}, ${note}, ${enteredBy}) RETURNING *`;
+  return rows[0];
+}
+export async function getPoStoreCharge(id) {
+  return (await db()`
+    SELECT c.*, s.po_id, s.name AS store_name FROM po_store_charges c JOIN po_stores s ON s.id = c.po_store_id
+     WHERE c.id = ${id}`)[0] || null;
+}
+export async function removePoStoreCharge(id) {
+  await db()`DELETE FROM po_store_charges WHERE id = ${id}`;
+}
+
+// Receipts, WHEN a store gave one: a photo/PDF in R2, or an ingested email receipt.
+export async function listPoStoreReceipts(poId) {
+  return db()`
+    SELECT r.*, s.name AS store_name,
+           er.store_name AS email_store, er.order_number AS email_order, er.total AS email_total,
+           er.received_at AS email_received_at, er.subject AS email_subject
+      FROM po_store_receipts r JOIN po_stores s ON s.id = r.po_store_id
+      LEFT JOIN email_receipts er ON er.id = r.email_receipt_id
+     WHERE s.po_id = ${poId} ORDER BY r.uploaded_at, r.id`;
+}
+export async function getPoStoreReceipt(id) {
+  return (await db()`
+    SELECT r.*, s.po_id, s.name AS store_name FROM po_store_receipts r JOIN po_stores s ON s.id = r.po_store_id
+     WHERE r.id = ${id}`)[0] || null;
+}
+export async function addPoStoreReceipt({ storeId, key = null, name = null, contentType = null, sizeBytes = null,
+  emailReceiptId = null, amount = null, uploadedBy = null, uploadedById = null }) {
+  const rows = await db()`
+    INSERT INTO po_store_receipts (po_store_id, r2_key, name, content_type, size_bytes, email_receipt_id, amount,
+                                   uploaded_by, uploaded_by_id)
+    VALUES (${storeId}, ${key}, ${name}, ${contentType}, ${sizeBytes}, ${emailReceiptId}::bigint, ${amount},
+            ${uploadedBy}, ${uploadedById}::bigint)
+    RETURNING *`;
+  return rows[0];
+}
+// A person confirms the total (typed, or the AI's read accepted); lines/agreement ride along.
+export async function setPoStoreReceiptRead(id, { amount, lines = undefined, readAgreed = undefined }) {
+  const has = (v) => v !== undefined;
+  const rows = await db()`
+    UPDATE po_store_receipts SET
+      amount      = ${amount},
+      lines       = CASE WHEN ${has(lines)} THEN ${lines === undefined ? null : JSON.stringify(lines)}::jsonb ELSE lines END,
+      read_agreed = CASE WHEN ${has(readAgreed)} THEN ${readAgreed ?? null}::boolean ELSE read_agreed END
+    WHERE id = ${id} RETURNING *`;
+  return rows[0] || null;
+}
+export async function removePoStoreReceipt(id) {
+  await db()`DELETE FROM po_store_receipts WHERE id = ${id}`;
+}
+// Email receipts that could be this store's: around the order's dates, closest total first.
+// Athlete's Foot emails file with a total but rarely a store, so the person picks.
+export async function listEmailReceiptCandidates(poId, { total = null } = {}) {
+  const sql = db();
+  const po = (await sql`SELECT created_at FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return [];
+  return sql`
+    SELECT id, received_at, store, store_name, store_number, city, state, order_number, total, subject,
+           (SELECT count(*) FROM po_store_receipts r WHERE r.email_receipt_id = er.id)::int AS used
+      FROM email_receipts er
+     WHERE er.received_at BETWEEN ${po.created_at}::timestamptz - interval '21 days'
+                              AND ${po.created_at}::timestamptz + interval '45 days'
+     ORDER BY CASE WHEN ${total}::numeric IS NULL THEN 0 ELSE abs(coalesce(er.total, 0) - ${total}::numeric) END,
+              er.received_at DESC
+     LIMIT 40`;
+}
+
+export async function setPoStoreCredit(storeId, { agreed, received, note }) {
+  const rows = await db()`
+    UPDATE po_stores SET credit_agreed = ${agreed}, credit_received = ${received}, credit_note = ${note}
+     WHERE id = ${storeId} RETURNING *`;
+  return rows[0] || null;
+}
+
+// Mark audited: the variance frozen onto the order, then the order reconciled (frozen).
+export async function markPoAudited(poId, { who, note = null }) {
+  const sql = db();
+  const variance = await getPoStoreVariance(poId);
+  if (!variance) return { error: 'Only an order bought from several stores is audited here.' };
+  const snap = { ...variance, at: new Date().toISOString(), by: who || null, note: note || null };
+  await sql`
+    UPDATE purchase_orders SET audited_at = now(), audited_by = ${who || null}, audit_note = ${note || null},
+           audit_snapshot = ${JSON.stringify(snap)}::jsonb
+     WHERE id = ${poId}`;
+  await snapshotReconciliation(poId);
+  return { ok: true, snapshot: snap };
+}
+// Undo it (admin): back to receiving, the audit and the reconciliation cleared.
+export async function unauditPo(poId) {
+  const rows = await db()`
+    UPDATE purchase_orders SET audited_at = NULL, audited_by = NULL, audit_note = NULL, audit_snapshot = NULL,
+           reconciliation = NULL, reconciled_at = NULL, status = 'receiving'
+     WHERE id = ${poId} RETURNING *`;
+  return rows[0] || null;
+}
+
+// The alert's view of a store order (reconcileOutcomeForIntake): only once it has landed —
+// a box still on a truck is not a shortage.
+export async function storeOutcomeForIntake(poId) {
+  const v = await getPoStoreVariance(poId);
+  if (!v || !v.landed.landed) return null;
+  const po = await getPo(poId);
+  if (!po || po.audited_at) return null;
+  const t = v.totals;
+  if (!t.short && !t.over && !v.untied_units && !t.overcharge) return null;
+  return {
+    byStore: true, poId: Number(poId), poCode: v.po_code, supplierName: po.supplier_name,
+    storesShort: t.stores_short, storeCount: v.stores.length, short: t.short, over: t.over,
+    owed: t.owed, overcharge: t.overcharge, untied: v.untied_units,
+    receivedUnits: t.received_units, expectedUnits: t.declared_units,
+    top: v.stores.filter((s) => s.short > 0).sort((a, b) => (b.owed || 0) - (a.owed || 0)).slice(0, 3)
+      .map((s) => ({ name: s.name, short: s.short, owed: s.owed })),
+  };
+}
+
 // Tie a received box to one of the order's labels after the fact (or untie it with
 // `poBoxId` null): the carton came in without its label, or under a number the order
 // never had. Writes `batch_boxes.po_box_id`, the first half of the shared matcher, so the
@@ -5703,6 +6017,10 @@ export async function getPoReconcileState(poId) {
 export async function autoReconcileIfClean(poId) {
   const st = await getPoReconcileState(poId);
   if (!st || st.po.status !== 'receiving' || !st.po.received_batch_id) return null;
+  // A store order is never closed by the count alone: store A short and store B over
+  // would net to "clean" and freeze the order before Kevin audited it (plan §4.6 [M4]).
+  // Its only way to reconciled is Mark audited. This gate also covers reconcile-list.
+  if (st.po.by_store) return null;
   if (!st.intakeDone || st.awaitingBoxes) return null;
   const s = st.summary;
   if (!s || !s.clean || s.no_manifest || s.expected_units === 0 || s.received_units !== s.expected_units) return null;
@@ -5741,6 +6059,9 @@ async function settleReplacementIfArrived(poId) {
 // notice, and a shortage needs someone to message the supplier today.
 // Returns null when there's nothing to say (auto-closed, or intake isn't finished yet).
 export async function reconcileOutcomeForIntake(poId) {
+  // A store order answers per store, and only once it has landed (plan §4.7).
+  const head = (await db()`SELECT by_store FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (head?.by_store) return storeOutcomeForIntake(poId);
   if (await autoReconcileIfClean(poId)) return null;
   const st = await getPoReconcileState(poId);
   if (!st || st.po.status !== 'receiving' || !st.intakeDone) return null;
@@ -6033,12 +6354,28 @@ export async function addReplacementBox(poId, { trackingNumber, carrierKey, crea
 // reship has to put the order back in play. Lands on 'receiving' (not 'draft'): the
 // manifest is settled, only the intake reopens. Returns the new status, or null if the
 // order was already open.
+//
+// A STORE order that was audited loses its audit here — a replacement arriving changes
+// what was received, so the frozen table no longer describes the order (plan §8b). The
+// old snapshot's headline goes into the thread as history; Kevin audits again.
 export async function reopenPoForReceiving(poId) {
   const sql = db();
+  const before = (await sql`SELECT audited_at, audited_by, audit_snapshot FROM purchase_orders WHERE id = ${poId}`)[0];
   const rows = await sql`
-    UPDATE purchase_orders SET status = 'receiving'
+    UPDATE purchase_orders SET status = 'receiving',
+           audited_at = NULL, audited_by = NULL, audit_note = NULL, audit_snapshot = NULL
     WHERE id = ${poId} AND status IN ('reconciled', 'closed')
     RETURNING id, po_code, status`;
+  if (rows[0] && before?.audited_at) {
+    const t = before.audit_snapshot?.totals || {};
+    await addPoComment({
+      poId, kind: 'system', audience: 'internal',
+      body: `Reopened for receiving — the audit by ${before.audited_by || 'staff'} is superseded and has to be done again. `
+        + `It read: ${t.received_units ?? '?'} of ${t.declared_units ?? '?'} pairs, ${t.short ?? 0} short, ${t.over ?? 0} over, `
+        + `$${Number(t.owed || 0).toFixed(2)} owed.`,
+      author: { id: null, name: null, role: 'system' },
+    }).catch(() => { /* the reopen matters, the note doesn't */ });
+  }
   return rows[0] || null;
 }
 

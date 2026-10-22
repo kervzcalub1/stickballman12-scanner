@@ -1,8 +1,10 @@
 # Store orders — plan v2 (multi-store supplier purchases: Joey)
 
-Status: **A (#304) + B (#305) merged; C (receiving attribution) built 2026-10-23; D, E to go.** v2 written 2026-10-23, replacing v1 the same day. What's live: `docs/context/purchase-orders.md` → Store orders.
+Status: **A (#304), B (#305), C (#307) merged; D (the audit) built 2026-10-23; E to go.** v2 written 2026-10-23, replacing v1 the same day. What's live: `docs/context/purchase-orders.md` → Store orders.
 
 **C as built, where it differs from §4.4:** tie-later lives on the PH order screen (StoreOrderPanel), not the warehouse Reconciliation screen (the endpoint allows warehouse too); the Telegram discrepancy alert on tie/untie is left for D with the other alert triggers.
+
+**D as built, where it differs from §4.6:** the audit export is CSV only (`src/lib/storeAudit.js`, from the same object as the screen) — no `stores` PDF mode yet; PDF receipts have their total typed (no in-browser PDF read). Receipt-lines vs declared (`compareReceiptToApproved`) is not shown yet — the AI's lines are stored on the receipt for it.
 
 **Sources:**
 - The Oct 17 meeting: transcript plus Kylene's notes.

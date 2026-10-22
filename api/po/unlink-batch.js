@@ -2,7 +2,8 @@
 // Removes the join only — the batch and every unit in it are untouched. Used to undo a
 // wrong link, and to clear the way to delete an order.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { unlinkBatchFromPo, dbConfigured } from '../_lib/db.js';
+import { unlinkBatchFromPo, storeOutcomeForIntake, dbConfigured } from '../_lib/db.js';
+import { alertPoDiscrepancy } from '../_lib/alerts.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -28,6 +29,12 @@ export default async function handler(req, res) {
       actor: { id: Number(user.uid) || null, name: user.name || user.username || '', role: user.role },
     });
     if (r.error) return send(res, 409, { ok: false, error: r.error });
+    // A store order's per-store shortfall becomes news once it has landed (plan §4.7).
+    // storeOutcomeForIntake, NOT reconcileOutcomeForIntake: that one auto-reconciles a
+    // clean ordinary order as a side effect, which froze an order the moment it was linked.
+    storeOutcomeForIntake(poId)
+      .then((rc) => { if (rc?.byStore) alertPoDiscrepancy(rc, user); })
+      .catch((e) => console.warn('[po/unlink-batch] store alert:', e.message));
     return send(res, 200, { ok: true });
   } catch (e) {
     console.error('[po/unlink-batch]', e.message);

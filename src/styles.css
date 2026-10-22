@@ -6225,3 +6225,28 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
   background: rgba(61,107,255,0.12); color: var(--primary); border: 1px solid rgba(61,107,255,0.35); }
 .store-untie { margin: 10px 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .store-untie p { margin: 0; }
+
+/* Store-order audit (StoreAuditPanel). The table scrolls sideways inside its card on a
+   phone rather than pushing the page wider. */
+.store-audit .table-scroll { overflow-x: auto; margin: 8px 0; -webkit-overflow-scrolling: touch; }
+.store-audit-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 760px; }
+.store-audit-table th { text-align: right; font-size: 11.5px; font-weight: 700; color: var(--muted); padding: 6px 8px;
+  border-bottom: 1px solid var(--border); white-space: nowrap; }
+.store-audit-table td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.store-audit-table th:first-child, .store-audit-table td:first-child { text-align: left; }
+.store-audit-row { cursor: pointer; }
+.store-audit-row:hover td { background: rgba(127,127,127,0.06); }
+.store-audit-caret { display: inline-block; width: 12px; color: var(--muted); }
+.store-audit-detail > td { text-align: left; white-space: normal; background: rgba(127,127,127,0.04); padding: 10px 12px; }
+.store-audit-total td { font-weight: 700; border-top: 2px solid var(--border); }
+.store-audit-skus { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.store-audit-sizes { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 4px 18px; }
+.store-audit-sizes .size-chip.short { border-color: rgba(220,60,60,0.55); color: #e05a5a; }
+.store-audit-sizes .size-chip.over { border-color: rgba(198,135,26,0.55); color: #c6871a; }
+.store-audit-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 0; border-top: 1px dashed var(--border); }
+.store-audit-sub > b { min-width: 92px; }
+.bad-cell { color: #e05a5a; font-weight: 700; }
+.warn-cell { color: #c6871a; font-weight: 700; }
+.store-email-list { list-style: none; margin: 8px 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.store-email-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }

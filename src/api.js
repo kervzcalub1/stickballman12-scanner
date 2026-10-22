@@ -494,6 +494,15 @@ export const api = {
   poTieBox: (poId, batchBoxId, poBoxId) => post('/api/po/tie-box', { poId, batchBoxId, poBoxId }),
   poFillCostsPreview: (poId) => get(`/api/po/fill-costs?poId=${encodeURIComponent(poId)}`),
   poFillCosts: (poId) => post('/api/po/fill-costs', { poId, apply: true }),
+  // Store orders: the audit (docs/store-orders-plan.md §4.6) and receipts.
+  poAudit: (poId) => get(`/api/po/audit?poId=${encodeURIComponent(poId)}`),
+  poAuditAct: (poId, action, extra = {}) => post('/api/po/audit', { poId, action, ...extra }),
+  poReceiptSign: (poId, storeId, contentType) => post('/api/po/receipt-sign', { poId, storeId, contentType }),
+  poReceiptAttach: (payload) => post('/api/po/receipt-attach', payload),
+  poReceiptRead: (poId, receiptId) => post('/api/po/receipt-read', { poId, receiptId }),
+  poReceiptEmails: (poId, total) => get(`/api/po/receipt-emails?poId=${encodeURIComponent(poId)}${total != null ? `&total=${encodeURIComponent(total)}` : ''}`),
+  // Proxied with the session token, like the buying request's files (no public URL).
+  poReceiptBlob: (poId, receiptId) => downloadBlob(`/api/po/receipt-file?poId=${encodeURIComponent(poId)}&receiptId=${encodeURIComponent(receiptId)}`),
   poRequestLabels: (poId, requested = true) => post('/api/po/request-labels', { poId, requested }),
   // Pre-sell: shipments sold before they landed. Not listed until released.
   presellList: (batchId) => get(`/api/presell/list${batchId ? `?batchId=${batchId}` : ''}`),

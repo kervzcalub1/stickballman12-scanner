@@ -62,10 +62,16 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
     return all.filter(keep).filter((it) => !words.length || words.every((w) => [it.product_name, it.seller_sku, it.shein_size, it.shopify_size, it.spu, it.shein_sku, it.action].join(' ').toLowerCase().includes(w)));
   }, [d, view, q]);
 
-  function csv() {
+  // Every row of the run, fetched for the file — the live list above is capped at 3,000.
+  async function csv() {
+    setBusy('csv'); setErr('');
+    let rows;
+    try { rows = (await api.sheinLiveAllItems(run.id)).items || []; }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); return; }
+    finally { setBusy(''); }
     const cols = ['spu', 'skc', 'shein_sku', 'product_name', 'shein_size', 'seller_sku', 'shopify_sku', 'shopify_size', 'shopify_qty', 'held', 'before_qty', 'target_qty', 'after_qty', 'reason', 'link_to', 'link_by', 'wrote', 'result', 'action', 'error'];
     const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    downloadCSV(`SHEIN live ${run?.mode || ''} run ${run?.id || ''} ${estToday()}.csv`, [cols.join(','), ...(d?.items || []).map((it) => cols.map((k) => esc(it[k])).join(','))].join('\n'));
+    downloadCSV(`SHEIN live ${run?.mode || ''} run ${run?.id || ''} ${estToday()}.csv`, [cols.join(','), ...rows.map((it) => cols.map((k) => esc(it[k])).join(','))].join('\n'));
   }
 
   if (!d) return <div className="card"><p className="muted sm">{err || 'Loading the live sync…'}</p></div>;
@@ -159,7 +165,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
             : <button type="button" className="btn primary" disabled={!!busy || (mode !== 'dry' && !paused4seller)}
               onClick={() => { if (mode === 'dry' || window.confirm(`${MODES.find((m) => m[0] === mode)[1]} on EVERY SHEIN listing?`)) act('start', { mode, ai }); }}>
               {busy === 'start' ? 'Starting…' : `Start: ${MODES.find((m) => m[0] === mode)[1]}`}</button>}
-          {!!d.items?.length && <button type="button" className="btn ghost sm" onClick={csv}>⬇ This run (CSV)</button>}
+          {!!d.items?.length && <button type="button" className="btn ghost sm" disabled={busy === 'csv'} onClick={csv}>{busy === 'csv' ? 'Preparing CSV…' : `⬇ This run (CSV${d.itemsTotal ? ` · ${fmt(d.itemsTotal)}` : ''})`}</button>}
         </div>
         {err && <div className="error mt">{err}</div>}
 
@@ -189,7 +195,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
               {VIEWS.map(([k, l]) => <button key={k} type="button" className={`seg-btn${view === k ? ' on' : ''}`} aria-pressed={view === k} onClick={() => { setView(k); setShown(80); }}>{l}</button>)}
             </div>
           </div>
-          <p className="muted xs">{fmt(items.length)} size{items.length === 1 ? '' : 's'}.</p>
+          <p className="muted xs">{fmt(items.length)} size{items.length === 1 ? '' : 's'}.{d.itemsTotal > d.items.length ? ` Showing the first ${fmt(d.items.length)} of ${fmt(d.itemsTotal)} sizes in this run — the CSV has every one.` : ''}</p>
           <div className="ap-tablewrap">
             <table className="table shc-table">
               <thead><tr><th>Shoe</th><th>SHEIN size</th><th>Seller SKU</th><th>Shopify size</th><th className="num">Shopify</th><th className="num">Held</th><th className="num">SHEIN</th><th>What happened</th></tr></thead>

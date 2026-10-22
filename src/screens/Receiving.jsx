@@ -37,6 +37,23 @@ let cartKey = 1;
 // the report and message the supplier, so this states the problem and hands over a link
 // rather than assuming an owner.
 function ReconcileAlert({ rc, onOpen }) {
+  // A store order (one supplier, many stores): said per store, and Kevin's audit settles it.
+  if (rc.byStore) {
+    return (
+      <div className="po-mismatch">
+        <div className="po-mismatch-top">
+          <b>{rc.poCode} has landed — it doesn’t match the stores’ lists</b>
+          <span className="po-flag bad">
+            {[rc.storesShort ? `${rc.storesShort} of ${rc.storeCount} stores short` : '', rc.over ? `${rc.over} over` : '',
+              rc.untied ? `${rc.untied} not tied to a store` : ''].filter(Boolean).join(' · ') || 'charged over the list'}
+          </span>
+        </div>
+        <p className="muted sm">
+          Received {rc.receivedUnits} of {rc.expectedUnits} pairs from {rc.supplierName}. The store-by-store audit is on the order.
+        </p>
+      </div>
+    );
+  }
   const parts = [];
   if (rc.shortage) parts.push(`${rc.shortage} short`);
   if (rc.overage) parts.push(`${rc.overage} over`);

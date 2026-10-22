@@ -36,6 +36,7 @@ import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
 import { useLive, afterTyping } from '../hooks.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
 import { StoreOrderPanel } from '../components/StoreOrderPanel.jsx';
+import { StoreAuditPanel } from '../components/StoreAuditPanel.jsx';
 
 const FROZEN = ['reconciled', 'closed'];
 
@@ -334,8 +335,14 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
               // A store order's list is split by store — the store panel replaces this block.
               if (po.by_store) {
                 return (
-                  <StoreOrderPanel detail={detail} staff onChanged={load} onPatchLine={patchLine}
-                    lineBusy={lineBusy} onSignOut={onSignOut} />
+                  <>
+                    <StoreOrderPanel detail={detail} staff onChanged={load} onPatchLine={patchLine}
+                      lineBusy={lineBusy} onSignOut={onSignOut} />
+                    {/* Kevin's audit: once anything is on the way, it has something to say. */}
+                    {(detail.stores || []).length > 0 && (
+                      <StoreAuditPanel detail={detail} onChanged={load} onSignOut={onSignOut} />
+                    )}
+                  </>
                 );
               }
               const orderLines = lines.filter((l) => l.po_box_id == null);

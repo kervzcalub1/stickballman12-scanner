@@ -474,6 +474,26 @@ export function alertDeliveries(before, updates, onlineOrders) {
 // Once per distinct result, so the next box on the same order with the same gap is quiet.
 export function alertPoDiscrepancy(rc, actor) {
   if (!rc) return;
+  // A STORE order (storeOutcomeForIntake): per store, and only once it has landed.
+  // e.g. "4 of 15 stores short · 12 pairs · $1,320 owed" + the three biggest.
+  if (rc.byStore) {
+    const $ = (n) => `$${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const head = [
+      rc.storesShort ? `${rc.storesShort} of ${rc.storeCount} stores short · ${rc.short} pair${rc.short === 1 ? '' : 's'} · ${$(rc.owed)} owed` : '',
+      rc.over ? `${rc.over} over` : '',
+      rc.overcharge ? `${$(rc.overcharge)} charged over the list` : '',
+      rc.untied ? `${rc.untied} pair${rc.untied === 1 ? '' : 's'} not tied to a store` : '',
+    ].filter(Boolean).join(' · ');
+    const top = (rc.top || []).map((s) => `${s.name}: ${s.short} short${s.owed != null ? ` (${$(s.owed)})` : ''}`).join('; ');
+    fireAlert(() => alertUsers('po.discrepancy', {
+      once: true, actorUid: actor?.uid,
+      ref: `po:${rc.poId}:store:${rc.short}/${rc.owed}/${rc.over}/${rc.overcharge}/${rc.untied}`,
+      code: rc.poCode,
+      body: `${rc.supplierName} — ${head}.${top ? ` ${top}.` : ''} Kevin's audit is next.`,
+      path: at('inbound', `po=${Number(rc.poId)}`),
+    }));
+    return;
+  }
   const parts = [];
   if (rc.shortage) parts.push(`${rc.shortage} short`);
   if (rc.overage) parts.push(`${rc.overage} over`);

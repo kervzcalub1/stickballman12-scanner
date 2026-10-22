@@ -92,6 +92,7 @@ unticking is as ordinary as ticking).
 | `issue_gift_cards` | record cards, release them, upload card images, read a code |
 | `audit_buying` | record the spend and close a transaction out |
 | `request_buying` | **the buyer's side (2026-09-15)**: see the Buying Requests card on the supplier portal and use `api/cart/*` at all |
+| `audit_po` | **not a buying duty (2026-10-23)**: Mark a STORE order audited (`po/audit`, `docs/context/purchase-orders.md` → Store orders). Same privilege model; `hasAnyPriv` ignores it (`notBuying`), so it draws no Buying Requests card |
 
 - **admin/superadmin hold all four implicitly** (`isPrivileged`), and are never looked up.
 - **A `supplier` can hold only `request_buying`.** `setUserPrivileges` and `db:setup`

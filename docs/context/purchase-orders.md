@@ -80,7 +80,41 @@ the invoice, and Kevin audits it against what arrived and the card statement.
   **Fill costs from this order's list** (StoreOrderPanel, staff) → `po/fill-costs` (GET
   preview / POST apply, ph_team) = the admin cost backfill scoped to one order's linked
   batches (`api/_lib/cost-backfill.js`, shared with `items/cost-backfill`).
-- Tests: `e2e/po-store-order.spec.js`, `e2e/po-store-receiving.spec.js`.
+- **The audit (PR D):** `getPoStoreVariance(poId)` — per store: declared pairs/$ (the list),
+  receipt $ (sum of `po_store_receipts.amount`), charged $ (sum of `po_store_charges`, negative =
+  a credit), received (pairs out of the store's boxes, via the shared matcher), **short / over per
+  SKU + size, never netted**, `owed` = Σ short × the line's price, charged − declared, credits;
+  SKU → size drill-down; totals (+ `overcharge` = only stores charged MORE than declared);
+  `untied_units`; `list_after_receiving`. **Landed** (`getPoLanded`): every non-replacement label
+  has a received box and no batch is open — or "Call it landed" (`landed_override_*`, with a
+  reason). Before landed the screen shows no short/owed. Overdue = a label Delivered 2+ days ago
+  (newest tracking event) with nothing received.
+- **`po/audit`** (GET view / POST actions): `charge_add|charge_remove|credit|receipt_amount|
+  receipt_remove|receipt_email|landed|mark_audited|unaudit`. Staff (ph_team/admin); the supplier
+  only reads/edits receipts THEY uploaded (GET returns just those, no email fields). Mark audited =
+  the **`audit_po` privilege** (Kevin; admin implicit), status `receiving`, landed, nothing untied →
+  `audited_*`, `audit_note`, the variance frozen into `audit_snapshot`, then
+  `snapshotReconciliation` (→ `reconciled`). Everything money-related 409s once audited; **Unaudit
+  = admin** (back to receiving, snapshot + reconciliation cleared). `reopenPoForReceiving` on an
+  audited order supersedes the audit (cleared + a system comment quoting what it read).
+- **Never closed by the count:** `autoReconcileIfClean` skips every `by_store` order (also covers
+  reconcile-list); `po/reconcile` 409s on one.
+- **Receipts:** `po/receipt-sign` → PUT to R2 → `po/receipt-attach` (key must be
+  `po-receipts/<PO>/<storeId>-<ts>.<ext>`), `po/receipt-file` (proxy, no public URL),
+  `po/receipt-read` = the vision model **twice** (`api/_lib/receipt-ai.js`, shared with
+  `cart/receipt-read`; `agreed` = both printed totals equal → prefilled, else typed),
+  `po/receipt-emails` = staff picker of `email_receipts` around the order's dates, closest total
+  first. Client refuses files > 15 MB. `RECEIPT_AI_URL` overrides the model URL (e2e fake on :5195).
+  PDF receipts: the total is typed (no in-browser PDF read yet).
+- **Alert:** `reconcileOutcomeForIntake` → `storeOutcomeForIntake` for a store order — only once
+  landed, not when audited; `alertPoDiscrepancy` says "N of M stores short · pairs · $ owed" + the
+  top 3, `once` per `po:<id>:store:<short>/<owed>/<over>/<overcharge>/<untied>`. Also fired from
+  link-batch, unlink-batch, tie-box and "Call it landed".
+- **UI:** `src/components/StoreAuditPanel.jsx` under the store list on PoDetail (staff): the table,
+  charges / receipts (upload, Read it, Total…, from email) / credit per store, Call it landed,
+  Mark audited (only drawn with `audit_po`), Undo (admin), CSV (`src/lib/storeAudit.js`). The
+  supplier adds receipts per store in StoreOrderPanel.
+- Tests: `e2e/po-store-order.spec.js`, `e2e/po-store-receiving.spec.js`, `e2e/po-store-audit.spec.js`.
 
 ## A purchase order can now be raised from a RECEIPT (2026-09-05)
 The buying-request process (`docs/context/buy-cart.md`) ends by raising a PO from the

@@ -44,6 +44,9 @@ export const PRIVILEGES = [
   { key: 'issue_gift_cards', label: 'Issue gift cards' },
   { key: 'audit_buying', label: 'Audit + close transactions' },
   { key: 'request_buying', label: 'Raise buying requests' },
+  // Store orders (docs/store-orders-plan.md §4.6): Kevin is ph_team and does this on top.
+  // Not a buying-request duty — just the same "permission on top of a job" model.
+  { key: 'audit_po', label: 'Audit store orders' },
 ];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
 // What a supplier may hold — everything else is stripped (setUserPrivileges, db:setup).

@@ -55,6 +55,9 @@ test.describe('Bulk scan-out · the run', () => {
     await page.reload();                       // pick up the seeded backlog
 
     await expect(stat(page, 'Scanned')).toHaveText('0');
+    // The backlog loads after the page does ('—' until then) — wait for the number rather
+    // than racing it (read too early it was NaN, about one run in three).
+    await expect(stat(page, 'Remaining')).toHaveText(/^\d+$/);
     const before = Number(await stat(page, 'Remaining').innerText());
     expect(before).toBeGreaterThanOrEqual(2);
 

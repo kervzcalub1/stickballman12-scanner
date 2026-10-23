@@ -177,6 +177,64 @@ export function planProduct({ rows, variants, decisions = {}, aiLinks = {}, owne
   return { rows: out, writes, edits, skipped, sizesToAdd: fix.sizesToAdd };
 }
 
+/* ------------------------- delist / re-list / delete ------------------------- */
+// One SHEIN SKC = one shoe (one colour, all its sizes). The owner's rule (2026-10-23):
+//   · every size at 0 (nothing Shopify can sell for it)  → DELIST it (reversible);
+//   · stock back on a size of one WE delisted             → LIST it again;
+//   · every size's seller SKU gone from Shopify, already off the shelf everywhere → ask
+//     SHEIN to DELETE it (irreversible; SHEIN reviews, and refuses one with an order in the
+//     last year — that one simply stays delisted).
+// A shoe still at 0 but on Shopify is only delisted, never deleted: it may be restocked.
+export const SHELF_GAP_MS = 20 * 60_000;   // SHEIN: one change per SKC + site per 20 minutes
+export const SHELF_DEFAULT_SITES = ['shein-us'];
+
+// spu-info → per SKC, the sites it is on / off the shelf.
+export function shelfFrom(spu) {
+  const out = new Map();
+  for (const skc of spu?.skcInfoList || []) {
+    const list = skc.shelfStatusInfoList || [];
+    out.set(String(skc.skcName), {
+      on: list.filter((x) => Number(x.shelfStatus) === 1).map((x) => String(x.siteAbbr)).filter(Boolean),
+      off: list.filter((x) => Number(x.shelfStatus) !== 1).map((x) => String(x.siteAbbr)).filter(Boolean),
+    });
+  }
+  return out;
+}
+
+// rows = planProduct().rows (newQty = what SHEIN may sell now); records = our shein_skc_shelf
+// rows by SKC. → [{ skc, act: delist | relist | delete | delete_check | settle, sites, why }]
+export function shelfPlan({ rows, shelf, records = new Map(), now = Date.now() }) {
+  const bySkc = new Map();
+  for (const r of rows) { if (!r.skc) continue; const a = bySkc.get(r.skc) || []; a.push(r); bySkc.set(r.skc, a); }
+  const out = [];
+  for (const [skc, rs] of bySkc) {
+    const st = shelf.get(skc) || { on: [], off: [] };
+    const rec = records.get(skc) || null;
+    const recent = rec?.shelf_at && now - new Date(rec.shelf_at).getTime() < SHELF_GAP_MS;
+    const zero = rs.every((r) => n0(r.newQty) === 0);
+    const gone = rs.every((r) => r.reason === 'no_shopify' && !r.linkTo);
+    if (rec?.state === 'deleted') continue;
+    if (!zero) {
+      if (rec?.state === 'delisted' && st.on.length) out.push({ skc, act: 'settle', why: 'listed again on SHEIN' });   // someone listed it by hand
+      else if (rec?.state === 'delisted') {
+        const sites = rec.sites?.length ? rec.sites : SHELF_DEFAULT_SITES;
+        out.push(recent ? { skc, act: 'wait', sites, why: 'stock is back — re-list after SHEIN’s 20-minute gap' }
+          : { skc, act: 'relist', sites, why: `stock is back (${rs.filter((r) => n0(r.newQty) > 0).length} size${rs.filter((r) => n0(r.newQty) > 0).length === 1 ? '' : 's'})` });
+      }
+      continue;
+    }
+    if (st.on.length) {
+      const why = gone ? 'every size’s seller SKU is gone from Shopify' : 'every size is at 0';
+      out.push(recent ? { skc, act: 'wait', sites: st.on, why: `${why} — delist after SHEIN’s 20-minute gap` } : { skc, act: 'delist', sites: st.on, why });
+      continue;
+    }
+    if (!gone) continue;                                   // off the shelf, still on Shopify: stays delisted
+    if (rec?.state === 'delete_requested') out.push({ skc, act: 'delete_check', why: 'waiting for SHEIN’s review of the delete' });
+    else if (rec?.state !== 'delete_refused') out.push({ skc, act: 'delete', why: 'every size’s seller SKU is gone from Shopify and it is off the shelf' });
+  }
+  return out;
+}
+
 // What a walk did to one SHEIN size, in one line (the log, the page, the CSV).
 export function outcome(row, { wrote = [], edit = null, skip = null, after = null, dry = false } = {}) {
   const parts = [];

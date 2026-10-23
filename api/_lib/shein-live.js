@@ -15,15 +15,16 @@
 // the live sync are the same code.
 import {
   sheinAllSpus, sheinSpuInfo, sheinStock, sheinWarehouses, sheinSetStock, sheinInReview, sheinSellerSkusTaken, sheinSetSellerSkus, sheinStatus,
+  sheinSetShelf, sheinCheckDeletable, sheinDeleteSkc, sheinDeleteLogs,
 } from './shein.js';
 import { shopifyAllVariants, shopifyProductsLive, shopifyProductIdsForSkus, shopifyConfigured } from './shopify.js';
 import {
   listSheinLinks, saveSheinLinks, createSheinLiveRun, updateSheinLiveRun, getSheinLiveRun, latestSheinLiveRun, markStaleSheinRuns,
-  addSheinLiveItems, sheinOpenNotDeducted, getSetting, sheinLastWalkFacts,
+  addSheinLiveItems, sheinOpenNotDeducted, getSetting, sheinLastWalkFacts, sheinShelfRecords, saveSheinShelf,
 } from './db.js';
 import { sheinAiMatch, sheinAiConfigured } from './shein-ai.js';
 import { readSync } from './shein-orders.js';
-import { rowsFromSpu, ownersFrom, indexRows, planProduct, outcome } from '../../src/lib/sheinLive.js';
+import { rowsFromSpu, ownersFrom, indexRows, planProduct, outcome, shelfFrom, shelfPlan } from '../../src/lib/sheinLive.js';
 import { candidatesFor, verifyAiLink } from '../../src/lib/sheinFix.js';
 import { styleFromTitle } from '../../src/lib/ebayReprice.js';
 
@@ -32,6 +33,7 @@ export const MODES = ['dry', 'stock', 'full'];
 export const IO = {
   sheinSpuInfo, sheinStock, sheinInReview, sheinSellerSkusTaken, sheinSetSellerSkus, sheinSetStock,
   shopifyProductsLive, shopifyProductIdsForSkus, saveSheinLinks, addSheinLiveItems, sheinOpenNotDeducted, readSync, sheinAiMatch, sheinAiConfigured,
+  sheinSetShelf, sheinCheckDeletable, sheinDeleteSkc, sheinDeleteLogs, sheinShelfRecords, saveSheinShelf,
   readBackWaits: [3_000, 5_000, 10_000],   // ms between read-backs of a size still showing the old stock
 };
 let active = null;   // { runId, promise } — one walk per process
@@ -190,6 +192,7 @@ export async function stepProduct(spuName, ctx) {
   }
 
   const counts = { sizes: 0, stock_changed: 0, zeroed: 0, links_changed: 0, links_skipped: 0, needs_person: 0, errors: 0, mismatch: 0 };
+  const { notes: shelfNote, gone } = await stepShelf({ spu, spuName, plan, mode, runId, source, io, counts });
   const items = plan.rows.map((r) => {
     counts.sizes += 1;
     const want = plan.writes.some((w) => w.sheinSku === r.sheinSku);
@@ -205,13 +208,14 @@ export async function stepProduct(spuName, ctx) {
     if (want && !err) { counts.stock_changed += 1; if (r.newQty === 0 && r.qty > 0) counts.zeroed += 1; }
     if (e && e.ok !== false && !e.frees) counts.links_changed += 1;
     if (skip) counts.links_skipped += 1;
-    if (r.reason !== 'ok' && !r.linkTo && !e) counts.needs_person += 1;
+    const reason = gone.has(r.skc) ? 'gone' : r.reason;   // the whole shoe is gone from Shopify and off SHEIN's shelf: nothing for a person to do
+    if (reason !== 'ok' && reason !== 'gone' && !r.linkTo && !e) counts.needs_person += 1;
     return {
       run_id: runId, source, spu: r.spu, skc: r.skc, shein_sku: r.sheinSku, seller_sku: r.sellerSku || null, shein_size: r.size || null, product_name: r.name || null,
       shopify_sku: r.variant?.sku || null, shopify_size: r.variant?.size || null, shopify_product: r.variant?.productTitle || null,
       shopify_qty: r.shopifyQty == null ? null : Number(r.shopifyQty), held: Number(held.map.get(r.sellerSku) || 0),
       before_qty: Number(r.qty || 0), target_qty: Number(r.newQty || 0), after_qty: a,
-      reason: r.reason, action: [r.action, outcome(r, { wrote: want ? [1] : [], edit: e, skip, after: a, dry: mode === 'dry' })].filter(Boolean).join(' — ').slice(0, 1000),
+      reason, action: [r.action, outcome(r, { wrote: want ? [1] : [], edit: e, skip, after: a, dry: mode === 'dry' }), shelfNote.get(r.skc)].filter(Boolean).join(' — ').slice(0, 1000),
       link_to: r.linkTo?.sku || null, link_by: r.linkTo?.by || null,
       wrote: mode === 'dry' ? (want || e ? 'dry' : 'none') : [wrote.has(r.sheinSku) && 'stock', e && e.ok !== false && 'link'].filter(Boolean).join('+') || 'none',
       result, error: err || null,
@@ -219,6 +223,69 @@ export async function stepProduct(spuName, ctx) {
   });
   await io.addSheinLiveItems(items);
   return { items, counts, heldSource: held.source };
+}
+
+/* -------------------------- delist / re-list / delete -------------------------- */
+
+// Whole shoes (SKCs): delist at 0, re-list what WE delisted when stock is back, ask SHEIN to
+// delete one whose seller SKUs are all gone from Shopify (rules: shelfPlan). Delete only on a
+// walk, never on a single Shopify push. Returns { notes: SKC → one line for each of its sizes,
+// gone: SKCs whose every seller SKU is gone from Shopify and that are (now) off the shelf }.
+async function stepShelf({ spu, spuName, plan, mode, runId, source, io, counts }) {
+  const notes = new Map(); const gone = new Set();
+  const shelf = shelfFrom(spu);
+  if (!shelf.size) return { notes, gone };
+  const acts = shelfPlan({ rows: plan.rows, shelf, records: await io.sheinShelfRecords([...shelf.keys()]) });
+  const bySkc = new Map();
+  for (const r of plan.rows) { const a = bySkc.get(r.skc) || []; a.push(r); bySkc.set(r.skc, a); }
+  for (const [skc, rs] of bySkc) {
+    const all = rs.every((r) => r.reason === 'no_shopify' && !r.linkTo);
+    const act = acts.find((x) => x.skc === skc);
+    if (all && (!(shelf.get(skc)?.on || []).length || (act?.act === 'delist' && mode === 'dry'))) gone.add(skc);
+  }
+  const nameOf = (skc) => plan.rows.find((r) => r.skc === skc)?.name || null;
+  const save = (x, patch) => io.saveSheinShelf({ skc: x.skc, spu: spuName, name: nameOf(x.skc), runId, ...patch });
+  const bump = (k) => { counts[k] = (counts[k] || 0) + 1; };
+  for (const x of acts) {
+    if (mode === 'dry') {
+      const t = { delist: `would DELIST this shoe on SHEIN (${x.why})`, relist: `would LIST this shoe again (${x.why})`, delete: `would ask SHEIN to DELETE this shoe (${x.why})` }[x.act];
+      if (t || x.act === 'wait' || x.act === 'delete_check') notes.set(x.skc, t || x.why);
+      if (x.act === 'delist') bump('skc_delisted'); else if (x.act === 'delete') bump('skc_delete_requested');
+      continue;
+    }
+    try {
+      if (x.act === 'delist' || x.act === 'relist') {
+        const r = await io.sheinSetShelf([{ skc: x.skc, sites: x.sites }], x.act === 'delist' ? 2 : 1);
+        if (r.failed.has(x.skc)) { bump('shelf_failed'); notes.set(x.skc, `SHEIN refused to ${x.act} this shoe: ${r.failed.get(x.skc)}`); continue; }
+        await save(x, { state: x.act === 'delist' ? 'delisted' : 'listed', sites: x.sites, why: x.why, shelfAt: true });
+        bump(x.act === 'delist' ? 'skc_delisted' : 'skc_relisted');
+        if (x.act === 'delist' && bySkc.get(x.skc)?.every((r) => r.reason === 'no_shopify' && !r.linkTo)) gone.add(x.skc);
+        notes.set(x.skc, x.act === 'delist' ? `shoe DELISTED on SHEIN — ${x.why}` : `shoe LISTED again on SHEIN — ${x.why}`);
+      } else if (x.act === 'settle') {
+        await save(x, { state: 'listed', note: x.why });
+      } else if (x.act === 'wait') {
+        notes.set(x.skc, x.why);
+      } else if (x.act === 'delete' && source === 'walk') {
+        const chk = await io.sheinCheckDeletable([x.skc]);
+        if (!chk.ok.has(x.skc)) { notes.set(x.skc, `stays delisted — SHEIN won’t delete it: ${chk.no.get(x.skc) || 'not deletable'}`); continue; }
+        const d = await io.sheinDeleteSkc(x.skc);
+        if (!d.submitted) { bump('shelf_failed'); notes.set(x.skc, 'SHEIN didn’t take the delete request'); continue; }
+        await save(x, { state: 'delete_requested', why: x.why, applyNo: d.applyNo });
+        bump('skc_delete_requested');
+        notes.set(x.skc, `asked SHEIN to DELETE this shoe (${x.why}) — SHEIN reviews it`);
+      } else if (x.act === 'delete_check' && source === 'walk') {
+        const l = (await io.sheinDeleteLogs([x.skc])).get(x.skc);
+        const status = Number(l?.status);
+        if (status === 2) { await save(x, { state: 'deleted', note: 'SHEIN deleted it' }); bump('skc_deleted'); notes.set(x.skc, 'SHEIN DELETED this shoe'); }
+        else if (status === 3) { await save(x, { state: 'delete_refused', note: l.fail_reason || 'refused' }); bump('skc_delete_refused'); notes.set(x.skc, `SHEIN refused to delete it (${l.fail_reason || 'no reason given'}) — it stays delisted`); }
+        else notes.set(x.skc, x.why);
+      }
+    } catch (e) {
+      bump('shelf_failed');
+      notes.set(x.skc, `couldn’t ${x.act} this shoe: ${String(e.message).slice(0, 200)}`);
+    }
+  }
+  return { notes, gone };
 }
 
 /* --------------------------------- the walk --------------------------------- */
@@ -315,6 +382,10 @@ export function queuePush(skus) {
 async function drain() {
   timer = null;
   if (pushing) { timer = setTimeout(drain, 1500); return; }
+  // A walk is running: hold the changes and push them once it ends. Dropping them (the walk
+  // "will reach it") lost every sale on a product the walk had already passed — until the
+  // next walk, up to 3 h later.
+  if (active) { if (queue.size) timer = setTimeout(drain, 30_000); return; }
   const skus = [...queue]; queue.clear();
   if (!skus.length) return;
   pushing = true;

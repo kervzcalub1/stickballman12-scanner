@@ -6253,3 +6253,9 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .store-audit-exports { display: inline-flex; gap: 6px; }
 .store-receipt-diffs { margin: 0; padding-left: 18px; flex-basis: 100%; }
 .store-receipt-diffs li { color: #c6871a; }
+
+/* Pre-sell rows against their order (PresellListings Stock tab, store-orders-plan §4.9). */
+.ap-po-cap { color: var(--muted); }
+.ap-po-cap.over { color: #c6871a; font-weight: 700; }
+.ap-po-risk { color: var(--muted); }
+.ap-po-risk.bad { color: #e05a5a; font-weight: 700; }

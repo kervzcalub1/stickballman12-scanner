@@ -14,7 +14,7 @@
 // Runs ONLY where PRESELL_WATCH=on — the one environment allowed to act on the shared accounts.
 import {
   presellTransitMatches, claimPresellArrival, batchKindAndCode, getPresellStock, insertPresellArrival,
-  presellRowsForPh, presellRowsWithReleased,
+  presellRowsForPh, presellRowsWithReleased, presellLinkedPoIds, presellPoStatus, setPresellAtRiskAlerted,
 } from './db.js';
 import { PLATFORM_LABEL, reconcileStock } from './presell.js';
 import { sendPresellSale } from './telegram.js';
@@ -107,4 +107,30 @@ export async function onPhSaved(pairsList, opts = {}) {
 export async function checkReleased(opts = {}) {
   if (!(opts.enabled ?? arrivalsEnabled())) return [];
   return release(await presellRowsWithReleased(), opts);
+}
+
+// ORDERS AT RISK (store-orders-plan §4.9 b). Once a PO has landed, a pair sold against it
+// that never arrived on it is an order we can't fill — say so in the pre-sell group, once
+// per change of the number (presell_stock.at_risk_alerted), and again when it clears.
+// Only the row's CURRENT PO is checked: that is the one its listings are selling against.
+export async function checkAtRisk(opts = {}) {
+  if (!(opts.enabled ?? arrivalsEnabled())) return [];
+  const status = (await presellPoStatus(await presellLinkedPoIds())).filter((x) => x.current && x.landed);
+  const changed = status.filter((x) => x.at_risk !== (x.at_risk_alerted ?? 0));
+  if (!changed.length) return [];
+  const RULE = '━━━━━━━━━━━━━━━━';
+  const lines = [{ b: '⚠️ PRE-SOLD ORDERS AT RISK — the shipment came in short' }, ''];
+  for (const x of changed) {
+    lines.push({ b: x.name || x.sku });
+    lines.push(`${x.sku} · size ${x.size} · ${x.po_code}`);
+    lines.push(x.at_risk
+      ? `Sold ${x.sold}, arrived on ${x.po_code} ${x.received} → ${pairs(x.at_risk)} at risk${x.arrived_any !== x.received ? ` (arrived on any shipment: ${x.arrived_any})` : ''}`
+      : `✅ Covered now — sold ${x.sold}, arrived ${x.received}.`);
+    lines.push(RULE);
+  }
+  lines.push('Find the pairs, or cancel / refund those orders before the ship-by date.');
+  let sent = true;
+  try { await (opts.send || sendPresellSale)(lines); } catch (e) { sent = false; console.error('[presell-arrival] at-risk message failed:', e.message); }
+  if (sent) for (const x of changed) await setPresellAtRiskAlerted(x.stock_id, x.at_risk);
+  return changed;
 }

@@ -12,7 +12,7 @@
 //   · webhooks: SHEIN's signature + AES, Shopify's HMAC — a forged one is refused.
 import { test, expect } from '@playwright/test';
 import crypto from 'node:crypto';
-import { rowsFromSpu, planProduct, ownersFrom, indexRows, unitsFromOrders, unitAction, pickLocation, toSheinTime, fromSheinTime, AI_WRITE_MIN } from '../src/lib/sheinLive.js';
+import { rowsFromSpu, planProduct, ownersFrom, indexRows, unitsFromOrders, unitAction, pickLocation, toSheinTime, fromSheinTime, AI_WRITE_MIN, shelfFrom, shelfPlan } from '../src/lib/sheinLive.js';
 
 /* ------------------------------ fixtures ------------------------------ */
 
@@ -123,8 +123,8 @@ test.describe('SHEIN live — the plan for one product', () => {
 
 /* ------------------------- one step, fake SHEIN + Shopify ------------------------- */
 
-function fakeIO({ spu, stock, shopify, inReview = false, taken = [], ordersOn = false, open = new Map() }) {
-  const calls = { stock: [], edits: [], links: [], items: [] };
+function fakeIO({ spu, stock, shopify, inReview = false, taken = [], ordersOn = false, open = new Map(), records = new Map(), deletable = true, deleteLog = null }) {
+  const calls = { stock: [], edits: [], links: [], items: [], shelf: [], deletes: [], saved: [] };
   const sheinQty = new Map(stock.map(([c, u, l = 0]) => [c, { u, l }]));
   return {
     calls,
@@ -142,6 +142,12 @@ function fakeIO({ spu, stock, shopify, inReview = false, taken = [], ordersOn = 
       sheinOpenNotDeducted: async () => open,
       readSync: async () => ({ orders: ordersOn ? 'on' : 'off' }),
       sheinAiMatch: async () => [], sheinAiConfigured: () => false,
+      sheinShelfRecords: async () => records,
+      saveSheinShelf: async (x) => { calls.saved.push(x); },
+      sheinSetShelf: async (list, state) => { calls.shelf.push(...list.map((x) => ({ ...x, state }))); return { failed: new Map() }; },
+      sheinCheckDeletable: async (skcs) => ({ ok: new Set(deletable ? skcs : []), no: new Map(deletable ? [] : skcs.map((k) => [k, 'quota used up'])) }),
+      sheinDeleteSkc: async (skc) => { calls.deletes.push(skc); return { submitted: true, applyNo: 'APP1' }; },
+      sheinDeleteLogs: async (skcs) => new Map(deleteLog ? skcs.map((k) => [k, deleteLog]) : []),
     },
   };
 }
@@ -458,5 +464,97 @@ test.describe('SHEIN live — the page', () => {
     expect(asked).toEqual(['9']);
     expect(text.trim().split('\n')).toHaveLength(3006);   // header + every row, not the 3,000 on screen
     expect(text).toContain('Shoe 3005');
+  });
+});
+
+/* ------------------------- delist / re-list / delete ------------------------- */
+test.describe('SHEIN live — whole shoes off the shelf', () => {
+  const shelfOn = (on) => ({ shelfStatusInfoList: [{ siteAbbr: 'shein-us', shelfStatus: on ? 1 : 0 }] });
+  const SPUS = (on, skus) => ({ ...SPU('spuX', skus), skcInfoList: [{ skcName: 'skcX', ...shelfOn(on), skuInfoList: skus }] });
+  const row = (size, newQty, reason = 'ok', extra = {}) => ({ skc: 'skcX', size, newQty, reason, ...extra });
+  const shelf = (on) => new Map([['skcX', on ? { on: ['shein-us'], off: [] } : { on: [], off: ['shein-us'] }]]);
+
+  test('the owner’s example: sizes 8/9/10 = SKUs 123/456/789; one size at 0 keeps the shoe up, all three at 0 delists it', () => {
+    expect(shelfPlan({ rows: [row('8', 0), row('9', 1), row('10', 1)], shelf: shelf(true) })).toEqual([]);
+    expect(shelfPlan({ rows: [row('8', 0), row('9', 0), row('10', 0)], shelf: shelf(true) }))
+      .toEqual([{ skc: 'skcX', act: 'delist', sites: ['shein-us'], why: 'every size is at 0' }]);
+  });
+
+  test('delete only when every seller SKU is gone from Shopify AND it is already off the shelf; a 0-stock shoe still on Shopify is never deleted', () => {
+    const gone = [row('8', 0, 'no_shopify'), row('9', 0, 'no_shopify')];
+    expect(shelfPlan({ rows: gone, shelf: shelf(true) })[0]).toMatchObject({ act: 'delist', why: 'every size’s seller SKU is gone from Shopify' });
+    expect(shelfPlan({ rows: gone, shelf: shelf(false) })[0]).toMatchObject({ act: 'delete' });
+    expect(shelfPlan({ rows: [row('8', 0, 'no_shopify'), row('9', 0)], shelf: shelf(false) })).toEqual([]);     // one size still on Shopify
+    expect(shelfPlan({ rows: [row('8', 0, 'no_shopify', { linkTo: { sku: 'N8' } })], shelf: shelf(false) })).toEqual([]);   // a relink is coming
+    const rec = (state) => new Map([['skcX', { state }]]);
+    expect(shelfPlan({ rows: gone, shelf: shelf(false), records: rec('delete_requested') })[0]).toMatchObject({ act: 'delete_check' });
+    expect(shelfPlan({ rows: gone, shelf: shelf(false), records: rec('delete_refused') })).toEqual([]);
+    expect(shelfPlan({ rows: gone, shelf: shelf(false), records: rec('deleted') })).toEqual([]);
+  });
+
+  test('re-list only what WE delisted, and not within SHEIN’s 20-minute gap', () => {
+    const back = [row('8', 0), row('9', 2)];
+    expect(shelfPlan({ rows: back, shelf: shelf(false) })).toEqual([]);                                      // a person delisted it: leave it
+    const now = Date.parse('2026-10-23T15:00:00Z');
+    const ours = (mins) => new Map([['skcX', { state: 'delisted', sites: ['shein-us'], shelf_at: new Date(now - mins * 60_000).toISOString() }]]);
+    expect(shelfPlan({ rows: back, shelf: shelf(false), records: ours(30), now })[0]).toMatchObject({ act: 'relist', sites: ['shein-us'] });
+    expect(shelfPlan({ rows: back, shelf: shelf(false), records: ours(5), now })[0]).toMatchObject({ act: 'wait' });
+    expect(shelfPlan({ rows: back, shelf: shelf(true), records: ours(30), now })[0]).toMatchObject({ act: 'settle' });   // someone listed it by hand
+    expect(shelfFrom(SPUS(true, []))).toEqual(new Map([['skcX', { on: ['shein-us'], off: [] }]]));
+  });
+
+  test('a walk: all sizes 0 on Shopify → SHEIN stock 0 AND the shoe delisted, remembered as ours', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const spu = SPUS(true, [SKU('s7', 'A7', 'US7'), SKU('s8', 'A8', 'US8')]);
+    const f = fakeIO({ spu, stock: [['s7', 2], ['s8', 1]], shopify: [V('A7', '7', 0), V('A8', '8', 0)] });
+    f.io.readBackWaits = [0, 0, 0];
+    const r = await stepProduct('spuX', ctxFor(f.io, 'stock', rowsFromSpu(spu, STOCK([['s7', 2], ['s8', 1]]), {})));
+    expect(f.calls.shelf).toEqual([{ skc: 'skcX', sites: ['shein-us'], state: 2 }]);
+    expect(f.calls.saved[0]).toMatchObject({ skc: 'skcX', state: 'delisted', sites: ['shein-us'], shelfAt: true });
+    expect(r.counts.skc_delisted).toBe(1);
+    expect(f.calls.items[0].action).toContain('shoe DELISTED on SHEIN');
+  });
+
+  test('a walk: every seller SKU gone from Shopify and off the shelf → delete requested; its sizes no longer “need a person”', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const spu = SPUS(false, [SKU('s7', 'DEAD7', 'US7'), SKU('s8', 'DEAD8', 'US8')]);
+    const scan = rowsFromSpu(spu, STOCK([['s7', 0], ['s8', 0]]), {});
+    const f = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: [V('A9', '9', 3)] });
+    const r = await stepProduct('spuX', ctxFor(f.io, 'stock', scan));
+    expect(f.calls.deletes).toEqual(['skcX']);
+    expect(f.calls.saved[0]).toMatchObject({ state: 'delete_requested', applyNo: 'APP1' });
+    expect(f.calls.items.every((i) => i.reason === 'gone')).toBe(true);
+    expect(r.counts).toMatchObject({ needs_person: 0, skc_delete_requested: 1 });
+    // A single Shopify push never deletes; SHEIN's quota/permission "no" leaves it delisted.
+    const p = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: [V('A9', '9', 3)] });
+    await stepProduct('spuX', { ...ctxFor(p.io, 'stock', scan), source: 'push' });
+    expect(p.calls.deletes).toEqual([]);
+    const q = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: [V('A9', '9', 3)], deletable: false });
+    await stepProduct('spuX', ctxFor(q.io, 'stock', scan));
+    expect(q.calls.deletes).toEqual([]);
+    expect(q.calls.items[0].action).toContain('SHEIN won’t delete it: quota used up');
+  });
+
+  test('SHEIN’s review answer is recorded: deleted, or refused (it stays delisted, never asked again)', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const spu = SPUS(false, [SKU('s7', 'DEAD7', 'US7')]);
+    const scan = rowsFromSpu(spu, STOCK([['s7', 0]]), {});
+    const records = new Map([['skcX', { state: 'delete_requested' }]]);
+    const ok = fakeIO({ spu, stock: [['s7', 0]], shopify: [], records, deleteLog: { status: 2 } });
+    expect((await stepProduct('spuX', ctxFor(ok.io, 'stock', scan))).counts.skc_deleted).toBe(1);
+    expect(ok.calls.saved[0]).toMatchObject({ state: 'deleted' });
+    const no = fakeIO({ spu, stock: [['s7', 0]], shopify: [], records, deleteLog: { status: 3, fail_reason: 'order in the last year' } });
+    await stepProduct('spuX', ctxFor(no.io, 'stock', scan));
+    expect(no.calls.saved[0]).toMatchObject({ state: 'delete_refused', note: 'order in the last year' });
+  });
+
+  test('dry run: says what it would delist / delete, touches nothing', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const spu = SPUS(true, [SKU('s7', 'A7', 'US7')]);
+    const f = fakeIO({ spu, stock: [['s7', 2]], shopify: [V('A7', '7', 0)] });
+    const r = await stepProduct('spuX', ctxFor(f.io, 'dry', rowsFromSpu(spu, STOCK([['s7', 2]]), {})));
+    expect(f.calls.shelf).toEqual([]); expect(f.calls.saved).toEqual([]);
+    expect(r.counts.skc_delisted).toBe(1);
+    expect(f.calls.items[0].action).toContain('would DELIST this shoe');
   });
 });

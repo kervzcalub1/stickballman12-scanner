@@ -15,6 +15,7 @@ Menu: `GET /api/api/apiDoc/queryAllApiDocCategoryList?categoryType=1`.
 | Our warehouse code | `msc/warehouse/list` | required on writes if >1 warehouse; only type 1 (merchant) is writable |
 | Price | `product/price/save` | per sku per sub-site (`shein-us`); **omit specialPrice → it's set to 0**; never 0; status 2 = in review → wait for webhook before the next change |
 | List / delist | `goods/modify-skc-shelf` | per SKC per site |
+| Delete a shoe | `goods/check-deletable` → `DELETE goods/delete/{skcName}` → `goods-delete-logs/search` | per SKC; must be off the shelf on every site; ≤500/day; SHEIN reviews (refuses with an order in the last year); irreversible; frees the seller SKUs. Docs 3001904–3001906 (not copied below) |
 | Orders | `order/order-list` → `order/order-detail` | list: ≤48 h window, **UTC+8 times**, pageSize ≤30; detail: ≤30 orders, `orderGoodsInfoList[]` = ONE row per unit with `sellerSku` (the size sold — see parent-SKU trap); only `stockMode=3` is ours |
 | Unshipped | `newGoodsStatus` 1 待处理 / 2 待发货 / 7 待揽收 | 4 shipped, 5 signed, 6 refunded, 8 lost, 9 rejected |
 | Returns | `return-order/list`, `/details` | |

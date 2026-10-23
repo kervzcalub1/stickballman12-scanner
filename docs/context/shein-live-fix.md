@@ -49,7 +49,9 @@ Admin turns it on → we register Shopify's `INVENTORY_LEVELS_UPDATE` webhook to
 `<APP_URL or host>/api/shopify/webhook` (HMAC over the RAW body with `SHOPIFY_SECRET_KEY`;
 `server.mjs` keeps `req.rawBody` for that path). The SKU is queued (1.5 s coalesce) and every
 SHEIN product carrying it (from the LAST WALK's log, so one walk must have run) gets the
-per-product step, **stock only**. Backstop: when push is on, a stock-only walk every 3 h.
+per-product step, **stock only**. While a walk is running, changes are HELD and pushed
+30 s after it ends (they used to be dropped, which left a product the walk had passed stale
+for up to 3 h). Backstop: when push is on, a stock-only walk every 3 h.
 No echo loop: our own Shopify deduction changes nothing on SHEIN (see the math below).
 
 ## 3. Fix every listing (`api/_lib/shein-live.js`, `src/lib/sheinLive.js`)
@@ -85,6 +87,27 @@ A size losing its SKU to a swap gets `<sku>-off` (parked, 0, saved as `delist`).
 is saved to `shein_links`, so the size stays 0 until SHEIN shows the new SKU, then sells.
 A SHEIN size itself can't be changed by API (sale attributes are fixed) — wrong sizes are
 relinked or zeroed; **sizes to add** stay a person's job (new SKU via partialEdit, untested).
+
+## 4. Delist / re-list / delete whole shoes (`stepShelf` in `shein-live.js`, rules `shelfPlan`)
+One SHEIN **SKC** = one shoe (a colour, all its sizes). After each product's stock step, per SKC
+(the owner's rule, 2026-10-23):
+- **Every size at 0** (nothing Shopify can sell for it: 0 units, dead or wrong links) and on the
+  shelf → **delist** it on the sites it's on (`goods/modify-skc-shelf`, state 2). Reversible.
+  One size with stock keeps the whole shoe up.
+- **Stock back** on a shoe **we** delisted → **list it again** on the same sites. A shoe a
+  person delisted is never re-listed by us; one listed again by hand is just noted (`listed`).
+- **Every size's seller SKU gone from Shopify** (all `no_shopify`, no relink found) and already
+  off the shelf everywhere → **ask SHEIN to delete it**: `goods/check-deletable` (seller allowed,
+  ≤500 SKCs a day) → `DELETE goods/delete/{skc}` (signed path includes the SKC) → SHEIN
+  reviews; `goods-delete-logs/search` on later walks reads the answer. SHEIN refuses one with
+  an order in the last year → `delete_refused`, stays delisted, never asked again. A shoe at 0
+  that still exists on Shopify is **never deleted** (it may be restocked).
+- SHEIN allows one shelf change per SKC + site per **20 minutes** (`SHELF_GAP_MS`) → `wait`.
+- Delete runs on a walk only; a single Shopify push (stock mode) can delist / re-list.
+- Dry run says what it would do. Table **`shein_skc_shelf`** (skc, state, sites, shelf_at,
+  apply_no). The sizes of a gone shoe that is off the shelf get reason **`gone`** ("shoe gone")
+  and no longer count as "need a person". Run tiles: shoes delisted / listed again / sent to
+  delete / deleted / delete refused / didn't go through.
 
 ## Endpoint / page
 `GET/POST /api/shein/live` (PH + admin; the two sync switches are admin-only). Panel

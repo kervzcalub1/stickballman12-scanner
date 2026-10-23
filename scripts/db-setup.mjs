@@ -2620,6 +2620,22 @@ await sql(`
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_live_items_run ON shein_live_items (run_id, id)`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_live_items_at ON shein_live_items (at DESC)`);
+// SHEIN products (one SKC = one shoe, all sizes) the walk took off the shelf / asked SHEIN to
+// delete (docs/context/shein-live-fix.md → "Delist / delete"). We re-list ONLY what we delisted.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_skc_shelf (
+    skc             TEXT PRIMARY KEY,
+    spu             TEXT,
+    name            TEXT,
+    state           TEXT NOT NULL,       -- delisted | listed | delete_requested | deleted | delete_refused
+    sites           TEXT[] NOT NULL DEFAULT '{}',
+    why             TEXT,
+    shelf_at        TIMESTAMPTZ,         -- our last list/delist (SHEIN: 20 min between changes)
+    apply_no        TEXT,                -- SHEIN's delete application
+    note            TEXT,
+    run_id          BIGINT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
 
 // ── Order cancellations (docs/context/cancellations.md) ─────────────────────────────
 // The warehouse sends the bot a picture of an order to cancel; the AI reads the platform +

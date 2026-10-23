@@ -28,7 +28,9 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
   const [msg, setMsg] = useState('');
   const [mode, setMode] = useState('dry');
   const [ai, setAi] = useState(true);
-  const [paused4seller, setPaused4seller] = useState(false);
+  // Remembered in this browser — it reset on every reload and greyed out "Turn on Shopify → SHEIN".
+  const [paused4seller, setPaused4sellerState] = useState(() => { try { return localStorage.getItem('shein.4sellerPaused') === '1'; } catch { return false; } });
+  const setPaused4seller = (v) => { setPaused4sellerState(v); try { localStorage.setItem('shein.4sellerPaused', v ? '1' : '0'); } catch { /* private mode */ } };
   const [openAtStart, setOpenAtStart] = useState(true);
   const [askOrders, setAskOrders] = useState(false);
   const [view, setView] = useState('changed');
@@ -65,7 +67,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const keep = (it) => (view === 'all' ? true
       : view === 'changed' ? it.result === 'changed' || it.wrote === 'dry'
-        : view === 'person' ? it.reason !== 'ok' && !it.link_to && it.result !== 'changed'
+        : view === 'person' ? it.reason !== 'ok' && it.reason !== 'gone' && !it.link_to && it.result !== 'changed'
           : view === 'skipped' ? it.result === 'skipped'
             : it.result === 'failed' || it.result === 'mismatch');
     return all.filter(keep).filter((it) => !words.length || words.every((w) => [it.product_name, it.seller_sku, it.shein_size, it.shopify_size, it.spu, it.shein_sku, it.action].join(' ').toLowerCase().includes(w)));
@@ -193,6 +195,12 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
               <div className="shc-tile warn"><b>{fmt(c.needs_person)}</b><span>need a person</span></div>
               {(Number(c.errors || 0) + Number(c.products_failed || 0)) > 0 && <div className="shc-tile bad"><b>{fmt(Number(c.errors || 0) + Number(c.products_failed || 0))}</b><span>refused by SHEIN</span></div>}
               {Number(c.mismatch) > 0 && <div className="shc-tile bad"><b>{fmt(c.mismatch)}</b><span>SHEIN still shows the old stock</span></div>}
+              {Number(c.skc_delisted) > 0 && <div className="shc-tile warn"><b>{fmt(c.skc_delisted)}</b><span>{run.mode === 'dry' ? 'shoes to delist' : 'shoes delisted'} (every size 0)</span></div>}
+              {Number(c.skc_relisted) > 0 && <div className="shc-tile ok"><b>{fmt(c.skc_relisted)}</b><span>shoes listed again (stock back)</span></div>}
+              {Number(c.skc_delete_requested) > 0 && <div className="shc-tile warn"><b>{fmt(c.skc_delete_requested)}</b><span>{run.mode === 'dry' ? 'shoes to delete' : 'shoes sent to SHEIN to delete'} (gone from Shopify)</span></div>}
+              {Number(c.skc_deleted) > 0 && <div className="shc-tile info"><b>{fmt(c.skc_deleted)}</b><span>shoes deleted by SHEIN</span></div>}
+              {Number(c.skc_delete_refused) > 0 && <div className="shc-tile warn"><b>{fmt(c.skc_delete_refused)}</b><span>delete refused by SHEIN (stay delisted)</span></div>}
+              {Number(c.shelf_failed) > 0 && <div className="shc-tile bad"><b>{fmt(c.shelf_failed)}</b><span>delist / delete didn’t go through</span></div>}
             </div>
           </>
         )}
@@ -220,7 +228,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
                     <td className="num">{it.shopify_qty == null ? '—' : fmt(it.shopify_qty)}</td>
                     <td className="num">{fmt(it.held)}</td>
                     <td className="num">{fmt(it.before_qty)} → <b>{fmt(it.target_qty)}</b>{it.after_qty != null && it.after_qty !== it.target_qty && <div className="shc-bad xs">shows {fmt(it.after_qty)}</div>}</td>
-                    <td className="xs"><span className={`ebo-chip ${tone(it)}`}>{it.result === 'ok' && it.reason !== 'ok' ? 'needs a person' : it.result}</span> {it.action}{it.error && <div className="shc-bad">{it.error}</div>}</td>
+                    <td className="xs"><span className={`ebo-chip ${tone(it)}`}>{it.result === 'ok' && it.reason === 'gone' ? 'shoe gone' : it.result === 'ok' && it.reason !== 'ok' ? 'needs a person' : it.result}</span> {it.action}{it.error && <div className="shc-bad">{it.error}</div>}</td>
                   </tr>
                 ))}
               </tbody>

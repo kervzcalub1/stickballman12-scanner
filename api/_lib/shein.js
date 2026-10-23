@@ -109,17 +109,18 @@ export async function sheinDisconnect(by) { await setSetting(AUTH_KEY, '', by); 
 /* ------------------------------- calls ------------------------------- */
 
 // One signed call to the seller's account. Returns SHEIN's `info` (or the whole body).
-export async function sheinCall(path, body = {}, { method = 'POST' } = {}) {
+// `query` goes on the URL only — SHEIN signs the path without it.
+export async function sheinCall(path, body = {}, { method = 'POST', query = '' } = {}) {
   const auth = await readJson(AUTH_KEY);
   if (!auth?.openKeyId) throw Object.assign(new Error('SHEIN is not connected yet.'), { notConnected: true });
   const keyId = decryptSecret(auth.openKeyId);
   const secret = decryptSecret(auth.secretKey);
   const ts = String(Date.now());
-  const r = await fetch(`${apiHost()}${path}`, {
+  const r = await fetch(`${apiHost()}${path}${query ? `?${query}` : ''}`, {
     method,
     headers: { 'Content-Type': 'application/json;charset=UTF-8', 'x-lt-appid': appId(), 'x-lt-openKeyId': keyId, 'x-lt-timestamp': ts,
       'x-lt-signature': sheinSignature(keyId, secret, path, ts), language: 'en' },
-    body: method === 'GET' ? undefined : JSON.stringify(body),
+    body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   });
   const j = await r.json().catch(() => ({}));
@@ -211,6 +212,48 @@ export async function sheinSetSellerSkus(spuName, edits) {
   const info = await sheinCall('/open-api/goods/product/partialEdit', { spu_name: spuName, skc_list: [...bySkc].map(([skc_name, sku_list]) => ({ skc_name, sku_list })) });
   const messages = (info?.pre_valid_result || []).flatMap((x) => x.messages || []);
   return { ok: info?.success !== false && !messages.length, version: info?.version || null, messages };
+}
+
+// Shelf: list (1) / delist (2) SKCs per site, ≤100 a call. SHEIN refuses a second change to
+// the same SKC + site within 20 minutes, and one locked by a promotion. Returns per-SKC failures.
+export async function sheinSetShelf(list, state) {
+  const failed = new Map();
+  for (let i = 0; i < list.length; i += 100) {
+    const info = await sheinCall('/open-api/goods/modify-skc-shelf', {
+      skc_site_info_list: list.slice(i, i + 100).map((x) => ({ skc_name: x.skc, site_list: x.sites, shelf_state: state })),
+    });
+    for (const f of [].concat(info?.failure_results || [])) failed.set(String(f.identity), f.msg || f.code || 'refused');
+  }
+  return { failed };
+}
+// Delete, step 1: may these SKCs be deleted (seller allowed, daily quota of 500 left,
+// approved and not deleted)? Off-shelf + no orders in a year are only judged at review.
+export async function sheinCheckDeletable(skcs) {
+  const ok = new Set(); const no = new Map();
+  for (let i = 0; i < skcs.length; i += 50) {
+    const info = await sheinCall('/open-api/goods/check-deletable', { skc_name_list: skcs.slice(i, i + 50) });
+    for (const x of [].concat(info?.deletable_list || [])) ok.add(String(x));
+    for (const x of [].concat(info?.undeletable_list || [])) no.set(String(x.skc_name), x.reason || x.code || 'not deletable');
+  }
+  return { ok, no };
+}
+// Delete, step 2: ask SHEIN to delete ONE SKC (it reviews; can't be undone). The signed path
+// includes the SKC. Returns the application number.
+export async function sheinDeleteSkc(skc) {
+  const info = await sheinCall(`/open-api/goods/delete/${encodeURIComponent(skc)}`, {}, { method: 'DELETE' });
+  return { submitted: info?.deleted !== false, applyNo: info?.apply_no || null };
+}
+// Delete, step 3: SHEIN's review of our requests (≤10 SKCs). status 0/1 pending · 2 deleted · 3 refused.
+export async function sheinDeleteLogs(skcs) {
+  const out = new Map();
+  for (let i = 0; i < skcs.length; i += 10) {
+    const info = await sheinCall('/open-api/goods-delete-logs/search', { skc_name_list: skcs.slice(i, i + 10) }, { query: 'page_num=1&page_size=100' });
+    for (const x of listOf(info, 'data')) {
+      const k = String(x.skc_name); const cur = out.get(k);
+      if (!cur || String(x.submit_time || '') > String(cur.submit_time || '')) out.set(k, x);   // the latest request
+    }
+  }
+  return out;
 }
 
 /* ------------------------------- webhooks ------------------------------- */

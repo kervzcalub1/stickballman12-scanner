@@ -9874,6 +9874,21 @@ export async function saveSheinLinks(links, by) {
       seller_sku_was = EXCLUDED.seller_sku_was, link_sku = EXCLUDED.link_sku, decision = EXCLUDED.decision,
       source = EXCLUDED.source, decided_by = EXCLUDED.decided_by, decided_at = now()`;
 }
+// shein_skc_shelf: what the walk delisted / asked SHEIN to delete, by SKC.
+export async function sheinShelfRecords(skcs) {
+  if (!skcs.length) return new Map();
+  const rows = await db()`SELECT * FROM shein_skc_shelf WHERE skc = ANY(${skcs}::text[])`;
+  return new Map(rows.map((r) => [r.skc, r]));
+}
+export async function saveSheinShelf({ skc, spu = null, name = null, state, sites = null, why = null, shelfAt = false, applyNo = null, note = null, runId = null }) {
+  await db()`
+    INSERT INTO shein_skc_shelf (skc, spu, name, state, sites, why, shelf_at, apply_no, note, run_id, updated_at)
+    VALUES (${skc}, ${spu}, ${name}, ${state}, COALESCE(${sites}::text[], '{}'), ${why}, CASE WHEN ${shelfAt} THEN now() END, ${applyNo}, ${note}, ${runId}, now())
+    ON CONFLICT (skc) DO UPDATE SET spu = COALESCE(EXCLUDED.spu, shein_skc_shelf.spu), name = COALESCE(EXCLUDED.name, shein_skc_shelf.name),
+      state = EXCLUDED.state, sites = CASE WHEN ${sites}::text[] IS NULL THEN shein_skc_shelf.sites ELSE EXCLUDED.sites END,
+      why = COALESCE(EXCLUDED.why, shein_skc_shelf.why), shelf_at = CASE WHEN ${shelfAt} THEN now() ELSE shein_skc_shelf.shelf_at END,
+      apply_no = COALESCE(EXCLUDED.apply_no, shein_skc_shelf.apply_no), note = EXCLUDED.note, run_id = COALESCE(EXCLUDED.run_id, shein_skc_shelf.run_id), updated_at = now()`;
+}
 export async function clearSheinLinks(ids) {
   if (!ids.length) return;
   await db()`DELETE FROM shein_links WHERE shein_sku = ANY(${ids}::text[])`;

@@ -4705,6 +4705,12 @@ body.keypad-open .keypad-fab, body.keypad-open .advisor-fab { display: none; }
 
 .bc-add-find { display: flex; gap: 8px; flex-wrap: wrap; }
 .bc-add-find .input { flex: 1 1 200px; min-width: 0; }
+/* Paste what the supplier sent → fills the form; the review note sits over the sizes. */
+.bc-paste { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.bc-paste textarea.input { width: 100%; resize: vertical; font-family: inherit; }
+.bc-paste-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bc-paste-review { padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(198,135,26,0.42);
+  background: rgba(198,135,26,0.10); line-height: 1.45; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
 .bc-add-body { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 .bc-add-shoe { font-size: 14px; }
 .bc-sizes { display: flex; flex-wrap: wrap; gap: 6px; }

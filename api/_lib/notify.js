@@ -17,12 +17,12 @@
 // seconds later by `priceInBackground`, and a card that goes out first says "not priced"
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
-import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent } from './db.js';
+import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage } from './db.js';
 import { alertUsers, at } from './alerts.js';
 import { fundingTarget } from './buycart.js';
-import { stockForPair, stockSentence } from './buyingStock.js';
+import { stockForPair, stockForSizes, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
-import { telegramConfigured, sendApprovalCard, sendNote, cardKeyboard } from './telegram.js';
+import { telegramConfigured, telegramChatId, sendApprovalCard, sendNote, cardKeyboard, groupCardKeyboard } from './telegram.js';
 import { cardsIssuable } from '../../src/lib/buycartRules.js';
 
 // THE TEST SUITE MUST NOT POST TO TELEGRAM.
@@ -302,6 +302,110 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
   } catch (e) {
     // Swallowed on purpose. See the header: the buyer must never pay for this.
     console.error(`[notify] could not send the card (${direct ? 'Telegram' : 'Make'}):`, e.message);
+    return { sent: false, reason: e.message };
+  }
+}
+
+/**
+ * SEVERAL SIZES OF ONE SHOE → ONE CARD (2026-10-24, docs/context/buy-cart.md → "One card
+ * per shoe"). A buyer asking about 8–12 put nine cards in the group, one per size, each
+ * with its own photo and buttons; the group asked for one, answered by replying to it:
+ *
+ *   11 x 3
+ *   10.5 x 4
+ *
+ * The lines are still one per size underneath — funding, receipts and the pack list read
+ * them exactly as before. Only the card is shared. Each size keeps a short line with its
+ * own buy call, because the market is per size and the call is what the approver decides on.
+ *
+ * Make (no TELEGRAM_BOT_TOKEN) has no reply handler, so there it is still a card per size.
+ *
+ * @param {number} cartId
+ * @param {number[]} lineIds  every size of one SKU, from one "Ask about N sizes"
+ * @param {{ photoFileId?: number|null, photoCount?: number }} [extra]
+ */
+export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
+  if (lineIds.length < 2 || !telegramConfigured()) {
+    for (const id of lineIds) await notifyLineAsked(cartId, id, extra);
+    return { sent: true, perLine: true };
+  }
+  try {
+    const cart = await getBuyCart(cartId);
+    const lines = (await Promise.all(lineIds.map((id) => getBuyCartLine(cartId, id)))).filter(Boolean);
+    if (!cart || !lines.length) {
+      console.warn(`[notify] cart ${cartId} lines ${lineIds.join(',')} — gone before the card could be built`);
+      return { sent: false, reason: 'cart or lines are gone' };
+    }
+    const first = lines[0];
+    let stock = null;
+    try { stock = await stockForSizes({ sku: first.sku, sizes: lines.map((l) => l.size) }); } catch { /* noted below */ }
+
+    // The price most of the run is ticketed at goes in the header; a size that differs says
+    // its own on its row — the same "one price, with exceptions" the form uses.
+    const tally = new Map();
+    for (const l of lines) tally.set(money(l.shelf_price), (tally.get(money(l.shelf_price)) || 0) + 1);
+    const shelf = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const headLine = lines.find((l) => money(l.shelf_price) === shelf);
+
+    const row = (l) => {
+      const bits = [l.size || '—'];
+      bits.push(l.available_qty != null ? `${l.available_qty} in store` : 'Did not count');
+      if (money(l.shelf_price) !== shelf) bits.push(`shelf ${dollars(l.shelf_price)}`);
+      // Never an empty verdict: "we didn't look" and "we looked and it's bad" differ.
+      if (l.verdict) {
+        bits.push(`${String(l.verdict).toUpperCase()}${money(l.profit) != null ? ` ${dollars(l.profit)}` : ''}`);
+        if (money(l.roi) != null) bits.push(`${money(l.roi).toFixed(1)}% ROI`);
+      } else bits.push('not priced');
+      return bits.join(' · ');
+    };
+
+    let inventory = 'Stock could not be read.';
+    if (stock) {
+      const all = [...stock.values()];
+      const held = lines.map((l) => [l.size, stock.get(l.size)?.we_hold || 0]).filter(([, n]) => n > 0);
+      const onTheseSizes = all.reduce((n, s) => n + (s?.ours?.on_hand || 0), 0);
+      const other = Math.max(0, (all[0]?.style_on_hand || 0) - onTheseSizes);
+      const recordsOnly = all.find((s) => s?.basis === 'our_records_only');
+      inventory = `${held.length ? `On hand: ${held.map(([sz, n]) => `${sz} ×${n}`).join(', ')}` : 'None of these sizes on hand'}`
+        + `${other > 0 ? ` (${other} in other sizes)` : ''}.`
+        + `${recordsOnly ? ` Our own records only (${recordsOnly.shopify.unavailable}).` : ''}`;
+    }
+
+    const caption = [
+      ...(String(first.name || '').trim() ? [String(first.name).trim()] : []),
+      first.sku,
+      `Shelf ${dollars(shelf)}${money(headLine?.final_cost) != null ? ` · costs us ${dollars(headLine.final_cost)}/unit` : ''}`,
+      '',
+      `Sizes (${lines.length}):`,
+      ...lines.map(row),
+      '',
+      'Inventory:',
+      inventory,
+      '',
+      cart.cart_code,
+      `Supplier: ${cart.buyer_name}`,
+      ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
+      '',
+      'To approve, REPLY to this card — one size per line:',
+      '9 x 5',
+      '10.5 x 4',
+      'Sizes you leave out are turned down.',
+    ].join('\n');
+
+    const card = await createTelegramGroupCard({
+      cartId, sku: first.sku, lineIds: lines.map((l) => Number(l.id)), chatId: telegramChatId(), env: notifyEnv(),
+    });
+    const msg = await sendApprovalCard({
+      caption,
+      keyboard: groupCardKeyboard(card.id, notifyEnv()),
+      photoFileId: extra.photoFileId ?? null,
+    });
+    if (msg?.message_id) await setTelegramGroupCardMessage(card.id, msg.message_id);
+    console.log(`[notify] ${cart.cart_code} ${first.sku} × ${lines.length} sizes → Telegram message ${msg?.message_id} (one card)`
+      + `${msg?.photo ? ' (with photo)' : ' (no photo)'}`);
+    return { sent: true };
+  } catch (e) {
+    console.error('[notify] could not send the one-card-per-shoe card:', e.message);
     return { sent: false, reason: e.message };
   }
 }

@@ -97,6 +97,13 @@ export function cardKeyboard(cartId, lineId, envName) {
   };
 }
 
+// The one-card-per-shoe card is answered by a REPLY ("9 x 5" lines), so its only button is
+// the one thing a reply can't say briefly: none of them. `grp…` also marks the card as a
+// group card to the webhook, and carries the env like every other button.
+export function groupCardKeyboard(cardId, envName) {
+  return { inline_keyboard: [[{ text: '✕ Turn them all down', callback_data: `grpreject:${cardId}:${envName}` }]] };
+}
+
 // Telegram's own photo id per shoe photo, so the second size of a burst sends the picture
 // by reference instead of uploading it again (Make kept this in a data store). In memory:
 // losing it on a restart costs one re-upload, nothing more.

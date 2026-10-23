@@ -122,6 +122,28 @@ await sql(`
     last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+// ONE card for several sizes of one shoe (2026-10-24, docs/context/buy-cart.md → "One card
+// per shoe"). A buyer asking about 8–12 used to put nine cards in the group; now it is one,
+// answered by REPLYING to it with "size x qty" lines. This maps the card back to the lines
+// it asks about — a reply carries only the message it answers, nothing of ours.
+//   line_ids         the sizes on the card, as "12,13,14" (the shim takes no arrays)
+//   message_id       set once Telegram has the card; the reply's reply_to_message.message_id
+//   last_reply_id    the reply already acted on — Telegram redelivers, the second is a no-op
+await sql(`
+  CREATE TABLE IF NOT EXISTS telegram_group_cards (
+    id              BIGSERIAL PRIMARY KEY,
+    cart_id         BIGINT NOT NULL,
+    sku             TEXT,
+    line_ids        TEXT NOT NULL,
+    chat_id         BIGINT NOT NULL,
+    message_id      BIGINT,
+    env             TEXT NOT NULL DEFAULT 'prod',
+    last_reply_id   BIGINT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS telegram_group_cards_msg
+             ON telegram_group_cards (chat_id, message_id) WHERE message_id IS NOT NULL`);
 // "More…" on a Telegram approval card asks the tapper "How many pairs?" and waits for a
 // number typed back (2026-09-29, replacing the Make data store that did this). One open
 // question per Telegram account — a second "More…" replaces the first — answered only in

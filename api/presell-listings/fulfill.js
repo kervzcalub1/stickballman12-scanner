@@ -5,7 +5,7 @@
 // label each platform made at the sale, tracking and the ship-by deadline — the pick list.
 // The sync only READS the marketplaces, so "Check now" works on any environment.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, listPresellFulfill } from '../_lib/db.js';
+import { dbConfigured, listPresellFulfill, presellBoxesFor } from '../_lib/db.js';
 import { syncFulfillment, fulfillLastPass } from '../_lib/presell-fulfill.js';
 import { arrivalsEnabled } from '../_lib/presell-arrival.js';
 
@@ -31,6 +31,15 @@ export default async function handler(req, res) {
     const view = VIEWS.has(p.get('view')) ? p.get('view') : 'to_ship';
     const q = String(p.get('q') || '').trim().slice(0, 80) || null;
     const out = await listPresellFulfill({ view, q, limit: view === 'to_ship' ? 2000 : 500 });
+    // The boxes each row's pairs are in, so an order waiting on the truck can name its box
+    // (docs/presell-box-tracking-plan.md). Best-effort: the pick list works without it.
+    if (view === 'to_ship' && out.rows?.length) {
+      try {
+        const stock = [...new Map(out.rows.filter((x) => x.stock_id != null).map((x) => [Number(x.stock_id), { id: x.stock_id, sku: x.sku, size: x.size }])).values()];
+        const boxes = await presellBoxesFor(stock);
+        out.rows = out.rows.map((x) => ({ ...x, boxes: boxes.get(Number(x.stock_id)) || [] }));
+      } catch (e) { console.error('[presell-listings/fulfill] boxes:', e.message); }
+    }
     return send(res, 200, { ok: true, ...out, lastPass: fulfillLastPass(), watching: arrivalsEnabled() });
   } catch (e) {
     console.error('[presell-listings/fulfill]', e.message);

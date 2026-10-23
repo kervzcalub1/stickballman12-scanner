@@ -4,13 +4,20 @@
 //            { stockId,   action: 'list', platform, price, activate }         → list up to the pairs left
 //   Details: { stockIds:[…], action: 'details', … }  → cost / supplier / PO / tracking / in transit
 //            (only the keys sent change; see detailsAction)
+//   Boxes (docs/presell-box-tracking-plan.md):
+//            { action: 'boxContents', poId, boxId, sku, lines: [{ size, qty|null }] } → what one box holds of a SKU
+//            { action: 'boxUnknown', stockIds, boxIds }   → split unknown: these sizes are somewhere in these boxes
+//            { action: 'makePo', stockIds, supplierName, trackingNumbers } → a PO (our labels) for rows on no PO
 // Pre-sell Listings (docs/context/presell-listings.md). The row changes only after the
 // platform said yes; a StockX change is PENDING until the watcher confirms it.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import {
   dbConfigured, getPresellListing, getPresellStock, setPresellStockQty, upsertPresellStock, updatePresellListing, movePresellListing,
   updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock, presellPoCap, bumpPresellStockPo,
+  getPoBoxBrief, setPresellBoxLines, addPresellBoxUnknown, presellPoBoxGrid, createPo, linkPresellToNewPo, poCodesByTracking,
 } from '../_lib/db.js';
+import { registerTracking } from '../_lib/tracking.js';
+import { boxSummary } from '../../src/lib/presellBoxes.js';
 import { landedFromShelf } from '../../src/lib/costs.js';
 import { cleanCostStack, cleanShelf, parseTrackingList } from '../../src/lib/presellDetails.js';
 import { PLATFORMS, applyResult, reconcileStock } from '../_lib/presell.js';
@@ -29,6 +36,9 @@ export default async function handler(req, res) {
   const actor = user.name || user.username || null;
   try {
     if (b.action === 'details') return await detailsAction(res, b, actor);
+    if (b.action === 'boxContents') return await boxContentsAction(res, b, actor);
+    if (b.action === 'boxUnknown') return await boxUnknownAction(res, b, actor);
+    if (b.action === 'makePo') return await makePoAction(res, b, user, actor);
     if (b.stockId != null) return await stockAction(res, b, actor);
     return await listingAction(res, b, actor);
   } catch (e) {
@@ -83,6 +93,93 @@ async function detailsAction(res, b, actor) {
   }
   if (!rows.length) return send(res, 404, { ok: false, error: 'Those stock rows no longer exist.' });
   return send(res, 200, { ok: true, rows });
+}
+
+// 📦 Box contents (docs/presell-box-tracking-plan.md): what one of the order's labels holds
+// of one SKU, size by size — for a box the supplier never declared (a whole-order manifest).
+// A box with the supplier's own list is read-only here: their list wins. A size can't end
+// up with more pairs in boxes than the row has.
+const boxIdsOf = (v) => [...new Set((Array.isArray(v) ? v : []).map(Number))].filter((n) => Number.isSafeInteger(n) && n > 0);
+async function editableBox(res, boxId, poId) {
+  const box = await getPoBoxBrief(boxId);
+  if (!box || (poId && Number(box.po_id) !== Number(poId))) { send(res, 404, { ok: false, error: 'That box is not on this order any more.' }); return null; }
+  if (box.kind === 'replacement') { send(res, 409, { ok: false, error: 'That’s a reship box — its contents come from the reship manifest.' }); return null; }
+  if (box.declared) { send(res, 409, { ok: false, error: `The supplier already declared what’s in ${box.tracking_number || 'this box'} — their list is used.` }); return null; }
+  if (box.po_status === 'closed') { send(res, 409, { ok: false, error: `${box.po_code} is archived.` }); return null; }
+  return box;
+}
+async function boxContentsAction(res, b, actor) {
+  const boxId = Number(b.boxId); const poId = Number(b.poId);
+  const sku = String(b.sku || '').trim().slice(0, 80);
+  if (!(boxId > 0) || !(poId > 0) || !sku) return send(res, 400, { ok: false, error: 'Which box and shoe?' });
+  const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 60).map((l) => ({
+    size: String(l?.size ?? '').trim().slice(0, 20),
+    qty: l?.qty === null ? null : Math.max(0, Math.min(999, parseInt(l?.qty, 10) || 0)),
+  })).filter((l) => l.size);
+  if (!(await editableBox(res, boxId, poId))) return;
+  // Would any size end up with more pairs in boxes than the row has?
+  const grid = await presellPoBoxGrid(poId, sku);
+  const bad = [];
+  for (const z of grid.sizes) {
+    const l = lines.find((x) => x.size === z.size);
+    const others = z.boxes.filter((x) => x.id !== boxId);
+    const next = [...others, ...(l && (l.qty === null || l.qty > 0) ? [{ qty: l.qty }] : [])];
+    const sum = boxSummary(z.qty, next);
+    if (sum.over > 0) bad.push(`size ${z.size}: ${sum.placed} in boxes but only ${z.qty} pair${z.qty === 1 ? '' : 's'}`);
+  }
+  const known = new Set(grid.sizes.map((z) => z.size));
+  const stray = lines.filter((l) => !known.has(l.size) && (l.qty === null || l.qty > 0));
+  if (stray.length) return send(res, 400, { ok: false, error: `Size ${stray.map((l) => l.size).join(", ")} of ${sku} isn’t pre-listed against ${grid.po.po_code}.` });
+  if (bad.length) return send(res, 409, { ok: false, code: 'over_boxes', error: `Too many in boxes — ${bad.join('; ')}.` });
+  await setPresellBoxLines(boxId, sku, lines, actor);
+  return send(res, 200, { ok: true, ...(await presellPoBoxGrid(poId, sku)) });
+}
+async function boxUnknownAction(res, b, actor) {
+  const ids = boxIdsOf(b.stockIds).slice(0, 200); const boxIds = boxIdsOf(b.boxIds).slice(0, 100);
+  if (!ids.length || !boxIds.length) return send(res, 400, { ok: false, error: 'Tick the sizes and the boxes.' });
+  const rows = (await Promise.all(ids.map((id) => getPresellStock(id)))).filter(Boolean);
+  if (!rows.length) return send(res, 404, { ok: false, error: 'Those stock rows no longer exist.' });
+  let poId = null;
+  for (const id of boxIds) {
+    const box = await editableBox(res, id, null);
+    if (!box) return;
+    poId = poId ?? Number(box.po_id);
+    if (Number(box.po_id) !== poId) return send(res, 400, { ok: false, error: 'Pick boxes from one order at a time.' });
+  }
+  // Every row has to be on that order — a box only holds pairs bought on it.
+  const off = rows.filter((r) => Number(r.po_id) !== poId);
+  if (off.length) return send(res, 409, { ok: false, error: `Link ${off.map((r) => `size ${r.size}`).join(', ')} to the order first (✎ Cost & shipment → Purchase order).` });
+  const added = await addPresellBoxUnknown(boxIds, rows, actor);
+  return send(res, 200, { ok: true, added });
+}
+
+// "Make a PO for this buy" (plan phase 4): we hand out every tracking number, so a buy we
+// track IS an order of our labels. Opens the PO with one label per tracking number (registered
+// with 17TRACK like po/create) and NO lines — the supplier still scans what's in each box, or
+// PH fills the 📦 Box contents grid. Only rows on no PO yet; PH / admin only (as po/create).
+async function makePoAction(res, b, user, actor) {
+  if (!isPrivileged(user.role) && user.role !== 'ph_team') return send(res, 403, { ok: false, error: 'Only PH or an admin can open a purchase order.' });
+  const ids = boxIdsOf(b.stockIds).slice(0, 200);
+  const supplierName = String(b.supplierName ?? '').trim().slice(0, 120);
+  const tracks = parseTrackingList(b.trackingNumbers);
+  if (!ids.length) return send(res, 400, { ok: false, error: 'Which sizes?' });
+  if (!supplierName) return send(res, 400, { ok: false, error: 'Who is the supplier?' });
+  if (!tracks.length) return send(res, 400, { ok: false, error: 'Add the tracking numbers we gave the supplier — one label per box.' });
+  const rows = (await Promise.all(ids.map((id) => getPresellStock(id)))).filter(Boolean);
+  const onPo = rows.filter((r) => r.po_id);
+  if (onPo.length) return send(res, 409, { ok: false, error: `Already on an order: ${onPo.map((r) => `size ${r.size} (${r.po_code})`).join(', ')}.` });
+  // A tracking number already on an order means that order exists — link to it instead.
+  const taken = await poCodesByTracking(tracks);
+  if (taken.length) return send(res, 409, { ok: false, error: `${taken[0].tracking_number} is already on ${taken[0].po_code} — pick that order under ✎ Cost & shipment instead.` });
+  const created = await createPo({
+    supplierName, labels: tracks.map((t) => ({ trackingNumber: t, carrierKey: null })),
+    notes: `Opened from Pre-sell Listings for ${[...new Set(rows.map((r) => r.sku))].join(', ')}.`, createdBy: actor || '',
+  });
+  const trackItems = (created.boxes || []).filter((x) => x.tracking_number).map((x) => ({ number: x.tracking_number, carrier: x.carrier_key }));
+  if (trackItems.length) registerTracking(trackItems).catch((e) => console.warn('[presell makePo] registerTracking:', e.message));
+  const poId = Number(created.po.id);
+  const linked = await linkPresellToNewPo(rows.map((r) => Number(r.id)), poId, actor);
+  return send(res, 200, { ok: true, poId, poCode: created.po.po_code, linked, labels: trackItems.length });
 }
 
 async function stockAction(res, b, actor) {

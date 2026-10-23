@@ -9379,6 +9379,203 @@ export async function presellLinkedPoIds() {
      WHERE po_id IS NOT NULL`).map((r) => Number(r.po_id));
 }
 
+/* ---- Pre-sell BOX CONTENTS (docs/presell-box-tracking-plan.md, owner 2026-10-24) -------
+   A box is one of OUR labels on the PO (po_boxes) — we give every tracking number to the
+   supplier, they buy and pack, often mixing sizes in a box. What's in each box comes from:
+     1. the supplier's per-box list (po_lines with a po_box_id; scanned, or typed for them) —
+        always wins for a box that has one;
+     2. presell_box_lines — typed on the pre-sell side for a box nobody declared (the
+        whole-order-manifest case; an order can't mix the two kinds of po_lines). qty NULL =
+        "some of this size is in here, count unknown".
+   presell_box_lines never feeds the PO's expected / reconciliation. Matching is the
+   reconciliation's (dual style codes, size notation). */
+
+// Every original label of these POs with its lines: { boxes, declared, ours }.
+// received = a receiving box tied to the label (by id, or by its tracking number for
+// batches received before the tie existed) has been received.
+async function presellPoBoxData(sql, poIds) {
+  const ids = [...new Set((poIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))];
+  if (!ids.length) return { boxes: [], declared: [], ours: [] };
+  const boxes = await sql`
+    SELECT b.id, b.po_id, p.po_code, p.status AS po_status, b.box_number, b.tracking_number AS tracking, b.status,
+           b.eta_from, b.eta_to,
+           EXISTS (SELECT 1 FROM batch_boxes bx
+                    WHERE bx.status = 'received'
+                      AND (bx.po_box_id = b.id
+                           OR (coalesce(b.tracking_number, '') <> '' AND upper(bx.tracking_number) = upper(b.tracking_number)))) AS received
+      FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
+     WHERE b.po_id = ANY(${ids}::bigint[]) AND b.kind <> 'replacement'
+     ORDER BY b.po_id, b.box_number NULLS LAST, b.id`;
+  const boxIds = boxes.map((b) => Number(b.id));
+  if (!boxIds.length) return { boxes: [], declared: [], ours: [] };
+  const declared = await sql`
+    SELECT po_box_id, sku, size, qty_expected, entered_on_behalf FROM po_lines
+     WHERE po_box_id = ANY(${boxIds}::bigint[]) AND dimensions IS NULL`;
+  const ours = await sql`
+    SELECT po_box_id, sku, size, qty, entered_by, updated_at FROM presell_box_lines
+     WHERE po_box_id = ANY(${boxIds}::bigint[])`;
+  return { boxes, declared, ours };
+}
+
+// One box as the screen/posts use it (src/lib/presellBoxes.js).
+const presellBoxOut = (b, qty, source) => ({
+  id: Number(b.id), po_id: Number(b.po_id), po_code: b.po_code, box_number: b.box_number == null ? null : Number(b.box_number),
+  tracking: b.tracking || null, status: b.status, received: !!b.received,
+  eta_from: b.eta_from || null, eta_to: b.eta_to || null, qty, source,
+});
+
+// The boxes each pre-sell row's pairs are in → Map(stockId → box[]). A row's POs = every PO
+// it was listed against (presell_stock_po) plus the one it points at.
+export async function presellBoxesFor(stockRows) {
+  const rows = (stockRows || []).filter((r) => r && r.id != null);
+  const out = new Map(rows.map((r) => [Number(r.id), []]));
+  if (!rows.length) return out;
+  const sql = db();
+  const sids = rows.map((r) => Number(r.id));
+  const links = await sql`
+    SELECT stock_id, po_id FROM presell_stock_po WHERE stock_id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL
+    UNION SELECT id, po_id FROM presell_stock WHERE id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL`;
+  if (!links.length) return out;
+  const { boxes, declared, ours } = await presellPoBoxData(sql, links.map((l) => l.po_id));
+  if (!boxes.length) return out;
+  const canon = rcCodeGroups([...declared.map((l) => rcCodes(l.sku)), ...ours.map((l) => rcCodes(l.sku)), ...rows.map((r) => rcCodes(r.sku))]);
+  const keyOf = (k, z) => `${canon(rcCodes(k))}|${rcSizeNum(z)}`;
+  const declaredBy = new Map();   // box id → Map(key → { qty, staff })
+  for (const l of declared) {
+    const m = declaredBy.get(Number(l.po_box_id)) || new Map();
+    const k = keyOf(l.sku, l.size); const cur = m.get(k) || { qty: 0, staff: true };
+    m.set(k, { qty: cur.qty + (Number(l.qty_expected) || 0), staff: cur.staff && !!l.entered_on_behalf });
+    declaredBy.set(Number(l.po_box_id), m);
+  }
+  const oursBy = new Map();       // box id → Map(key → qty|null)
+  for (const l of ours) {
+    const m = oursBy.get(Number(l.po_box_id)) || new Map();
+    m.set(keyOf(l.sku, l.size), l.qty == null ? null : Number(l.qty));
+    oursBy.set(Number(l.po_box_id), m);
+  }
+  const posOf = new Map();
+  for (const l of links) { const s = Number(l.stock_id); posOf.set(s, [...(posOf.get(s) || []), Number(l.po_id)]); }
+  for (const r of rows) {
+    const k = keyOf(r.sku, r.size);
+    const mine = posOf.get(Number(r.id)) || [];
+    for (const b of boxes) {
+      if (!mine.includes(Number(b.po_id))) continue;
+      const dec = declaredBy.get(Number(b.id));
+      if (dec) {
+        const d = dec.get(k);
+        if (d && d.qty > 0) out.get(Number(r.id)).push(presellBoxOut(b, d.qty, d.staff ? 'staff' : 'supplier'));
+        continue;   // the supplier's list for this box is the truth — ours is ignored
+      }
+      const o = oursBy.get(Number(b.id));
+      if (o && o.has(k)) out.get(Number(r.id)).push(presellBoxOut(b, o.get(k), 'presell'));
+    }
+  }
+  return out;
+}
+
+// 📦 Box contents for one SKU on one PO (the grid): every label of the order, whether the
+// supplier declared it (then it's read-only here), and per size what's in it for this SKU;
+// plus the SKU's pre-sell rows (any size) with their pairs, so the grid can say what's left.
+export async function presellPoBoxGrid(poId, sku) {
+  const sql = db();
+  const po = (await sql`SELECT id, po_code, status, supplier_name, manifest_scope FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return null;
+  const { boxes, declared, ours } = await presellPoBoxData(sql, [poId]);
+  // The SKU's rows listed against THIS order (its current PO, or pairs booked against it).
+  const stock = await sql`
+    SELECT s.id, s.sku, s.size, s.qty, s.sold, s.po_id FROM presell_stock s
+     WHERE upper(s.sku) = upper(${sku})
+       AND (s.po_id = ${poId} OR EXISTS (SELECT 1 FROM presell_stock_po x WHERE x.stock_id = s.id AND x.po_id = ${poId}))`;
+  const canon = rcCodeGroups([rcCodes(sku), ...declared.map((l) => rcCodes(l.sku)), ...ours.map((l) => rcCodes(l.sku))]);
+  const same = (k) => canon(rcCodes(k)) === canon(rcCodes(sku));
+  const all = await presellBoxesFor(stock);
+  return {
+    po: { id: Number(po.id), po_code: po.po_code, status: po.status, supplier_name: po.supplier_name, manifest_scope: po.manifest_scope },
+    boxes: boxes.map((b) => {
+      const dec = declared.filter((l) => Number(l.po_box_id) === Number(b.id));
+      const mine = (dec.length ? dec : ours.filter((l) => Number(l.po_box_id) === Number(b.id))).filter((l) => same(l.sku));
+      const others = (dec.length ? dec : ours.filter((l) => Number(l.po_box_id) === Number(b.id))).filter((l) => !same(l.sku));
+      return {
+        ...presellBoxOut(b, null, dec.length ? (dec.every((l) => l.entered_on_behalf) ? 'staff' : 'supplier') : 'presell'),
+        declared: dec.length > 0,
+        // Lines land on OUR size columns (the supplier may write 9 for our 9W); a size we have
+        // no pre-sell row for is counted with the other pairs in the box.
+        lines: (() => {
+          const m = new Map();
+          for (const l of mine) {
+            const z = stock.find((x) => rcSizeNum(x.size) === rcSizeNum(l.size));
+            if (!z) continue;
+            const q = dec.length ? Number(l.qty_expected) || 0 : (l.qty == null ? null : Number(l.qty));
+            m.set(z.size, m.has(z.size) && m.get(z.size) != null && q != null ? m.get(z.size) + q : q);
+          }
+          return [...m].map(([size, qty]) => ({ size, qty }));
+        })(),
+        other_pairs: [...others, ...mine.filter((l) => !stock.some((x) => rcSizeNum(x.size) === rcSizeNum(l.size)))]
+          .reduce((n, l) => n + (Number(dec.length ? l.qty_expected : l.qty) || 0), 0),
+      };
+    }),
+    sizes: stock.map((s) => ({ stock_id: Number(s.id), size: s.size, qty: Number(s.qty), sold: Number(s.sold),
+      boxes: all.get(Number(s.id)) || [] })),
+  };
+}
+
+// Replace what pre-sell recorded for ONE SKU in ONE box: lines = [{ size, qty }] (qty null =
+// count unknown; 0 / missing size = not in this box). Other SKUs in the box are untouched.
+export async function setPresellBoxLines(boxId, sku, lines, actor) {
+  const sql = db();
+  const keep = (lines || []).filter((l) => l.qty === null || Number(l.qty) > 0);
+  const json = JSON.stringify(keep.map((l) => ({ size: String(l.size), qty: l.qty == null ? null : Number(l.qty) })));
+  await sql.transaction([
+    sql`DELETE FROM presell_box_lines WHERE po_box_id = ${boxId} AND upper(sku) = upper(${sku})`,
+    sql`INSERT INTO presell_box_lines (po_box_id, sku, size, qty, entered_by)
+        SELECT ${boxId}, ${sku}, r.size, r.qty, ${actor} FROM jsonb_to_recordset(${json}::jsonb) AS r(size text, qty int)`,
+  ]);
+}
+// Split unknown: "these sizes are somewhere in these boxes" — a count-unknown line for each
+// (row, box) that has nothing for that size yet. A counted line is never overwritten.
+export async function addPresellBoxUnknown(boxIds, stockRows, actor) {
+  const sql = db();
+  const json = JSON.stringify(boxIds.flatMap((b) => stockRows.map((s) => ({ box: Number(b), sku: s.sku, size: s.size }))));
+  const rows = await sql`
+    INSERT INTO presell_box_lines (po_box_id, sku, size, qty, entered_by)
+    SELECT r.box, r.sku, r.size, NULL, ${actor} FROM jsonb_to_recordset(${json}::jsonb) AS r(box bigint, sku text, size text)
+    ON CONFLICT (po_box_id, upper(sku), size) DO NOTHING
+    RETURNING id`;
+  return rows.length;
+}
+export async function getPoBoxBrief(id) {
+  const rows = await db()`SELECT b.id, b.po_id, b.kind, b.tracking_number, p.status AS po_status, p.po_code,
+           EXISTS (SELECT 1 FROM po_lines l WHERE l.po_box_id = b.id AND l.dimensions IS NULL) AS declared
+      FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id WHERE b.id = ${id}`;
+  return rows[0] || null;
+}
+// Link pre-sell rows to a PO made for them ("Make a PO for this buy"): po_id + the pairs
+// listed against it. Only rows not on a PO yet.
+export async function linkPresellToNewPo(stockIds, poId, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE presell_stock SET po_id = ${poId}, updated_by = ${actor}, updated_at = now()
+     WHERE id = ANY(${stockIds}::bigint[]) AND po_id IS NULL RETURNING id, qty`;
+  for (const r of rows) await bumpPresellStockPo(Number(r.id), poId, Number(r.qty) || 0);
+  return rows.length;
+}
+// Labels already carrying any of these tracking numbers (a PO made twice for one buy).
+export async function poCodesByTracking(tracks) {
+  if (!tracks?.length) return [];
+  return await db()`
+    SELECT DISTINCT p.po_code, b.tracking_number FROM po_boxes b JOIN purchase_orders p ON p.id = b.po_id
+     WHERE upper(regexp_replace(b.tracking_number, '[^0-9A-Za-z]', '', 'g')) = ANY(${tracks.map((t) => String(t).replace(/[^0-9a-z]/gi, '').toUpperCase())}::text[])`;
+}
+// The receiving boxes that just took these items → their labels' tracking numbers (arrival post).
+export async function trackingForBatchBoxes(boxIds) {
+  const ids = [...new Set((boxIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))];
+  if (!ids.length) return new Map();
+  const rows = await db()`
+    SELECT bx.id, coalesce(pb.tracking_number, bx.tracking_number) AS tracking
+      FROM batch_boxes bx LEFT JOIN po_boxes pb ON pb.id = bx.po_box_id WHERE bx.id = ANY(${ids}::bigint[])`;
+  return new Map(rows.filter((r) => r.tracking).map((r) => [Number(r.id), r.tracking]));
+}
+
 // In-transit rows still waiting for their pairs, matching what was just received. SKU
 // compared upper-case, size on its digits ("10.5" = "US 10.5" = "10.5W" — the style code
 // already tells men's from women's).

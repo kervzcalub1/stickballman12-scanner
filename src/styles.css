@@ -5873,7 +5873,9 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .ap-source-track { grid-column: 1 / -1; }
 .ap-source-track textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .ap-source-line { margin-top: 2px; }
-.ap-row-actions { white-space: nowrap; }
+/* Wraps when the table is squeezed (4 actions with 📦 Boxes) instead of clipping off the card. */
+.ap-row-actions { min-width: 200px; }
+.ap-row-actions .btn { white-space: nowrap; margin: 2px 0; }
 .ap-row-actions .btn + .btn { margin-left: 4px; }
 /* 📄 Report: dates → PDF / CSV. Wraps to rows on a phone. */
 .ap-report { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; width: 100%; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border, rgba(255,255,255,0.08)); }
@@ -6265,3 +6267,30 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .ap-po-cap.over { color: #c6871a; font-weight: 700; }
 .ap-po-risk { color: var(--muted); }
 .ap-po-risk.bad { color: #e05a5a; font-weight: 700; }
+/* 📦 By box — docs/presell-box-tracking-plan.md */
+.ap-boxes { margin-top: 3px; display: flex; flex-direction: column; gap: 1px; }
+.ap-boxes .ap-mono { font-size: 11px; word-break: normal; }
+.ap-box { color: var(--muted); white-space: nowrap; }
+.ap-box b { color: var(--text); }
+.ap-box.received { color: #5fc58a; }
+.ap-box.delivered { color: #4aa3df; }
+.ap-box-gap { color: #c6871a; font-weight: 600; }
+.ap-box-over { color: #e05a5a; font-weight: 700; }
+.ap-box-ok { color: #5fc58a; }
+.ap-boxes.none { color: var(--muted); }
+.ap-tickbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 8px; }
+.ap-boxgrid-wrap { overflow-x: auto; max-width: 100%; }
+.ap-edit.wide { max-width: 860px; }
+.ap-boxgrid td, .ap-boxgrid th { vertical-align: middle; }
+.ap-boxgrid td:first-child { min-width: 200px; }
+.ap-boxgrid td:first-child .ap-mono { word-break: normal; white-space: nowrap; }
+.ap-boxgrid tr.declared td { opacity: 0.8; }
+.ap-boxcell { width: 3.2em; padding: 4px; text-align: center; font: inherit; border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: inherit; }
+.ap-boxgrid-acts { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; white-space: nowrap; }
+.ap-boxpick { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.ap-boxpick label { display: flex; gap: 8px; align-items: flex-start; }
+.ap-makepo { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ap-makepo.ok { flex-direction: column; align-items: flex-start; color: #5fc58a; }
+.ap-ff-box { color: var(--muted); }

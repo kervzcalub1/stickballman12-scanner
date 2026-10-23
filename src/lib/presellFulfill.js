@@ -11,6 +11,7 @@
 // Our reading of the platform's own status: to_ship | shipped | cancelled (null = unknown yet).
 // Anything we haven't seen before that isn't a cancel counts as moved on (shipped) — a new
 // pre-ship status would show here as "shipped" with its raw name beside it, never vanish.
+import { transitBoxes } from './presellBoxes.js';
 export function shipStateOf(platform, status) {
   const s = String(status || '').toUpperCase();
   if (!s) return null;
@@ -82,6 +83,8 @@ export const WHERE = {
   source: { word: 'Source it — no pair yet', short: 'SOURCE IT', rank: 3 },
 };
 const t = (v) => (v ? new Date(v).getTime() : Infinity);
+// An order waiting on the truck also gets `box` — the box its pair is coming in, when the
+// row's box contents are known (x.boxes, docs/presell-box-tracking-plan.md; transitBoxes).
 export function assignWhere(rows) {
   const byStock = new Map();
   for (const x of rows || []) {
@@ -94,14 +97,17 @@ export function assignWhere(rows) {
     const s = list[0];
     const aside = Math.max(0, Number(s.arrived_qty || 0) - Number(s.released_qty || 0));
     let ready = Math.max(0, aside - Number(s.shipped_n || 0));
+    const mine = [];
     [...list].sort((a, b) => t(a.ship_by) - t(b.ship_by) || t(a.sold_at) - t(b.sold_at)).forEach((x) => {
       let where;
       if (ready > 0) { where = 'ready'; ready--; }
       else if (x.in_transit && !x.arrived_at) where = 'transit';
       else if (x.in_transit) where = 'shelf';
       else where = 'source';
-      out.push({ ...x, where });
+      mine.push({ ...x, where });
     });
+    const boxOf = transitBoxes(mine.filter((x) => x.where === 'transit'), s.boxes);
+    for (const x of mine) out.push(boxOf.get(x) ? { ...x, box: boxOf.get(x) } : x);
   }
   return out;
 }

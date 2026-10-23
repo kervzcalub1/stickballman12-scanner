@@ -15,6 +15,7 @@
 import {
   presellTransitMatches, claimPresellArrival, batchKindAndCode, getPresellStock, insertPresellArrival,
   presellRowsForPh, presellRowsWithReleased, presellLinkedPoIds, presellPoStatus, setPresellAtRiskAlerted,
+  trackingForBatchBoxes,
 } from './db.js';
 import { PLATFORM_LABEL, reconcileStock } from './presell.js';
 import { sendPresellSale } from './telegram.js';
@@ -26,7 +27,9 @@ const norm = (sku, size) => `${String(sku || '').toUpperCase()}|${String(size ||
 const pairs = (n) => `${n} pair${n === 1 ? '' : 's'}`;
 
 // n pairs of one in-transit row arrived: count them, post one message. Returns what happened.
-export async function countArrival(stock, n, batchCode, { notify = sendPresellSale } = {}) {
+// `tracks` = the tracking numbers of the boxes these pairs came out of (BY BOX — the plan in
+// docs/presell-box-tracking-plan.md), named on the post when known.
+export async function countArrival(stock, n, batchCode, { notify = sendPresellSale, tracks = [] } = {}) {
   let row = stock; let claimed = null; let split = null;
   for (let attempt = 0; attempt < 3 && !claimed; attempt++) {
     split = arrivalSplit(row, n);
@@ -45,6 +48,7 @@ export async function countArrival(stock, n, batchCode, { notify = sendPresellSa
     `${claimed.sku} · size ${claimed.size}${batchCode ? ` · received in ${batchCode}` : ''}`,
     ...(claimed.supplier ? [{ b: 'Supplier:', t: ` ${claimed.supplier}` }] : []),
     ...(claimed.po_code ? [{ b: 'PO:', t: ` ${claimed.po_code}` }] : []),
+    ...(tracks.length ? [{ b: tracks.length === 1 ? 'Box:' : 'Boxes:', t: ` ${tracks.join(', ')}` }] : []),
     { b: 'Arrived so far:', t: ` ${arrived} of ${qty}${split.full ? '' : ` · still on the way: ${qty - arrived}`}` },
     RULE,
     { b: split.aside ? '⚠️ WAREHOUSE' : '📦 WAREHOUSE' },
@@ -64,15 +68,26 @@ export async function countArrival(stock, n, batchCode, { notify = sendPresellSa
 export async function onItemsReceived(batchId, items, opts = {}) {
   if (!(opts.enabled ?? arrivalsEnabled())) return [];
   const counts = new Map();
-  for (const it of items || []) if (it?.sku && it?.size) counts.set(norm(it.sku, it.size), (counts.get(norm(it.sku, it.size)) || 0) + 1);
+  const boxesOf = new Map();   // key → receiving box ids the pairs came out of
+  for (const it of items || []) {
+    if (!it?.sku || !it?.size) continue;
+    const k = norm(it.sku, it.size);
+    counts.set(k, (counts.get(k) || 0) + 1);
+    if (it.boxId != null) boxesOf.set(k, new Set([...(boxesOf.get(k) || []), Number(it.boxId)]));
+  }
   if (!counts.size) return [];
   const matches = await presellTransitMatches([...counts.keys()].map((k) => { const [sku, size] = k.split('|'); return { sku, size }; }));
   if (!matches.length) return [];
   const batch = batchId ? await batchKindAndCode(batchId) : null;
   if (batch?.kind === 'existing') return [];
+  let trackOf = new Map();
+  try { trackOf = await trackingForBatchBoxes([...boxesOf.values()].flatMap((x) => [...x])); }
+  catch (e) { console.error('[presell-arrival] box tracking:', e.message); }
   const done = [];
   for (const m of matches) {
-    const r = await countArrival(m, counts.get(norm(m.sku, m.size)) || 0, batch?.batch_code, opts);
+    const k = norm(m.sku, m.size);
+    const tracks = [...new Set([...(boxesOf.get(k) || [])].map((id) => trackOf.get(id)).filter(Boolean))];
+    const r = await countArrival(m, counts.get(k) || 0, batch?.batch_code, { ...opts, tracks });
     if (r) done.push(r);
   }
   return done;

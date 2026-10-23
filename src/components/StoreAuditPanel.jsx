@@ -13,7 +13,10 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { FormModal } from './common.jsx';
 import { estDate, estToday } from '../lib/format.js';
-import { storeAuditCsv } from '../lib/storeAudit.js';
+import { storeAuditCsv, compareReceiptToList, receiptDiffSentence } from '../lib/storeAudit.js';
+import { downloadStoreAuditPdf } from '../lib/storeAuditPdf.js';
+import { textFromPdf } from '../lib/pdfText.js';
+import { parseReceipt } from '../lib/receiptParse.js';
 import { downloadCSV } from '../lib/csv.js';
 
 const money = (n) => (n == null ? '—' : `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
@@ -80,22 +83,36 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
   const receiptTotal = (r, read = null) => setForm({
     title: `Receipt total · ${r.store_name}`,
     message: read
-      ? (read.agreed
-        ? `Read twice — both reads say ${money(read.statedTotal)}. Check it against the receipt before saving.`
-        : `The two reads disagree (${read.totals.map(money).join(' vs ')}). Type the total off the receipt.`)
+      ? (read.pdf
+        ? (read.statedTotal != null
+          ? `Read from the PDF’s text: ${money(read.statedTotal)}${read.rows.length ? ` · ${read.rows.length} line${read.rows.length === 1 ? '' : 's'}` : ''}. Check it before saving.`
+          : 'No total found in the PDF’s text — type it off the receipt.')
+        : read.agreed
+          ? `Read twice — both reads say ${money(read.statedTotal)}. Check it against the receipt before saving.`
+          : `The two reads disagree (${read.totals.map(money).join(' vs ')}). Type the total off the receipt.`)
       : 'The total printed on the receipt.',
     submitLabel: 'Save total',
     fields: [{ name: 'amount', label: 'Receipt total', type: 'number', step: '0.01', required: true,
-      value: read?.agreed ? read.statedTotal : (r.amount ?? '') }],
+      value: (read?.agreed || read?.pdf) && read.statedTotal != null ? read.statedTotal : (r.amount ?? '') }],
     onSubmit: async (f) => {
       await act('receipt_amount', { receiptId: r.id, amount: f.amount,
-        ...(read ? { lines: read.rows, readAgreed: !!read.agreed } : {}) });
+        ...(read ? { lines: read.rows, ...(read.pdf ? {} : { readAgreed: !!read.agreed }) } : {}) });
       setForm(null);
     },
   });
+  // A PDF (usually the store's email) carries its text — read here, no AI, no cost.
+  const readPdf = async (blob) => {
+    const parsed = parseReceipt(await textFromPdf(blob), { source: 'pdf' });
+    return { pdf: true, statedTotal: parsed.statedTotal ?? null, rows: parsed.rows.map(({ sku, size, qty, totalPrice }) => ({ sku, size, qty, totalPrice })) };
+  };
+  const isPdf = (r) => /pdf/i.test(r.content_type || '') || /\.pdf$/i.test(r.r2_key || '');
   const readReceipt = async (r) => {
     setBusy(true); setError('');
-    try { receiptTotal(r, await api.poReceiptRead(Number(po.id), r.id)); }
+    try {
+      receiptTotal(r, isPdf(r)
+        ? await readPdf((await api.poReceiptBlob(Number(po.id), r.id)).blob)
+        : await api.poReceiptRead(Number(po.id), r.id));
+    }
     catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
   };
@@ -116,8 +133,12 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
       const { uploadUrl, key } = await api.poReceiptSign(Number(po.id), s.store_id, type);
       const put = await fetch(uploadUrl, { method: 'PUT', body: file, headers: { 'Content-Type': type } });
       if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-      await api.poReceiptAttach({ poId: Number(po.id), storeId: s.store_id, key, name: file.name, contentType: type, sizeBytes: file.size });
+      const { receipt } = await api.poReceiptAttach({ poId: Number(po.id), storeId: s.store_id, key, name: file.name, contentType: type, sizeBytes: file.size });
       await load(); onChanged?.();
+      // A PDF is read straight away — its total comes up for a person to confirm.
+      if (type === 'application/pdf') {
+        try { receiptTotal({ ...receipt, store_name: s.name }, await readPdf(file)); } catch { /* typed by hand instead */ }
+      }
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
   };
@@ -157,7 +178,11 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
           <b>Audit — by store</b>
           <div className="po-track muted sm">What arrived, against each store’s list, against the card. Quantities first.</div>
         </div>
-        <button type="button" className="btn sm ghost" onClick={() => downloadCSV(`audit-${po.po_code}.csv`, storeAuditCsv(v))}>CSV</button>
+        <span className="store-audit-exports">
+          <button type="button" className="btn sm ghost" onClick={() => downloadCSV(`audit-${po.po_code}.csv`, storeAuditCsv(v))}>CSV</button>
+          <button type="button" className="btn sm ghost"
+            onClick={() => downloadStoreAuditPdf(v, { po, generatedAt: `${estDate(new Date())}` }).catch((e) => setError(e.message))}>PDF</button>
+        </span>
       </div>
 
       <div className="store-order-state sm">
@@ -255,7 +280,7 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
                                     {r.read_agreed === false ? ' · reads disagreed' : ''}
                                   </span>
                                   {r.r2_key && <button type="button" className="btn xs ghost" onClick={() => viewReceipt(r)}>Open</button>}
-                                  {r.r2_key && !/pdf/i.test(r.content_type || '') && (
+                                  {r.r2_key && (
                                     <button type="button" className="btn xs ghost" disabled={busy} onClick={() => readReceipt(r)}>Read it</button>
                                   )}
                                   <button type="button" className="btn xs ghost" disabled={busy} onClick={() => receiptTotal(r)}>Total…</button>
@@ -269,6 +294,20 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
                               </label>
                               <button type="button" className="btn xs ghost" disabled={busy} onClick={() => pickEmail(s)}>✉ From email…</button>
                             </div>
+                            {(() => {
+                              // The store's receipt lines against Joey's list for it.
+                              const read = receiptsOf(s.store_id).flatMap((r) => (Array.isArray(r.lines) ? r.lines : []));
+                              if (!read.length) return null;
+                              const { diffs, bySize } = compareReceiptToList(read, s);
+                              return (
+                                <div className="store-audit-sub">
+                                  <b className="sm">Receipt vs list</b>
+                                  {diffs.length
+                                    ? <ul className="store-receipt-diffs sm">{diffs.map((d) => <li key={`${d.sku}|${d.size}`}>{receiptDiffSentence(d)}</li>)}</ul>
+                                    : <span className="sm">✓ the receipt matches the list{bySize ? '' : ' (shoe by shoe — the receipt prints no sizes)'}</span>}
+                                </div>
+                              );
+                            })()}
                             <div className="store-audit-sub">
                               <b className="sm">Credit</b>
                               <span className="sm">

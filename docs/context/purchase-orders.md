@@ -105,14 +105,19 @@ the invoice, and Kevin audits it against what arrived and the card statement.
   `cart/receipt-read`; `agreed` = both printed totals equal → prefilled, else typed),
   `po/receipt-emails` = staff picker of `email_receipts` around the order's dates, closest total
   first. Client refuses files > 15 MB. `RECEIPT_AI_URL` overrides the model URL (e2e fake on :5195).
-  PDF receipts: the total is typed (no in-browser PDF read yet).
+  PDF receipts are read in the BROWSER from their own text (`src/lib/pdfText.js` →
+  `parseReceipt`, no AI): on upload (staff: the total comes up to confirm; supplier: sent as the
+  attach `amount`) and with "Read it". The read lines are stored on the receipt and shown per
+  store as **Receipt vs list** (`compareReceiptToList` in `src/lib/storeAudit.js`: by size, or
+  shoe by shoe when the receipt prints no sizes; sizes on their number like the audit).
 - **Alert:** `reconcileOutcomeForIntake` → `storeOutcomeForIntake` for a store order — only once
   landed, not when audited; `alertPoDiscrepancy` says "N of M stores short · pairs · $ owed" + the
   top 3, `once` per `po:<id>:store:<short>/<owed>/<over>/<overcharge>/<untied>`. Also fired from
   link-batch, unlink-batch, tie-box and "Call it landed".
 - **UI:** `src/components/StoreAuditPanel.jsx` under the store list on PoDetail (staff): the table,
   charges / receipts (upload, Read it, Total…, from email) / credit per store, Call it landed,
-  Mark audited (only drawn with `audit_po`), Undo (admin), CSV (`src/lib/storeAudit.js`). The
+  Mark audited (only drawn with `audit_po`), Undo (admin), CSV (`src/lib/storeAudit.js`) and PDF
+  (`src/lib/storeAuditPdf.js`, landscape) — both from the same object as the screen. The
   supplier adds receipts per store in StoreOrderPanel.
 - **Pre-sell guard (PR E):** pairs pre-listed against an order are capped by what it lists, and
   sold pairs that never arrived on it are flagged at risk once it lands — every PO, not only

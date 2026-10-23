@@ -16,7 +16,7 @@ import { PLATFORMS, applyResult, handleSale } from './presell.js';
 import { aliasRecentOrders } from './alias.js';
 import { stockxActiveOrders, stockxConfigured } from './stockx.js';
 import { runCompetition } from './presell-compete.js';
-import { checkReleased } from './presell-arrival.js';
+import { checkReleased, checkAtRisk } from './presell-arrival.js';
 import { syncFulfillment } from './presell-fulfill.js';
 
 const OPS_EVERY_MS = 12_000;
@@ -165,6 +165,7 @@ export function startPresellWorker() {
   // Safety net for "PH listed an arrived pair → its pre-sell listing comes down" (normally
   // right after the PH save): every 15 min.
   loop(checkReleased, 15 * 60_000, 'released');
+  loop(checkAtRisk, 15 * 60_000, 'at-risk');
   loop(() => syncFulfillment(), 2 * 60_000, 'fulfilment');
   console.log(`[presell-worker] watching StockX operations every 12 s, Alias/StockX sales every 60 s, market competition every ${compMin} min, fulfilment status every 2 min`);
 }

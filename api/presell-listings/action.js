@@ -9,7 +9,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import {
   dbConfigured, getPresellListing, getPresellStock, setPresellStockQty, upsertPresellStock, updatePresellListing, movePresellListing,
-  updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock,
+  updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock, presellPoCap, bumpPresellStockPo,
 } from '../_lib/db.js';
 import { landedFromShelf } from '../../src/lib/costs.js';
 import { cleanCostStack, cleanShelf, parseTrackingList } from '../../src/lib/presellDetails.js';
@@ -94,7 +94,18 @@ async function stockAction(res, b, actor) {
     const qty = Number(b.qty);
     if (!Number.isInteger(qty) || qty < 0 || qty > 999) return send(res, 400, { ok: false, error: 'The quantity has to be a whole number from 0 to 999.' });
     if (qty < Number(stock.sold)) return send(res, 400, { ok: false, error: `${stock.sold} already sold — the quantity can't go below that.` });
+    // More pairs on a row listed against a PO: the same cap as listing (create.js). The
+    // change is booked against the row's CURRENT PO; lowering is always allowed.
+    const delta = qty - Number(stock.qty);
+    if (delta > 0 && stock.po_id) {
+      const cap = await presellPoCap(Number(stock.po_id), stock.sku, stock.size);
+      if (cap.hasList && cap.listed + delta > cap.expected) {
+        return send(res, 409, { ok: false, code: 'over_po', error:
+          `${stock.po_code} lists ${cap.expected} of ${stock.sku} size ${stock.size} — ${cap.listed} already pre-listed, you're adding ${delta}.` });
+      }
+    }
     await setPresellStockQty(id, qty, actor);
+    if (stock.po_id && delta) await bumpPresellStockPo(id, Number(stock.po_id), delta);
     // Fewer pairs than open listings → the extras come down now.
     const removed = await reconcileStock(id, actor, 'qty_cut');
     return send(res, 200, { ok: true, stock: await getPresellStock(id), removed });
@@ -155,6 +166,8 @@ async function listingAction(res, b, actor) {
       const old = await getPresellStock(l.stock_id);
       const moved = await upsertPresellStock({ sku: old.sku, size: newSize, name: old.name, image: old.image, upc: null, addQty: 1 }, actor);
       if (Number(old.qty) - 1 >= Number(old.sold)) await setPresellStockQty(old.id, Number(old.qty) - 1, actor);
+      // The pair it really is moves its PO count with it.
+      if (old.po_id) { await bumpPresellStockPo(old.id, Number(old.po_id), -1); await bumpPresellStockPo(Number(moved.id), Number(old.po_id), 1); }
       await movePresellListing(l.id, moved.id, actor);
     }
   } else return send(res, 400, { ok: false, error: 'Unknown action.' });

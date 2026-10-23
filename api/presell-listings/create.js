@@ -5,7 +5,7 @@
 // SKU + size stock row, then each ticked platform is listed up to the pairs left.
 // Nothing touches inventory or Shopify. Prices are whole US dollars per platform.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, upsertPresellStock, getPoBrief } from '../_lib/db.js';
+import { dbConfigured, upsertPresellStock, getPoBrief, presellPoCap, bumpPresellStockPo } from '../_lib/db.js';
 import { topUp } from '../_lib/presell-create.js';
 import { aliasListingKey } from '../_lib/alias.js';
 import { stockxConfigured } from '../_lib/stockx.js';
@@ -64,6 +64,26 @@ export default async function handler(req, res) {
   if (!lines.length) return send(res, 400, { ok: false, error: 'Add at least one pair to list.' });
   const pairs = lines.reduce((n, l) => n + l.qty * Object.keys(l.want).length, 0);
   if (pairs > MAX_PAIRS) return send(res, 400, { ok: false, error: `That is ${pairs} listings — at most ${MAX_PAIRS} at a time.` });
+  // THE CAP (store-orders-plan §4.9): pairs listed against a PO can't exceed what the order
+  // lists for that SKU + size — pre-selling pairs the order never had is how Joey's wrong
+  // manifests turned into orders we couldn't fill. An order with no list yet is allowed,
+  // with a warning: there is nothing to check against.
+  const warnings = [];
+  if (poId) {
+    const po = await getPoBrief(poId);
+    const adding = new Map();
+    for (const l of lines) {
+      const k = `${l.sku}|${l.size}`;
+      const cap = await presellPoCap(poId, l.sku, l.size);
+      const before = adding.get(k) || 0;
+      adding.set(k, before + l.qty);
+      if (!cap.hasList) { if (!warnings.length) warnings.push(`⚠ ${po.po_code} has no list yet — nothing to check these pairs against.`); continue; }
+      if (cap.listed + before + l.qty > cap.expected) {
+        return send(res, 409, { ok: false, code: 'over_po', error:
+          `${po.po_code} lists ${cap.expected} of ${l.sku} size ${l.size} — ${cap.listed + before} already pre-listed, you're adding ${l.qty}.` });
+      }
+    }
+  }
   if (lines.some((l) => l.want.alias) && !aliasListingKey()) return send(res, 503, { ok: false, error: 'Alias listing is not configured on the server.' });
   if (lines.some((l) => l.want.stockx) && !stockxConfigured()) return send(res, 503, { ok: false, error: 'StockX is not configured on the server.' });
 
@@ -74,6 +94,7 @@ export default async function handler(req, res) {
     for (const l of lines) {
       const stock = await upsertPresellStock({ sku: l.sku, size: l.size, name: l.name, image: l.image, upc: l.upc, addQty: l.qty, inTransit, transitNote, expectedOn,
         shelfPrice: l.shelfPrice, unitCost: l.unitCost, costStack: l.shelfPrice != null ? costStack : null, supplier, poId, trackingNumbers }, actor);
+      if (poId) await bumpPresellStockPo(Number(stock.id), poId, l.qty);
       const row = { sku: l.sku, size: l.size, stockId: Number(stock.id) };
       for (const [platform, priceCents] of Object.entries(l.want)) {
         row[platform] = await topUp(stock, platform, { priceCents, active: activate }, actor, cache);
@@ -85,5 +106,5 @@ export default async function handler(req, res) {
     return send(res, 500, { ok: false, error: 'Could not finish listing — check the Listings tab for what went through.', lines: out });
   }
   const all = out.flatMap((r) => ['alias', 'stockx'].flatMap((p) => r[p]?.results || []));
-  return send(res, 200, { ok: true, lines: out, created: all.filter((x) => x.ok).length, failed: all.filter((x) => !x.ok).length });
+  return send(res, 200, { ok: true, lines: out, created: all.filter((x) => x.ok).length, failed: all.filter((x) => !x.ok).length, warnings });
 }

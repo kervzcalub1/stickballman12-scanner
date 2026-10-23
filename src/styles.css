@@ -6250,3 +6250,9 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .warn-cell { color: #c6871a; font-weight: 700; }
 .store-email-list { list-style: none; margin: 8px 0; padding: 0; max-height: 50vh; overflow-y: auto; }
 .store-email-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+
+/* Pre-sell rows against their order (PresellListings Stock tab, store-orders-plan §4.9). */
+.ap-po-cap { color: var(--muted); }
+.ap-po-cap.over { color: #c6871a; font-weight: 700; }
+.ap-po-risk { color: var(--muted); }
+.ap-po-risk.bad { color: #e05a5a; font-weight: 700; }

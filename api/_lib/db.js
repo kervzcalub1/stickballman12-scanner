@@ -9211,11 +9211,139 @@ export async function updatePresellStockDetails(id, p, actor) {
 export async function presellByPo(poIds) {
   const ids = (poIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0);
   if (!ids.length) return [];
-  return await db()`
+  // Each row with where it stands against ITS order: listed / the order's count / at risk.
+  const status = new Map((await presellPoStatus(ids)).map((x) => [`${x.stock_id}|${x.po_id}`, x]));
+  const rows = await db()`
     SELECT s.id, s.po_id, s.sku, s.name, s.size, s.qty, s.sold, s.in_transit, s.arrived_at, s.supplier
       FROM presell_stock s WHERE s.po_id = ANY(${ids}::bigint[])
      ORDER BY s.sku, CASE WHEN regexp_replace(s.size, '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
                           THEN regexp_replace(s.size, '[^0-9.]', '', 'g')::numeric END NULLS LAST, s.size`;
+  return rows.map((r) => {
+    const x = status.get(`${r.id}|${r.po_id}`);
+    return x ? { ...r, po_listed: x.listed_all, po_expected: x.expected, over_cap: x.over_cap,
+      po_sold: x.sold, po_received: x.received, landed: x.landed, at_risk: x.at_risk } : r;
+  });
+}
+
+/* ---- Pre-sell guard per purchase order (docs/store-orders-plan.md §4.9, PR E) -------
+   presell_stock is ONE row per SKU + size across every purchase, so its qty can't say
+   what one PO is good for. presell_stock_po records how many of a row's pairs were listed
+   against EACH PO, and two things hang off it:
+     (a) the CAP — you can't pre-list more of a size against an order than the order lists
+         (Joey's manifests were wrong, so pairs that never existed got sold);
+     (b) AT RISK — once the order has landed, pairs sold against it that never arrived on
+         it are orders we can't fill.
+   Matching is the reconciliation's (dual style codes, size notation, a GS pair received as
+   men's counted as what the box said). Known limit, shared with the reconciliation: the
+   size match strips the letter, so a GS 7Y and a men's 7 are the same size here. */
+
+// What the order lists, per canonical SKU+size: its order-level list (the receipt / the
+// store list / the whole-order manifest) when it has one, else what its labels declare.
+async function poExpectedByKey(sql, poId, canonOf) {
+  const lines = await sql`
+    SELECT l.sku, l.size, l.po_box_id, l.qty_expected, b.kind AS box_kind
+      FROM po_lines l LEFT JOIN po_boxes b ON b.id = l.po_box_id
+     WHERE l.po_id = ${poId} AND l.dimensions IS NULL`;
+  const order = lines.filter((l) => l.po_box_id == null);
+  const use = order.length ? order : lines.filter((l) => l.box_kind !== 'replacement');
+  const m = new Map();
+  for (const l of use) {
+    const k = canonOf(l.sku, l.size);
+    m.set(k, (m.get(k) || 0) + (Number(l.qty_expected) || 0));
+  }
+  return { byKey: m, hasList: use.length > 0 };
+}
+
+// The cap for adding pairs of sku+size against a PO. `listed` = pairs already listed
+// against it (any stock row whose SKU+size matches), `expected` = what the order lists.
+export async function presellPoCap(poId, sku, size) {
+  const sql = db();
+  const links = await sql`
+    SELECT s.sku, s.size, p.qty FROM presell_stock_po p JOIN presell_stock s ON s.id = p.stock_id
+     WHERE p.po_id = ${poId}`;
+  const lineSkus = (await sql`SELECT sku FROM po_lines WHERE po_id = ${poId}`).map((r) => rcCodes(r.sku));
+  const canon = rcCodeGroups([...lineSkus, rcCodes(sku), ...links.map((l) => rcCodes(l.sku))]);
+  const canonOf = (k, z) => `${canon(rcCodes(k))}|${rcSizeNum(z)}`;
+  const { byKey, hasList } = await poExpectedByKey(sql, poId, canonOf);
+  const key = canonOf(sku, size);
+  const listed = links.filter((l) => canonOf(l.sku, l.size) === key).reduce((n, l) => n + (Number(l.qty) || 0), 0);
+  return { hasList, expected: hasList ? (byKey.get(key) || 0) : null, listed };
+}
+
+// Pairs listed against a PO for one stock row: + `delta` (never below 0).
+export async function bumpPresellStockPo(stockId, poId, delta) {
+  if (!poId || !delta) return;
+  await db()`
+    INSERT INTO presell_stock_po (stock_id, po_id, qty) VALUES (${stockId}, ${poId}, ${Math.max(0, delta)})
+    ON CONFLICT (stock_id, po_id) DO UPDATE SET qty = greatest(0, presell_stock_po.qty + ${delta})`;
+}
+
+// Where each pre-sell link stands against its PO: one row per (stock row, PO) — a link in
+// presell_stock_po, or a row pointing at the PO with nothing recorded against it yet.
+//   listed     pairs pre-listed against THIS PO by this row; listed_all = every row of the size
+//   expected   what the PO lists for the size (null = the PO has no list to check against)
+//   sold       sales made against this PO (a sale from before sales carried their PO counts
+//              for the PO its row points at)
+//   received   pairs received on THIS PO's batches — not "arrived on any batch"
+//   at_risk    once the PO has landed: sold − received, never below 0
+export async function presellPoStatus(poIds) {
+  const ids = [...new Set((poIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))];
+  if (!ids.length) return [];
+  const sql = db();
+  const links = await sql`
+    SELECT s.id AS stock_id, s.sku, s.size, s.name, s.arrived_qty,
+           s.po_id AS current_po, s.at_risk_alerted, x.po_id, coalesce(p.qty, 0)::int AS listed,
+           (SELECT count(*) FROM presell_sales ps
+             WHERE ps.stock_id = s.id AND (ps.po_id = x.po_id OR (ps.po_id IS NULL AND s.po_id = x.po_id)))::int AS sold
+      FROM (SELECT stock_id, po_id FROM presell_stock_po WHERE po_id = ANY(${ids}::bigint[])
+            UNION SELECT id, po_id FROM presell_stock WHERE po_id = ANY(${ids}::bigint[])) x
+      JOIN presell_stock s ON s.id = x.stock_id
+      LEFT JOIN presell_stock_po p ON p.stock_id = x.stock_id AND p.po_id = x.po_id`;
+  const out = [];
+  for (const poId of ids) {
+    const mine = links.filter((l) => Number(l.po_id) === poId);
+    if (!mine.length) continue;
+    const po = (await sql`SELECT id, po_code, status FROM purchase_orders WHERE id = ${poId}`)[0];
+    if (!po) continue;
+    const recv = await sql`
+      SELECT coalesce(i.original_sku, i.sku) AS sku, coalesce(i.original_size, i.size) AS size, count(*)::int AS n
+        FROM items i JOIN batches b ON b.id = i.batch_id
+       WHERE b.po_id = ${poId} GROUP BY 1, 2`;
+    const lineSkus = (await sql`SELECT sku FROM po_lines WHERE po_id = ${poId}`).map((r) => rcCodes(r.sku));
+    const canon = rcCodeGroups([...lineSkus, ...recv.map((r) => rcCodes(r.sku)), ...mine.map((l) => rcCodes(l.sku))]);
+    const canonOf = (k, z) => `${canon(rcCodes(k))}|${rcSizeNum(z)}`;
+    const { byKey, hasList } = await poExpectedByKey(sql, poId, canonOf);
+    const recvBy = new Map();
+    for (const r of recv) { const k = canonOf(r.sku, r.size); recvBy.set(k, (recvBy.get(k) || 0) + r.n); }
+    const landed = ['reconciled', 'closed'].includes(po.status) || !!(await getPoLanded(poId))?.landed;
+    // The cap is per SKU+size across every row listed against the PO.
+    const listedBy = new Map();
+    for (const l of mine) { const k = canonOf(l.sku, l.size); listedBy.set(k, (listedBy.get(k) || 0) + l.listed); }
+    for (const l of mine) {
+      const k = canonOf(l.sku, l.size);
+      const expected = hasList ? (byKey.get(k) || 0) : null;
+      const received = recvBy.get(k) || 0;
+      out.push({
+        stock_id: Number(l.stock_id), po_id: poId, po_code: po.po_code, sku: l.sku, size: l.size, name: l.name,
+        current: Number(l.current_po) === poId,
+        listed: l.listed, listed_all: listedBy.get(k) || 0, expected, has_list: hasList,
+        over_cap: expected != null && (listedBy.get(k) || 0) > expected,
+        sold: l.sold, received, arrived_any: Number(l.arrived_qty) || 0,
+        landed, at_risk: landed ? Math.max(0, l.sold - received) : 0,
+        at_risk_alerted: l.at_risk_alerted == null ? null : Number(l.at_risk_alerted),
+      });
+    }
+  }
+  return out;
+}
+export async function setPresellAtRiskAlerted(stockId, n) {
+  await db()`UPDATE presell_stock SET at_risk_alerted = ${n} WHERE id = ${stockId}`;
+}
+// Every PO a pre-sell row is (or was) listed against — the at-risk sweep's scope.
+export async function presellLinkedPoIds() {
+  return (await db()`
+    SELECT DISTINCT po_id FROM (SELECT po_id FROM presell_stock_po UNION SELECT po_id FROM presell_stock WHERE po_id IS NOT NULL) x
+     WHERE po_id IS NOT NULL`).map((r) => Number(r.po_id));
 }
 
 // In-transit rows still waiting for their pairs, matching what was just received. SKU
@@ -9351,8 +9479,11 @@ export async function presellListingsByExternal(platform, ids) {
 export async function recordPresellSale({ listing, platform, orderId, priceCents, payoutCents, soldAt, raw }, actor) {
   const sql = db();
   const ins = await sql`
-    INSERT INTO presell_sales (stock_id, listing_id, platform, order_id, price_cents, payout_cents, sold_at, raw)
-    VALUES (${listing.stock_id}, ${listing.id}, ${platform}, ${orderId}, ${priceCents}, ${payoutCents}, ${soldAt}::timestamptz, ${JSON.stringify(raw || {})}::jsonb)
+    INSERT INTO presell_sales (stock_id, listing_id, platform, order_id, price_cents, payout_cents, sold_at, raw, po_id)
+    VALUES (${listing.stock_id}, ${listing.id}, ${platform}, ${orderId}, ${priceCents}, ${payoutCents}, ${soldAt}::timestamptz, ${JSON.stringify(raw || {})}::jsonb,
+            -- The PO the row is listed against at the moment of the sale, so "sold for this
+            -- PO" still counts after the row is re-pointed (store-orders-plan §8b).
+            (SELECT po_id FROM presell_stock WHERE id = ${listing.stock_id}))
     ON CONFLICT (platform, order_id) DO NOTHING RETURNING id`;
   if (!ins[0]) return null;
   await sql.transaction([

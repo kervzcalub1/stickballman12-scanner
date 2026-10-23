@@ -69,6 +69,29 @@ the pre-sell listings come down one for one.
   the last price (⚠️ Alias's can be stale — "Use current lowest ask"), sequential, Stop.
 - Only where `PRESELL_WATCH=on`. Tests: `e2e/presell-in-transit.spec.js`.
 
+## The PO guard — never pre-sell more than the order has (2026-10-23, store-orders-plan §4.9)
+Joey's manifests were wrong, so pairs that never existed were pre-sold. `presell_stock` is one
+row per SKU + size across every purchase, so `presell_stock_po (stock_id, po_id, qty)` records
+how many of a row's pairs were listed against EACH order.
+- **The cap:** `create` (with a `poId`) and the Stock tab's `qty` raise refuse (409
+  `over_po`) when pairs listed against the order for that SKU + size would pass what the order
+  lists: "PO-1234 lists 5 of DZ5485-612 size 10 — 3 already pre-listed, you're adding 4."
+  "What the order lists" = its order-level lines (receipt / store list / whole-order
+  manifest), else its non-replacement labels' lines; matched like the reconciliation
+  (`rcCodes` / `rcSizeNum`, so `9W` = `9`; a GS `7Y` and men's `7` collide — shared limit).
+  An order with no list yet is allowed with a warning. Lowering is always allowed. The
+  refusal happens BEFORE any marketplace call. `qty` changes are booked against the row's
+  CURRENT PO; re-pointing a row (`details`) moves nothing — the new PO starts at 0.
+- **Sales remember their PO:** `presell_sales.po_id` = the row's PO at the sale (an older
+  sale with none counts for the PO its row points at).
+- **At risk** (`presellPoStatus`): once the order has LANDED (`getPoLanded`, or it is
+  reconciled/closed), `sold against it − received on ITS batches` (not "arrived on any
+  shipment", shown beside it). Stock tab: "PO lists N · pre-listed M" (amber when over) and
+  "sold X, arrived on PO Y → Z orders at risk" (red); Inbound's pre-listed rows say the same.
+  `checkAtRisk` (watcher, every 15 min, `PRESELL_WATCH=on` only) posts to the pre-sell group
+  when a row's number changes, and again when it clears (`presell_stock.at_risk_alerted`).
+- Tests: `e2e/po-presell-guard.spec.js`.
+
 ## Paste a message (2026-10-10)
 **📋 Paste message** next to Find: Alex's shape (`src/lib/presellPaste.js`) = a style code
 line, an optional name line, then `size x pairs` lines (`8x 12`, `8.5 x 14`, `10 × 26`,

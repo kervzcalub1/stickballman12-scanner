@@ -114,7 +114,10 @@ the invoice, and Kevin audits it against what arrived and the card statement.
   charges / receipts (upload, Read it, Total…, from email) / credit per store, Call it landed,
   Mark audited (only drawn with `audit_po`), Undo (admin), CSV (`src/lib/storeAudit.js`). The
   supplier adds receipts per store in StoreOrderPanel.
-- Tests: `e2e/po-store-order.spec.js`, `e2e/po-store-receiving.spec.js`, `e2e/po-store-audit.spec.js`.
+- **Pre-sell guard (PR E):** pairs pre-listed against an order are capped by what it lists, and
+  sold pairs that never arrived on it are flagged at risk once it lands — every PO, not only
+  store orders. `docs/context/presell-listings.md` → "The PO guard".
+- Tests: `e2e/po-store-order.spec.js`, `e2e/po-store-receiving.spec.js`, `e2e/po-store-audit.spec.js`, `e2e/po-presell-guard.spec.js`.
 
 ## A purchase order can now be raised from a RECEIPT (2026-09-05)
 The buying-request process (`docs/context/buy-cart.md`) ends by raising a PO from the

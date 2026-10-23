@@ -3,7 +3,7 @@
 // Sales by the day sold.
 // Pre-sell Listings (docs/context/presell-listings.md) — the three read views.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, listPresellStock, listPresellListings, listPresellSales, presellPoOptions } from '../_lib/db.js';
+import { dbConfigured, listPresellStock, listPresellListings, listPresellSales, presellPoOptions, presellPoStatus } from '../_lib/db.js';
 
 const VIEWS = new Set(['all', 'live', 'off', 'pending', 'sold', 'deleted', 'failed']);
 
@@ -19,7 +19,17 @@ export default async function handler(req, res) {
   const from = day('from'); const to = day('to');
   try {
     const tab = p.get('tab');
-    if (tab === 'stock') return send(res, 200, { ok: true, rows: await listPresellStock({ q, from, to }) });
+    if (tab === 'stock') {
+      // Each row against its order (store-orders-plan §4.9): listed vs what it lists, at risk.
+      const rows = await listPresellStock({ q, from, to });
+      const st = new Map((await presellPoStatus(rows.map((r) => r.po_id).filter(Boolean)))
+        .filter((x) => x.current).map((x) => [x.stock_id, x]));
+      return send(res, 200, { ok: true, rows: rows.map((r) => {
+        const x = st.get(Number(r.id));
+        return x ? { ...r, po_listed: x.listed_all, po_expected: x.expected, over_cap: x.over_cap,
+          po_sold: x.sold, po_received: x.received, po_landed: x.landed, at_risk: x.at_risk, arrived_any: x.arrived_any } : r;
+      }) });
+    }
     // A date range is a report: every sale in it, not just the latest 300.
     if (tab === 'sales') return send(res, 200, { ok: true, rows: await listPresellSales({ from, to, limit: from || to ? 5000 : 300 }) });
     if (tab === 'pos') return send(res, 200, { ok: true, pos: await presellPoOptions() });

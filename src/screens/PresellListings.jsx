@@ -333,7 +333,7 @@ function ListNew({ onSignOut, onListed }) {
     }
     const failed = {};
     const sentQty = {};
-    const total = { created: 0, failed: 0 };
+    const total = { created: 0, failed: 0, warnings: [] };
     const runStart = new Date().toISOString();
     const stockIds = new Set();
     let unsure = false;
@@ -363,6 +363,7 @@ function ListNew({ onSignOut, onListed }) {
         for (const { l, qty } of b.pieces) sentQty[l.key] = (sentQty[l.key] || 0) + qty;
         for (const ln of r.lines || []) if (ln.stockId) stockIds.add(ln.stockId);
         total.created += r.created || 0; total.failed += r.failed || 0;
+        for (const w of r.warnings || []) if (!total.warnings.includes(w)) total.warnings.push(w);
         // A line with failures stays (marked done), its pairs now in Stock — retried from the
         // Stock tab's "List" (re-sending would add the qty twice).
         for (const ln of r.lines || []) {
@@ -615,7 +616,8 @@ function ListNew({ onSignOut, onListed }) {
       {result && (
         <Modal type={result.failed ? 'warn' : 'success'}
           title={result.failed ? `${result.created} listed · ${result.failed} failed` : `${result.created} listing${result.created === 1 ? '' : 's'} created`}
-          message={result.failed ? 'What failed is still shown with the reason — its pairs are in Stock, so retry with “List” there.' : 'StockX may show “Pending…” for a few seconds while it confirms.'}
+          message={[result.failed ? 'What failed is still shown with the reason — its pairs are in Stock, so retry with “List” there.' : 'StockX may show “Pending…” for a few seconds while it confirms.',
+            ...(result.warnings || [])].join(' ')}
           onClose={() => setResult(null)}>
           <button type="button" className="btn ghost" onClick={() => setResult(null)}>Keep listing</button>
           {result.created > 0 && <button type="button" className="btn primary" onClick={() => { setResult(null); onListed(); }}>See them</button>}
@@ -681,6 +683,22 @@ function StockTab({ onSignOut }) {
                         {(s.supplier || s.po_code || tracks.length > 0) && (
                           <div className="muted xs ap-source-line" title={tracks.join('\n')}>
                             {[s.supplier, s.po_code, tracks.length && `${tracks.length} tracking`].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                        {/* Against its order (store-orders-plan §4.9): never pre-list more than
+                            the order has, and once it lands, say which sold pairs never came. */}
+                        {s.po_code && s.po_expected != null && (
+                          <div className={`xs ap-po-cap${s.over_cap ? ' over' : ''}`}
+                            title="Pairs pre-listed against this order, against what the order lists for this size">
+                            {s.over_cap ? '⚠ ' : ''}{s.po_code} lists {s.po_expected} · pre-listed {s.po_listed}
+                          </div>
+                        )}
+                        {s.po_code && s.po_landed && (
+                          <div className={`xs ap-po-risk${s.at_risk ? ' bad' : ''}`}
+                            title="Sold against this order vs received on this order's shipment (other shipments counted separately)">
+                            sold {s.po_sold}, arrived on {s.po_code} {s.po_received}
+                            {s.at_risk ? ` → ${s.at_risk} order${s.at_risk === 1 ? '' : 's'} at risk` : ' ✓'}
+                            {s.arrived_any !== s.po_received ? ` · on any shipment ${s.arrived_any}` : ''}
                           </div>
                         )}
                       </div></div></td>

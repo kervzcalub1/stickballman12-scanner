@@ -1,6 +1,6 @@
 # Store orders — plan v2 (multi-store supplier purchases: Joey)
 
-Status: **A (#304), B (#305), C (#307) merged; D (the audit) built 2026-10-23; E to go.** v2 written 2026-10-23, replacing v1 the same day. What's live: `docs/context/purchase-orders.md` → Store orders.
+Status: **A–D merged (#304 #305 #307 #309); E (the pre-sell guard) built 2026-10-23 — the plan is complete once E merges.** v2 written 2026-10-23, replacing v1 the same day. What's live: `docs/context/purchase-orders.md` → Store orders.
 
 **C as built, where it differs from §4.4:** tie-later lives on the PH order screen (StoreOrderPanel), not the warehouse Reconciliation screen (the endpoint allows warehouse too); the Telegram discrepancy alert on tie/untie is left for D with the other alert triggers.
 

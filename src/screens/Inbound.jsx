@@ -393,6 +393,8 @@ export function Inbound({ onHome, onSignOut, onOpenPo }) {
                           {pre.map((x) => (
                             <span key={x.id} className="inbound-presell-row sm">
                               <b>{x.sku}</b> {x.size} · {x.sold}/{x.qty} sold{x.arrived_at ? ' · arrived' : ''}
+                              {x.over_cap ? <span className="inbound-var over" title="More pre-listed against this order than it lists for the size"> · ⚠ order lists {x.po_expected}</span> : null}
+                              {x.at_risk ? <span className="inbound-var short"> · {x.at_risk} at risk</span> : null}
                             </span>
                           ))}
                         </div>

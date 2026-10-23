@@ -1973,6 +1973,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
   test.afterAll(async () => {
     await pool.query('UPDATE users SET telegram_user_id = NULL WHERE telegram_user_id = $1', [TG]);
     await pool.query('DELETE FROM telegram_pending_qty WHERE telegram_user_id IN ($1, $2)', [TG, 999000777]);
+    await pool.query(`DELETE FROM telegram_group_cards WHERE chat_id = $1`, [CHAT]);
     await new Promise((r) => fake.close(r));
   });
 
@@ -2136,6 +2137,97 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(since(t0).length).toBe(0);
   });
 
+  // ONE CARD PER SHOE (docs/context/buy-cart.md → "One card per shoe"): several sizes go out
+  // as one card, answered by replying "size x qty" lines; sizes left out are turned down.
+  const RUN = ['9', '9.5', '10'].map((size) => ({ ...LINE, size }));
+  async function groupCard(request) {
+    const cartId = await newRequest(request, { lines: RUN });
+    const lines = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines;
+    const keep = { ...process.env };
+    Object.assign(process.env, {
+      TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: String(CHAT),
+      TELEGRAM_API_BASE: 'http://127.0.0.1:5198', MAKE_WEBHOOK_URL: '',
+    });
+    try {
+      const { notifyGroupAsked } = await import('../api/_lib/notify.js');
+      const t0 = calls.length;
+      expect((await notifyGroupAsked(cartId, lines.map((l) => Number(l.id)))).sent).toBe(true);
+      const sent = since(t0).filter((c) => c.method === 'sendMessage' || c.method === 'sendPhoto');
+      expect(sent.length).toBe(1);
+      const row = (await pool.query('SELECT * FROM telegram_group_cards WHERE cart_id = $1', [cartId])).rows[0];
+      return { cartId, lines, card: sent[0].body, row };
+    } finally {
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL']) {
+        if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+      }
+    }
+  }
+  const replyUpdate = (row, text, { replyId = Date.now() % 1e9, from = TG } = {}) => ({
+    update_id: Date.now(),
+    message: {
+      message_id: replyId, chat: { id: CHAT, type: 'supergroup' }, from: { id: from, first_name: 'Tapper' }, text,
+      reply_to_message: {
+        message_id: Number(row.message_id), chat: { id: CHAT },
+        reply_markup: { inline_keyboard: [[{ text: '✕ Turn them all down', callback_data: `grpreject:${row.id}:dev` }]] },
+      },
+    },
+  });
+  const statuses = async (cartId) => Object.fromEntries((await pool.query(
+    'SELECT size, status, qty FROM buy_cart_lines WHERE cart_id = $1', [cartId])).rows.map((r) => [r.size, `${r.status}${r.qty ? ` ×${r.qty}` : ''}`]));
+
+  test('several sizes of one shoe go out as ONE card, every size on it with its own call', async ({ request }) => {
+    const { card, row, lines } = await groupCard(request);
+    expect(card.text).toContain('CW2288-111');
+    expect(card.text).toContain('Sizes (3):');
+    expect(card.text).toMatch(/^9 · Did not count · BUY$/m);
+    expect(card.text).toMatch(/^10 · Did not count · BUY$/m);
+    expect(card.text).toContain('Sizes you leave out are turned down.');
+    expect(card.reply_markup.inline_keyboard.flat().map((b) => b.callback_data)).toEqual([expect.stringMatching(new RegExp(`^grpreject:${row.id}:`))]);
+    expect(row.line_ids).toBe(lines.map((l) => l.id).join(','));
+    expect(row.message_id).not.toBeNull();
+  });
+
+  test('a "size x qty" reply approves those sizes, turns the rest down — once', async ({ request }) => {
+    const { cartId, row } = await groupCard(request);
+    const update = replyUpdate(row, '10 x 1\n9 x 2');
+    let t0 = calls.length;
+    expect((await hook(request, update)).status()).toBe(200);
+    expect(await statuses(cartId)).toEqual({ 9: 'approved ×2', '9.5': 'rejected', 10: 'approved ×1' });
+    const reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
+    expect(reply.body.text).toBe(`${people.approver.name} approved 9 ×2, 10 ×1 (3 pairs)\nTurned down: 9.5 · [dev]`);
+    expect(reply.body.reply_parameters.message_id).toBe(Number(row.message_id));
+    expect(since(t0).find((c) => c.method === 'setMessageReaction').body.reaction[0].emoji).toBe('👍');
+    // Telegram redelivers; the second copy records and says nothing.
+    t0 = calls.length;
+    await hook(request, update);
+    expect(since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).length).toBe(0);
+  });
+
+  test('a reply naming a size that is not on the card records NOTHING and says why', async ({ request }) => {
+    const { cartId, row } = await groupCard(request);
+    const t0 = calls.length;
+    await hook(request, replyUpdate(row, '9 x 2\n13 x 1'));
+    expect(await statuses(cartId)).toEqual({ 9: 'pending', '9.5': 'pending', 10: 'pending' });
+    const warn = since(t0).find((c) => c.method === 'sendMessage');
+    expect(warn.body.text).toMatch(/^⚠️ 13 isn’t on this card .*Nothing was recorded\. · \[dev\]$/);
+  });
+
+  test('"Turn them all down" rejects every size on the card', async ({ request }) => {
+    const { cartId, row } = await groupCard(request);
+    await hook(request, tapUpdate(`grpreject:${row.id}:dev`, { messageId: Number(row.message_id) }));
+    expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'rejected' });
+  });
+
+  test('cart/line takes several sizes of ONE shoe in one call, and refuses two shoes', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [], submit: false });
+    const ok = await call(request, 'approver', 'cart/line', { cartId, lines: RUN });
+    expect(ok.status).toBe(200);
+    expect(ok.body.lines.map((l) => l.size)).toEqual(['9', '9.5', '10']);
+    const mixed = await call(request, 'approver', 'cart/line', { cartId, lines: [LINE, { ...LINE, sku: 'DZ5485-201' }] });
+    expect(mixed.status).toBe(400);
+    expect(mixed.body.error).toMatch(/One shoe per ask/);
+  });
+
   test('a quantity tapped on the picker is answered on the CARD, and spends the question', async ({ request }) => {
     const cartId = await newRequest(request, { lines: [LINE] });
     const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
@@ -2232,6 +2324,39 @@ test.describe('one price for the run, and the sizes that break it', () => {
     expect(page.url()).toContain(`request=${cartId}`);
     await page.reload();
     await expect(page.locator('.bc-code')).toHaveText(`BC-${cartId}`);
+  });
+
+  // What the supplier actually sends — "100000317 / Sizes 8-12 $50" — pasted. It FILLS THE
+  // FORM for review and asks nothing until the buyer presses Ask (owner, 2026-10-24).
+  test('a pasted "Sizes 11-13 $50" fills the form for review, and one press asks in one call', async ({ page, request }) => {
+    const cartId = await newRequest(request, { lines: [], submit: false });
+    await shoePhotos(cartId, ['HV4091-006']);
+    await page.route('**/api/sku-search', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ ok: true, product: { sku: 'HV4091-006', name: 'AJ1 Mid', sizes: ['11', '11.5', '12', '12.5'] } }),
+    }));
+    const posts = [];
+    page.on('request', (r) => { if (r.url().includes('/api/cart/line') && r.method() === 'POST') posts.push(r.postDataJSON()); });
+
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await page.getByRole('button', { name: 'Paste' }).click();
+    await page.getByPlaceholder(/100000317/).fill('HV4091-006\nSizes 11-13 $50');
+    await page.getByRole('button', { name: 'Fill in the form' }).click();
+
+    // Every half size selected, the price typed, and nothing sent yet.
+    await expect(page.locator('.bc-paste-review')).toContainText('5 sizes at $50.00');
+    await expect(page.locator('.bc-paste-review')).toContainText('Not in this shoe’s size list: 13');
+    await expect(page.locator('.bc-sizes .size-chip.on')).toHaveText(['11', '11.5', '12', '12.5', '13']);
+    expect(await page.locator('.bc-add-row .ph-price').inputValue()).toBe('50');
+    expect(posts.length).toBe(0);
+
+    // The buyer unticks the misread 13, then asks — ONE call for the four sizes.
+    await page.locator('.bc-sizes .size-chip').filter({ hasText: /^13$/ }).click();
+    await page.getByRole('button', { name: 'Ask about 4 sizes' }).click();
+    await expect(page.locator('.bc-add-body')).toHaveCount(0);
+    expect(posts.length).toBe(1);
+    expect(posts[0].lines.map((l) => [l.size, l.shelfPrice])).toEqual([['11', 50], ['11.5', 50], ['12', 50], ['12.5', 50]]);
   });
 
   test('the endpoint takes a different price per size on one request', async ({ request }) => {

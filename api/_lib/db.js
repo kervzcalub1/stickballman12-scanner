@@ -7716,6 +7716,39 @@ export async function noteTelegramLinkRequest({ telegramUserId, name, username }
           last_seen_at = now()`;
 }
 
+// One card for several sizes of one shoe (telegram_group_cards, api/_lib/notify.js
+// notifyGroupAsked). Created BEFORE the send so its id can ride on the card's button,
+// then stamped with Telegram's message id once the card is up.
+const groupCardOut = (r) => (r ? {
+  ...r, id: Number(r.id), cart_id: Number(r.cart_id),
+  line_ids: String(r.line_ids || '').split(',').map(Number).filter(Number.isInteger),
+} : null);
+export async function createTelegramGroupCard({ cartId, sku, lineIds, chatId, env }) {
+  const rows = await db()`
+    INSERT INTO telegram_group_cards (cart_id, sku, line_ids, chat_id, env)
+    VALUES (${cartId}, ${sku || null}, ${lineIds.map(Number).join(',')}, ${chatId}, ${env || 'prod'})
+    RETURNING *`;
+  return groupCardOut(rows[0]);
+}
+export async function setTelegramGroupCardMessage(id, messageId) {
+  await db()`UPDATE telegram_group_cards SET message_id = ${messageId} WHERE id = ${id}`;
+}
+export async function getTelegramGroupCard({ id = null, chatId = null, messageId = null }) {
+  const rows = id != null
+    ? await db()`SELECT * FROM telegram_group_cards WHERE id = ${id}`
+    : await db()`SELECT * FROM telegram_group_cards WHERE chat_id = ${chatId} AND message_id = ${messageId}`;
+  return groupCardOut(rows[0] || null);
+}
+// Claims one reply for the card: true the first time this reply id is seen, false when
+// Telegram delivers it again (or a later reply already overrode it — the newer one stands).
+export async function claimTelegramGroupReply(id, replyId) {
+  const rows = await db()`
+    UPDATE telegram_group_cards SET last_reply_id = ${replyId}
+     WHERE id = ${id} AND (last_reply_id IS NULL OR last_reply_id < ${replyId})
+    RETURNING id`;
+  return rows.length > 0;
+}
+
 // "More…" → "How many pairs?" (api/telegram/webhook.js). Asking replaces any earlier open
 // question from the same person; taking it DELETEs it, so a number is only ever spent once
 // — Telegram redelivers an update it didn't get a 200 for, and the second delivery must

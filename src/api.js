@@ -365,6 +365,8 @@ export const api = {
   cartGet: (id) => get(`/api/cart/get?id=${encodeURIComponent(id)}`),
   cartCreate: (payload) => post('/api/cart/create', payload),
   cartAddLine: (cartId, line) => post('/api/cart/line', { cartId, line }),
+  // Every size of ONE shoe in one call — one line each, but ONE Telegram card for the shoe.
+  cartAddLines: (cartId, lines) => post('/api/cart/line', { cartId, lines }),
   cartEditLine: (cartId, lineId, patch) => post('/api/cart/line', { cartId, lineId, patch }),
   cartRemoveLine: (cartId, lineId) => post('/api/cart/line', { cartId, lineId, remove: true }),
   // The cost stack an approver or an auditor states when the buyer's preset never had

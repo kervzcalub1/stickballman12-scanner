@@ -39,6 +39,12 @@ import { StoreOrderPanel } from '../components/StoreOrderPanel.jsx';
 import { StoreAuditPanel } from '../components/StoreAuditPanel.jsx';
 
 const FROZEN = ['reconciled', 'closed'];
+// What the screen keeps of po/get. ONE place, so a field the order gains (a store order's
+// `stores`, its `untied_boxes`) can't be dropped by one of the three loaders and not the
+// others — `untied_boxes` was, and the "Tie to…" picker never showed (2026-10-24).
+const detailOf = (r) => ({
+  po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [], stores: r.stores || [], untied_boxes: r.untied_boxes || [],
+});
 
 // Live re-reads (docs/context/live-updates.md) wait for whoever is TYPING on this page to
 // leave the field: the line rows re-seed their inputs from the server value, so a re-read
@@ -76,14 +82,14 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   const [delLine, setDelLine] = useState(null);         // { line } — remove confirm
 
   const load = () => api.poGet(poId)
-    .then((r) => setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [], stores: r.stores || [] }))
+    .then((r) => setDetail(detailOf(r)))
     .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null); setBusy(true); setError('');
     api.poGet(poId)
-      .then((r) => { if (!cancelled) setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [], stores: r.stores || [] }); })
+      .then((r) => { if (!cancelled) setDetail(detailOf(r)); })
       .catch((e) => { if (cancelled) return; if (e.unauthorized) return onSignOut(); setError(e.message); })
       .finally(() => { if (!cancelled) setBusy(false); });
     return () => { cancelled = true; };
@@ -96,7 +102,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
     await afterTyping('.app');
     try {
       const r = await api.poGet(poId);
-      setDetail((cur) => keepSame(cur, { po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [], stores: r.stores || [] }));
+      setDetail((cur) => keepSame(cur, detailOf(r)));
     } catch (e) { if (e.unauthorized) onSignOut(); }
   }, {
     mount: false,
@@ -192,9 +198,10 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
     setError('');
     try {
       const r = await api.poTrackRefresh(poId, boxId != null ? Number(boxId) : undefined);
-      // track-refresh doesn't return the linked batches — keep the ones already loaded
-      // rather than blanking the "received into" panel on every refresh.
-      setDetail((d) => ({ po: r.po, boxes: r.boxes, lines: r.lines, batches: d?.batches || [] }));
+      // Anything the refresh comes back without is kept as loaded, never blanked: the
+      // "received into" panel, and a store order's stores / untied boxes (dropping those
+      // blanked the store list on every tracking refresh).
+      setDetail((d) => ({ ...detailOf(r), batches: r.batches || d?.batches || [], stores: r.stores || d?.stores || [], untied_boxes: r.untied_boxes || d?.untied_boxes || [] }));
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { if (boxId != null) setTrackBoxBusy(null); else setTrackBusy(false); }
   };

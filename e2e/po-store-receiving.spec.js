@@ -238,3 +238,21 @@ test('Receiving shows which store each box is from, and warns on another box\'s 
   await expect(rows.nth(0).locator('.dup-warn')).toContainText('box 2');
   await expect(rows.nth(0).locator('.dup-warn')).toContainText('AF #8 Waco');
 });
+
+test('the order screen shows a box received without its label, and ties it from the picker', async ({ page }) => {
+  // A carton under a number this order doesn't know, received not tied to a store.
+  const [ub] = await q(`INSERT INTO batch_boxes (batch_id, box_number, tracking_number, status, received_at)
+                        VALUES ($1, 7, $2, 'received', now()) RETURNING id`, [batchId, `SRQ${stamp}88`]);
+  await q(`INSERT INTO items (vin, batch_id, box_id, sku, size, name, status) VALUES ($1, $2, $3, $4, '9', 'E2E SR Shoe', 'in_stock')`,
+    [`SBM-E2ESR${stamp}Q`, batchId, ub.id, SKU]);
+  await loginAs(page, 'ph_team');
+  await page.goto(`/ph/po-status?po=${po.id}`);
+  // It was in the API from the start (PR C) but the screen dropped it — the picker never drew.
+  const untied = page.locator('.store-untied');
+  await expect(untied).toContainText('Not tied to a store:', { timeout: 15_000 });
+  const row = untied.locator('.store-untied-row', { hasText: `SRQ${stamp}88` });
+  await expect(row).toContainText('1 pair');
+  await row.locator('select').selectOption(String(labelA.id));
+  await expect(page.locator('.store-untied-row', { hasText: `SRQ${stamp}88` })).toHaveCount(0, { timeout: 15_000 });
+  expect(Number((await q('SELECT po_box_id FROM batch_boxes WHERE id = $1', [ub.id]))[0].po_box_id)).toBe(Number(labelA.id));
+});

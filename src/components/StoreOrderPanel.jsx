@@ -14,6 +14,8 @@ import { parseStorePaste } from '../lib/storePaste.js';
 import { compareSizes } from '../lib/codes.js';
 import { estDate } from '../lib/format.js';
 import { ManifestPrint } from './ManifestPrint.jsx';
+import { textFromPdf } from '../lib/pdfText.js';
+import { parseReceipt } from '../lib/receiptParse.js';
 
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 const pairsWord = (n) => `${n} pair${n === 1 ? '' : 's'}`;
@@ -186,7 +188,13 @@ export function StoreOrderPanel({ detail, staff = false, onChanged, onPatchLine,
       const { uploadUrl, key } = await api.poReceiptSign(Number(po.id), Number(store.id), type);
       const put = await fetch(uploadUrl, { method: 'PUT', body: file, headers: { 'Content-Type': type } });
       if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-      await api.poReceiptAttach({ poId: Number(po.id), storeId: Number(store.id), key, name: file.name, contentType: type, sizeBytes: file.size });
+      // A PDF receipt's own total rides along (read from its text, in the browser) —
+      // staff still confirm it in the audit.
+      let amount = null;
+      if (type === 'application/pdf') {
+        try { amount = parseReceipt(await textFromPdf(file), { source: 'pdf' }).statedTotal ?? null; } catch { /* left blank */ }
+      }
+      await api.poReceiptAttach({ poId: Number(po.id), storeId: Number(store.id), key, name: file.name, contentType: type, sizeBytes: file.size, amount });
       await loadReceipts();
     });
   };

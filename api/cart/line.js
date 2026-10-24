@@ -18,6 +18,7 @@ import { notifyLineAsked, notifyGroupAsked } from '../_lib/notify.js';
 import { cartVisibleTo, hasCostPrivilege, canSeeBuyCall, redactLineForViewer, redactCartForViewer, shelfPricesEditable, repriceLine, requireBuyerAccess } from '../_lib/buycart.js';
 import { buyerCanAdd, listOpen } from '../../src/lib/buycartRules.js';
 import { readMarketForLine } from '../_lib/lineMarket.js';
+import { sizeKey } from '../../src/lib/buyPaste.js';
 
 const MAX_LINES = 200;
 // One shoe's sizes in one ask — a full run in halves is ~30; past that it is two shoes.
@@ -179,6 +180,14 @@ export default async function handler(req, res) {
     }
     if (many && new Set(prepared.map((p) => p.sku)).size > 1)
       return send(res, 400, { ok: false, error: 'One shoe per ask — every size in it must be the same SKU.' });
+    // Each size once: the shared card is answered by size, so a second line of the same
+    // size could never be named in the reply and would be turned down as "left out".
+    if (many) {
+      const keys = prepared.map((p) => sizeKey(p.row.size));
+      const twice = keys.filter((k, i) => k && keys.indexOf(k) !== i);
+      if (twice.length)
+        return send(res, 400, { ok: false, error: `Size ${[...new Set(twice)].join(', ')} is in this ask twice — each size once.` });
+    }
     const sku = prepared[0].sku;
 
     // A photo of the shoe is what the approver decides on — they are not in the shop and

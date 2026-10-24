@@ -389,7 +389,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       'To approve, REPLY to this card — one size per line:',
       '9 x 5',
       '10.5 x 4',
-      'Sizes you leave out are turned down.',
+      'Sizes you leave out are turned down. A new reply replaces the last one (edits aren’t read).',
     ].join('\n');
 
     const card = await createTelegramGroupCard({

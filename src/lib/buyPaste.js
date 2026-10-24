@@ -24,35 +24,54 @@
 const SIZE = '(\\d{1,2}(?:\\.5)?)\\s?([MWYCK])?';
 const SIZE_RE = new RegExp(`^${SIZE}$`, 'i');
 const RANGE_RE = new RegExp(`${SIZE}\\s*(?:-|–|—|to)\\s*${SIZE}`, 'gi');
-const PRICE_RE = /(?:\$|@|usd\s*)\s*(\d{1,5}(?:\.\d{1,2})?)|(\d{1,5}(?:\.\d{1,2})?)\s*(?:usd|dollars?)\b/i;
-// A style code: has a digit, 5+ characters, optionally one dash/space split
-// (DZ5485-201, DZ5485 201, 100000317, IB4025100).
-const SKU_RE = /\b(?:sku[:#\s]*)?((?=[A-Z0-9-]*\d)[A-Z0-9]{2,}(?:[-\s][A-Z0-9]{2,4})?)\b/gi;
+// "$1,050" is 1050, not 1 (the comma used to end the number).
+const AMOUNT = '((?:\\d{1,3}(?:,\\d{3})+|\\d{1,5})(?:\\.\\d{1,2})?)';
+const PRICE_RE = new RegExp(`(?:\\$|@|usd\\s*)\\s*${AMOUNT}|${AMOUNT}\\s*(?:usd|dollars?)\\b`, 'i');
+// A style code: has a digit, 5+ characters, optionally one split — a dash (DZ5485-201) or
+// a space before exactly three characters (DZ5485 201). The space form never takes a size:
+// "100000317 10-12" and "IB4025100 10.5" are a code and then sizes, not "100000317-10".
+const SKU_RE = /\b(?:sku[:#\s]*)?((?=[A-Z0-9-]*\d)[A-Z0-9]{2,}(?:-[A-Z0-9]{2,4}|\s[A-Z0-9]{3}(?![.\d]|\s*(?:-|–|—|to)\s*\d))?)\b/gi;
+const amount = (s) => Number(String(s).replace(/,/g, ''));
 
 const label = (n, suffix) => `${Number(n)}${suffix ? suffix.toUpperCase() : ''}`;
 
 /** Expand "8-12" (or "5Y-7Y") into every half size, both ends included. Null if silly. */
 export function expandRange(lo, hi, suffix = '') {
   const a = Number(lo); const b = Number(hi);
-  if (!(a > 0) || !(b > a) || b - a > 12) return null;
+  // 22 is the top of any size run we buy; "40-44" is EU sizing, not nine US sizes.
+  if (!(a > 0) || !(b > a) || b - a > 12 || b > 22) return null;
   const out = [];
   for (let x = a; x <= b + 1e-9; x += 0.5) out.push(label(Math.round(x * 2) / 2, suffix));
   return out;
 }
 
 export function parseBuyPaste(text) {
-  const out = { sku: null, sizes: [], price: null, available: {}, unread: [] };
-  const add = (sz) => { if (!out.sizes.includes(sz)) out.sizes.push(sz); };
+  // `price` is the run's price; `sizePrice` the sizes a line priced differently
+  // ("8-10 $50" / "11-12 $60" → 11–12 at $60, not quietly at $50).
+  const out = { sku: null, sizes: [], price: null, sizePrice: {}, available: {}, unread: [], warnings: [] };
+  const linePrice = {};   // size → the price on the line it was read from
+  let general = null;     // a price on a line with no sizes ("$50" alone, or on the SKU line)
+  const add = (sz, lp) => {
+    if (!out.sizes.includes(sz)) out.sizes.push(sz);
+    if (lp != null && linePrice[sz] == null) linePrice[sz] = lp;
+  };
   for (const raw of String(text || '').split(/\r?\n/)) {
     let line = raw.replace(/[​ ]/g, ' ').trim();
     if (!line) continue;
     let used = false;
 
+    let lp = null;
     const p = PRICE_RE.exec(line);
     if (p) {
-      if (out.price == null) out.price = Number(p[1] ?? p[2]);
+      lp = amount(p[1] ?? p[2]);
       line = line.replace(p[0], ' ').trim();
       used = true;
+      // Two prices on one line can't be told apart by size — say so rather than guess.
+      const p2 = PRICE_RE.exec(line);
+      if (p2) {
+        out.warnings.push(`Two prices on one line ("${raw.trim()}") — only ${p[0].trim()} was used; check each size's price.`);
+        line = line.replace(p2[0], ' ').trim();
+      }
     }
     // The style code: only before any size has been read, and only a token that can't be
     // a size itself ("10.5" is never a SKU).
@@ -71,7 +90,7 @@ export function parseBuyPaste(text) {
     const sx = new RegExp(`^${SIZE}\\s*[x×*]\\s*(\\d{1,3})$`, 'i').exec(line);
     if (sx) {
       const sz = label(sx[1], sx[2]);
-      add(sz);
+      add(sz, lp);
       if (Number(sx[3]) > 0) out.available[sz] = Number(sx[3]);
       continue;
     }
@@ -94,11 +113,22 @@ export function parseBuyPaste(text) {
     // size list — its numbers are only sizes when the line says so or is nothing else.
     if (leftover.length && !keyword && !ranged) {
       if (!used) out.unread.push(raw.trim());
+      if (lp != null && general == null) general = lp;
       continue;
     }
-    found.forEach(add);
+    if (!found.length && lp != null && general == null) general = lp;
+    found.forEach((sz) => add(sz, lp));
     if (leftover.length) out.unread.push(leftover.join(' '));
   }
+  // The run's price: one given on its own, else the one most sizes carry. Every size priced
+  // otherwise keeps its own.
+  if (general != null) out.price = general;
+  else {
+    const n = new Map();
+    for (const v of Object.values(linePrice)) n.set(v, (n.get(v) || 0) + 1);
+    out.price = n.size ? [...n.entries()].sort((a, b) => b[1] - a[1])[0][0] : null;
+  }
+  for (const [sz, v] of Object.entries(linePrice)) if (v !== out.price) out.sizePrice[sz] = v;
   out.sizes.sort((a, b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b));
   return out;
 }
@@ -115,6 +145,17 @@ export const sizeKey = (v) => String(v ?? '').trim().toUpperCase().replace(/^US\
  */
 export function parseApprovalReply(text, lines) {
   const bySize = new Map(lines.map((l) => [sizeKey(l.size), l]));
+  // Two lines of one size on a card can't be told apart by a reply — the second would be
+  // turned down as "left out" without anyone having said so.
+  if (bySize.size < lines.length)
+    return { ok: false, error: 'This card has the same size twice, so a reply can’t say which — decide it on the request’s page.' };
+  // "9" for the card's "9W" (or "5" for "5Y") when it is the only 9 on the card.
+  const byNumber = (t) => {
+    const n = parseFloat(sizeKey(t));
+    if (!/^\d{1,2}(\.5)?$/.test(sizeKey(t))) return null;
+    const hits = lines.filter((l) => parseFloat(sizeKey(l.size)) === n);
+    return hits.length === 1 ? hits[0] : null;
+  };
   const qty = new Map();
   const bad = []; const unknown = []; const twice = [];
   let all = null;
@@ -125,7 +166,7 @@ export function parseApprovalReply(text, lines) {
     if (!m) { bad.push(t); continue; }
     const n = Number(m[2]);
     if (/^all$/i.test(m[1])) { all = n; continue; }
-    const line = bySize.get(sizeKey(m[1]));
+    const line = bySize.get(sizeKey(m[1])) || byNumber(m[1]);
     if (!line) { unknown.push(m[1]); continue; }
     if (qty.has(line.id)) twice.push(line.size);
     qty.set(line.id, n);

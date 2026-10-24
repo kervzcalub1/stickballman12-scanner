@@ -614,6 +614,26 @@ Suppliers often send just `100000317` / `Sizes 8-12 $50`, and a run of nine size
 - Tests: `buy-cart.spec.js` § "Telegram, direct" (one card, reply, bad size, turn all down,
   bulk endpoint) and § "one price for the run" (paste → review → one call).
 
+**Review fixes (2026-10-25):**
+- **One decision per card at a time** (`oneCardAtATime`, webhook): a reply approves, then turns
+  the rest down, in two steps; two approvers answering together could interleave and leave
+  every size turned down. Queued per card (in-process — one server); the claim still drops an
+  older reply that arrives after a newer one.
+- **The answer says what the lines say now**, re-read after the decision: on a funded request
+  a "turn down" can't touch a frozen approval, so it says "Already funded, so still approved: …".
+  It also names **approvals a reply reversed** (`↩️ Replaced the earlier decision: 9 was ×2
+  (Alex) → turned down` — a later reply replaces the whole card, so "10 x 1" sent to *add* a size
+  turns down the 9), and **a quantity over the shop's count** (`⚠️ 10 ×3 is more than the 1
+  counted in store` — a warning, as on the screen, not a refusal). The card now says "A new
+  reply replaces the last one (edits aren't read)" — the webhook isn't subscribed to edits.
+- **Reply sizes**: `9` matches the card's `9W` / `9Y` when it is the only 9 on the card; a card
+  with one size twice refuses replies, and `cart/line` refuses the same size twice in one ask.
+- **Paste**: a code on the same line as its sizes (`100000317 10-12`, `IB4025100 10.5`) no longer
+  swallows the first size into the SKU (the space split now takes exactly 3 characters and never
+  a size); **each line's price stays with that line's sizes** (`8-10 $50` / `11-12 $60` → 11–12
+  in the per-size boxes at $60; two prices on ONE line → a warning); `$1,050` is 1050; a range
+  above 22 (`40-44`, EU) is not read as sizes.
+
 ### The cost stack is the desk's too (2026-09-11)
 It moved the same way the buy call did, and for the same reason: **the stack is what turns
 a shelf price into a profit, so it is the basis on which a request gets approved or turned

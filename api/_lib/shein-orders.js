@@ -15,12 +15,14 @@
 // request whose answer got lost is resent with the same key and can't take a pair twice.
 import { sheinCall, listOf } from './shein.js';
 import { shopifyStockForSku, shopifyAdjustAvailable, shopifyConfigured } from './shopify.js';
-import { getSetting, setSetting, upsertSheinUnits, sheinUnitsKnown, sheinUnitsToAct, markSheinUnit } from './db.js';
+import { getSetting, setSetting, upsertSheinUnits, sheinUnitsKnown, sheinUnitsToAct, markSheinUnit, sheinLinkedSku } from './db.js';
 import { unitsFromOrders, unitAction, pickLocation, toSheinTime } from '../../src/lib/sheinLive.js';
 
 export const SYNC_KEY = 'shein_sync';
 // What the Shopify step touches — swappable in tests.
-export const IO = { shopifyStockForSku, shopifyAdjustAvailable, markSheinUnit, sheinUnitsToAct, shopifyConfigured };
+export const IO = { shopifyStockForSku, shopifyAdjustAvailable, markSheinUnit, sheinUnitsToAct, shopifyConfigured, sheinLinkedSku };
+// After this many failed tries a unit waits for a person (Retry). Matches sheinUnitsToAct's cap.
+export const MAX_AUTO_ATTEMPTS = 8;
 export async function readSync() {
   try { const v = await getSetting(SYNC_KEY); return v ? JSON.parse(v) : {}; } catch { return {}; }
 }
@@ -94,7 +96,15 @@ export async function applyToShopify(u, action, io = IO) {
   const delta = action === 'deduct' ? -1 : 1;
   if (!u.seller_sku) { await io.markSheinUnit(u.goods_id, { error: 'SHEIN order line has no seller SKU', failed: true }); return { error: 'no sku' }; }
   for (let attempt = 0; attempt < 4; attempt++) {
-    const st = await io.shopifyStockForSku(u.seller_sku);
+    let st = await io.shopifyStockForSku(u.seller_sku);
+    let via = '';
+    // The order carries the size's OLD seller SKU and Shopify no longer has it (the product was
+    // re-made with new SKUs): take it off the SKU that SHEIN size was relinked to. Not for a
+    // unit that already gave up (a person may have taken it off by hand) — Retry stays as it was.
+    if (st.code === 'missing' && u.shein_sku && io.sheinLinkedSku && (u.attempts || 0) < MAX_AUTO_ATTEMPTS) {
+      const linked = await io.sheinLinkedSku(u.shein_sku);
+      if (linked && linked !== u.seller_sku) { st = await io.shopifyStockForSku(linked); via = ` (via relinked SKU ${linked}; the order says ${u.seller_sku})`; }
+    }
     if (st.error) { await io.markSheinUnit(u.goods_id, { error: st.error, failed: st.code !== 'unauthorized' }); return st; }
     const loc = st.levels.find((l) => l.locationId === u.shopify_location) || pickLocation(st.levels, process.env.SHOPIFY_SHEIN_LOCATION);
     if (!loc) { await io.markSheinUnit(u.goods_id, { error: `Shopify stocks ${u.seller_sku} at ${st.levels.length} locations and none is clearly the warehouse — set SHOPIFY_SHEIN_LOCATION`, failed: true }); return { error: 'location' }; }
@@ -106,8 +116,8 @@ export async function applyToShopify(u, action, io = IO) {
     });
     if (r.ok) {
       const note = action === 'deduct'
-        ? `Shopify ${loc.available} → ${r.after} at ${loc.location}${loc.available <= 0 ? ' — Shopify had none left: OVERSOLD' : ''}`
-        : `SHEIN cancelled before shipping — put back: Shopify ${loc.available} → ${r.after}`;
+        ? `Shopify ${loc.available} → ${r.after} at ${loc.location}${loc.available <= 0 ? ' — Shopify had none left: OVERSOLD' : ''}${via}`
+        : `SHEIN cancelled before shipping — put back: Shopify ${loc.available} → ${r.after}${via}`;
       await io.markSheinUnit(u.goods_id, { deducted: action === 'deduct', restocked: action === 'restock', variant: st.variantId, location: loc.locationId, before: action === 'deduct' ? loc.available : null, note, error: null });
       return { ok: true };
     }

@@ -202,8 +202,10 @@ export function shelfFrom(spu) {
 }
 
 // rows = planProduct().rows (newQty = what SHEIN may sell now); records = our shein_skc_shelf
-// rows by SKC. → [{ skc, act: delist | relist | delete | delete_check | settle, sites, why }]
-export function shelfPlan({ rows, shelf, records = new Map(), now = Date.now() }) {
+// rows by SKC; styleOnShopify = SKCs whose style code Shopify still sells under OTHER SKUs
+// (re-made product, new SKUs: the shoe isn't gone, its sizes need relinking — never delete).
+// → [{ skc, act: delist | relist | delete | delete_check | settle | wait | relink, sites, why }]
+export function shelfPlan({ rows, shelf, records = new Map(), styleOnShopify = new Set(), now = Date.now() }) {
   const bySkc = new Map();
   for (const r of rows) { if (!r.skc) continue; const a = bySkc.get(r.skc) || []; a.push(r); bySkc.set(r.skc, a); }
   const out = [];
@@ -212,7 +214,8 @@ export function shelfPlan({ rows, shelf, records = new Map(), now = Date.now() }
     const rec = records.get(skc) || null;
     const recent = rec?.shelf_at && now - new Date(rec.shelf_at).getTime() < SHELF_GAP_MS;
     const zero = rs.every((r) => n0(r.newQty) === 0);
-    const gone = rs.every((r) => r.reason === 'no_shopify' && !r.linkTo);
+    const deadSkus = rs.every((r) => r.reason === 'no_shopify' && !r.linkTo);
+    const gone = deadSkus && !styleOnShopify.has(skc);
     if (rec?.state === 'deleted') continue;
     if (!zero) {
       if (rec?.state === 'delisted' && st.on.length) out.push({ skc, act: 'settle', why: 'listed again on SHEIN' });   // someone listed it by hand
@@ -224,10 +227,11 @@ export function shelfPlan({ rows, shelf, records = new Map(), now = Date.now() }
       continue;
     }
     if (st.on.length) {
-      const why = gone ? 'every size’s seller SKU is gone from Shopify' : 'every size is at 0';
+      const why = gone ? 'every size’s seller SKU is gone from Shopify' : deadSkus ? 'every size is at 0 (its seller SKUs are gone; Shopify has the style under new SKUs)' : 'every size is at 0';
       out.push(recent ? { skc, act: 'wait', sites: st.on, why: `${why} — delist after SHEIN’s 20-minute gap` } : { skc, act: 'delist', sites: st.on, why });
       continue;
     }
+    if (deadSkus && !gone) { out.push({ skc, act: 'relink', why: 'its seller SKUs are gone, but Shopify still has this style under new SKUs — not deleted; relink it on Match sizes' }); continue; }
     if (!gone) continue;                                   // off the shelf, still on Shopify: stays delisted
     if (rec?.state === 'delete_requested') out.push({ skc, act: 'delete_check', why: 'waiting for SHEIN’s review of the delete' });
     else if (rec?.state !== 'delete_refused') out.push({ skc, act: 'delete', why: 'every size’s seller SKU is gone from Shopify and it is off the shelf' });

@@ -37,7 +37,7 @@ export default async function handler(req, res) {
       try {
         const stock = [...new Map(out.rows.filter((x) => x.stock_id != null).map((x) => [Number(x.stock_id), { id: x.stock_id, sku: x.sku, size: x.size }])).values()];
         const boxes = await presellBoxesFor(stock);
-        out.rows = out.rows.map((x) => ({ ...x, boxes: boxes.get(Number(x.stock_id)) || [] }));
+        out.rows = out.rows.map((x) => ({ ...x, boxes: boxes.get(Number(x.stock_id))?.boxes || [] }));
       } catch (e) { console.error('[presell-listings/fulfill] boxes:', e.message); }
     }
     return send(res, 200, { ok: true, ...out, lastPass: fulfillLastPass(), watching: arrivalsEnabled() });

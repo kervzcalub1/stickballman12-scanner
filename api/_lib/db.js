@@ -9424,22 +9424,56 @@ const presellBoxOut = (b, qty, source) => ({
   eta_from: b.eta_from || null, eta_to: b.eta_to || null, qty, source,
 });
 
-// The boxes each pre-sell row's pairs are in → Map(stockId → box[]). A row's POs = every PO
-// it was listed against (presell_stock_po) plus the one it points at.
+// WHAT A BOX COUNT MEANS (review 2026-10-25): a box holds PHYSICAL pairs — the supplier's list
+// counts every pair of the order in it, not just the ones we pre-sold. So boxes are judged per
+// ORDER: pairs in its boxes vs its own order-level list (the cap, when it has one), and our
+// pre-listed pairs on it vs what's placed ("not in a box yet"). Comparing the boxes with the
+// pre-sold count alone called a 20-pair order with 10 pre-sold "10 too many".
+
+// The order-level list per canonical SKU+size (whole-order manifest / receipt / store list) —
+// the only thing a box total can be capped by. Per-box declarations are NOT a cap: a label
+// nobody declared yet would always read as "over".
+async function poOrderListByKey(sql, poIds, keyOf) {
+  const ids = [...new Set((poIds || []).map(Number))];
+  const out = new Map();   // po id → Map(key → qty)
+  if (!ids.length) return out;
+  const lines = await sql`
+    SELECT po_id, sku, size, qty_expected FROM po_lines
+     WHERE po_id = ANY(${ids}::bigint[]) AND po_box_id IS NULL AND dimensions IS NULL`;
+  for (const l of lines) {
+    const m = out.get(Number(l.po_id)) || new Map();
+    const k = keyOf(l.sku, l.size);
+    m.set(k, (m.get(k) || 0) + (Number(l.qty_expected) || 0));
+    out.set(Number(l.po_id), m);
+  }
+  return out;
+}
+
+// The boxes each pre-sell row's pairs are in → Map(stockId → { boxes, pos }).
+//   boxes  every box of the row's orders holding that SKU+size (physical pairs, landing order
+//          is the caller's — boxOrder);
+//   pos    per order: { po_id, po_code, pairs (pre-listed against it), expected (its order
+//          list for the size, null = none), placed (counted pairs in its boxes), unknown }.
+// A row's POs = every PO it was listed against (presell_stock_po) plus the one it points at.
+// An order with ONE label that nobody declared: everything is in that box — no typing needed.
 export async function presellBoxesFor(stockRows) {
   const rows = (stockRows || []).filter((r) => r && r.id != null);
-  const out = new Map(rows.map((r) => [Number(r.id), []]));
+  const out = new Map(rows.map((r) => [Number(r.id), { boxes: [], pos: [] }]));
   if (!rows.length) return out;
   const sql = db();
   const sids = rows.map((r) => Number(r.id));
   const links = await sql`
-    SELECT stock_id, po_id FROM presell_stock_po WHERE stock_id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL
-    UNION SELECT id, po_id FROM presell_stock WHERE id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL`;
+    SELECT s.id AS stock_id, x.po_id, coalesce(p.qty, s.qty)::int AS pairs
+      FROM (SELECT stock_id, po_id FROM presell_stock_po WHERE stock_id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL
+            UNION SELECT id, po_id FROM presell_stock WHERE id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL) x
+      JOIN presell_stock s ON s.id = x.stock_id
+      LEFT JOIN presell_stock_po p ON p.stock_id = x.stock_id AND p.po_id = x.po_id`;
   if (!links.length) return out;
   const { boxes, declared, ours } = await presellPoBoxData(sql, links.map((l) => l.po_id));
-  if (!boxes.length) return out;
-  const canon = rcCodeGroups([...declared.map((l) => rcCodes(l.sku)), ...ours.map((l) => rcCodes(l.sku)), ...rows.map((r) => rcCodes(r.sku))]);
+  const orderSkus = await sql`SELECT DISTINCT sku FROM po_lines WHERE po_id = ANY(${links.map((l) => Number(l.po_id))}::bigint[])`;
+  const canon = rcCodeGroups([...orderSkus.map((l) => rcCodes(l.sku)), ...ours.map((l) => rcCodes(l.sku)), ...rows.map((r) => rcCodes(r.sku))]);
   const keyOf = (k, z) => `${canon(rcCodes(k))}|${rcSizeNum(z)}`;
+  const listOf = await poOrderListByKey(sql, links.map((l) => l.po_id), keyOf);
   const declaredBy = new Map();   // box id → Map(key → { qty, staff })
   for (const l of declared) {
     const m = declaredBy.get(Number(l.po_box_id)) || new Map();
@@ -9453,21 +9487,36 @@ export async function presellBoxesFor(stockRows) {
     m.set(keyOf(l.sku, l.size), l.qty == null ? null : Number(l.qty));
     oursBy.set(Number(l.po_box_id), m);
   }
-  const posOf = new Map();
-  for (const l of links) { const s = Number(l.stock_id); posOf.set(s, [...(posOf.get(s) || []), Number(l.po_id)]); }
+  const boxesOfPo = new Map();
+  for (const b of boxes) boxesOfPo.set(Number(b.po_id), [...(boxesOfPo.get(Number(b.po_id)) || []), b]);
   for (const r of rows) {
     const k = keyOf(r.sku, r.size);
-    const mine = posOf.get(Number(r.id)) || [];
-    for (const b of boxes) {
-      if (!mine.includes(Number(b.po_id))) continue;
-      const dec = declaredBy.get(Number(b.id));
-      if (dec) {
-        const d = dec.get(k);
-        if (d && d.qty > 0) out.get(Number(r.id)).push(presellBoxOut(b, d.qty, d.staff ? 'staff' : 'supplier'));
-        continue;   // the supplier's list for this box is the truth — ours is ignored
+    const o = out.get(Number(r.id));
+    for (const l of links.filter((x) => Number(x.stock_id) === Number(r.id))) {
+      const poId = Number(l.po_id);
+      const list = listOf.get(poId);
+      const expected = list ? (list.get(k) || 0) : null;
+      const poBoxes = boxesOfPo.get(poId) || [];
+      const mine = [];
+      for (const b of poBoxes) {
+        const dec = declaredBy.get(Number(b.id));
+        if (dec) {
+          const d = dec.get(k);
+          if (d && d.qty > 0) mine.push(presellBoxOut(b, d.qty, d.staff ? 'staff' : 'supplier'));
+          continue;   // the supplier's list for this box is the truth — ours is ignored
+        }
+        const ob = oursBy.get(Number(b.id));
+        if (ob && ob.has(k)) mine.push(presellBoxOut(b, ob.get(k), 'presell'));
       }
-      const o = oursBy.get(Number(b.id));
-      if (o && o.has(k)) out.get(Number(r.id)).push(presellBoxOut(b, o.get(k), 'presell'));
+      // One label, nobody said what's in it: it's all in there.
+      if (!mine.length && poBoxes.length === 1 && !declaredBy.has(Number(poBoxes[0].id)) && !oursBy.get(Number(poBoxes[0].id))?.has(k)) {
+        mine.push(presellBoxOut(poBoxes[0], expected ?? Number(l.pairs), 'only_box'));
+      }
+      o.boxes.push(...mine);
+      o.pos.push({
+        po_id: poId, po_code: poBoxes[0]?.po_code ?? null, pairs: Number(l.pairs) || 0, expected,
+        placed: mine.reduce((n, b) => n + (b.qty == null ? 0 : b.qty), 0), unknown: mine.filter((b) => b.qty == null).length,
+      });
     }
   }
   return out;
@@ -9475,7 +9524,7 @@ export async function presellBoxesFor(stockRows) {
 
 // 📦 Box contents for one SKU on one PO (the grid): every label of the order, whether the
 // supplier declared it (then it's read-only here), and per size what's in it for this SKU;
-// plus the SKU's pre-sell rows (any size) with their pairs, so the grid can say what's left.
+// plus the SKU's pre-sell rows on this order: pre-listed pairs and the order's own count.
 export async function presellPoBoxGrid(poId, sku) {
   const sql = db();
   const po = (await sql`SELECT id, po_code, status, supplier_name, manifest_scope FROM purchase_orders WHERE id = ${poId}`)[0];
@@ -9493,11 +9542,14 @@ export async function presellPoBoxGrid(poId, sku) {
     po: { id: Number(po.id), po_code: po.po_code, status: po.status, supplier_name: po.supplier_name, manifest_scope: po.manifest_scope },
     boxes: boxes.map((b) => {
       const dec = declared.filter((l) => Number(l.po_box_id) === Number(b.id));
-      const mine = (dec.length ? dec : ours.filter((l) => Number(l.po_box_id) === Number(b.id))).filter((l) => same(l.sku));
-      const others = (dec.length ? dec : ours.filter((l) => Number(l.po_box_id) === Number(b.id))).filter((l) => !same(l.sku));
+      const oursHere = ours.filter((l) => Number(l.po_box_id) === Number(b.id));
+      const mine = (dec.length ? dec : oursHere).filter((l) => same(l.sku));
+      const others = (dec.length ? dec : oursHere).filter((l) => !same(l.sku));
       return {
         ...presellBoxOut(b, null, dec.length ? (dec.every((l) => l.entered_on_behalf) ? 'staff' : 'supplier') : 'presell'),
         declared: dec.length > 0,
+        // What PH typed here before the supplier declared the box — no longer used, said out loud.
+        replaced: dec.length ? oursHere.filter((l) => same(l.sku)).length : 0,
         // Lines land on OUR size columns (the supplier may write 9 for our 9W); a size we have
         // no pre-sell row for is counted with the other pairs in the box.
         lines: (() => {
@@ -9514,8 +9566,12 @@ export async function presellPoBoxGrid(poId, sku) {
           .reduce((n, l) => n + (Number(dec.length ? l.qty_expected : l.qty) || 0), 0),
       };
     }),
-    sizes: stock.map((s) => ({ stock_id: Number(s.id), size: s.size, qty: Number(s.qty), sold: Number(s.sold),
-      boxes: all.get(Number(s.id)) || [] })),
+    sizes: stock.map((s) => {
+      const x = all.get(Number(s.id));
+      const here = x.pos.find((p) => p.po_id === Number(poId)) || { pairs: Number(s.qty), expected: null };
+      // pairs = pre-listed against this order; expected = the order's own count (null = no list).
+      return { stock_id: Number(s.id), size: s.size, qty: Number(s.qty), sold: Number(s.sold), pairs: here.pairs, expected: here.expected };
+    }),
   };
 }
 
@@ -9558,6 +9614,15 @@ export async function linkPresellToNewPo(stockIds, poId, actor) {
      WHERE id = ANY(${stockIds}::bigint[]) AND po_id IS NULL RETURNING id, qty`;
   for (const r of rows) await bumpPresellStockPo(Number(r.id), poId, Number(r.qty) || 0);
   return rows.length;
+}
+// Undo a PO "Make a PO for this buy" just opened and lost a race on — only while nothing hangs
+// off it (no lines, no batch, no pre-sell link).
+export async function deleteEmptyPo(id) {
+  await db()`DELETE FROM purchase_orders p WHERE p.id = ${id}
+              AND NOT EXISTS (SELECT 1 FROM po_lines WHERE po_id = p.id)
+              AND NOT EXISTS (SELECT 1 FROM batches WHERE po_id = p.id)
+              AND NOT EXISTS (SELECT 1 FROM presell_stock_po WHERE po_id = p.id)
+              AND NOT EXISTS (SELECT 1 FROM presell_stock WHERE po_id = p.id)`;
 }
 // Labels already carrying any of these tracking numbers (a PO made twice for one buy).
 export async function poCodesByTracking(tracks) {

@@ -91,21 +91,66 @@ test('an Alias-only barcode blocks Review until the box is read, and a different
   await leave(page);
 });
 
-test('confirming covers the boxes read; a new size barcode is asked again', async ({ page }) => {
+test('a new size barcode is asked on its own line, and joins the shoe once answered', async ({ page }) => {
   await openItemsStep(page);
 
   await scan(page, UPC_ALIAS_7);
   const line = page.locator(`.recv-item[data-sku="${ALIAS_CODE}"]`);
   await expect(line).toBeVisible({ timeout: 10_000 });
   await line.locator('.sz.need').fill('7');
+  await expect(line).toContainText('the size 7 box');
   await line.getByRole('button', { name: `✓ Box says ${ALIAS_CODE}` }).click();
   await expect(line).not.toContainText('Only Alias knew');
   await expect(line).not.toHaveClass(/needs-fix/);
 
-  // Another size's box has its own barcode — nobody has read that one yet.
+  // Another size's box has its own barcode — nobody has read that one yet. It waits on
+  // a line of its own, so "different code" on it could never carry the checked 7.
   await scan(page, UPC_ALIAS_9);
-  await expect(line).toContainText('Only Alias knew this barcode');
+  await expect(page.locator(`.recv-item[data-sku="${ALIAS_CODE}"]`)).toHaveCount(2);
+  const waiting = page.locator(`.recv-item.needs-fix[data-sku="${ALIAS_CODE}"]`);
+  await expect(waiting).toContainText('Only Alias knew this barcode');
+  await waiting.locator('.sz.need').fill('9');
+  await waiting.getByRole('button', { name: `✓ Box says ${ALIAS_CODE}` }).click();
+  // Answered → it joins the shoe already in the cart.
+  await expect(page.locator(`.recv-item[data-sku="${ALIAS_CODE}"]`)).toHaveCount(1);
+  await expect(page.getByText('Items (2 units)')).toBeVisible();
+  await leave(page);
+});
+
+test('a wrong tap is undone by removing the line — the next scan asks again', async ({ page }) => {
+  await openItemsStep(page);
+  await scan(page, UPC_ALIAS_7);
+  const line = page.locator(`.recv-item[data-sku="${ALIAS_CODE}"]`);
+  await expect(line).toBeVisible({ timeout: 10_000 });
+  await line.getByRole('button', { name: `✓ Box says ${ALIAS_CODE}` }).click();
+  await expect(line).not.toContainText('Only Alias knew');
+  await line.getByTitle('Remove item', { exact: true }).click();
+  await expect(page.locator('.recv-item')).toHaveCount(0);
+  await scan(page, UPC_ALIAS_7);
+  await expect(page.locator(`.recv-item[data-sku="${ALIAS_CODE}"]`)).toContainText('Only Alias knew this barcode', { timeout: 10_000 });
+  await leave(page);
+});
+
+test('Add manually: a code typed over the Alias code in the draft still asks to look it up, so the name changes too', async ({ page }) => {
+  await openItemsStep(page);
+  await page.getByRole('button', { name: '+ Add manually' }).click();
+  const modal = page.locator('.modal.additem');
+  await modal.locator('form input').first().fill(UPC_ALIAS_7);
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(modal.getByPlaceholder('SKU', { exact: true })).toHaveValue(ALIAS_CODE, { timeout: 10_000 });
+  // The person reads the box and types its code straight into the draft.
+  await modal.getByPlaceholder('SKU', { exact: true }).fill(BOX_CODE);
+  await modal.getByRole('button', { name: '+ Custom' }).click();
+  await modal.locator('.size-line input.sz').fill('7');
+  await modal.getByRole('button', { name: 'Complete item ✓' }).click();
+
+  // The code is right, but the name is still Alias's shoe — the line says so.
+  const line = page.locator(`.recv-item[data-sku="${BOX_CODE}"]`);
+  await expect(line).toContainText('E2E Retro 16 Black');
   await expect(line).toHaveClass(/needs-fix/);
+  await line.getByRole('button', { name: `Look up ${BOX_CODE}` }).click();
+  await expect(line).toContainText('E2E Retro 15 Black');
+  await expect(line).not.toHaveClass(/needs-fix/);
   await leave(page);
 });
 

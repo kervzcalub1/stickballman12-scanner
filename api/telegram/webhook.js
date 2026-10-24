@@ -87,7 +87,11 @@ async function handleTap(update, cq) {
     if (cardEnv !== notifyEnv()) return forwardToOtherEnv(update, cardEnv);
     const card = await getTelegramGroupCard({ id: Number(parts[1]) });
     if (!card) return answerOnCard(chatId, messageId, { code: 404, body: { ok: false, error: 'This card is not on record here' } }, cardEnv);
-    return decideGroup({ from, card, chatId, messageId, cardEnv, approve: [], reject: card.line_ids.map((id) => ({ id })) });
+    return oneCardAtATime(card.id, async () => {
+      const lines = await cardLines(card);
+      if (!lines.length) return answerOnCard(chatId, messageId, { code: 404, body: { ok: false, error: 'Those sizes are no longer on the request' } }, cardEnv);
+      return decideGroup({ from, card, chatId, messageId, cardEnv, lines, approve: [], reject: lines.map((l) => ({ id: Number(l.id), size: l.size })) });
+    });
   }
   const cartId = Number(parts[1]);
   const lineId = Number(parts[2]);
@@ -206,23 +210,41 @@ async function handleGroupReply(msg, cardMsg, cardEnv) {
     reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true },
   }));
   if (!card) return say('⚠️ This card is not on record here, so nothing was recorded.');
-  const lines = (await Promise.all(card.line_ids.map((id) => getBuyCartLine(card.cart_id, id)))).filter(Boolean);
-  if (!lines.length) return say('⚠️ Those sizes are no longer on the request, so nothing was recorded.');
-  const read = parseApprovalReply(msg.text, lines);
-  if (!read.ok) return say(`⚠️ ${read.error}`);
-  // Telegram redelivers an update it didn't get a 200 for; the second copy is a no-op.
-  if (!(await claimTelegramGroupReply(card.id, msg.message_id))) return null;
-  return decideGroup({
-    from: msg.from || {}, card, chatId, messageId: cardMsg.message_id, cardEnv,
-    approve: read.approve.map((a) => ({ id: Number(a.line.id), size: a.line.size, qty: a.qty })),
-    reject: read.reject.map((l) => ({ id: Number(l.id), size: l.size })),
+  return oneCardAtATime(card.id, async () => {
+    const lines = await cardLines(card);
+    if (!lines.length) return say('⚠️ Those sizes are no longer on the request, so nothing was recorded.');
+    const read = parseApprovalReply(msg.text, lines);
+    if (!read.ok) return say(`⚠️ ${read.error}`);
+    // Telegram redelivers an update it didn't get a 200 for; the second copy is a no-op.
+    if (!(await claimTelegramGroupReply(card.id, msg.message_id))) return null;
+    return decideGroup({
+      from: msg.from || {}, card, chatId, messageId: cardMsg.message_id, cardEnv, lines,
+      approve: read.approve.map((a) => ({ id: Number(a.line.id), size: a.line.size, qty: a.qty })),
+      reject: read.reject.map((l) => ({ id: Number(l.id), size: l.size })),
+    });
   });
+}
+
+const cardLines = async (card) =>
+  (await Promise.all(card.line_ids.map((id) => getBuyCartLine(card.cart_id, id)))).filter(Boolean);
+
+// ONE DECISION PER CARD AT A TIME. A reply approves some sizes and turns the rest down in
+// two steps, so two approvers answering the same card in the same second could interleave
+// — A's approvals, B's approvals, A's rejections, B's rejections — and leave every size
+// turned down, which neither of them said. Queued per card, each reply runs whole, in the
+// order they arrived (the claim drops an older one that turns up after a newer one).
+const cardQueues = new Map();
+function oneCardAtATime(cardId, fn) {
+  const next = (cardQueues.get(cardId) || Promise.resolve()).catch(() => {}).then(fn);
+  cardQueues.set(cardId, next);
+  next.finally(() => { if (cardQueues.get(cardId) === next) cardQueues.delete(cardId); }).catch(() => {});
+  return next;
 }
 
 // One decision for the whole card: the approvals (each with its quantity), then the rest
 // turned down — through decideFromTelegram, so the identity and `approve_buying` checks are
 // the same as a button tap's. Answered under the card in one message.
-async function decideGroup({ from, card, chatId, messageId, cardEnv, approve, reject }) {
+async function decideGroup({ from, card, chatId, messageId, cardEnv, lines, approve, reject }) {
   const who = { telegramUserId: from.id, telegramName: from.first_name, telegramUsername: from.username, cartId: card.cart_id };
   let name = null;
   if (approve.length) {
@@ -241,14 +263,38 @@ async function decideGroup({ from, card, chatId, messageId, cardEnv, approve, re
     if (!out.body?.ok && !(approve.length && out.code === 409)) return answerOnCard(chatId, messageId, out, cardEnv);
     name = name || out.body?.by;
   }
-  const pairs = approve.reduce((n, a) => n + a.qty, 0);
+  // The answer says what the lines SAY NOW, not what the reply asked for: on a funded
+  // request the approvals are frozen and a "turn down" can't touch them, and saying it did
+  // is how the group ends up believing a size wasn't bought when it was.
+  const before = new Map(lines.map((l) => [Number(l.id), l]));
+  const after = new Map((await cardLines(card)).map((l) => [Number(l.id), l]));
+  const now = (id) => after.get(id) || before.get(id);
+  const approved = approve.filter((a) => now(a.id).status === 'approved');
+  const turnedDown = reject.filter((r) => now(r.id).status === 'rejected');
+  const unchanged = reject.filter((r) => now(r.id).status === 'approved');
+  const pairs = approved.reduce((n, a) => n + Number(now(a.id).qty || a.qty), 0);
+  // An approval this reply reversed or re-counted — a later reply replaces the whole card,
+  // so "10 x 1" sent to ADD a size also turns down the 9 someone approved before it.
+  const reversed = [...before.values()].filter((b) => b.status === 'approved'
+    && (now(Number(b.id)).status !== 'approved' || Number(now(Number(b.id)).qty) !== Number(b.qty)))
+    .map((b) => {
+      const n = now(Number(b.id));
+      return `${b.size} was ×${b.qty}${b.decided_by ? ` (${b.decided_by})` : ''} → ${n.status === 'approved' ? `×${n.qty}` : 'turned down'}`;
+    });
+  const over = approved.map((a) => before.get(a.id))
+    .filter((b) => b?.available_qty != null && Number(now(Number(b.id)).qty) > Number(b.available_qty))
+    .map((b) => `${b.size} ×${now(Number(b.id)).qty} is more than the ${b.available_qty} counted in store`);
   const outcome = [
-    approve.length
-      ? `${name} approved ${approve.map((a) => `${a.size} ×${a.qty}`).join(', ')} (${pairs} pair${pairs === 1 ? '' : 's'})`
-      : `${name} turned them all down`,
-    ...(approve.length && reject.length ? [`Turned down: ${reject.map((r) => r.size).join(', ')}`] : []),
+    approved.length
+      ? `${name} approved ${approved.map((a) => `${a.size} ×${now(a.id).qty || a.qty}`).join(', ')} (${pairs} pair${pairs === 1 ? '' : 's'})`
+      : unchanged.length ? `${name} turned down ${turnedDown.map((r) => r.size).join(', ') || 'nothing new'}`
+        : `${name} turned them all down`,
+    ...(approved.length && turnedDown.length ? [`Turned down: ${turnedDown.map((r) => r.size).join(', ')}`] : []),
+    ...(unchanged.length ? [`Already funded, so still approved: ${unchanged.map((r) => r.size).join(', ')}`] : []),
+    ...(reversed.length ? [`↩️ Replaced the earlier decision: ${reversed.join('; ')}`] : []),
+    ...(over.length ? [`⚠️ ${over.join('; ')}.`] : []),
   ].join('\n');
-  return answerOnCard(chatId, messageId, { code: 200, body: { ok: true, outcome, reaction: approve.length ? '👍' : '👎' } }, cardEnv);
+  return answerOnCard(chatId, messageId, { code: 200, body: { ok: true, outcome, reaction: approved.length ? '👍' : '👎' } }, cardEnv);
 }
 
 // A person's own chat with the bot — where their alerts arrive. Only `/start` means

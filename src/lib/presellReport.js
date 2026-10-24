@@ -46,7 +46,7 @@ export function stockReportRows(rows) {
         tracking: (s.tracking_numbers || []).join(' '), trackingCount: (s.tracking_numbers || []).length,
         // By box (docs/presell-box-tracking-plan.md): "3 in 1Z… (in transit - exp 10/26); …" + what's not in a box yet.
         boxes: [...(s.boxes || []).map((b) => `${b.qty == null ? 'some' : b.qty} in ${b.tracking || `box ${b.box_number ?? '?'}`} (${boxState(b).word.replace(/·/g, '-')})`),
-          ...((s.boxes || []).length && boxSummary(s.qty, s.boxes).unplaced ? [`${boxSummary(s.qty, s.boxes).unplaced} not in a box yet`] : [])].join('; '),
+          ...((s.boxes || []).length && boxSummary(s).unplaced ? [`${boxSummary(s).unplaced} not in a box yet`] : [])].join('; '),
         note: s.transit_note || '',
         shelf: s.shelf_price != null ? Number(s.shelf_price) : null, cost,
         preset: s.cost_stack?.preset || '',

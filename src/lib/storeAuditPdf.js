@@ -27,7 +27,7 @@ async function loadJsPDF() {
 const COLS = [
   ['Store', 0, 'left'], ['Declared', 18, 'right'], ['Declared $', 24, 'right'], ['Receipt $', 24, 'right'],
   ['Charged $', 24, 'right'], ['Received', 18, 'right'], ['Short', 14, 'right'], ['Over', 14, 'right'],
-  ['$ owed', 22, 'right'], ['Charged - decl.', 26, 'right'],
+  ['$ owed', 22, 'right'], ['Card vs list+tax', 28, 'right'],
 ];
 
 export async function buildStoreAuditPdf(v, { po, businessName = 'Stickballman12', generatedAt = '' } = {}) {
@@ -84,19 +84,22 @@ export async function buildStoreAuditPdf(v, { po, businessName = 'Stickballman12
     row([
       s.name, s.declared_units, money(s.declared_total), s.receipt_total == null ? 'no receipt' : money(s.receipt_total),
       money(s.charged_total), s.received_units, showShort ? s.short : '—', s.over,
-      showShort ? money(s.owed) : '—', signed(s.charged_minus_declared),
-    ], { colors: { 6: showShort && s.short ? RED : INK, 7: s.over ? AMBER : INK, 8: owedColor, 9: (s.charged_minus_declared || 0) > 0.004 ? RED : INK } });
+      showShort ? money(s.owed) : '—', signed(s.charged_minus_expected ?? s.charged_minus_declared),
+    ], { colors: { 6: showShort && s.short ? RED : INK, 7: s.over ? AMBER : INK, 8: owedColor, 9: s.charge_flag === 'over' ? RED : s.charge_flag === 'under' ? AMBER : INK } });
   }
   const t = v.totals || {};
   doc.setDrawColor(...INK); doc.line(M, y - 4, PAGE_W - M, y - 4);
   row(['Total', t.declared_units, money(t.declared_total), money(t.receipt_total), money(t.charged_total), t.received_units,
     showShort ? t.short : '—', t.over, showShort ? money(t.owed) : '—',
-    t.charged_total != null && t.declared_total != null ? signed(t.charged_total - t.declared_total) : '—'], { bold: true });
+    t.charged_total != null && t.expected_charge != null ? signed(t.charged_total - t.expected_charge)
+      : t.charged_total != null && t.declared_total != null ? signed(t.charged_total - t.declared_total) : '—'], { bold: true });
 
   const notes = [];
   if (v.untied_units) notes.push(`Not tied to a store: ${v.untied_units} pair(s).`);
   if (v.list_after_receiving) notes.push('The list was entered after receiving started.');
-  if (showShort && t.overcharge > 0) notes.push(`Charged over the list: ${money(t.overcharge)}.`);
+  if (v.tax_pct) notes.push(`Card compared with the list plus ${v.tax_pct}% sales tax (${v.tax_source}).`);
+  if (showShort && t.overcharge > 0) notes.push(`Charged over list + tax: ${money(t.overcharge)}.`);
+  if (showShort && t.undercharge > 0) notes.push(`Charged under the list: ${money(t.undercharge)} - check the list's prices (the supplier is paid on the list).`);
   if (notes.length) {
     y += 2; doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...AMBER);
     for (const n of notes) { doc.text(n, M, y); y += 5; }

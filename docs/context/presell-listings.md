@@ -81,11 +81,18 @@ how many of a row's pairs were listed against EACH order.
   (`rcCodes` / `rcSizeNum`, so `9W` = `9`; a GS `7Y` and men's `7` collide — shared limit).
   An order with no list yet is allowed with a warning. Lowering is always allowed. The
   refusal happens BEFORE any marketplace call. `qty` changes are booked against the row's
-  CURRENT PO; re-pointing a row (`details`) moves nothing — the new PO starts at 0.
+  CURRENT PO. Pairs listed with NO order picked onto a row that is already linked to one
+  count against that order (`presellStockBySkuSize`) — they used to slip past its cap.
+  Re-pointing a row (`details`) MOVES its count to the new order (`movePresellStockPo`;
+  allowed even over the new cap, shown as over) and resets its at-risk marker (review
+  2026-10-25 — it used to move nothing, so a row listed with no PO and linked later counted
+  against nothing).
 - **Sales remember their PO:** `presell_sales.po_id` = the row's PO at the sale (an older
   sale with none counts for the PO its row points at).
 - **At risk** (`presellPoStatus`): once the order has LANDED (`getPoLanded`, or it is
-  reconciled/closed), `sold against it − received on ITS batches` (not "arrived on any
+  reconciled/closed), `sold against it − received on ITS batches` — cancelled sales
+  (`ship_state='cancelled'`) don't count, and never more than the sales still waiting to ship
+  (a shipped sale found its pair) — (not "arrived on any
   shipment", shown beside it). Stock tab: "PO lists N · pre-listed M" (amber when over) and
   "sold X, arrived on PO Y → Z orders at risk" (red); Inbound's pre-listed rows say the same.
   `checkAtRisk` (watcher, every 15 min, `PRESELL_WATCH=on` only) posts to the pre-sell group

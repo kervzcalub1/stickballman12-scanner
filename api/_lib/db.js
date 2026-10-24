@@ -4514,6 +4514,15 @@ export async function getPoStoreVariance(poId) {
   const receiptBy = new Map(receipts.map((r) => [String(r.po_store_id), r]));
   const boxes = await getPoReceivedBoxes(poId);
   const landed = await getPoLanded(poId);
+  // SALES TAX (review 2026-10-25). The list is shelf prices, the card pays shelf + tax, so
+  // comparing the card to the bare list flagged every store "over" by its tax. The rate is
+  // the supplier's cost preset's — the same stack that turns a shelf price into a cost.
+  // With no preset (or no tax on it) the list is compared as it stands. Known limit: one
+  // rate per order, while stores in different states charge different rates.
+  const { preset } = await presetForShipment({ poId, supplierName: po.supplier_name || '' });
+  const taxPct = Number.isFinite(Number(preset?.taxPct)) && Number(preset.taxPct) > 0 ? Number(preset.taxPct) : 0;
+  // Within a dollar (or half a percent) is rounding, not a finding.
+  const tolOf = (expected) => Math.max(1, Math.abs(Number(expected) || 0) * 0.005);
 
   const canon = rcCodeGroups([
     ...lines.map((l) => rcCodes(l.sku)),
@@ -4588,6 +4597,14 @@ export async function getPoStoreVariance(poId) {
       owed: money(sizes.reduce((n, z) => n + (z.owed || 0), 0)),
       unpriced_short: sizes.some((z) => z.short > 0 && z.owed == null),
       charged_minus_declared: charged != null && declaredTotal != null ? money(charged - declaredTotal) : null,
+      // What the card should show for the list: list + tax. + = charged MORE than the list
+      // allows; − = charged LESS — a discount, or the list (Joey's invoice) priced above
+      // what he actually paid.
+      expected_charge: declaredTotal != null ? money(declaredTotal * (1 + taxPct / 100)) : null,
+      charged_minus_expected: charged != null && declaredTotal != null ? money(charged - declaredTotal * (1 + taxPct / 100)) : null,
+      charge_flag: charged == null || declaredTotal == null ? null
+        : charged - declaredTotal * (1 + taxPct / 100) > tolOf(declaredTotal * (1 + taxPct / 100)) ? 'over'
+          : declaredTotal * (1 + taxPct / 100) - charged > tolOf(declaredTotal * (1 + taxPct / 100)) ? 'under' : 'ok',
       receipt_vs_charged: receiptTotal != null && charged != null ? money(charged - receiptTotal) : null,
       credit_agreed: st.credit_agreed == null ? null : money(st.credit_agreed),
       credit_received: st.credit_received == null ? null : money(st.credit_received),
@@ -4601,6 +4618,7 @@ export async function getPoStoreVariance(poId) {
   return {
     po_id: Number(po.id), po_code: po.po_code,
     landed,
+    tax_pct: taxPct, tax_source: taxPct ? (preset?.name || 'supplier preset') : null,
     stores: rows,
     totals: {
       declared_units: rows.reduce((n, r) => n + r.declared_units, 0),
@@ -4611,9 +4629,13 @@ export async function getPoStoreVariance(poId) {
       short: rows.reduce((n, r) => n + r.short, 0),
       over: rows.reduce((n, r) => n + r.over, 0),
       owed: t('owed'),
-      // Only the stores charged MORE than they declared — an undercharge elsewhere is not
-      // a refund of it.
-      overcharge: money(rows.reduce((n, r) => n + Math.max(0, Number(r.charged_minus_declared) || 0), 0)),
+      expected_charge: anyCharged ? t('expected_charge') : null,
+      // Only the stores charged MORE than list + tax (beyond rounding) — an undercharge
+      // elsewhere is not a refund of it.
+      overcharge: money(rows.filter((r) => r.charge_flag === 'over').reduce((n, r) => n + Number(r.charged_minus_expected), 0)),
+      // …and the stores whose card came in BELOW list + tax: the list may be priced above
+      // what was paid, and the list is what the supplier is paid on.
+      undercharge: money(rows.filter((r) => r.charge_flag === 'under').reduce((n, r) => n - Number(r.charged_minus_expected), 0)),
       stores_short: rows.filter((r) => r.short > 0).length,
     },
     untied_units: untiedUnits,
@@ -4698,6 +4720,14 @@ export async function listEmailReceiptCandidates(poId, { total = null } = {}) {
      LIMIT 40`;
 }
 
+// Where an email receipt is already attached, if anywhere (any order, any store).
+export async function emailReceiptAttachedTo(emailReceiptId) {
+  return (await db()`
+    SELECT s.name AS store_name, p.po_code FROM po_store_receipts r
+      JOIN po_stores s ON s.id = r.po_store_id JOIN purchase_orders p ON p.id = s.po_id
+     WHERE r.email_receipt_id = ${emailReceiptId} LIMIT 1`)[0] || null;
+}
+
 export async function setPoStoreCredit(storeId, { agreed, received, note }) {
   const rows = await db()`
     UPDATE po_stores SET credit_agreed = ${agreed}, credit_received = ${received}, credit_note = ${note}
@@ -4735,11 +4765,11 @@ export async function storeOutcomeForIntake(poId) {
   const po = await getPo(poId);
   if (!po || po.audited_at) return null;
   const t = v.totals;
-  if (!t.short && !t.over && !v.untied_units && !t.overcharge) return null;
+  if (!t.short && !t.over && !v.untied_units && !t.overcharge && !t.undercharge) return null;
   return {
     byStore: true, poId: Number(poId), poCode: v.po_code, supplierName: po.supplier_name,
     storesShort: t.stores_short, storeCount: v.stores.length, short: t.short, over: t.over,
-    owed: t.owed, overcharge: t.overcharge, untied: v.untied_units,
+    owed: t.owed, overcharge: t.overcharge, undercharge: t.undercharge, untied: v.untied_units,
     receivedUnits: t.received_units, expectedUnits: t.declared_units,
     top: v.stores.filter((s) => s.short > 0).sort((a, b) => (b.owed || 0) - (a.owed || 0)).slice(0, 3)
       .map((s) => ({ name: s.name, short: s.short, owed: s.owed })),
@@ -9303,6 +9333,33 @@ export async function presellPoCap(poId, sku, size) {
   return { hasList, expected: hasList ? (byKey.get(key) || 0) : null, listed };
 }
 
+// The existing stock row for a SKU + size (or null) — which PO it is listed against.
+export async function presellStockBySkuSize(sku, size) {
+  return (await db()`SELECT id, po_id, qty, sold FROM presell_stock WHERE sku = ${sku} AND size = ${size}`)[0] || null;
+}
+
+// A row re-pointed to another PO (✎ Cost & shipment): its pairs were pre-listed against
+// ONE order, so they move with it — the old order's count drops, the new one's rises.
+// Without this a row listed with no PO and linked afterwards counted against nothing,
+// and the cap never saw it (review 2026-10-25). Allowed even over the new order's cap:
+// that shows as "over" on the row rather than refusing a fix-up.
+export async function movePresellStockPo(stockId, fromPoId, toPoId, qty) {
+  if (Number(fromPoId || 0) === Number(toPoId || 0)) return;
+  const sql = db();
+  const from = fromPoId ? (await sql`SELECT qty FROM presell_stock_po WHERE stock_id = ${stockId} AND po_id = ${fromPoId}`)[0] : null;
+  const n = from ? Number(from.qty) : Number(qty) || 0;
+  const queries = [];
+  if (fromPoId) queries.push(sql`DELETE FROM presell_stock_po WHERE stock_id = ${stockId} AND po_id = ${fromPoId}`);
+  if (toPoId && n > 0) {
+    queries.push(sql`
+      INSERT INTO presell_stock_po (stock_id, po_id, qty) VALUES (${stockId}, ${toPoId}, ${n})
+      ON CONFLICT (stock_id, po_id) DO UPDATE SET qty = presell_stock_po.qty + ${n}`);
+  }
+  // What was posted as "at risk" was about the old order; the new one is said afresh.
+  queries.push(sql`UPDATE presell_stock SET at_risk_alerted = NULL WHERE id = ${stockId}`);
+  if (queries.length) await sql.transaction(queries);
+}
+
 // Pairs listed against a PO for one stock row: + `delta` (never below 0).
 export async function bumpPresellStockPo(stockId, poId, delta) {
   if (!poId || !delta) return;
@@ -9326,8 +9383,13 @@ export async function presellPoStatus(poIds) {
   const links = await sql`
     SELECT s.id AS stock_id, s.sku, s.size, s.name, s.arrived_qty,
            s.po_id AS current_po, s.at_risk_alerted, x.po_id, coalesce(p.qty, 0)::int AS listed,
+           -- A cancelled sale is no sale; a shipped one has its pair (from wherever it came).
            (SELECT count(*) FROM presell_sales ps
-             WHERE ps.stock_id = s.id AND (ps.po_id = x.po_id OR (ps.po_id IS NULL AND s.po_id = x.po_id)))::int AS sold
+             WHERE ps.stock_id = s.id AND (ps.po_id = x.po_id OR (ps.po_id IS NULL AND s.po_id = x.po_id))
+               AND ps.ship_state IS DISTINCT FROM 'cancelled')::int AS sold,
+           (SELECT count(*) FROM presell_sales ps
+             WHERE ps.stock_id = s.id AND (ps.po_id = x.po_id OR (ps.po_id IS NULL AND s.po_id = x.po_id))
+               AND ps.ship_state IS DISTINCT FROM 'cancelled' AND ps.ship_state IS DISTINCT FROM 'shipped')::int AS unshipped
       FROM (SELECT stock_id, po_id FROM presell_stock_po WHERE po_id = ANY(${ids}::bigint[])
             UNION SELECT id, po_id FROM presell_stock WHERE po_id = ANY(${ids}::bigint[])) x
       JOIN presell_stock s ON s.id = x.stock_id
@@ -9362,7 +9424,8 @@ export async function presellPoStatus(poIds) {
         listed: l.listed, listed_all: listedBy.get(k) || 0, expected, has_list: hasList,
         over_cap: expected != null && (listedBy.get(k) || 0) > expected,
         sold: l.sold, received, arrived_any: Number(l.arrived_qty) || 0,
-        landed, at_risk: landed ? Math.max(0, l.sold - received) : 0,
+        // Never more than the sales still waiting to ship: one that shipped found its pair.
+        landed, at_risk: landed ? Math.min(Number(l.unshipped) || 0, Math.max(0, l.sold - received)) : 0,
         at_risk_alerted: l.at_risk_alerted == null ? null : Number(l.at_risk_alerted),
       });
     }

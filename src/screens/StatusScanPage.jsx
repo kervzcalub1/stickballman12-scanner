@@ -114,6 +114,9 @@ export function StatusScanPage({ target, navBack, onHome, onSignOut }) {
     try {
       const { item } = await api.itemLookup(c);
       if (item.status === target) return fail(c, `${item.vin} is already ${label}.`);
+      // Held by an open inbound issue (inbound-issues.md): it was never listed, so it can't
+      // have sold — refuse it here rather than have the whole submit bounce at the end.
+      if (item.status === 'issue') return fail(c, `${item.vin} is held by an open inbound issue — it isn't for sale. Set it aside; PH resolves it on Inbound Issues.`);
       setRows((rs) => [{ vin: item.vin, name: item.name, sku: item.sku, size: item.size, status: item.status, at: new Date() }, ...rs]);
       pulse('ok', `${item.name || item.sku || item.vin}${item.size ? ` · US ${item.size}` : ''}`);
     } catch (err) {

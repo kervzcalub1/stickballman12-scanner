@@ -45,6 +45,8 @@ const action = (request, id, act, extra = {}, headers = PH) =>
   request.post('/api/inbound-issues/action', { headers, data: { id, action: act, ...extra } });
 
 test('receiving issues open cases, hold the flagged pairs, and PH works them to resolved', async ({ request, page }) => {
+  // The first API call on a fresh dev server compiles the handlers (~10–25 s) — not the feature.
+  test.setTimeout(120_000);
   // Two pairs, each flagged; one shipment issue; one key note (not a case); one no-box defect (not a case).
   const { vins } = await (await request.post('/api/vins/reserve', { headers: WH, data: { count: 3 } })).json();
   expect(vins).toHaveLength(3);
@@ -162,4 +164,37 @@ test('a problem found after receiving is reported by VIN and opens a held case',
   const rs = await request.post('/api/inbound-issues/report', { headers: WH, data: { scope: 'shipment', code: `${TRACK}B`.toLowerCase(), type: 'damaged_package' } });
   expect(rs.status()).toBe(200);
   expect((await rs.json()).row).toMatchObject({ scope: 'shipment', type: 'damaged_package', supplier: SUPPLIER });
+});
+
+test('a held pair moves only through its case — every other status path refuses it', async ({ request }) => {
+  const { vins: [vin] } = await (await request.post('/api/vins/reserve', { headers: WH, data: { count: 1 } })).json();
+  const c = await (await request.post('/api/batches/commit', {
+    headers: WH,
+    data: { batch: { supplier: SUPPLIER, tracking: `${TRACK}C`, manifestReceived: true },
+      items: [{ name: 'E2E II Runner', sku: SKU, size: '13', vin, cost: 150, withBox: true }],
+      unitIssues: [{ vin, type: 'dirty', note: 'stained toe box' }] },
+  })).json();
+  const [caseId] = c.inboundIssues;
+  const refused = async (res) => { expect(res.status()).toBe(409); expect((await res.json()).error).toContain(`case #${caseId}`); };
+  await refused(await request.post('/api/items/bulk-status', { headers: WH, data: { vins: [vin], status: 'needs_shelf' } }));
+  await refused(await request.post('/api/items/bulk-status', { headers: WH, data: { vins: [vin], status: 'sold' } }));
+  await refused(await request.post('/api/items/event', { headers: WH, data: { vin, type: 'status_change', details: { status: 'needs_shelf' } } }));
+  await refused(await request.post('/api/items/rescale', { headers: WH, data: { vin, status: 'needs_shelf' } }));
+  await refused(await request.post('/api/items/box-found', { headers: WH, data: { vin } }));
+  await refused(await request.post('/api/items/delete', { headers: WH, data: { vins: [vin], reason: 'miscount' } }));
+  expect((await q('SELECT status, restock_pending FROM items WHERE vin = $1', [vin]))[0]).toMatchObject({ status: 'issue', restock_pending: false });
+
+  // Reporting the same problem again points at the open case instead of opening a twin.
+  const dup = await request.post('/api/inbound-issues/report', { headers: WH, data: { scope: 'pair', vin, type: 'dirty' } });
+  expect(dup.status()).toBe(409);
+  expect((await dup.json()).caseId).toBe(caseId);
+
+  // Claimed vs came back: a short refund stays visible after it is resolved.
+  expect((await action(request, caseId, 'claim')).status()).toBe(200);
+  expect((await action(request, caseId, 'waiting', { claimAmount: '150' })).status()).toBe(200);
+  const r = await (await action(request, caseId, 'resolve', { outcome: 'partial_refund', refundAmount: 40, disposition: 'keep' })).json();
+  expect(r.row).toMatchObject({ claim_amount: 150, refund_amount: 40 });
+  expect(r.pair).toMatchObject({ released: vin });
+  // …and once resolved, the ordinary paths work on it again.
+  expect((await request.post('/api/items/bulk-status', { headers: WH, data: { vins: [vin], status: 'missing' } })).status()).toBe(200);
 });

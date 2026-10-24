@@ -89,6 +89,16 @@ export function ago(t, now = Date.now()) {
 const when = (t) => (t ? `${estDate(t)} ${estTime(t)}` : '');
 const money = (n) => (n == null || n === '' ? '' : Number(n).toFixed(2));
 
+/**
+ * A refund that came back SHORT of what was claimed: claimed − back, or null when either
+ * side is unknown or nothing is owed. "Refunded" with a gap is how refunds get missed.
+ */
+export function shortfallOf(r) {
+  if (!r || r.claim_amount == null || r.status !== 'resolved' || !MONEY_OUTCOMES.includes(r.outcome)) return null;
+  const gap = Number(r.claim_amount) - Number(r.refund_amount || 0);
+  return gap > 0.005 ? Math.round(gap * 100) / 100 : null;
+}
+
 /** One line about WHAT is wrong — the alert, the list row, the CSV. */
 export function issueHeadline(r) {
   const what = typeLabel(r.scope, r.type);
@@ -103,7 +113,8 @@ const CSV_COLS = [
   ['supplier', 'Supplier'], ['po_code', 'PO'], ['tracking_number', 'Tracking #'], ['batch_code', 'Batch'], ['box_number', 'Box'],
   ['vin', 'VIN'], ['sku', 'SKU'], ['size', 'Size'], ['product', 'Shoe'], ['cost', 'Cost'],
   ['reported_by', 'Reported by'], ['reported', 'Reported (EST)'], ['owner', 'Owner'],
-  ['supplier_ref', 'Supplier ref / RMA'], ['outcome', 'Outcome'], ['refund_amount', 'Amount back'],
+  ['supplier_ref', 'Supplier ref / RMA'], ['claim_amount', 'Amount claimed'], ['outcome', 'Outcome'], ['refund_amount', 'Amount back'],
+  ['short', 'Still owed'],
   ['disposition', 'Pair'], ['resolved_by', 'Resolved by'], ['resolved', 'Resolved (EST)'], ['resolution_note', 'Resolution note'],
   ['photos', 'Photos'],
 ];
@@ -116,6 +127,8 @@ export function inboundIssuesCsv(rows) {
     what: typeLabel(r.scope, r.type),
     cost: money(r.cost),
     refund_amount: money(r.refund_amount),
+    claim_amount: money(r.claim_amount),
+    short: money(shortfallOf(r)),
     outcome: outcomeLabel(r.outcome),
     disposition: dispositionLabel(r.disposition),
     reported: when(r.created_at),

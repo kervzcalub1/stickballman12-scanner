@@ -1,7 +1,7 @@
 // POST /api/items/event  { vin, type, details }  ->  { ok, item, events }
 // Adds a history event to an item (status change, note, or issue).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { getItemByVin, addItemEvent, dbConfigured } from '../_lib/db.js';
+import { getItemByVin, addItemEvent, dbConfigured, inboundHoldsByVin, inboundHoldMessage } from '../_lib/db.js';
 import { normalizeStatus } from '../_lib/statuses.js';
 
 const TYPES = ['status_change', 'note', 'issue', 'moved'];
@@ -38,6 +38,11 @@ export default async function handler(req, res) {
     // unshelved unit is rejected — "Move to shelf" is the path (it sets in_stock).
     if (type === 'status_change' && details.status === 'in_stock' && !found.item.location_id)
       return send(res, 409, { ok: false, error: "This unit isn't on a shelf yet — use “Move to shelf” to place it, which also marks it In Stock." });
+    // Held by an open inbound issue: only its case moves it (a note is still fine).
+    if (type === 'status_change') {
+      const holds = await inboundHoldsByVin([found.item.vin]);
+      if (Object.keys(holds).length) return send(res, 409, { ok: false, error: inboundHoldMessage(holds) });
+    }
     await addItemEvent({ itemId: found.item.id, type, details, createdBy: user.name || user.username || '' });
 
     const updated = await getItemByVin(vin);

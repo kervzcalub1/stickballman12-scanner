@@ -2,7 +2,7 @@
 // Report-page bulk status change. Updates each item and logs a status_change
 // event to its history. Auth required.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { bulkSetStatus, getItemStatesByVins, dbConfigured } from '../_lib/db.js';
+import { bulkSetStatus, getItemStatesByVins, dbConfigured, inboundHoldsByVin, inboundHoldMessage } from '../_lib/db.js';
 import { STATUS_KEYS, isTerminalStatus } from '../_lib/statuses.js';
 
 export default async function handler(req, res) {
@@ -23,6 +23,10 @@ export default async function handler(req, res) {
   if (!STATUS_KEYS.includes(status)) return send(res, 400, { ok: false, error: 'Invalid status.' });
 
   try {
+    // A pair held by an open inbound issue moves only through its case (inbound-issues.md) —
+    // to ANY status, sold included: it was never listed, so nothing could have sold it.
+    const holds = await inboundHoldsByVin(vins);
+    if (Object.keys(holds).length) return send(res, 409, { ok: false, blocked: Object.keys(holds), error: inboundHoldMessage(holds) });
     // These guards both need each unit's current state (status + shelf).
     if (!isTerminalStatus(status)) {
       const states = await getItemStatesByVins(vins);

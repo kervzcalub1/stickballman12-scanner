@@ -6,13 +6,20 @@
 // the "nothing gets overlooked" half of the owner's ask: a case can't sit quietly the way
 // a box on the shelf did, because it is named in a message every day until it is closed.
 //
+// Also: a case still on New after 4 h (INBOUND_ISSUES_REMIND_HOURS) is sent to PH once more.
+//
 // Production only by default (dev and prod share one Telegram bot); INBOUND_ISSUES_WORKER
 // =on / =off overrides, INBOUND_ISSUES_DIGEST_HOUR_EST moves the hour.
-import { listOpenInboundIssues, countInboundIssuesResolvedOn } from './db.js';
-import { alertInboundIssuesDaily } from './alerts.js';
+import { listOpenInboundIssues, countInboundIssuesResolvedOn, listUnclaimedInboundIssues } from './db.js';
+import { alertInboundIssuesDaily, alertInboundIssueUnclaimed } from './alerts.js';
 import { estToday, estCivil, ymd } from '../../src/lib/format.js';
 
 const TICK_MS = 10 * 60 * 1000;
+// A case still on New after this many hours is sent to PH once more (INBOUND_ISSUES_REMIND_HOURS).
+const remindHours = () => {
+  const h = Number(process.env.INBOUND_ISSUES_REMIND_HOURS);
+  return Number.isInteger(h) && h > 0 && h <= 72 ? h : 4;
+};
 const digestHour = () => {
   const h = Number(process.env.INBOUND_ISSUES_DIGEST_HOUR_EST);
   return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 10;
@@ -34,6 +41,8 @@ export function inboundIssuesWorkerEnabled(env = process.env) {
 
 let lastDay = null;
 export async function inboundIssuesTick(now = new Date()) {
+  // The re-ping first: it is per case and `once`, so a tick that repeats it says nothing.
+  for (const r of await listUnclaimedInboundIssues(remindHours())) await alertInboundIssueUnclaimed(r);
   const day = estToday();
   if (lastDay === day || estHour(now) < digestHour()) return { sent: false };
   lastDay = day; // set first: a failed send is not retried every 10 minutes
@@ -61,5 +70,5 @@ export function startInboundIssuesWorker() {
   };
   setTimeout(tick, 20_000);
   setInterval(tick, TICK_MS);
-  console.log(`[inbound-issues-worker] on — daily summary from ${digestHour()}:00 EST`);
+  console.log(`[inbound-issues-worker] on — re-ping untaken cases after ${remindHours()} h, daily summary from ${digestHour()}:00 EST`);
 }

@@ -21,7 +21,7 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { estDate, estTime } from '../lib/format.js';
 import {
   STATUSES, OUTCOMES, MONEY_OUTCOMES, DISPOSITIONS, SHIPMENT_TYPES, PAIR_TYPES, AGE_FLAGS,
-  typeLabel, outcomeLabel, dispositionLabel, ageFlags, ago, inboundIssuesCsv,
+  typeLabel, outcomeLabel, dispositionLabel, ageFlags, ago, inboundIssuesCsv, shortfallOf,
 } from '../lib/inboundIssues.js';
 
 const TABS = [
@@ -31,6 +31,8 @@ const TABS = [
 const PERIODS = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['all', 'All time']];
 const when = (t) => (t ? `${estDate(t)} ${estTime(t)} EST` : '');
 const money = (n) => (n == null ? '—' : `$${Number(n).toFixed(2)}`);
+// The PO's reconciliation (which sizes came short) in the reader's own app.
+const reconcileHref = (poId) => `${window.location.pathname.startsWith('/ph/') ? '/ph/reconciliation' : '/reconcile'}?po=${poId}`;
 const CHIP = { open: 'warn', in_progress: 'info', waiting: 'info', resolved: 'ok' };
 const EVENT_WORDS = {
   reported: 'Reported', claimed: 'Took it', claim: 'Took it', assign: 'Handed over', release: 'Put back to New',
@@ -51,6 +53,7 @@ function claimText(r) {
     r.date_received && `Received: ${r.date_received}`,
     r.scope === 'pair' && `Pair: ${[r.product, r.sku, r.size && `size ${r.size}`].filter(Boolean).join(' · ')}${r.vin ? ` (VIN ${r.vin})` : ''}`,
     r.cost != null && `Cost: ${money(r.cost)}`,
+    r.claim_amount != null && `Amount claimed: ${money(r.claim_amount)}`,
     (r.expected_count != null || r.received_count != null) && `Expected ${r.expected_count ?? '?'}, received ${r.received_count ?? '?'}`,
     r.description && `Details: ${r.description}`,
     (r.photos || []).length && `Photos:\n${r.photos.join('\n')}`,
@@ -127,7 +130,8 @@ function Case({ row, canWork, me, assignees, onChanged, onOpenPhoto, onError, se
 
       <div className="ii-facts">
         <Fact label="Supplier">{row.supplier}</Fact>
-        <Fact label="PO">{row.po_code && <>{row.po_code}{row.po_date ? <span className="muted"> · ordered {row.po_date}</span> : null}</>}</Fact>
+        <Fact label="PO">{row.po_code && <>{row.po_code}{row.po_date ? <span className="muted"> · ordered {row.po_date}</span> : null}
+          {row.po_id ? <> · <a href={reconcileHref(row.po_id)} target="_blank" rel="noopener noreferrer">reconciliation ↗</a></> : null}</>}</Fact>
         <Fact label="Online order">{row.online_store && <>{row.online_store}{row.online_order_number ? ` #${row.online_order_number}` : ''}</>}</Fact>
         <Fact label="Tracking #">{row.tracking_number ? <TrackingLink number={row.tracking_number} /> : (row.no_tracking ? 'none (stated at receiving)' : null)}</Fact>
         <Fact label="Batch / box">{row.batch_code && <>{row.batch_code}{row.box_number != null ? ` · box ${row.box_number}` : ''}</>}</Fact>
@@ -141,6 +145,7 @@ function Case({ row, canWork, me, assignees, onChanged, onOpenPhoto, onError, se
         <Fact label="Reported">{row.reported_by || '—'} · {when(row.created_at)}</Fact>
         <Fact label="Owner">{row.owner ? <>{row.owner}{row.claimed_at ? <span className="muted"> · since {when(row.claimed_at)}</span> : null}</> : <span className="muted">nobody yet</span>}</Fact>
         <Fact label="Supplier ref / RMA">{row.supplier_ref}</Fact>
+        <Fact label="Amount claimed">{row.claim_amount != null ? money(row.claim_amount) : null}</Fact>
       </div>
 
       {(row.photos || []).length > 0 && (
@@ -166,6 +171,7 @@ function Case({ row, canWork, me, assignees, onChanged, onOpenPhoto, onError, se
           <b>{outcomeLabel(row.outcome)}</b>{row.refund_amount != null ? ` · ${money(row.refund_amount)}` : ''}
           {row.disposition ? ` · ${dispositionLabel(row.disposition)}` : ''}
           <span className="muted xs"> — {row.resolved_by} · {when(row.resolved_at)}</span>
+          {shortfallOf(row) != null && <div className="ii-owed">Still owed {money(shortfallOf(row))} — claimed {money(row.claim_amount)}, {money(row.refund_amount)} came back.</div>}
           {row.resolution_note && <div className="muted sm">{row.resolution_note}</div>}
         </div>
       )}
@@ -202,6 +208,9 @@ function Case({ row, canWork, me, assignees, onChanged, onOpenPhoto, onError, se
         <FormModal title={`#${row.id} — waiting on the supplier`} message="You've asked the supplier; nothing to do until they answer. It stays yours."
           submitLabel="Save" fields={[
             { name: 'supplierRef', label: 'Their reference / RMA / ticket # (optional)', value: row.supplier_ref || '', maxLength: 120 },
+            { name: 'claimAmount', label: 'Amount you asked for ($)', type: 'number', step: '0.01', min: 0,
+              value: row.claim_amount ?? (row.scope === 'pair' && row.cost != null ? String(row.cost) : ''),
+              hint: 'So a short refund shows up when it is resolved. Blank if you asked for a replacement.' },
             { name: 'note', label: 'What you asked for', type: 'textarea', placeholder: 'e.g. emailed Sunny for a refund of the missing pair, photos attached', maxLength: 500 },
           ]}
           onClose={() => setAsk(null)}
@@ -212,7 +221,8 @@ function Case({ row, canWork, me, assignees, onChanged, onOpenPhoto, onError, se
           message={row.scope === 'pair' && row.item_id ? 'Say what the supplier did, and what happens to the pair. “Keep it” puts it back to stock (PH can list it); “Returned” takes it off the inventory.' : 'Say what the supplier did.'}
           submitLabel="Resolve" fields={[
             { name: 'outcome', label: 'What happened', type: 'select', value: OUTCOMES[0][0], options: OUTCOMES.map(([value, label]) => ({ value, label })) },
-            { name: 'refundAmount', label: 'Amount back ($) — for a refund or credit', type: 'number', step: '0.01', min: 0, hint: `Needed for: ${MONEY_OUTCOMES.map(outcomeLabel).join(', ')}` },
+            { name: 'refundAmount', label: 'Amount back ($) — for a refund or credit', type: 'number', step: '0.01', min: 0,
+              value: row.claim_amount != null ? String(row.claim_amount) : '', hint: `Needed for: ${MONEY_OUTCOMES.map(outcomeLabel).join(', ')}` },
             ...(row.scope === 'pair' && row.item_id ? [{ name: 'disposition', label: 'The pair', type: 'select', value: 'keep', options: DISPOSITIONS.map(([value, label]) => ({ value, label })) }] : []),
             { name: 'note', label: 'Note (optional)', type: 'textarea', maxLength: 1000 },
           ]}
@@ -242,7 +252,10 @@ function Case({ row, canWork, me, assignees, onChanged, onOpenPhoto, onError, se
         <FormModal title={`Note on #${row.id}`} submitLabel="Add note"
           fields={[
             { name: 'text', label: 'Note', type: 'textarea', maxLength: 1000, placeholder: 'e.g. supplier says they will refund by Friday' },
-            ...(canWork ? [{ name: 'supplierRef', label: 'Supplier ref / RMA (optional)', value: '', maxLength: 120 }] : []),
+            ...(canWork ? [
+              { name: 'supplierRef', label: 'Supplier ref / RMA (optional)', value: '', maxLength: 120 },
+              { name: 'claimAmount', label: 'Amount claimed ($, optional)', type: 'number', step: '0.01', min: 0 },
+            ] : []),
           ]}
           onClose={() => setAsk(null)}
           onSubmit={modal((v) => send('note', v, `Note added to #${row.id}.`))} />

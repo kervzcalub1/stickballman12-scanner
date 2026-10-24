@@ -2006,6 +2006,7 @@ export async function phListItems(from, to, kind = null) {
       ) ev ON true
       WHERE i.restock_pending = true  -- pending worklist; cleared on "Mark restocked"
         AND i.status <> 'no_box'      -- no-box units aren't postable; PH never lists them
+        AND i.status <> 'issue'       -- held by an open inbound issue (inbound-issues.md)
         AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH entirely
         AND NOT i.pre_sell            -- released units clear the flag; unreleased ones stay out
         AND (i.waitlist_until IS NULL OR i.waitlist_until <= now())  -- still on the waitlist (waitlist.md)
@@ -3751,6 +3752,8 @@ export async function markPreSoldByVin(vin, createdBy) {
   if (!it) return { error: `No unit found for ${vin}.` };
   if (!it.pre_sell) return { error: `${it.vin} is not on a pre-sell shipment.` };
   if (it.status === 'pre_sold') return { error: `${it.vin} is already marked as sold.` };
+  // Held by an open inbound issue (inbound-issues.md) — not available to cover an order.
+  if (it.status === 'issue') return { error: `${it.vin} is held as an inbound issue — it can't cover a pre-sale until PH resolves the case.` };
   if (['sold', 'shipped'].includes(it.status)) return { error: `${it.vin} is already ${it.status}.` };
   await sql.transaction([
     sql`UPDATE items SET status = 'pre_sold', updated_at = now() WHERE id = ${it.id}`,
@@ -3930,6 +3933,9 @@ export async function phUpdateGroup(sizeUpdates, by, baseEditedAt = undefined) {
       -- On the waitlist = held out of listing until its date (waitlist.md). The grid shows
       -- those rows read-only; this is the guard for a tab that loaded before the hold.
       AND (i.waitlist_until IS NULL OR i.waitlist_until <= now())
+      -- Held by an open inbound issue (inbound-issues.md) — the guard for a grid tab
+      -- that loaded before the warehouse flagged the pair.
+      AND i.status <> 'issue'
   `;
   if (!curRows.length) return [];
   const curByVin = new Map(curRows.map((r) => [r.vin, r]));
@@ -10857,7 +10863,7 @@ const INBOUND_ISSUE_COLS = `
   ii.batch_id, ii.box_id, ii.item_id, ii.shipment_issue_id, ii.vin, ii.held_from_status,
   ii.status, ii.owner_user_id, ii.owner, ii.claimed_at, ii.supplier_ref,
   ii.warehouse_task, ii.warehouse_task_by, ii.warehouse_task_at, ii.warehouse_done_by, ii.warehouse_done_at,
-  ii.outcome, ii.refund_amount, ii.disposition, ii.resolution_note, ii.resolved_by, ii.resolved_at,
+  ii.outcome, ii.claim_amount, ii.refund_amount, ii.disposition, ii.resolution_note, ii.resolved_by, ii.resolved_at,
   ii.source, ii.reported_by, ii.reported_by_user_id, ii.created_at, ii.updated_at, ii.last_activity_at,
   coalesce(b.supplier_name, ii.supplier) AS supplier,
   coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number) AS tracking_number,
@@ -10895,6 +10901,7 @@ const inboundRow = (r) => (r ? {
   online_order_id: r.online_order_id == null ? null : Number(r.online_order_id),
   cost: r.cost == null ? null : Number(r.cost),
   refund_amount: r.refund_amount == null ? null : Number(r.refund_amount),
+  claim_amount: r.claim_amount == null ? null : Number(r.claim_amount),
   photos: r.photos || [],
 } : null);
 
@@ -11054,7 +11061,7 @@ export async function countInboundIssuesResolvedOn(ymd) {
  *   waiting {supplierRef} in_progress → waiting
  *   working               waiting → in_progress
  */
-export async function moveInboundIssue(id, { action, actor, actorUid, toUid = null, toName = null, supplierRef = null, detail = null }) {
+export async function moveInboundIssue(id, { action, actor, actorUid, toUid = null, toName = null, supplierRef = null, claimAmount = null, detail = null }) {
   let rows = [];
   if (action === 'claim') {
     rows = await db()`UPDATE inbound_issues SET status = 'in_progress', owner_user_id = ${actorUid}, owner = ${actor},
@@ -11070,7 +11077,7 @@ export async function moveInboundIssue(id, { action, actor, actorUid, toUid = nu
                        WHERE id = ${id} AND status IN ('in_progress', 'waiting') RETURNING id`;
   } else if (action === 'waiting') {
     rows = await db()`UPDATE inbound_issues SET status = 'waiting', supplier_ref = coalesce(${supplierRef}, supplier_ref),
-                        updated_at = now(), last_activity_at = now()
+                        claim_amount = coalesce(${claimAmount}::numeric, claim_amount), updated_at = now(), last_activity_at = now()
                        WHERE id = ${id} AND status = 'in_progress' RETURNING id`;
   } else if (action === 'working') {
     rows = await db()`UPDATE inbound_issues SET status = 'in_progress', updated_at = now(), last_activity_at = now()
@@ -11084,12 +11091,13 @@ export async function moveInboundIssue(id, { action, actor, actorUid, toUid = nu
 }
 
 /** A note on the trail (and the supplier's reference, if one is given). Bumps "last activity". */
-export async function noteInboundIssue(id, { actor, text, supplierRef = null }) {
+export async function noteInboundIssue(id, { actor, text, supplierRef = null, claimAmount = null }) {
   const rows = await db()`UPDATE inbound_issues SET supplier_ref = coalesce(${supplierRef}, supplier_ref),
+                            claim_amount = coalesce(${claimAmount}::numeric, claim_amount),
                             updated_at = now(), last_activity_at = now()
                            WHERE id = ${id} RETURNING id`;
   if (!rows.length) return null;
-  const parts = [text, supplierRef ? `supplier ref ${supplierRef}` : null].filter(Boolean);
+  const parts = [text, supplierRef ? `supplier ref ${supplierRef}` : null, claimAmount != null ? `claimed $${Number(claimAmount).toFixed(2)}` : null].filter(Boolean);
   await logInboundIssueEvent(id, 'note', actor, parts.join(' · '));
   return getInboundIssue(id);
 }
@@ -11205,4 +11213,44 @@ export async function findShipmentForIssue(code) {
   const b = await db()`SELECT id, batch_code, kind FROM batches WHERE upper(tracking_number) = ${t} OR upper(batch_code) = ${up}
                         ORDER BY id DESC LIMIT 1`;
   return b[0] ? { batch_id: Number(b[0].id), box_id: null, batch_code: b[0].batch_code, kind: b[0].kind } : null;
+}
+
+/**
+ * Pairs HELD by an open inbound-issue case: { vin: caseId }. Every path that moves a
+ * pair's status (Inventory edits, Mark sold/shipped, rescale, box found, pre-sell, remove)
+ * asks this first — the hold is only a hold if nothing else can lift it. The case's own
+ * Resolve is the one way out (inbound-issues.md).
+ */
+export async function inboundHoldsByVin(vins) {
+  const list = [...new Set((vins || []).map((v) => String(v || '').trim().toUpperCase()).filter(Boolean))];
+  if (!list.length) return {};
+  const rows = await db()`SELECT i.vin, min(ii.id) AS case_id FROM items i
+                           JOIN inbound_issues ii ON ii.item_id = i.id AND ii.status <> 'resolved'
+                          WHERE i.vin = ANY(${list}) AND i.status = 'issue'
+                          GROUP BY i.vin`;
+  return Object.fromEntries(rows.map((r) => [r.vin, Number(r.case_id)]));
+}
+/** The one sentence every refusal uses. */
+export function inboundHoldMessage(holds) {
+  const e = Object.entries(holds || {});
+  if (!e.length) return null;
+  const list = e.slice(0, 5).map(([v, id]) => `${v} (case #${id})`).join(', ');
+  return `${e.length === 1 ? 'This pair is' : `${e.length} pairs are`} held by an open inbound issue: ${list}${e.length > 5 ? '…' : ''}. It changes only when PH resolves the case on Inbound Issues (Keep it → back to stock, or Returned).`;
+}
+
+/** An OPEN case already about this exact problem — the report path's duplicate guard. */
+export async function findOpenInboundIssue({ itemId = null, batchId = null, boxId = null, type }) {
+  const rows = itemId
+    ? await db()`SELECT id FROM inbound_issues WHERE status <> 'resolved' AND item_id = ${itemId} AND type = ${type} ORDER BY id LIMIT 1`
+    : await db()`SELECT id FROM inbound_issues WHERE status <> 'resolved' AND scope = 'shipment' AND batch_id = ${batchId}
+                   AND box_id IS NOT DISTINCT FROM ${boxId}::bigint AND type = ${type} ORDER BY id LIMIT 1`;
+  return rows[0] ? Number(rows[0].id) : null;
+}
+
+/** Cases still on New (nobody took them) older than `hours` — the worker's one re-ping. */
+export async function listUnclaimedInboundIssues(hours) {
+  const rows = await rawQuery(`SELECT ${INBOUND_ISSUE_COLS} ${INBOUND_ISSUE_FROM}
+                                WHERE ii.status = 'open' AND ii.created_at < now() - make_interval(hours => $1::int)
+                                ORDER BY ii.created_at, ii.id`, [hours]);
+  return rows.map(inboundRow);
 }

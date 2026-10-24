@@ -791,3 +791,15 @@ export async function alertInboundIssuesDaily({ day, rows, closedYesterday = 0, 
     path: at('inboundissues', 'view=all'),
   });
 }
+
+// The one re-ping: a case still on New after a few hours goes to PH again, ONCE per case
+// (`once` on its own ref), so "nobody saw it" can't wait for the next morning's summary.
+export async function alertInboundIssueUnclaimed(row) {
+  return alertUsers('inbound.issue_reported', {
+    once: true,
+    ref: `inbound-remind:${row.id}`,
+    code: `#${row.id} — still not taken`,
+    body: `Nobody has taken #${row.id} yet (reported ${ago(row.created_at)} ago by ${row.reported_by || 'the warehouse'}): ${issueHeadline(row)}${issueWhere(row) ? ` (${issueWhere(row)})` : ''}. Open it and tap “Take it”.`,
+    path: at('inboundissues', `id=${row.id}`),
+  });
+}

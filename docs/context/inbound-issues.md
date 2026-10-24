@@ -45,6 +45,16 @@ already out of `listable` / pending counts. Added:
   open inbound issue — keep it aside").
 - A pair already held by another open case stays held; its ORIGINAL status is the one kept.
 - Sold/shipped pairs are never touched.
+- **Nothing else can lift the hold (review 2026-10-25).** `inboundHoldsByVin(vins)` (a pair
+  with status `issue` AND an unresolved case) is checked by every other path that moves a
+  pair, each answering 409 with `inboundHoldMessage` ("held by an open inbound issue: VIN
+  (case #N) …"): `items/bulk-status` (Inventory edits, Mark sold/shipped — to ANY status),
+  `items/event` (a status change; a note is fine), `items/rescale` (would put it on PH's
+  Rescale list), `items/box-found`, `items/delete` (it leaves through "Returned" instead),
+  `markPreSoldByVin`. Mark Sold/Shipped also refuses it AT THE SCAN (`StatusScanPage`), so a
+  300-pair run isn't bounced at submit. The PH Rescale worklist and `phUpdateGroup` (a grid
+  tab loaded before the flag) skip `status='issue'` too. A legacy `issue` status with no case
+  is not a hold — the server lets it move as before (only the scan page refuses all `issue`).
 
 ## Working a case (PH + admin own; warehouse sees, reports, notes, photos, does jobs)
 Statuses: `open` (New, nobody owns) → `in_progress` → `waiting` (on the supplier) → `resolved`.
@@ -65,6 +75,17 @@ it (`pair.stillHeld`); `returned` → `deleteItems` (Deleted archive, reason "Re
 supplier — inbound issue #N"), `item_id` goes NULL by FK, the case keeps its VIN/SKU copy.
 The reporter gets `inbound.issue_resolved` saying which.
 
+**Claimed vs came back (2026-10-25).** `claim_amount` = what we ASKED for (Waiting on
+supplier… — prefilled with the pair's cost — or a Note…); `refund_amount` = what came back
+(Resolve, prefilled with the claim). `shortfallOf()` → "Still owed $X" in red on a resolved
+refund/partial/credit case, and a CSV column — a short refund no longer reads as "refunded".
+Each case with a PO links to that PO's **reconciliation** (`?po=`), which lists the sizes short.
+
+**Duplicate guard.** `report` refuses a second OPEN case for the same pair + problem, or the
+same delivery (batch + box) + problem → 409 `{caseId}` "already case #N — add your photos or a
+note there". Receiving can't double-open: a shipment case is unique on `shipment_issue_id`, a
+retried box submit is refused by the box CAS.
+
 **The claim facts.** Each case COPIES the shipment facts at report time (supplier, tracking,
 PO id+code, batch code, box #, pair SKU/size/name/cost) so it still answers "who do we claim
 from?" after a merge or a removal; reads take the live row first (`coalesce`). The online
@@ -72,6 +93,9 @@ order is matched by tracking number. **Copy for supplier** on the page puts all 
 photo links on the clipboard. CSV export of the shown rows (`inboundIssuesCsv`).
 
 ## Oversight (Genesis)
+- **Re-ping (2026-10-25):** a case still on New after **4 h** (`INBOUND_ISSUES_REMIND_HOURS`)
+  goes to PH once more ("#N — still not taken"), once per case (`inbound-remind:<id>`), from
+  the same worker — so an unseen case doesn't wait for the next morning's summary.
 - `inbound.issue_daily` — `api/_lib/inbound-issues-worker.js`, **10:00 EST**
   (`INBOUND_ISSUES_DIGEST_HOUR_EST`), production only (`INBOUND_ISSUES_WORKER=on/off`),
   `once` per EST day. Open count by owner, ⏰ unclaimed 24 h+ (`UNCLAIMED_HOURS`), 🐢 no update
@@ -94,7 +118,7 @@ auto). Photos are public R2 URLs like the per-VIN defect photos.
 
 ## Tables (db-setup; both in `LIVE_TABLES`)
 `inbound_issues` (one row per case; unique on `shipment_issue_id` so a retried commit can't
-open it twice), `inbound_issue_events` (the trail). `shipment_issues.photos TEXT[]`.
+open it twice; `claim_amount` added 2026-10-25), `inbound_issue_events` (the trail). `shipment_issues.photos TEXT[]`.
 
 ## Tests
 `e2e/inbound-issues.spec.js` — commit with a shortfall + 3 per-pair flags (one no_box) →

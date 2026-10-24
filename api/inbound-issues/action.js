@@ -22,6 +22,14 @@ import { alertInboundIssueAssigned, alertInboundWarehouseTask, alertInboundIssue
 import { OUTCOMES, MONEY_OUTCOMES, DISPOSITIONS } from '../../src/lib/inboundIssues.js';
 import { VIEW_ROLES, canWork, actorOf, uidOf, idOf, text } from './_shared.js';
 
+// A dollar amount from a form: blank = not given (never $0), else ≥ 0, cents.
+const amountOf = (v) => {
+  if (v === '' || v == null) return { value: null };
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return { error: 'The amount must be a number, $0 or more.' };
+  return { value: Math.round(n * 100) / 100 };
+};
+
 const WORK = ['claim', 'assign', 'release', 'waiting', 'working', 'ask_warehouse', 'resolve', 'reopen'];
 const ANYONE = ['note', 'photos', 'warehouse_done'];
 
@@ -63,7 +71,10 @@ export default async function handler(req, res) {
     } else if (action === 'release') {
       row = await moveInboundIssue(id, { action, actor, actorUid, detail: text(b.note, 300) });
     } else if (action === 'waiting') {
-      row = await moveInboundIssue(id, { action, actor, actorUid, supplierRef: text(b.supplierRef, 120), detail: text(b.note, 500) });
+      const claim = amountOf(b.claimAmount);
+      if (claim.error) return send(res, 400, { ok: false, error: claim.error });
+      const words = [text(b.note, 500), claim.value != null ? `claimed $${claim.value.toFixed(2)}` : null].filter(Boolean).join(' · ') || null;
+      row = await moveInboundIssue(id, { action, actor, actorUid, supplierRef: text(b.supplierRef, 120), claimAmount: claim.value, detail: words });
     } else if (action === 'working') {
       row = await moveInboundIssue(id, { action, actor, actorUid, detail: text(b.note, 500) });
     } else if (action === 'ask_warehouse') {
@@ -74,12 +85,9 @@ export default async function handler(req, res) {
     } else if (action === 'resolve') {
       const outcome = String(b.outcome || '');
       if (!OUTCOMES.some(([k]) => k === outcome)) return send(res, 400, { ok: false, error: 'Pick what the supplier did.' });
-      let refundAmount = null;
-      if (b.refundAmount !== '' && b.refundAmount != null) {
-        refundAmount = Number(b.refundAmount);
-        if (!Number.isFinite(refundAmount) || refundAmount < 0) return send(res, 400, { ok: false, error: 'The amount must be a number, $0 or more.' });
-        refundAmount = Math.round(refundAmount * 100) / 100;
-      }
+      const amt = amountOf(b.refundAmount);
+      if (amt.error) return send(res, 400, { ok: false, error: amt.error });
+      const refundAmount = amt.value;
       if (MONEY_OUTCOMES.includes(outcome) && refundAmount == null)
         return send(res, 400, { ok: false, error: 'How much came back? Type the amount.' });
       const disposition = cur.scope === 'pair' ? String(b.disposition || '') : null;
@@ -96,9 +104,11 @@ export default async function handler(req, res) {
       row = await reopenInboundIssue(id, { actor, actorUid, why });
     } else if (action === 'note') {
       const t = text(b.text, 1000);
-      const supplierRef = text(b.supplierRef, 120);
-      if (!t && !supplierRef) return send(res, 400, { ok: false, error: 'Write the note first.' });
-      row = await noteInboundIssue(id, { actor, text: t, supplierRef });
+      const supplierRef = canWork(user) ? text(b.supplierRef, 120) : null;
+      const claim = canWork(user) ? amountOf(b.claimAmount) : { value: null };
+      if (claim.error) return send(res, 400, { ok: false, error: claim.error });
+      if (!t && !supplierRef && claim.value == null) return send(res, 400, { ok: false, error: 'Write the note first.' });
+      row = await noteInboundIssue(id, { actor, text: t, supplierRef, claimAmount: claim.value });
     } else if (action === 'photos') {
       row = await addInboundIssuePhotos(id, { actor, photos: b.photos });
     } else if (action === 'warehouse_done') {

@@ -2,7 +2,7 @@
 // A no-box unit got a box: mark with_box=true + status needs_shelf (now sellable).
 // Warehouse/admin only.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { getItemByVin, markBoxFound, dbConfigured } from '../_lib/db.js';
+import { getItemByVin, markBoxFound, dbConfigured, inboundHoldsByVin, inboundHoldMessage } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -20,6 +20,8 @@ export default async function handler(req, res) {
   try {
     const found = await getItemByVin(vin);
     if (!found) return send(res, 404, { ok: false, error: `No item found for ${vin}.` });
+    const holds = await inboundHoldsByVin([found.item.vin]);
+    if (Object.keys(holds).length) return send(res, 409, { ok: false, error: inboundHoldMessage(holds) });
     await markBoxFound(found.item.id, user.name || user.username || '');
     const updated = await getItemByVin(vin);
     return send(res, 200, { ok: true, ...updated });

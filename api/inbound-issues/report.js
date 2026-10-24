@@ -8,6 +8,7 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import {
   dbConfigured, findItemForIssue, findShipmentForIssue, insertIssueEvents, insertIssues, openInboundIssues, cleanPhotoUrls,
+  findOpenInboundIssue,
 } from '../_lib/db.js';
 import { alertInboundIssuesReported } from '../_lib/alerts.js';
 import { SHIPMENT_TYPES, PAIR_TYPES } from '../../src/lib/inboundIssues.js';
@@ -42,6 +43,9 @@ export default async function handler(req, res) {
       if (!it) return send(res, 404, { ok: false, error: `No pair with VIN ${vin}.` });
       if (['sold', 'shipped'].includes(it.status)) return send(res, 409, { ok: false, error: `${vin} is already ${it.status}.` });
       if (!it.batch_id || !isDelivery(it.kind)) return send(res, 409, { ok: false, error: NOT_A_DELIVERY });
+      // Already an open case about this? Add to it rather than opening a twin.
+      const dupe = await findOpenInboundIssue({ itemId: it.id, type });
+      if (dupe) return send(res, 409, { ok: false, caseId: dupe, error: `That’s already case #${dupe} — add your photos or a note there.` });
       await insertIssueEvents([{ itemId: it.id, type, note: description || '', photos }], by);
       rows = await openInboundIssues({ batchId: it.batch_id, boxId: it.box_id, pairs: [{ itemId: it.id, type, note: description, photos }], by, byUid, source: 'page' });
     } else if (b.scope === 'shipment') {
@@ -49,6 +53,8 @@ export default async function handler(req, res) {
       const found = await findShipmentForIssue(b.code);
       if (!found) return send(res, 404, { ok: false, error: 'No received shipment with that tracking number or batch code.' });
       if (!isDelivery(found.kind)) return send(res, 409, { ok: false, error: NOT_A_DELIVERY });
+      const dupe = await findOpenInboundIssue({ batchId: found.batch_id, boxId: found.box_id, type });
+      if (dupe) return send(res, 409, { ok: false, caseId: dupe, error: `That’s already case #${dupe} — add your photos or a note there.` });
       const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Math.max(0, Math.round(Number(v))));
       const [rec] = await insertIssues(found.batch_id, [{ type, description, expectedCount: num(b.expectedCount), receivedCount: num(b.receivedCount), photos }], by);
       rows = await openInboundIssues({

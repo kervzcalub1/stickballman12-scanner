@@ -84,7 +84,12 @@ the invoice, and Kevin audits it against what arrived and the card statement.
   receipt $ (sum of `po_store_receipts.amount`), charged $ (sum of `po_store_charges`, negative =
   a credit), received (pairs out of the store's boxes, via the shared matcher), **short / over per
   SKU + size, never netted**, `owed` = Σ short × the line's price, charged − declared, credits;
-  SKU → size drill-down; totals (+ `overcharge` = only stores charged MORE than declared);
+  SKU → size drill-down; totals. **Sales tax (review 2026-10-25):** the card is compared with
+  `expected_charge` = list × (1 + the supplier cost preset's `tax_pct`) → `charged_minus_expected`
+  + `charge_flag` ok/over/under (tolerance max($1, 0.5%)); `overcharge` = stores over, and
+  `undercharge` = stores whose card came in BELOW list + tax (a discount, or the list — what
+  the supplier is paid on — priced above what was paid). One rate per order (known limit:
+  stores in different states). `charged_minus_declared` is kept for old snapshots;
   `untied_units`; `list_after_receiving`. **Landed** (`getPoLanded`): every non-replacement label
   has a received box and no batch is open — or "Call it landed" (`landed_override_*`, with a
   reason). Before landed the screen shows no short/owed. Overdue = a label Delivered 2+ days ago
@@ -110,6 +115,9 @@ the invoice, and Kevin audits it against what arrived and the card statement.
   attach `amount`) and with "Read it". The read lines are stored on the receipt and shown per
   store as **Receipt vs list** (`compareReceiptToList` in `src/lib/storeAudit.js`: by size, or
   shoe by shoe when the receipt prints no sizes; sizes on their number like the audit).
+  It checks PRICES too: a receipt price each more than $1 off the list's is a `kind:'price'`
+  diff. One email receipt can only be attached once (any store, any order). A photo receipt
+  uploaded by staff is read by the AI at once (no separate "Read it").
 - **Alert:** `reconcileOutcomeForIntake` → `storeOutcomeForIntake` for a store order — only once
   landed, not when audited; `alertPoDiscrepancy` says "N of M stores short · pairs · $ owed" + the
   top 3, `once` per `po:<id>:store:<short>/<owed>/<over>/<overcharge>/<untied>`. Also fired from

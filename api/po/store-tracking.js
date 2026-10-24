@@ -11,7 +11,7 @@
 // themselves — never overwrite a label we bought. Staff may do either.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import {
-  getPoBox, getPo, getPoFull, updatePoBox, poBoxByTracking, addPoComment, PO_FROZEN, dbConfigured,
+  getPoBox, getPo, getPoFull, updatePoBox, poBoxByTracking, poBoxReceived, addPoComment, PO_FROZEN, dbConfigured,
 } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
 import { supplierPoView } from '../_lib/po-supplier-view.js';
@@ -46,8 +46,9 @@ export default async function handler(req, res) {
       return send(res, 409, { ok: false, error: `${po.po_code} is ${po.status} — its count is settled, so its labels can't be edited.` });
     if (bySupplier && box.tracking_number && box.tracking_source !== 'store')
       return send(res, 409, { ok: false, error: `Box ${box.box_number} already has the label we sent (${box.tracking_number}). Ask us if the store shipped it some other way.` });
-    if (bySupplier && box.status === 'received')
-      return send(res, 409, { ok: false, error: `Box ${box.box_number} has already been received.` });
+    // Labels have no 'received' status — what counts is pairs already counted into it.
+    if (bySupplier && (await poBoxReceived(box)).units > 0)
+      return send(res, 409, { ok: false, error: `Box ${box.box_number} has already been received — ask us if its number is wrong.` });
     const clash = await poBoxByTracking(tracking, { exceptBoxId: boxId });
     if (clash) {
       return send(res, 409, {

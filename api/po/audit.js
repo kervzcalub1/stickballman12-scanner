@@ -25,7 +25,7 @@ import {
   getPo, getPoStore, getPoStoreVariance, listPoStoreCharges, addPoStoreCharge, getPoStoreCharge,
   removePoStoreCharge, listPoStoreReceipts, getPoStoreReceipt, setPoStoreReceiptRead, removePoStoreReceipt,
   addPoStoreReceipt, setPoStoreCredit, setPoLandedOverride, markPoAudited, unauditPo, addPoComment,
-  storeOutcomeForIntake, getEmailReceipt, dbConfigured,
+  storeOutcomeForIntake, getEmailReceipt, emailReceiptAttachedTo, dbConfigured,
 } from '../_lib/db.js';
 import { hasPrivilege } from '../_lib/buycart.js';
 import { alertPoDiscrepancy } from '../_lib/alerts.js';
@@ -162,6 +162,13 @@ export default async function handler(req, res) {
       if (!Number.isInteger(emailId)) return send(res, 400, { ok: false, error: 'Pick the email receipt.' });
       const er = await getEmailReceipt(emailId);
       if (!er) return send(res, 404, { ok: false, error: 'That email receipt no longer exists.' });
+      // One receipt is one purchase: attached to a second store (or twice to one) it would
+      // count its total twice and hide an overcharge.
+      const used = await emailReceiptAttachedTo(emailId);
+      if (used) {
+        return send(res, 409, { ok: false,
+          error: `That email receipt is already attached to ${used.store_name} on ${used.po_code}. One receipt can only be one store's.` });
+      }
       await addPoStoreReceipt({
         storeId: Number(st.id), emailReceiptId: emailId, amount: er.total == null ? null : Number(er.total),
         name: `Email receipt${er.order_number ? ` #${er.order_number}` : ''}`, uploadedBy: who,

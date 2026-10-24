@@ -135,10 +135,12 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
       if (!put.ok) throw new Error(`Upload failed (${put.status})`);
       const { receipt } = await api.poReceiptAttach({ poId: Number(po.id), storeId: s.store_id, key, name: file.name, contentType: type, sizeBytes: file.size });
       await load(); onChanged?.();
-      // A PDF is read straight away — its total comes up for a person to confirm.
-      if (type === 'application/pdf') {
-        try { receiptTotal({ ...receipt, store_name: s.name }, await readPdf(file)); } catch { /* typed by hand instead */ }
-      }
+      // Read straight away — a PDF from its own text, a photo by the AI (twice) — and the
+      // total comes up for a person to confirm: one step, not upload-then-"Read it".
+      try {
+        receiptTotal({ ...receipt, store_name: s.name },
+          type === 'application/pdf' ? await readPdf(file) : await api.poReceiptRead(Number(po.id), receipt.id));
+      } catch { /* the reader is unavailable — the total is typed with "Total…" instead */ }
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setBusy(false); }
   };
@@ -196,7 +198,12 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
         )}
         {v.untied_units > 0 && <span className="po-chip warn">Not tied to a store: {v.untied_units} pair{v.untied_units === 1 ? '' : 's'}</span>}
         {v.list_after_receiving && <span className="po-chip warn">⚠ List entered after receiving</span>}
-        {showShort && v.totals.overcharge > 0 && <span className="po-chip warn">Charged over the list: {money(v.totals.overcharge)}</span>}
+        {showShort && v.totals.overcharge > 0 && <span className="po-chip warn">Charged over list + tax: {money(v.totals.overcharge)}</span>}
+        {showShort && v.totals.undercharge > 0 && (
+          <span className="po-chip warn" title="The card came in below the list plus tax. A discount — or the list (what the supplier is paid on) is priced above what was really paid.">
+            Charged under the list: {money(v.totals.undercharge)} — check its prices
+          </span>
+        )}
       </div>
       {landed.override?.note && !audited && <p className="muted sm">“{landed.override.note}”</p>}
       {audited && po.audit_note && <p className="muted sm">Audit note: “{po.audit_note}”</p>}
@@ -207,7 +214,10 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
           <thead>
             <tr>
               <th>Store</th><th>Declared</th><th>Declared $</th><th>Receipt $</th><th>Charged $</th>
-              <th>Received</th><th>Short</th><th>Over</th><th>$ owed</th><th>Charged − declared</th>
+              <th>Received</th><th>Short</th><th>Over</th><th>$ owed</th>
+              <th title={v.tax_pct ? `What each store should have charged: the list plus ${v.tax_pct}% tax (${v.tax_source})` : 'No tax rate on the supplier’s cost preset — compared with the list as it stands'}>
+                Card vs list{v.tax_pct ? ` + ${v.tax_pct}% tax` : ''}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -229,7 +239,9 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
                     <td className={showShort && s.short ? 'bad-cell' : ''}>{showShort ? s.short : '—'}</td>
                     <td className={s.over ? 'warn-cell' : ''}>{s.over}</td>
                     <td className={showShort && s.owed ? 'bad-cell' : ''}>{showShort ? money(s.owed) : '—'}{showShort && s.unpriced_short ? ' +?' : ''}</td>
-                    <td className={(s.charged_minus_declared || 0) > 0.004 ? 'bad-cell' : ''}>{signed(s.charged_minus_declared)}</td>
+                    <td className={s.charge_flag === 'over' ? 'bad-cell' : s.charge_flag === 'under' ? 'warn-cell' : ''}>
+                      {signed(s.charged_minus_expected ?? s.charged_minus_declared)}{s.charge_flag === 'ok' ? ' ✓' : ''}
+                    </td>
                   </tr>
                   {isOpen && (
                     <tr className="store-audit-detail">
@@ -303,7 +315,7 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
                                 <div className="store-audit-sub">
                                   <b className="sm">Receipt vs list</b>
                                   {diffs.length
-                                    ? <ul className="store-receipt-diffs sm">{diffs.map((d) => <li key={`${d.sku}|${d.size}`}>{receiptDiffSentence(d)}</li>)}</ul>
+                                    ? <ul className="store-receipt-diffs sm">{diffs.map((d) => <li key={`${d.kind}|${d.sku}|${d.size}`}>{receiptDiffSentence(d)}</li>)}</ul>
                                     : <span className="sm">✓ the receipt matches the list{bySize ? '' : ' (shoe by shoe — the receipt prints no sizes)'}</span>}
                                 </div>
                               );
@@ -333,7 +345,8 @@ export function StoreAuditPanel({ detail, onChanged, onSignOut }) {
               <td>{showShort ? v.totals.short : '—'}</td>
               <td>{v.totals.over}</td>
               <td>{showShort ? money(v.totals.owed) : '—'}</td>
-              <td>{v.totals.charged_total != null && v.totals.declared_total != null ? signed(v.totals.charged_total - v.totals.declared_total) : '—'}</td>
+              <td>{v.totals.charged_total != null && v.totals.expected_charge != null ? signed(v.totals.charged_total - v.totals.expected_charge)
+                : v.totals.charged_total != null && v.totals.declared_total != null ? signed(v.totals.charged_total - v.totals.declared_total) : '—'}</td>
             </tr>
           </tbody>
         </table>

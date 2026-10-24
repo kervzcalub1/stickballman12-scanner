@@ -110,6 +110,28 @@ test.describe('Box Labels · lookup', () => {
     await expect(page.locator('.card').last()).toContainText(`UPC ${UPC}`);
     await expect(page.getByRole('button', { name: /Print box label only/i })).toBeEnabled();
   });
+
+  // A label prints the code as fact. When only Alias knew the barcode (it filed the
+  // Jordan 15 'Black Pack' under the 16 on 2026-10-22), the code is read off the shoe
+  // before anything prints.
+  test('a UPC only Alias knew blocks printing until the code is checked', async ({ page }) => {
+    await loginAs(page, 'warehouse');
+    await stubCatalogue(page);
+    await page.route('**/api/upc-search', (route) => route.fulfill({
+      json: { ok: true, product: { ...PRODUCT.product, upc: UPC, upcSource: 'alias' } },
+    }));
+    await page.goto('/box-labels');
+    await page.getByPlaceholder(/Scan a VIN or box UPC/i).fill(UPC);
+    await page.getByRole('button', { name: 'Find', exact: true }).click();
+
+    await expect(page.locator('.alias-check')).toContainText('Only Alias knew this barcode');
+    await page.locator('select').first().selectOption('9.5');
+    await expect(page.getByRole('button', { name: /Print box label only/i })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Give it a VIN/i })).toBeDisabled();
+    await page.getByRole('button', { name: `✓ Box says ${SKU}` }).click();
+    await expect(page.locator('.alias-check')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Print box label only/i })).toBeEnabled();
+  });
 });
 
 // The bug this guards: the tool used to ask the third-party catalogue ONLY, so a

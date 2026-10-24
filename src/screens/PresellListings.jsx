@@ -13,6 +13,7 @@ import { TopBar, Modal, CopyText, ShoeThumb } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
+import { AliasCodeCheck, aliasOnlyCode } from '../components/AliasCodeCheck.jsx';
 import { isUpcCode } from '../lib/codes.js';
 import { parsePresellPaste } from '../lib/presellPaste.js';
 import { landedFromShelf } from '../lib/costs.js';
@@ -288,7 +289,9 @@ function ListNew({ onSignOut, onListed }) {
       const r = upc ? await api.searchUpc(code) : await api.searchSku(code.toUpperCase());
       if (!r.product?.sku) throw new Error('No product found.');
       // A dual style code: the marketplaces know one code at a time — list under the first.
-      const prod = { ...r.product, sku: String(r.product.sku).split('/')[0] };
+      // Only Alias knew the barcode: the code is a guess until the box is read
+      // (src/components/AliasCodeCheck.jsx) — listing it would sell the wrong shoe.
+      const prod = { ...r.product, sku: String(r.product.sku).split('/')[0], codeCheck: aliasOnlyCode(r.product, upc ? code : '') };
       setProduct(prod);
       if (upc && r.product.scannedSize) addLine(prod, r.product.scannedSize, code);
       setInput('');
@@ -477,8 +480,15 @@ function ListNew({ onSignOut, onListed }) {
               <b>{product.name}</b>
               <div className="muted sm"><CopyText text={product.sku}>{product.sku}</CopyText>{product.colorway ? ` · ${product.colorway}` : ''}</div>
               <div className="muted xs">Tap a size to add a pair{product.scannedSize ? ` — size ${product.scannedSize} was added from the scan` : ''}.</div>
+              {product.codeCheck && (
+                <AliasCodeCheck key={product.codeCheck} code={product.codeCheck} current={product.sku} onSignOut={onSignOut}
+                  onConfirm={() => setProduct((x) => ({ ...x, codeCheck: '' }))}
+                  onFix={({ found, sizes, ...fix }) => setProduct((x) => ({
+                    ...x, ...fix, name: fix.name || fix.sku, sku: String(fix.sku).split('/')[0], sizes, codeCheck: '',
+                  }))} />
+              )}
               <div className="ap-sizes">
-                {(product.sizes || []).map((s) => <button key={s} type="button" className="btn sm ghost" onClick={() => addLine(product, s)}>{s}</button>)}
+                {(product.sizes || []).map((s) => <button key={s} type="button" className="btn sm ghost" disabled={!!product.codeCheck} onClick={() => addLine(product, s)}>{s}</button>)}
                 {!product.sizes?.length && <span className="muted sm">No size run came back for this SKU.</span>}
               </div>
             </div>

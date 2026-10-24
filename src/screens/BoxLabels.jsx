@@ -19,6 +19,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { useMediaQuery } from '../hooks.js';
 import { isUpcCode, isVinCode, upcDigits, compareSizes, sizeLabel } from '../lib/codes.js';
 import UpcCheck from '../components/UpcCheck.jsx';
+import { AliasCodeCheck, aliasOnlyCode } from '../components/AliasCodeCheck.jsx';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -128,6 +129,9 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
       // the exact scanned size.
       const { product: p } = upc ? await api.searchUpc(code) : await api.searchSku(code);
       setFound({
+        // Only Alias knew this barcode: the code is a guess until somebody reads the
+        // label (src/components/AliasCodeCheck.jsx) — a label prints the code as fact.
+        codeCheck: aliasOnlyCode(p, upc ? code : ''),
         kind: 'product', from: 'catalogue', name: p.name || code, sku: p.sku || (upc ? '' : code),
         // A scanned UPC belongs to the size it came back with — changing the size
         // drops it (the catalogue will be asked for the new size's at print time).
@@ -286,6 +290,7 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
   const it = found?.kind === 'item' ? found.item : null;
   const p = found?.kind === 'product' ? found : null;
   const needSize = p && !String(p.size || '').trim();
+  const needCheck = !!p?.codeCheck;
 
   return (
     <div className="app">
@@ -431,12 +436,20 @@ export function BoxLabels({ navBack, onHome, onSignOut }) {
             </label>
             {p.customSize && <span className="muted xs">Typed sizes print as written — 12.5, 8W, 6Y.</span>}
           </div>
+          {needCheck && (
+            <AliasCodeCheck key={p.codeCheck} code={p.codeCheck} current={p.sku} where="the shoe’s tongue label or its box" onSignOut={onSignOut}
+              onConfirm={() => setFound((f) => ({ ...f, codeCheck: '' }))}
+              onFix={({ found: hit, sizes, ...fix }) => setFound((f) => ({
+                ...f, ...fix, name: fix.name || fix.sku, codeCheck: '',
+                sizeOptions: sizes.length ? sizes.slice().sort(compareSizes) : f.sizeOptions,
+              }))} />
+          )}
           {needSize && <p className="muted sm">Pick the size — a box label without one can’t be shelved or sold from.</p>}
           <div className="nobox-actions mt">
-            <button className="btn primary" disabled={busy || needSize} onClick={() => printBox(p)}>
+            <button className="btn primary" disabled={busy || needSize || needCheck} onClick={() => printBox(p)}>
               <Icon name="print" /> Print box label only
             </button>
-            <button className={`btn ${p.units?.length ? 'ghost' : ''}`} disabled={busy || needSize} onClick={() => setShowConfirm(true)}>
+            <button className={`btn ${p.units?.length ? 'ghost' : ''}`} disabled={busy || needSize || needCheck} onClick={() => setShowConfirm(true)}>
               <Icon name="box" /> Give it a VIN + print both
             </button>
             <button className="btn ghost" onClick={reset}>Next shoe</button>

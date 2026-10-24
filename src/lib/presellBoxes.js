@@ -16,14 +16,30 @@ export function boxOrder(boxes) {
     || (Number(a.box_number) || 1e9) - (Number(b.box_number) || 1e9) || Number(a.id) - Number(b.id));
 }
 
-// Where a stock row stands: pairs placed in a known box, boxes whose count is unknown, pairs
-// not in any box yet (a to-do, not an error) and over-placement (more in boxes than we have).
-export function boxSummary(qty, boxes) {
-  const list = boxes || [];
-  const placed = list.reduce((n, b) => n + (b.qty == null ? 0 : Number(b.qty) || 0), 0);
-  const unknown = list.filter((b) => b.qty == null).length;
-  const q = Math.max(0, Number(qty) || 0);
-  return { placed, unknown, unplaced: Math.max(0, q - placed), over: Math.max(0, placed - q), boxes: list.length };
+// Where a stock row stands. Boxes hold PHYSICAL pairs (the supplier's list counts every pair of
+// the order, not only the pre-sold ones), so each order is judged on its own (`box_pos`):
+//   placed    counted pairs in the boxes
+//   unknown   boxes marked "?" (count unknown)
+//   unplaced  pre-listed pairs on an order with fewer pairs in its boxes — a to-do, not an error
+//   over      more in an order's boxes than the order itself lists (only when it has a list)
+// Without box_pos (an older caller) it falls back to boxes vs the row's pairs.
+export function boxSummary(row, legacyBoxes) {
+  if (typeof row !== 'object' || row == null || legacyBoxes) {
+    const list = legacyBoxes || [];
+    const placed = list.reduce((n, b) => n + (b.qty == null ? 0 : Number(b.qty) || 0), 0);
+    const q = Math.max(0, Number(row) || 0);
+    return { placed, unknown: list.filter((b) => b.qty == null).length, unplaced: Math.max(0, q - placed), over: Math.max(0, placed - q), boxes: list.length };
+  }
+  const boxes = row.boxes || [];
+  const pos = row.box_pos || [];
+  if (!pos.length) return boxSummary(row.qty, boxes);
+  let placed = 0; let unplaced = 0; let over = 0; let unknown = 0;
+  for (const p of pos) {
+    placed += p.placed; unknown += p.unknown;
+    unplaced += Math.max(0, (Number(p.pairs) || 0) - p.placed);
+    if (p.expected != null) over += Math.max(0, p.placed - p.expected);
+  }
+  return { placed, unknown, unplaced, over, boxes: boxes.length };
 }
 
 // The box the n-th pair (1-based) comes out of, walking boxOrder by counted pairs. null when
@@ -36,6 +52,16 @@ export function boxForPair(boxes, n) {
     if (n <= at) return b;
   }
   return null;
+}
+
+// The box a just-sold in-transit pair comes in. Pairs that already arrived were set aside for
+// earlier buyers (presell-arrival), so this pair is the owed-th one among the boxes NOT yet
+// received, in landing order — the same rule Fulfill uses (transitBoxes). null once every pair
+// is here (pull it from the shelf) or when it isn't in a counted box.
+export function boxForSale(stock, boxes) {
+  if (!stock || stock.arrived_at) return null;
+  const owed = Math.max(0, Number(stock.sold || 0) - (Number(stock.arrived_qty || 0) - Number(stock.released_qty || 0)));
+  return owed ? boxForPair((boxes || []).filter((b) => !b.received), owed) : null;
 }
 
 // Short form for tight spaces: "1Z…4784" (the full number goes in a title / CSV).

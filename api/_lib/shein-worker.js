@@ -8,10 +8,21 @@
 import { dbConfigured, latestSheinLiveRun } from './db.js';
 import { sheinStatus, sheinConfigured } from './shein.js';
 import { pollOrders, actOnUnits, readSync } from './shein-orders.js';
-import { heartbeat, startWalk, walkActive } from './shein-live.js';
+import { heartbeat, startWalk, walkActive, resumePushes } from './shein-live.js';
 
 const EVERY_MS = 60 * 1000;
 const REWALK_MS = 3 * 3600 * 1000;
+export const AFTER_RESTART = 'auto (after a restart)';
+
+// Start the stock walk now? Every 3 h — and at once when the last walk was cut off by a
+// deploy/restart (it used to wait 3 h from the dead walk's START). Only once in a row, so a
+// walk that itself kills the process can't loop.
+export function walkDue(last, now = Date.now()) {
+  if (!last) return true;
+  if (last.status === 'running') return false;
+  if (last.status === 'interrupted' && last.started_by !== AFTER_RESTART) return true;
+  return now - new Date(last.started_at).getTime() > REWALK_MS;
+}
 
 export function sheinWorkerEnabled(env = process.env) {
   const flag = String(env.SHEIN_SYNC_WATCH || '').trim().toLowerCase();
@@ -33,8 +44,9 @@ export async function sheinTick() {
     else await actOnUnits();   // put-backs of earlier sales still apply
     if (sync.push === 'on' && !walkActive()) {
       const last = await latestSheinLiveRun();
-      if (!last || (last.status !== 'running' && Date.now() - new Date(last.started_at).getTime() > REWALK_MS)) {
-        await startWalk({ mode: 'stock', by: 'auto (every 3 h)', ai: false }).catch((e) => console.error('[shein-sync] rewalk', e.message));
+      if (walkDue(last)) {
+        const by = last?.status === 'interrupted' ? AFTER_RESTART : 'auto (every 3 h)';
+        await startWalk({ mode: 'stock', by, ai: false }).catch((e) => console.error('[shein-sync] rewalk', e.message));
       }
     }
   } catch (e) {
@@ -45,5 +57,6 @@ export async function sheinTick() {
 export function startSheinWorker() {
   if (!sheinWorkerEnabled()) return;
   console.log('[shein-sync] worker on — SHEIN orders → Shopify every minute');
+  resumePushes();
   setInterval(() => { sheinTick(); }, EVERY_MS);
 }

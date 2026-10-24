@@ -167,6 +167,10 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
         const avail = {};
         preset.sizes.forEach((sz, i) => { if (preset.available[sz]) avail[picked[i]] = String(preset.available[sz]); });
         setSizeAvail(avail);
+        // A line priced apart from the run ("11-12 $60") keeps its own price on its size.
+        const own = {};
+        preset.sizes.forEach((sz, i) => { if (preset.sizePrice?.[sz] != null) own[picked[i]] = String(preset.sizePrice[sz]); });
+        setSizePrice(own);
         const extra = picked.filter((sz) => !labels.includes(sz));
         setFromPaste({ ...preset, extra, unlisted: labels.length ? extra : [] });
       }
@@ -334,6 +338,10 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
               From the paste: {fromPaste.sizes.length} size{fromPaste.sizes.length === 1 ? '' : 's'}
               {fromPaste.price != null ? ` at ${money(fromPaste.price)}` : ' — no price found, type it below'}.
               Untick any size the shop doesn’t have. Nothing goes to the desk until you press Ask.
+              {Object.keys(fromPaste.sizePrice || {}).length > 0 && (
+                <div className="bc-short sm">Priced apart: {Object.entries(fromPaste.sizePrice).map(([sz, v]) => `${sz} at ${money(v)}`).join(', ')}.</div>
+              )}
+              {(fromPaste.warnings || []).map((w) => <div key={w} className="bc-short sm">{w}</div>)}
               {fromPaste.unlisted.length > 0 && (
                 <div className="bc-short sm">Not in this shoe’s size list: {fromPaste.unlisted.join(', ')} — still selected; untick if that’s a misread.</div>
               )}

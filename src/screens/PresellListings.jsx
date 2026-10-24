@@ -778,7 +778,8 @@ function StockTab({ onSignOut }) {
 // number; the supplier packs, often mixing sizes in a box. So a size's boxes are DERIVED from
 // what each box holds (the supplier's per-box list on the PO, else what PH typed in the grid),
 // shown in the order the pairs land, plus what isn't in a box yet.
-const BOX_SOURCE = { supplier: 'the supplier’s list', staff: 'typed for the supplier on the PO', presell: 'typed here (📦 Box contents)' };
+const BOX_SOURCE = { supplier: 'the supplier’s list', staff: 'typed for the supplier on the PO', presell: 'typed here (📦 Box contents)',
+  only_box: 'the order’s only box — everything is in it' };
 const sizeNumOf = (z) => { const m = String(z || '').match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : Infinity; };
 function BoxBreakdown({ s, onOpen }) {
   const boxes = boxOrder(s.boxes || []);
@@ -789,7 +790,7 @@ function BoxBreakdown({ s, onOpen }) {
         {onOpen && <> · <button type="button" className="linklike" onClick={onOpen}>which box is it in?</button></>}</div>
     );
   }
-  const sum = boxSummary(s.qty, boxes);
+  const sum = boxSummary(s);
   const shown = boxes.slice(0, 4);
   return (
     <div className="xs ap-boxes">
@@ -809,7 +810,7 @@ function BoxBreakdown({ s, onOpen }) {
         <div className="ap-box-gap">{sum.unplaced} {sum.unknown ? 'not in a counted box' : 'not in a box yet'}
           {onOpen && <> · <button type="button" className="linklike" onClick={onOpen}>place them</button></>}</div>
       )}
-      {sum.over > 0 && <div className="ap-box-over">⚠ {sum.over} more in boxes than we have pairs</div>}
+      {sum.over > 0 && <div className="ap-box-over" title="More pairs of this size in the boxes than the order itself lists — a typo in a box, or the order list is short">⚠ {sum.over} more in boxes than the order lists</div>}
     </div>
   );
 }
@@ -838,11 +839,10 @@ function BoxGridDialog({ sku, poId, onSignOut, onClose }) {
   const sizes = useMemo(() => [...(grid?.sizes || [])].sort((a, b) => sizeNumOf(a.size) - sizeNumOf(b.size)), [grid]);
   const boxes = grid?.boxes || [];
   const num = (v) => (v === '?' ? null : Math.max(0, parseInt(v, 10) || 0));
-  // Per size: pairs in boxes of OTHER orders (read as saved) + every box of this one (as edited).
-  const placedOf = (z, exceptBox = null) => {
-    const other = z.boxes.filter((b) => b.po_id !== Number(poId)).reduce((n, b) => n + (Number(b.qty) || 0), 0);
-    return other + boxes.filter((b) => b.id !== exceptBox).reduce((n, b) => n + (num(vals[b.id]?.[z.size] ?? '') || 0), 0);
-  };
+  // Per size, pairs in THIS order's boxes (as edited). A box holds physical pairs, so the
+  // target is the order's own count for the size when it has a list, else our pre-listed pairs.
+  const placedOf = (z, exceptBox = null) => boxes.filter((b) => b.id !== exceptBox).reduce((n, b) => n + (num(vals[b.id]?.[z.size] ?? '') || 0), 0);
+  const target = (z) => (z.expected != null ? z.expected : z.pairs);
   const setCell = (boxId, size, v) => {
     const clean = v.trim() === '?' ? '?' : v.replace(/[^0-9]/g, '').slice(0, 3);
     setVals((c) => ({ ...c, [boxId]: { ...(c[boxId] || {}), [size]: clean } }));
@@ -851,7 +851,8 @@ function BoxGridDialog({ sku, poId, onSignOut, onClose }) {
   };
   const setRow = (boxId, row) => { setVals((c) => ({ ...c, [boxId]: row })); setDirty((d) => new Set(d).add(boxId)); setSaved(''); };
   const editable = boxes.filter((b) => !b.declared);
-  const over = sizes.filter((z) => placedOf(z) > z.qty);
+  const over = sizes.filter((z) => z.expected != null && placedOf(z) > z.expected);
+  const onlyBox = boxes.length === 1 && !boxes[0].declared && !Object.values(vals[boxes[0].id] || {}).some((v) => v);
   async function save() {
     setBusy(true); setErr(''); setSaved('');
     const total = (b) => Object.values(vals[b.id] || {}).reduce((n, v) => n + (num(v) || 0), 0);
@@ -878,8 +879,12 @@ function BoxGridDialog({ sku, poId, onSignOut, onClose }) {
         <p className="muted">No size of {sku} is pre-listed against {grid.po.po_code}.</p>
       ) : (
         <>
-          <p className="muted sm">One row per box (a tracking number we gave the supplier). Type how many pairs of each size are in it, or <b>?</b> when it’s in there but you don’t know how many.
-            A box the supplier declared on the PO is read-only — their list is used.</p>
+          {onlyBox ? (
+            <p className="sm ap-box-ok">This order has one box — every pair is in it. Nothing to type unless that’s wrong.</p>
+          ) : (
+            <p className="muted sm">One row per box (a tracking number we gave the supplier). Type how many pairs of each size are in it — <b>all</b> of them, not just the pre-sold ones — or <b>?</b> when it’s in there but you don’t know how many.
+              A box the supplier declared on the PO is read-only — their list is used.</p>
+          )}
           <div className="ap-boxgrid-wrap">
             <table className="table ap-boxgrid">
               <thead>
@@ -894,6 +899,7 @@ function BoxGridDialog({ sku, poId, onSignOut, onClose }) {
                       <td>
                         <div><b>Box {b.box_number ?? '?'}</b> {b.tracking ? <CopyText text={b.tracking} className="ap-mono xs">{b.tracking}</CopyText> : <span className="muted xs">no tracking number</span>}</div>
                         <div className="muted xs">{st.icon} {st.word}{b.declared ? ` · ${BOX_SOURCE[b.source]}` : ''}{b.other_pairs ? ` · +${b.other_pairs} pairs of other shoes` : ''}</div>
+                        {b.replaced > 0 && <div className="xs ap-box-gap">What was typed here before is no longer used — the supplier’s list replaced it.</div>}
                       </td>
                       {sizes.map((z) => (
                         <td key={z.stock_id} className="num">
@@ -909,7 +915,7 @@ function BoxGridDialog({ sku, poId, onSignOut, onClose }) {
                             {prev && <button type="button" className="linklike xs" disabled={busy} onClick={() => setRow(b.id, { ...vals[prev.id] })}
                               title={`Copy box ${prev.box_number ?? '?'}`}>same as last box</button>}
                             <button type="button" className="linklike xs" disabled={busy}
-                              onClick={() => setRow(b.id, Object.fromEntries(sizes.map((z) => { const left = z.qty - placedOf(z, b.id); return [z.size, left > 0 ? String(left) : '']; })))}
+                              onClick={() => setRow(b.id, Object.fromEntries(sizes.map((z) => { const left = target(z) - placedOf(z, b.id); return [z.size, left > 0 ? String(left) : '']; })))}
                               title="Put every pair not yet in a box into this one">fill the rest</button>
                             {Object.values(vals[b.id] || {}).some((v) => v) && <button type="button" className="linklike xs" disabled={busy} onClick={() => setRow(b.id, {})}>clear</button>}
                           </>
@@ -921,13 +927,14 @@ function BoxGridDialog({ sku, poId, onSignOut, onClose }) {
               </tbody>
               <tfoot>
                 <tr>
-                  <td className="muted xs">In boxes / pairs</td>
+                  <td className="muted xs" title="Pairs in this order's boxes / the order's own count for the size (or, with no order list, the pairs we pre-listed)">In boxes / {sizes.some((z) => z.expected != null) ? 'order' : 'pre-listed'}</td>
                   {sizes.map((z) => {
-                    const p = placedOf(z);
+                    const p = placedOf(z); const t = target(z);
+                    const bad = z.expected != null && p > z.expected;
                     return (
-                      <td key={z.stock_id} className={`num xs ${p > z.qty ? 'ap-box-over' : p < z.qty ? 'ap-box-gap' : 'ap-box-ok'}`}
-                        title={p < z.qty ? `${z.qty - p} not in a box yet` : p > z.qty ? `${p - z.qty} too many` : 'Every pair is in a box'}>
-                        {p}/{z.qty}
+                      <td key={z.stock_id} className={`num xs ${bad ? 'ap-box-over' : p < t ? 'ap-box-gap' : 'ap-box-ok'}`}
+                        title={`${z.pairs} pre-listed on this order${z.expected != null ? ` · the order lists ${z.expected}` : ' · the order has no list to check against'}${p < t ? ` · ${t - p} not in a box yet` : bad ? ` · ${p - z.expected} too many` : ''}`}>
+                        {onlyBox ? `${t}/${t}` : `${p}/${t}`}
                       </td>
                     );
                   })}
@@ -936,7 +943,7 @@ function BoxGridDialog({ sku, poId, onSignOut, onClose }) {
               </tfoot>
             </table>
           </div>
-          {over.length > 0 && <div className="error xs">Too many in boxes — {over.map((z) => `size ${z.size}: ${placedOf(z)} of ${z.qty}`).join('; ')}.</div>}
+          {over.length > 0 && <div className="error xs">More in boxes than {grid.po.po_code} lists — {over.map((z) => `size ${z.size}: ${placedOf(z)} of ${z.expected}`).join('; ')}.</div>}
         </>
       )}
       {saved && <p className="sm ap-box-ok">{saved}</p>}

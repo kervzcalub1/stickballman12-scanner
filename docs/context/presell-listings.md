@@ -188,27 +188,43 @@ number** (our labels on the PO); they buy and pack, often MIXING sizes in a box 
      order can't mix the two). It **never** feeds the PO's expected / reconciliation.
   Matching is the reconciliation's (dual style codes, `rcSizeNum`: supplier 10 = our 10W).
   `received` = a receiving box tied to the label (`batch_boxes.po_box_id`, or same tracking #).
+- **A box count = PHYSICAL pairs** (review 2026-10-25): the supplier's list counts every pair of
+  the order in the box, not only pre-sold ones. So each ORDER is judged on its own
+  (`presellBoxesFor` → `{ boxes, pos }`, `boxSummary(row)`): **not in a box yet** = pairs
+  pre-listed on the order − counted pairs in its boxes; **over** = counted pairs in its boxes −
+  the order's own ORDER-LEVEL list for the size (`po_lines` with no box) — only when it has one.
+  (Comparing boxes with pre-sold pairs called a 20-pair order with 10 pre-sold "10 too many".)
+  Per-box declarations are never a cap (an undeclared label would always read "over").
+- **One label, nobody declared it** → everything is in that box (`source: 'only_box'`), nothing
+  to type; the grid says so.
 - **Stock tab**: under each size, one line per box in LANDING order (`boxOrder`: received →
   delivered → soonest ETA): "3 in 1Z…4784 🚚 in transit · exp 10/27", then "N not in a box yet"
-  (amber, a to-do) or "⚠ N more in boxes than we have pairs". Rows with boxes drop the old
-  "N tracking" count. Helpers: `src/lib/presellBoxes.js` (pure, shared with the server).
+  / "not in a counted box" (amber, a to-do) or "⚠ N more in boxes than the order lists". Rows
+  with boxes drop the old "N tracking" count. Helpers: `src/lib/presellBoxes.js` (pure, shared).
 - **📦 Boxes** (row button, PO-linked rows) → grid for one SKU on one PO: a row per label, a
   column per size pre-listed against that PO; a number or **?**; supplier-declared boxes are
-  read-only; "same as last box", "fill the rest", per-size "in boxes / pairs" footer. Saves per
-  box: `POST action {action:'boxContents', poId, boxId, sku, lines:[{size, qty|null}]}` (replaces
-  that SKU in that box; 409 `over_boxes` when a size would have more in boxes than pairs; 409 on
-  a declared/reship box; 400 on a size not pre-listed against the PO). Read:
-  `GET list?tab=boxgrid&po=&sku=`.
+  read-only (and says so when it replaced something typed here earlier — `replaced`); type ALL
+  pairs in the box, not only pre-sold ones; "same as last box", "fill the rest" (up to the order's
+  count, else the pre-listed pairs), footer "in boxes / order" (or "/ pre-listed" with no order
+  list). Saves per box: `POST action {action:'boxContents', poId, boxId, sku, lines:[{size,
+  qty|null}]}` (replaces that SKU in that box; 409 `over_boxes` when the order's boxes would hold
+  more of a size than its order list; 409 on a declared/reship box; 400 on a size not pre-listed
+  against the PO). Read: `GET list?tab=boxgrid&po=&sku=` (sizes carry `pairs` + `expected`).
 - **Tick rows → 📦 In boxes (count unknown)…** — "these sizes are somewhere in these boxes":
   `action:'boxUnknown', stockIds, boxIds` adds a `qty NULL` line per (size, box) that has none
-  (a counted line is never overwritten); one PO at a time, rows must be on it.
+  (a counted line is never overwritten); one PO at a time, rows must be on it (current PO or
+  pairs listed against it).
 - **✎ Cost & shipment → ＋ Make a PO for this buy** (rows on no PO; PH/admin): opens a PO for the
   typed supplier with ONE LABEL PER TRACKING NUMBER (registered with 17TRACK like `po/create`),
   NO lines (the supplier still scans per box, or PH fills 📦 Boxes), links the rows (`po_id` +
   `presell_stock_po` = qty). 409 if a tracking # is already on an order (link to that one).
+  Races (double click, two people): the link takes only rows still on no order, and a PO that
+  linked nothing — or whose tracking #s turned up on another order meanwhile — is deleted again
+  (`deleteEmptyPo`); 17TRACK is registered only after a successful link.
   `action:'makePo', stockIds, supplierName, trackingNumbers`.
-- **Uses**: the IN-TRANSIT SALE post shows **Box:** (the sold-th pair along `boxOrder`,
-  `boxForPair`) instead of the tracking list; the ARRIVED post names the box(es) the pairs came
+- **Uses**: the IN-TRANSIT SALE post shows **Box:** (`boxForSale`: the OWED-th pair among the
+  boxes NOT received yet — arrived pairs were already split by the arrival, so a received box is
+  never named; no box line once every pair is here) instead of the tracking list; the ARRIVED post names the box(es) the pairs came
   out of (`trackingForBatchBoxes`); Fulfill gives each in-transit order its box
   (`presell-fulfillment.md`); the Stock CSV has a **Boxes** column, the pick list a **Box** one.
 - Live: `presell_box_lines` is in `LIVE_TABLES`; the Stock tab also listens to `po_lines` /

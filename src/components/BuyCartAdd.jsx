@@ -27,6 +27,7 @@
 // where nobody can audit it.
 import React, { useState, lazy, Suspense } from 'react';
 import { api } from '../api.js';
+import { AliasCodeCheck, aliasOnlyCode } from './AliasCodeCheck.jsx';
 import { PriceInput } from './common.jsx';
 import { Icon } from './NavIcons.jsx';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../lib/payout.js';
@@ -124,8 +125,13 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
     if (digits.length >= 12 && digits.length <= 14) {
       setBusy('look'); setError(''); setProduct(null); setSizes([]);
       try {
-        const { product: p } = await api.searchUpc(digits);
+        const { product: p0 } = await api.searchUpc(digits);
+        // Only Alias knew the barcode: hold the shoe until the buyer reads the box —
+        // the desk prices and approves whatever code this names
+        // (src/components/AliasCodeCheck.jsx).
+        const p = p0 ? { ...p0, codeCheck: aliasOnlyCode(p0, digits) } : p0;
         setProduct(p);
+        if (p?.codeCheck) { setSkuInput(p.sku); return; }
         if (p?.sku) setSkuInput(p.sku);
         // A UPC identifies one size's box, so it comes back with that size already
         // known — price it straight away rather than asking for a tap that has only
@@ -320,6 +326,11 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
             <b>{product.name || product.sku}</b>
             <span className="muted sm"> {product.sku}{product.colorway ? ` · ${product.colorway}` : ''}</span>
           </div>
+          {product.codeCheck && (
+            <AliasCodeCheck key={product.codeCheck} code={product.codeCheck} onSignOut={onSignOut}
+              onConfirm={() => setProduct((x) => ({ ...x, codeCheck: '' }))}
+              onFix={(fix) => { setSkuInput(fix.sku); lookUp(null, fix.sku); }} />
+          )}
 
           {fromPaste && (
             <div className="bc-paste-review" role="status">
@@ -353,7 +364,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                 // than define a second chip beside it.
                 <button key={label} type="button"
                   className={`size-chip ${picked ? 'on' : ''}`}
-                  aria-pressed={picked}
+                  aria-pressed={picked} disabled={!!product.codeCheck}
                   onClick={() => tapSize(label)}>{label}</button>
               );
             })}
@@ -469,7 +480,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                 is still on the shelf. The photo is required BEFORE this, because it is
                 what the approver decides on. */}
             <button type="button" className="btn primary"
-              disabled={busy === 'add' || !(shelfNum > 0) || !shots.length}
+              disabled={busy === 'add' || !(shelfNum > 0) || !shots.length || !!product.codeCheck}
               onClick={add}>
               {busy === 'add'
                 ? 'Sending…'

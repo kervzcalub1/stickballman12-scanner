@@ -40,6 +40,12 @@ its top). The rules are the export fix's (`docs/context/shein-fix.md`), run per 
   doesn't have would otherwise fail every minute forever. It stays in the red "NOT off Shopify"
   count; the admin **Retry the failed ones** button (`manual`) tries those again too and says
   how many went through / still fail. The count leaves out units SHEIN refunded or swapped.
+- **Old seller SKU on the order** (the size was relinked after the sale, or Shopify re-made the
+  product with new SKUs): Shopify says `missing` → we take it off the SKU `shein_links` relinked
+  that SHEIN size to (`decision = 'link'`), noted "via relinked SKU …". Not for a unit that
+  already hit 8 tries (a person may have taken it off by hand) — Retry stays as it was.
+- A pair taken off resets `attempts` to 0, so a cancel later is put back by the poll even when
+  the deduction needed a person's Retry (8+ tries) — it used to be skipped forever.
 - Location: `SHOPIFY_SHEIN_LOCATION` (id), else the only one, else the clear leader; a tie is
   refused, never guessed. The store has ONE location (2026-10-16). Location NAMES need
   `read_locations`, which the app lacks — we use ids only.
@@ -51,7 +57,10 @@ Admin turns it on → we register Shopify's `INVENTORY_LEVELS_UPDATE` webhook to
 SHEIN product carrying it (from the LAST WALK's log, so one walk must have run) gets the
 per-product step, **stock only**. While a walk is running, changes are HELD and pushed
 30 s after it ends (they used to be dropped, which left a product the walk had passed stale
-for up to 3 h). Backstop: when push is on, a stock-only walk every 3 h.
+for up to 3 h). The queue is also kept in table **`shein_push_queue`** (not live) until
+pushed, so a deploy/restart replays it on the worker's start (`resumePushes`). Backstop: when
+push is on, a stock-only walk every 3 h — and **at once after a restart cut a walk off**
+(`walkDue`: status `interrupted`, once in a row, so a walk that kills the process can't loop).
 No echo loop: our own Shopify deduction changes nothing on SHEIN (see the math below).
 
 ## 3. Fix every listing (`api/_lib/shein-live.js`, `src/lib/sheinLive.js`)
@@ -101,7 +110,10 @@ One SHEIN **SKC** = one shoe (a colour, all its sizes). After each product's sto
   ≤500 SKCs a day) → `DELETE goods/delete/{skc}` (signed path includes the SKC) → SHEIN
   reviews; `goods-delete-logs/search` on later walks reads the answer. SHEIN refuses one with
   an order in the last year → `delete_refused`, stays delisted, never asked again. A shoe at 0
-  that still exists on Shopify is **never deleted** (it may be restocked).
+  that still exists on Shopify is **never deleted** (it may be restocked). Nor is one whose
+  seller SKUs are all gone but whose **style code Shopify still sells** under new SKUs (a
+  re-made product, e.g. Adistar XLG KJ7895): it is delisted at 0 and marked `relink` — fix it
+  on Match sizes; its sizes stay "need a person", not "shoe gone".
 - SHEIN allows one shelf change per SKC + site per **20 minutes** (`SHELF_GAP_MS`) → `wait`.
 - Delete runs on a walk only; a single Shopify push (stock mode) can delist / re-list.
 - Dry run says what it would do. Table **`shein_skc_shelf`** (skc, state, sites, shelf_at,

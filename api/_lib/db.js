@@ -10224,6 +10224,26 @@ export async function trackingStatusFor(numbers) {
 export async function listSheinLinks() {
   return await db()`SELECT * FROM shein_links ORDER BY decided_at DESC`;
 }
+// Shopify → SHEIN changes not pushed yet (shein-live.js queuePush). Kept so a deploy/restart
+// doesn't drop them. Deliberately NOT a live table: it changes on every Shopify stock change.
+export async function sheinPushQueueAdd(skus) {
+  if (!skus.length) return;
+  await db()`INSERT INTO shein_push_queue (sku) SELECT unnest(${skus}::text[]) ON CONFLICT (sku) DO NOTHING`;
+}
+export async function sheinPushQueueDone(skus) {
+  if (!skus.length) return;
+  await db()`DELETE FROM shein_push_queue WHERE sku = ANY(${skus}::text[])`;
+}
+export async function sheinPushQueueList() {
+  return (await db()`SELECT sku FROM shein_push_queue ORDER BY queued_at`).map((r) => r.sku);
+}
+// The Shopify SKU a SHEIN size was relinked to (Match sizes / the walk), for a SHEIN sale that
+// still carries the size's OLD seller SKU.
+export async function sheinLinkedSku(sheinSku) {
+  if (!sheinSku) return null;
+  const [r] = await db()`SELECT link_sku FROM shein_links WHERE shein_sku = ${String(sheinSku)} AND decision = 'link' AND link_sku IS NOT NULL LIMIT 1`;
+  return r?.link_sku || null;
+}
 export async function saveSheinLinks(links, by) {
   const chunk = JSON.stringify(links);
   await db()`
@@ -10375,7 +10395,9 @@ export async function markSheinUnit(goodsId, { deducted = false, restocked = fal
       restocked_at = CASE WHEN ${restocked} THEN now() ELSE restocked_at END,
       shopify_variant = COALESCE(${variant}, shopify_variant), shopify_location = COALESCE(${location}, shopify_location),
       shopify_before = COALESCE(${before}::int, shopify_before), note = COALESCE(${note}, note),
-      error = ${error}, attempts = CASE WHEN ${failed} THEN attempts + 1 ELSE attempts END, updated_at = now()
+      -- a pair taken off starts its put-back count from 0: one that needed a person's Retry
+      -- (8+ tries) was otherwise never put back by the poll when SHEIN cancelled it
+      error = ${error}, attempts = CASE WHEN ${failed} THEN attempts + 1 WHEN ${deducted} THEN 0 ELSE attempts END, updated_at = now()
      WHERE goods_id = ${goodsId}`;
 }
 // Pairs SHEIN sold that are still in the warehouse and NOT yet off Shopify, per seller SKU —

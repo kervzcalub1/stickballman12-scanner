@@ -13,7 +13,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import {
   dbConfigured, getPresellListing, getPresellStock, setPresellStockQty, upsertPresellStock, updatePresellListing, movePresellListing,
-  updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock, presellPoCap, bumpPresellStockPo,
+  updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock, presellPoCap, bumpPresellStockPo, movePresellStockPo,
   getPoBoxBrief, setPresellBoxLines, addPresellBoxUnknown, presellPoBoxGrid, createPo, linkPresellToNewPo, poCodesByTracking, deleteEmptyPo,
 } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
@@ -87,6 +87,10 @@ async function detailsAction(res, b, actor) {
       patch.shelf_price = shelf;
       patch.cost_stack = stack;
       patch.unit_cost = shelf != null && stack ? landedFromShelf(shelf, null, stack) : null;
+    }
+    // Re-pointed to another order: its pairs' count against the order moves with it.
+    if (Object.prototype.hasOwnProperty.call(common, 'po_id') && Number(stock.po_id || 0) !== Number(common.po_id || 0)) {
+      await movePresellStockPo(id, stock.po_id ? Number(stock.po_id) : null, common.po_id, Number(stock.qty));
     }
     rows.push(await updatePresellStockDetails(id, patch, actor));
   }

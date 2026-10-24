@@ -2011,8 +2011,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // The PO line is a SHELF price (2026-09-29); the pair's cost is what landing it really
   // took — shelf through the supplier's preset stack (tax, gift card, shipping, tip).
   // On a store order the price is the box's STORE's; a box tied to no store has none.
+  // A box received "not tied to a store" has no store, so no store's price either — the
+  // slot it was opened from is exactly what the person just said it isn't.
   const poMoney = (it, s) => poLineMoney(costLines, it.sku, s.size, activePoBoxId,
-    isStorePo ? (activeBox?.storeId ?? null) : undefined);
+    isStorePo ? (untieOk.current ? null : (activeBox?.storeId ?? null)) : undefined);
   const poLanded = (it, s) => {
     const m = poMoney(it, s);
     return m ? landedFromShelf(m.shelf, m.tip, costPreset) : null;

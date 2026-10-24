@@ -1,5 +1,6 @@
 // POST /api/cart/line
 //   { cartId, line:{ sku, size, availableQty, shelfPrice, verdict, … } }  -> add
+//   { cartId, lines:[ …same, every size of ONE sku… ] }           -> add several, ONE card
 //   { cartId, lineId, patch:{ qty?, availableQty?, shelfPrice?, size? } }  -> edit
 //   { cartId, lineId, remove:true }                               -> remove
 //
@@ -13,12 +14,14 @@ import {
   getBuyCart, getBuyCartLine, addBuyCartLine, updateBuyCartLine, removeBuyCartLine,
   priceBuyCartLine, askBuyCart, cartHasShoePhoto, cartShoePhotos, dbConfigured,
 } from '../_lib/db.js';
-import { notifyLineAsked } from '../_lib/notify.js';
+import { notifyLineAsked, notifyGroupAsked } from '../_lib/notify.js';
 import { cartVisibleTo, hasCostPrivilege, canSeeBuyCall, redactLineForViewer, redactCartForViewer, shelfPricesEditable, repriceLine, requireBuyerAccess } from '../_lib/buycart.js';
 import { buyerCanAdd, listOpen } from '../../src/lib/buycartRules.js';
 import { readMarketForLine } from '../_lib/lineMarket.js';
 
 const MAX_LINES = 200;
+// One shoe's sizes in one ask — a full run in halves is ~30; past that it is two shoes.
+const MAX_GROUP = 40;
 // The buyer whose request it is. Their add is a question being asked; anybody else's is
 // data entry on their behalf, and the two must not do the same thing to the status.
 const isOwnBuyer = (user, cart) => user.role === 'supplier' && Number(cart.buyer_user_id) === Number(user.uid);
@@ -155,68 +158,28 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true, line: redactLineForViewer(line, user) });
     }
 
-    if (Number(cart.line_count) >= MAX_LINES)
+    // SEVERAL SIZES OF ONE SHOE in one call (`lines`), or one line (`line`). The sizes
+    // go in as one line each, exactly as before; what the batch changes is the CARD —
+    // one per shoe, answered by a "size x qty" reply (notifyGroupAsked) instead of one
+    // per size. Every line is checked before any is added, so a bad size in the middle
+    // can't leave half a run asked about.
+    const many = Array.isArray(body.lines);
+    const asks = many ? body.lines : [body.line || {}];
+    if (!asks.length) return send(res, 400, { ok: false, error: 'Nothing to add.' });
+    if (asks.length > MAX_GROUP)
+      return send(res, 400, { ok: false, error: `At most ${MAX_GROUP} sizes in one ask.` });
+    if (Number(cart.line_count) + asks.length > MAX_LINES)
       return send(res, 409, { ok: false, error: `A request holds at most ${MAX_LINES} lines.` });
 
-    const l = body.line || {};
-    const sku = String(l.sku ?? '').trim().toUpperCase().slice(0, 40);
-    // NO QUANTITY. The buyer reports what they found in a shop — this shoe, this size,
-    // this price on the ticket — and how many to buy is the decision being asked for, so
-    // it belongs to whoever approves it (`cart/decide`). Defaulting to 1 here would put
-    // a number nobody stated into the funding total.
-    const qty = null;
-    // HOW MANY THE SHOP HAS, which is NOT the same question and is the buyer's to answer.
-    // `qty` above is what we decide to buy; this is what is sitting on the shelf, and it
-    // is the number the approver was missing when they chose one. Optional on purpose —
-    // blank means "didn't count", and a guessed number the approver cannot tell apart
-    // from a counted one is worse than no number at all. 0 is not a meaningful answer
-    // (nobody adds a line for a size the shop hasn't got), so it reads as blank.
-    const availableQty = Number.isInteger(Number(l.availableQty)) && Number(l.availableQty) > 0
-      ? Math.min(Number(l.availableQty), 999) : null;
-    const shelfPrice = money(l.shelfPrice);
-    if (!sku) return send(res, 400, { ok: false, error: 'A SKU is required.' });
-    // The shelf price is the funding target for this line. Without it a request can be
-    // approved for an amount nobody can compute, so it is required rather than defaulted
-    // to zero — a $0 pair would silently fund nothing.
-    if (shelfPrice == null || shelfPrice <= 0)
-      return send(res, 400, { ok: false, error: 'Enter the price on the shelf — it is what the gift cards have to cover.' });
-
-    const size = String(l.size ?? '').trim().slice(0, 20) || null;
-    const upc = String(l.upc ?? '').replace(/\D/g, '').slice(0, 20) || null;
-    const basis = l.basis === 'consigned' ? 'consigned' : 'with_you';
-
-    // WHERE THE CALL COMES FROM depends on who is adding.
-    //
-    // Staff post the snapshot their own screen derived — the calculator is the only
-    // place those numbers are worked out, so a second code path here could disagree
-    // with it about the same pair.
-    //
-    // A BUYER posts nothing that is believed. Their screen no longer computes a call at
-    // all (the call is the approver's — `canSeeBuyCall`), and even if it did, taking it
-    // on trust would mean the party asking for the money supplies the figures that
-    // justify releasing it: a crafted request could arrive reading "buy, $180 profit"
-    // with no market behind it. So the market is read HERE, once, and the call derived
-    // from our own cost stack.
-    let call = null;
-    // Set when the market still has to be read — see `priceInBackground` below.
-    let toPrice = false;
-    if (!canSeeBuyCall(user)) {
-      // The pair still LANDS AT something without any market at all: `final_cost` is
-      // the buyer's own shelf price run through the cost stack, and it is not part of
-      // the call (it is theirs to see). Computed here so the column is true instantly.
-      call = repriceLine({ shelf_price: shelfPrice, alias_price: null, stockx_price: null, liquidity: null },
-        cart.cost_stack || {});
-      toPrice = !!size;
-    } else {
-      call = {
-        verdict: ['buy', 'watch', 'pass'].includes(l.verdict) ? l.verdict : null,
-        finalCost: money(l.finalCost),
-        bestPlatform: String(l.bestPlatform ?? '').slice(0, 20) || null,
-        bestPayout: money(l.bestPayout), profit: num(l.profit), roi: num(l.roi),
-        aliasPrice: money(l.aliasPrice), stockxPrice: money(l.stockxPrice),
-        liquidity: String(l.liquidity ?? '').slice(0, 20) || null,
-      };
+    const prepared = [];
+    for (const l of asks) {
+      const p = prepareLine(l, user, cart);
+      if (p.error) return send(res, 400, { ok: false, error: p.error });
+      prepared.push(p);
     }
+    if (many && new Set(prepared.map((p) => p.sku)).size > 1)
+      return send(res, 400, { ok: false, error: 'One shoe per ask — every size in it must be the same SKU.' });
+    const sku = prepared[0].sku;
 
     // A photo of the shoe is what the approver decides on — they are not in the shop and
     // the style code is four characters from a different pair. Checked HERE now rather
@@ -227,7 +190,127 @@ export default async function handler(req, res) {
         error: `Add a photo of ${sku} first — the desk decides on it and cannot see the shoe. One photo covers every size of it.`,
       });
 
-    const line = await addBuyCartLine(cartId, {
+    const added = [];
+    for (const p of prepared) added.push({ p, line: await addBuyCartLine(cartId, p.row, user) });
+    // AFTER the response, never before it. The buyer is standing in a shop with a shoe
+    // in one hand and a phone in the other, and Alias runs 16s on an ordinary day and
+    // 20–45s on a bad one — measured. Pricing inline made "Add to request" hang for all
+    // of it, which is the difference between a tool you use on a shop floor and one you
+    // stop using. Nothing is lost by deferring it: the buyer is not allowed to see the
+    // call anyway, and the approver reads the line minutes or hours later.
+    //
+    // If it fails, the line simply stays unpriced — an ordinary state with a way back
+    // (the desk's "Price it"), and the same state a timed-out quote has always left.
+    // Tell Telegram AFTER the market read, not with the add — a card that goes out first
+    // says "not priced" on every pair, which is the one thing the approver most needs.
+    // Both are fire-and-forget: the buyer is in a shop and must never wait on either.
+    // `photos` is read now because the file rows are already there.
+    const asking = isOwnBuyer(user, cart);
+    const photos = asking ? await cartShoePhotos(cartId, sku) : [];
+    const tell = { notify: asking, photos };
+    if (added.length > 1) {
+      priceRunInBackground(cartId, added, cart.cost_stack || {}, tell);
+    } else {
+      const [{ p, line }] = added;
+      if (p.toPrice) {
+        priceInBackground(cartId, Number(line.id), { ...p.market }, cart.cost_stack || {}, tell);
+      } else if (asking) {
+        notifyLineAsked(cartId, Number(line.id), { photoFileId: photos[0] ?? null, photoCount: photos.length });
+      }
+    }
+    // ADDING A PAIR *IS* ASKING ABOUT IT. There is no separate "send for approval" for a
+    // buyer any more: they are standing in a shop and the desk should be able to answer
+    // while the shoe is still on the shelf. A trip that ends with the buyer remembering
+    // to press Send is a trip where the first pair sat unasked for an hour.
+    //
+    // Only for the BUYER. A desk adding a line on somebody's behalf is data entry, not a
+    // question being asked, and flipping the request's state under them would be a
+    // surprise. Their add leaves the status exactly as it was.
+    // On a FUNDED request `askBuyCart` matches no row and the status stays put — the
+    // new line is pending on a funded request, which is exactly what it is.
+    const asked = isOwnBuyer(user, cart) ? await askBuyCart(cartId, user) : null;
+    // The line goes back to whoever added it as THEY may see it — a buyer's copy has
+    // never carried a call, and must not start carrying one on the way out of the add.
+    return send(res, 200, {
+      ok: true,
+      ...(many
+        ? { lines: added.map((a) => redactLineForViewer(a.line, user)) }
+        : { line: redactLineForViewer(added[0].line, user) }),
+      ...(asked ? { cart: redactCartForViewer(asked, user) } : {}),
+    });
+  } catch (e) {
+    console.error('[cart/line]', e.message);
+    return send(res, 500, { ok: false, error: 'Could not update the request.' });
+  }
+}
+
+/**
+ * One asked-about line, checked and shaped for `addBuyCartLine` — or `{ error }`.
+ * Shared by the single add and the several-sizes add so the two can't disagree.
+ */
+function prepareLine(l, user, cart) {
+  const sku = String(l.sku ?? '').trim().toUpperCase().slice(0, 40);
+  // NO QUANTITY. The buyer reports what they found in a shop — this shoe, this size,
+  // this price on the ticket — and how many to buy is the decision being asked for, so
+  // it belongs to whoever approves it (`cart/decide`). Defaulting to 1 here would put
+  // a number nobody stated into the funding total.
+  const qty = null;
+  // HOW MANY THE SHOP HAS, which is NOT the same question and is the buyer's to answer.
+  // `qty` above is what we decide to buy; this is what is sitting on the shelf, and it
+  // is the number the approver was missing when they chose one. Optional on purpose —
+  // blank means "didn't count", and a guessed number the approver cannot tell apart
+  // from a counted one is worse than no number at all. 0 is not a meaningful answer
+  // (nobody adds a line for a size the shop hasn't got), so it reads as blank.
+  const availableQty = Number.isInteger(Number(l.availableQty)) && Number(l.availableQty) > 0
+    ? Math.min(Number(l.availableQty), 999) : null;
+  const shelfPrice = money(l.shelfPrice);
+  if (!sku) return { error: 'A SKU is required.' };
+  // The shelf price is the funding target for this line. Without it a request can be
+  // approved for an amount nobody can compute, so it is required rather than defaulted
+  // to zero — a $0 pair would silently fund nothing.
+  if (shelfPrice == null || shelfPrice <= 0)
+    return { error: 'Enter the price on the shelf — it is what the gift cards have to cover.' };
+
+  const size = String(l.size ?? '').trim().slice(0, 20) || null;
+  const upc = String(l.upc ?? '').replace(/\D/g, '').slice(0, 20) || null;
+  const basis = l.basis === 'consigned' ? 'consigned' : 'with_you';
+
+  // WHERE THE CALL COMES FROM depends on who is adding.
+  //
+  // Staff post the snapshot their own screen derived — the calculator is the only
+  // place those numbers are worked out, so a second code path here could disagree
+  // with it about the same pair.
+  //
+  // A BUYER posts nothing that is believed. Their screen no longer computes a call at
+  // all (the call is the approver's — `canSeeBuyCall`), and even if it did, taking it
+  // on trust would mean the party asking for the money supplies the figures that
+  // justify releasing it: a crafted request could arrive reading "buy, $180 profit"
+  // with no market behind it. So the market is read HERE, once, and the call derived
+  // from our own cost stack.
+  let call = null;
+  // Set when the market still has to be read — see `priceInBackground` below.
+  let toPrice = false;
+  if (!canSeeBuyCall(user)) {
+    // The pair still LANDS AT something without any market at all: `final_cost` is
+    // the buyer's own shelf price run through the cost stack, and it is not part of
+    // the call (it is theirs to see). Computed here so the column is true instantly.
+    call = repriceLine({ shelf_price: shelfPrice, alias_price: null, stockx_price: null, liquidity: null },
+      cart.cost_stack || {});
+    toPrice = !!size;
+  } else {
+    call = {
+      verdict: ['buy', 'watch', 'pass'].includes(l.verdict) ? l.verdict : null,
+      finalCost: money(l.finalCost),
+      bestPlatform: String(l.bestPlatform ?? '').slice(0, 20) || null,
+      bestPayout: money(l.bestPayout), profit: num(l.profit), roi: num(l.roi),
+      aliasPrice: money(l.aliasPrice), stockxPrice: money(l.stockxPrice),
+      liquidity: String(l.liquidity ?? '').slice(0, 20) || null,
+    };
+  }
+  return {
+    sku, toPrice,
+    market: { sku, size, upc, basis, shelfPrice },
+    row: {
       sku, size, qty, availableQty, shelfPrice, upc,
       name: String(l.name ?? '').trim().slice(0, 200) || null,
       colorway: String(l.colorway ?? '').trim().slice(0, 120) || null,
@@ -245,51 +328,24 @@ export default async function handler(req, res) {
       stockxPrice: call?.stockxPrice ?? null,
       liquidity: call?.liquidity ?? null,
       basis,
-    }, user);
-    // AFTER the response, never before it. The buyer is standing in a shop with a shoe
-    // in one hand and a phone in the other, and Alias runs 16s on an ordinary day and
-    // 20–45s on a bad one — measured. Pricing inline made "Add to request" hang for all
-    // of it, which is the difference between a tool you use on a shop floor and one you
-    // stop using. Nothing is lost by deferring it: the buyer is not allowed to see the
-    // call anyway, and the approver reads the line minutes or hours later.
-    //
-    // If it fails, the line simply stays unpriced — an ordinary state with a way back
-    // (the desk's "Price it"), and the same state a timed-out quote has always left.
-    // Tell Make AFTER the market read, not with the add — a card that goes out first
-    // says "not priced" on every pair, which is the one thing the approver most needs.
-    // Both paths are fire-and-forget: the buyer is in a shop and must never wait on
-    // either of them. `photos` is read now because the file rows are already there.
-    const asking = isOwnBuyer(user, cart);
-    const photos = asking ? await cartShoePhotos(cartId, sku) : [];
-    if (toPrice) {
-      priceInBackground(cartId, Number(line.id), { sku, size, upc, basis, shelfPrice }, cart.cost_stack || {}, {
-        notify: asking, photos,
-      });
-    } else if (asking) {
-      notifyLineAsked(cartId, Number(line.id), { photoFileId: photos[0] ?? null, photoCount: photos.length });
-    }
-    // ADDING A PAIR *IS* ASKING ABOUT IT. There is no separate "send for approval" for a
-    // buyer any more: they are standing in a shop and the desk should be able to answer
-    // while the shoe is still on the shelf. A trip that ends with the buyer remembering
-    // to press Send is a trip where the first pair sat unasked for an hour.
-    //
-    // Only for the BUYER. A desk adding a line on somebody's behalf is data entry, not a
-    // question being asked, and flipping the request's state under them would be a
-    // surprise. Their add leaves the status exactly as it was.
-    // On a FUNDED request `askBuyCart` matches no row and the status stays put — the
-    // new line is pending on a funded request, which is exactly what it is.
-    const asked = isOwnBuyer(user, cart) ? await askBuyCart(cartId, user) : null;
-    // The line goes back to whoever added it as THEY may see it — a buyer's copy has
-    // never carried a call, and must not start carrying one on the way out of the add.
-    return send(res, 200, {
-      ok: true,
-      line: redactLineForViewer(line, user),
-      ...(asked ? { cart: redactCartForViewer(asked, user) } : {}),
-    });
-  } catch (e) {
-    console.error('[cart/line]', e.message);
-    return send(res, 500, { ok: false, error: 'Could not update the request.' });
+    },
+  };
+}
+
+/**
+ * Several sizes of one shoe: priced ONE AT A TIME (forty at once would be forty
+ * simultaneous Alias calls off one button — the reason the screen used to send them in
+ * sequence), then ONE card for all of them, after the last read so every row carries its call.
+ */
+async function priceRunInBackground(cartId, added, stack, tell) {
+  for (const { p, line } of added) {
+    if (p.toPrice) await priceInBackground(cartId, Number(line.id), { ...p.market }, stack, null);
   }
+  if (!tell?.notify) return;
+  await notifyGroupAsked(cartId, added.map((a) => Number(a.line.id)), {
+    photoFileId: tell.photos?.[0] ?? null,
+    photoCount: tell.photos?.length ?? 0,
+  });
 }
 
 /**
@@ -328,7 +384,8 @@ async function priceInBackground(cartId, lineId, { sku, size, upc, basis, shelfP
   // be told the pair was asked about. A market outage must not swallow the question.
   // WHETHER WE EVEN TRY is the other half of "no card arrived". A line the buyer added
   // that was never treated as a question leaves no trace at all otherwise.
-  if (!tell?.notify) console.log(`[cart/line] line ${lineId} priced — no card (not the buyer's own ask)`);
+  if (!tell) return;   // one size of a run — the run sends its own card (priceRunInBackground)
+  if (!tell.notify) console.log(`[cart/line] line ${lineId} priced — no card (not the buyer's own ask)`);
   if (tell?.notify) {
     await notifyLineAsked(cartId, lineId, {
       photoFileId: tell.photos?.[0] ?? null,

@@ -92,6 +92,19 @@ export async function stockForPair({ sku, size }) {
   });
 }
 
+/** Several sizes of ONE style (the one-card-per-shoe Telegram card): both sources read once. */
+export async function stockForSizes({ sku, sizes }) {
+  const [oursR, shopR] = await Promise.allSettled([
+    stockOnHandBySizeForSku(sku),
+    shopifyConfigured() ? shopifyInventoryForSku(sku) : Promise.resolve(null),
+  ]);
+  const pre = {
+    ours: oursR.status === 'fulfilled' ? (oursR.value || []) : null,
+    shop: shopR.status === 'fulfilled' ? shopR.value : null,
+  };
+  return new Map(sizes.map((size) => [size, readLineStock({ sku, size }, pre)]));
+}
+
 /** One line of prose for a person: what we hold, and where it is. */
 export function stockSentence(s) {
   if (!s) return 'Stock unknown.';

@@ -523,6 +523,20 @@ race caused the black/stalled preview).
 ## Product lookup (fills name/sku/image/sizes/gender/colorway)
 `searchUpc` / `searchSku` — see `integrations.md`.
 
+### Alias-only barcode → check the box (2026-10-24)
+A UPC that **only Alias** resolved (`product.upcSource === 'alias'` — StockX, the Nike feed
+and our own stock all missed) is a guess: on 2026-10-22 Alias filed the Jordan 15 'Black
+Pack' boxes (IZ2585-001) under the Jordan 16 (IZ2586-001), and 7 pairs were received,
+listed and priced as the 16. Such a cart line now carries `codeCheck` (the Alias code) and
+shows, on the line (no dialog — rapid scan), **"✓ Box says CODE"** / **"Box says a
+different code"** (typed → `searchSku` → name/photo/colorway/sizes change with it; a miss
+blanks the name so it must be typed). It blocks Review like an unknown size
+(`needsCodeCheck` in `isUnresolved`). The answer is remembered **per UPC** for the session
+(`codeDecisionsRef`) — never per code, so a real 16 box in the same cart isn't "corrected";
+a new size's barcode merging into a confirmed line re-opens the check. Both scan paths
+(rapid scan and the Add-item draft). After commit, own-stock answers that UPC before Alias,
+so the next session isn't asked. E2E: `e2e/receiving-alias-code-check.spec.js`.
+
 ## Shipment issues + key notes (Step 4, 2026-09-15)
 `ISSUE_TYPES` (`src/lib/constants.js`) is the floor's list: damaged package, shoe boxes
 damaged, ripped, **tampered** (merchandise appears removed), item missing, missing boxes,

@@ -122,6 +122,28 @@ await sql(`
     last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+// ONE card for several sizes of one shoe (2026-10-24, docs/context/buy-cart.md → "One card
+// per shoe"). A buyer asking about 8–12 used to put nine cards in the group; now it is one,
+// answered by REPLYING to it with "size x qty" lines. This maps the card back to the lines
+// it asks about — a reply carries only the message it answers, nothing of ours.
+//   line_ids         the sizes on the card, as "12,13,14" (the shim takes no arrays)
+//   message_id       set once Telegram has the card; the reply's reply_to_message.message_id
+//   last_reply_id    the reply already acted on — Telegram redelivers, the second is a no-op
+await sql(`
+  CREATE TABLE IF NOT EXISTS telegram_group_cards (
+    id              BIGSERIAL PRIMARY KEY,
+    cart_id         BIGINT NOT NULL,
+    sku             TEXT,
+    line_ids        TEXT NOT NULL,
+    chat_id         BIGINT NOT NULL,
+    message_id      BIGINT,
+    env             TEXT NOT NULL DEFAULT 'prod',
+    last_reply_id   BIGINT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS telegram_group_cards_msg
+             ON telegram_group_cards (chat_id, message_id) WHERE message_id IS NOT NULL`);
 // "More…" on a Telegram approval card asks the tapper "How many pairs?" and waits for a
 // number typed back (2026-09-29, replacing the Make data store that did this). One open
 // question per Telegram account — a second "More…" replaces the first — answered only in
@@ -2249,6 +2271,24 @@ await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS at_risk_alerted IN
 await sql(`INSERT INTO presell_stock_po (stock_id, po_id, qty)
            SELECT id, po_id, qty FROM presell_stock WHERE po_id IS NOT NULL
            ON CONFLICT (stock_id, po_id) DO NOTHING`);
+// PRE-SELL BOX CONTENTS (docs/presell-box-tracking-plan.md, owner 2026-10-24). A box = one of
+// OUR labels on the PO (po_boxes; we hand every tracking number to the supplier). Suppliers mix
+// sizes in a box, so a size's tracking numbers are derived from what each box holds. The
+// supplier's own per-box list (po_lines with a po_box_id) always wins; THIS table is only for a
+// box nobody declared — a whole-order manifest, where po_lines can't carry a box (an order
+// can't mix the two). It never feeds the PO's expected/reconciliation.
+//   qty NULL = "some of this size is in here, count unknown" (the split-unknown tick).
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_box_lines (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    po_box_id  BIGINT NOT NULL REFERENCES po_boxes(id) ON DELETE CASCADE,
+    sku        TEXT NOT NULL,
+    size       TEXT NOT NULL,
+    qty        INT CHECK (qty IS NULL OR qty > 0),
+    entered_by TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS presell_box_lines_key ON presell_box_lines (po_box_id, upper(sku), size)`);
 // MARKET COMPETITION (owner, 2026-10-11): keep our live listings at the market's lowest ask —
 // "undercut" by $1 or "match" it — never more than $5 under the price we set, and follow the
 // market UP without a cap. Each size, each platform, on its own (presell-compete.js).
@@ -2808,7 +2848,7 @@ const LIVE_TABLES = [
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
   'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
   'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions',
-  'po_stores', 'po_store_charges', 'po_store_receipts', 'presell_stock_po',
+  'po_stores', 'po_store_charges', 'po_store_receipts', 'presell_stock_po', 'presell_box_lines',
   'rescale_requests', 'rescale_request_items',
   'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards',
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',

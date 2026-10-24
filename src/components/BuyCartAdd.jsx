@@ -30,6 +30,7 @@ import { api } from '../api.js';
 import { PriceInput } from './common.jsx';
 import { Icon } from './NavIcons.jsx';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../lib/payout.js';
+import { parseBuyPaste, sizeKey } from '../lib/buyPaste.js';
 
 // Lazy, like every other camera surface here — the decoder is a large chunk and most
 // buyers type the code.
@@ -94,6 +95,13 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [showCam, setShowCam] = useState(false);
+  // PASTE WHAT THE SUPPLIER SENT ("100000317 / Sizes 8-12 $50"). It only fills the form:
+  // the sizes come up selected and the price typed, and the buyer checks them there —
+  // nothing is asked until they press Ask (the owner's rule, 2026-10-24).
+  const [pasting, setPasting] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  // What the paste said, kept beside the form while the buyer reviews it.
+  const [fromPaste, setFromPaste] = useState(null);
 
   const shelfNum = Number(String(shelf).replace(/[$,\s]/g, ''));
   // Photos already on this request for the shoe on screen. Keyed by STYLE CODE, so a
@@ -133,19 +141,43 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
     lookUp(null, raw);
   }
 
-  async function lookUp(e, override) {
+  async function lookUp(e, override, preset = null) {
     e?.preventDefault();
     const sku = String(override || skuInput || '').trim();
     if (!sku) return;
-    setBusy('look'); setError(''); setProduct(null); setSizes([]);
+    setBusy('look'); setError(''); setProduct(null); setSizes([]); setSizePrice({}); setSizeAvail({});
+    if (!preset) setFromPaste(null);
     try {
       const { product: p } = await api.searchSku(sku);
       setProduct(p);
       if (p?.sku) setSkuInput(p.sku);
+      if (preset && p) {
+        // Pasted sizes take the catalogue's own label where there is one ("10.5" → the
+        // chip that says 10.5). One the catalogue doesn't list stays selected — the buyer
+        // is looking at the shelf, the catalogue isn't — but is flagged for review.
+        const labels = (p.sizes || []).map((s) => String(typeof s === 'string' ? s : (s.size ?? s.label ?? '')));
+        const picked = preset.sizes.map((sz) => labels.find((l) => sizeKey(l) === sizeKey(sz)) || sz);
+        setSizes(picked);
+        const avail = {};
+        preset.sizes.forEach((sz, i) => { if (preset.available[sz]) avail[picked[i]] = String(preset.available[sz]); });
+        setSizeAvail(avail);
+        const extra = picked.filter((sz) => !labels.includes(sz));
+        setFromPaste({ ...preset, extra, unlisted: labels.length ? extra : [] });
+      }
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(err.message);
     } finally { setBusy(''); }
+  }
+
+  function usePaste() {
+    const r = parseBuyPaste(pasteText);
+    if (!r.sku) { setError('Couldn’t find a SKU in that — put the style code on its own line.'); return; }
+    if (!r.sizes.length) { setError(`Found ${r.sku} but no sizes — write them like "Sizes 8-12" or "8, 9, 10.5".`); return; }
+    if (r.price != null) setShelf(String(r.price));
+    setPasting(false); setPasteText('');
+    setSkuInput(r.sku);
+    lookUp(null, r.sku, r);
   }
 
   // Just a selection now. The market read moved to the server, where the call is made
@@ -217,22 +249,25 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
       // One line per size, at the same shelf price. Sent in order and NOT in parallel:
       // each add re-reads the market server-side, and forty simultaneous ones would be
       // forty simultaneous Alias calls off one button.
-      for (const sz of (sizes.length ? sizes : [null])) {
-        await api.cartAddLine(cart.id, {
-          // The price this SIZE is ticketed at, not the one at the top of the form.
-          sku: product.sku, size: sz, shelfPrice: sz == null ? shelfNum : priceFor(sz),
-          availableQty: availFor(sz),
-          name: product.name || null, colorway: product.colorway || null,
-          gender: product.gender || null, upc: product.upc || null,
-          basis: 'with_you',
-        });
-      }
+      const lineFor = (sz) => ({
+        // The price this SIZE is ticketed at, not the one at the top of the form.
+        sku: product.sku, size: sz, shelfPrice: sz == null ? shelfNum : priceFor(sz),
+        availableQty: availFor(sz),
+        name: product.name || null, colorway: product.colorway || null,
+        gender: product.gender || null, upc: product.upc || null,
+        basis: 'with_you',
+      });
+      // Several sizes go in ONE call: the server prices them one at a time and the desk
+      // gets ONE Telegram card for the shoe, answered with "size x qty" — not one per size.
+      if (sizes.length > 1) await api.cartAddLines(cart.id, sizes.map(lineFor));
+      else await api.cartAddLine(cart.id, lineFor(sizes[0] ?? null));
       // Clear the WHOLE form — the code, the shoe, the sizes, the prices, the count, and
       // with the shoe its photos (they hang off `product.sku`). The first version kept
       // the shoe, on the theory that the next size of the same style was the common
       // next action; the buyer said otherwise: every add is a fresh shoe, and a form
       // still showing the last one's code and photo count was being re-sent by mistake.
       setProduct(null); setSkuInput(''); setSizes([]); setShelf(''); setSizePrice({}); setSizeAvail({});
+      setFromPaste(null);
       onAdded();
     } catch (err) {
       if (err.unauthorized) return onSignOut();
@@ -252,7 +287,26 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
         <button type="button" className="btn ghost" onClick={() => setShowCam((v) => !v)}>
           <Icon name="camera" /> {showCam ? 'Close' : 'Scan'}
         </button>
+        <button type="button" className="btn ghost" aria-pressed={pasting} onClick={() => setPasting((v) => !v)}>
+          {pasting ? 'Close' : 'Paste'}
+        </button>
       </form>
+
+      {pasting && (
+        <div className="bc-paste">
+          <label className="field">
+            <span className="field-label">Paste what the supplier sent</span>
+            <textarea className="input" rows={3} value={pasteText} onChange={(e) => setPasteText(e.target.value)}
+              placeholder={'100000317\nSizes 8-12 $50'} autoCapitalize="characters" autoCorrect="off" spellCheck={false} />
+          </label>
+          <div className="bc-paste-actions">
+            <button type="button" className="btn primary sm" disabled={!pasteText.trim() || busy === 'look'} onClick={usePaste}>
+              Fill in the form
+            </button>
+            <span className="muted xs">A range takes every half size (8-12 = 8, 8.5 … 12). You check it before anything is sent.</span>
+          </div>
+        </div>
+      )}
 
       {error && <div className="error mt">{error}</div>}
 
@@ -263,8 +317,23 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
             <span className="muted sm"> {product.sku}{product.colorway ? ` · ${product.colorway}` : ''}</span>
           </div>
 
+          {fromPaste && (
+            <div className="bc-paste-review" role="status">
+              <b>Check this before you ask.</b>{' '}
+              From the paste: {fromPaste.sizes.length} size{fromPaste.sizes.length === 1 ? '' : 's'}
+              {fromPaste.price != null ? ` at ${money(fromPaste.price)}` : ' — no price found, type it below'}.
+              Untick any size the shop doesn’t have. Nothing goes to the desk until you press Ask.
+              {fromPaste.unlisted.length > 0 && (
+                <div className="bc-short sm">Not in this shoe’s size list: {fromPaste.unlisted.join(', ')} — still selected; untick if that’s a misread.</div>
+              )}
+              {fromPaste.unread.length > 0 && (
+                <div className="muted xs">Ignored: {fromPaste.unread.join(' · ')}</div>
+              )}
+            </div>
+          )}
+
           <div className="bc-sizes" role="group" aria-label="Size">
-            {(product.sizes || []).map((s) => {
+            {[...(product.sizes || []), ...(fromPaste?.extra || [])].map((s) => {
               const label = typeof s === 'string' ? s : (s.size ?? s.label ?? '');
               const picked = sizes.includes(String(label));
               return (
@@ -280,10 +349,10 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                   onClick={() => tapSize(label)}>{label}</button>
               );
             })}
-            {!(product.sizes || []).length && <span className="muted sm">No sizes listed — type the price and add it anyway.</span>}
+            {!(product.sizes || []).length && !fromPaste?.extra?.length && <span className="muted sm">No sizes listed — type the price and add it anyway.</span>}
             {sizes.length > 1 && (
               <p className="muted xs bc-sizes-note">
-                {sizes.length} sizes selected — each goes on as its own line{shelfNum > 0 ? ` at ${money(shelfNum)}` : ''}, and the desk decides how many of each.
+                {sizes.length} sizes selected — each goes on as its own line{shelfNum > 0 ? ` at ${money(shelfNum)}` : ''}, on ONE card to the desk, and they decide how many of each.
                 {differing > 0 && shelfNum > 0 && ` ${differing} priced differently.`}
               </p>
             )}

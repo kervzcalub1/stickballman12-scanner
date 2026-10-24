@@ -23,13 +23,14 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, askTelegramQty, takeTelegramQty, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
+import { dbConfigured, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
 import { alertCancellationsLogged } from '../_lib/alerts.js';
 import { downloadTelegramFile, fileCancellationPhoto, fileTypedCancellation, replyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport } from '../_lib/cancellations.js';
 import { platformFromCommand, platformLabel, PLATFORMS } from '../../src/lib/cancellations.js';
+import { parseApprovalReply } from '../../src/lib/buyPaste.js';
 const PLATFORM_KEYS = new Set(PLATFORMS.map((p) => p.key));
 
 const env = (k) => String(process.env[k] || '').trim();
@@ -82,6 +83,12 @@ async function handleTap(update, cq) {
   const kind = parts[0];
   const cardEnv = parts[parts.length - 1] === 'dev' ? 'dev' : 'prod';
   const from = cq.from || {};
+  if (kind === 'grpreject') {
+    if (cardEnv !== notifyEnv()) return forwardToOtherEnv(update, cardEnv);
+    const card = await getTelegramGroupCard({ id: Number(parts[1]) });
+    if (!card) return answerOnCard(chatId, messageId, { code: 404, body: { ok: false, error: 'This card is not on record here' } }, cardEnv);
+    return decideGroup({ from, card, chatId, messageId, cardEnv, approve: [], reject: card.line_ids.map((id) => ({ id })) });
+  }
   const cartId = Number(parts[1]);
   const lineId = Number(parts[2]);
 
@@ -153,6 +160,22 @@ async function handleMessage(update, msg) {
   if (/^\/chatid(@\w+)?\s*$/i.test(String(msg.text || ''))) {
     return tg('sendMessage', { chat_id: msg.chat.id, text: `This chat's id: ${msg.chat.id}` }).catch((e) => console.error('[telegram/webhook] chatid', e.message));
   }
+  // A REPLY to a one-card-per-shoe card: "9 x 5" lines (api/_lib/notify.js notifyGroupAsked).
+  // Recognised by the card's own button, which also says which server sent it.
+  const card0 = msg.reply_to_message;
+  const grpData = (card0?.reply_markup?.inline_keyboard || []).flat()
+    .map((b) => String(b.callback_data || '')).find((d) => d.startsWith('grpreject:'));
+  if (grpData && inOurChat(msg.chat?.id) && msg.text) {
+    const cardEnv = grpData.endsWith(':dev') ? 'dev' : 'prod';
+    if (cardEnv !== notifyEnv()) return forwardToOtherEnv(update, cardEnv);
+    return handleGroupReply(msg, card0, cardEnv);
+  }
+  // Same card, should a client ever deliver the reply without the card's buttons: a card
+  // in THIS server's table is ours by definition.
+  if (card0 && inOurChat(msg.chat?.id) && msg.text
+      && await getTelegramGroupCard({ chatId: msg.chat.id, messageId: card0.message_id }).catch(() => null)) {
+    return handleGroupReply(msg, card0, notifyEnv());
+  }
   if (!/^\s*\d{1,3}\s*$/.test(String(msg.text || ''))) return null;
   if (!inOurChat(msg.chat?.id)) return null;
   const from = msg.from || {};
@@ -170,6 +193,62 @@ async function handleMessage(update, msg) {
     qty: Number(String(msg.text).trim()),
   });
   return answerOnCard(msg.chat.id, Number(pending.card_message_id), out, pending.env);
+}
+
+// "11 x 3 / 10.5 x 4" under a shoe's card → those sizes approved at those quantities, every
+// other size on the card turned down. Strict: anything unreadable, or a size that isn't on
+// the card, records NOTHING and says why — this spends money (src/lib/buyPaste.js).
+async function handleGroupReply(msg, cardMsg, cardEnv) {
+  const chatId = msg.chat.id;
+  const card = await getTelegramGroupCard({ chatId, messageId: cardMsg.message_id });
+  const say = (text) => enqueue(() => tg('sendMessage', {
+    chat_id: chatId, text: `${text}${cardEnv === 'dev' ? ' · [dev]' : ''}`,
+    reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true },
+  }));
+  if (!card) return say('⚠️ This card is not on record here, so nothing was recorded.');
+  const lines = (await Promise.all(card.line_ids.map((id) => getBuyCartLine(card.cart_id, id)))).filter(Boolean);
+  if (!lines.length) return say('⚠️ Those sizes are no longer on the request, so nothing was recorded.');
+  const read = parseApprovalReply(msg.text, lines);
+  if (!read.ok) return say(`⚠️ ${read.error}`);
+  // Telegram redelivers an update it didn't get a 200 for; the second copy is a no-op.
+  if (!(await claimTelegramGroupReply(card.id, msg.message_id))) return null;
+  return decideGroup({
+    from: msg.from || {}, card, chatId, messageId: cardMsg.message_id, cardEnv,
+    approve: read.approve.map((a) => ({ id: Number(a.line.id), size: a.line.size, qty: a.qty })),
+    reject: read.reject.map((l) => ({ id: Number(l.id), size: l.size })),
+  });
+}
+
+// One decision for the whole card: the approvals (each with its quantity), then the rest
+// turned down — through decideFromTelegram, so the identity and `approve_buying` checks are
+// the same as a button tap's. Answered under the card in one message.
+async function decideGroup({ from, card, chatId, messageId, cardEnv, approve, reject }) {
+  const who = { telegramUserId: from.id, telegramName: from.first_name, telegramUsername: from.username, cartId: card.cart_id };
+  let name = null;
+  if (approve.length) {
+    const out = await decideFromTelegram({
+      ...who, action: 'approve',
+      lineIds: approve.map((a) => a.id),
+      qty: Object.fromEntries(approve.map((a) => [a.id, a.qty])),
+    });
+    // Nothing turned down either when the approval was refused — half a decision is worse.
+    if (!out.body?.ok) return answerOnCard(chatId, messageId, out, cardEnv);
+    name = out.body.by;
+  }
+  if (reject.length) {
+    const out = await decideFromTelegram({ ...who, action: 'reject', lineIds: reject.map((r) => r.id) });
+    // A 409 here after approvals went through = those sizes were already settled; fine.
+    if (!out.body?.ok && !(approve.length && out.code === 409)) return answerOnCard(chatId, messageId, out, cardEnv);
+    name = name || out.body?.by;
+  }
+  const pairs = approve.reduce((n, a) => n + a.qty, 0);
+  const outcome = [
+    approve.length
+      ? `${name} approved ${approve.map((a) => `${a.size} ×${a.qty}`).join(', ')} (${pairs} pair${pairs === 1 ? '' : 's'})`
+      : `${name} turned them all down`,
+    ...(approve.length && reject.length ? [`Turned down: ${reject.map((r) => r.size).join(', ')}`] : []),
+  ].join('\n');
+  return answerOnCard(chatId, messageId, { code: 200, body: { ok: true, outcome, reaction: approve.length ? '👍' : '👎' } }, cardEnv);
 }
 
 // A person's own chat with the bot — where their alerts arrive. Only `/start` means

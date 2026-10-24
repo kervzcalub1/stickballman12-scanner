@@ -580,6 +580,40 @@ afterwards would leave the group holding a card that quotes a number the request
 carries, and the group is where the decision gets made. A price that is wrong after
 sending is a remove-and-re-add (the × on a pending row), not an edit.
 
+### One card per shoe + paste the supplier's text (2026-10-24)
+Suppliers often send just `100000317` / `Sizes 8-12 $50`, and a run of nine sizes used to put
+**nine cards** in the group. Now:
+- **Paste** (button beside Scan on "Add a pair") → `parseBuyPaste` (`src/lib/buyPaste.js`):
+  style code, a **range = every half size** (8-12 → 8, 8.5 … 12; `5Y-7Y` keeps the suffix), or
+  a list (`8, 9, 10.5`), `$50` / `@ 50` / `50 usd` = shelf price, `9 x 2` = size with 2 in the
+  shop. A line of words ("Club C 85 Vintage") is the NAME and its numbers are not sizes.
+  **It only fills the form** (owner's rule): sizes come up selected, the price typed, an amber
+  "Check this before you ask" note lists what was read, sizes the catalogue doesn't list
+  (still selected, flagged) and ignored lines. Nothing is asked until **Ask about N sizes**.
+- **One call** — `cart/line` takes `{ cartId, lines:[…] }` (one SKU, ≤ 40 sizes, every line
+  checked before any is added; mixed SKUs → 400). Still **one `buy_cart_lines` row per size**;
+  funding / receipts / pack list unchanged. Priced one at a time in the background
+  (`priceRunInBackground`), then **one card** (`notifyGroupAsked`, `api/_lib/notify.js`):
+  name, SKU, header shelf price (the most common; a differing size says its own), then one row
+  per size — `9 · Did not count · BUY $61.39 · 98.9% ROI` / `· not priced` — inventory for the
+  run, request code, supplier, store, and how to answer. A single size still gets the old card.
+  Make (no bot token) has no reply handler, so there it stays a card per size.
+- **Answer by REPLYING** to the card: `11 x 3` / `10.5 x 4` (also `10.5x4`, `11 × 2`, `all x 2`,
+  `9 x 0` = turn down). `parseApprovalReply`: listed sizes approved at those quantities, **every
+  other size on the card turned down**. Strict — an unreadable line, a size not on the card, or a
+  size twice records NOTHING and replies why. Both halves go through `decideFromTelegram`
+  (same identity + `approve_buying` checks as a tap); the approval first, and if it's refused
+  nothing is turned down. One reply under the card ("X approved 9 ×5, 10.5 ×4 (9 pairs)\nTurned
+  down: …") + 👍 (👎 if none). A later reply overrides (same as the screen).
+- The card's only button: **✕ Turn them all down** (`grpreject:<cardId>:<env>`). That button is
+  also how the webhook recognises a reply to a group card and which server owns it — a dev
+  card's reply is forwarded like a dev tap. Fallback: a card found in this server's table.
+- **`telegram_group_cards`** (new table → **db:setup**): card id → cart, sku, `line_ids`
+  ("12,13,14"), chat + `message_id`, env, `last_reply_id` (Telegram redelivers; the same reply
+  twice is a no-op via `claimTelegramGroupReply`).
+- Tests: `buy-cart.spec.js` § "Telegram, direct" (one card, reply, bad size, turn all down,
+  bulk endpoint) and § "one price for the run" (paste → review → one call).
+
 ### The cost stack is the desk's too (2026-09-11)
 It moved the same way the buy call did, and for the same reason: **the stack is what turns
 a shelf price into a profit, so it is the basis on which a request gets approved or turned

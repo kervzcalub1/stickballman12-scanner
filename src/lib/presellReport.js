@@ -17,6 +17,7 @@ import { toCsv } from './manifestCsv.js';
 import { estDate, estTime, estClock } from './format.js';
 import { saleNet } from './presellDetails.js';
 import { WHERE, pickGroups, fulfillTotals, timeLeft, urgency, labelLink } from './presellFulfill.js';
+import { boxState, boxSummary } from './presellBoxes.js';
 
 const PLAT = { alias: 'Alias', stockx: 'StockX' };
 const n2 = (v) => (v == null || !Number.isFinite(Number(v)) ? '' : Number(v).toFixed(2));
@@ -43,6 +44,9 @@ export function stockReportRows(rows) {
         qty: Number(s.qty), sold: Number(s.sold), left, state: stockState(s),
         supplier: s.supplier || s.po_supplier || '', po: s.po_code || '',
         tracking: (s.tracking_numbers || []).join(' '), trackingCount: (s.tracking_numbers || []).length,
+        // By box (docs/presell-box-tracking-plan.md): "3 in 1Z… (in transit - exp 10/26); …" + what's not in a box yet.
+        boxes: [...(s.boxes || []).map((b) => `${b.qty == null ? 'some' : b.qty} in ${b.tracking || `box ${b.box_number ?? '?'}`} (${boxState(b).word.replace(/·/g, '-')})`),
+          ...((s.boxes || []).length && boxSummary(s.qty, s.boxes).unplaced ? [`${boxSummary(s.qty, s.boxes).unplaced} not in a box yet`] : [])].join('; '),
         note: s.transit_note || '',
         shelf: s.shelf_price != null ? Number(s.shelf_price) : null, cost,
         preset: s.cost_stack?.preset || '',
@@ -89,7 +93,7 @@ export function salesTotals(rs) {
 export function stockReportCsv(rows) {
   return toCsv([
     ['listed', 'Listed (EST)'], ['sku', 'SKU'], ['name', 'Name'], ['size', 'Size'], ['qty', 'Pairs'], ['sold', 'Sold'], ['left', 'Left'],
-    ['state', 'Status'], ['supplier', 'Supplier'], ['po', 'PO'], ['tracking', 'Tracking numbers'], ['note', 'Shipment note'],
+    ['state', 'Status'], ['supplier', 'Supplier'], ['po', 'PO'], ['boxes', 'Boxes'], ['tracking', 'Tracking numbers'], ['note', 'Shipment note'],
     ['shelf', 'Shelf $'], ['preset', 'Preset'], ['cost', 'Cost $ / pair'], ['leftValue', 'Left at cost $'],
   ], stockReportRows(rows).map((r) => ({ ...r, shelf: n2(r.shelf), cost: n2(r.cost), leftValue: n2(r.leftValue) })));
 }
@@ -297,17 +301,19 @@ export async function salesReportPdf(rows, { from, to, generatedAt }) {
 // tick box per order. Rows come from assignWhere (src/lib/presellFulfill.js). Letter PORTRAIT.
 
 const shipByText = (v) => (v ? `${estDate(v)} ${estClock(v)}` : 'no deadline');
+// The box an in-transit pair is coming in (docs/presell-box-tracking-plan.md), ASCII for the PDF.
+const boxText = (b) => (b ? `box ${b.tracking || b.box_number || '?'} (${boxState(b).word.replace(/·/g, '-')})` : '');
 export function pickListCsv(rows, now = Date.now()) {
   const out = [];
   for (const g of pickGroups(rows)) for (const x of g.orders) {
     out.push({ shipBy: x.ship_by ? shipByText(x.ship_by) : '', left: timeLeft(x.ship_by, now), sku: g.sku || '', name: g.name || '', size: g.size || '',
-      platform: PLAT[x.platform] || x.platform, order: x.order_id, where: WHERE[x.where]?.word || '', status: x.order_status || 'not read yet',
+      platform: PLAT[x.platform] || x.platform, order: x.order_id, where: WHERE[x.where]?.word || '', box: boxText(x.box), status: x.order_status || 'not read yet',
       carrier: x.carrier || '', tracking: x.tracking_number || '', label: labelLink(x) || '',
       supplier: x.supplier || '', po: x.po_code || '' });
   }
   return toCsv([
     ['shipBy', 'Ship by (EST)'], ['left', 'Time left'], ['sku', 'SKU'], ['name', 'Name'], ['size', 'Size'], ['platform', 'Platform'],
-    ['order', 'Order'], ['where', 'Where is the pair'], ['status', 'Platform status'], ['carrier', 'Carrier'], ['tracking', 'Tracking'],
+    ['order', 'Order'], ['where', 'Where is the pair'], ['box', 'Box'], ['status', 'Platform status'], ['carrier', 'Carrier'], ['tracking', 'Tracking'],
     ['label', 'Label'], ['supplier', 'Supplier'], ['po', 'PO'],
   ], out);
 }
@@ -397,10 +403,10 @@ export async function pickListPdf(rows, { generatedAt, scope = '', now = Date.no
       doc.text(fit(track, C.track[1]), C.track[0] + 1, y + 4);
       // Platform status when it isn't the ordinary "waiting to ship" one (e.g. card failed).
       const odd = x.order_status && !/LABEL_GENERATED|^CREATED$/.test(x.order_status) ? x.order_status : (!x.order_status ? 'not read from the platform yet' : '');
-      if (odd || (x.where === 'transit' && (x.transit_note || x.expected_on))) {
+      if (odd || (x.where === 'transit' && (x.box || x.transit_note || x.expected_on))) {
         y += 4.2;
         doc.setFontSize(7); doc.setTextColor(...MUTED);
-        const note = [odd && `Platform: ${odd}`, x.where === 'transit' && [x.transit_note, x.expected_on && `expected ${String(x.expected_on).slice(0, 10)}`].filter(Boolean).join(', ')].filter(Boolean).join('  |  ');
+        const note = [odd && `Platform: ${odd}`, x.where === 'transit' && [boxText(x.box), x.transit_note, x.expected_on && `expected ${String(x.expected_on).slice(0, 10)}`].filter(Boolean).join(', ')].filter(Boolean).join('  |  ');
         doc.text(fit(note, R - C.by[0]), C.by[0] + 1, y + 3.4);
       }
       y += 5.6;

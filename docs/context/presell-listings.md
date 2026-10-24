@@ -175,6 +175,45 @@ the numbers). A re-list without a cost keeps the one already there.
   rest". The LISTED and INBOUNDED posts carry supplier · PO (· N tracking numbers).
 - Tests: `e2e/presell-cost-shipment.spec.js`.
 
+## 📦 By box — tracking numbers per BOX, not per size (owner, 2026-10-24)
+Plan + reasoning: `docs/presell-box-tracking-plan.md`. **We hand the supplier every tracking
+number** (our labels on the PO); they buy and pack, often MIXING sizes in a box (3 × 8, 3 × 9,
+3 × 10). So a size's boxes are DERIVED from what each box holds — never typed against the size.
+- **Source of a box's contents** (`presellBoxesFor` in db.js), per label (`po_boxes`, reships
+  excluded) of every PO the row is on (`presell_stock_po` ∪ `po_id`):
+  1. the supplier's per-box list — `po_lines` with a `po_box_id` (scanned, or typed on their
+     behalf) — **always wins** for a box that has one;
+  2. else **`presell_box_lines`** (`po_box_id`, sku, size, `qty` — NULL = "some, count
+     unknown"), typed here. For a WHOLE-ORDER manifest, where `po_lines` can't carry a box (an
+     order can't mix the two). It **never** feeds the PO's expected / reconciliation.
+  Matching is the reconciliation's (dual style codes, `rcSizeNum`: supplier 10 = our 10W).
+  `received` = a receiving box tied to the label (`batch_boxes.po_box_id`, or same tracking #).
+- **Stock tab**: under each size, one line per box in LANDING order (`boxOrder`: received →
+  delivered → soonest ETA): "3 in 1Z…4784 🚚 in transit · exp 10/27", then "N not in a box yet"
+  (amber, a to-do) or "⚠ N more in boxes than we have pairs". Rows with boxes drop the old
+  "N tracking" count. Helpers: `src/lib/presellBoxes.js` (pure, shared with the server).
+- **📦 Boxes** (row button, PO-linked rows) → grid for one SKU on one PO: a row per label, a
+  column per size pre-listed against that PO; a number or **?**; supplier-declared boxes are
+  read-only; "same as last box", "fill the rest", per-size "in boxes / pairs" footer. Saves per
+  box: `POST action {action:'boxContents', poId, boxId, sku, lines:[{size, qty|null}]}` (replaces
+  that SKU in that box; 409 `over_boxes` when a size would have more in boxes than pairs; 409 on
+  a declared/reship box; 400 on a size not pre-listed against the PO). Read:
+  `GET list?tab=boxgrid&po=&sku=`.
+- **Tick rows → 📦 In boxes (count unknown)…** — "these sizes are somewhere in these boxes":
+  `action:'boxUnknown', stockIds, boxIds` adds a `qty NULL` line per (size, box) that has none
+  (a counted line is never overwritten); one PO at a time, rows must be on it.
+- **✎ Cost & shipment → ＋ Make a PO for this buy** (rows on no PO; PH/admin): opens a PO for the
+  typed supplier with ONE LABEL PER TRACKING NUMBER (registered with 17TRACK like `po/create`),
+  NO lines (the supplier still scans per box, or PH fills 📦 Boxes), links the rows (`po_id` +
+  `presell_stock_po` = qty). 409 if a tracking # is already on an order (link to that one).
+  `action:'makePo', stockIds, supplierName, trackingNumbers`.
+- **Uses**: the IN-TRANSIT SALE post shows **Box:** (the sold-th pair along `boxOrder`,
+  `boxForPair`) instead of the tracking list; the ARRIVED post names the box(es) the pairs came
+  out of (`trackingForBatchBoxes`); Fulfill gives each in-transit order its box
+  (`presell-fulfillment.md`); the Stock CSV has a **Boxes** column, the pick list a **Box** one.
+- Live: `presell_box_lines` is in `LIVE_TABLES`; the Stock tab also listens to `po_lines` /
+  `po_boxes`. Tests: `e2e/presell-boxes.spec.js`.
+
 ## ⚔ Market competition + 🔒 price lock (owner, 2026-10-11)
 Tab **⚔ Compete**. Engine `api/_lib/presell-compete.js`, from the worker every
 `PRESELL_COMP_EVERY_MIN` (default **15**) — only where `PRESELL_WATCH=on`.

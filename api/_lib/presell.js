@@ -19,9 +19,11 @@ import {
 } from './stockx.js';
 import {
   getPresellStock, openPresellListings, updatePresellListing, recordPresellSale, markPresellSaleNotified, presellPhListed,
+  presellBoxesFor,
 } from './db.js';
 import { sendPresellSale } from './telegram.js';
 import { saleNet, listableOn, pairsOwed } from '../../src/lib/presellDetails.js';
+import { boxForPair, boxState } from '../../src/lib/presellBoxes.js';
 
 export const PLATFORM_LABEL = { alias: 'Alias', stockx: 'StockX' };
 
@@ -180,6 +182,13 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
   const signed = (n) => `${n < 0 ? '−' : ''}${usd(Math.abs(n))}`;
   const preset = stock?.cost_stack?.preset;
   const tracks = stock?.tracking_numbers || [];
+  // The box this pair comes in (docs/presell-box-tracking-plan.md): the sold-th pair along the
+  // boxes in the order they land — received first, then the soonest ETA. Best-effort.
+  let box = null;
+  if (transit && stock) {
+    try { box = boxForPair((await presellBoxesFor([stock])).get(Number(stock.id)) || [], sold); }
+    catch (e) { console.error('[presell] box lookup:', e.message); }
+  }
   // Laid out in sections with a rule between them (owner, 2026-10-10: one block of lines was
   // too compressed to read) — WHAT sold, the MONEY, WHERE it's from, then what to DO.
   // { b, t } = a bold label followed by plain text; '' = a blank line.
@@ -199,7 +208,8 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
     ...(stock?.supplier ? [{ b: 'Supplier:', t: ` ${stock.supplier}` }] : []),
     ...(stock?.po_code ? [{ b: 'PO:', t: ` ${stock.po_code}` }] : []),
     ...(transit ? [{ b: 'Shipment:', t: ` ${stock?.transit_note || 'in transit'}${stock?.expected_on ? ` · expected ${String(stock.expected_on).slice(0, 10)}` : ''}` }] : []),
-    ...(tracks.length ? [{ b: 'Tracking:', t: ` ${tracks.slice(0, 3).join(', ')}${tracks.length > 3 ? ` +${tracks.length - 3} more` : ''}` }] : []),
+    ...(box ? [{ b: 'Box:', t: ` ${box.tracking || `box ${box.box_number}`} — ${boxState(box).word}` }]
+      : tracks.length ? [{ b: 'Tracking:', t: ` ${tracks.slice(0, 3).join(', ')}${tracks.length > 3 ? ` +${tracks.length - 3} more` : ''}` }] : []),
   ];
   const todo = transit ? [
     { b: arrived ? '⚠️ WAREHOUSE — ALREADY RECEIVED' : '📦 WAREHOUSE' },

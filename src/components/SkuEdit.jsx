@@ -44,12 +44,19 @@ export function SkuEditModal({ item, onClose, onSaved, onSignOut, defaultScope =
     } finally { setBusy(''); }
   }
 
+  // Saving looks the code up itself when nobody pressed Look up: a code saved under the
+  // old name left 7 Jordan 15s reading "Air Jordan 16 'Black Pack'" after their SKU was
+  // fixed (2026-10-23). A miss still saves the code — the name just stays as it is.
   async function save() {
     setBusy('save'); setErr('');
     try {
+      let hit = lookedUp === code ? product : null;
+      if (lookedUp !== code) {
+        try { hit = (await api.searchSku(code)).product || null; } catch (e) { if (e.unauthorized) return onSignOut(); }
+      }
       const r = await api.setItemSku({
         vin: item.vin, sku: code, scope,
-        product: lookedUp === code && product ? product : null,
+        product: hit || null,
         reason: reason.trim() || null,
       });
       onSaved(r);

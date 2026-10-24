@@ -20,6 +20,7 @@ import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
 import { parseTrackingList, saleNet, pairsLeft, listableOn, pairsOwed } from '../lib/presellDetails.js';
 import { COMP_MODES, compFloor } from '../lib/presellCompete.js';
 import { assignWhere, pickGroups, fulfillTotals, urgency, timeLeft, labelLink, WHERE } from '../lib/presellFulfill.js';
+import { boxOrder, boxSummary, boxState, shortTrack } from '../lib/presellBoxes.js';
 
 // The cost stack fields a supplier preset carries (payout_presets), in the order the
 // Payout Calculator applies them.
@@ -639,6 +640,9 @@ function StockTab({ onSignOut }) {
   const [fill, setFill] = useState(false);
   const [detailsFor, setDetailsFor] = useState(null);   // { sku, focus }
   const [restoreFor, setRestoreFor] = useState(null);   // a SKU
+  const [boxesFor, setBoxesFor] = useState(null);       // { sku, poId } — the 📦 Box contents grid
+  const [ticked, setTicked] = useState(() => new Set()); // rows ticked for "📦 In boxes (count unknown)"
+  const [unknownFor, setUnknownFor] = useState(false);
   const [presets, setPresets] = useState([]);
   useEffect(() => { api.payoutPresets().then((r) => setPresets(r.presets || [])).catch(() => {}); }, []);
   const pos = usePresellPos();
@@ -647,8 +651,10 @@ function StockTab({ onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { const t = setTimeout(load, q ? 300 : 0); return () => clearTimeout(t); }, [q, from, to]); // eslint-disable-line react-hooks/exhaustive-deps
-  useLive(['presell_stock', 'presell_listings'], load, { mount: false });
+  useLive(['presell_stock', 'presell_listings', 'presell_box_lines', 'po_lines', 'po_boxes'], load, { mount: false });
   const noCost = (rows || []).filter((s) => s.unit_cost == null).length;
+  const tick = (id) => setTicked((t) => { const n = new Set(t); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const tickedRows = (rows || []).filter((r) => ticked.has(r.id));
   return (
     <>
       <div className="card ap-stockbar">
@@ -659,17 +665,26 @@ function StockTab({ onSignOut }) {
       </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">
+        {tickedRows.length > 0 && (
+          <div className="ap-tickbar">
+            <span><b>{tickedRows.length}</b> size{tickedRows.length === 1 ? '' : 's'} ticked</span>
+            <button type="button" className="btn sm" onClick={() => setUnknownFor(true)}
+              title="When you know which boxes these sizes are in, but not how many in each">📦 In boxes (count unknown)…</button>
+            <button type="button" className="linklike xs" onClick={() => setTicked(new Set())}>clear</button>
+          </div>
+        )}
         {noCost > 0 && <p className="muted sm">{noCost} size{noCost === 1 ? ' has' : 's have'} <b>no cost</b> yet — tap <b>✎ Cost &amp; shipment</b> to add the shelf price and supplier preset.</p>}
         {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">{from || to ? 'Nothing listed in those dates.' : 'No pre-sell stock yet.'}</p> : (
           <div className="ap-tablewrap">
             <table className="table">
-              <thead><tr><th>Shoe</th><th>Size</th><th className="num">Pairs</th><th className="num">Sold</th><th className="num">Left</th><th className="num">Cost</th><th>Alias</th><th>StockX</th><th /></tr></thead>
+              <thead><tr><th aria-label="Tick" /><th>Shoe</th><th>Size</th><th className="num">Pairs</th><th className="num">Sold</th><th className="num">Left</th><th className="num">Cost</th><th>Alias</th><th>StockX</th><th /></tr></thead>
               <tbody>
                 {rows.map((s) => {
                   const left = pairsLeft(s);
                   const tracks = s.tracking_numbers || [];
                   return (
                     <tr key={s.id}>
+                      <td><input type="checkbox" checked={ticked.has(s.id)} onChange={() => tick(s.id)} aria-label={`Tick ${s.sku} size ${s.size}`} /></td>
                       <td><div className="ap-shoe"><ShoeThumb url={s.image} size={36} /><div><b>{s.sku}</b><div className="muted xs">{s.name}</div>
                         {s.in_transit && (s.arrived_at
                           ? <span className="ap-transit-chip arrived" title={`Every pair received${s.arrived_batch ? ` (last in ${s.arrived_batch})` : ''}`}>📦 All arrived {PH_DATE.format(new Date(s.arrived_at))}</span>
@@ -682,9 +697,10 @@ function StockTab({ onSignOut }) {
                         )}
                         {(s.supplier || s.po_code || tracks.length > 0) && (
                           <div className="muted xs ap-source-line" title={tracks.join('\n')}>
-                            {[s.supplier, s.po_code, tracks.length && `${tracks.length} tracking`].filter(Boolean).join(' · ')}
+                            {[s.supplier, s.po_code, !s.boxes?.length && tracks.length && `${tracks.length} tracking`].filter(Boolean).join(' · ')}
                           </div>
                         )}
+                        <BoxBreakdown s={s} onOpen={s.po_id ? () => setBoxesFor({ sku: s.sku, poId: s.po_id }) : null} />
                         {/* Against its order (store-orders-plan §4.9): never pre-list more than
                             the order has, and once it lands, say which sold pairs never came. */}
                         {s.po_code && s.po_expected != null && (
@@ -722,6 +738,7 @@ function StockTab({ onSignOut }) {
                           <button type="button" className="btn sm" onClick={() => setRestoreFor(s.sku)} title="List every size of this shoe that's short, on both platforms, in one go">↺ Restore</button>
                         )}
                         <button type="button" className="btn sm ghost" onClick={() => setDetailsFor({ sku: s.sku, focus: s.id })} title="Cost, supplier, PO, tracking numbers, in transit">✎ Cost &amp; shipment</button>
+                        {s.po_id && <button type="button" className="btn sm ghost" onClick={() => setBoxesFor({ sku: s.sku, poId: s.po_id })} title="Which of the order's boxes each size is in">📦 Boxes</button>}
                         <button type="button" className="btn sm ghost" onClick={() => setQtyFor(s)}>Pairs…</button>
                       </td>
                     </tr>
@@ -735,12 +752,243 @@ function StockTab({ onSignOut }) {
       {qtyFor && <QtyDialog stock={qtyFor} onSignOut={onSignOut} onClose={() => setQtyFor(null)} onDone={() => { setQtyFor(null); load(); }} />}
       {listFor && <ListMoreDialog {...listFor} onSignOut={onSignOut} onClose={() => setListFor(null)} onDone={() => { setListFor(null); load(); }} />}
       {fill && <FillMissingDialog rows={rows || []} onSignOut={onSignOut} onClose={() => setFill(false)} onDone={() => { setFill(false); load(); }} />}
+      {boxesFor && <BoxGridDialog {...boxesFor} onSignOut={onSignOut} onClose={() => { setBoxesFor(null); load(); }} />}
+      {unknownFor && <BoxUnknownDialog rows={tickedRows} onSignOut={onSignOut} onClose={() => setUnknownFor(false)}
+        onDone={() => { setUnknownFor(false); setTicked(new Set()); load(); }} />}
       {restoreFor && <RestoreDialog rows={(rows || []).filter((r) => r.sku === restoreFor)} onSignOut={onSignOut} onClose={() => setRestoreFor(null)} onDone={() => { setRestoreFor(null); load(); }} />}
       {detailsFor && (
         <DetailsDialog rows={(rows || []).filter((r) => r.sku === detailsFor.sku)} focus={detailsFor.focus} presets={presets} pos={pos}
           onSignOut={onSignOut} onClose={() => setDetailsFor(null)} onDone={() => { setDetailsFor(null); load(); }} />
       )}
     </>
+  );
+}
+
+// 📦 BY BOX (docs/presell-box-tracking-plan.md, owner 2026-10-24). We hand out every tracking
+// number; the supplier packs, often mixing sizes in a box. So a size's boxes are DERIVED from
+// what each box holds (the supplier's per-box list on the PO, else what PH typed in the grid),
+// shown in the order the pairs land, plus what isn't in a box yet.
+const BOX_SOURCE = { supplier: 'the supplier’s list', staff: 'typed for the supplier on the PO', presell: 'typed here (📦 Box contents)' };
+const sizeNumOf = (z) => { const m = String(z || '').match(/\d+(?:\.\d+)?/); return m ? Number(m[0]) : Infinity; };
+function BoxBreakdown({ s, onOpen }) {
+  const boxes = boxOrder(s.boxes || []);
+  if (!boxes.length) {
+    if (!s.po_id) return null;
+    return (
+      <div className="xs ap-boxes none">📦 Not in a box yet
+        {onOpen && <> · <button type="button" className="linklike" onClick={onOpen}>which box is it in?</button></>}</div>
+    );
+  }
+  const sum = boxSummary(s.qty, boxes);
+  const shown = boxes.slice(0, 4);
+  return (
+    <div className="xs ap-boxes">
+      {shown.map((b) => {
+        const st = boxState(b);
+        return (
+          <div key={b.id} className={`ap-box ${st.key}`}
+            title={`${b.tracking || 'No tracking number'} · ${b.po_code} box ${b.box_number ?? '?'} · ${st.word} · from ${BOX_SOURCE[b.source] || b.source}`}>
+            <b>{b.qty == null ? '?' : b.qty}</b> in <span className="ap-mono">{b.tracking ? shortTrack(b.tracking) : `box ${b.box_number ?? '?'}`}</span> {st.icon} {st.word}
+          </div>
+        );
+      })}
+      {boxes.length > shown.length && (onOpen
+        ? <button type="button" className="linklike" onClick={onOpen}>+{boxes.length - shown.length} more box{boxes.length - shown.length === 1 ? '' : 'es'}</button>
+        : <div className="muted">+{boxes.length - shown.length} more</div>)}
+      {sum.unplaced > 0 && (
+        <div className="ap-box-gap">{sum.unplaced} {sum.unknown ? 'not in a counted box' : 'not in a box yet'}
+          {onOpen && <> · <button type="button" className="linklike" onClick={onOpen}>place them</button></>}</div>
+      )}
+      {sum.over > 0 && <div className="ap-box-over">⚠ {sum.over} more in boxes than we have pairs</div>}
+    </div>
+  );
+}
+
+// 📦 Box contents: one SKU on one order — a row per label (tracking number we gave the
+// supplier), a column per size. The supplier's own per-box list is shown read-only (it wins);
+// a box nobody declared is typed here: a number, or "?" for "some, count unknown".
+// "Same as last box" (even packing) and "Fill the rest" (the last box takes what's left).
+function BoxGridDialog({ sku, poId, onSignOut, onClose }) {
+  const [grid, setGrid] = useState(null);
+  const [vals, setVals] = useState({});        // boxId → { size: '' | '3' | '?' }
+  const [dirty, setDirty] = useState(() => new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [saved, setSaved] = useState('');
+  function adopt(g) {
+    setGrid(g);
+    setVals(Object.fromEntries(g.boxes.map((b) => [b.id, Object.fromEntries(b.lines.map((l) => [l.size, l.qty == null ? '?' : String(l.qty)]))])));
+    setDirty(new Set());
+  }
+  async function load() {
+    try { adopt(await api.presellListingsList({ tab: 'boxgrid', po: poId, sku })); setErr(''); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+  }
+  useEffect(() => { load(); }, [poId, sku]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sizes = useMemo(() => [...(grid?.sizes || [])].sort((a, b) => sizeNumOf(a.size) - sizeNumOf(b.size)), [grid]);
+  const boxes = grid?.boxes || [];
+  const num = (v) => (v === '?' ? null : Math.max(0, parseInt(v, 10) || 0));
+  // Per size: pairs in boxes of OTHER orders (read as saved) + every box of this one (as edited).
+  const placedOf = (z, exceptBox = null) => {
+    const other = z.boxes.filter((b) => b.po_id !== Number(poId)).reduce((n, b) => n + (Number(b.qty) || 0), 0);
+    return other + boxes.filter((b) => b.id !== exceptBox).reduce((n, b) => n + (num(vals[b.id]?.[z.size] ?? '') || 0), 0);
+  };
+  const setCell = (boxId, size, v) => {
+    const clean = v.trim() === '?' ? '?' : v.replace(/[^0-9]/g, '').slice(0, 3);
+    setVals((c) => ({ ...c, [boxId]: { ...(c[boxId] || {}), [size]: clean } }));
+    setDirty((d) => new Set(d).add(boxId));
+    setSaved('');
+  };
+  const setRow = (boxId, row) => { setVals((c) => ({ ...c, [boxId]: row })); setDirty((d) => new Set(d).add(boxId)); setSaved(''); };
+  const editable = boxes.filter((b) => !b.declared);
+  const over = sizes.filter((z) => placedOf(z) > z.qty);
+  async function save() {
+    setBusy(true); setErr(''); setSaved('');
+    const total = (b) => Object.values(vals[b.id] || {}).reduce((n, v) => n + (num(v) || 0), 0);
+    const was = (b) => b.lines.reduce((n, l) => n + (Number(l.qty) || 0), 0);
+    // Boxes losing pairs first, so moving pairs between boxes never trips the "too many" check.
+    const order = editable.filter((b) => dirty.has(b.id)).sort((a, b) => (total(a) - was(a)) - (total(b) - was(b)));
+    let last = null;
+    try {
+      for (const b of order) {
+        last = await api.presellListingsAction({ action: 'boxContents', poId: Number(poId), boxId: b.id, sku,
+          lines: sizes.map((z) => ({ size: z.size, qty: num(vals[b.id]?.[z.size] ?? '') })) });
+      }
+      if (last) adopt(last);
+      setSaved(`Saved ${order.length} box${order.length === 1 ? '' : 'es'}.`);
+    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); load(); }
+    finally { setBusy(false); }
+  }
+  const title = `📦 ${sku} — what’s in each box${grid ? ` · ${grid.po.po_code}` : ''}`;
+  return (
+    <Dialog title={title} onClose={() => (busy ? null : onClose())} busy={busy} wide>
+      {!grid ? (err ? null : <p className="muted">Loading…</p>) : !boxes.length ? (
+        <p className="muted">{grid.po.po_code} has no labels yet — add the tracking numbers we gave the supplier on the purchase order first.</p>
+      ) : !sizes.length ? (
+        <p className="muted">No size of {sku} is pre-listed against {grid.po.po_code}.</p>
+      ) : (
+        <>
+          <p className="muted sm">One row per box (a tracking number we gave the supplier). Type how many pairs of each size are in it, or <b>?</b> when it’s in there but you don’t know how many.
+            A box the supplier declared on the PO is read-only — their list is used.</p>
+          <div className="ap-boxgrid-wrap">
+            <table className="table ap-boxgrid">
+              <thead>
+                <tr><th>Box</th>{sizes.map((z) => <th key={z.stock_id} className="num">{z.size}</th>)}<th /></tr>
+              </thead>
+              <tbody>
+                {boxes.map((b, i) => {
+                  const st = boxState(b);
+                  const prev = boxes.slice(0, i).reverse().find((x) => vals[x.id] && Object.values(vals[x.id]).some((v) => v));
+                  return (
+                    <tr key={b.id} className={b.declared ? 'declared' : ''}>
+                      <td>
+                        <div><b>Box {b.box_number ?? '?'}</b> {b.tracking ? <CopyText text={b.tracking} className="ap-mono xs">{b.tracking}</CopyText> : <span className="muted xs">no tracking number</span>}</div>
+                        <div className="muted xs">{st.icon} {st.word}{b.declared ? ` · ${BOX_SOURCE[b.source]}` : ''}{b.other_pairs ? ` · +${b.other_pairs} pairs of other shoes` : ''}</div>
+                      </td>
+                      {sizes.map((z) => (
+                        <td key={z.stock_id} className="num">
+                          {b.declared ? <span>{vals[b.id]?.[z.size] || <span className="muted">—</span>}</span> : (
+                            <input className="ap-boxcell" inputMode="numeric" value={vals[b.id]?.[z.size] ?? ''} placeholder="0" disabled={busy}
+                              onChange={(e) => setCell(b.id, z.size, e.target.value)} aria-label={`Box ${b.box_number ?? '?'} size ${z.size}`} />
+                          )}
+                        </td>
+                      ))}
+                      <td className="ap-boxgrid-acts">
+                        {!b.declared && (
+                          <>
+                            {prev && <button type="button" className="linklike xs" disabled={busy} onClick={() => setRow(b.id, { ...vals[prev.id] })}
+                              title={`Copy box ${prev.box_number ?? '?'}`}>same as last box</button>}
+                            <button type="button" className="linklike xs" disabled={busy}
+                              onClick={() => setRow(b.id, Object.fromEntries(sizes.map((z) => { const left = z.qty - placedOf(z, b.id); return [z.size, left > 0 ? String(left) : '']; })))}
+                              title="Put every pair not yet in a box into this one">fill the rest</button>
+                            {Object.values(vals[b.id] || {}).some((v) => v) && <button type="button" className="linklike xs" disabled={busy} onClick={() => setRow(b.id, {})}>clear</button>}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td className="muted xs">In boxes / pairs</td>
+                  {sizes.map((z) => {
+                    const p = placedOf(z);
+                    return (
+                      <td key={z.stock_id} className={`num xs ${p > z.qty ? 'ap-box-over' : p < z.qty ? 'ap-box-gap' : 'ap-box-ok'}`}
+                        title={p < z.qty ? `${z.qty - p} not in a box yet` : p > z.qty ? `${p - z.qty} too many` : 'Every pair is in a box'}>
+                        {p}/{z.qty}
+                      </td>
+                    );
+                  })}
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          {over.length > 0 && <div className="error xs">Too many in boxes — {over.map((z) => `size ${z.size}: ${placedOf(z)} of ${z.qty}`).join('; ')}.</div>}
+        </>
+      )}
+      {saved && <p className="sm ap-box-ok">{saved}</p>}
+      {err && <div className="error mt">{err}</div>}
+      <div className="modal-actions">
+        <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>{dirty.size ? 'Close without saving' : 'Close'}</button>
+        {editable.length > 0 && (
+          <button type="button" className="btn primary" onClick={save} disabled={busy || !dirty.size || over.length > 0}>
+            {busy ? 'Saving…' : dirty.size ? `Save ${dirty.size} box${dirty.size === 1 ? '' : 'es'}` : 'Save'}</button>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
+// Split unknown: the ticked sizes are somewhere in these boxes, counts unknown. Kept as "?"
+// in each box until someone types the real numbers in the grid. One order at a time.
+function BoxUnknownDialog({ rows, onSignOut, onClose, onDone }) {
+  const poIds = [...new Set(rows.map((r) => r.po_id).filter(Boolean))];
+  const noPo = rows.filter((r) => !r.po_id);
+  const poId = poIds.length === 1 && !noPo.length ? poIds[0] : null;
+  const [grid, setGrid] = useState(null);
+  const [pick, setPick] = useState(() => new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (!poId) return;
+    api.presellListingsList({ tab: 'boxgrid', po: poId, sku: rows[0].sku }).then(setGrid)
+      .catch((e) => { if (e.unauthorized) return onSignOut(); setErr(e.message); });
+  }, [poId]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function save() {
+    setBusy(true); setErr('');
+    try { await api.presellListingsAction({ action: 'boxUnknown', stockIds: rows.map((r) => r.id), boxIds: [...pick] }); onDone(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); setBusy(false); }
+  }
+  const toggle = (id) => setPick((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  return (
+    <Dialog title="📦 In these boxes — count unknown" onClose={onClose} busy={busy}>
+      <p className="sm">{rows.map((r) => `${r.sku} ${r.size}`).join(', ')}</p>
+      {!poId ? (
+        <p className="error sm">{noPo.length ? `Link ${noPo.map((r) => `size ${r.size}`).join(', ')} to the purchase order first (✎ Cost & shipment).` : 'These sizes are on different orders — tick sizes from one order at a time.'}</p>
+      ) : !grid ? <p className="muted">Loading…</p> : !grid.boxes.length ? (
+        <p className="muted">{grid.po.po_code} has no labels yet.</p>
+      ) : (
+        <>
+          <p className="muted sm">Tick the boxes these sizes could be in. Each shows as <b>?</b> in that box until the real count is typed in 📦 Boxes. A box the supplier declared can’t be ticked — their list is used.</p>
+          <div className="ap-boxpick">
+            {grid.boxes.map((b) => (
+              <label key={b.id} className={b.declared ? 'muted' : ''}>
+                <input type="checkbox" disabled={b.declared || busy} checked={pick.has(b.id)} onChange={() => toggle(b.id)} />
+                <span>Box {b.box_number ?? '?'} · <span className="ap-mono">{b.tracking || 'no tracking'}</span> · {boxState(b).word}{b.declared ? ' · declared by the supplier' : ''}</span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+      {err && <div className="error mt">{err}</div>}
+      <div className="modal-actions">
+        <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+        <button type="button" className="btn primary" onClick={save} disabled={busy || !poId || !pick.size}>{busy ? 'Saving…' : `Mark in ${pick.size || ''} box${pick.size === 1 ? '' : 'es'}`}</button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -962,6 +1210,7 @@ function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }
         <fieldset className="ap-details-sec">
           <legend>Where it’s from</legend>
           <SourceFields value={source} onChange={(v) => { setSource(v); setSourceDirty(true); }} pos={pos} presets={presets} />
+          {!source.poId && <MakePo rows={sorted.filter((r) => picked.has(r.id) && !r.po_id)} source={source} onSignOut={onSignOut} onMade={onDone} />}
         </fieldset>
 
         <fieldset className="ap-details-sec">
@@ -991,6 +1240,45 @@ function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }
   );
 }
 
+// "Make a PO for this buy" (docs/presell-box-tracking-plan.md, phase 4). We give the supplier
+// every tracking number, so a buy we track is an order of our labels: one label per tracking
+// number above, no lines — the supplier scans what's in each box, or PH fills 📦 Boxes.
+function MakePo({ rows, source, onSignOut, onMade }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [made, setMade] = useState(null);
+  const tracks = parseTrackingList(source.tracking);
+  if (!rows.length) return null;
+  async function go() {
+    setBusy(true); setErr('');
+    try {
+      const r = await api.presellListingsAction({ action: 'makePo', stockIds: rows.map((x) => x.id), supplierName: source.supplier.trim(), trackingNumbers: tracks });
+      setMade(r);
+    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  if (made) {
+    return (
+      <div className="ap-makepo ok sm">
+        ✓ Opened <b>{made.poCode}</b> with {made.labels} label{made.labels === 1 ? '' : 's'} · {made.linked} size{made.linked === 1 ? '' : 's'} linked.
+        Next: tell us what’s in each box (📦 Boxes on the row), or let the supplier scan it.
+        <div><button type="button" className="btn sm primary" onClick={onMade}>Done</button></div>
+      </div>
+    );
+  }
+  const missing = !source.supplier.trim() ? 'the supplier' : !tracks.length ? 'the tracking numbers we gave them' : '';
+  return (
+    <div className="ap-makepo sm">
+      <span className="muted">Not on a purchase order?</span>{' '}
+      <button type="button" className="btn sm" disabled={busy || !!missing} onClick={go}
+        title={missing ? `Fill in ${missing} first` : `Opens a PO for ${source.supplier.trim()} with ${tracks.length} label${tracks.length === 1 ? '' : 's'} and links ${rows.length} size${rows.length === 1 ? '' : 's'}`}>
+        {busy ? 'Opening…' : `＋ Make a PO for this buy (${tracks.length} box${tracks.length === 1 ? '' : 'es'})`}</button>
+      {missing && <span className="muted xs"> — fill in {missing} first</span>}
+      {err && <div className="error xs">{err}</div>}
+    </div>
+  );
+}
+
 function useEscape(onClose, busy) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !busy) onClose(); };
@@ -998,11 +1286,11 @@ function useEscape(onClose, busy) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, busy]);
 }
-function Dialog({ title, children, onClose, busy }) {
+function Dialog({ title, children, onClose, busy, wide = false }) {
   useEscape(onClose, busy);
   return (
     <div className="modal-overlay" onClick={() => !busy && onClose()}>
-      <div className="modal ap-edit" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+      <div className={`modal ap-edit${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">{title}</h3>
         {children}
       </div>
@@ -1722,6 +2010,11 @@ function FulfillOrder({ x, now, toShip }) {
         <span className="ff-plat">{UPLAT[x.platform] || x.platform}</span>
         <CopyText text={x.order_id} className="ap-mono">{x.order_id}</CopyText>
         {toShip && x.where && <span className={`ff-where ${x.where}`}>{WHERE[x.where].word}</span>}
+        {toShip && x.box && (
+          <span className="xs ap-ff-box" title={`Coming in ${x.box.po_code} box ${x.box.box_number ?? '?'} — ${x.box.tracking || 'no tracking number'}`}>
+            📦 <span className="ap-mono">{x.box.tracking ? shortTrack(x.box.tracking) : `box ${x.box.box_number ?? '?'}`}</span> · {boxState(x.box).word}
+          </span>
+        )}
       </div>
       <div className="ff-o-when">
         {toShip ? (x.ship_by

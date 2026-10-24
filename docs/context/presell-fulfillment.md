@@ -42,6 +42,10 @@ back for in-transit buyers, `presell-listings.md` → In transit), less that row
 **shipped** = pairs on the set-aside shelf now. Orders take them most-urgent ship-by first; the
 rest are **in transit** (shipment not all here), **shelf** (all arrived — a sale that raced the
 take-down) or **source it** (row was never in transit: we don't own the pair).
+**Which box** (2026-10-24, `presell-listings.md` → By box): the API adds each row's `boxes`; an
+order left **in transit** gets `box` = the box its pair comes in — the not-yet-received boxes in
+landing order (`transitBoxes`), most urgent order first. Shown on the order ("📦 1Z…6782 · in
+transit · exp 10/27"), in the pick list PDF note and the CSV **Box** column.
 
 ## The tab
 To ship / Shipped / Cancelled (counts), search (SKU, name, order #, tracking). Totals: to ship,

@@ -26,6 +26,8 @@ Component: `Inventory` in `src/App.jsx`. Data: `api/items/query.js` →
 `api/items/set-sku.js` (GET preview + POST) · `findSkuSiblings` / `setItemsSku` in db.js ·
 `SkuEditModal` in `Inventory.jsx` (the ✎ beside SKU on the item detail, warehouse/admin/PH).
 E2E: `e2e/inventory-edit-sku.spec.js`.
+**Save looks the code up** when nobody pressed Look up (2026-10-24) — a code saved under the
+old name left the 7 Black Pack 15s reading "Air Jordan 16"; a miss still saves the code.
 
 **Why:** a box UPC does not always name one style code forever. Jordan re-coded
 553558-100 → 553558-136 for size 10.5 in 2022 and kept the barcode (196149780863), so a

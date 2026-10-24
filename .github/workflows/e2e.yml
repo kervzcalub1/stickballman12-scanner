@@ -7,7 +7,7 @@ on:
 
 jobs:
   playwright:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: the step below relies on its preinstalled PostgreSQL 16
     # The suite runs serially (one shared server + DB per run), ~9 min for ~100 specs. Split
     # it four ways: each shard is its own runner with its OWN Postgres and dev server, so
     # they can't interfere, and the whole suite still runs on every PR — ~3–4 min.
@@ -19,21 +19,10 @@ jobs:
     name: playwright (${{ matrix.shard }}/4)
 
     # Hermetic: ephemeral Postgres + throwaway test secrets. No production creds.
-    services:
-      postgres:
-        # The official image via AWS's public mirror, not Docker Hub: Docker Hub caps anonymous
-        # pulls, and 4 shards × a few PRs an hour hit it (2026-10-10: every shard failed on
-        # "toomanyrequests" before a single test ran). Same image, no pull limit.
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: sbm_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s --health-timeout 5s --health-retries 5
-
+    # Postgres is the one PREINSTALLED on the runner (started in a step below), not a
+    # service container: no image pull means no registry limit. Docker Hub capped anonymous
+    # pulls (2026-10-10, "toomanyrequests"), then AWS's public mirror did too (2026-10-25,
+    # "Data limit exceeded" with five PRs open) — both failed shards before a single test ran.
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/sbm_test
       # Test-only values (ephemeral CI DB has no real data). The auth fixture mints
@@ -49,6 +38,13 @@ jobs:
       CI: 'true'
 
     steps:
+      - name: Start the runner's Postgres
+        run: |
+          sudo systemctl start postgresql.service
+          timeout 60 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+          sudo -u postgres createdb sbm_test
+          psql "$DATABASE_URL" -c 'SELECT version();'
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

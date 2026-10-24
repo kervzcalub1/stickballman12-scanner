@@ -19,6 +19,7 @@ test.afterAll(async () => {
   for (const i of items) await q('DELETE FROM item_events WHERE item_id = $1', [i.id]);
   await q('DELETE FROM items WHERE sku = $1', [SKU]);
   for (const id of [...new Set(items.map((i) => i.batch_id))]) {
+    await q('DELETE FROM inbound_issues WHERE batch_id = $1', [id]); // the tampered issue opened a case
     await q('DELETE FROM shipment_issues WHERE batch_id = $1', [id]);
     await q('DELETE FROM batch_boxes WHERE batch_id = $1', [id]);
     await q('DELETE FROM batches WHERE id = $1', [id]);

@@ -6259,3 +6259,37 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .ap-po-cap.over { color: #c6871a; font-weight: 700; }
 .ap-po-risk { color: var(--muted); }
 .ap-po-risk.bad { color: #e05a5a; font-weight: 700; }
+
+/* ── Inbound Issues (docs/context/inbound-issues.md) ───────────────────────────────── */
+.ii-lede { margin: 0 0 12px; line-height: 1.5; }
+.ii-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ii-filters select.input { width: auto; flex: 0 1 auto; }
+.ii-filters .ii-search { flex: 1 1 220px; min-width: 0; }
+.ii-filters .seg { flex-wrap: wrap; max-width: 100%; }
+.ii-filters .seg-btn { flex: 0 0 auto; }
+.ii-focus { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+.ii-list { display: flex; flex-direction: column; gap: 10px; }
+.ii-case { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid #e0a33f; border-radius: 12px; padding: 12px 14px; min-width: 0; }
+.ii-case.ii-in_progress, .ii-case.ii-waiting { border-left-color: #6ea8fe; }
+.ii-case.ii-resolved { border-left-color: #6bbf8a; opacity: .85; }
+.ii-case.focused { box-shadow: 0 0 0 2px rgba(110,168,254,.55); }
+.ii-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ii-age { margin-left: auto; }
+.ii-title { font-weight: 700; margin-top: 6px; }
+.ii-desc { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ii-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 14px; margin-top: 10px; }
+.ii-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.ii-fact.wide { grid-column: span 2; }
+.ii-photos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.ii-photo { width: 96px; height: 96px; padding: 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); background: rgba(127,127,127,.08); cursor: zoom-in; }
+.ii-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ii-task { margin-top: 10px; padding: 8px 10px; border-radius: 8px; border: 1px dashed rgba(224,163,63,.6); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.ii-task.done { border-color: var(--border); opacity: .8; }
+.ii-resolution { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: rgba(107,191,138,.10); }
+.ii-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ii-addphotos { margin-top: 8px; }
+.ii-trail { margin: 10px 0 0; padding-left: 18px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+@media (max-width: 600px) { .ii-fact.wide { grid-column: auto; } .ii-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Receiving Issues step: each shipment issue carries its own photos (the parcel, the label). */
+.issue-row .issue-photos { flex: 1 0 100%; }
+.inbound-issue-sent { margin: 8px 0; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(224,163,63,.45); background: rgba(224,163,63,.12); font-size: 14px; line-height: 1.45; }

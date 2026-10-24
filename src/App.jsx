@@ -46,6 +46,7 @@ import { OnlineOrders } from './screens/OnlineOrders.jsx';
 import { TrackingDuplicates } from './screens/TrackingDuplicates.jsx';
 import { Undelivered } from './screens/Undelivered.jsx';
 import { Cancellations } from './screens/Cancellations.jsx';
+import { InboundIssues } from './screens/InboundIssues.jsx';
 import { Receipts } from './screens/Receipts.jsx';
 import { PresellListings } from './screens/PresellListings.jsx';
 import { VinStock } from './screens/VinStock.jsx';
@@ -223,6 +224,7 @@ export default function App() {
   // The duplicate tracking number log — warehouse reads, admin closes entries.
   if (view === 'undelivered') return withAdvisor(<Undelivered onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'cancellations') return withAdvisor(<Cancellations onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'inbound-issues') return withAdvisor(<InboundIssues onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'dup-tracking') return withAdvisor(<TrackingDuplicates user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Store receipts the mailbox sweep filed (receipts.md).
   if (view === 'receipts') return withAdvisor(<Receipts user={user} onHome={() => go('home')} onSignOut={signOut} />);

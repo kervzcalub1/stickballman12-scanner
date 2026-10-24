@@ -451,7 +451,7 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', undelivered: '/ph/undelivered', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', sheinreprice: '/ph/shein-reprice', sheincheck: '/ph/shein-check', ebaylistings: '/ph/ebay-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', undelivered: '/ph/undelivered', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', sheinreprice: '/ph/shein-reprice', sheincheck: '/ph/shein-check', ebaylistings: '/ph/ebay-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -491,6 +491,7 @@ export const PH_HOME_SECTIONS = [
     { key: 'request', icon: 'rescalereq', title: 'Request Rescale', sub: 'Ask the warehouse to recount / rescan a SKU' },
     { key: 'nobox', icon: 'nobox', title: 'No Box / Not Ready', sub: 'Units without a box — view-only, warehouse resolves' },
     { key: 'cancellations', icon: 'cancellations', title: 'Order Cancellations', sub: 'Orders the warehouse sent to cancel — check against the photo, verify, cancel' },
+    { key: 'inboundissues', icon: 'inbound-issues', title: 'Inbound Issues', sub: 'Damaged, short or wrong deliveries — take a case, claim from the supplier, resolve it' },
   ] },
   { title: 'Purchase Orders', accent: 'orders', cards: [
     { key: 'po', icon: 'po-new', title: 'New Batch (Purchase Order)', sub: 'Open a supplier batch — labels + tracking to scan out' },
@@ -521,6 +522,8 @@ export const PH_ATTENTION = [
   { key: 'receiving', icon: 'receiving', label: 'Not on Alias yet', count: 'not_alias', tier: 'now' },
   { key: 'rescale', icon: 'rescale', label: 'Restock to re-list', count: 'restock_pending', tier: 'now' },
   { key: 'request', icon: 'rescalereq', label: 'Rescale audits to close', count: 'rescale_requests_audited', tier: 'now' },
+  // A problem the warehouse reported that nobody on PH has taken yet (inbound-issues.md).
+  { key: 'inboundissues', icon: 'inbound-issues', label: 'Inbound issues to take', count: 'inbound_issues_new', query: { view: 'open' }, tier: 'now' },
   { key: 'reconcile', icon: 'reconcile', label: 'POs to reconcile', count: 'po_to_reconcile', tier: 'now' },
   // Shipments received without a manifest, not yet signed off. PH does these audits (they
   // were logging in as warehouse just to see this tile); `query` opens Batches filtered.

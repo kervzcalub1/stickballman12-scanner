@@ -18,6 +18,7 @@ import {
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
   getLocationByCode, shelveItems, PH_EXCLUDED_KINDS, claimForTracking, logTrackingDuplicate,
 } from '../_lib/db.js';
+import { openCasesForIntake } from '../_lib/inbound-issues.js';
 import { registerWarehouseTracking } from '../_lib/tracking.js';
 import { enrichGlobalIndicators, normalizeItems, toCost } from '../_lib/intake.js';
 import { normalizeLocationCode } from '../_lib/locations.js';
@@ -211,7 +212,7 @@ export default async function handler(req, res) {
     const created = await insertItems(batch.id, items, createdBy, bh.dateReceived);
     // First history per item: "Scanned by <user>" then received / rescaled.
     await insertIntakeEvents(created.map((r) => r.id), createdBy, kind);
-    await insertIssues(batch.id, issues, createdBy);
+    const recordedIssues = await insertIssues(batch.id, issues, createdBy);
 
     // Existing stock: place every counted pair on the shelf it was scanned against,
     // reusing the normal put-away path so status/location_id/location_code and the
@@ -241,6 +242,13 @@ export default async function handler(req, res) {
       if (entries.length) await insertIssueEvents(entries, createdBy);
     }
 
+    // Every real problem recorded above becomes a case the PH team owns (inbound-issues.md),
+    // and its flagged pairs are held off listing. Only a shipment from a supplier: in-store
+    // trips never reach PH (PH_EXCLUDED_KINDS). Best-effort — the batch is saved either way.
+    const cases = kind === 'receiving'
+      ? await openCasesForIntake({ batchId: batch.id, recorded: recordedIssues, unitIssues, created, user })
+      : [];
+
     // Reconcile BEFORE responding when there's a PO: a clean one closes itself, and a
     // short/over/blind one comes back in the payload so the "batch saved" screen can say
     // so while the person is still standing over the boxes. Best-effort — a failure here
@@ -267,6 +275,7 @@ export default async function handler(req, res) {
       vins: created.map((r) => r.vin),
       reconcile,
       shelved,
+      inboundIssues: cases.map((c) => c.id),
     });
 
     // Best-effort, AFTER responding (slow/flaky Alias must never delay the

@@ -140,6 +140,12 @@ export const api = {
   cancellation: (id) => get(`/api/cancellations/get?id=${encodeURIComponent(id)}`),
   saveCancellation: (row) => post('/api/cancellations/save', row),
   cancellationAction: (id, action, extra = {}) => post('/api/cancellations/action', { id, action, ...extra }),
+  // Inbound issues (docs/context/inbound-issues.md)
+  inboundIssues: (view = 'open', days = '30') => get(`/api/inbound-issues/list?view=${encodeURIComponent(view)}&days=${encodeURIComponent(days)}`),
+  inboundIssue: (id) => get(`/api/inbound-issues/get?id=${encodeURIComponent(id)}`),
+  inboundIssueAction: (id, action, extra = {}) => post('/api/inbound-issues/action', { id, action, ...extra }),
+  reportInboundIssue: (body) => post('/api/inbound-issues/report', body),
+  inboundIssuePhotoSign: (contentType, id = null) => post('/api/inbound-issues/photo-sign', { contentType, id }),
   cancellationPhoto: (photoId) => downloadBlob(`/api/cancellations/photo?id=${encodeURIComponent(photoId)}`),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // GS received as men's: what this GS code was last received as (receiving.md).

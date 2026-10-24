@@ -19,6 +19,7 @@ import { telegramConfigured, sendAlertMessage, sendAlertDocument } from './teleg
 import { alertCandidates, logAlert, setTelegramBroken, alertSentRecently, cartParticipantIds, poParticipantIds,
   getBuyCart, cartListChangesSince } from './db.js';
 import { fundingTarget } from './buycart.js';
+import { issueHeadline, outcomeLabel, ageFlags, ago, STALE_DAYS } from '../../src/lib/inboundIssues.js';
 
 const isAdminRole = (role) => role === 'admin' || role === 'superadmin';
 // Anyone who can raise a buying request: staff, and a supplier switched on for buying.
@@ -155,6 +156,41 @@ export const ALERT_EVENTS = [
     when: 'The warehouse sends an order to cancel — check it and cancel it on the platform',
     who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
   },
+  // Inbound issues (inbound-issues.md): a problem found at receiving is a case the PH team
+  // owns until it is resolved — the owner's ask was "without my personal involvement".
+  {
+    key: 'inbound.issue_reported', group: 'Inbound issues', emoji: '⚠️', required: false,
+    title: 'Inbound issue reported',
+    when: 'The warehouse records a problem with a delivery — damaged, short, wrong or defective pair. Take it and work it with the supplier',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+    defaultFor: (u) => u.role === 'ph_team',
+  },
+  {
+    key: 'inbound.issue_assigned', group: 'Inbound issues', emoji: '👤', required: false,
+    title: 'Inbound issue handed to you',
+    when: 'Someone hands you an inbound issue case',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+  },
+  {
+    key: 'inbound.warehouse_task', group: 'Inbound issues', emoji: '📦', required: false,
+    title: 'Inbound issue — job for the warehouse',
+    when: 'The PH owner of a case asks the floor to do something — ship it back, shelve it',
+    who: (u) => u.role === 'warehouse' || isAdminRole(u.role),
+    defaultFor: (u) => u.role === 'warehouse',
+  },
+  {
+    key: 'inbound.issue_resolved', group: 'Inbound issues', emoji: '✅', required: false,
+    title: 'Inbound issue resolved',
+    when: 'A problem you reported is resolved — and what becomes of the pair',
+    who: (u) => u.role === 'warehouse' || u.role === 'ph_team' || isAdminRole(u.role),
+  },
+  {
+    key: 'inbound.issue_daily', group: 'Inbound issues', emoji: '🧭', required: false,
+    title: 'Daily inbound issues summary',
+    when: 'Every morning: open cases, who owns each, and any nobody has taken or that have stopped moving — for the oversight',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+    defaultFor: (u) => isAdminRole(u.role),
+  },
   {
     key: 'nudge', group: 'Nudges', emoji: '🔔', required: true,
     title: 'Nudges',
@@ -278,6 +314,7 @@ const ROUTES = {
   duptrack:  { main: '/dup-tracking' },
   newinv:    { main: '/report',        ph: '/ph/new-inventory' },
   cancellations: { main: '/cancellations', ph: '/ph/cancellations' },
+  inboundissues: { main: '/inbound-issues', ph: '/ph/inbound-issues' },
 };
 export const at = (page, query = '') => (u) => {
   const r = ROUTES[page];
@@ -668,4 +705,89 @@ export function alertCancellationsLogged(rows, by) {
       + (flagged ? ` ${flagged} need${flagged === 1 ? 's' : ''} a closer look.` : ''),
     path: at('cancellations'),
   }));
+}
+
+// ── Inbound issues (inbound-issues.md) ───────────────────────────────────────────────
+const issueWhere = (r) => [
+  r.supplier ? `from ${r.supplier}` : null,
+  r.po_code ? r.po_code : null,
+  r.tracking_number ? `tracking ${r.tracking_number}` : null,
+  r.batch_code ? `${r.batch_code}${r.box_number != null ? ` box ${r.box_number}` : ''}` : null,
+].filter(Boolean).join(' · ');
+
+// One message per receiving submit, however many cases it opened — five creased pairs in
+// one box is one ping listing five cases, not five pings.
+export function alertInboundIssuesReported(rows, by) {
+  if (!rows?.length) return;
+  const first = rows[0];
+  const lines = rows.slice(0, 10).map((r) => `#${r.id} ${issueHeadline(r)}${(r.photos || []).length ? ` · ${r.photos.length} photo${r.photos.length === 1 ? '' : 's'}` : ''}`);
+  const more = rows.length > 10 ? `\n…and ${rows.length - 10} more.` : '';
+  fireAlert(() => alertUsers('inbound.issue_reported', {
+    actorUid: by?.id ?? null,
+    ref: `inbound:${first.id}`,
+    code: rows.length === 1 ? `#${first.id}` : `#${first.id}–#${rows[rows.length - 1].id}`,
+    body: `${by?.name || 'The warehouse'} reported ${rows.length === 1 ? 'a problem' : `${rows.length} problems`}${issueWhere(first) ? ` (${issueWhere(first)})` : ''}:\n${lines.join('\n')}${more}\n\nOpen it and tap “Take it” — one person owns each case.`,
+    path: at('inboundissues', rows.length === 1 ? `id=${first.id}` : 'view=open'),
+  }));
+}
+
+export function alertInboundIssueAssigned(row, toUid, by) {
+  fireAlert(() => alertUsers('inbound.issue_assigned', {
+    pick: (u) => String(u.id) === String(toUid),
+    actorUid: by?.id ?? null,
+    ref: `inbound-assign:${row.id}:${toUid}`,
+    code: `#${row.id}`,
+    body: `${by?.name || 'Someone'} handed you case #${row.id}: ${issueHeadline(row)}${issueWhere(row) ? ` (${issueWhere(row)})` : ''}.`,
+    path: at('inboundissues', `id=${row.id}`),
+  }));
+}
+
+export function alertInboundWarehouseTask(row, by) {
+  fireAlert(() => alertUsers('inbound.warehouse_task', {
+    actorUid: by?.id ?? null,
+    ref: `inbound-task:${row.id}:${row.warehouse_task_at}`,
+    code: `#${row.id}`,
+    body: `${by?.name || 'PH'} asks: ${row.warehouse_task}\nCase #${row.id} — ${issueHeadline(row)}${issueWhere(row) ? ` (${issueWhere(row)})` : ''}. Tap “Done” on the case when it is done.`,
+    path: at('inboundissues', `id=${row.id}`),
+  }));
+}
+
+// To the person who reported it: their box is no longer "set aside until someone comes".
+export function alertInboundIssueResolved(row, pair, by) {
+  if (!row?.reported_by_user_id) return;
+  const pairWord = pair?.removed ? ` The pair ${pair.removed} was returned and is off the inventory.`
+    : pair?.released ? ` The pair ${pair.released} is back in stock — shelve it.`
+    : pair?.stillHeld ? ` The pair ${pair.stillHeld} is still held by another open case.` : '';
+  fireAlert(() => alertUsers('inbound.issue_resolved', {
+    pick: (u) => String(u.id) === String(row.reported_by_user_id),
+    actorUid: by?.id ?? null,
+    ref: `inbound-resolved:${row.id}:${row.resolved_at}`,
+    code: `#${row.id}`,
+    body: `${by?.name || 'PH'} resolved #${row.id} — ${issueHeadline(row)}: ${outcomeLabel(row.outcome)}${row.refund_amount != null ? ` ${money(row.refund_amount)}` : ''}.${pairWord}${row.resolution_note ? `\n${row.resolution_note}` : ''}`,
+    path: at('inboundissues', `id=${row.id}`),
+  }));
+}
+
+// The oversight summary (Genesis): what is open, who owns it, and what is slipping.
+export async function alertInboundIssuesDaily({ day, rows, closedYesterday = 0, now = Date.now() }) {
+  const unclaimed = rows.filter((r) => ageFlags(r, now).includes('unclaimed'));
+  const stale = rows.filter((r) => ageFlags(r, now).includes('stale'));
+  const byOwner = new Map();
+  for (const r of rows) byOwner.set(r.owner || 'nobody yet', (byOwner.get(r.owner || 'nobody yet') || 0) + 1);
+  const owners = [...byOwner.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(' · ');
+  const list = (xs) => xs.slice(0, 8).map((r) => `#${r.id} ${issueHeadline(r)} — ${r.owner || 'unclaimed'}, ${ago(r.status === 'open' ? r.created_at : r.last_activity_at, now)}`).join('\n');
+  const body = !rows.length
+    ? `No open inbound issues.${closedYesterday ? ` ${closedYesterday} resolved yesterday.` : ''}`
+    : [
+      `${rows.length} open case${rows.length === 1 ? '' : 's'} (${owners}).${closedYesterday ? ` ${closedYesterday} resolved yesterday.` : ''}`,
+      unclaimed.length ? `\n⏰ Nobody has taken ${unclaimed.length}:\n${list(unclaimed)}` : '',
+      stale.length ? `\n🐢 No update in ${STALE_DAYS}+ days on ${stale.length}:\n${list(stale)}` : '',
+    ].filter(Boolean).join('\n');
+  return alertUsers('inbound.issue_daily', {
+    once: true,
+    ref: `inbound-daily:${day}`,
+    code: day,
+    body,
+    path: at('inboundissues', 'view=all'),
+  });
 }

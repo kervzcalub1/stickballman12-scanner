@@ -1297,16 +1297,27 @@ export async function insertIntakeEvents(itemIds, createdBy, kind = 'receiving')
   await sql.transaction(queries);
 }
 
+// Returns the rows written (id + what was recorded), so the caller can open an inbound
+// issue case for each one that is a real problem (inbound-issues.md).
 export async function insertIssues(batchId, issues, createdBy) {
-  if (!issues || !issues.length) return;
+  if (!issues || !issues.length) return [];
   const sql = db();
-  await sql.transaction(issues.map((is) => sql`
+  const res = await sql.transaction(issues.map((is) => sql`
     INSERT INTO shipment_issues
-      (batch_id, type, description, expected_count, received_count, created_by)
+      (batch_id, type, description, expected_count, received_count, photos, created_by)
     VALUES
       (${batchId}, ${is.type || 'other'}, ${is.description || null},
-       ${is.expectedCount ?? null}, ${is.receivedCount ?? null}, ${createdBy || null})
+       ${is.expectedCount ?? null}, ${is.receivedCount ?? null}, ${cleanPhotoUrls(is.photos)}::text[], ${createdBy || null})
+    RETURNING id, type, description, expected_count, received_count, photos
   `));
+  return res.map((r) => r[0]).filter(Boolean);
+}
+
+/** Photo URLs a client sent: https only, bounded. Shared by every issue path. */
+export function cleanPhotoUrls(list, max = 8) {
+  return (Array.isArray(list) ? list : [])
+    .map((p) => String(p || '').trim()).filter((p) => /^https:\/\//.test(p))
+    .map((p) => p.slice(0, 500)).slice(0, max);
 }
 
 // `phSafe` drops the kinds the PH team must never see (instore + existing). It is a
@@ -2048,6 +2059,10 @@ export async function phListItems(from, to, kind = null) {
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
       -- Report (kind IS NULL) for oversight.
       AND (${kind}::text IS NULL OR i.status <> 'no_box')
+      -- A pair HELD by an open inbound issue (status 'issue': creased, wrong pair, being
+      -- returned — inbound-issues.md) is not listing work until its case is resolved.
+      -- Same shape as no-box: the admin Report still sees it.
+      AND (${kind}::text IS NULL OR i.status <> 'issue')
       -- A unit on the RESCALE worklist is rescale work, not new-inventory work, and
       -- must appear in one worklist only — two lists claiming the same pair is how a
       -- pair gets listed twice or, worse, left because each side assumed the other
@@ -2215,7 +2230,13 @@ export async function pendingCounts() {
       -- matches the status filter the queue screen opens with.)
       (SELECT count(*) FROM buy_carts WHERE status = 'approved' AND list_closed_at IS NOT NULL)::int AS carts_to_fund,
       (SELECT count(*) FROM buy_carts WHERE status = 'funded')::int    AS carts_awaiting_receipt,
-      (SELECT count(*) FROM buy_carts WHERE status IN ('receipted','audited'))::int AS carts_to_audit
+      (SELECT count(*) FROM buy_carts WHERE status IN ('receipted','audited'))::int AS carts_to_audit,
+      -- Inbound issues (inbound-issues.md): new = nobody owns it yet; open = not resolved;
+      -- warehouse = a PH owner asked the floor to do something (ship it back, shelve it).
+      (SELECT count(*) FROM inbound_issues WHERE status = 'open')::int AS inbound_issues_new,
+      (SELECT count(*) FROM inbound_issues WHERE status <> 'resolved')::int AS inbound_issues_open,
+      (SELECT count(*) FROM inbound_issues WHERE status <> 'resolved'
+          AND warehouse_task IS NOT NULL AND warehouse_done_at IS NULL)::int AS inbound_issues_warehouse
     FROM (
       -- ph_managed gates the PH store-sync badges only: in-store buys and existing
       -- (old) stock bypass PH, so they must NOT inflate not_ii/alias/stockx/shopify.
@@ -2720,6 +2741,13 @@ export async function shelveItems({ location, units, createdBy }) {
     // in_stock. This backstops every caller (ShelvePage + Inventory put-away).
     if (item.status === 'sold' || item.status === 'shipped') {
       results.push({ vin: u.vin, ok: false, reason: 'terminal', status: item.status });
+      continue;
+    }
+    // Held by an open inbound issue (inbound-issues.md): shelving would flip it to
+    // in_stock and so straight back to listable — the hold would be gone. It goes on a
+    // shelf once its case is resolved ("Keep it — back to stock").
+    if (item.status === 'issue') {
+      results.push({ vin: u.vin, ok: false, reason: 'issue', status: item.status });
       continue;
     }
     const wasNoBox = item.with_box === false;
@@ -10583,4 +10611,368 @@ export async function listCancellationsForDay(ymd, { withRejected = false } = {}
        AND (${withRejected} OR c.status <> 'rejected')
      ORDER BY c.created_at, c.id`;
   return rows.map((r) => ({ ...r, id: Number(r.id) }));
+}
+
+// ── Inbound issues (docs/context/inbound-issues.md) ──────────────────────────────────
+// A problem recorded at receiving becomes a CASE the PH team owns until it is resolved.
+// One case per issue: each shipment issue, and each flagged pair. A flagged pair is HELD
+// (status 'issue' — not listable, not on PH's New Inventory) until its case closes.
+
+// The column list and FROM are shared text, not `sql` fragments (the shim can't nest them),
+// so the reads that use them go through rawQuery with positional parameters.
+const rawQuery = (text, values = []) => new Query(text, values);
+
+const INBOUND_ISSUE_COLS = `
+  ii.id, ii.scope, ii.type, ii.description, ii.expected_count, ii.received_count, ii.photos,
+  ii.batch_id, ii.box_id, ii.item_id, ii.shipment_issue_id, ii.vin, ii.held_from_status,
+  ii.status, ii.owner_user_id, ii.owner, ii.claimed_at, ii.supplier_ref,
+  ii.warehouse_task, ii.warehouse_task_by, ii.warehouse_task_at, ii.warehouse_done_by, ii.warehouse_done_at,
+  ii.outcome, ii.refund_amount, ii.disposition, ii.resolution_note, ii.resolved_by, ii.resolved_at,
+  ii.source, ii.reported_by, ii.reported_by_user_id, ii.created_at, ii.updated_at, ii.last_activity_at,
+  coalesce(b.supplier_name, ii.supplier) AS supplier,
+  coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number) AS tracking_number,
+  coalesce(b.po_id, ii.po_id) AS po_id,
+  coalesce(po.po_code, ii.po_code) AS po_code,
+  coalesce(b.batch_code, ii.batch_code) AS batch_code,
+  coalesce(bx.box_number, ii.box_number) AS box_number,
+  coalesce(i.sku, ii.sku) AS sku, coalesce(i.size, ii.size) AS size,
+  coalesce(i.name, ii.product) AS product, coalesce(i.cost, ii.cost) AS cost,
+  b.date_received, b.buyer_name, b.kind AS batch_kind, b.no_tracking,
+  po.date_of_purchase AS po_date, po.tag_code AS po_tag,
+  i.status AS item_status, i.image_url, i.location_code,
+  oo.id AS online_order_id, oo.store AS online_store, oo.order_number AS online_order_number`;
+// The FROM every read shares. The online order is matched by the parcel's tracking
+// number — the same key receiving uses to say "this box is that online order".
+const INBOUND_ISSUE_FROM = `
+  FROM inbound_issues ii
+  LEFT JOIN batches b ON b.id = ii.batch_id
+  LEFT JOIN batch_boxes bx ON bx.id = ii.box_id
+  LEFT JOIN purchase_orders po ON po.id = b.po_id
+  LEFT JOIN items i ON i.id = ii.item_id
+  LEFT JOIN LATERAL (
+    SELECT o.id, o.store, o.order_number FROM online_orders o
+     WHERE o.tracking_number IS NOT NULL
+       AND o.tracking_number = coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number)
+     ORDER BY o.id DESC LIMIT 1) oo ON true`;
+const inboundRow = (r) => (r ? {
+  ...r,
+  id: Number(r.id),
+  batch_id: r.batch_id == null ? null : Number(r.batch_id),
+  box_id: r.box_id == null ? null : Number(r.box_id),
+  item_id: r.item_id == null ? null : Number(r.item_id),
+  po_id: r.po_id == null ? null : Number(r.po_id),
+  owner_user_id: r.owner_user_id == null ? null : Number(r.owner_user_id),
+  online_order_id: r.online_order_id == null ? null : Number(r.online_order_id),
+  cost: r.cost == null ? null : Number(r.cost),
+  refund_amount: r.refund_amount == null ? null : Number(r.refund_amount),
+  photos: r.photos || [],
+} : null);
+
+export async function logInboundIssueEvent(issueId, action, actor, detail = null) {
+  await db()`INSERT INTO inbound_issue_events (issue_id, action, actor, detail)
+             VALUES (${issueId}, ${action}, ${actor || null}, ${detail ? String(detail).slice(0, 1000) : null})`;
+}
+
+/**
+ * Open a case for every recorded issue that is a real problem (`opensCase` decided by the
+ * caller). Copies the shipment facts in, holds each flagged pair, logs "reported".
+ *   shipment: [{ shipmentIssueId, type, description, expectedCount, receivedCount, photos }]
+ *   pairs:    [{ itemId, type, note, photos }]
+ * Returns the created rows (full, with the live joins) for the alert.
+ */
+export async function openInboundIssues({ batchId = null, boxId = null, shipment = [], pairs = [], by = null, byUid = null, source = 'receiving' }) {
+  if (!shipment.length && !pairs.length) return [];
+  const sql = db();
+  const facts = batchId ? (await sql`
+    SELECT b.batch_code, b.supplier_name, b.tracking_number, b.po_id, po.po_code,
+           bx.box_number, bx.tracking_number AS box_tracking
+      FROM batches b
+      LEFT JOIN purchase_orders po ON po.id = b.po_id
+      LEFT JOIN batch_boxes bx ON bx.id = ${boxId}::bigint
+     WHERE b.id = ${batchId}`)[0] || {} : {};
+  const ids = [];
+  for (const s of shipment) {
+    const rows = await sql`
+      INSERT INTO inbound_issues (scope, type, description, expected_count, received_count, photos,
+             batch_id, box_id, shipment_issue_id, supplier, tracking_number, po_id, po_code, batch_code, box_number,
+             source, reported_by, reported_by_user_id)
+      VALUES ('shipment', ${s.type || 'other'}, ${s.description || null}, ${s.expectedCount ?? null}, ${s.receivedCount ?? null},
+             ${cleanPhotoUrls(s.photos)}::text[], ${batchId}, ${boxId}, ${s.shipmentIssueId ?? null},
+             ${facts.supplier_name || null}, ${facts.box_tracking || facts.tracking_number || null},
+             ${facts.po_id ?? null}, ${facts.po_code || null}, ${facts.batch_code || null}, ${facts.box_number ?? null},
+             ${source}, ${by}, ${byUid})
+      ON CONFLICT (shipment_issue_id) WHERE shipment_issue_id IS NOT NULL DO NOTHING
+      RETURNING id`;
+    if (rows[0]) ids.push(Number(rows[0].id));
+  }
+  for (const p of pairs) {
+    const it = (await sql`
+      SELECT i.id, i.vin, i.sku, i.size, i.name, i.cost, i.status, i.with_box, i.batch_id, i.box_id,
+             b.batch_code, b.supplier_name, b.tracking_number, b.po_id, po.po_code,
+             bx.box_number, bx.tracking_number AS box_tracking
+        FROM items i
+        LEFT JOIN batches b ON b.id = i.batch_id
+        LEFT JOIN purchase_orders po ON po.id = b.po_id
+        LEFT JOIN batch_boxes bx ON bx.id = i.box_id
+       WHERE i.id = ${p.itemId}`)[0];
+    if (!it) continue;
+    const rows = await sql`
+      INSERT INTO inbound_issues (scope, type, description, photos, batch_id, box_id, item_id, vin,
+             supplier, tracking_number, po_id, po_code, batch_code, box_number, sku, size, product, cost,
+             source, reported_by, reported_by_user_id)
+      VALUES ('pair', ${p.type || 'other'}, ${p.note || null}, ${cleanPhotoUrls(p.photos)}::text[],
+             ${it.batch_id}, ${it.box_id}, ${it.id}, ${it.vin},
+             ${it.supplier_name || null}, ${it.box_tracking || it.tracking_number || null},
+             ${it.po_id ?? null}, ${it.po_code || null}, ${it.batch_code || null}, ${it.box_number ?? null},
+             ${it.sku || null}, ${it.size || null}, ${it.name || null}, ${it.cost ?? null},
+             ${source}, ${by}, ${byUid})
+      RETURNING id`;
+    const id = Number(rows[0].id);
+    ids.push(id);
+    await holdPairForIssue(id, it, by);
+  }
+  for (const id of ids) await logInboundIssueEvent(id, 'reported', by, source === 'receiving' ? 'at receiving' : 'reported on the Inbound Issues page');
+  return ids.length ? listInboundIssuesByIds(ids) : [];
+}
+
+// Hold a flagged pair: status 'issue' (not listable, off PH's New Inventory, can't be
+// shelved) until the case closes. What it was is kept on the case, so "keep it" puts it
+// back exactly. A pair already held by another open case stays held (and that earlier
+// status is the one to restore); a sold/shipped pair is never touched.
+async function holdPairForIssue(issueId, it, by) {
+  if (TERMINAL_STATUSES.includes(it.status)) return;
+  let was = it.status;
+  if (it.status === 'issue') {
+    const prior = await db()`SELECT held_from_status FROM inbound_issues
+                              WHERE item_id = ${it.id} AND id <> ${issueId} AND held_from_status IS NOT NULL
+                              ORDER BY id LIMIT 1`;
+    was = prior[0]?.held_from_status || (it.with_box ? 'needs_shelf' : 'no_box');
+  } else {
+    const up = await db()`
+      WITH up AS (
+        UPDATE items SET status = 'issue', updated_at = now()
+         WHERE id = ${it.id} AND status = ${it.status} RETURNING id)
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT id, 'status_change', ${JSON.stringify({ status: 'issue', from: it.status, inboundIssue: issueId })}::jsonb, ${by || null} FROM up
+      RETURNING item_id`;
+    if (!up.length) return;
+  }
+  await db()`UPDATE inbound_issues SET held_from_status = ${was} WHERE id = ${issueId}`;
+}
+
+async function listInboundIssuesByIds(ids) {
+  const rows = await rawQuery(`SELECT ${INBOUND_ISSUE_COLS} ${INBOUND_ISSUE_FROM} WHERE ii.id = ANY($1::bigint[]) ORDER BY ii.id`, [ids]);
+  return rows.map(inboundRow);
+}
+
+export async function getInboundIssue(id) {
+  const rows = await rawQuery(`SELECT ${INBOUND_ISSUE_COLS} ${INBOUND_ISSUE_FROM} WHERE ii.id = $1`, [id]);
+  if (!rows[0]) return null;
+  const events = await db()`SELECT id, action, actor, detail, created_at FROM inbound_issue_events
+                             WHERE issue_id = ${id} ORDER BY created_at, id`;
+  return { ...inboundRow(rows[0]), events: events.map((e) => ({ ...e, id: Number(e.id) })) };
+}
+
+/**
+ * The page's list. view: open | in_progress | waiting | mine | warehouse | resolved | all.
+ * Open work shows whatever its age; `days` only trims resolved cases.
+ */
+export async function listInboundIssues({ view = 'open', days = null, uid = null } = {}) {
+  const d = Number.isInteger(Number(days)) && Number(days) > 0 ? Number(days) : null;
+  const rows = await rawQuery(`
+    SELECT ${INBOUND_ISSUE_COLS} ${INBOUND_ISSUE_FROM}
+     WHERE (  $1 = 'all'
+           OR ($1 = 'open' AND ii.status = 'open')
+           OR ($1 = 'in_progress' AND ii.status = 'in_progress')
+           OR ($1 = 'waiting' AND ii.status = 'waiting')
+           OR ($1 = 'mine' AND ii.owner_user_id = $2::bigint AND ii.status <> 'resolved')
+           OR ($1 = 'warehouse' AND ii.status <> 'resolved' AND ii.warehouse_task IS NOT NULL AND ii.warehouse_done_at IS NULL)
+           OR ($1 = 'resolved' AND ii.status = 'resolved'))
+       AND ($3::int IS NULL OR ii.status <> 'resolved' OR ii.resolved_at > now() - make_interval(days => $3::int))
+     ORDER BY CASE WHEN ii.status = 'resolved' THEN 1 ELSE 0 END, ii.created_at ${view === 'resolved' || view === 'all' ? 'DESC' : 'ASC'}, ii.id
+     LIMIT 1500`, [view, uid, d]);
+  const [c] = await db()`
+    SELECT count(*) FILTER (WHERE status = 'open')::int AS open,
+           count(*) FILTER (WHERE status = 'in_progress')::int AS in_progress,
+           count(*) FILTER (WHERE status = 'waiting')::int AS waiting,
+           count(*) FILTER (WHERE status <> 'resolved' AND owner_user_id = ${uid}::bigint)::int AS mine,
+           count(*) FILTER (WHERE status <> 'resolved' AND warehouse_task IS NOT NULL AND warehouse_done_at IS NULL)::int AS warehouse
+      FROM inbound_issues`;
+  return { rows: rows.map(inboundRow), counts: c };
+}
+
+/** Every case not resolved — the daily oversight summary. */
+export async function listOpenInboundIssues() {
+  const rows = await rawQuery(`SELECT ${INBOUND_ISSUE_COLS} ${INBOUND_ISSUE_FROM}
+                                  WHERE ii.status <> 'resolved' ORDER BY ii.created_at, ii.id`);
+  return rows.map(inboundRow);
+}
+
+/** Cases resolved on one EST day (the summary's "closed yesterday" line). */
+export async function countInboundIssuesResolvedOn(ymd) {
+  const [r] = await db()`SELECT count(*)::int AS n FROM inbound_issues
+                          WHERE status = 'resolved' AND (resolved_at AT TIME ZONE 'America/New_York')::date = ${ymd}::date`;
+  return r?.n || 0;
+}
+
+/**
+ * Every move on a case is a compare-and-set on its status, so two people can't both take
+ * it, and a case changed under someone comes back as null (→ 409 "refresh").
+ *   claim                 open → in_progress, owner = actor
+ *   assign {toUid,toName} any unresolved → owner = that person (open → in_progress)
+ *   release               in_progress | waiting → open, no owner
+ *   waiting {supplierRef} in_progress → waiting
+ *   working               waiting → in_progress
+ */
+export async function moveInboundIssue(id, { action, actor, actorUid, toUid = null, toName = null, supplierRef = null, detail = null }) {
+  let rows = [];
+  if (action === 'claim') {
+    rows = await db()`UPDATE inbound_issues SET status = 'in_progress', owner_user_id = ${actorUid}, owner = ${actor},
+                        claimed_at = now(), updated_at = now(), last_activity_at = now()
+                       WHERE id = ${id} AND status = 'open' RETURNING id`;
+  } else if (action === 'assign') {
+    rows = await db()`UPDATE inbound_issues SET status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
+                        owner_user_id = ${toUid}, owner = ${toName}, claimed_at = now(), updated_at = now(), last_activity_at = now()
+                       WHERE id = ${id} AND status <> 'resolved' RETURNING id`;
+  } else if (action === 'release') {
+    rows = await db()`UPDATE inbound_issues SET status = 'open', owner_user_id = NULL, owner = NULL, claimed_at = NULL,
+                        updated_at = now(), last_activity_at = now()
+                       WHERE id = ${id} AND status IN ('in_progress', 'waiting') RETURNING id`;
+  } else if (action === 'waiting') {
+    rows = await db()`UPDATE inbound_issues SET status = 'waiting', supplier_ref = coalesce(${supplierRef}, supplier_ref),
+                        updated_at = now(), last_activity_at = now()
+                       WHERE id = ${id} AND status = 'in_progress' RETURNING id`;
+  } else if (action === 'working') {
+    rows = await db()`UPDATE inbound_issues SET status = 'in_progress', updated_at = now(), last_activity_at = now()
+                       WHERE id = ${id} AND status = 'waiting' RETURNING id`;
+  } else {
+    throw new Error(`unknown move ${action}`);
+  }
+  if (!rows.length) return null;
+  await logInboundIssueEvent(id, action, actor, detail);
+  return getInboundIssue(id);
+}
+
+/** A note on the trail (and the supplier's reference, if one is given). Bumps "last activity". */
+export async function noteInboundIssue(id, { actor, text, supplierRef = null }) {
+  const rows = await db()`UPDATE inbound_issues SET supplier_ref = coalesce(${supplierRef}, supplier_ref),
+                            updated_at = now(), last_activity_at = now()
+                           WHERE id = ${id} RETURNING id`;
+  if (!rows.length) return null;
+  const parts = [text, supplierRef ? `supplier ref ${supplierRef}` : null].filter(Boolean);
+  await logInboundIssueEvent(id, 'note', actor, parts.join(' · '));
+  return getInboundIssue(id);
+}
+
+export async function addInboundIssuePhotos(id, { actor, photos }) {
+  const add = cleanPhotoUrls(photos);
+  if (!add.length) return getInboundIssue(id);
+  const rows = await db()`UPDATE inbound_issues SET photos = (photos || ${add}::text[])[1:16],
+                            updated_at = now(), last_activity_at = now()
+                           WHERE id = ${id} RETURNING id`;
+  if (!rows.length) return null;
+  await logInboundIssueEvent(id, 'photos', actor, `${add.length} photo${add.length === 1 ? '' : 's'} added`);
+  return getInboundIssue(id);
+}
+
+/** The owner asks the floor to do something physical (ship it back on this label, shelve it). */
+export async function setInboundWarehouseTask(id, { actor, task }) {
+  const rows = await db()`UPDATE inbound_issues SET warehouse_task = ${task}, warehouse_task_by = ${actor}, warehouse_task_at = now(),
+                            warehouse_done_by = NULL, warehouse_done_at = NULL, updated_at = now(), last_activity_at = now()
+                           WHERE id = ${id} AND status <> 'resolved' RETURNING id`;
+  if (!rows.length) return null;
+  await logInboundIssueEvent(id, 'warehouse_task', actor, task);
+  return getInboundIssue(id);
+}
+export async function doneInboundWarehouseTask(id, { actor, note = null }) {
+  const rows = await db()`UPDATE inbound_issues SET warehouse_done_by = ${actor}, warehouse_done_at = now(),
+                            updated_at = now(), last_activity_at = now()
+                           WHERE id = ${id} AND warehouse_task IS NOT NULL AND warehouse_done_at IS NULL RETURNING id`;
+  if (!rows.length) return null;
+  await logInboundIssueEvent(id, 'warehouse_done', actor, note);
+  return getInboundIssue(id);
+}
+
+/**
+ * Close a case. For a PAIR, `disposition` says what becomes of it:
+ *   keep     → the hold is lifted (back to the status it had) — unless another open case
+ *              still holds the same pair
+ *   returned → removed from inventory through the normal archive (Deleted page), reason
+ *              "Returned to the supplier — inbound issue #N"
+ * Returns { row, pair: { released | removed | stillHeld | blocked } } or null on a race.
+ */
+export async function resolveInboundIssue(id, { actor, actorUid, outcome, refundAmount = null, disposition = null, note = null }) {
+  const cur = await getInboundIssue(id);
+  if (!cur || cur.status === 'resolved') return null;
+  const rows = await db()`
+    UPDATE inbound_issues SET status = 'resolved', outcome = ${outcome}, refund_amount = ${refundAmount},
+           disposition = ${cur.scope === 'pair' ? disposition : null}, resolution_note = ${note},
+           resolved_by = ${actor}, resolved_at = now(),
+           owner_user_id = coalesce(owner_user_id, ${actorUid}::bigint), owner = coalesce(owner, ${actor}),
+           claimed_at = coalesce(claimed_at, now()), updated_at = now(), last_activity_at = now()
+     WHERE id = ${id} AND status = ${cur.status} RETURNING id`;
+  if (!rows.length) return null;
+  let pair = null;
+  if (cur.scope === 'pair' && cur.item_id) {
+    if (disposition === 'returned') {
+      const r = await deleteItems([cur.vin], `Returned to the supplier — inbound issue #${id}`, actor);
+      pair = r.blocked?.length ? { blocked: cur.vin } : { removed: cur.vin };
+    } else {
+      const back = cur.held_from_status || 'needs_shelf';
+      const up = await db()`
+        WITH up AS (
+          UPDATE items SET status = ${back}, updated_at = now()
+           WHERE id = ${cur.item_id} AND status = 'issue'
+             AND NOT EXISTS (SELECT 1 FROM inbound_issues o
+                              WHERE o.item_id = ${cur.item_id} AND o.id <> ${id} AND o.status <> 'resolved')
+           RETURNING id)
+        INSERT INTO item_events (item_id, type, details, created_by)
+        SELECT id, 'status_change', ${JSON.stringify({ status: back, from: 'issue', inboundIssue: id, released: true })}::jsonb, ${actor || null} FROM up
+        RETURNING item_id`;
+      pair = up.length ? { released: cur.vin, status: back } : (cur.item_status === 'issue' ? { stillHeld: cur.vin } : null);
+    }
+  }
+  const words = [outcome, refundAmount != null ? `$${Number(refundAmount).toFixed(2)}` : null,
+    disposition ? `pair: ${disposition}` : null, note].filter(Boolean).join(' · ');
+  await logInboundIssueEvent(id, 'resolved', actor, words);
+  return { row: await getInboundIssue(id), pair };
+}
+
+/** Back to work after a close that was wrong. The pair is NOT re-held (it may be sold by now). */
+export async function reopenInboundIssue(id, { actor, actorUid, why }) {
+  const rows = await db()`UPDATE inbound_issues SET status = 'in_progress', resolved_by = NULL, resolved_at = NULL,
+                            owner_user_id = coalesce(owner_user_id, ${actorUid}::bigint), owner = coalesce(owner, ${actor}),
+                            updated_at = now(), last_activity_at = now()
+                           WHERE id = ${id} AND status = 'resolved' RETURNING id`;
+  if (!rows.length) return null;
+  await logInboundIssueEvent(id, 'reopened', actor, why);
+  return getInboundIssue(id);
+}
+
+/** People a case can be handed to: approved PH team + admins (by name). */
+export async function inboundIssueAssignees() {
+  const rows = await db()`SELECT id, name, username, role FROM users
+                           WHERE status = 'approved' AND role IN ('ph_team', 'admin')
+                           ORDER BY role DESC, lower(coalesce(name, username))`;
+  return rows.map((r) => ({ id: Number(r.id), name: r.name || r.username, role: r.role }));
+}
+
+/** Where to file a case reported by hand: a pair by VIN, a shipment by tracking # or batch code. */
+export async function findItemForIssue(vin) {
+  const rows = await db()`SELECT i.id, i.vin, i.batch_id, i.box_id, i.status, i.sku, i.size, i.name, b.kind
+                            FROM items i LEFT JOIN batches b ON b.id = i.batch_id WHERE i.vin = ${vin}`;
+  return rows[0] ? { ...rows[0], id: Number(rows[0].id), batch_id: rows[0].batch_id == null ? null : Number(rows[0].batch_id), box_id: rows[0].box_id == null ? null : Number(rows[0].box_id) } : null;
+}
+export async function findShipmentForIssue(code) {
+  const c = String(code || '').trim();
+  if (!c) return null;
+  const up = c.toUpperCase();
+  const t = (normalizeTrackingNumber(c) || c).toUpperCase();
+  // A box's own tracking first (multi-box shipments), then the batch's, then its code.
+  const box = await db()`SELECT bx.id AS box_id, bx.batch_id, b.batch_code, b.kind FROM batch_boxes bx JOIN batches b ON b.id = bx.batch_id
+                          WHERE upper(bx.tracking_number) = ${t} ORDER BY bx.id DESC LIMIT 1`;
+  if (box[0]) return { batch_id: Number(box[0].batch_id), box_id: Number(box[0].box_id), batch_code: box[0].batch_code, kind: box[0].kind };
+  const b = await db()`SELECT id, batch_code, kind FROM batches WHERE upper(tracking_number) = ${t} OR upper(batch_code) = ${up}
+                        ORDER BY id DESC LIMIT 1`;
+  return b[0] ? { batch_id: Number(b[0].id), box_id: null, batch_code: b[0].batch_code, kind: b[0].kind } : null;
 }

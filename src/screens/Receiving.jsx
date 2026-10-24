@@ -1783,14 +1783,16 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     } finally { setOcrBusy(false); }
   }
 
-  const addIssue = () => setIssues((is) => [...is, { key: cartKey++, type: ISSUE_TYPES[0][0], description: '', expectedCount: '', receivedCount: '' }]);
+  const addIssue = () => setIssues((is) => [...is, { key: cartKey++, type: ISSUE_TYPES[0][0], description: '', expectedCount: '', receivedCount: '', photos: [] }]);
+  // A shipment's photos (the parcel, the label, the inside) have no VIN to file under.
+  const signShipmentPhoto = (type) => api.inboundIssuePhotoSign(type);
   // Free text for anything unusual that isn't one of the named problems. Committed as
   // one `note` issue row, so it lands beside the issues on the batch and in reports.
   const [keyNotes, setKeyNotes] = useState('');
   const issuePayload = () => [
     ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
     ...issues.map((i) => ({
-      type: i.type, description: i.description,
+      type: i.type, description: i.description, photos: i.photos || [],
       expectedCount: i.expectedCount === '' ? null : Number(i.expectedCount),
       receivedCount: i.receivedCount === '' ? null : Number(i.receivedCount),
     })),
@@ -2190,10 +2192,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
             ? { ...s, status: 'received', boxNumber: box.box_number, itemCount: res.count || 0 } : s)));
           setActiveSlot(null); setStep(1);
-          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, inBatchList: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile, online: onlineAtCommit });
+          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, inBatchList: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile, online: onlineAtCommit, inboundIssues: res.inboundIssues || [] });
         } else {
           setStep(1);
-          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile, online: onlineAtCommit });
+          setResult({ batchCode, newCount: res.count || 0, rescaledCount: 0, vins: res.vins || [], printItems, boxCommit: true, autoCompleted: res.autoCompleted, reconcile: res.reconcile, online: onlineAtCommit, inboundIssues: res.inboundIssues || [] });
         }
         return;
       }
@@ -2238,6 +2240,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         printItems,
         reconcile: batchRes?.reconcile || null,
         online: onlineAtCommit,
+        inboundIssues: batchRes?.inboundIssues || [],
       });
       setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1);
       // noTracking and pre-sell reset with the tracking # for the same reason: left
@@ -3095,7 +3098,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             <>
               <div className="card">
                 <h3 className="rows-title">{isInstore ? 'Issues' : 'Shipment issues'} <span className="muted">(optional)</span></h3>
-                <p className="muted sm">Anything wrong with the package as it arrived — damage, tampering, a short count, bad packing. Pick the closest problem and describe it; every entry stays on the batch.</p>
+                <p className="muted sm">Anything wrong with the package as it arrived — damage, tampering, a short count, bad packing. Pick the closest problem, describe it and <b>take photos: the outside of the parcel, the shipping label (tracking #) and what is inside</b>.{!isInstore && <> Each one is sent to the PH team as a case on <b>Inbound Issues</b> — they take it and sort it out with the supplier. A pair with a problem is flagged on the Review step (＋ Issue on its VIN).</>}</p>
                 {autoIssues.length > 0 && (
                   <div className="auto-issues">
                     <div className="muted sm">Auto-added — shoes received without a box:</div>
@@ -3115,6 +3118,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     )}
                     <input placeholder="Description" value={i.description} onChange={(e) => updateIssue(i.key, { description: e.target.value })} />
                     <button type="button" className="btn icon ghost remove" onClick={() => removeIssue(i.key)}>×</button>
+                    <div className="issue-photos">
+                      <DefectPhotos photos={i.photos || []} max={6} sign={signShipmentPhoto}
+                        onChange={(photos) => updateIssue(i.key, { photos })} onSignOut={onSignOut} />
+                    </div>
                   </div>
                 ))}
                 <button type="button" className="btn add-size" onClick={addIssue}>+ Add issue</button>
@@ -3348,6 +3355,15 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               message the supplier today. Either team can pick it up from the report. */}
           {result.reconcile && <ReconcileAlert rc={result.reconcile} onOpen={onOpenReconcile} />}
           {result.online && <OnlineMismatchAlert check={result.online} />}
+          {/* The problems just recorded are now cases PH owns — say so, so nobody waits
+              for the owner's next visit (inbound-issues.md). */}
+          {result.inboundIssues?.length > 0 && (
+            <div className="inbound-issue-sent" role="status">
+              ⚠ {result.inboundIssues.length === 1 ? 'One problem was' : `${result.inboundIssues.length} problems were`} sent to the PH team
+              as case{result.inboundIssues.length === 1 ? '' : 's'} {result.inboundIssues.map((id) => `#${id}`).join(', ')}.
+              Set the box aside with the case number on it; flagged pairs are held off listing until PH resolves them.
+            </div>
+          )}
           {result.printItems?.length > 0 && (
             <button className="btn primary" onClick={() => setPrintLabels({ batchCode: result.batchCode, items: result.printItems })}><Icon name="print" /> Print labels</button>
           )}

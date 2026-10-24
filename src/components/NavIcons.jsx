@@ -209,6 +209,12 @@ const PATHS = {
     <path d="M10 10.2a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6.9v.5" />
     <path d="M12 16h.01" />
   </>),
+  // Inbound Issues — a parcel with a warning mark (something is wrong with this delivery)
+  'inbound-issues': (<>
+    <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z" />
+    <path d="M12 9v4" />
+    <path d="M12 16h.01" />
+  </>),
   // Order Cancellations — an order slip struck through
   cancellations: (<>
     <path d="M6 3h9l3 3v15H6z" />

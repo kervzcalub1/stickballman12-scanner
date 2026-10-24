@@ -5,7 +5,7 @@
 // SKU + size stock row, then each ticked platform is listed up to the pairs left.
 // Nothing touches inventory or Shopify. Prices are whole US dollars per platform.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, upsertPresellStock, getPoBrief, presellPoCap, bumpPresellStockPo } from '../_lib/db.js';
+import { dbConfigured, upsertPresellStock, getPoBrief, presellPoCap, bumpPresellStockPo, presellStockBySkuSize } from '../_lib/db.js';
 import { topUp } from '../_lib/presell-create.js';
 import { aliasListingKey } from '../_lib/alias.js';
 import { stockxConfigured } from '../_lib/stockx.js';
@@ -69,12 +69,17 @@ export default async function handler(req, res) {
   // manifests turned into orders we couldn't fill. An order with no list yet is allowed,
   // with a warning: there is nothing to check against.
   const warnings = [];
-  if (poId) {
-    const po = await getPoBrief(poId);
+  // The order each line is listed against: the one picked, else the order its stock row is
+  // already linked to — pairs added to a linked row without picking a PO still belong to
+  // that order, and used to slip past its cap (review 2026-10-25).
+  for (const l of lines) l.poId = poId || Number((await presellStockBySkuSize(l.sku, l.size))?.po_id) || null;
+  {
     const adding = new Map();
     for (const l of lines) {
-      const k = `${l.sku}|${l.size}`;
-      const cap = await presellPoCap(poId, l.sku, l.size);
+      if (!l.poId) continue;
+      const po = await getPoBrief(l.poId);
+      const k = `${l.poId}|${l.sku}|${l.size}`;
+      const cap = await presellPoCap(l.poId, l.sku, l.size);
       const before = adding.get(k) || 0;
       adding.set(k, before + l.qty);
       if (!cap.hasList) { if (!warnings.length) warnings.push(`⚠ ${po.po_code} has no list yet — nothing to check these pairs against.`); continue; }
@@ -94,7 +99,7 @@ export default async function handler(req, res) {
     for (const l of lines) {
       const stock = await upsertPresellStock({ sku: l.sku, size: l.size, name: l.name, image: l.image, upc: l.upc, addQty: l.qty, inTransit, transitNote, expectedOn,
         shelfPrice: l.shelfPrice, unitCost: l.unitCost, costStack: l.shelfPrice != null ? costStack : null, supplier, poId, trackingNumbers }, actor);
-      if (poId) await bumpPresellStockPo(Number(stock.id), poId, l.qty);
+      if (l.poId) await bumpPresellStockPo(Number(stock.id), l.poId, l.qty);
       const row = { sku: l.sku, size: l.size, stockId: Number(stock.id) };
       for (const [platform, priceCents] of Object.entries(l.want)) {
         row[platform] = await topUp(stock, platform, { priceCents, active: activate }, actor, cache);

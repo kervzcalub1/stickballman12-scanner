@@ -6302,6 +6302,10 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .issue-row .issue-photos { flex: 1 0 100%; }
 .inbound-issue-sent { margin: 8px 0; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(224,163,63,.45); background: rgba(224,163,63,.12); font-size: 14px; line-height: 1.45; }
 
+/* Sales: SKU filter + why a sale has no cost (2026-10-25) */
+.ap-sku-filter { width: 150px; }
+.ap-nocost { color: #c6871a; white-space: nowrap; }
+.ap-nocost-why { color: #c6871a; margin-top: 6px; }
 /* 📦 By box — docs/presell-box-tracking-plan.md */
 .ap-boxes { margin-top: 3px; display: flex; flex-direction: column; gap: 1px; }
 .ap-boxes .ap-mono { font-size: 11px; word-break: normal; }

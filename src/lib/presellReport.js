@@ -15,7 +15,7 @@
 import { lazyImport } from './chunkLoad.js';
 import { toCsv } from './manifestCsv.js';
 import { estDate, estTime, estClock } from './format.js';
-import { saleNet, costBasis } from './presellDetails.js';
+import { saleNet, costBasis, costNote } from './presellDetails.js';
 import { WHERE, pickGroups, fulfillTotals, timeLeft, urgency, labelLink } from './presellFulfill.js';
 import { boxState, boxSummary } from './presellBoxes.js';
 
@@ -65,7 +65,7 @@ export function salesReportRows(rows) {
         date: estDate(at), time: estTime(at), at, sku: x.sku || '', name: x.name || '', size: x.size || '',
         platform: PLAT[x.platform] || x.platform, order: x.order_id,
         price: net.price, payout: net.payout, payoutEst: net.estimated, cost: net.cost, net: net.profit,
-        supplier: x.supplier || '', po: x.po_code || '',
+        supplier: x.supplier || '', po: x.po_code || '', costNote: costNote(x),
         kind: x.in_transit ? (x.arrived_at ? 'In transit (arrived)' : 'In transit') : 'Pre-sell (source it)',
       };
     });
@@ -101,7 +101,7 @@ export function salesReportCsv(rows) {
   return toCsv([
     ['date', 'Sold (EST)'], ['time', 'Time'], ['sku', 'SKU'], ['name', 'Name'], ['size', 'Size'], ['platform', 'Platform'], ['order', 'Order'],
     ['price', 'Price $'], ['payout', 'Payout $'], ['payoutEst', 'Payout estimated'], ['cost', 'Cost $'], ['net', 'Net $'],
-    ['supplier', 'Supplier'], ['po', 'PO'], ['kind', 'Kind'],
+    ['supplier', 'Supplier'], ['po', 'PO'], ['kind', 'Kind'], ['costNote', 'Cost from / why none'],
   ], salesReportRows(rows).map((r) => ({ ...r, price: n2(r.price), payout: n2(r.payout), payoutEst: r.payoutEst ? 'yes' : '', cost: n2(r.cost), net: n2(r.net) })));
 }
 

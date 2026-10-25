@@ -15,6 +15,7 @@ import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 // name: this file also has its own `trackKey` further down, for MATCHING a label to a
 // box. Since 2026-10-23 that is the same alphanumeric rule (store-orders-plan §8b).
 import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
+import { presellUnitCost } from '../../src/lib/presellDetails.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
 // number has to canonicalise too — see normalizeTrackingNumber for why.
 import { normalizeTrackingNumber } from './tracking.js';
@@ -9953,13 +9954,54 @@ export async function listPresellListings({ view = 'all', platform = null, q = n
 }
 // from / to (YYYY-MM-DD, EST) on the day it SOLD. Cost comes from the stock row as it is
 // now, so a cost entered after the sale still shows up in the profit.
-export async function listPresellSales({ limit = 300, from = null, to = null } = {}) {
+// THE COST OF A PRE-SELL PAIR, resolved at READ time (review 2026-10-25, "the Sales report says
+// no cost but we set the shelf price"). The rule is presellUnitCost (owner, 2026-10-25, e6d56ab):
+// the shelf price IS the cost ("shelf only"), plus the preset's / our own fees when picked.
+//   1. a cost saved on the row                              → cost_source 'entered'
+//   2. a shelf price on the row but no cost saved (a row from before that rule whose db:setup
+//      backfill hasn't run yet) → presellUnitCost(shelf, its fees)  → 'shelf'
+//   3. no shelf on the row: the shelf price typed on the PO line for that SKU + size (the PO
+//      price IS the shelf price) → presellUnitCost(that, the row's fees) → 'po'
+//   4. otherwise blank, cost_reason 'no_shelf' — said per sale, never "without a cost" alone.
+// Nothing is written: a shelf price added later shows up at once on every old sale.
+// Rows need sku, size, po_id (or stock_po_id), shelf_price, unit_cost, cost_stack.
+export async function withPresellCost(rows) {
+  const list = rows || [];
+  const need = list.filter((r) => r.unit_cost == null);
+  if (!need.length) return list.map((r) => ({ ...r, cost_source: r.unit_cost == null ? null : 'entered' }));
+  // A sale carries the PO it was sold against (po_id); a stock row / older sale the row's own.
+  const poOf = (r) => Number(r.po_id ?? r.stock_po_id) || null;
+  const poIds = [...new Set(need.filter((r) => r.shelf_price == null).map(poOf).filter(Boolean))];
+  const lines = poIds.length ? await db()`
+    SELECT po_id, sku, size, unit_cost, po_box_id FROM po_lines
+     WHERE po_id = ANY(${poIds}::bigint[]) AND unit_cost IS NOT NULL AND dimensions IS NULL` : [];
+  const canon = rcCodeGroups([...lines.map((l) => rcCodes(l.sku)), ...need.map((r) => rcCodes(r.sku))]);
+  const keyOf = (k, z) => `${canon(rcCodes(k))}|${rcSizeNum(z)}`;
+  const poShelf = new Map();   // po|key → shelf (the order-level line first, else a label's)
+  for (const l of [...lines].sort((a, b) => (a.po_box_id == null ? 0 : 1) - (b.po_box_id == null ? 0 : 1))) {
+    const k = `${l.po_id}|${keyOf(l.sku, l.size)}`;
+    if (!poShelf.has(k)) poShelf.set(k, Number(l.unit_cost));
+  }
+  return list.map((r) => {
+    if (r.unit_cost != null) return { ...r, cost_source: 'entered' };
+    if (r.shelf_price != null) {
+      return { ...r, unit_cost: presellUnitCost(r.shelf_price, r.cost_stack), cost_source: 'shelf', cost_shelf: Number(r.shelf_price) };
+    }
+    const fromPo = poOf(r) ? poShelf.get(`${poOf(r)}|${keyOf(r.sku, r.size)}`) : undefined;
+    if (fromPo != null) return { ...r, unit_cost: presellUnitCost(fromPo, r.cost_stack), cost_source: 'po', cost_shelf: fromPo };
+    return { ...r, cost_source: null, cost_reason: 'no_shelf' };
+  });
+}
+
+export async function listPresellSales({ limit = 300, from = null, to = null, sku = null } = {}) {
   return await db()`
     SELECT x.*, s.sku, s.name, s.image, s.size, s.unit_cost, s.shelf_price, s.cost_stack, s.supplier, s.in_transit, s.arrived_at,
-           s.tracking_numbers, s.transit_note, po.po_code, l.external_id
+           s.tracking_numbers, s.transit_note, s.po_id AS stock_po_id, po.po_code, po.supplier_name AS po_supplier, l.external_id
       FROM presell_sales x LEFT JOIN presell_stock s ON s.id = x.stock_id LEFT JOIN presell_listings l ON l.id = x.listing_id
       LEFT JOIN purchase_orders po ON po.id = s.po_id
      WHERE (${from}::date IS NULL OR (COALESCE(x.sold_at, x.created_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       -- SKU filter (owner, 2026-10-25): part of a SKU, any case.
+       AND (${sku ? `%${sku}%` : null}::text IS NULL OR s.sku ILIKE ${sku ? `%${sku}%` : null})
        AND (${to}::date IS NULL OR (COALESCE(x.sold_at, x.created_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
      ORDER BY COALESCE(x.sold_at, x.created_at) DESC LIMIT ${limit}`;
 }

@@ -19,10 +19,10 @@ import {
 } from './stockx.js';
 import {
   getPresellStock, openPresellListings, updatePresellListing, recordPresellSale, markPresellSaleNotified, presellPhListed,
-  presellBoxesFor,
+  presellBoxesFor, withPresellCost,
 } from './db.js';
 import { sendPresellSale } from './telegram.js';
-import { saleNet, listableOn, pairsOwed, costBasis } from '../../src/lib/presellDetails.js';
+import { saleNet, listableOn, pairsOwed, costBasis, costNote } from '../../src/lib/presellDetails.js';
 import { boxForSale, boxState } from '../../src/lib/presellBoxes.js';
 
 export const PLATFORM_LABEL = { alias: 'Alias', stockx: 'StockX' };
@@ -177,7 +177,11 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
   // Payout is the platform's own (fee taken); NET = payout − the pair's landed cost, when a
   // cost was entered (shelf through the supplier's preset). Without one, say so — never
   // print a "profit" that is really just the payout (owner, 2026-10-10).
-  const net = saleNet({ platform, price_cents: priceCents, payout_cents: payoutCents, unit_cost: stock?.unit_cost });
+  // The pair's cost the same way the Sales report reads it (shelf through the supplier's preset
+  // when none was picked by hand — withPresellCost). Best-effort: the post never waits on it.
+  let costed = stock;
+  try { if (stock) [costed] = await withPresellCost([stock]); } catch (e) { console.error('[presell] cost lookup:', e.message); }
+  const net = saleNet({ platform, price_cents: priceCents, payout_cents: payoutCents, unit_cost: costed?.unit_cost });
   const usd = (n) => money(n == null ? null : Math.round(n * 100));
   const signed = (n) => `${n < 0 ? '−' : ''}${usd(Math.abs(n))}`;
   const basis = costBasis(stock?.cost_stack || null);
@@ -198,8 +202,8 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
     { b: 'Price:', t: ` ${money(priceCents)}` },
     { b: 'Payout:', t: ` ${usd(net.payout)}${net.estimated ? ' (est. — fee taken off the price)' : ''}` },
     net.cost != null
-      ? { b: 'Cost:', t: ` ${usd(net.cost)}${stock?.shelf_price != null ? `  (shelf ${usd(Number(stock.shelf_price))} · ${basis})` : ''}` }
-      : { b: 'Cost:', t: ' not entered — Pre-sell → Stock → ✎ Cost & shipment' },
+      ? { b: 'Cost:', t: ` ${usd(net.cost)}${costed?.cost_source === 'po' ? `  (${costNote(costed)})` : stock?.shelf_price != null ? `  (shelf ${usd(Number(stock.shelf_price))} · ${basis})` : ''}` }
+      : { b: 'Cost:', t: ` ${costNote(costed).replace(/^No cost: /, 'not entered — ')}` },
     ...(net.profit != null ? [{ b: `${net.profit < 0 ? '🔻' : '✅'} NET: ${signed(net.profit)}` }] : []),
   ];
   const source = [

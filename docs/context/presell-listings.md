@@ -192,6 +192,23 @@ the numbers). A re-list without a cost keeps the one already there.
   rest". The LISTED and INBOUNDED posts carry supplier · PO (· N tracking numbers).
 - Tests: `e2e/presell-cost-shipment.spec.js`.
 
+## Sales report: cost of every sale + why none, SKU filter (owner, 2026-10-25)
+"The Sales report says no cost but we set the shelf price." The report read only the cost SAVED
+on the stock row (`unit_cost`) — read live, never stamped at sale time. Now `withPresellCost`
+(db.js) resolves it at READ time with the pre-sell rule (`presellUnitCost`: shelf IS the cost,
+fees on top when picked), nothing written:
+1. saved cost → `cost_source 'entered'`;
+2. shelf on the row, no cost saved (a row from before e6d56ab whose db:setup backfill hasn't run)
+   → `'shelf'`;
+3. no shelf on the row → the **shelf price on the PO line** for that SKU + size (order-level line
+   first; reconciliation matching) through the row's fees → `'po'` ("from the PO");
+4. else blank with `cost_reason 'no_shelf'`.
+Used by the Sales tab, the Stock tab and the sale post. The Sales tab shows the reason under "—",
+"Without a cost: N no shelf price", how many were costed from the PO; CSV column "Cost from / why
+none" (`costNote` in presellDetails.js). **SKU filter** next to the dates: `?sku=` (urlstate),
+part of a SKU, any case (`listPresellSales({ sku })`, ILIKE); it filters the totals, the list,
+the PDF (named in the scope line) and the CSV. Tests: `e2e/presell-sales-cost.spec.js`.
+
 ## 📦 By box — tracking numbers per BOX, not per size (owner, 2026-10-24)
 Plan + reasoning: `docs/presell-box-tracking-plan.md`. **We hand the supplier every tracking
 number** (our labels on the PO); they buy and pack, often MIXING sizes in a box (3 × 8, 3 × 9,

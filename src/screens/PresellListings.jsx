@@ -17,7 +17,7 @@ import { AliasCodeCheck, aliasOnlyCode } from '../components/AliasCodeCheck.jsx'
 import { isUpcCode } from '../lib/codes.js';
 import { parsePresellPaste } from '../lib/presellPaste.js';
 import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
-import { parseTrackingList, saleNet, pairsLeft, listableOn, pairsOwed, presellUnitCost, costBasis } from '../lib/presellDetails.js';
+import { parseTrackingList, saleNet, pairsLeft, listableOn, pairsOwed, presellUnitCost, costBasis, costNote, COST_REASON } from '../lib/presellDetails.js';
 import { COMP_MODES, compFloor } from '../lib/presellCompete.js';
 import { assignWhere, pickGroups, fulfillTotals, urgency, timeLeft, labelLink, WHERE } from '../lib/presellFulfill.js';
 import { boxOrder, boxSummary, boxState, shortTrack } from '../lib/presellBoxes.js';
@@ -170,7 +170,9 @@ const REPORTS = {
 // Listings = every listing (the tab's platform + status filters apply), Sales = what sold.
 // A date range (EST) → PDF or CSV, built from a fresh read so the file is whole even when the
 // screen shows a search. `extra` = the tab's own filters, passed to the read.
-function ReportBar({ kind, from, to, setFrom, setTo, onSignOut, filtersList = false, extra = {}, scope = '' }) {
+// skuFilter = { value, set } puts a SKU box next to the dates (Sales, owner 2026-10-25): part of
+// a SKU, any case; it rides into the report's fresh read through `extra` like the dates do.
+function ReportBar({ kind, from, to, setFrom, setTo, onSignOut, filtersList = false, extra = {}, scope = '', skuFilter = null }) {
   const R = REPORTS[kind];
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -201,9 +203,14 @@ function ReportBar({ kind, from, to, setFrom, setTo, onSignOut, filtersList = fa
       <label><span className="muted xs">to</span>
         <input className="input" type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} aria-label="To date" /></label>
       {(from || to) && <button type="button" className="btn sm ghost" onClick={() => { setFrom(''); setTo(''); }}>All dates</button>}
+      {skuFilter && (
+        <label><span className="muted xs">SKU</span>
+          <input className="input ap-sku-filter" type="search" value={skuFilter.value} placeholder="any SKU" maxLength={60}
+            onChange={(e) => skuFilter.set(e.target.value)} aria-label="SKU filter" /></label>
+      )}
       <button type="button" className="btn sm" disabled={!!busy} onClick={() => download('pdf')}>{busy === 'pdf' ? 'Building…' : '⬇ PDF'}</button>
       <button type="button" className="btn sm" disabled={!!busy} onClick={() => download('csv')}>{busy === 'csv' ? 'Building…' : '⬇ CSV'}</button>
-      {filtersList && (from || to) && <span className="muted xs">The list below is filtered to these dates too.</span>}
+      {filtersList && (from || to || skuFilter?.value?.trim()) && <span className="muted xs">The list below is filtered the same way.</span>}
       {err && <span className="error xs">{err}</span>}
     </div>
   );
@@ -1825,6 +1832,8 @@ function EditListing({ row, onSignOut, onClose, onSaved }) {
 function SalesTab({ onSignOut }) {
   const [from, setFrom] = useQueryParam('from', '');
   const [to, setTo] = useQueryParam('to', '');
+  const [sku, setSku] = useQueryParam('sku', '');
+  const skuQ = sku.trim();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
   const [cfg, setCfg] = useState(null);
@@ -1837,18 +1846,22 @@ function SalesTab({ onSignOut }) {
     finally { setSaving(false); }
   }
   async function load() {
-    try { const r = await api.presellListingsList({ tab: 'sales', from, to }); setRows(r.rows || []); setError(''); }
+    try { const r = await api.presellListingsList({ tab: 'sales', from, to, sku: skuQ }); setRows(r.rows || []); setError(''); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
-  useEffect(() => { load(); }, [from, to]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const t = setTimeout(load, skuQ ? 300 : 0); return () => clearTimeout(t); }, [from, to, skuQ]); // eslint-disable-line react-hooks/exhaustive-deps
   // Totals for what's shown: payout is the platform's (est. when it gave none), net only
   // where a cost was entered — a sale without one is counted, not guessed.
   const tot = useMemo(() => {
-    const t = { n: 0, price: 0, payout: 0, cost: 0, net: 0, noCost: 0 };
+    const t = { n: 0, price: 0, payout: 0, cost: 0, net: 0, noCost: 0, why: {}, fromPo: 0 };
     for (const x of rows || []) {
       const m = saleNet(x);
       t.n++; t.price += m.price || 0; t.payout += m.payout || 0;
-      if (m.cost == null) t.noCost++; else { t.cost += m.cost; t.net += m.profit; }
+      if (m.cost == null) {
+        t.noCost++;
+        const k = x.cost_reason || 'unknown';
+        t.why[k] = (t.why[k] || 0) + 1;
+      } else { t.cost += m.cost; t.net += m.profit; if (x.cost_source === 'po') t.fromPo++; }
     }
     return t;
   }, [rows]);
@@ -1870,7 +1883,8 @@ function SalesTab({ onSignOut }) {
         </div>
       )}
       <div className="card">
-        <ReportBar kind="sales" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut} filtersList />
+        <ReportBar kind="sales" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut} filtersList
+          skuFilter={{ value: sku, set: setSku }} extra={{ sku: skuQ }} scope={skuQ ? `SKU contains: ${skuQ}` : ''} />
         {rows?.length > 0 && (
           <div className="ap-sales-tot">
             <span><b>{tot.n}</b> <span className="muted xs">sale{tot.n === 1 ? '' : 's'}</span></span>
@@ -1880,10 +1894,17 @@ function SalesTab({ onSignOut }) {
             <span><b className={tot.net < 0 ? 'neg' : 'pos'}>{money2(tot.net)}</b> <span className="muted xs">net{tot.noCost ? ` · ${tot.noCost} without a cost` : ''}</span></span>
           </div>
         )}
+        {tot.noCost > 0 && (
+          <p className="xs ap-nocost-why">
+            Without a cost: {Object.entries(tot.why).map(([k, n]) => `${n} ${COST_REASON[k] || 'not entered'}`).join(' · ')} — add the shelf price
+            under Stock → ✎ Cost &amp; shipment (or on the PO line) and these fill in by themselves.
+          </p>
+        )}
+        {tot.fromPo > 0 && <p className="muted xs">{tot.fromPo} sale{tot.fromPo === 1 ? '' : 's'} costed from the shelf price on the purchase order (none was typed on the pre-sell row).</p>}
       </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">
-        {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">{from || to ? 'No sales in those dates.' : 'No pre-sell sales yet — they appear here (and in the Telegram group) within a minute of selling.'}</p> : (
+        {rows == null ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">{from || to || skuQ ? 'No sales match those filters.' : 'No pre-sell sales yet — they appear here (and in the Telegram group) within a minute of selling.'}</p> : (
           <div className="ap-tablewrap">
             <table className="table">
               <thead><tr><th>Sold</th><th>Shoe</th><th>Size</th><th>Platform</th><th className="num">Price</th><th className="num">Payout</th><th className="num">Cost</th><th className="num">Net</th><th>Order</th><th>Telegram</th></tr></thead>
@@ -1896,7 +1917,10 @@ function SalesTab({ onSignOut }) {
                     <td>{PLAT[x.platform] || x.platform}</td>
                     <td className="num">{money(x.price_cents)}</td>
                     <td className="num" title={m.estimated ? 'Estimated from the default fee — the platform gave no payout' : 'The platform’s payout'}>{money2(m.payout)}{m.estimated ? '*' : ''}</td>
-                    <td className="num" title={x.shelf_price != null ? `Shelf $${Number(x.shelf_price).toFixed(2)} · ${costBasis(x.cost_stack)}` : 'No cost entered — Stock → ✎ Cost & shipment'}>{m.cost != null ? money2(m.cost) : <span className="muted">—</span>}</td>
+                    <td className="num" title={costNote(x)}>
+                      {m.cost != null ? <>{money2(m.cost)}{x.cost_source === 'po' && <div className="muted xs">from the PO</div>}</>
+                        : <><span className="muted">—</span><div className="xs ap-nocost">{COST_REASON[x.cost_reason] || 'not entered'}</div></>}
+                    </td>
                     <td className="num">{m.profit != null ? <b className={m.profit < 0 ? 'neg' : 'pos'}>{money2(m.profit)}</b> : <span className="muted">—</span>}</td>
                     <td><CopyText text={x.order_id} className="ap-mono">{x.order_id}</CopyText></td>
                     <td className="xs">{x.notified_at ? 'Sent' : <span className="error xs" title={x.notify_error || ''}>{x.notify_error ? 'Not sent' : '—'}</span>}</td>

@@ -40,6 +40,19 @@ export function costBasis(stack) {
   return `${stack.preset || 'preset'}${stack.edited ? ', edited' : ''}`;
 }
 
+// What a pair's cost is made of, or WHY there is none (withPresellCost on the server sets
+// cost_source / cost_reason). "Without a cost" alone told nobody what to fix (owner, 2026-10-25).
+const usd2 = (n) => `$${Number(n).toFixed(2)}`;
+export const COST_REASON = { no_shelf: 'no shelf price' };
+export function costNote(x) {
+  if (!x) return '';
+  const shelf = x.cost_shelf ?? x.shelf_price;
+  if (x.cost_source === 'po') return `shelf ${usd2(shelf)} from the PO · ${costBasis(x.cost_stack)}`;
+  if (x.cost_source === 'entered' || x.cost_source === 'shelf') return shelf != null ? `shelf ${usd2(shelf)} · ${costBasis(x.cost_stack)}` : 'entered';
+  if (x.cost_reason === 'no_shelf') return 'No cost: no shelf price on the pair or its PO line — Stock → ✎ Cost & shipment';
+  return 'No cost entered — Stock → ✎ Cost & shipment';
+}
+
 // A shelf price, or null. Blank is not $0 (blank-vs-zero rule).
 export function cleanShelf(v) {
   if (v == null || v === '') return null;

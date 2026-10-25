@@ -1,4 +1,4 @@
-// GET /api/presell-listings/list?tab=stock|listings|sales|pos|boxgrid&view=&platform=&q=&stock=&from=&to=
+// GET /api/presell-listings/list?tab=stock|listings|sales|pos|boxgrid&view=&platform=&q=&stock=&from=&to=&sku=
 //   tab=boxgrid&po=&sku=  → the 📦 Box contents grid for one SKU on one PO
 //   (docs/presell-box-tracking-plan.md)
 // from / to = YYYY-MM-DD (EST): Stock by the day first listed, Listings by the day created,
@@ -6,7 +6,7 @@
 // Pre-sell Listings (docs/context/presell-listings.md) — the three read views.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, listPresellStock, listPresellListings, listPresellSales, presellPoOptions, presellPoStatus,
-  presellBoxesFor, presellPoBoxGrid } from '../_lib/db.js';
+  presellBoxesFor, presellPoBoxGrid, withPresellCost } from '../_lib/db.js';
 
 const VIEWS = new Set(['all', 'live', 'off', 'pending', 'sold', 'deleted', 'failed']);
 
@@ -24,7 +24,9 @@ export default async function handler(req, res) {
     const tab = p.get('tab');
     if (tab === 'stock') {
       // Each row against its order (store-orders-plan §4.9): listed vs what it lists, at risk.
-      const rows = await listPresellStock({ q, from, to });
+      // Cost resolved the same way as the Sales report (withPresellCost: shelf through the
+      // supplier's preset when none was picked by hand).
+      const rows = await withPresellCost(await listPresellStock({ q, from, to }));
       const st = new Map((await presellPoStatus(rows.map((r) => r.po_id).filter(Boolean)))
         .filter((x) => x.current).map((x) => [x.stock_id, x]));
       // What's in each box (one of our labels), from the PO — docs/presell-box-tracking-plan.md.
@@ -46,7 +48,12 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true, ...grid });
     }
     // A date range is a report: every sale in it, not just the latest 300.
-    if (tab === 'sales') return send(res, 200, { ok: true, rows: await listPresellSales({ from, to, limit: from || to ? 5000 : 300 }) });
+    if (tab === 'sales') {
+      // sku = part of a SKU, any case (owner, 2026-10-25) — the totals, list, PDF and CSV all follow it.
+      const sku = String(p.get('sku') || '').trim().slice(0, 60) || null;
+      const rows = await listPresellSales({ from, to, sku, limit: from || to || sku ? 5000 : 300 });
+      return send(res, 200, { ok: true, rows: await withPresellCost(rows) });
+    }
     if (tab === 'pos') return send(res, 200, { ok: true, pos: await presellPoOptions() });
     const platform = ['alias', 'stockx'].includes(p.get('platform')) ? p.get('platform') : null;
     const stockId = Number(p.get('stock')) > 0 ? Number(p.get('stock')) : null;

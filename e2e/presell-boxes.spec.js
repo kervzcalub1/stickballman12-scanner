@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test';
 import { signToken } from '../api/_lib/util.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
-import { boxOrder, boxSummary, boxForPair, transitBoxes, shortTrack } from '../src/lib/presellBoxes.js';
+import { boxOrder, boxSummary, boxForPair, boxForSale, transitBoxes, shortTrack } from '../src/lib/presellBoxes.js';
 import { assignWhere } from '../src/lib/presellFulfill.js';
 import pg from 'pg';
 
@@ -89,9 +89,9 @@ test('a size\'s boxes come from the supplier\'s per-box list — mixed sizes, re
   expect(b8.map((b) => [b.tracking, b.qty, b.received])).toEqual([
     [`1ZPB${stamp}A3`, 4, true], [`1ZPB${stamp}A2`, 3, false], [`1ZPB${stamp}A1`, 3, false]]);
   expect(b8.every((b) => b.source === 'supplier')).toBe(true);
-  expect(boxSummary(by['8'].qty, by['8'].boxes)).toMatchObject({ placed: 10, unplaced: 0, over: 0 });
+  expect(boxSummary(by['8'])).toMatchObject({ placed: 10, unplaced: 0, over: 0 });
   // Size 10W (supplier wrote 10): only boxes 1 and 2 → 4 not in a box yet.
-  expect(boxSummary(by['10W'].qty, by['10W'].boxes)).toMatchObject({ placed: 6, unplaced: 4, boxes: 2 });
+  expect(boxSummary(by['10W'])).toMatchObject({ placed: 6, unplaced: 4, boxes: 2 });
   // The 11th pair of size 9 isn't in a counted box; the 5th is in box 2 (after box 3's 4).
   expect(boxForPair(by['9'].boxes, 5).tracking).toBe(`1ZPB${stamp}A2`);
   expect(boxForPair(by['9'].boxes, 11)).toBeNull();
@@ -105,13 +105,13 @@ test('📦 Box contents on a whole-order PO: typed per box, "?" = count unknown,
   // The PO's own list is untouched — box contents never feed expected / reconciliation.
   expect((await q('SELECT count(*)::int AS n FROM po_lines WHERE po_id = $1 AND po_box_id IS NOT NULL', [poB.id]))[0].n).toBe(0);
   const by = Object.fromEntries((await stockRows(request, SKU2)).map((x) => [x.size, x]));
-  expect(boxSummary(by['9'].qty, by['9'].boxes)).toMatchObject({ placed: 3, unplaced: 2 });
+  expect(boxSummary(by['9'])).toMatchObject({ placed: 3, unplaced: 2 });
   expect(by['10'].boxes[0]).toMatchObject({ qty: null, source: 'presell' });
-  expect(boxSummary(by['10'].qty, by['10'].boxes)).toMatchObject({ unknown: 1, unplaced: 4 });
-  // 3 more of size 9 in box 2 = 6 in boxes for 5 pairs.
+  expect(boxSummary(by['10'])).toMatchObject({ unknown: 1, unplaced: 4 });
+  // 3 more of size 9 in box 2 = 6 in boxes; the ORDER lists 5.
   const over = await act(request, { action: 'boxContents', poId: poB.id, boxId: boxesB[1], sku: SKU2, lines: [{ size: '9', qty: 3 }] });
   expect(over.status()).toBe(409);
-  expect((await over.json()).error).toMatch(/size 9: 6 in boxes but only 5 pairs/);
+  expect((await over.json()).error).toContain(`size 9: 6 in boxes but ${poB.po_code} lists 5`);
   // A size not pre-listed against the order is refused, naming it.
   const stray = await act(request, { action: 'boxContents', poId: poB.id, boxId: boxesB[1], sku: SKU2, lines: [{ size: '11', qty: 1 }] });
   expect(stray.status()).toBe(400);
@@ -157,6 +157,53 @@ test('Make a PO for this buy: our labels, rows linked; PH only; a tracking numbe
   expect((await g.json()).boxes).toHaveLength(2);
 });
 
+test('review: boxes hold PHYSICAL pairs — an order of 20 with 10 pre-sold is not "10 too many"; the cap is the order list', async ({ request }) => {
+  const [po] = await q(`INSERT INTO purchase_orders (supplier_name, status, manifest_scope, created_by) VALUES ($1, 'shipped', 'po', 'e2e') RETURNING id, po_code`, [SUPPLIER]);
+  await q(`INSERT INTO po_lines (po_id, sku, size, name, qty_expected) VALUES ($1, $2, '11', 'E2E PB2', 20)`, [po.id, SKU2]);
+  const bx = [];
+  for (const n of [1, 2]) bx.push(Number((await q(`INSERT INTO po_boxes (po_id, box_number, tracking_number, status) VALUES ($1, $2, $3, 'in_transit') RETURNING id`, [po.id, n, `1ZPB${stamp}D${n}`]))[0].id));
+  const [r] = await q(`INSERT INTO presell_stock (sku, size, name, qty, po_id, in_transit) VALUES ($1, '11', 'E2E PB2', 10, $2, true) RETURNING id`, [SKU2, po.id]);
+  await q('INSERT INTO presell_stock_po (stock_id, po_id, qty) VALUES ($1, $2, 10)', [r.id, po.id]);
+  // 12 in box 1 is more than we pre-sold (10) but within the order (20) — accepted.
+  expect((await act(request, { action: 'boxContents', poId: po.id, boxId: bx[0], sku: SKU2, lines: [{ size: '11', qty: 12 }] })).status()).toBe(200);
+  const row = (await stockRows(request, SKU2)).find((x) => x.size === '11');
+  expect(boxSummary(row)).toMatchObject({ placed: 12, unplaced: 0, over: 0 });
+  // 9 more = 21 of an order of 20 — refused.
+  const over = await act(request, { action: 'boxContents', poId: po.id, boxId: bx[1], sku: SKU2, lines: [{ size: '11', qty: 9 }] });
+  expect(over.status()).toBe(409);
+  expect((await over.json()).error).toContain(`size 11: 21 in boxes but ${po.po_code} lists 20`);
+});
+
+test('review: an order with ONE label nobody declared — everything is in it, nothing to type', async ({ request }) => {
+  const [po] = await q(`INSERT INTO purchase_orders (supplier_name, status, created_by) VALUES ($1, 'shipped', 'e2e') RETURNING id, po_code`, [SUPPLIER]);
+  await q(`INSERT INTO po_boxes (po_id, box_number, tracking_number, status) VALUES ($1, 1, $2, 'in_transit')`, [po.id, `1ZPB${stamp}E1`]);
+  const [r] = await q(`INSERT INTO presell_stock (sku, size, name, qty, po_id) VALUES ($1, '12', 'E2E PB2', 4, $2) RETURNING id`, [SKU2, po.id]);
+  await q('INSERT INTO presell_stock_po (stock_id, po_id, qty) VALUES ($1, $2, 4)', [r.id, po.id]);
+  const row = (await stockRows(request, SKU2)).find((x) => x.size === '12');
+  expect(row.boxes).toEqual([expect.objectContaining({ tracking: `1ZPB${stamp}E1`, qty: 4, source: 'only_box' })]);
+  expect(boxSummary(row)).toMatchObject({ placed: 4, unplaced: 0 });
+});
+
+test('review: the supplier\'s scan replaces what PH typed, and the grid says so', async ({ request }) => {
+  // PH typed size 8 into box 1 of PO A before the supplier's list existed (box 1 IS declared).
+  await q(`INSERT INTO presell_box_lines (po_box_id, sku, size, qty) VALUES ($1, $2, '8', 5)`, [boxesA[0], SKU]);
+  const g = await (await request.get(`/api/presell-listings/list?tab=boxgrid&po=${poA.id}&sku=${SKU}`, { headers: PH })).json();
+  const b1 = g.boxes.find((b) => b.id === boxesA[0]);
+  expect(b1).toMatchObject({ declared: true, replaced: 1 });
+  expect(b1.lines.find((l) => l.size === '8').qty).toBe(3);   // the supplier's 3, not PH's 5 — never both
+  const row = (await stockRows(request, SKU)).find((x) => x.size === '8');
+  expect(boxSummary(row).placed).toBe(10);
+});
+
+test('review: Make a PO pressed twice at once opens ONE order', async ({ request }) => {
+  const [a] = await q(`INSERT INTO presell_stock (sku, size, name, qty, supplier) VALUES ($1, '13', 'E2E PB3', 2, $2) RETURNING id`, [SKU3, SUPPLIER]);
+  const body = { action: 'makePo', stockIds: [Number(a.id)], supplierName: SUPPLIER, trackingNumbers: `1ZPB${stamp}F1` };
+  const res = await Promise.all([act(request, body), act(request, body)]);
+  const codes = res.map((r) => r.status()).sort();
+  expect(codes).toContain(409);
+  expect((await q('SELECT count(DISTINCT po_id)::int AS n FROM po_boxes WHERE tracking_number = $1', [`1ZPB${stamp}F1`]))[0].n).toBeLessThanOrEqual(1);
+});
+
 test('arrival + fulfil name the box: the post says which box came in; an in-transit order gets its box', async () => {
   const { countArrival } = await import('../api/_lib/presell-arrival.js');
   const [row] = await q('SELECT * FROM presell_stock WHERE id = $1', [rowB['9']]);
@@ -177,6 +224,12 @@ test('arrival + fulfil name the box: the post says which box came in; an in-tran
   ]);
   expect(out.map((x) => [x.id, x.where, x.box?.tracking ?? null])).toEqual([['a', 'ready', null], ['b', 'transit', 'SOON'], ['c', 'transit', 'LATE']]);
   expect([...transitBoxes([{}, {}, {}, {}], boxes).values()].map((b) => b?.tracking ?? null)).toEqual(['SOON', 'LATE', 'LATE', null]);
+  // The sale post uses the same rule: 3 sold, 2 arrived of which 1 set aside → 2 still owed →
+  // the 2nd pair among boxes NOT received (never a received box, which the warehouse already split).
+  const mixed = [{ id: 0, tracking: 'HERE', qty: 4, received: true }, ...boxes];
+  expect(boxForSale({ sold: 3, arrived_qty: 2, released_qty: 1 }, mixed).tracking).toBe('LATE');
+  expect(boxForSale({ sold: 1, arrived_qty: 0, released_qty: 0 }, mixed).tracking).toBe('SOON');
+  expect(boxForSale({ sold: 3, arrived_qty: 4, released_qty: 1, arrived_at: '2026-10-20' }, mixed)).toBeNull();
 });
 
 test('the page: the Stock tab shows each size by box; 📦 Boxes saves a box', async ({ page }) => {

@@ -9,6 +9,7 @@ import { Icon } from './NavIcons.jsx';
 import { isUpcCode, usSizeChart, compareSizes } from '../lib/codes.js';
 import { DimensionsFields, dimsComplete, dimsToText, emptyDims } from './PoDimensions.jsx';
 import { parsePoPaste } from '../lib/poPaste.js';
+import { AliasCodeCheck, aliasOnlyCode } from './AliasCodeCheck.jsx';
 
 const CameraScanner = lazy(() => import('./CameraScanner.jsx'));
 
@@ -157,6 +158,11 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   const [camZoom, setCamZoom] = useState(1);          // 1× / 2× camera zoom (like warehouse)
   const [recent, setRecent] = useState([]);           // running "added to this label" tally (session)
   const [pendingSwitch, setPendingSwitch] = useState(null); // a different shoe scanned mid-draft
+  // A barcode only Alias knew is checked against the box before it goes on the manifest
+  // (src/components/AliasCodeCheck.jsx) — the warehouse receives a PO line by its UPC
+  // without looking it up again, so a wrong code declared here is never questioned
+  // downstream. Answers are kept per barcode for the session: { fix: null | product }.
+  const codeDecisionsRef = useRef(new Map());
   // EMPTY-BOX ORDERS. The carton size is what identifies a line here, the way a shoe's
   // size does on a normal order — so it takes the size chips' place rather than sitting
   // beside them. It's also the one field a supplier types the SAME value into thirty
@@ -240,8 +246,12 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
     setBusy(true);
     try {
       const isUpc = isUpcCode(c);
-      const { product: p } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
+      const { product: p0 } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
+      const alias = aliasOnlyCode(p0, isUpc ? c : '');
+      const told = alias ? codeDecisionsRef.current.get(c) : null;
+      const p = told?.fix ? { ...p0, ...told.fix } : p0;
       const incoming = {
+        codeCheck: alias && !told ? alias : '', codeCheckUpcs: alias && !told ? [c] : [],
         name: p.name || '', sku: p.sku || (isUpc ? '' : c), image: p.image || '',
         upc: (isUpc ? c : '') || p.upc || '', colorway: p.colorway || '', gender: p.gender || null,
         scannedSize: p.scannedSize ? String(p.scannedSize) : null, sizeOptions: p.sizes || [],
@@ -252,6 +262,10 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
         setFlash(startFlash(incoming, c));
       } else if (!sameSku(d.sku, incoming.sku)) {
         setPendingSwitch(incoming); // different shoe → confirm switch (finish current first)
+      } else if (incoming.codeCheck && !(d.codeCheckUpcs || []).includes(c)) {
+        // Same code, but a box nobody has read yet: ask about it before it counts.
+        setDraft((x) => ({ ...x, codeCheck: incoming.codeCheck, codeCheckUpcs: [...(x.codeCheckUpcs || []), c] }));
+        setFlash({ type: 'warn', text: 'Check the style code on this box, then tap the size below.' });
       } else if (incoming.scannedSize) {
         addSize(incoming.scannedSize);
         setFlash({ type: 'added', text: `+1 · size ${incoming.scannedSize}` });
@@ -346,6 +360,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
       // is a line the warehouse can't match to anything.
       .filter((r) => r.size && (!boxesOrder || r.dimensions));
     if (!draft?.sku) { setError('A SKU is required.'); return false; }
+    if (draft.codeCheck) { setError('Check the style code printed on the box first.'); return false; }
     if (rows.length === 0) {
       setError(boxesOrder
         ? 'Every box needs a size AND its length, width and height.'
@@ -394,9 +409,10 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   // it's a line nobody can match to a shoe. Every row has to be complete, not just one:
   // a half-filled row would be silently dropped on submit.
   const draftRows = draft?.rows || [];
-  const draftReady = draftRows.length > 0 && draftRows.every((r) => String(r.size).trim())
+  const draftReady = !draft?.codeCheck && draftRows.length > 0 && draftRows.every((r) => String(r.size).trim())
     && (!boxesOrder || draftRows.every((r) => dimsComplete(r.dims)));
-  const draftMissing = !draftReady && draftRows.length > 0
+  const draftMissing = draft?.codeCheck ? 'Check the style code printed on the box first.'
+    : !draftReady && draftRows.length > 0
     ? (draftRows.some((r) => !String(r.size).trim()) ? 'Every row needs a size.' : 'Every box needs its length, width and height.')
     : '';
   // What this draft adds up to, per size: qty × cost and qty × tip.
@@ -536,6 +552,18 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
                 <input placeholder="SKU" value={draft.sku} onChange={(e) => setDraft((d) => ({ ...d, sku: e.target.value }))} />
               </div>
             </div>
+            {draft.codeCheck && (
+              <AliasCodeCheck key={draft.codeCheck} code={draft.codeCheck} current={draft.sku} onSignOut={onSignOut}
+                where={(draft.codeCheckUpcs || []).length > 1 ? `each of the ${draft.codeCheckUpcs.length} boxes you scanned` : ''}
+                onConfirm={() => {
+                  for (const u of draft.codeCheckUpcs || []) codeDecisionsRef.current.set(u, { fix: null });
+                  setDraft((d) => ({ ...d, codeCheck: '', codeCheckUpcs: [] }));
+                }}
+                onFix={({ found, sizes, ...fix }) => {
+                  for (const u of draft.codeCheckUpcs || []) codeDecisionsRef.current.set(u, { fix: { ...fix, sizes } });
+                  setDraft((d) => ({ ...d, ...fix, sizeOptions: sizes.length ? sizes : d.sizeOptions, codeCheck: '', codeCheckUpcs: [] }));
+                }} />
+            )}
             <div className="size-rows">
               <div className="muted sm">{boxesOrder
                 ? 'Tap the size each box is for (tap again for +1), or “+ Custom” if a size isn’t listed. Give the carton’s dimensions on each row — a new row starts at the last one you typed.'

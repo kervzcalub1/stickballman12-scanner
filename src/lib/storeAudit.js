@@ -8,10 +8,10 @@ const m = (n) => (n == null ? '' : Number(n).toFixed(2));
 export function storeAuditCsv(v) {
   const out = [];
   out.push(['Store', 'Declared pairs', 'Declared $', 'Receipt $', 'Charged $', 'Received', 'Short', 'Over', '$ owed (short)',
-    'Charged − declared', 'Credit agreed', 'Credit received'].map(esc).join(','));
+    `Card vs list${v.tax_pct ? ` + ${v.tax_pct}% tax` : ''}`, 'Credit agreed', 'Credit received'].map(esc).join(','));
   for (const s of v.stores || []) {
     out.push([s.name, s.declared_units, m(s.declared_total), m(s.receipt_total), m(s.charged_total), s.received_units,
-      s.short, s.over, m(s.owed), m(s.charged_minus_declared), m(s.credit_agreed), m(s.credit_received)].map(esc).join(','));
+      s.short, s.over, m(s.owed), m(s.charged_minus_expected ?? s.charged_minus_declared), m(s.credit_agreed), m(s.credit_received)].map(esc).join(','));
   }
   const t = v.totals || {};
   out.push(['TOTAL', t.declared_units, m(t.declared_total), m(t.receipt_total), m(t.charged_total), t.received_units,
@@ -45,27 +45,43 @@ export function compareReceiptToList(receiptLines, store) {
   const bySize = rows.every((r) => r.size != null && String(r.size).trim() !== '');
   const key = (sku, size) => (bySize ? `${skuKey(sku)}|${sizeKey(size)}` : skuKey(sku));
   const listed = new Map();
+  const listPrice = new Map();     // key -> the list's price each (the invoice price)
   const label = new Map();
   for (const g of store.skus || []) {
     for (const z of g.sizes || []) {
       if (!z.declared) continue;
       const k = key(z.sku, z.size);
       listed.set(k, (listed.get(k) || 0) + z.declared);
+      if (z.price != null && !listPrice.has(k)) listPrice.set(k, Number(z.price));
       if (!label.has(k)) label.set(k, { sku: z.sku, size: bySize ? z.size : null });
     }
   }
   const onReceipt = new Map();
+  const paid = new Map();          // key -> { money, qty } the receipt actually charged (pre-tax)
   for (const r of rows) {
     const k = key(r.sku, r.size);
     onReceipt.set(k, (onReceipt.get(k) || 0) + (Number(r.qty) || 0));
+    if (Number.isFinite(Number(r.totalPrice)) && Number(r.qty) > 0) {
+      const p = paid.get(k) || { money: 0, qty: 0 };
+      p.money += Number(r.totalPrice); p.qty += Number(r.qty);
+      paid.set(k, p);
+    }
     if (!label.has(k)) label.set(k, { sku: r.sku, size: bySize ? r.size : null });
   }
   const diffs = [];
   for (const k of new Set([...listed.keys(), ...onReceipt.keys()])) {
     const a = listed.get(k) || 0;
     const b = onReceipt.get(k) || 0;
-    if (a === b) continue;
-    diffs.push({ ...label.get(k), listed: a, receipt: b, diff: b - a });
+    if (a !== b) diffs.push({ ...label.get(k), kind: 'qty', listed: a, receipt: b, diff: b - a });
+    // The PRICE, too: the list is the invoice the supplier is paid on, so a list price above
+    // what the store rang up is money paid for nothing (review 2026-10-25). Within $1 is
+    // rounding.
+    const p = paid.get(k);
+    const lp = listPrice.get(k);
+    if (p && p.qty > 0 && lp != null) {
+      const each = Math.round((p.money / p.qty) * 100) / 100;
+      if (Math.abs(each - lp) > 1) diffs.push({ ...label.get(k), kind: 'price', listPrice: lp, receiptPrice: each, diff: Math.round((each - lp) * 100) / 100 });
+    }
   }
   diffs.sort((x, y) => String(x.sku).localeCompare(String(y.sku)) || String(x.size || '').localeCompare(String(y.size || ''), undefined, { numeric: true }));
   return { bySize, diffs };
@@ -74,6 +90,10 @@ export function compareReceiptToList(receiptLines, store) {
 // One line a person can read: "the receipt has 2 more DZ5485-612 size 10 than the list".
 export function receiptDiffSentence(d) {
   const what = `${d.sku}${d.size ? ` size ${d.size}` : ''}`;
+  if (d.kind === 'price') {
+    return `the receipt charged $${d.receiptPrice.toFixed(2)} each for ${what}; the list says $${d.listPrice.toFixed(2)}`
+      + (d.diff < 0 ? ' — the list is higher than what was paid' : '');
+  }
   if (!d.listed) return `on the receipt, not on the list: ${d.receipt} × ${what}`;
   if (!d.receipt) return `on the list, not on the receipt: ${d.listed} × ${what}`;
   return `the receipt has ${Math.abs(d.diff)} ${d.diff > 0 ? 'more' : 'fewer'} ${what} than the list (${d.receipt} vs ${d.listed})`;

@@ -315,6 +315,24 @@ test.describe('SHEIN sales → Shopify', () => {
     expect(marks.at(-1)[1].note).toContain('Shopify 2 → 1');
   });
 
+  test('the order carries the size’s OLD seller SKU Shopify no longer has: taken off the SKU it was relinked to — but not on a unit that already gave up', async () => {
+    const { applyToShopify } = await import('../api/_lib/shein-orders.js');
+    const asked = []; const adjusts = []; const marks = [];
+    const io = {
+      shopifyStockForSku: async (sku) => { asked.push(sku); return sku === 'NEW8' ? { variantId: 'V2', inventoryItemId: 'I2', levels: [{ locationId: 'L1', location: 'Warehouse', available: 2 }] } : { error: `No Shopify variant has SKU ${sku}.`, code: 'missing' }; },
+      shopifyAdjustAvailable: async (a) => { adjusts.push(a); return { ok: true, after: a.from + a.delta }; },
+      markSheinUnit: async (id, m) => { marks.push([id, m]); },
+      sheinLinkedSku: async (sheinSku) => (sheinSku === 'S8' ? 'NEW8' : null),
+    };
+    expect((await applyToShopify({ goods_id: 'G1', order_no: 'O1', seller_sku: 'OLD8', shein_sku: 'S8', attempts: 2 }, 'deduct', io)).ok).toBe(true);
+    expect(asked).toEqual(['OLD8', 'NEW8']);
+    expect(adjusts[0]).toMatchObject({ inventoryItemId: 'I2', delta: -1, from: 2 });
+    expect(marks.at(-1)[1].note).toContain('via relinked SKU NEW8');
+    asked.length = 0;
+    const r = await applyToShopify({ goods_id: 'G2', order_no: 'O1', seller_sku: 'OLD8', shein_sku: 'S8', attempts: 8 }, 'deduct', io);
+    expect(r.code).toBe('missing'); expect(asked).toEqual(['OLD8']);
+  });
+
   test('a SHEIN sale Shopify had none of is still taken off — and flagged OVERSOLD', async () => {
     const { applyToShopify } = await import('../api/_lib/shein-orders.js');
     const marks = [];
@@ -343,6 +361,21 @@ test.describe('SHEIN sales → Shopify', () => {
 });
 
 /* ---------------------------------- webhooks ---------------------------------- */
+
+test.describe('SHEIN live — the worker', () => {
+  test('the stock walk: every 3 h, and at once after a restart cut one off (only once in a row)', async () => {
+    const { walkDue, AFTER_RESTART } = await import('../api/_lib/shein-worker.js');
+    const now = Date.parse('2026-10-25T15:00:00Z');
+    const ago = (h) => new Date(now - h * 3600_000).toISOString();
+    expect(walkDue(null, now)).toBe(true);
+    expect(walkDue({ status: 'running', started_at: ago(5) }, now)).toBe(false);
+    expect(walkDue({ status: 'done', started_at: ago(1) }, now)).toBe(false);
+    expect(walkDue({ status: 'done', started_at: ago(4) }, now)).toBe(true);
+    expect(walkDue({ status: 'interrupted', started_at: ago(0.2), started_by: 'kervz' }, now)).toBe(true);
+    expect(walkDue({ status: 'interrupted', started_at: ago(0.2), started_by: AFTER_RESTART }, now)).toBe(false);
+    expect(walkDue({ status: 'stopped', started_at: ago(0.2) }, now)).toBe(false);   // a person stopped it
+  });
+});
 
 test.describe('SHEIN live — webhooks', () => {
   test('SHEIN: signed with the APP id + secret over the path, AES body — a forged or stale one is refused', async () => {
@@ -492,6 +525,14 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     expect(shelfPlan({ rows: gone, shelf: shelf(false), records: rec('deleted') })).toEqual([]);
   });
 
+  test('seller SKUs gone but Shopify still sells the STYLE (re-made with new SKUs): delisted at 0, never deleted', () => {
+    const gone = [row('8', 0, 'no_shopify'), row('9', 0, 'no_shopify')];
+    const kept = new Set(['skcX']);
+    expect(shelfPlan({ rows: gone, shelf: shelf(true), styleOnShopify: kept })[0]).toMatchObject({ act: 'delist' });
+    expect(shelfPlan({ rows: gone, shelf: shelf(false), styleOnShopify: kept })).toEqual([expect.objectContaining({ act: 'relink' })]);
+    expect(shelfPlan({ rows: gone, shelf: shelf(false), styleOnShopify: kept, records: new Map([['skcX', { state: 'delete_requested' }]]) })[0].act).toBe('relink');
+  });
+
   test('re-list only what WE delisted, and not within SHEIN’s 20-minute gap', () => {
     const back = [row('8', 0), row('9', 2)];
     expect(shelfPlan({ rows: back, shelf: shelf(false) })).toEqual([]);                                      // a person delisted it: leave it
@@ -533,6 +574,19 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     await stepProduct('spuX', ctxFor(q.io, 'stock', scan));
     expect(q.calls.deletes).toEqual([]);
     expect(q.calls.items[0].action).toContain('SHEIN won’t delete it: quota used up');
+  });
+
+  test('a walk: seller SKUs gone but the style is on Shopify under new SKUs → no delete, its sizes still need a person (relink)', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const spu = SPUS(false, [SKU('s7', 'DEAD7', 'US7'), SKU('s8', 'DEAD8', 'US8')]);
+    const scan = rowsFromSpu(spu, STOCK([['s7', 0], ['s8', 0]]), {});
+    const remade = [V('N10', '10', 3, 'P2')];   // same style (IB7936-100), new product, no size the rules can place
+    const f = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: remade });
+    const r = await stepProduct('spuX', { ...ctxFor(f.io, 'stock', scan), catalogue: remade });
+    expect(f.calls.deletes).toEqual([]);
+    expect(f.calls.items.every((i) => i.reason === 'no_shopify')).toBe(true);
+    expect(r.counts.needs_person).toBe(2);
+    expect(f.calls.items[0].action).toContain('Shopify still has this style under new SKUs');
   });
 
   test('SHEIN’s review answer is recorded: deleted, or refused (it stays delisted, never asked again)', async () => {

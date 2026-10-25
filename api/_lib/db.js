@@ -4548,6 +4548,15 @@ export async function getPoStoreVariance(poId) {
   const receiptBy = new Map(receipts.map((r) => [String(r.po_store_id), r]));
   const boxes = await getPoReceivedBoxes(poId);
   const landed = await getPoLanded(poId);
+  // SALES TAX (review 2026-10-25). The list is shelf prices, the card pays shelf + tax, so
+  // comparing the card to the bare list flagged every store "over" by its tax. The rate is
+  // the supplier's cost preset's — the same stack that turns a shelf price into a cost.
+  // With no preset (or no tax on it) the list is compared as it stands. Known limit: one
+  // rate per order, while stores in different states charge different rates.
+  const { preset } = await presetForShipment({ poId, supplierName: po.supplier_name || '' });
+  const taxPct = Number.isFinite(Number(preset?.taxPct)) && Number(preset.taxPct) > 0 ? Number(preset.taxPct) : 0;
+  // Within a dollar (or half a percent) is rounding, not a finding.
+  const tolOf = (expected) => Math.max(1, Math.abs(Number(expected) || 0) * 0.005);
 
   const canon = rcCodeGroups([
     ...lines.map((l) => rcCodes(l.sku)),
@@ -4622,6 +4631,14 @@ export async function getPoStoreVariance(poId) {
       owed: money(sizes.reduce((n, z) => n + (z.owed || 0), 0)),
       unpriced_short: sizes.some((z) => z.short > 0 && z.owed == null),
       charged_minus_declared: charged != null && declaredTotal != null ? money(charged - declaredTotal) : null,
+      // What the card should show for the list: list + tax. + = charged MORE than the list
+      // allows; − = charged LESS — a discount, or the list (Joey's invoice) priced above
+      // what he actually paid.
+      expected_charge: declaredTotal != null ? money(declaredTotal * (1 + taxPct / 100)) : null,
+      charged_minus_expected: charged != null && declaredTotal != null ? money(charged - declaredTotal * (1 + taxPct / 100)) : null,
+      charge_flag: charged == null || declaredTotal == null ? null
+        : charged - declaredTotal * (1 + taxPct / 100) > tolOf(declaredTotal * (1 + taxPct / 100)) ? 'over'
+          : declaredTotal * (1 + taxPct / 100) - charged > tolOf(declaredTotal * (1 + taxPct / 100)) ? 'under' : 'ok',
       receipt_vs_charged: receiptTotal != null && charged != null ? money(charged - receiptTotal) : null,
       credit_agreed: st.credit_agreed == null ? null : money(st.credit_agreed),
       credit_received: st.credit_received == null ? null : money(st.credit_received),
@@ -4635,6 +4652,7 @@ export async function getPoStoreVariance(poId) {
   return {
     po_id: Number(po.id), po_code: po.po_code,
     landed,
+    tax_pct: taxPct, tax_source: taxPct ? (preset?.name || 'supplier preset') : null,
     stores: rows,
     totals: {
       declared_units: rows.reduce((n, r) => n + r.declared_units, 0),
@@ -4645,9 +4663,13 @@ export async function getPoStoreVariance(poId) {
       short: rows.reduce((n, r) => n + r.short, 0),
       over: rows.reduce((n, r) => n + r.over, 0),
       owed: t('owed'),
-      // Only the stores charged MORE than they declared — an undercharge elsewhere is not
-      // a refund of it.
-      overcharge: money(rows.reduce((n, r) => n + Math.max(0, Number(r.charged_minus_declared) || 0), 0)),
+      expected_charge: anyCharged ? t('expected_charge') : null,
+      // Only the stores charged MORE than list + tax (beyond rounding) — an undercharge
+      // elsewhere is not a refund of it.
+      overcharge: money(rows.filter((r) => r.charge_flag === 'over').reduce((n, r) => n + Number(r.charged_minus_expected), 0)),
+      // …and the stores whose card came in BELOW list + tax: the list may be priced above
+      // what was paid, and the list is what the supplier is paid on.
+      undercharge: money(rows.filter((r) => r.charge_flag === 'under').reduce((n, r) => n - Number(r.charged_minus_expected), 0)),
       stores_short: rows.filter((r) => r.short > 0).length,
     },
     untied_units: untiedUnits,
@@ -4732,6 +4754,14 @@ export async function listEmailReceiptCandidates(poId, { total = null } = {}) {
      LIMIT 40`;
 }
 
+// Where an email receipt is already attached, if anywhere (any order, any store).
+export async function emailReceiptAttachedTo(emailReceiptId) {
+  return (await db()`
+    SELECT s.name AS store_name, p.po_code FROM po_store_receipts r
+      JOIN po_stores s ON s.id = r.po_store_id JOIN purchase_orders p ON p.id = s.po_id
+     WHERE r.email_receipt_id = ${emailReceiptId} LIMIT 1`)[0] || null;
+}
+
 export async function setPoStoreCredit(storeId, { agreed, received, note }) {
   const rows = await db()`
     UPDATE po_stores SET credit_agreed = ${agreed}, credit_received = ${received}, credit_note = ${note}
@@ -4769,11 +4799,11 @@ export async function storeOutcomeForIntake(poId) {
   const po = await getPo(poId);
   if (!po || po.audited_at) return null;
   const t = v.totals;
-  if (!t.short && !t.over && !v.untied_units && !t.overcharge) return null;
+  if (!t.short && !t.over && !v.untied_units && !t.overcharge && !t.undercharge) return null;
   return {
     byStore: true, poId: Number(poId), poCode: v.po_code, supplierName: po.supplier_name,
     storesShort: t.stores_short, storeCount: v.stores.length, short: t.short, over: t.over,
-    owed: t.owed, overcharge: t.overcharge, untied: v.untied_units,
+    owed: t.owed, overcharge: t.overcharge, undercharge: t.undercharge, untied: v.untied_units,
     receivedUnits: t.received_units, expectedUnits: t.declared_units,
     top: v.stores.filter((s) => s.short > 0).sort((a, b) => (b.owed || 0) - (a.owed || 0)).slice(0, 3)
       .map((s) => ({ name: s.name, short: s.short, owed: s.owed })),
@@ -9337,6 +9367,33 @@ export async function presellPoCap(poId, sku, size) {
   return { hasList, expected: hasList ? (byKey.get(key) || 0) : null, listed };
 }
 
+// The existing stock row for a SKU + size (or null) — which PO it is listed against.
+export async function presellStockBySkuSize(sku, size) {
+  return (await db()`SELECT id, po_id, qty, sold FROM presell_stock WHERE sku = ${sku} AND size = ${size}`)[0] || null;
+}
+
+// A row re-pointed to another PO (✎ Cost & shipment): its pairs were pre-listed against
+// ONE order, so they move with it — the old order's count drops, the new one's rises.
+// Without this a row listed with no PO and linked afterwards counted against nothing,
+// and the cap never saw it (review 2026-10-25). Allowed even over the new order's cap:
+// that shows as "over" on the row rather than refusing a fix-up.
+export async function movePresellStockPo(stockId, fromPoId, toPoId, qty) {
+  if (Number(fromPoId || 0) === Number(toPoId || 0)) return;
+  const sql = db();
+  const from = fromPoId ? (await sql`SELECT qty FROM presell_stock_po WHERE stock_id = ${stockId} AND po_id = ${fromPoId}`)[0] : null;
+  const n = from ? Number(from.qty) : Number(qty) || 0;
+  const queries = [];
+  if (fromPoId) queries.push(sql`DELETE FROM presell_stock_po WHERE stock_id = ${stockId} AND po_id = ${fromPoId}`);
+  if (toPoId && n > 0) {
+    queries.push(sql`
+      INSERT INTO presell_stock_po (stock_id, po_id, qty) VALUES (${stockId}, ${toPoId}, ${n})
+      ON CONFLICT (stock_id, po_id) DO UPDATE SET qty = presell_stock_po.qty + ${n}`);
+  }
+  // What was posted as "at risk" was about the old order; the new one is said afresh.
+  queries.push(sql`UPDATE presell_stock SET at_risk_alerted = NULL WHERE id = ${stockId}`);
+  if (queries.length) await sql.transaction(queries);
+}
+
 // Pairs listed against a PO for one stock row: + `delta` (never below 0).
 export async function bumpPresellStockPo(stockId, poId, delta) {
   if (!poId || !delta) return;
@@ -9360,8 +9417,13 @@ export async function presellPoStatus(poIds) {
   const links = await sql`
     SELECT s.id AS stock_id, s.sku, s.size, s.name, s.arrived_qty,
            s.po_id AS current_po, s.at_risk_alerted, x.po_id, coalesce(p.qty, 0)::int AS listed,
+           -- A cancelled sale is no sale; a shipped one has its pair (from wherever it came).
            (SELECT count(*) FROM presell_sales ps
-             WHERE ps.stock_id = s.id AND (ps.po_id = x.po_id OR (ps.po_id IS NULL AND s.po_id = x.po_id)))::int AS sold
+             WHERE ps.stock_id = s.id AND (ps.po_id = x.po_id OR (ps.po_id IS NULL AND s.po_id = x.po_id))
+               AND ps.ship_state IS DISTINCT FROM 'cancelled')::int AS sold,
+           (SELECT count(*) FROM presell_sales ps
+             WHERE ps.stock_id = s.id AND (ps.po_id = x.po_id OR (ps.po_id IS NULL AND s.po_id = x.po_id))
+               AND ps.ship_state IS DISTINCT FROM 'cancelled' AND ps.ship_state IS DISTINCT FROM 'shipped')::int AS unshipped
       FROM (SELECT stock_id, po_id FROM presell_stock_po WHERE po_id = ANY(${ids}::bigint[])
             UNION SELECT id, po_id FROM presell_stock WHERE po_id = ANY(${ids}::bigint[])) x
       JOIN presell_stock s ON s.id = x.stock_id
@@ -9396,7 +9458,8 @@ export async function presellPoStatus(poIds) {
         listed: l.listed, listed_all: listedBy.get(k) || 0, expected, has_list: hasList,
         over_cap: expected != null && (listedBy.get(k) || 0) > expected,
         sold: l.sold, received, arrived_any: Number(l.arrived_qty) || 0,
-        landed, at_risk: landed ? Math.max(0, l.sold - received) : 0,
+        // Never more than the sales still waiting to ship: one that shipped found its pair.
+        landed, at_risk: landed ? Math.min(Number(l.unshipped) || 0, Math.max(0, l.sold - received)) : 0,
         at_risk_alerted: l.at_risk_alerted == null ? null : Number(l.at_risk_alerted),
       });
     }
@@ -9458,22 +9521,56 @@ const presellBoxOut = (b, qty, source) => ({
   eta_from: b.eta_from || null, eta_to: b.eta_to || null, qty, source,
 });
 
-// The boxes each pre-sell row's pairs are in → Map(stockId → box[]). A row's POs = every PO
-// it was listed against (presell_stock_po) plus the one it points at.
+// WHAT A BOX COUNT MEANS (review 2026-10-25): a box holds PHYSICAL pairs — the supplier's list
+// counts every pair of the order in it, not just the ones we pre-sold. So boxes are judged per
+// ORDER: pairs in its boxes vs its own order-level list (the cap, when it has one), and our
+// pre-listed pairs on it vs what's placed ("not in a box yet"). Comparing the boxes with the
+// pre-sold count alone called a 20-pair order with 10 pre-sold "10 too many".
+
+// The order-level list per canonical SKU+size (whole-order manifest / receipt / store list) —
+// the only thing a box total can be capped by. Per-box declarations are NOT a cap: a label
+// nobody declared yet would always read as "over".
+async function poOrderListByKey(sql, poIds, keyOf) {
+  const ids = [...new Set((poIds || []).map(Number))];
+  const out = new Map();   // po id → Map(key → qty)
+  if (!ids.length) return out;
+  const lines = await sql`
+    SELECT po_id, sku, size, qty_expected FROM po_lines
+     WHERE po_id = ANY(${ids}::bigint[]) AND po_box_id IS NULL AND dimensions IS NULL`;
+  for (const l of lines) {
+    const m = out.get(Number(l.po_id)) || new Map();
+    const k = keyOf(l.sku, l.size);
+    m.set(k, (m.get(k) || 0) + (Number(l.qty_expected) || 0));
+    out.set(Number(l.po_id), m);
+  }
+  return out;
+}
+
+// The boxes each pre-sell row's pairs are in → Map(stockId → { boxes, pos }).
+//   boxes  every box of the row's orders holding that SKU+size (physical pairs, landing order
+//          is the caller's — boxOrder);
+//   pos    per order: { po_id, po_code, pairs (pre-listed against it), expected (its order
+//          list for the size, null = none), placed (counted pairs in its boxes), unknown }.
+// A row's POs = every PO it was listed against (presell_stock_po) plus the one it points at.
+// An order with ONE label that nobody declared: everything is in that box — no typing needed.
 export async function presellBoxesFor(stockRows) {
   const rows = (stockRows || []).filter((r) => r && r.id != null);
-  const out = new Map(rows.map((r) => [Number(r.id), []]));
+  const out = new Map(rows.map((r) => [Number(r.id), { boxes: [], pos: [] }]));
   if (!rows.length) return out;
   const sql = db();
   const sids = rows.map((r) => Number(r.id));
   const links = await sql`
-    SELECT stock_id, po_id FROM presell_stock_po WHERE stock_id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL
-    UNION SELECT id, po_id FROM presell_stock WHERE id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL`;
+    SELECT s.id AS stock_id, x.po_id, coalesce(p.qty, s.qty)::int AS pairs
+      FROM (SELECT stock_id, po_id FROM presell_stock_po WHERE stock_id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL
+            UNION SELECT id, po_id FROM presell_stock WHERE id = ANY(${sids}::bigint[]) AND po_id IS NOT NULL) x
+      JOIN presell_stock s ON s.id = x.stock_id
+      LEFT JOIN presell_stock_po p ON p.stock_id = x.stock_id AND p.po_id = x.po_id`;
   if (!links.length) return out;
   const { boxes, declared, ours } = await presellPoBoxData(sql, links.map((l) => l.po_id));
-  if (!boxes.length) return out;
-  const canon = rcCodeGroups([...declared.map((l) => rcCodes(l.sku)), ...ours.map((l) => rcCodes(l.sku)), ...rows.map((r) => rcCodes(r.sku))]);
+  const orderSkus = await sql`SELECT DISTINCT sku FROM po_lines WHERE po_id = ANY(${links.map((l) => Number(l.po_id))}::bigint[])`;
+  const canon = rcCodeGroups([...orderSkus.map((l) => rcCodes(l.sku)), ...ours.map((l) => rcCodes(l.sku)), ...rows.map((r) => rcCodes(r.sku))]);
   const keyOf = (k, z) => `${canon(rcCodes(k))}|${rcSizeNum(z)}`;
+  const listOf = await poOrderListByKey(sql, links.map((l) => l.po_id), keyOf);
   const declaredBy = new Map();   // box id → Map(key → { qty, staff })
   for (const l of declared) {
     const m = declaredBy.get(Number(l.po_box_id)) || new Map();
@@ -9487,21 +9584,36 @@ export async function presellBoxesFor(stockRows) {
     m.set(keyOf(l.sku, l.size), l.qty == null ? null : Number(l.qty));
     oursBy.set(Number(l.po_box_id), m);
   }
-  const posOf = new Map();
-  for (const l of links) { const s = Number(l.stock_id); posOf.set(s, [...(posOf.get(s) || []), Number(l.po_id)]); }
+  const boxesOfPo = new Map();
+  for (const b of boxes) boxesOfPo.set(Number(b.po_id), [...(boxesOfPo.get(Number(b.po_id)) || []), b]);
   for (const r of rows) {
     const k = keyOf(r.sku, r.size);
-    const mine = posOf.get(Number(r.id)) || [];
-    for (const b of boxes) {
-      if (!mine.includes(Number(b.po_id))) continue;
-      const dec = declaredBy.get(Number(b.id));
-      if (dec) {
-        const d = dec.get(k);
-        if (d && d.qty > 0) out.get(Number(r.id)).push(presellBoxOut(b, d.qty, d.staff ? 'staff' : 'supplier'));
-        continue;   // the supplier's list for this box is the truth — ours is ignored
+    const o = out.get(Number(r.id));
+    for (const l of links.filter((x) => Number(x.stock_id) === Number(r.id))) {
+      const poId = Number(l.po_id);
+      const list = listOf.get(poId);
+      const expected = list ? (list.get(k) || 0) : null;
+      const poBoxes = boxesOfPo.get(poId) || [];
+      const mine = [];
+      for (const b of poBoxes) {
+        const dec = declaredBy.get(Number(b.id));
+        if (dec) {
+          const d = dec.get(k);
+          if (d && d.qty > 0) mine.push(presellBoxOut(b, d.qty, d.staff ? 'staff' : 'supplier'));
+          continue;   // the supplier's list for this box is the truth — ours is ignored
+        }
+        const ob = oursBy.get(Number(b.id));
+        if (ob && ob.has(k)) mine.push(presellBoxOut(b, ob.get(k), 'presell'));
       }
-      const o = oursBy.get(Number(b.id));
-      if (o && o.has(k)) out.get(Number(r.id)).push(presellBoxOut(b, o.get(k), 'presell'));
+      // One label, nobody said what's in it: it's all in there.
+      if (!mine.length && poBoxes.length === 1 && !declaredBy.has(Number(poBoxes[0].id)) && !oursBy.get(Number(poBoxes[0].id))?.has(k)) {
+        mine.push(presellBoxOut(poBoxes[0], expected ?? Number(l.pairs), 'only_box'));
+      }
+      o.boxes.push(...mine);
+      o.pos.push({
+        po_id: poId, po_code: poBoxes[0]?.po_code ?? null, pairs: Number(l.pairs) || 0, expected,
+        placed: mine.reduce((n, b) => n + (b.qty == null ? 0 : b.qty), 0), unknown: mine.filter((b) => b.qty == null).length,
+      });
     }
   }
   return out;
@@ -9509,7 +9621,7 @@ export async function presellBoxesFor(stockRows) {
 
 // 📦 Box contents for one SKU on one PO (the grid): every label of the order, whether the
 // supplier declared it (then it's read-only here), and per size what's in it for this SKU;
-// plus the SKU's pre-sell rows (any size) with their pairs, so the grid can say what's left.
+// plus the SKU's pre-sell rows on this order: pre-listed pairs and the order's own count.
 export async function presellPoBoxGrid(poId, sku) {
   const sql = db();
   const po = (await sql`SELECT id, po_code, status, supplier_name, manifest_scope FROM purchase_orders WHERE id = ${poId}`)[0];
@@ -9527,11 +9639,14 @@ export async function presellPoBoxGrid(poId, sku) {
     po: { id: Number(po.id), po_code: po.po_code, status: po.status, supplier_name: po.supplier_name, manifest_scope: po.manifest_scope },
     boxes: boxes.map((b) => {
       const dec = declared.filter((l) => Number(l.po_box_id) === Number(b.id));
-      const mine = (dec.length ? dec : ours.filter((l) => Number(l.po_box_id) === Number(b.id))).filter((l) => same(l.sku));
-      const others = (dec.length ? dec : ours.filter((l) => Number(l.po_box_id) === Number(b.id))).filter((l) => !same(l.sku));
+      const oursHere = ours.filter((l) => Number(l.po_box_id) === Number(b.id));
+      const mine = (dec.length ? dec : oursHere).filter((l) => same(l.sku));
+      const others = (dec.length ? dec : oursHere).filter((l) => !same(l.sku));
       return {
         ...presellBoxOut(b, null, dec.length ? (dec.every((l) => l.entered_on_behalf) ? 'staff' : 'supplier') : 'presell'),
         declared: dec.length > 0,
+        // What PH typed here before the supplier declared the box — no longer used, said out loud.
+        replaced: dec.length ? oursHere.filter((l) => same(l.sku)).length : 0,
         // Lines land on OUR size columns (the supplier may write 9 for our 9W); a size we have
         // no pre-sell row for is counted with the other pairs in the box.
         lines: (() => {
@@ -9548,8 +9663,12 @@ export async function presellPoBoxGrid(poId, sku) {
           .reduce((n, l) => n + (Number(dec.length ? l.qty_expected : l.qty) || 0), 0),
       };
     }),
-    sizes: stock.map((s) => ({ stock_id: Number(s.id), size: s.size, qty: Number(s.qty), sold: Number(s.sold),
-      boxes: all.get(Number(s.id)) || [] })),
+    sizes: stock.map((s) => {
+      const x = all.get(Number(s.id));
+      const here = x.pos.find((p) => p.po_id === Number(poId)) || { pairs: Number(s.qty), expected: null };
+      // pairs = pre-listed against this order; expected = the order's own count (null = no list).
+      return { stock_id: Number(s.id), size: s.size, qty: Number(s.qty), sold: Number(s.sold), pairs: here.pairs, expected: here.expected };
+    }),
   };
 }
 
@@ -9592,6 +9711,15 @@ export async function linkPresellToNewPo(stockIds, poId, actor) {
      WHERE id = ANY(${stockIds}::bigint[]) AND po_id IS NULL RETURNING id, qty`;
   for (const r of rows) await bumpPresellStockPo(Number(r.id), poId, Number(r.qty) || 0);
   return rows.length;
+}
+// Undo a PO "Make a PO for this buy" just opened and lost a race on — only while nothing hangs
+// off it (no lines, no batch, no pre-sell link).
+export async function deleteEmptyPo(id) {
+  await db()`DELETE FROM purchase_orders p WHERE p.id = ${id}
+              AND NOT EXISTS (SELECT 1 FROM po_lines WHERE po_id = p.id)
+              AND NOT EXISTS (SELECT 1 FROM batches WHERE po_id = p.id)
+              AND NOT EXISTS (SELECT 1 FROM presell_stock_po WHERE po_id = p.id)
+              AND NOT EXISTS (SELECT 1 FROM presell_stock WHERE po_id = p.id)`;
 }
 // Labels already carrying any of these tracking numbers (a PO made twice for one buy).
 export async function poCodesByTracking(tracks) {
@@ -10258,6 +10386,26 @@ export async function trackingStatusFor(numbers) {
 export async function listSheinLinks() {
   return await db()`SELECT * FROM shein_links ORDER BY decided_at DESC`;
 }
+// Shopify → SHEIN changes not pushed yet (shein-live.js queuePush). Kept so a deploy/restart
+// doesn't drop them. Deliberately NOT a live table: it changes on every Shopify stock change.
+export async function sheinPushQueueAdd(skus) {
+  if (!skus.length) return;
+  await db()`INSERT INTO shein_push_queue (sku) SELECT unnest(${skus}::text[]) ON CONFLICT (sku) DO NOTHING`;
+}
+export async function sheinPushQueueDone(skus) {
+  if (!skus.length) return;
+  await db()`DELETE FROM shein_push_queue WHERE sku = ANY(${skus}::text[])`;
+}
+export async function sheinPushQueueList() {
+  return (await db()`SELECT sku FROM shein_push_queue ORDER BY queued_at`).map((r) => r.sku);
+}
+// The Shopify SKU a SHEIN size was relinked to (Match sizes / the walk), for a SHEIN sale that
+// still carries the size's OLD seller SKU.
+export async function sheinLinkedSku(sheinSku) {
+  if (!sheinSku) return null;
+  const [r] = await db()`SELECT link_sku FROM shein_links WHERE shein_sku = ${String(sheinSku)} AND decision = 'link' AND link_sku IS NOT NULL LIMIT 1`;
+  return r?.link_sku || null;
+}
 export async function saveSheinLinks(links, by) {
   const chunk = JSON.stringify(links);
   await db()`
@@ -10409,7 +10557,9 @@ export async function markSheinUnit(goodsId, { deducted = false, restocked = fal
       restocked_at = CASE WHEN ${restocked} THEN now() ELSE restocked_at END,
       shopify_variant = COALESCE(${variant}, shopify_variant), shopify_location = COALESCE(${location}, shopify_location),
       shopify_before = COALESCE(${before}::int, shopify_before), note = COALESCE(${note}, note),
-      error = ${error}, attempts = CASE WHEN ${failed} THEN attempts + 1 ELSE attempts END, updated_at = now()
+      -- a pair taken off starts its put-back count from 0: one that needed a person's Retry
+      -- (8+ tries) was otherwise never put back by the poll when SHEIN cancelled it
+      error = ${error}, attempts = CASE WHEN ${failed} THEN attempts + 1 WHEN ${deducted} THEN 0 ELSE attempts END, updated_at = now()
      WHERE goods_id = ${goodsId}`;
 }
 // Pairs SHEIN sold that are still in the warehouse and NOT yet off Shopify, per seller SKU —

@@ -518,13 +518,14 @@ export function alertPoDiscrepancy(rc, actor) {
     const head = [
       rc.storesShort ? `${rc.storesShort} of ${rc.storeCount} stores short · ${rc.short} pair${rc.short === 1 ? '' : 's'} · ${$(rc.owed)} owed` : '',
       rc.over ? `${rc.over} over` : '',
-      rc.overcharge ? `${$(rc.overcharge)} charged over the list` : '',
+      rc.overcharge ? `${$(rc.overcharge)} charged over list + tax` : '',
+      rc.undercharge ? `${$(rc.undercharge)} charged UNDER the list — check its prices` : '',
       rc.untied ? `${rc.untied} pair${rc.untied === 1 ? '' : 's'} not tied to a store` : '',
     ].filter(Boolean).join(' · ');
     const top = (rc.top || []).map((s) => `${s.name}: ${s.short} short${s.owed != null ? ` (${$(s.owed)})` : ''}`).join('; ');
     fireAlert(() => alertUsers('po.discrepancy', {
       once: true, actorUid: actor?.uid,
-      ref: `po:${rc.poId}:store:${rc.short}/${rc.owed}/${rc.over}/${rc.overcharge}/${rc.untied}`,
+      ref: `po:${rc.poId}:store:${rc.short}/${rc.owed}/${rc.over}/${rc.overcharge}/${rc.undercharge || 0}/${rc.untied}`,
       code: rc.poCode,
       body: `${rc.supplierName} — ${head}.${top ? ` ${top}.` : ''} Kevin's audit is next.`,
       path: at('inbound', `po=${Number(rc.poId)}`),

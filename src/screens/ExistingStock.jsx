@@ -22,6 +22,7 @@ import { useUnsavedGuard } from '../hooks.js';
 import { isUpcCode, isLocationCode, isRollVin, isVinCode, compareSizes } from '../lib/codes.js';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { ShelfPicker } from '../components/ShelfPicker.jsx';
+import { AliasCodeCheck, aliasOnlyCode } from '../components/AliasCodeCheck.jsx';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -109,26 +110,33 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
   // Old boxes often scan to a size-specific UPC, in which case the catalogue hands
   // back `scannedSize` and this is a pure one-scan-per-pair loop; when it doesn't,
   // the row lands with no size and is flagged so it can be filled in by hand.
+  // A barcode only Alias knew waits on a look at the box before the shelf can be saved
+  // (src/components/AliasCodeCheck.jsx). Answers are kept per barcode for the session.
+  const codeDecisionsRef = useRef(new Map());
   async function addProduct(code) {
     setError('');
     if (!location) { setError('Scan the shelf first.'); pulse('err', 'Scan the shelf first.'); return; }
     setBusy(true);
     try {
       const isUpc = isUpcCode(code);
-      const { product: p } = isUpc ? await api.searchUpc(code) : await api.searchSku(code);
+      const { product: p0 } = isUpc ? await api.searchUpc(code) : await api.searchSku(code);
+      const alias = aliasOnlyCode(p0, isUpc ? code : '');
+      const told = alias ? codeDecisionsRef.current.get(code) : null;
+      const p = told?.fix ? { ...p0, ...told.fix } : p0;
+      const codeCheck = alias && !told ? alias : '';
       const sku = p.sku || (isUpc ? '' : code);
       const size = p.scannedSize || '';
       setRows((rs) => {
         // Same SKU + same size → bump the qty rather than stacking duplicate rows.
         const at = rs.findIndex((r) => r.sku && sku && r.sku.toUpperCase() === sku.toUpperCase() && r.size === size);
-        if (at >= 0 && size) {
+        if (at >= 0 && size && !codeCheck && !rs[at].codeCheck) {
           const next = rs.slice();
           next[at] = { ...next[at], qty: next[at].qty + 1 };
           return next;
         }
         return [{
           key: rowKey++, name: p.name || sku || code, sku, upc: (isUpc ? code : '') || p.upc || '',
-          image: p.image || '', size, qty: 1, withBox: true,
+          image: p.image || '', size, qty: 1, withBox: true, codeCheck,
           sizeOptions: (p.sizes || []).slice().sort(compareSizes),
         }, ...rs];
       });
@@ -177,6 +185,7 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
   const clearShelf = () => { setRows([]); setLocation(null); setError(''); };
 
   const missingSize = rows.filter((r) => !String(r.size || '').trim()).length;
+  const missingCheck = rows.filter((r) => r.codeCheck).length;
   // In raw mode every counted pair needs a sticker scanned onto it before it can be
   // saved — same rule as a missing size, and blocked the same way.
   const missingStickers = rawVins
@@ -329,8 +338,9 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
           <b>{total}</b> pair{total === 1 ? '' : 's'} on this shelf
           {missingSize ? ` · ${missingSize} need a size` : ''}
           {missingStickers ? ` · ${missingStickers} need a 1ID sticker` : ''}
+          {missingCheck ? ` · ${missingCheck} need the box’s code checked` : ''}
         </div>
-        <button className="btn primary" disabled={busy || !location || !rows.length || missingSize > 0 || missingStickers > 0}
+        <button className="btn primary" disabled={busy || !location || !rows.length || missingSize > 0 || missingStickers > 0 || missingCheck > 0}
           onClick={() => setShowConfirm(true)}>{busy ? 'Saving…' : 'Save shelf'}</button>
       </div>
 
@@ -349,6 +359,14 @@ export function ExistingStock({ navBack, onHome, onSignOut }) {
                   <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => removeRow(r.key)}>×</button>
                 </div>
                 <div className="muted sm">{r.sku || '—'}{r.upc ? ` · ${r.upc}` : ''}</div>
+                {r.codeCheck && (
+                  <AliasCodeCheck key={r.codeCheck} code={r.codeCheck} current={r.sku} onSignOut={onSignOut}
+                    onConfirm={() => { if (r.upc) codeDecisionsRef.current.set(r.upc, { fix: null }); patchRow(r.key, { codeCheck: '' }); }}
+                    onFix={({ found, sizes, ...fix }) => {
+                      if (r.upc) codeDecisionsRef.current.set(r.upc, { fix: { ...fix, sizes } });
+                      patchRow(r.key, { ...fix, name: fix.name || fix.sku, sizeOptions: sizes.length ? sizes.slice().sort(compareSizes) : r.sizeOptions, codeCheck: '' });
+                    }} />
+                )}
                 <div className="dcard-line">
                   <label className="sm">Size&nbsp;
                     {r.sizeOptions?.length ? (

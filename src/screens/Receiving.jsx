@@ -8,6 +8,7 @@ import { STATUSES } from '../statuses.js';
 import { TopBar, Modal, LabelSheet, PreferencesModal, Pager, PriceInput, RemoveUnitsModal } from '../components/common.jsx';
 import { SizeEditModal } from '../components/SizeEdit.jsx';
 import { SkuEditModal } from '../components/SkuEdit.jsx';
+import { AliasCodeCheck, aliasOnlyCode } from '../components/AliasCodeCheck.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
@@ -416,6 +417,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     (receivingPo?.lines || []).filter((l) => l.po_box_id == null)
       .map((l) => String(l.sku || '').toUpperCase().replace(/[\s-]/g, '')),
   ), [receivingPo]);
+  const orderSkusRef = useRef(orderManifestSkus); orderSkusRef.current = orderManifestSkus;
   function buildManifestItems(poBoxId) {
     const bySku = new Map();
     for (const l of manifestLinesFor(poBoxId)) {
@@ -846,7 +848,6 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // Jordan 16 box in the same cart is never "corrected" into the 15 — as
   // { fix: null } (Alias was right) or { fix: product } (the box says another code).
   const codeDecisionsRef = useRef(new Map());
-  const [codeFix, setCodeFix] = useState(null);     // { key, text, busy, err } — typing the box's code on one line
   const rescannedRef = useRef([]); rescannedRef.current = rescanned; // mirror so the camera callback dedupes against fresh state
   useUnsavedGuard(items.length > 0 || !!draft || rescanned.length > 0 || issues.length > 0 || flaggedCount > 0); // guard the cart against Back/refresh
   const [mInput, setMInput] = useState('');
@@ -1171,9 +1172,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setMBusy(true);
     try {
       const { product: p0 } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
-      const { p, codeCheck } = applyCodeDecision(p0, isUpc ? c : '');
+      const { p, codeCheck, codeCheckUpcs } = applyCodeDecision(p0, isUpc ? c : '');
       const incoming = {
-        name: p.name || '', sku: p.sku || '', image: p.image || '', source: p.source || 'manual', codeCheck,
+        name: p.name || '', sku: p.sku || '', image: p.image || '', source: p.source || 'manual', codeCheck, codeCheckUpcs,
         // Two different things: `upc` describes the shoe (either code, for display),
         // `scannedUpc` is the code scanned off THIS size's box — only the latter is
         // ever stamped on a unit. A SKU lookup's UPC belongs to whichever size the
@@ -1196,9 +1197,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       } else if (!sameSku(d.sku, incoming.sku)) {
         setPendingSwitch(incoming); scanFeedback('dup'); // different shoe → confirm switch
       } else if (incoming.scannedSize) {
-        setDraft({ ...d, rows: bumpSize(d.rows, incoming.scannedSize, incoming.scannedUpc), codeCheck: d.codeCheck || incoming.codeCheck });
+        setDraft({ ...d, rows: bumpSize(d.rows, incoming.scannedSize, incoming.scannedUpc), codeCheck: d.codeCheck || incoming.codeCheck, codeCheckUpcs: [...new Set([...(d.codeCheckUpcs || []), ...(incoming.codeCheckUpcs || [])])] });
         setFlash({ type: 'added', text: `+1 · size ${incoming.scannedSize}` }); scanFeedback('added');
       } else {
+        // No size off this box — but if only Alias knew it, the box still has to be read
+        // before the size picked for it counts (it would otherwise ride a checked draft).
+        if (incoming.codeCheck) setDraft({ ...d, codeCheck: d.codeCheck || incoming.codeCheck, codeCheckUpcs: [...new Set([...(d.codeCheckUpcs || []), ...incoming.codeCheckUpcs])] });
         setFlash({ type: 'warn', text: 'Scanned, but no size from the catalog for this code. Pick the size manually below.' }); scanFeedback('dup');
       }
     } catch (err) {
@@ -1240,10 +1244,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const vs = vins.slice(idx, idx + qty); idx += qty;
       return { key: r.key, size: r.size, qty, upc: r.upc || '', vins: vs };
     });
-    // Retyping the SKU in the draft is itself reading the box — only an untouched
-    // Alias code still needs the check on the line.
-    const codeCheck = d.codeCheck && sameSku(d.sku, d.codeCheck) ? d.codeCheck : '';
-    return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, colorway: d.colorway || null, withBox: d.withBox !== false, goatOnly: d.goatOnly === true, preSell: preSellDefaultRef.current, codeCheck, sizes };
+    // The check rides to the line even when the SKU was retyped in the draft: the code
+    // may be right then, but the name and photo are still Alias's shoe (the line asks
+    // to look the typed code up — AliasCodeCheck's `current`).
+    const codeCheck = d.codeCheck || '';
+    const codeCheckUpcs = codeCheck ? d.codeCheckUpcs || [] : [];
+    return { key: cartKey++, name: d.name, sku: d.sku, image: d.image, source: d.source, upc: d.upc, gender: d.gender || null, colorway: d.colorway || null, withBox: d.withBox !== false, goatOnly: d.goatOnly === true, preSell: preSellDefaultRef.current, codeCheck, codeCheckUpcs, sizes };
   }
   // Add a completed item to the cart, MERGING into an existing item when it's the
   // same product + same box status (so the same shoe scanned in two sessions
@@ -1254,7 +1260,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       // `!!` on goatOnly: a manifest row never sets it, and `undefined !== false` sent a
       // shoe picked off the PO to its own "not on PO" line instead of onto its rows.
       const i = arr.findIndex((x) => x.withBox === item.withBox && !!x.goatOnly === !!item.goatOnly
-        && (x.preSell === true) === (item.preSell === true) && sameSku(x.sku, item.sku));
+        && (x.preSell === true) === (item.preSell === true) && sameSku(x.sku, item.sku) && sameCheck(x, item));
       const sheet = poBoxHasChecklistRef.current;
       const firstSize = [...item.sizes].sort(compareSizes)[0];
       // Newest scanned shoe shows on top (Feature 3) — prepend new lines. A PO sheet is
@@ -1276,7 +1282,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           hitKey = hitKey ?? sizes[j].key;
         }
       }
-      const updated = { ...arr[i], sizes, codeCheck: arr[i].codeCheck || item.codeCheck || '' };
+      const updated = { ...arr[i], sizes, codeCheckUpcs: [...new Set([...(arr[i].codeCheckUpcs || []), ...(item.codeCheckUpcs || [])])] };
       // On the sheet the shoe keeps its place, and the next 1ID is aimed at what was
       // just counted (smallest size first), not at the first short row on the page.
       if (sheet) {
@@ -1556,7 +1562,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       return;
     }
 
-    const { p, codeCheck } = applyCodeDecision(look.product || {}, isUpc ? c : '');
+    const { p, codeCheck, codeCheckUpcs } = applyCodeDecision(look.product || {}, isUpc ? c : '');
     // The catalogue's size wins; failing that, the size already typed for this code.
     const remembered = !p.scannedSize && known ? String(known.size.size).trim() : '';
     const size = p.scannedSize || remembered;
@@ -1569,7 +1575,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const picked = opts.length > 1 ? pickedCodeFor(arr, opts) : null;
       const resolved = {
         key: lineKey, name: p.name || '', sku: picked || p.sku || '', image: p.image || '', source: p.source || 'manual',
-        skuOptions: opts, codeCheck,
+        skuOptions: opts, codeCheck, codeCheckUpcs,
         // The line's `upc` is for display only. The code that gets STAMPED on the
         // pair rides on its size row, and only when it was really scanned off that
         // box — a SKU lookup's UPC is some other size's and merging this line into
@@ -1581,7 +1587,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       // Fold into the same shoe already in the cart (same product AND same box /
       // GOAT status — boxed and no-box pairs are tracked apart).
       const i = arr.findIndex((x) => x.key !== lineKey && !x.pending && !x.failed
-        && x.withBox === withBox && !!x.goatOnly === false && !!x.preSell === !!resolved.preSell && sameSku(x.sku, resolved.sku));
+        && x.withBox === withBox && !!x.goatOnly === false && !!x.preSell === !!resolved.preSell && sameSku(x.sku, resolved.sku) && sameCheck(x, resolved));
       if (i === -1) {
         // On a PO sheet a new line sits BELOW the expected rows, so "first short row"
         // would hand its sticker to some other pair — aim it at this one.
@@ -1600,9 +1606,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         sizes[j].scanned = (Number(sizes[j].scanned) || 0) + 1;
         if (isUpc && !sizes[j].upc) sizes[j].upc = c;
       }
-      // A new size's barcode nobody has checked re-opens the check on the line: a
-      // confirmed line vouches for the boxes that were read, not for this one.
-      const merged = { ...arr[i], sizes, image: arr[i].image || resolved.image, codeCheck: arr[i].codeCheck || codeCheck };
+      const merged = { ...arr[i], sizes, image: arr[i].image || resolved.image };
       // On a PO manifest the list is a fixed sheet read top to bottom, so the shoe
       // stays where it is and the next sticker is aimed by the hit, not by position.
       if (poBoxHasChecklistRef.current) {
@@ -1669,84 +1673,87 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     );
   };
 
-  // A scan's product, with this session's answer for the barcode applied. Returns the
-  // product to file and the Alias code still waiting on a look at the box ('' = none).
-  // Only a UPC that ONLY Alias resolved is in question: StockX and the Nike feed name
-  // the size off the barcode itself, and our own stock is what we already checked.
+  // A scan's product, with this session's answer for its barcode applied. Returns the
+  // product to file, the Alias code still waiting on a look at the box ('' = none) and
+  // the barcode(s) that answer is owed for. Asked once per BARCODE (each size's box has
+  // its own) — never per code, so a real Jordan 16 in the same cart is never
+  // "corrected" into the 15. Not asked when the PO's own list declares the shoe under
+  // the same code: the supplier's manifest is a second record that already agrees, and
+  // a disagreement still asks (it lands as an overage line until it's answered).
   function applyCodeDecision(p, upc) {
-    if (!upc || p?.upcSource !== 'alias' || !p?.sku) return { p, codeCheck: '' };
+    const none = { p, codeCheck: '', codeCheckUpcs: [] };
+    const alias = aliasOnlyCode(p, upc);
+    if (!alias) return none;
     const told = codeDecisionsRef.current.get(upc);
-    if (!told) return { p, codeCheck: p.sku };
-    return { p: told.fix ? { ...p, ...told.fix } : p, codeCheck: '' };
+    if (told) return { ...none, p: told.fix ? { ...p, ...told.fix } : p };
+    const flat = alias.toUpperCase().replace(/[\s-]/g, '');
+    if (itemsRef.current.some((x) => x.expected && sameSku(x.sku, alias)) || orderSkusRef.current.has(flat)) return none;
+    return { p, codeCheck: alias, codeCheckUpcs: [upc] };
   }
-  // Every barcode scanned onto the line — the answer covers the boxes that were read.
-  const lineUpcs = (it) => [...new Set((it.sizes || []).map((s) => s.upc).filter(Boolean).concat(it.upc ? [it.upc] : []))];
+  // Two lines may stack only when neither is waiting on the box, or both are waiting
+  // on the same barcode(s). Otherwise answering one line would carry pairs it was never
+  // asked about: a checked size 7 must not turn into a 15 because the size 9 box did.
+  function sameCheck(x, y) {
+    if (!x.codeCheck && !y.codeCheck) return true;
+    if (!x.codeCheck || !y.codeCheck) return false;
+    return (y.codeCheckUpcs || []).every((u) => (x.codeCheckUpcs || []).includes(u));
+  }
+  // An answered line joins the line already holding that shoe (same code and box /
+  // GOAT / pre-sell status) — "different code" on a PO overage lands its pairs on the
+  // manifest row they belong to. Sizes are summed with their stickers and scan counts.
+  function foldAnswered(arr, itemKey, patch) {
+    const cur = arr.find((x) => x.key === itemKey);
+    if (!cur) return arr;
+    const line = { ...cur, ...patch, codeCheck: '', codeCheckUpcs: [] };
+    const i = !String(line.name || '').trim() ? -1 : arr.findIndex((x) => x.key !== itemKey && !x.pending && !x.failed && !x.codeCheck
+      && x.withBox === line.withBox && !!x.goatOnly === !!line.goatOnly && !!x.preSell === !!line.preSell && sameSku(x.sku, line.sku));
+    if (i === -1) return arr.map((x) => (x.key === itemKey ? line : x));
+    const sizes = arr[i].sizes.map((z) => ({ ...z, vins: [...(z.vins || [])] }));
+    for (const s of line.sizes) {
+      const j = String(s.size || '').trim() ? sizes.findIndex((z) => z.size === s.size) : -1;
+      if (j === -1) { sizes.push({ ...s }); continue; }
+      sizes[j].qty = (Number(sizes[j].qty) || 0) + (Number(s.qty) || 0);
+      sizes[j].scanned = (Number(sizes[j].scanned) || 0) + (Number(s.scanned) || 0);
+      sizes[j].vins = [...sizes[j].vins, ...(s.vins || [])];
+      sizes[j].upc = sizes[j].upc || s.upc || '';
+    }
+    const into = arr[i].key;
+    return arr.filter((x) => x.key !== itemKey).map((x) => (x.key === into ? { ...x, sizes } : x));
+  }
   // "The box says the same code" — the line files as Alias had it.
   function confirmCode(itemKey) {
     const it = itemsRef.current.find((x) => x.key === itemKey);
     if (!it) return;
-    for (const u of lineUpcs(it)) codeDecisionsRef.current.set(u, { fix: null });
-    setItems((arr) => arr.map((x) => (x.key === itemKey ? { ...x, codeCheck: '' } : x)));
-    setCodeFix(null);
+    for (const u of it.codeCheckUpcs || []) codeDecisionsRef.current.set(u, { fix: null });
+    setItems((arr) => foldAnswered(arr, itemKey, {}));
   }
-  // "The box says another code" — look it up so the name and photo change with it (a
-  // code changed under the old name is how the 7 pairs stayed "Air Jordan 16" after
-  // their SKU was fixed). Nothing in the catalogue: the code goes on and the name is
-  // blanked, which opens the line's name field and blocks the commit until it's typed.
-  async function fixCode(itemKey) {
+  // "The box says another code" — already looked up (AliasCodeCheck), so the name and
+  // photo change with it. Not in the catalogue: the name is blanked, which opens the
+  // line's name field and blocks the commit until it's typed.
+  function fixCode(itemKey, fix) {
     const it = itemsRef.current.find((x) => x.key === itemKey);
-    const code = String(codeFix?.text || '').trim().toUpperCase();
-    if (!it || !code) return;
-    setCodeFix((f) => ({ ...f, busy: true, err: '' }));
-    let found = null;
-    try { found = (await api.searchSku(code)).product || null; } catch (e) {
-      if (e.unauthorized) return onSignOut();
-      if (!/not found|no product/i.test(e.message || '')) { setCodeFix((f) => ({ ...f, busy: false, err: e.message })); return; }
-    }
-    const fix = found
-      ? { sku: found.sku || code, name: found.name || '', image: found.image || '', colorway: found.colorway || '', gender: found.gender || null, sizes: found.sizes || [] }
-      : { sku: code, name: '', image: '', colorway: '', gender: null, sizes: [] };
-    for (const u of lineUpcs(it)) codeDecisionsRef.current.set(u, { fix });
-    setItems((arr) => arr.map((x) => (x.key !== itemKey ? x : {
-      ...x, sku: fix.sku, name: fix.name, image: fix.image, colorway: fix.colorway, gender: fix.gender,
-      sizeOptions: fix.sizes.length ? fix.sizes : x.sizeOptions, codeCheck: '', failed: false,
-    })));
-    setCodeFix(null);
+    if (!it) return;
+    const { found, sizes, ...rest } = fix;
+    for (const u of it.codeCheckUpcs || []) codeDecisionsRef.current.set(u, { fix: { ...rest, sizes } });
+    setItems((arr) => foldAnswered(arr, itemKey, {
+      ...rest, sizeOptions: sizes.length ? sizes : it.sizeOptions, failed: false,
+    }));
     setFlash(found
-      ? { type: 'added', text: `✓ Changed to ${found.name || code} — ${fix.sku}` }
-      : { type: 'warn', text: `${code} isn't in the catalogue — type the shoe's name on the line` });
+      ? { type: 'added', text: `✓ Changed to ${fix.name || fix.sku} — ${fix.sku}` }
+      : { type: 'warn', text: `${fix.sku} isn't in the catalogue — type the shoe's name on the line` });
+  }
+  // Which boxes to look at: their sizes when known, else the barcode's last digits.
+  function codeCheckWhere(it) {
+    const ups = it.codeCheckUpcs || [];
+    const sizes = [...new Set(it.sizes.filter((s) => ups.includes(s.upc) && String(s.size || '').trim()).map((s) => s.size))];
+    if (sizes.length) return `the size ${sizes.join(', ')} box${sizes.length === 1 ? '' : 'es'}`;
+    return ups.length ? `the box with barcode …${ups.map((u) => u.slice(-4)).join(', …')}` : '';
   }
   // On the line, like the style-code pick — rapid scan never stops for a dialog.
-  const codeCheckUi = (it) => {
-    if (!needsCodeCheck(it)) return null;
-    const typing = codeFix?.key === it.key;
-    return (
-      <div className="recv-sku-pick">
-        <span className="recv-sku-pick-lbl">
-          Only Alias knew this barcode, and Alias has filed boxes under the wrong shoe before.
-          Check the style code printed on the box label — does it say <b>{it.codeCheck}</b>?
-        </span>
-        {typing ? (
-          <div className="recv-sku-pick-opts">
-            <input className="input sm" value={codeFix.text} autoFocus={hasFinePointer()} placeholder="Code on the box, e.g. IZ2585-001"
-              autoComplete="off" spellCheck={false} maxLength={40} aria-label="Style code printed on the box"
-              onChange={(e) => setCodeFix((f) => ({ ...f, text: e.target.value, err: '' }))}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); fixCode(it.key); } }} />
-            <button type="button" className="btn sm" disabled={codeFix.busy || !String(codeFix.text).trim()} onClick={() => fixCode(it.key)}>
-              {codeFix.busy ? 'Looking…' : 'Use this code'}
-            </button>
-            <button type="button" className="btn ghost sm" disabled={codeFix.busy} onClick={() => setCodeFix(null)}>Cancel</button>
-            {codeFix.err && <span className="error sm">{codeFix.err}</span>}
-          </div>
-        ) : (
-          <div className="recv-sku-pick-opts" role="group" aria-label="Style code printed on the box">
-            <button type="button" className="btn sm" onClick={() => confirmCode(it.key)}>✓ Box says {it.codeCheck}</button>
-            <button type="button" className="btn sm" onClick={() => setCodeFix({ key: it.key, text: '', busy: false, err: '' })}>Box says a different code</button>
-          </div>
-        )}
-      </div>
-    );
-  };
+  const codeCheckUi = (it) => (!needsCodeCheck(it) ? null : (
+    <AliasCodeCheck key={`${it.key}:${it.codeCheck}`} code={it.codeCheck} current={it.sku} where={codeCheckWhere(it)}
+      onConfirm={() => confirmCode(it.key)} onFix={(f) => fixCode(it.key, f)} onSignOut={onSignOut} />
+  ));
 
   // Has this cart already settled which code this shoe goes under? Matches on the
   // OPTION SET, not the shoe, so every size of the same re-release inherits the one
@@ -1833,7 +1840,14 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const setRowSize = (key, v) => setDraftRows((rows) => rows.map((r) => (r.key === key ? { ...r, size: v } : r)));
   const removeDraftRow = (key) => setDraftRows((rows) => rows.filter((r) => r.key !== key));
 
-  const removeItem = (key) => setItems((arr) => arr.filter((i) => i.key !== key));
+  // Removing a line forgets this session's answer for its barcodes, so a wrong tap is
+  // undone by removing the line and scanning the box again.
+  const removeItem = (key) => {
+    const it = itemsRef.current.find((x) => x.key === key);
+    for (const s of it?.sizes || []) if (s.upc) codeDecisionsRef.current.delete(s.upc);
+    for (const u of it?.codeCheckUpcs || []) codeDecisionsRef.current.delete(u);
+    setItems((arr) => arr.filter((i) => i.key !== key));
+  };
   // How many pairs of this size — on the Items step too, not just Review. A scan that
   // came back without a size (or a shoe with no barcode) is one pair; two more of the
   // same are counted here, and in raw 1ID mode each waits for its own sticker.
@@ -1999,8 +2013,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // The PO line is a SHELF price (2026-09-29); the pair's cost is what landing it really
   // took — shelf through the supplier's preset stack (tax, gift card, shipping, tip).
   // On a store order the price is the box's STORE's; a box tied to no store has none.
+  // A box received "not tied to a store" has no store, so no store's price either — the
+  // slot it was opened from is exactly what the person just said it isn't.
   const poMoney = (it, s) => poLineMoney(costLines, it.sku, s.size, activePoBoxId,
-    isStorePo ? (activeBox?.storeId ?? null) : undefined);
+    isStorePo ? (untieOk.current ? null : (activeBox?.storeId ?? null)) : undefined);
   const poLanded = (it, s) => {
     const m = poMoney(it, s);
     return m ? landedFromShelf(m.shelf, m.tip, costPreset) : null;
@@ -2774,7 +2790,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
                     onSetQty={setSizeQty} onAskClear={(it, sz, n) => setClearAsk({ item: it, size: sz, scanned: n })} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} onSetField={setItemField} onSetSize={setSizeValue} onMergeSize={mergeSizeRow}
                     rawVins={rawVins && !isBoxesPo} awaiting={awaitingSticker} unresolved={isUnresolved}
-                    boxesOrder={isBoxesPo} onCountAsDeclared={countAsDeclared} />
+                    boxesOrder={isBoxesPo} onCountAsDeclared={countAsDeclared} lineChecks={(it) => <>{skuChoice(it)}{codeCheckUi(it)}</>} />
                 </>
               ) : (
               <div className="card">
@@ -3591,7 +3607,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
    list is the picking guide and whatever stays unticked is the shortage. Adjust the
    "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
    issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onAskClear, onRemoveSize, onRemoveItem, onSetField, onSetSize, onMergeSize, unresolved, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared }) {
+function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onAskClear, onRemoveSize, onRemoveItem, onSetField, onSetSize, onMergeSize, unresolved, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared, lineChecks }) {
   // Progress is AGAINST the label: an undeclared pair doesn't make a 3-of-4 box a
   // 4-of-4 one, and a third pair of a size that declared two counts as two.
   const onLabel = items.reduce((n, it) => (!it.expected || it.pending ? n : n + it.sizes.reduce((a, r) => {
@@ -3664,6 +3680,10 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                     : <span className="po-chip receiving">Overage · not on PO</span>}
                 {!it.expected && <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => onRemoveItem(it.key)}>×</button>}
               </div>
+              {/* The two questions a scan can leave on a line (which of several codes;
+                  is Alias right about this box). They block the commit, so they must be
+                  answerable HERE — the PO sheet showed neither, a dead end. */}
+              {lineChecks?.(it)}
               {[...it.sizes].sort((a, b) => compareSizes(a.size, b.size)).map((s) => {
                 const got = Number(s.qty) || 0;
                 const exp = s.expectedQty;

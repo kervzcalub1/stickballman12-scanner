@@ -31,7 +31,8 @@ export default async function handler(req, res) {
       const boxes = await presellBoxesFor(rows);
       return send(res, 200, { ok: true, rows: rows.map((r) => {
         const x = st.get(Number(r.id));
-        const b = { boxes: boxes.get(Number(r.id)) || [] };
+        const bx = boxes.get(Number(r.id));
+        const b = { boxes: bx?.boxes || [], box_pos: bx?.pos || [] };
         return x ? { ...r, ...b, po_listed: x.listed_all, po_expected: x.expected, over_cap: x.over_cap,
           po_sold: x.sold, po_received: x.received, po_landed: x.landed, at_risk: x.at_risk, arrived_any: x.arrived_any } : { ...r, ...b };
       }) });

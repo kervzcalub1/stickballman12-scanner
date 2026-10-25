@@ -2677,6 +2677,15 @@ await sql(`
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 
+// Shopify → SHEIN stock changes not pushed yet, so a deploy/restart doesn't drop them
+// (shein-live.js queuePush / resumePushes). NOT in LIVE_TABLES: it changes on every Shopify
+// stock change, and no screen reads it.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_push_queue (
+    sku             TEXT PRIMARY KEY,
+    queued_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+
 // ── Order cancellations (docs/context/cancellations.md) ─────────────────────────────
 // The warehouse sends the bot a picture of an order to cancel; the AI reads the platform +
 // order number off it; PH/admin check every row against the photo, then cancel it on the

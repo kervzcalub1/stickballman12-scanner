@@ -2218,6 +2218,35 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'rejected' });
   });
 
+  test('a second reply replaces the first, and says which approval it reversed and what is over the count', async ({ request }) => {
+    const { cartId, row } = await groupCard(request);
+    await hook(request, replyUpdate(row, '9 x 2', { replyId: 700001 }));
+    expect(await statuses(cartId)).toEqual({ 9: 'approved ×2', '9.5': 'rejected', 10: 'rejected' });
+    await pool.query(`UPDATE buy_cart_lines SET available_qty = 1 WHERE cart_id = $1 AND size = '10'`, [cartId]);
+    const t0 = calls.length;
+    await hook(request, replyUpdate(row, '10 x 3', { replyId: 700002 }));
+    expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'approved ×3' });
+    const reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
+    expect(reply.body.text).toContain(`↩️ Replaced the earlier decision: 9 was ×2 (${people.approver.name}) → turned down`);
+    expect(reply.body.text).toContain('⚠️ 10 ×3 is more than the 1 counted in store.');
+  });
+
+  test('two replies to one card at once never mix — the newer one stands whole', async ({ request }) => {
+    const { cartId, row } = await groupCard(request);
+    await Promise.all([
+      hook(request, replyUpdate(row, '9 x 2', { replyId: 710001 })),
+      hook(request, replyUpdate(row, '10 x 1', { replyId: 710002 })),
+    ]);
+    expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'approved ×1' });
+  });
+
+  test('cart/line refuses the same size twice in one ask — the card could not tell them apart', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [], submit: false });
+    const out = await call(request, 'approver', 'cart/line', { cartId, lines: [LINE, { ...LINE }] });
+    expect(out.status).toBe(400);
+    expect(out.body.error).toMatch(/twice/);
+  });
+
   test('cart/line takes several sizes of ONE shoe in one call, and refuses two shoes', async ({ request }) => {
     const cartId = await newRequest(request, { lines: [], submit: false });
     const ok = await call(request, 'approver', 'cart/line', { cartId, lines: RUN });
@@ -2585,6 +2614,27 @@ test.describe('the list stays open until the buyer closes it', () => {
 // Gift cards read off a file (2026-09-17). The image path costs a model call and is
 // exercised by hand against real cardwell cards; what is pinned here is the text
 // parser the PDF path runs, the gate, and that nothing is ever recorded by the read.
+test.describe('reading a supplier paste and an approver reply', () => {
+  test('a code on the same line as its sizes keeps both; a second price stays with its sizes', async () => {
+    const { parseBuyPaste } = await import('../src/lib/buyPaste.js');
+    expect(parseBuyPaste('100000317 10-12 $50')).toMatchObject({ sku: '100000317', sizes: ['10', '10.5', '11', '11.5', '12'], price: 50 });
+    expect(parseBuyPaste('IB4025100 10.5 $90')).toMatchObject({ sku: 'IB4025100', sizes: ['10.5'] });
+    expect(parseBuyPaste('DZ5485 201 8-9').sku).toBe('DZ5485-201');
+    expect(parseBuyPaste('X100000317\n8-10 $50\n11-12 $60')).toMatchObject({ price: 50, sizePrice: { 11: 60, '11.5': 60, 12: 60 } });
+    expect(parseBuyPaste('Sizes 40-44 $50').sizes).toEqual([]);          // EU sizing, not nine US sizes
+    expect(parseBuyPaste('$1,050\nsizes 9').price).toBe(1050);
+    expect(parseBuyPaste('9-10 $50 11 $60').warnings.length).toBe(1);
+  });
+  test('a reply may say "9" for the card\'s only 9, and a card with one size twice is refused', async () => {
+    const { parseApprovalReply } = await import('../src/lib/buyPaste.js');
+    const out = parseApprovalReply('9 x 2', [{ id: 1, size: '9W' }, { id: 2, size: '10W' }]);
+    expect(out.ok).toBe(true);
+    expect(out.approve.map((a) => [a.line.id, a.qty])).toEqual([[1, 2]]);
+    expect(parseApprovalReply('9 x 2', [{ id: 1, size: '9' }, { id: 2, size: '9W' }]).approve.map((a) => a.line.id)).toEqual([1]);
+    expect(parseApprovalReply('9 x 2', [{ id: 1, size: '9' }, { id: 2, size: '9' }]).ok).toBe(false);
+  });
+});
+
 test.describe('gift cards read off a file', () => {
   test('a table of cards parses one card a row: balance, number, PIN', async () => {
     const { cardsFromText } = await import('../api/cart/gift-card-read.js');

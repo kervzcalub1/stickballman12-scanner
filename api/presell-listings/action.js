@@ -13,11 +13,10 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import {
   dbConfigured, getPresellListing, getPresellStock, setPresellStockQty, upsertPresellStock, updatePresellListing, movePresellListing,
-  updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock, presellPoCap, bumpPresellStockPo,
-  getPoBoxBrief, setPresellBoxLines, addPresellBoxUnknown, presellPoBoxGrid, createPo, linkPresellToNewPo, poCodesByTracking,
+  updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock, presellPoCap, bumpPresellStockPo, movePresellStockPo,
+  getPoBoxBrief, setPresellBoxLines, addPresellBoxUnknown, presellPoBoxGrid, createPo, linkPresellToNewPo, poCodesByTracking, deleteEmptyPo,
 } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
-import { boxSummary } from '../../src/lib/presellBoxes.js';
 import { landedFromShelf } from '../../src/lib/costs.js';
 import { cleanCostStack, cleanShelf, parseTrackingList } from '../../src/lib/presellDetails.js';
 import { PLATFORMS, applyResult, reconcileStock } from '../_lib/presell.js';
@@ -89,6 +88,10 @@ async function detailsAction(res, b, actor) {
       patch.cost_stack = stack;
       patch.unit_cost = shelf != null && stack ? landedFromShelf(shelf, null, stack) : null;
     }
+    // Re-pointed to another order: its pairs' count against the order moves with it.
+    if (Object.prototype.hasOwnProperty.call(common, 'po_id') && Number(stock.po_id || 0) !== Number(common.po_id || 0)) {
+      await movePresellStockPo(id, stock.po_id ? Number(stock.po_id) : null, common.po_id, Number(stock.qty));
+    }
     rows.push(await updatePresellStockDetails(id, patch, actor));
   }
   if (!rows.length) return send(res, 404, { ok: false, error: 'Those stock rows no longer exist.' });
@@ -117,15 +120,18 @@ async function boxContentsAction(res, b, actor) {
     qty: l?.qty === null ? null : Math.max(0, Math.min(999, parseInt(l?.qty, 10) || 0)),
   })).filter((l) => l.size);
   if (!(await editableBox(res, boxId, poId))) return;
-  // Would any size end up with more pairs in boxes than the row has?
+  // A box holds PHYSICAL pairs, so the cap is the ORDER's own count for the size (its
+  // order-level list), across this order's boxes — not the pre-sold pairs (review 2026-10-25:
+  // a 20-pair order with 10 pre-sold was refused at 11). No list → nothing to cap against.
   const grid = await presellPoBoxGrid(poId, sku);
   const bad = [];
   for (const z of grid.sizes) {
+    if (z.expected == null) continue;
     const l = lines.find((x) => x.size === z.size);
-    const others = z.boxes.filter((x) => x.id !== boxId);
-    const next = [...others, ...(l && (l.qty === null || l.qty > 0) ? [{ qty: l.qty }] : [])];
-    const sum = boxSummary(z.qty, next);
-    if (sum.over > 0) bad.push(`size ${z.size}: ${sum.placed} in boxes but only ${z.qty} pair${z.qty === 1 ? '' : 's'}`);
+    const others = grid.boxes.filter((x) => x.id !== boxId)
+      .reduce((n, x) => n + (Number(x.lines.find((y) => y.size === z.size)?.qty) || 0), 0);
+    const placed = others + (l?.qty || 0);
+    if (placed > z.expected) bad.push(`size ${z.size}: ${placed} in boxes but ${grid.po.po_code} lists ${z.expected}`);
   }
   const known = new Set(grid.sizes.map((z) => z.size));
   const stray = lines.filter((l) => !known.has(l.size) && (l.qty === null || l.qty > 0));
@@ -146,8 +152,11 @@ async function boxUnknownAction(res, b, actor) {
     poId = poId ?? Number(box.po_id);
     if (Number(box.po_id) !== poId) return send(res, 400, { ok: false, error: 'Pick boxes from one order at a time.' });
   }
-  // Every row has to be on that order — a box only holds pairs bought on it.
-  const off = rows.filter((r) => Number(r.po_id) !== poId);
+  // Every row has to be on that order (its current PO, or pairs listed against it) — a box
+  // only holds pairs bought on it.
+  const onOrder = new Set();
+  for (const sku of new Set(rows.map((r) => r.sku))) for (const z of (await presellPoBoxGrid(poId, sku)).sizes) onOrder.add(z.stock_id);
+  const off = rows.filter((r) => !onOrder.has(Number(r.id)));
   if (off.length) return send(res, 409, { ok: false, error: `Link ${off.map((r) => `size ${r.size}`).join(', ')} to the order first (✎ Cost & shipment → Purchase order).` });
   const added = await addPresellBoxUnknown(boxIds, rows, actor);
   return send(res, 200, { ok: true, added });
@@ -175,10 +184,23 @@ async function makePoAction(res, b, user, actor) {
     supplierName, labels: tracks.map((t) => ({ trackingNumber: t, carrierKey: null })),
     notes: `Opened from Pre-sell Listings for ${[...new Set(rows.map((r) => r.sku))].join(', ')}.`, createdBy: actor || '',
   });
+  const poId = Number(created.po.id);
+  // The same tracking numbers opened on another order a moment ago (a race past the check
+  // above) — back out rather than leave two orders for one box.
+  const twin = (await poCodesByTracking(tracks)).filter((x) => x.po_code !== created.po.po_code);
+  if (twin.length) {
+    await deleteEmptyPo(poId);
+    return send(res, 409, { ok: false, error: `${twin[0].tracking_number} is already on ${twin[0].po_code} — pick that order under ✎ Cost & shipment instead.` });
+  }
+  // Two clicks / two people racing: the link only takes rows still on NO order (row lock), so
+  // the loser links nothing — its PO is removed again rather than left as a duplicate.
+  const linked = await linkPresellToNewPo(rows.map((r) => Number(r.id)), poId, actor);
+  if (!linked) {
+    await deleteEmptyPo(poId);
+    return send(res, 409, { ok: false, error: 'Those sizes were just put on an order — reload to see it.' });
+  }
   const trackItems = (created.boxes || []).filter((x) => x.tracking_number).map((x) => ({ number: x.tracking_number, carrier: x.carrier_key }));
   if (trackItems.length) registerTracking(trackItems).catch((e) => console.warn('[presell makePo] registerTracking:', e.message));
-  const poId = Number(created.po.id);
-  const linked = await linkPresellToNewPo(rows.map((r) => Number(r.id)), poId, actor);
   return send(res, 200, { ok: true, poId, poCode: created.po.po_code, linked, labels: trackItems.length });
 }
 

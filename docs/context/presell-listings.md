@@ -135,8 +135,18 @@ purchase** (tax, gift card, store, promo, cashback %, tip and shipping $). Edits
 THIS purchase only; the saved preset is never written (*edited for this purchase* chip,
 *Reset to the preset*). Per line **Shelf $** (+ *Shelf price for all*) → **Cost** = landed
 cost (`landedFromShelf`, the same formula as receiving and Costs). Under each platform's
-price: **Payout** (default fee: Alias 9.9 %, StockX 10 %) and **profit**. No preset → no
-cost (owner's rule: the shelf price alone isn't the cost); payout still shows.
+price: **Payout** (default fee: Alias 9.9 %, StockX 10 %) and **profit**.
+**Shelf price is a cost on its own (owner, 2026-10-25 — replaces "no preset → no cost"):** the
+fees are added ON TOP of it. No preset → cost = shelf price, net = payout − shelf, labelled
+**"shelf only"** (Stock tooltip, sale post `(shelf $110 · shelf only)`, report Preset column).
+No shelf price → no cost (blank, never $0). **Our own fees** (menu option `own`, for a supplier
+with no preset): the same 7 fields from zero, for THIS purchase, never saved as a preset →
+`cost_stack.own = true` (preset/presetId null), shown as "own fees". One formula,
+`presellUnitCost(shelf, stack)` + `costBasis(stack)` (`src/lib/presellDetails.js`), used by
+create, ✎ details, the screen. A re-list with a shelf but no fees uses the row's saved fees
+(so the cost agrees with the kept `cost_stack`). `db:setup` backfills rows with a shelf price,
+no fees and no cost → cost = shelf. **Pre-sell only:** receiving / Costs still leave a cost blank
+without a preset (`landedFromShelf`, cost-is-shelf-plus-preset).
 Saved on `presell_stock`: `shelf_price`, `unit_cost` (the SERVER recomputes it from the
 stack, not trusting the browser) and `cost_stack` (JSONB snapshot: preset name/id, edited,
 the numbers). A re-list without a cost keeps the one already there.
@@ -154,8 +164,8 @@ the numbers). A re-list without a cost keeps the one already there.
   In transit (note/expected; ticking it on a row that wasn't re-arms arrival). `POST action
   {action:'details', stockIds, cost?:{costStack, shelf:{id:price}}, supplier?, poId?,
   trackingNumbers?, inTransit?, transitNote?, expectedOn?}` — only the sections touched are sent,
-  so a cost fix never wipes tracking. The server recomputes `unit_cost`; shelf without a preset →
-  shelf kept, cost NULL. Stock table: Cost column, "supplier · PO · N tracking" line, a count of
+  so a cost fix never wipes tracking. The server recomputes `unit_cost`; shelf without fees →
+  cost = shelf ("shelf only"). Stock table: Cost column, "supplier · PO · N tracking" line, a count of
   sizes with no cost.
 - **Sale post layout** (owner, 2026-10-10: too compressed): title, blank line, shoe + SKU/size,
   then sections split by a `━━━` rule — **💵 MONEY** (Price / Payout / Cost / ✅ NET, one per line,

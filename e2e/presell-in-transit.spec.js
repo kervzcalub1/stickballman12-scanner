@@ -245,6 +245,40 @@ test('cost: preset + shelf price → landed cost and payout/profit per platform;
   expect(calls[0].items[0].shelfPrice).toBe(100);
 });
 
+test('cost: no fees → the shelf price is the cost; "Our own fees" for a supplier with no preset', async ({ page }) => {
+  const { loginAs } = await import('./helpers/auth.js');
+  const calls = [];
+  await page.route('**/api/payout/presets', (r) => r.fulfill({ json: { ok: true, presets: [{ id: 7, name: 'QA Supplier', taxPct: 6, giftPct: 0, storePct: 0, promoPct: 0, cashbackPct: 0, tipAmt: 10, shippingAmt: 5 }] } }));
+  await page.route('**/api/sku-search**', (r) => r.fulfill({ json: { ok: true, product: null } }));
+  await page.route('**/api/presell-listings/prices', (r) => r.fulfill({ json: { ok: true, prices: {} } }));
+  await page.route('**/api/presell-listings/create', async (r) => {
+    const body = r.request().postDataJSON(); calls.push(body);
+    await r.fulfill({ json: { ok: true, created: 1, failed: 0, lines: body.items.map((i) => ({ sku: i.sku, size: i.size, alias: { results: [] }, stockx: { results: [] } })) } });
+  });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/presell-listings');
+  await page.getByRole('button', { name: '📋 Paste message' }).click();
+  await page.getByLabel('Paste the message').fill('JA1091-100\n8 x 1');
+  await page.getByRole('button', { name: 'Add 1 pairs to the list' }).click();
+  await page.getByLabel('Shelf price for every pair').fill('100');
+  await page.getByLabel('Shelf price for every pair').locator('xpath=following-sibling::button').click();
+  // No preset: the shelf price alone is the cost, and the profit is payout − shelf.
+  await expect(page.locator('.ap-cost-out')).toContainText('$100.00');
+  await page.getByLabel('Line 1 Alias price').fill('200');
+  await expect(page.locator('.ap-payout').first()).toContainText('profit $80.20');
+  // Our own fees: from zero, typed for this purchase — 100 + 7% tax + $5 shipping = 112.00.
+  await page.getByLabel('Supplier preset').selectOption('own');
+  await page.getByLabel('Sales tax for this purchase').fill('7');
+  await page.getByLabel('Shipping for this purchase').fill('5');
+  await expect(page.locator('.ap-cost-out')).toContainText('$112.00');
+  await expect(page.getByText('edited for this purchase')).toHaveCount(0);
+  await page.getByLabel('Line 1 StockX price').fill('210');
+  await page.getByRole('button', { name: /List 1 pair on Alias \+ StockX/ }).click();
+  await page.getByRole('button', { name: 'List live' }).click();
+  await expect(page.getByText(/listings? created/)).toBeVisible();
+  expect(calls[0].costStack).toMatchObject({ own: true, preset: null, presetId: null, taxPct: 7, shippingAmt: 5, tipAmt: 0 });
+});
+
 test('cost is stored on the pre-sell row, computed the same way as everywhere', async () => {
   const { landedFromShelf } = await import('../src/lib/costs.js');
   const stack = { taxPct: 8, giftPct: 0, storePct: 0, promoPct: 0, cashbackPct: 0, tipAmt: 10, shippingAmt: 5 };

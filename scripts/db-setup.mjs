@@ -2246,6 +2246,11 @@ await sql(`
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS shelf_price NUMERIC(12,2)`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,2)`);
 await sql(`ALTER TABLE presell_stock ADD COLUMN IF NOT EXISTS cost_stack JSONB`);
+// The shelf price is a cost on its own (owner, 2026-10-25): a row with a shelf price and no
+// fees used to keep its cost blank; it now costs its shelf price ("shelf only"). Idempotent —
+// only rows still without a cost and without fees.
+await sql(`UPDATE presell_stock SET unit_cost = shelf_price
+            WHERE unit_cost IS NULL AND shelf_price IS NOT NULL AND cost_stack IS NULL`);
 // Where a pre-sell pair comes FROM (2026-10-10): the supplier (usually a payout preset's
 // name), the PO it was bought on (so Inbound shows the order as pre-listed) and every
 // tracking number of the shipment — a supplier's pre-listed order often has many boxes.

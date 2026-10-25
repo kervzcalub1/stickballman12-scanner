@@ -17,8 +17,7 @@ import {
   getPoBoxBrief, setPresellBoxLines, addPresellBoxUnknown, presellPoBoxGrid, createPo, linkPresellToNewPo, poCodesByTracking, deleteEmptyPo,
 } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
-import { landedFromShelf } from '../../src/lib/costs.js';
-import { cleanCostStack, cleanShelf, parseTrackingList } from '../../src/lib/presellDetails.js';
+import { cleanCostStack, cleanShelf, parseTrackingList, presellUnitCost } from '../../src/lib/presellDetails.js';
 import { PLATFORMS, applyResult, reconcileStock } from '../_lib/presell.js';
 import { topUp } from '../_lib/presell-create.js';
 
@@ -55,8 +54,8 @@ export default async function handler(req, res) {
 // on, every tracking number, the in-transit details. One call for the rows of a SKU:
 //   { stockIds, cost?: { costStack|null, shelf: { [stockId]: price|null } },
 //     supplier?, poId?, trackingNumbers?, inTransit?, transitNote?, expectedOn? }
-// The landed cost is recomputed HERE from shelf + stack (landedFromShelf); a shelf price
-// without a preset saves the shelf and leaves the cost blank (owner's rule).
+// The landed cost is recomputed HERE from shelf + stack (presellUnitCost); a shelf price
+// without any fees IS the cost (owner, 2026-10-25), shown as "shelf only".
 async function detailsAction(res, b, actor) {
   const ids = [...new Set((Array.isArray(b.stockIds) ? b.stockIds : []).map(Number))].filter((n) => Number.isSafeInteger(n) && n > 0);
   if (!ids.length || ids.length > 200) return send(res, 400, { ok: false, error: 'Which stock rows?' });
@@ -86,7 +85,7 @@ async function detailsAction(res, b, actor) {
       const shelf = Object.prototype.hasOwnProperty.call(shelfFor, String(id)) ? cleanShelf(shelfFor[id]) : (stock.shelf_price != null ? Number(stock.shelf_price) : null);
       patch.shelf_price = shelf;
       patch.cost_stack = stack;
-      patch.unit_cost = shelf != null && stack ? landedFromShelf(shelf, null, stack) : null;
+      patch.unit_cost = presellUnitCost(shelf, stack);
     }
     // Re-pointed to another order: its pairs' count against the order moves with it.
     if (Object.prototype.hasOwnProperty.call(common, 'po_id') && Number(stock.po_id || 0) !== Number(common.po_id || 0)) {

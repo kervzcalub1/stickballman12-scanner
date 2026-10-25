@@ -9,8 +9,7 @@ import { dbConfigured, upsertPresellStock, getPoBrief, presellPoCap, bumpPresell
 import { topUp } from '../_lib/presell-create.js';
 import { aliasListingKey } from '../_lib/alias.js';
 import { stockxConfigured } from '../_lib/stockx.js';
-import { landedFromShelf } from '../../src/lib/costs.js';
-import { cleanCostStack, cleanShelf, parseTrackingList } from '../../src/lib/presellDetails.js';
+import { cleanCostStack, cleanShelf, parseTrackingList, presellUnitCost } from '../../src/lib/presellDetails.js';
 
 const MAX_PAIRS = 100;
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
@@ -58,8 +57,7 @@ export default async function handler(req, res) {
     }
     if (!Object.keys(want).length) return send(res, 400, { ok: false, error: `${at}: tick Alias, StockX or both.` });
     const shelfPrice = cleanShelf(l?.shelfPrice);
-    lines.push({ sku, size, qty, want, name: text(l?.name, 200), image: text(l?.image, 500), upc: text(l?.upc, 20),
-      shelfPrice, unitCost: shelfPrice != null && costStack ? landedFromShelf(shelfPrice, null, costStack) : null });
+    lines.push({ sku, size, qty, want, name: text(l?.name, 200), image: text(l?.image, 500), upc: text(l?.upc, 20), shelfPrice });
   }
   if (!lines.length) return send(res, 400, { ok: false, error: 'Add at least one pair to list.' });
   const pairs = lines.reduce((n, l) => n + l.qty * Object.keys(l.want).length, 0);
@@ -72,7 +70,14 @@ export default async function handler(req, res) {
   // The order each line is listed against: the one picked, else the order its stock row is
   // already linked to — pairs added to a linked row without picking a PO still belong to
   // that order, and used to slip past its cap (review 2026-10-25).
-  for (const l of lines) l.poId = poId || Number((await presellStockBySkuSize(l.sku, l.size))?.po_id) || null;
+  for (const l of lines) {
+    const had = await presellStockBySkuSize(l.sku, l.size);
+    l.poId = poId || Number(had?.po_id) || null;
+    // The cost: shelf through the fees sent, else through the fees the row already carries (a
+    // re-list keeps them — the upsert keeps that stack, so the cost must agree with it), else
+    // the shelf price alone (owner, 2026-10-25: shelf is a cost on its own).
+    l.unitCost = presellUnitCost(l.shelfPrice, costStack || had?.cost_stack || null);
+  }
   {
     const adding = new Map();
     for (const l of lines) {

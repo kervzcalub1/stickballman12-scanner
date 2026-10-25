@@ -60,10 +60,21 @@ test('✎ details: fix a cost after listing, then tracking — one never wipes t
   rows = (await db.query(`SELECT unit_cost, supplier, tracking_numbers FROM presell_stock WHERE id = $1`, [a.id])).rows;
   expect(Number(rows[0].unit_cost)).toBe(landedFromShelf(110, null, STACK));
   expect(rows[0]).toMatchObject({ supplier: 'QA Supplier', tracking_numbers: ['1Z999AA10123456784', '1Z999AA10123456785'] });
-  // Shelf without a preset → shelf kept, cost blank (owner's rule).
+  // Shelf without any fees → the shelf price IS the cost (owner, 2026-10-25: "shelf only").
   await act({ stockIds: [b.id], cost: { costStack: null, shelf: { [b.id]: 99 } } });
+  rows = (await db.query(`SELECT shelf_price, unit_cost, cost_stack FROM presell_stock WHERE id = $1`, [b.id])).rows;
+  expect(rows[0]).toMatchObject({ shelf_price: '99.00', unit_cost: '99.00', cost_stack: null });
+  // A supplier with no preset → our own fees, typed for this purchase, on top of the shelf.
+  const OWN = { own: true, taxPct: 7, shippingAmt: 5, presetId: 123, preset: 'Some preset' };
+  await act({ stockIds: [b.id], cost: { costStack: OWN, shelf: { [b.id]: 100 } } });
+  rows = (await db.query(`SELECT unit_cost, cost_stack FROM presell_stock WHERE id = $1`, [b.id])).rows;
+  expect(Number(rows[0].unit_cost)).toBe(landedFromShelf(100, null, { taxPct: 7, shippingAmt: 5 }));
+  expect(Number(rows[0].unit_cost)).toBeGreaterThan(100);
+  expect(rows[0].cost_stack).toMatchObject({ own: true, preset: null, presetId: null });
+  // No shelf price → no cost at all, never $0.
+  await act({ stockIds: [b.id], cost: { costStack: null, shelf: { [b.id]: null } } });
   rows = (await db.query(`SELECT shelf_price, unit_cost FROM presell_stock WHERE id = $1`, [b.id])).rows;
-  expect(rows[0]).toMatchObject({ shelf_price: '99.00', unit_cost: null });
+  expect(rows[0]).toMatchObject({ shelf_price: null, unit_cost: null });
   // Refused: nothing to change, a PO that doesn't exist, a supplier account.
   expect((await act({ stockIds: [a.id] })).status()).toBe(400);
   expect((await act({ stockIds: [a.id], poId: 999999999 })).status()).toBe(400);
@@ -74,7 +85,8 @@ test('the sale post carries cost → NET when a cost is entered, and says so whe
   const { handleSale } = await import('../api/_lib/presell.js');
   const sale = async (size, cost) => {
     const st = await S.upsertPresellStock({ sku: SKU, size, name: 'QA Cost Shoe', addQty: 5, supplier: 'QA Supplier', trackingNumbers: ['1Z999AA10123456799'] }, 'e2e');
-    if (cost) await S.updatePresellStockDetails(st.id, { shelf_price: 110, unit_cost: landedFromShelf(110, null, STACK), cost_stack: STACK }, 'e2e');
+    if (cost === true) await S.updatePresellStockDetails(st.id, { shelf_price: 110, unit_cost: landedFromShelf(110, null, STACK), cost_stack: STACK }, 'e2e');
+    if (cost === 'shelf') await S.updatePresellStockDetails(st.id, { shelf_price: 110, unit_cost: 110, cost_stack: null }, 'e2e');
     const { rows } = await db.query(`INSERT INTO presell_listings (stock_id, platform, external_id, price_cents, status) VALUES ($1, 'alias', $2, 17500, 'live') RETURNING *`, [st.id, `${SKU}-sale-${size}`]);
     const sent = [];
     await handleSale({ listing: rows[0], platform: 'alias', orderId: `QACS-${stamp}-${size}`, priceCents: 17500, payoutCents: 16275, soldAt: new Date().toISOString(), raw: {} },
@@ -91,6 +103,10 @@ test('the sale post carries cost → NET when a cost is entered, and says so whe
   expect(withCost).toContain('Tracking: 1Z999AA10123456799');
   // Sections: money, order, then what to do — each after a rule.
   expect(withCost.split('━━━━━━━━━━━━━━━━').length).toBe(4);
+  // Shelf price only: still a cost and a NET, and the post says it's the shelf alone.
+  const shelfOnly = await sale('12.5', 'shelf');
+  expect(shelfOnly).toContain('Cost: $110  (shelf $110 · shelf only)');
+  expect(shelfOnly).toContain('✅ NET: $52.75');
   const without = await sale('12', false);
   expect(without).toContain('Cost: not entered');
   expect(without).not.toContain('NET:');

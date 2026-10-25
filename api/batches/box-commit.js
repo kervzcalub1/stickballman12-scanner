@@ -5,6 +5,7 @@
 // the batch when received == expected. (V6 Feature 7)
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { alertPoDiscrepancy, alertDuplicateTracking } from '../_lib/alerts.js';
+import { openCasesForIntake } from '../_lib/inbound-issues.js';
 import {
   getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues,
   reconcileOutcomeForIntake, dbConfigured, SHIPMENT_KINDS, logTrackingDuplicate,
@@ -69,7 +70,11 @@ export default async function handler(req, res) {
     }
     // Batch-level shipment issues (no-box auto-list + manual) — recorded on the batch.
     const issues = Array.isArray(body.issues) ? body.issues : [];
-    if (issues.length) await insertIssues(batchId, issues, createdBy);
+    const recordedIssues = issues.length ? await insertIssues(batchId, issues, createdBy) : [];
+    // Each real problem → a case the PH team owns, flagged pairs held (inbound-issues.md).
+    const cases = found.batch.kind === 'receiving'
+      ? await openCasesForIntake({ batchId, boxId, recorded: recordedIssues, unitIssues, created, user })
+      : [];
 
     // Last box in → the batch just auto-completed, so the PO can be settled: clean closes
     // itself, short/over/blind comes back so the "box saved" screen can flag it while the
@@ -89,7 +94,7 @@ export default async function handler(req, res) {
       : null;
     alertDuplicateTracking(dup, user);
 
-    send(res, 200, { ok: true, count: created.length, vins, autoCompleted, reconcile, duplicateTracking: dup ? { id: Number(dup.id), prior: dup.prior_batch_code } : null });
+    send(res, 200, { ok: true, count: created.length, vins, autoCompleted, reconcile, inboundIssues: cases.map((c) => c.id), duplicateTracking: dup ? { id: Number(dup.id), prior: dup.prior_batch_code } : null });
     enrichGlobalIndicators(created, items).catch((e) => console.warn('[box-commit] GI enrichment failed:', e.message));
     return;
   } catch (e) {

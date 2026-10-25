@@ -7,7 +7,7 @@
 // Warehouse AND PH team can do this: both count stock, and both were finding rows
 // they had no way to correct. Sold/shipped pairs are refused server-side.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { deleteItems, dbConfigured } from '../_lib/db.js';
+import { deleteItems, dbConfigured, inboundHoldsByVin, inboundHoldMessage } from '../_lib/db.js';
 
 // Matches bulk-status' ceiling. A single SKU+status row realistically never reaches it.
 const MAX_PER_CALL = 1000;
@@ -40,6 +40,10 @@ export default async function handler(req, res) {
 
   try {
     const by = user.name || user.username || '';
+    // A held pair leaves through its case ("Returned to the supplier"), so the claim keeps
+    // its record of what happened to it.
+    const holds = await inboundHoldsByVin(vins);
+    if (Object.keys(holds).length) return send(res, 409, { ok: false, blocked: Object.keys(holds), error: inboundHoldMessage(holds) });
     const { deleted, blocked } = await deleteItems(vins, reason, by);
     if (!deleted.length && blocked.length) return send(res, 409, {
       ok: false, blocked,

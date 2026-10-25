@@ -23,7 +23,8 @@ export function Home({ user, onPick, onSignOut }) {
     .map((s) => (s.cards.some((c) => c.priv) ? { ...s, cards: s.cards.filter((c) => !c.priv || canBuy) } : s))
     .filter((s) => s.cards.length);
   const attention = counts
-    ? HOME_ATTENTION.filter((a) => (counts[a.count] || 0) > 0 && (!a.priv || hasPriv(user, a.priv)))
+    ? HOME_ATTENTION.filter((a) => (counts[a.count] || 0) > 0 && (!a.priv || hasPriv(user, a.priv))
+      && (!a.adminOnly || user.role === 'admin' || isSuper))
     : [];
   const now = attention.filter((a) => a.tier === 'now');
   const backlog = attention.filter((a) => a.tier !== 'now');

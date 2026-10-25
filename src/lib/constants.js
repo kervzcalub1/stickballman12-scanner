@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'shein-check', 'cancellations'];
+export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'shein-check', 'cancellations', 'inbound-issues'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -115,6 +115,9 @@ export function homeCardBadges(key, c) {
   if (key === 'po') return [['Labels requested', c.po_labels_requested]];
   // Logged duplicates nobody has decided about yet.
   if (key === 'dup-tracking') return [['Open', c.dup_tracking_open]];
+  // Inbound issues: amber = nobody has taken it / the floor has a job on it; the rest is
+  // PH's work in progress, neutral.
+  if (key === 'inbound-issues') return [['New', c.inbound_issues_new], ['Warehouse to-do', c.inbound_issues_warehouse], ['Open', c.inbound_issues_open, 'info']];
   // Empty shoe boxes. "On hand" is stock, not a chore, so it reads as neutral info; only
   // the ones still to put away are amber. Both hide at 0, which is most days.
   if (key === 'box-stock') return [['On hand', c.boxes_on_hand, 'info'], ['To shelve', c.boxes_needs_shelf]];
@@ -135,6 +138,9 @@ export const HOME_SECTIONS = [
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
     { key: 'presell', icon: '🔖', title: 'Pre-sell', sub: 'Shipments sold before they landed — say how many each order covers, then free the rest for listing' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
+    // A problem recorded at receiving is a CASE the PH team owns until it's resolved
+    // (inbound-issues.md) — here so the floor can report one later and see its jobs.
+    { key: 'inbound-issues', icon: '⚠️', title: 'Inbound Issues', sub: 'Damaged, short or wrong deliveries — each one a case PH works with the supplier until it is resolved' },
     { key: 'undelivered', icon: '📭', title: 'Undelivered Tracking', sub: 'PO and online-order parcels not delivered or received — untick the new ones, export CSV / PDF to chase' },
     { key: 'dup-tracking', icon: '🔁', title: 'Duplicate Tracking', sub: 'Packages received under a tracking number we already received — logged per supplier' },
     { key: 'costs', icon: '💵', title: 'Costs', sub: 'Fill in what a pair cost when the supplier left it off the manifest' },
@@ -260,6 +266,11 @@ export const HOME_ATTENTION = [
   { key: 'reconcile', label: 'PO to reconcile', count: 'po_to_reconcile', tier: 'now' },
   { key: 'presell', label: 'Pre-sell to work', count: 'presell_pending', tier: 'now' },
   { key: 'rescalereq', label: 'Rescale requests', count: 'rescale_requests', tier: 'now' },
+  // Inbound issues (inbound-issues.md): a job PH asked the floor to do (ship it back,
+  // shelve it), and — for the oversight — problems nobody has taken yet.
+  { id: 'inbound-task', key: 'inbound-issues', label: 'Inbound issue jobs', count: 'inbound_issues_warehouse', query: { view: 'warehouse' }, tier: 'now' },
+  // `adminOnly`: the warehouse can't take a case, so for them it's not a to-do.
+  { id: 'inbound-new', key: 'inbound-issues', label: 'Inbound issues not taken', count: 'inbound_issues_new', query: { view: 'open' }, tier: 'now', adminOnly: true },
   // Shipments received without a manifest and not yet signed off. `query` opens the
   // Batches page already filtered to them (Home writes it after go()).
   { id: 'batches-audit', key: 'batches', label: 'No manifest — audit', count: 'batches_to_audit', query: { audit: 'pending' }, tier: 'now' },

@@ -244,8 +244,9 @@ and `purchase-orders.md` → "Scan-first, any order".
    becomes an `item_events(type='issue')` with `{defectType, note, photos}` (see
    `commit.js` `unitIssues` → `insertIssueEvents`). Defect photos are per-VIN,
    separate from the per-SKU listing photos.
-4. **Issues** — shipment-level: no-box pairs auto-listed; manual issues addable.
-   Finish commits.
+4. **Issues** — shipment-level: no-box pairs auto-listed; manual issues addable, **each
+   with its own photos** (parcel, label, inside). Finish commits. Every real problem from
+   steps 3 and 4 opens an **Inbound Issues** case and holds a flagged pair (`inbound-issues.md`).
 
 ## A received box is tied to its LABEL (2026-10-23, store orders)
 `batch_boxes.po_box_id` records which of the order's labels a received box is. Receiving

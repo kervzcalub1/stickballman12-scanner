@@ -79,6 +79,8 @@ export function ShelvePage({ navBack, onHome, onSignOut }) {
     try {
       const { item } = await api.itemLookup(code);
       if (item.status === 'sold' || item.status === 'shipped') { setError(`${item.vin} is ${item.status} — can’t shelve it.`); pulse('err', `${item.vin} is ${item.status} — can’t shelve it.`); return; }
+      // Held by an open inbound issue (inbound-issues.md) — it stays aside until PH closes the case.
+      if (item.status === 'issue') { const m = `${item.vin} is held by an open inbound issue — keep it aside. It goes on a shelf once PH resolves the case (Inbound Issues).`; setError(m); pulse('err', m); return; }
       setRows((rs) => [{ vin: item.vin, name: item.name, sku: item.sku, size: item.size, status: item.status, with_box: item.with_box, nowHasBox: false }, ...rs]);
       setJustVin(item.vin);
       clearTimeout(justTimer.current);

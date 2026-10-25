@@ -2776,6 +2776,90 @@ await sql(`
   )
 `);
 
+// ── Inbound issues (docs/context/inbound-issues.md) ──────────────────────────────────
+// A problem found at receiving (damaged parcel, short count, wrong / creased pair) used to
+// be a note on the batch and a box set aside until the owner visited. Each one is now a
+// CASE the PH team owns from report to resolution. One row per ISSUE: a shipment issue
+// (shipment_issue_id) or one flagged pair (item_id / vin). The shipment facts are COPIED
+// in at report time (supplier, tracking, PO, batch, box; the pair's SKU/size/cost) so the
+// record still answers "who do we claim from?" after a batch is merged or a pair removed;
+// the list reads the live rows first and falls back to these.
+await sql(`ALTER TABLE shipment_issues ADD COLUMN IF NOT EXISTS photos TEXT[] NOT NULL DEFAULT '{}'`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS inbound_issues (
+    id                 BIGSERIAL PRIMARY KEY,
+    scope              TEXT NOT NULL,
+    type               TEXT NOT NULL,
+    description        TEXT,
+    expected_count     INT,
+    received_count     INT,
+    photos             TEXT[] NOT NULL DEFAULT '{}',
+    batch_id           BIGINT REFERENCES batches(id) ON DELETE SET NULL,
+    box_id             BIGINT REFERENCES batch_boxes(id) ON DELETE SET NULL,
+    item_id            BIGINT REFERENCES items(id) ON DELETE SET NULL,
+    shipment_issue_id  BIGINT REFERENCES shipment_issues(id) ON DELETE SET NULL,
+    vin                TEXT,
+    supplier           TEXT,
+    tracking_number    TEXT,
+    po_id              BIGINT,
+    po_code            TEXT,
+    batch_code         TEXT,
+    box_number         INT,
+    sku                TEXT,
+    size               TEXT,
+    product            TEXT,
+    cost               NUMERIC(12,2),
+    held_from_status   TEXT,
+    status             TEXT NOT NULL DEFAULT 'open',
+    owner_user_id      BIGINT,
+    owner              TEXT,
+    claimed_at         TIMESTAMPTZ,
+    supplier_ref       TEXT,
+    warehouse_task     TEXT,
+    warehouse_task_by  TEXT,
+    warehouse_task_at  TIMESTAMPTZ,
+    warehouse_done_by  TEXT,
+    warehouse_done_at  TIMESTAMPTZ,
+    outcome            TEXT,
+    refund_amount      NUMERIC(12,2),
+    disposition        TEXT,
+    resolution_note    TEXT,
+    resolved_by        TEXT,
+    resolved_at        TIMESTAMPTZ,
+    source             TEXT NOT NULL DEFAULT 'receiving',
+    reported_by        TEXT,
+    reported_by_user_id BIGINT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_activity_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+// What we ASKED the supplier for — beside refund_amount (what came back), so a short
+// refund shows as a gap instead of reading as "refunded" (inbound-issues.md).
+await sql(`ALTER TABLE inbound_issues ADD COLUMN IF NOT EXISTS claim_amount NUMERIC(12,2)`);
+await sql(`ALTER TABLE inbound_issues DROP CONSTRAINT IF EXISTS inbound_issues_status_check`);
+await sql(`ALTER TABLE inbound_issues ADD CONSTRAINT inbound_issues_status_check
+             CHECK (status IN ('open','in_progress','waiting','resolved'))`);
+await sql(`ALTER TABLE inbound_issues DROP CONSTRAINT IF EXISTS inbound_issues_scope_check`);
+await sql(`ALTER TABLE inbound_issues ADD CONSTRAINT inbound_issues_scope_check CHECK (scope IN ('shipment','pair'))`);
+await sql(`CREATE INDEX IF NOT EXISTS inbound_issues_status_idx ON inbound_issues (status, created_at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS inbound_issues_batch_idx ON inbound_issues (batch_id)`);
+await sql(`CREATE INDEX IF NOT EXISTS inbound_issues_item_idx ON inbound_issues (item_id)`);
+// One case per recorded shipment issue: a retried commit can't open it twice.
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS inbound_issues_shipment_issue_uq
+             ON inbound_issues (shipment_issue_id) WHERE shipment_issue_id IS NOT NULL`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS inbound_issue_events (
+    id         BIGSERIAL PRIMARY KEY,
+    issue_id   BIGINT NOT NULL REFERENCES inbound_issues(id) ON DELETE CASCADE,
+    action     TEXT NOT NULL,
+    actor      TEXT,
+    detail     TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS inbound_issue_events_idx ON inbound_issue_events (issue_id, created_at)`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -2792,6 +2876,7 @@ const LIVE_TABLES = [
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_live_runs', 'shein_live_items',
   'cancellations', 'cancellation_photos', 'cancellation_events',
+  'inbound_issues', 'inbound_issue_events',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

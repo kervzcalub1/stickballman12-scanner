@@ -206,6 +206,12 @@ import('./api/_lib/waitlist-worker.js')
   .then((m) => m.startWaitlistWorker())
   .catch((e) => console.error('[waitlist-worker] failed to start:', e.message));
 
+// Inbound issues — the daily oversight summary (docs/context/inbound-issues.md).
+// Production only by default: dev and prod share one Telegram bot.
+import('./api/_lib/inbound-issues-worker.js')
+  .then((m) => m.startInboundIssuesWorker())
+  .catch((e) => console.error('[inbound-issues-worker] failed to start:', e.message));
+
 // SHEIN live sync — SHEIN sales off Shopify every minute (behind the webhook) + the live fix
 // walker's heartbeat (docs/context/shein-live-fix.md). Production only by default.
 import('./api/_lib/shein-worker.js')

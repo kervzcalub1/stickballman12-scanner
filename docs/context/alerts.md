@@ -74,6 +74,11 @@ connection brings it back as **Reconnect** with no "Not now". No migration.
 | `buy.list_reclosed` | gift card desk — closed AGAIN after a re-open: lines added / removed / changed since `list_reopened_at`, and what that means for the cards | `cart/submit.js` (close) | on |
 | `ph.waitlist_back` | PH (admins: shown, off) — one message per batch of returns | `waitlist-worker.js` (claimWaitlistReturns) | on |
 | `ph.waitlist_daily` | admins (PH: shown, off) — an **Excel file** (`sendAlertDocument`), `once` per EST day | `waitlist-worker.js`, 18:00 EST | on |
+| `inbound.issue_reported` | PH (admins: shown, off) — ONE message per receiving submit / report | `openCasesForIntake`, `inbound-issues/report` (inbound-issues.md) | on |
+| `inbound.issue_assigned` | the person a case is handed to | `inbound-issues/action` assign | on |
+| `inbound.warehouse_task` | warehouse (admins: shown, off) | `inbound-issues/action` ask_warehouse | on |
+| `inbound.issue_resolved` | the person who reported it | `inbound-issues/action` resolve | on |
+| `inbound.issue_daily` | admins (PH: shown, off) — `once` per EST day, 10:00 EST | `inbound-issues-worker.js` | on |
 | `nudge` | whoever the record waits on | `api/nudge.js` | required |
 
 **Links are per reader** (`at(page, query)`): PH lands under `/ph/*`, a supplier on its

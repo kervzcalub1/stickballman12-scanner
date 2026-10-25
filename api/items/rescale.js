@@ -5,7 +5,7 @@
 // genuinely new/unlabeled stock (scanned by UPC/SKU) still goes through batch
 // commit. Warehouse/admin only.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { getItemByVin, rescaleItem, dbConfigured } from '../_lib/db.js';
+import { getItemByVin, rescaleItem, dbConfigured, inboundHoldsByVin, inboundHoldMessage } from '../_lib/db.js';
 import { normalizeStatus, isTerminalStatus } from '../_lib/statuses.js';
 
 export default async function handler(req, res) {
@@ -42,6 +42,9 @@ export default async function handler(req, res) {
     // stock (double-sell risk). Requires a deliberate status change, not a rescale.
     if (isTerminalStatus(found.item.status))
       return send(res, 409, { ok: false, error: `${vin} is marked ${found.item.status} — a ${found.item.status} unit can't be rescaled back into stock.` });
+    // Held by an open inbound issue: rescaling would put it on PH's Rescale worklist.
+    const holds = await inboundHoldsByVin([found.item.vin]);
+    if (Object.keys(holds).length) return send(res, 409, { ok: false, error: inboundHoldMessage(holds) });
     await rescaleItem({ itemId: found.item.id, status, note, reason, createdBy: user.name || user.username || '' });
 
     const updated = await getItemByVin(vin);

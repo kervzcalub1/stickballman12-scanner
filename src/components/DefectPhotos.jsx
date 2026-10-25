@@ -10,7 +10,10 @@ import { Icon } from './NavIcons.jsx';
 
 const MAX = 4;
 
-export function DefectPhotos({ vin, photos = [], onChange, onSignOut }) {
+// `sign(contentType)` → { uploadUrl, publicUrl }: where the picture goes. Defaults to the
+// per-VIN defect path; the receiving Issues step and the Inbound Issues page pass their own
+// (a shipment's photos have no VIN). `max` = how many this list may hold.
+export function DefectPhotos({ vin, photos = [], onChange, onSignOut, sign = null, max = MAX }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const cameraRef = useRef(null);   // capture=environment → opens the device camera
@@ -23,7 +26,7 @@ export function DefectPhotos({ vin, photos = [], onChange, onSignOut }) {
     setBusy(true); setError('');
     try {
       const { blob, type } = await compressImage(file);
-      const { uploadUrl, publicUrl } = await api.photoSignIssue(vin, type);
+      const { uploadUrl, publicUrl } = sign ? await sign(type) : await api.photoSignIssue(vin, type);
       const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
       if (!put.ok) throw new Error(`Upload failed (${put.status}). Check the R2 bucket CORS policy.`);
       onChange([...photos, publicUrl]);
@@ -45,7 +48,7 @@ export function DefectPhotos({ vin, photos = [], onChange, onSignOut }) {
           </div>
         ))}
       </div>
-      {photos.length < MAX && (
+      {photos.length < max && (
         <div className="dp-add-actions">
           <button type="button" className="btn primary sm" onClick={() => cameraRef.current?.click()} disabled={busy}>
             {busy ? '…' : <><Icon name="camera" /> Take photo</>}

@@ -15,7 +15,7 @@
 import { lazyImport } from './chunkLoad.js';
 import { toCsv } from './manifestCsv.js';
 import { estDate, estTime, estClock } from './format.js';
-import { saleNet } from './presellDetails.js';
+import { saleNet, costBasis } from './presellDetails.js';
 import { WHERE, pickGroups, fulfillTotals, timeLeft, urgency, labelLink } from './presellFulfill.js';
 import { boxState, boxSummary } from './presellBoxes.js';
 
@@ -49,7 +49,7 @@ export function stockReportRows(rows) {
           ...((s.boxes || []).length && boxSummary(s).unplaced ? [`${boxSummary(s).unplaced} not in a box yet`] : [])].join('; '),
         note: s.transit_note || '',
         shelf: s.shelf_price != null ? Number(s.shelf_price) : null, cost,
-        preset: s.cost_stack?.preset || '',
+        preset: s.shelf_price != null ? costBasis(s.cost_stack) : '',
         leftValue: cost != null ? Math.round(cost * left * 100) / 100 : null,
       };
     });

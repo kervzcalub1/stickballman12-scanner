@@ -2,6 +2,7 @@
 // Shared by the screen and the server so both read a cost stack and a pasted tracking
 // list the same way.
 import { DEFAULT_FEE_PCT } from './payout.js';
+import { landedFromShelf } from './costs.js';
 
 // The supplier preset as used for ONE purchase (maybe edited for it). The server rebuilds
 // it from whatever the browser sent — numbers clamped, unknown keys dropped — and computes
@@ -11,11 +12,32 @@ const amt = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 &&
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
 export function cleanCostStack(cs) {
   if (!cs || typeof cs !== 'object') return null;
+  const own = cs.own === true;
   return {
-    preset: text(cs.preset, 60), presetId: Number(cs.presetId) || null, edited: cs.edited === true,
+    preset: own ? null : text(cs.preset, 60), presetId: own ? null : Number(cs.presetId) || null, edited: !own && cs.edited === true,
+    // OUR OWN FEES (owner, 2026-10-25): a supplier with no preset — the fees are typed for
+    // this purchase, starting from zero, and nothing is saved as a preset.
+    own,
     taxPct: pct(cs.taxPct), giftPct: pct(cs.giftPct), storePct: pct(cs.storePct), promoPct: pct(cs.promoPct),
     cashbackPct: pct(cs.cashbackPct), tipAmt: amt(cs.tipAmt), shippingAmt: amt(cs.shippingAmt),
   };
+}
+
+// What one pre-sell pair cost (owner, 2026-10-25): the SHELF PRICE is a cost on its own, and
+// the fees — the supplier's preset, or our own for a supplier with none — are added on top.
+// So: shelf through the fees when there are any, else the shelf price alone (labelled "shelf
+// only" wherever it shows — `costBasis`), and no shelf price → no cost (blank, never $0).
+// Pre-sell only: receiving still leaves a cost blank without a preset (cost-is-shelf-plus-preset).
+export function presellUnitCost(shelf, stack) {
+  const s = cleanShelf(shelf);
+  if (s == null) return null;
+  return stack ? landedFromShelf(s, null, stack) : s;
+}
+// How a row's cost was reached, in a few words: the preset's name, "own fees", or "shelf only".
+export function costBasis(stack) {
+  if (!stack) return 'shelf only';
+  if (stack.own) return 'own fees';
+  return `${stack.preset || 'preset'}${stack.edited ? ', edited' : ''}`;
 }
 
 // A shelf price, or null. Blank is not $0 (blank-vs-zero rule).

@@ -16,9 +16,8 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { AliasCodeCheck, aliasOnlyCode } from '../components/AliasCodeCheck.jsx';
 import { isUpcCode } from '../lib/codes.js';
 import { parsePresellPaste } from '../lib/presellPaste.js';
-import { landedFromShelf } from '../lib/costs.js';
 import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
-import { parseTrackingList, saleNet, pairsLeft, listableOn, pairsOwed } from '../lib/presellDetails.js';
+import { parseTrackingList, saleNet, pairsLeft, listableOn, pairsOwed, presellUnitCost, costBasis } from '../lib/presellDetails.js';
 import { COMP_MODES, compFloor } from '../lib/presellCompete.js';
 import { assignWhere, pickGroups, fulfillTotals, urgency, timeLeft, labelLink, WHERE } from '../lib/presellFulfill.js';
 import { boxOrder, boxSummary, boxState, shortTrack } from '../lib/presellBoxes.js';
@@ -30,6 +29,14 @@ const STACK_FIELDS = [
   ['cashbackPct', 'Cashback', '%'], ['taxPct', 'Sales tax', '%'], ['tipAmt', 'Tip / fee', '$'], ['shippingAmt', 'Shipping', '$'],
 ];
 const stackOf = (p) => (p ? Object.fromEntries(STACK_FIELDS.map(([k]) => [k, Number(p[k]) || 0])) : null);
+// "Our own fees" in the preset menu (owner, 2026-10-25): a supplier with no preset — the fees
+// are typed for this purchase from zero, and nothing is saved as a preset.
+const OWN = 'own';
+const stackFor = (id, presets) => (id === OWN ? stackOf({}) : stackOf(presets.find((x) => String(x.id) === String(id))));
+// The stack as sent: a preset's (named), our own fees, or none (the shelf price is the cost).
+const stackToSend = (stack, id, preset, edited, fallbackName = null) => (!stack ? null : id === OWN
+  ? { ...stack, preset: null, presetId: null, edited: false, own: true }
+  : { ...stack, preset: preset?.name || fallbackName, presetId: preset?.id || null, edited });
 const money2 = (n) => (n == null || !Number.isFinite(n) ? '—' : `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`);
 import { PH_DATE, PH_DATETIME, estToday, estDate, estTime } from '../lib/format.js';
 
@@ -258,10 +265,10 @@ function ListNew({ onSignOut, onListed }) {
   function pickPreset(id) {
     setPresetId(id);
     const p = presets.find((x) => String(x.id) === String(id));
-    setStack(stackOf(p)); setStackEdited(false); setEditStack(false);
+    setStack(stackFor(id, presets)); setStackEdited(false); setEditStack(id === OWN);
     if (p && !source.supplier.trim()) setSource((v) => ({ ...v, supplier: p.name }));
   }
-  const costOf = (l) => (stack ? landedFromShelf(l.shelfPrice, null, stack) : null);
+  const costOf = (l) => presellUnitCost(l.shelfPrice, stack);
   const [basis, setBasis] = useState(loadBasis);
   const [confirm, setConfirm] = useState(false);
   const [listing, setListing] = useState(false);
@@ -351,7 +358,7 @@ function ListNew({ onSignOut, onListed }) {
             activate,
             inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
             supplier: source.supplier.trim(), poId: source.poId ? Number(source.poId) : null, trackingNumbers: parseTrackingList(source.tracking),
-            costStack: stack ? { ...stack, preset: preset?.name || null, presetId: preset?.id || null, edited: stackEdited } : null,
+            costStack: stackToSend(stack, presetId, preset, stackEdited),
             items: b.pieces.map(({ l, qty }) => ({
               sku: l.sku, name: l.name, image: l.image, upc: l.upc, size: l.size, qty,
               shelfPrice: Number(l.shelfPrice) > 0 ? Number(l.shelfPrice) : null,
@@ -504,12 +511,13 @@ function ListNew({ onSignOut, onListed }) {
               <div className="ap-cost-row">
                 <label className="muted sm">Supplier preset (costs)
                   <select className="input" value={presetId} onChange={(e) => pickPreset(e.target.value)} aria-label="Supplier preset">
-                    <option value="">— none (no cost) —</option>
+                    <option value="">— none (shelf price only) —</option>
+                    <option value={OWN}>Our own fees (supplier has no preset)</option>
                     {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </label>
-                {stack && <button type="button" className={`btn sm ${editStack ? 'primary' : 'ghost'}`} onClick={() => setEditStack((v) => !v)}>✎ Edit for this purchase</button>}
-                {stackEdited && <span className="ap-edited xs" title="Changed for this purchase only — the saved preset is untouched">edited for this purchase</span>}
+                {stack && <button type="button" className={`btn sm ${editStack ? 'primary' : 'ghost'}`} onClick={() => setEditStack((v) => !v)}>{presetId === OWN ? '✎ Our fees' : '✎ Edit for this purchase'}</button>}
+                {stackEdited && presetId !== OWN && <span className="ap-edited xs" title="Changed for this purchase only — the saved preset is untouched">edited for this purchase</span>}
                 <label className="muted sm">Shelf price for all
                   <span className="ap-inline"><input type="number" min="1" step="0.01" inputMode="decimal" value={allShelf} placeholder="$" onChange={(e) => setAllShelf(e.target.value)} aria-label="Shelf price for every pair" />
                     <button type="button" className="btn sm" disabled={!(Number(allShelf) > 0)} onClick={() => setLines((ls) => ls.map((l) => ({ ...l, shelfPrice: allShelf })))}>Apply</button></span>
@@ -524,11 +532,12 @@ function ListNew({ onSignOut, onListed }) {
                         aria-label={`${label} for this purchase`} />
                     </label>
                   ))}
-                  <button type="button" className="btn sm ghost" onClick={() => pickPreset(presetId)}>Reset to the preset</button>
+                  <button type="button" className="btn sm ghost" onClick={() => pickPreset(presetId)}>{presetId === OWN ? 'Clear the fees' : 'Reset to the preset'}</button>
                 </div>
               )}
               <SourceFields value={source} onChange={setSource} pos={pos} presets={presets} />
-              {!stack && <p className="muted xs">Pick the supplier’s preset to turn each shelf price into a landed cost and see the payout and profit per platform. Without one the cost stays blank (the owner’s rule: shelf price alone isn’t the cost).</p>}
+              {!stack && <p className="muted xs">No fees: each pair costs its shelf price, and the profit is payout − shelf (marked “shelf only”). Pick the supplier’s preset to add tax, shipping and the rest — or <b>Our own fees</b> for a supplier that has no preset.</p>}
+              {presetId === OWN && <p className="muted xs">Our own fees, for this purchase only — added on top of each shelf price. Not saved as a preset.</p>}
             </div>
             <div className="ap-bulk">
               <div className="ap-basis"><span className="muted xs">Alias prices</span>
@@ -554,7 +563,7 @@ function ListNew({ onSignOut, onListed }) {
                     <label className="ap-qtyfield"><span className="muted xs">Shelf $</span>
                       <input className="ap-qty ap-shelf" type="number" min="0" step="0.01" inputMode="decimal" value={l.shelfPrice ?? ''} disabled={l.done}
                         onChange={(e) => setLine(l.key, 'shelfPrice', e.target.value)} aria-label={`Line ${i + 1} shelf price`} /></label>
-                    <span className="ap-cost-out" title={stack ? 'Shelf price through the supplier preset (landed cost per pair)' : 'Pick a supplier preset to get the cost'}>
+                    <span className="ap-cost-out" title={stack ? 'Shelf price plus the fees (landed cost per pair)' : 'Shelf price only — no fees added'}>
                       <span className="muted xs">Cost</span><b>{money2(costOf(l))}</b></span>
                     <button type="button" className="btn icon ghost remove sm" title="Remove" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>×</button>
                   </div>
@@ -730,7 +739,7 @@ function StockTab({ onSignOut }) {
                       </div></div></td>
                       <td>{s.size}</td>
                       <td className="num">{s.qty}</td><td className="num">{s.sold}</td><td className="num"><b>{left}</b></td>
-                      <td className="num" title={s.shelf_price != null ? `Shelf $${Number(s.shelf_price).toFixed(2)}${s.cost_stack?.preset ? ` · ${s.cost_stack.preset}` : ''}` : 'No cost entered'}>
+                      <td className="num" title={s.shelf_price != null ? `Shelf $${Number(s.shelf_price).toFixed(2)} · ${costBasis(s.cost_stack)}` : 'No cost entered'}>
                         {s.unit_cost != null ? money2(Number(s.unit_cost)) : <span className="muted">—</span>}
                       </td>
                       {['alias', 'stockx'].map((p) => {
@@ -1121,7 +1130,7 @@ function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }
   const [picked, setPicked] = useState(() => new Set(rows.map((r) => r.id)));
   // Cost
   const firstStack = first.cost_stack || null;
-  const [presetId, setPresetId] = useState(firstStack?.presetId ? String(firstStack.presetId) : '');
+  const [presetId, setPresetId] = useState(firstStack?.own ? OWN : firstStack?.presetId ? String(firstStack.presetId) : '');
   const [stack, setStack] = useState(firstStack ? Object.fromEntries(STACK_FIELDS.map(([k]) => [k, Number(firstStack[k]) || 0])) : null);
   const [stackEdited, setStackEdited] = useState(!!firstStack?.edited);
   const [editStack, setEditStack] = useState(false);
@@ -1131,7 +1140,7 @@ function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }
   function pickPreset(id) {
     setPresetId(id); setCostDirty(true);
     const p = presets.find((x) => String(x.id) === String(id));
-    setStack(stackOf(p)); setStackEdited(false); setEditStack(false);
+    setStack(stackFor(id, presets)); setStackEdited(false); setEditStack(id === OWN);
     if (p && !source.supplier.trim()) { setSource((v) => ({ ...v, supplier: p.name })); setSourceDirty(true); }
   }
   // Where from
@@ -1148,7 +1157,7 @@ function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const toggle = (id) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const costOf = (id) => (stack ? landedFromShelf(shelf[id], null, stack) : null);
+  const costOf = (id) => presellUnitCost(shelf[id], stack);
   async function save() {
     setBusy(true); setErr('');
     const ids = sorted.filter((r) => picked.has(r.id)).map((r) => r.id);
@@ -1156,7 +1165,7 @@ function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }
     const body = { action: 'details', stockIds: ids };
     if (costDirty) {
       body.cost = {
-        costStack: stack ? { ...stack, preset: preset?.name || firstStack?.preset || null, presetId: preset?.id || null, edited: stackEdited } : null,
+        costStack: stackToSend(stack, presetId, preset, stackEdited, firstStack?.preset || null),
         shelf: Object.fromEntries(ids.map((id) => [id, shelf[id] === '' ? null : Number(shelf[id])])),
       };
     }
@@ -1189,12 +1198,13 @@ function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }
           <div className="ap-cost-row">
             <label className="muted sm">Supplier preset
               <select className="input" value={presetId} onChange={(e) => pickPreset(e.target.value)} aria-label="Supplier preset">
-                <option value="">{firstStack?.preset && !firstStack.presetId ? `${firstStack.preset} (as saved)` : '— none (no cost) —'}</option>
+                <option value="">{firstStack?.preset && !firstStack.presetId ? `${firstStack.preset} (as saved)` : '— none (shelf price only) —'}</option>
+                <option value={OWN}>Our own fees (supplier has no preset)</option>
                 {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </label>
-            {stack && <button type="button" className={`btn sm ${editStack ? 'primary' : 'ghost'}`} onClick={() => setEditStack((v) => !v)}>✎ Edit for this purchase</button>}
-            {stackEdited && <span className="ap-edited xs">edited for this purchase</span>}
+            {stack && <button type="button" className={`btn sm ${editStack ? 'primary' : 'ghost'}`} onClick={() => setEditStack((v) => !v)}>{presetId === OWN ? '✎ Our fees' : '✎ Edit for this purchase'}</button>}
+            {stackEdited && presetId !== OWN && <span className="ap-edited xs">edited for this purchase</span>}
             <label className="muted sm">Shelf price for the ticked sizes
               <span className="ap-inline"><input type="number" min="1" step="0.01" inputMode="decimal" value={allShelf} placeholder="$" onChange={(e) => setAllShelf(e.target.value)} aria-label="Shelf price for the ticked sizes" />
                 <button type="button" className="btn sm" disabled={!(Number(allShelf) > 0)}
@@ -1221,7 +1231,7 @@ function DetailsDialog({ rows, focus, presets, pos, onSignOut, onClose, onDone }
               </label>
             ))}
           </div>
-          {!stack && <p className="muted xs">Without a preset the cost stays blank (the shelf price alone isn’t the cost).</p>}
+          {!stack && <p className="muted xs">No fees: each size costs its shelf price (“shelf only”). Pick the supplier’s preset, or <b>Our own fees</b> for a supplier that has no preset.</p>}
         </fieldset>
 
         <fieldset className="ap-details-sec">
@@ -1886,7 +1896,7 @@ function SalesTab({ onSignOut }) {
                     <td>{PLAT[x.platform] || x.platform}</td>
                     <td className="num">{money(x.price_cents)}</td>
                     <td className="num" title={m.estimated ? 'Estimated from the default fee — the platform gave no payout' : 'The platform’s payout'}>{money2(m.payout)}{m.estimated ? '*' : ''}</td>
-                    <td className="num" title={x.shelf_price != null ? `Shelf $${Number(x.shelf_price).toFixed(2)}${x.cost_stack?.preset ? ` · ${x.cost_stack.preset}` : ''}` : 'No cost entered — Stock → ✎ Cost & shipment'}>{m.cost != null ? money2(m.cost) : <span className="muted">—</span>}</td>
+                    <td className="num" title={x.shelf_price != null ? `Shelf $${Number(x.shelf_price).toFixed(2)} · ${costBasis(x.cost_stack)}` : 'No cost entered — Stock → ✎ Cost & shipment'}>{m.cost != null ? money2(m.cost) : <span className="muted">—</span>}</td>
                     <td className="num">{m.profit != null ? <b className={m.profit < 0 ? 'neg' : 'pos'}>{money2(m.profit)}</b> : <span className="muted">—</span>}</td>
                     <td><CopyText text={x.order_id} className="ap-mono">{x.order_id}</CopyText></td>
                     <td className="xs">{x.notified_at ? 'Sent' : <span className="error xs" title={x.notify_error || ''}>{x.notify_error ? 'Not sent' : '—'}</span>}</td>

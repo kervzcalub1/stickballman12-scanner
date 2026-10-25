@@ -22,7 +22,7 @@ import {
   presellBoxesFor,
 } from './db.js';
 import { sendPresellSale } from './telegram.js';
-import { saleNet, listableOn, pairsOwed } from '../../src/lib/presellDetails.js';
+import { saleNet, listableOn, pairsOwed, costBasis } from '../../src/lib/presellDetails.js';
 import { boxForSale, boxState } from '../../src/lib/presellBoxes.js';
 
 export const PLATFORM_LABEL = { alias: 'Alias', stockx: 'StockX' };
@@ -180,7 +180,7 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
   const net = saleNet({ platform, price_cents: priceCents, payout_cents: payoutCents, unit_cost: stock?.unit_cost });
   const usd = (n) => money(n == null ? null : Math.round(n * 100));
   const signed = (n) => `${n < 0 ? '−' : ''}${usd(Math.abs(n))}`;
-  const preset = stock?.cost_stack?.preset;
+  const basis = costBasis(stock?.cost_stack || null);
   const tracks = stock?.tracking_numbers || [];
   // The box this pair comes in (docs/presell-box-tracking-plan.md): the owed-th pair among the
   // boxes not received yet, in landing order (boxForSale) — matches the warehouse line. Best-effort.
@@ -198,7 +198,7 @@ export async function handleSale({ listing, platform, orderId, priceCents, payou
     { b: 'Price:', t: ` ${money(priceCents)}` },
     { b: 'Payout:', t: ` ${usd(net.payout)}${net.estimated ? ' (est. — fee taken off the price)' : ''}` },
     net.cost != null
-      ? { b: 'Cost:', t: ` ${usd(net.cost)}${stock?.shelf_price != null ? `  (shelf ${usd(Number(stock.shelf_price))}${preset ? ` · ${preset}${stock.cost_stack.edited ? ', edited' : ''}` : ''})` : ''}` }
+      ? { b: 'Cost:', t: ` ${usd(net.cost)}${stock?.shelf_price != null ? `  (shelf ${usd(Number(stock.shelf_price))} · ${basis})` : ''}` }
       : { b: 'Cost:', t: ' not entered — Pre-sell → Stock → ✎ Cost & shipment' },
     ...(net.profit != null ? [{ b: `${net.profit < 0 ? '🔻' : '✅'} NET: ${signed(net.profit)}` }] : []),
   ];

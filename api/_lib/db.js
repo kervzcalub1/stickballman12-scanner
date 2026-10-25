@@ -9335,7 +9335,7 @@ export async function presellPoCap(poId, sku, size) {
 
 // The existing stock row for a SKU + size (or null) — which PO it is listed against.
 export async function presellStockBySkuSize(sku, size) {
-  return (await db()`SELECT id, po_id, qty, sold FROM presell_stock WHERE sku = ${sku} AND size = ${size}`)[0] || null;
+  return (await db()`SELECT id, po_id, qty, sold, cost_stack FROM presell_stock WHERE sku = ${sku} AND size = ${size}`)[0] || null;
 }
 
 // A row re-pointed to another PO (✎ Cost & shipment): its pairs were pre-listed against

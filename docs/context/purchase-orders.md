@@ -547,7 +547,7 @@ label belonging to the box in front of them. It's now stored and downloadable.
   once packed. Covered by `e2e/po-labels-file.spec.js`.
 
 ## Paste a list (2026-10-20)
-Suppliers send orders as a message — a SKU, then `size x qty` lines, many shoes at once:
+Suppliers send orders as a message — a SKU, then `size x qty` (or `size-qty`) lines, many shoes at once:
 ```
 DZ5485-201
 8.5 x 2

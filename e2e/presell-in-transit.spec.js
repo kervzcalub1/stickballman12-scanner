@@ -168,6 +168,10 @@ test('paste: Alex\'s message → one shoe, nine sizes, 145 pairs; no-name and mu
     { sku: 'KI6956', name: '', sizes: [{ size: '7W', qty: 3 }] },
   ]);
   expect(two.skipped.map((x) => x.line)).toEqual(['see you tomorrow', '8-9 x 2']);   // never guessed at
+  // The dash reads like the x: "size-pairs".
+  const dash = parsePresellPaste('HQ2037-100\n7.5-5\n8-5\n9.5 - 4\n12.5–1\n10.5-11.5\n7W-2');
+  expect(dash.shoes[0].sizes).toEqual([{ size: '7.5', qty: 5 }, { size: '8', qty: 5 }, { size: '9.5', qty: 4 }, { size: '12.5', qty: 1 }, { size: '7W', qty: 2 }]);
+  expect(dash.skipped.map((x) => x.line)).toEqual(['10.5-11.5']);
 });
 
 test('paste on the page: the cart fills, In transit ticks, and 290 listings go out in batches of ≤100', async ({ page }) => {

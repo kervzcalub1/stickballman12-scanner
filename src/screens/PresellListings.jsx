@@ -478,7 +478,7 @@ function ListNew({ onSignOut, onListed }) {
                 </div>
                 <p className="muted xs">Adds every size with its pairs, ticks Alias + StockX and <b>🚚 In transit</b> — set the prices, then Create.</p>
               </div>
-            ) : <p className="muted sm">Paste the style code, then one line per size like <code>8 x 12</code> (size × pairs).</p>)}
+            ) : <p className="muted sm">Paste the style code, then one line per size like <code>8 x 12</code> or <code>8-12</code> (size × pairs).</p>)}
           </div>
         )}
         {showCam && (

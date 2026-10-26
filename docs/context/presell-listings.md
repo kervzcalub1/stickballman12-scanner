@@ -102,8 +102,8 @@ how many of a row's pairs were listed against EACH order.
 ## Paste a message (2026-10-10)
 **📋 Paste message** next to Find: Alex's shape (`src/lib/presellPaste.js`) = a style code
 line, an optional name line, then `size x pairs` lines (`8x 12`, `8.5 x 14`, `10 × 26`,
-`9*19`, `7W x 3`). No name is fine; several shoes in one message too (each style code starts
-one). The same size twice adds up. Anything else (`8-9 x 2`, chat text) is listed as *not
+`9*19`, `7W x 3`, and since 10-27 a dash: `7.5-5` = size 7.5, 5 pairs). No name is fine; several shoes in one message too (each style code starts
+one). The same size twice adds up. Anything else (`8-9 x 2`, `10.5-11.5`, chat text) is listed as *not
 understood* and left out, never guessed. Preview → **Add N pairs** fills the cart (name/photo
 from our SKU lookup when we have one), ticks Alias + StockX and **🚚 In transit**.
 **Batches:** the create endpoint takes ≤ 100 listings a call, so the cart is sent in batches

@@ -12,9 +12,11 @@
 // no name. Several shoes in one message: each style code starts a new one. Anything that
 // isn't one of those is returned in `skipped`, never guessed at.
 
-// "8x 12", "8.5 x 14", "10 × 26", "9*19", "US 9.5 x 17", "7W x 3", "8 - 12"? (no — a dash
-// reads like a size range, so it's refused rather than guessed).
-const SIZE_LINE = /^(?:us\s*)?(\d{1,2}(?:\.\d)?)\s*([a-z]{0,2})\s*[x×*]\s*(\d{1,3})\s*(?:pairs?|pcs?|units?)?$/i;
+// "8x 12", "8.5 x 14", "10 × 26", "9*19", "US 9.5 x 17", "7W x 3", and since 2026-10-27 the
+// dash too: "7.5-5", "9.5 - 4" = size 7.5, 5 pairs (how the pre-sell size text arrives). The
+// number after the dash must be a whole count, so "10.5-11.5" never reads; nor does a range
+// with a count ("8-9 x 2"), which is refused rather than guessed.
+const SIZE_LINE = /^(?:us\s*)?(\d{1,2}(?:\.\d)?)\s*([a-z]{0,2})\s*[x×*\-–—]\s*(\d{1,3})\s*(?:pairs?|pcs?|units?)?$/i;
 // A style code: letters/digits with a digit, ≥ 5 chars, optional "-NNN" tail (JA1091-100,
 // DD1391-100, KI6956, 305381-007, IB4025-100). One token on the line.
 const STYLE_LINE = /^[A-Z0-9]{2,}(?:-[A-Z0-9]{2,4})?$/i;

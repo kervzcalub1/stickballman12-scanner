@@ -15,6 +15,7 @@
 import { lazyImport } from './chunkLoad.js';
 import { toCsv } from './manifestCsv.js';
 import { estDate } from './format.js';
+import { compareSizes } from './codes.js';
 
 const PAGE_W = 215.9;   // US Letter, portrait, mm — a document, not a die-cut label
 const PAGE_H = 279.4;
@@ -52,6 +53,8 @@ export function batchReportFacts(batch) {
 // One line per SKU+size, which is how a manifest is read and checked against a carton —
 // not one line per pair. Boxed and loose units are kept apart because "which box" is the
 // question a discrepancy conversation turns on.
+// Grouped by SKU, sizes smallest → biggest, THEN box (Brent, 2026-10-26): box-first split
+// one SKU across the sheet, so checking a SKU meant hunting for its rows.
 export function batchReportRows({ items = [], boxes = [] }) {
   const boxById = new Map((boxes || []).map((b) => [String(b.id), b]));
   const grouped = new Map();
@@ -69,9 +72,9 @@ export function batchReportRows({ items = [], boxes = [] }) {
       qty: 1,
     });
   }
-  return [...grouped.values()].sort((a, b) => (a.box ?? 1e9) - (b.box ?? 1e9)
-    || String(a.sku).localeCompare(String(b.sku))
-    || String(a.size).localeCompare(String(b.size), undefined, { numeric: true }));
+  return [...grouped.values()].sort((a, b) => String(a.sku).localeCompare(String(b.sku))
+    || compareSizes(a.size, b.size)
+    || (a.box ?? 1e9) - (b.box ?? 1e9));
 }
 
 export function buildBatchReportCsv({ batch, items = [], boxes = [] }) {
@@ -84,8 +87,8 @@ export function buildBatchReportCsv({ batch, items = [], boxes = [] }) {
   const cols = [
     ['date_order', 'DATE ORDER'], ['date_delivered', 'DATE DELIVERED'],
     ['batch_no', 'Batch No.'], ['po_number', 'PO Number'],
-    ['box', 'Box'], ['box_tracking', 'Box tracking'],
-    ['sku', 'SKU'], ['size', 'Size'], ['name', 'Name'], ['qty', 'Qty'],
+    ['sku', 'SKU'], ['size', 'Size'], ['box', 'Box'], ['box_tracking', 'Box tracking'],
+    ['name', 'Name'], ['qty', 'Qty'],
   ];
   return toCsv(cols, rows.map((r) => ({
     date_order: f.dateOrder, date_delivered: f.dateDelivered,
@@ -155,7 +158,7 @@ export async function buildBatchReportPdf({ batch, items = [], boxes = [], busin
   };
 
   const columns = [
-    ['Box', 14], ['SKU', 30], ['Size', 14], ['Name', 0], ['Qty', 14],
+    ['SKU', 30], ['Size', 14], ['Box', 14], ['Name', 0], ['Qty', 14],
   ];
   const nameW = right - MARGIN - columns.reduce((n, c) => n + c[1], 0);
 
@@ -181,17 +184,23 @@ export async function buildBatchReportPdf({ batch, items = [], boxes = [], busin
   tableHead();
 
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+  // Shade by SKU GROUP, not by row, with a rule between SKUs — one SKU reads as one block.
+  let group = -1;
   rows.forEach((r, i) => {
+    const newSku = !i || r.sku !== rows[i - 1].sku;
+    if (newSku) group += 1;
     if (y > PAGE_H - MARGIN - 14) {   // room for the row plus the footer rule
       doc.addPage(); header(); tableHead(); doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    } else if (newSku && i) {
+      doc.setDrawColor(...HAIR); doc.setLineWidth(0.3); doc.line(MARGIN, y, right, y);
     }
-    if (i % 2) { doc.setFillColor(...ZEBRA); doc.rect(MARGIN, y, right - MARGIN, 6, 'F'); }
+    if (group % 2) { doc.setFillColor(...ZEBRA); doc.rect(MARGIN, y, right - MARGIN, 6, 'F'); }
     doc.setTextColor(...INK);
     let x = MARGIN + 2;
     const cells = [
-      r.box != null ? String(r.box) : 'loose',
       r.sku || dash,
       r.size || dash,
+      r.box != null ? String(r.box) : 'loose',
       (r.name || dash).slice(0, 46),
       String(r.qty),
     ];

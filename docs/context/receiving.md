@@ -375,7 +375,10 @@ of every page: **DATE ORDER** (`purchase_orders.date_of_purchase`, so it comes f
 order, not the batch), **DATE DELIVERED** (`date_received` — the day it was received here,
 which is what "delivered" means to the reader), **BATCH NO.** and **PO NUMBER**. Beneath
 them, every pair counted in, folded to **one line per SKU + size** — a manifest is read
-against a carton, not pair by pair.
+against a carton, not pair by pair. **Order: grouped by SKU, sizes smallest → biggest
+(`compareSizes`), then box** (Brent, 2026-10-26 — box-first split one SKU across the
+sheet). SKU is the first column in both formats; the PDF shades by SKU group with a rule
+between SKUs.
 
 - **Where a fact is missing it is stated, not left blank**: "no purchase order", "not
   recorded", and a delivered date falling back to the creation day is marked `(created)`

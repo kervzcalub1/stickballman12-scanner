@@ -80,7 +80,7 @@ test('the CSV carries the four facts on every row, and folds pairs into per-size
     expect(row).toContain(`B-RPT-${stamp}`);
     expect(row).toContain(poCode);
   }
-  expect(text).toMatch(/RP-1234-100,10,Report Test Shoe,2/);   // the folded line, qty 2
+  expect(text).toMatch(/RP-1234-100,10,1,[^,]*,Report Test Shoe,2/);   // the folded line, qty 2 (SKU, Size, Box, tracking…)
 });
 
 test('a batch with no order says so in the CSV rather than leaving it blank', async ({ page }) => {
@@ -130,6 +130,21 @@ test('the four header facts are derived correctly, including the no-order case',
   });
   expect(rows).toHaveLength(2);
   expect(rows[0]).toMatchObject({ box: null, qty: 2 });
+});
+
+test('rows are grouped by SKU, sizes smallest to biggest, then box', async () => {
+  // Brent checks a batch SKU by SKU; box-first order split one SKU across the sheet.
+  const { batchReportRows } = await import('../src/lib/batchReport.js');
+  const boxes = [{ id: 1, box_number: 1 }, { id: 2, box_number: 2 }];
+  const it = (sku, size, box_id) => ({ sku, size, box_id });
+  const rows = batchReportRows({
+    boxes,
+    items: [it('B', '7W', 2), it('A', '10', 1), it('A', '8.5', 2), it('B', '6.5W', 1),
+      it('A', '10', 2), it('A', '4Y', 1), it('A', '12', null)],
+  });
+  expect(rows.map((r) => `${r.sku} ${r.size} ${r.box ?? 'loose'}`)).toEqual([
+    'A 4Y 1', 'A 8.5 2', 'A 10 1', 'A 10 2', 'A 12 loose', 'B 6.5W 1', 'B 7W 2',
+  ]);
 });
 
 test('PH can pull the same report — they get asked when it landed too', async ({ page }) => {

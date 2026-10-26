@@ -136,8 +136,10 @@ test.describe('eBay Orders + Sales report pages', () => {
     const [dl2] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /Sales by order/ }).click()]);
     expect(dl2.suggestedFilename()).toMatch(/sales by order\.csv$/);
     await page.getByLabel('Period').selectOption('last_month');
-    await expect.poll(() => asked.length).toBe(2);
-    expect(asked[1]).toMatch(/^from=\d{4}-\d{2}-01&to=\d{4}-\d{2}-\d{2}$/);
+    // Wait for the NEW period's request, not a count: the dev build mounts the tab twice, so
+    // year to date can be asked twice and a count raced the last-month request (2026-10-27).
+    await expect.poll(() => asked.filter((a) => a !== asked[0]).length).toBe(1);
+    expect(asked.find((a) => a !== asked[0])).toMatch(/^from=\d{4}-\d{2}-01&to=\d{4}-\d{2}-\d{2}$/);
   });
 
   test('an admin reaches eBay at /ebay and connects from there; eBay comes back to /ebay', async ({ page }) => {

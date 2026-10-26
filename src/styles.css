@@ -6349,3 +6349,6 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .rcn-tally { margin: 0 0 10px; font-size: 14px; line-height: 1.5; }
 .rcn-tally-open { color: #e0a458; font-weight: 600; }
 .rcn-tally-done { color: var(--ok); font-weight: 600; }
+
+/* A receipt row the reader wants a person to look at (UPC misread / repaired / wrong size). */
+.bc-row-note { margin-top: 3px; font-size: 12px; line-height: 1.35; color: #e0a458; max-width: 280px; white-space: normal; }

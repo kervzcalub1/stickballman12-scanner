@@ -64,8 +64,9 @@ const dollars = (n) => (money(n) == null ? '—' : `$${money(n).toFixed(2)}`);
  */
 // PREMIUM and a PROPOSED TIP, in words the group reads at a glance (docs/context/buy-cart.md
 // "Premium shoes"): "⭐ PREMIUM — Andrew is proposing a $10.00 tip per pair". `replies` adds
-// how to answer it, which only the one-card-per-shoe card can take.
-export function premiumLines(line, cart, { replies = false } = {}) {
+// how to answer it by reply (the one-card-per-shoe card); `buttons` = by the tip buttons on a
+// one-size card.
+export function premiumLines(line, cart, { replies = false, buttons = false } = {}) {
   if (!line?.premium && line?.tip_status == null) return [];
   const who = String(cart?.buyer_name || 'The supplier').trim();
   const tip = money(line.tip_proposed);
@@ -80,7 +81,9 @@ export function premiumLines(line, cart, { replies = false } = {}) {
     head,
     replies
       ? `Tip: reply "tip ok" to approve it, "tip no" to decline, or "tip 5" to approve $5 instead. The costs below include it.`
-      : 'Approve or decline the tip on the request’s page. The costs below include it.',
+      : buttons
+        ? 'Tip: use the tip buttons below (a different amount: on the request’s page). The cost includes it.'
+        : 'Approve or decline the tip on the request’s page. The costs below include it.',
   ];
 }
 
@@ -197,7 +200,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
       // the cost stack — it exists whether or not Alias and StockX answered, and an
       // approver looking at an unpriced pair still wants to know what it would cost.
       `Shelf ${dollars(line.shelf_price)}${money(line.final_cost) != null ? ` · costs us ${dollars(line.final_cost)}/unit` : ''}`,
-      ...premiumLines(line, cart),
+      ...premiumLines(line, cart, { buttons: direct }),
       // HOW MANY THE SHOP HAS, when the buyer counted. Most approvals happen from this
       // card rather than the screen, and the tap IS the decision — so the number the
       // quantity is chosen against has to be on the card, not only in the app. Omitted
@@ -294,7 +297,8 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
       // tunnel — and the buttons carry the same callback data Make's did.
       const msg = await sendApprovalCard({
         caption,
-        keyboard: cardKeyboard(Number(cart.id), Number(line.id), notifyEnv()),
+        keyboard: cardKeyboard(Number(cart.id), Number(line.id), notifyEnv(),
+          { tip: line.tip_status === 'proposed' ? money(line.tip_proposed) : null }),
         photoFileId: extra.photoFileId ?? null,
       });
       console.log(`[notify] ${cart.cart_code} ${line.sku}/${line.size || '—'} → Telegram message ${msg?.message_id}`
@@ -348,8 +352,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
  * @param {{ photoFileId?: number|null, photoCount?: number }} [extra]
  */
 export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
-  // `oneCard`: a single size still gets this card — a proposed tip is answered by a reply.
-  if ((lineIds.length < 2 && !extra.oneCard) || !telegramConfigured()) {
+  if (lineIds.length < 2 || !telegramConfigured()) {
     for (const id of lineIds) await notifyLineAsked(cartId, id, extra);
     return { sent: true, perLine: true };
   }

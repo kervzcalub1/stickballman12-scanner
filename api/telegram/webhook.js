@@ -120,6 +120,18 @@ async function handleTap(update, cq) {
     });
     return answerOnCard(chatId, messageId, out, cardEnv);
   }
+  // A premium pair's tip buttons (one-size card): the same decision a "tip ok" reply makes.
+  if (kind === 'tipok' || kind === 'tipno') {
+    const out = await decideTipFromTelegram({
+      telegramUserId: from.id, telegramName: from.first_name, telegramUsername: from.username,
+      cartId, lineIds: [lineId], action: kind === 'tipok' ? 'approve' : 'decline',
+    });
+    return enqueue(() => tg('sendMessage', {
+      chat_id: chatId,
+      text: `${out.body?.ok ? `💵 ${out.body.outcome}` : `⚠️ ${out.body?.error || 'The tip answer was not recorded'}`}${cardEnv === 'dev' ? ' · [dev]' : ''}`,
+      reply_parameters: { message_id: messageId, allow_sending_without_reply: true },
+    }));
+  }
   if (kind === 'more') {
     await askTelegramQty({ telegramUserId: from.id, cartId, lineId, chatId, cardMessageId: messageId, env: cardEnv });
     // A PICKER, not "type a number". Make asked for a typed reply, and in the first live

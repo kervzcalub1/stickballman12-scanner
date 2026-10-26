@@ -647,9 +647,12 @@ whole request.
   `repriceLine` — **proposed counts as if approved** (the approver decides on the cost WITH it),
   then the approved amount, nothing once declined. Every answer re-prices the run; a line with no
   market price only moves its cost, never its call.
-- **Telegram:** a tip always goes out on the one-card-per-shoe card (`oneCard`, even for one
-  size) because only that card takes replies: `⭐ PREMIUM — Andrew is proposing a $10.00 tip per
-  pair` + how to answer. Reply **`tip ok`** / `approve tip` / `approved tip request` = approve as
+- **Telegram, ONE size:** the ordinary tap-button card (Buy 1/2/3 · More… · Turn it down), plus
+  a tip row **💵 Approve $10.00 tip** / **✕ Decline tip** (`tipok:` / `tipno:` callbacks →
+  `decideTipFromTelegram`, answered under the card). A different amount = the request page.
+  Owner, 2026-10-27: buttons for one size; replies only when the shoe has several.
+- **Telegram, SEVERAL sizes:** the one-card-per-shoe card: `⭐ PREMIUM — Andrew is proposing a
+  $10.00 tip per pair` + how to answer. Reply **`tip ok`** / `approve tip` / `approved tip request` = approve as
   proposed, **`tip 5`** / `tip $7.50` = approve that amount, **`tip no`** / `decline tip` / `tip 0`
   = decline (`splitTipReply`, `src/lib/buyPaste.js`). It can sit beside the sizes (`9 x 2` + `tip
   ok`, or one line `9 x 2, tip ok`) or alone (sizes untouched). Strict like the sizes: an

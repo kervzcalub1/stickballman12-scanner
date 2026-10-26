@@ -598,6 +598,10 @@ Suppliers often send just `100000317` / `Sizes 8-12 $50`, and a run of nine size
   per size — `9 · Did not count · BUY $61.39 · 98.9% ROI` / `· not priced` — inventory for the
   run, request code, supplier, store, and how to answer. A single size still gets the old card.
   Make (no bot token) has no reply handler, so there it stays a card per size.
+- **Sizes smallest first** (`compareSizes`) on the card and in the form's selection, whatever
+  order they were tapped in; the card's **example reply uses its own first two sizes** and the
+  count in store (`10.5 x 3`, `11 x 2`; 1 when not counted) — the fixed "9 x 5 / 10.5 x 4" read
+  as real sizes under a card of 10.5 / 11 / 11.5 (2026-10-27).
 - **Answer by REPLYING** to the card: `11 x 3` / `10.5 x 4` (also `10.5x4`, `11 × 2`, `all x 2`,
   `9 x 0` = turn down). `parseApprovalReply`: listed sizes approved at those quantities, **every
   other size on the card turned down**. Strict — an unreadable line, a size not on the card, or a
@@ -637,10 +641,16 @@ Suppliers often send just `100000317` / `Sizes 8-12 $50`, and a run of nine size
 ### Premium shoes + a proposed tip (2026-10-27)
 Suppliers ask for an extra tip on a premium pair — e.g. $10 a pair on THAT SKU only, not the
 whole request.
-- **Form** (`BuyCartAdd.jsx`, under the shelf price): `Premium shoe?` → once ticked, `Propose a
-  tip for this shoe` → once ticked, `Tip per pair`. Ticked-but-blank can't be sent (a blank tip
-  is not $0). Sent on every size of the ask (`premium`, `tipProposed`); `cart/line` refuses a
-  tip ≤ 0 or > $500 and only lets a premium line carry one.
+- **Form** (`BuyCartAdd.jsx`, under the shelf price): `Premium shoe?` → once ticked, `Tip per
+  pair` straight away (the "Propose a tip" tick was dropped 2026-10-27, for simplicity). The tip
+  is OPTIONAL: **left blank = no tip proposed, the desk decides it** (never $0). Sent on every
+  size of the ask (`premium`, `tipProposed`); `cart/line` refuses a tip ≤ 0 or > $500 and only
+  lets a premium line carry one.
+- **Premium, no tip proposed:** the card says `⭐ PREMIUM — Andrew proposed no tip, so the tip is
+  the desk's call`; the desk SETS one with a reply `tip 10` (reply card) or **Set a tip** on the
+  request page (`tip_status` approved, `tip_proposed` stays NULL). `tip ok` there has nothing to
+  approve and says "say the amount". Chip: "No tip proposed — desk decides" → "Tip $X/pair set by
+  the desk".
 - **Columns** on `buy_cart_lines` (→ **db:setup**): `premium`, `tip_proposed`, `tip_status`
   (proposed | approved | declined), `tip_approved` (may be lower — a counter), `tip_decided_by/at`.
 - **Cost:** `lineTip` (`api/_lib/buycart.js`) adds the shoe's tip to the stack's tip in

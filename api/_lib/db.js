@@ -7678,7 +7678,7 @@ export async function decideBuyCartTip(cartId, lineIds, { action, amount = null 
         profit = CASE WHEN ${full}::boolean THEN ${c ? c.profit : null}::numeric ELSE profit END,
         roi = CASE WHEN ${full}::boolean THEN ${c ? c.roi : null}::numeric ELSE roi END,
         updated_at = now()
-      WHERE id = ${id} AND cart_id = ${cartId} AND tip_status IS NOT NULL
+      WHERE id = ${id} AND cart_id = ${cartId} AND (tip_status IS NOT NULL OR premium)
       RETURNING *`;
     if (rows[0]) out.push(lineOut(rows[0]));
   }

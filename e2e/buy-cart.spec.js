@@ -2220,9 +2220,21 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(card.text).toMatch(/^9 · Did not count · BUY$/m);
     expect(card.text).toMatch(/^10 · Did not count · BUY$/m);
     expect(card.text).toContain('Sizes you leave out are turned down.');
+    expect(card.text).toContain('e.g.:\n9 x 1\n9.5 x 1\n');   // its own sizes; nothing counted → 1
     expect(card.reply_markup.inline_keyboard.flat().map((b) => b.callback_data)).toEqual([expect.stringMatching(new RegExp(`^grpreject:${row.id}:`))]);
     expect(row.line_ids).toBe(lines.map((l) => l.id).join(','));
     expect(row.message_id).not.toBeNull();
+  });
+
+  // Sizes go out smallest first whatever order they were tapped in, and the example reply is
+  // built from THIS card's sizes and counts — a made-up "9 x 5" under 10.5 / 11 read as real.
+  test('the card lists sizes smallest first, and its example reply uses its own sizes', async ({ request }) => {
+    const tapped = [['10.5', 3], ['11.5', 3], ['11', 2]].map(([size, availableQty]) => ({ ...LINE, size, availableQty }));
+    const { card } = await groupCard(request, tapped);
+    const rows = card.text.split('\n').filter((l) => /^\d+(\.5)? · /.test(l)).map((l) => l.split(' · ')[0]);
+    expect(rows).toEqual(['10.5', '11', '11.5']);
+    expect(card.text).toContain('To approve, REPLY to this card — one size per line, e.g.:\n10.5 x 3\n11 x 2\n');
+    expect(card.text).not.toContain('9 x 5');
   });
 
   test('a "size x qty" reply approves those sizes, turns the rest down — once', async ({ request }) => {
@@ -2313,7 +2325,26 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const t0 = calls.length;
     await hook(request, replyUpdate(row, 'tip ok'));
     expect(await statuses(cartId)).toEqual({ 9: 'pending', '9.5': 'pending', 10: 'pending' });
-    expect(since(t0).find((c) => c.method === 'sendMessage').body.text).toBe('⚠️ No tip was proposed on this card, so nothing was recorded. · [dev]');
+    expect(since(t0).find((c) => c.method === 'sendMessage').body.text).toBe('⚠️ This shoe isn’t premium and has no tip proposed, so nothing was recorded. · [dev]');
+  });
+
+  // Premium with the tip box left BLANK: the tip is the desk's call. "tip 8" sets it;
+  // "tip ok" has nothing to approve and says so.
+  test('a premium shoe with no tip proposed: the desk sets one with "tip 8"', async ({ request }) => {
+    const { cartId, row, card } = await groupCard(request, RUN.map((l) => ({ ...l, premium: true })));
+    expect(card.text).toContain(`⭐ PREMIUM — ${people.buyer.name} proposed no tip, so the tip is the desk’s call`);
+    expect(card.text).toContain('To set one, reply "tip 10"');
+    let t0 = calls.length;
+    await hook(request, replyUpdate(row, 'tip ok', { replyId: 720001 }));
+    expect(since(t0).find((c) => c.method === 'sendMessage').body.text).toBe('⚠️ No tip was proposed for this shoe — say the amount, like "tip 10". · [dev]');
+    t0 = calls.length;
+    await hook(request, replyUpdate(row, 'tip 8', { replyId: 720002 }));
+    expect(since(t0).find((c) => c.method === 'sendMessage').body.text).toBe(`💵 ${people.approver.name} set a $8.00 tip per pair for CW2288-111 (none was proposed) · [dev]`);
+    const tips = (await pool.query('SELECT tip_status, tip_approved, tip_proposed FROM buy_cart_lines WHERE cart_id = $1', [cartId])).rows;
+    expect(tips.every((t) => t.tip_status === 'approved' && t.tip_approved === '8.00' && t.tip_proposed == null)).toBe(true);
+    // $50 through the fixture's stack is $63.05 — plus the $8 the desk set.
+    expect((await costs(cartId))['9']).toBeCloseTo(71.05, 2);
+    expect(await statuses(cartId)).toEqual({ 9: 'pending', '9.5': 'pending', 10: 'pending' });
   });
 
   test('the request page answers the tip too — approvers only — and a declined tip leaves the cost', async ({ request }) => {
@@ -2497,13 +2528,12 @@ test.describe('one price for the run, and the sizes that break it', () => {
     await page.locator('.bc-sizes .size-chip').filter({ hasText: /^10$/ }).click();
     await page.locator('.bc-add-row .ph-price').fill('140');
 
-    // The tip question waits for Premium, and the amount waits for the tip question.
-    await expect(page.getByText('Propose a tip for this shoe')).toHaveCount(0);
-    await page.getByLabel('Premium shoe?').check();
+    // The tip box waits for Premium, then comes straight up — optional, no extra tick
+    // (2026-10-27): blank means the desk decides it.
     await expect(page.getByLabel('Tip per pair')).toHaveCount(0);
-    await page.getByLabel('Propose a tip for this shoe').check();
-    // Ticked but blank is not sendable — a blank tip is not a $0 tip.
-    await expect(page.getByRole('button', { name: 'Ask about 2 sizes' })).toBeDisabled();
+    await page.getByLabel('Premium shoe?').check();
+    await expect(page.getByText('Leave it blank and the desk decides the tip.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Ask about 2 sizes' })).toBeEnabled();
     await page.getByLabel('Tip per pair').fill('10');
     await page.locator('.bc-premium').screenshot({ path: 'test-results/premium-form.png' });
     await page.getByRole('button', { name: 'Ask about 2 sizes' }).click();

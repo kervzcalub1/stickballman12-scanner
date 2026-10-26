@@ -229,8 +229,8 @@ async function handleGroupReply(msg, cardMsg, cardEnv) {
     // the sizes. Everything is read before anything is recorded, as before.
     const split = splitTipReply(msg.text);
     if (split.error) return say(`⚠️ ${split.error}`);
-    if (split.tip && !lines.some((l) => l.tip_status != null))
-      return say('⚠️ No tip was proposed on this card, so nothing was recorded.');
+    if (split.tip && !lines.some((l) => l.tip_status != null || l.premium))
+      return say('⚠️ This shoe isn’t premium and has no tip proposed, so nothing was recorded.');
     const sizesSaid = !split.tip || split.rest.trim() !== '';
     const read = sizesSaid ? parseApprovalReply(split.tip ? split.rest : msg.text, lines) : null;
     if (read && !read.ok) return say(`⚠️ ${read.error}`);

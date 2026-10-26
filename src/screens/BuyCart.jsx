@@ -303,6 +303,14 @@ function StockPanel({ s }) {
 // What became of a premium shoe's proposed tip, in one chip.
 function TipChip({ line: l }) {
   const $ = (n) => `$${Number(n).toFixed(2)}`;
+  // Premium with no tip proposed: the desk's call (a blank tip box on the form).
+  if (l.tip_proposed == null) {
+    if (l.tip_status === 'approved')
+      return <span className="po-chip ok" title={l.tip_decided_by ? `Set by ${l.tip_decided_by}` : undefined}>Tip {$(l.tip_approved)}/pair set by the desk</span>;
+    if (l.tip_status === 'declined')
+      return <span className="po-chip muted" title={l.tip_decided_by ? `Decided by ${l.tip_decided_by}` : undefined}>No tip</span>;
+    return <span className="po-chip muted">No tip proposed — desk decides</span>;
+  }
   if (l.tip_status === 'approved') {
     const changed = l.tip_approved != null && Number(l.tip_approved) !== Number(l.tip_proposed);
     return <span className="po-chip ok" title={l.tip_decided_by ? `Approved by ${l.tip_decided_by}` : undefined}>
@@ -459,7 +467,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   }
   // The tip's buttons sit on the FIRST size of the shoe only — it's one answer for the run.
   const firstTipLine = new Map();
-  for (const l of lines) if (l.tip_status != null && !firstTipLine.has(l.sku)) firstTipLine.set(l.sku, Number(l.id));
+  for (const l of lines) if ((l.tip_status != null || l.premium) && !firstTipLine.has(l.sku)) firstTipLine.set(l.sku, Number(l.id));
 
   // Not through `act`-style error swallowing: FormModal keeps the typed values when the
   // server refuses, which is the whole reason these stopped being window.prompts.
@@ -487,8 +495,10 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
       {tipping && (
         <FormModal
           title={`Tip for ${tipping.sku}`}
-          message={`${cart.buyer_name || 'The supplier'} proposed $${Number(tipping.tip_proposed).toFixed(2)} a pair. Approve a different amount — it applies to every size of this shoe.`}
-          submitLabel="Approve this tip"
+          message={tipping.tip_proposed == null
+            ? `${cart.buyer_name || 'The supplier'} proposed no tip for this premium shoe. Set one per pair — it applies to every size of this shoe and goes into what each pair costs.`
+            : `${cart.buyer_name || 'The supplier'} proposed $${Number(tipping.tip_proposed).toFixed(2)} a pair. Approve a different amount — it applies to every size of this shoe.`}
+          submitLabel={tipping.tip_proposed == null ? 'Set this tip' : 'Approve this tip'}
           onClose={() => setTipping(null)}
           onSubmit={({ amount }) => api.cartTip(cart.id, tipping.sku, 'approve', Number(amount)).then(() => { setTipping(null); onChanged(); })}
           fields={[{ name: 'amount', label: 'Tip per pair ($)', type: 'number', step: '0.01', min: 0.01, required: true }]} />
@@ -568,7 +578,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                     {(l.premium || l.tip_status) && (
                       <div className="bc-premium-tag" onClick={(e) => e.stopPropagation()}>
                         <span className="po-chip warn">Premium</span>
-                        {l.tip_status && <TipChip line={l} />}
+                        <TipChip line={l} />
                         {canTip && l.tip_status === 'proposed' && firstTipLine.get(l.sku) === Number(l.id) && (
                           <span className="bc-tip-actions">
                             <button type="button" className="btn sm primary" disabled={!!busy}
@@ -577,6 +587,12 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                               onClick={() => setTipping(l)}>Other amount</button>
                             <button type="button" className="btn sm ghost" disabled={!!busy}
                               onClick={() => tipAnswer(l, 'decline')}>Decline</button>
+                          </span>
+                        )}
+                        {canTip && l.premium && l.tip_proposed == null && firstTipLine.get(l.sku) === Number(l.id) && (
+                          <span className="bc-tip-actions">
+                            <button type="button" className="btn sm ghost" disabled={!!busy}
+                              onClick={() => setTipping(l)}>{l.tip_status === 'approved' ? 'Change the tip' : 'Set a tip'}</button>
                           </span>
                         )}
                       </div>

@@ -24,6 +24,7 @@ import { stockForPair, stockForSizes, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
 import { telegramConfigured, telegramChatId, sendApprovalCard, sendNote, cardKeyboard, groupCardKeyboard } from './telegram.js';
 import { cardsIssuable } from '../../src/lib/buycartRules.js';
+import { compareSizes } from '../../src/lib/codes.js';
 
 // THE TEST SUITE MUST NOT POST TO TELEGRAM.
 //
@@ -70,7 +71,15 @@ export function premiumLines(line, cart, { replies = false, buttons = false } = 
   if (!line?.premium && line?.tip_status == null) return [];
   const who = String(cart?.buyer_name || 'The supplier').trim();
   const tip = money(line.tip_proposed);
-  if (tip == null) return ['⭐ PREMIUM'];
+  // Premium, no tip proposed: the tip is the desk's call (a blank box on the form).
+  if (tip == null) {
+    if (line.tip_status === 'approved') return ['⭐ PREMIUM', `✅ Tip set: ${dollars(line.tip_approved)} per pair${line.tip_decided_by ? ` (${line.tip_decided_by})` : ''}`];
+    if (line.tip_status === 'declined') return ['⭐ PREMIUM', `No tip${line.tip_decided_by ? ` (${line.tip_decided_by})` : ''}`];
+    return [
+      `⭐ PREMIUM — ${who} proposed no tip, so the tip is the desk’s call`,
+      replies ? 'To set one, reply "tip 10" (per pair), or set it on the request’s page.' : 'To set one, use the request’s page.',
+    ];
+  }
   const head = `⭐ PREMIUM — ${who} is proposing a ${dollars(tip)} tip per pair`;
   if (line.tip_status === 'approved') {
     const ok = money(line.tip_approved ?? tip);
@@ -358,7 +367,9 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
   }
   try {
     const cart = await getBuyCart(cartId);
-    const lines = (await Promise.all(lineIds.map((id) => getBuyCartLine(cartId, id)))).filter(Boolean);
+    // Smallest size first, whatever order the buyer tapped them in.
+    const lines = (await Promise.all(lineIds.map((id) => getBuyCartLine(cartId, id)))).filter(Boolean)
+      .sort((a, b) => compareSizes(a.size, b.size));
     if (!cart || !lines.length) {
       console.warn(`[notify] cart ${cartId} lines ${lineIds.join(',')} — gone before the card could be built`);
       return { sent: false, reason: 'cart or lines are gone' };
@@ -414,9 +425,10 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       `Supplier: ${cart.buyer_name}`,
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
       '',
-      'To approve, REPLY to this card — one size per line:',
-      '9 x 5',
-      '10.5 x 4',
+      // The example uses THIS card's sizes (and the count in store, when there is one) —
+      // a made-up "9 x 5" under a card of 10.5 / 11 / 11.5 read as an instruction.
+      'To approve, REPLY to this card — one size per line, e.g.:',
+      ...lines.slice(0, 2).map((l) => `${l.size} x ${l.available_qty > 0 ? l.available_qty : 1}`),
       'Sizes you leave out are turned down. A new reply replaces the last one (edits aren’t read).',
     ].join('\n');
 

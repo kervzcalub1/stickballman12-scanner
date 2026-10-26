@@ -6341,3 +6341,11 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .ap-makepo.ok { flex-direction: column; align-items: flex-start; color: #5fc58a; }
 .ap-ff-box { color: var(--muted); }
 .ii-owed { margin-top: 4px; color: #e08f8f; font-weight: 600; font-size: 13.5px; }
+
+/* PO Reconciliation: one supplier's orders, reconciled or not (Kevin, 2026-10-27). */
+.rcn-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 8px 0; }
+.rcn-filters label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 160px; }
+.rcn-filters select { width: 100%; font-size: 16px; }
+.rcn-tally { margin: 0 0 10px; font-size: 14px; line-height: 1.5; }
+.rcn-tally-open { color: #e0a458; font-weight: 600; }
+.rcn-tally-done { color: var(--ok); font-weight: 600; }

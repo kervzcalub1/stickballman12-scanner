@@ -3,7 +3,7 @@
 // overage / wrong-size / wrong-sku), leave a note explaining the outcome, copy a
 // discrepancy report to send the supplier in the group chat, and reconcile & close
 // the PO — which freezes the snapshot onto it. See docs/context/purchase-orders.md.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { TrackingLink } from '../components/TrackingLink.jsx';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -130,6 +130,11 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   const [q, setQ] = useQueryParam('q');
   const archived = tab === 'archived';
   const [archivedPos, setArchivedPos] = useState(null);
+  // ONE SUPPLIER'S ORDERS (Kevin, 2026-10-27): pick a supplier and see every PO they have
+  // here, reconciled or not, with the count of each. `rstate` narrows it: '' all ·
+  // 'open' not reconciled yet · 'done' reconciled. In the URL like the search.
+  const [supplier, setSupplier] = useQueryParam('supplier');
+  const [rstate, setRstate] = useQueryParam('rstate');
 
   const loadList = () => {
     api.poReconcileList()
@@ -142,7 +147,28 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
   useEffect(loadList, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (archived && archivedPos == null) loadArchived(); }, [archived]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A supplier picked → their archived orders count too, so the totals are the whole story.
+  useEffect(() => { if ((archived || supplier) && archivedPos == null) loadArchived(); }, [archived, supplier]); // eslint-disable-line react-hooks/exhaustive-deps
+  // …and the ones not received yet, which this page doesn't list (nothing to reconcile) but
+  // "every PO we have from them" has to count. Every order, once, only when asked.
+  const [allPos, setAllPos] = useState(null);
+  useEffect(() => {
+    if (!supplier || allPos != null) return;
+    api.poList().then((r) => setAllPos(r.pos || [])).catch((e) => { if (e.unauthorized) onSignOut(); });
+  }, [supplier]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Supplier names as typed can differ in case and spacing ("ABC Kicks " / "abc kicks"):
+  // one entry each, compared on this key.
+  const supKey = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const supplierNames = useMemo(() => {
+    const seen = new Map();
+    for (const p of [...(pos || []), ...(archivedPos || [])]) {
+      const n = String(p.supplier_name || '').trim();
+      if (n && !seen.has(supKey(n))) seen.set(supKey(n), n);
+    }
+    const names = [...seen.values()].sort((a, b) => a.localeCompare(b));
+    return supplier && !seen.has(supKey(supplier)) ? [...names, supplier] : names;
+  }, [pos, archivedPos, supplier]);
 
   // Live (docs/context/live-updates.md). The list's chips, the open order's rows, its
   // checklist and its thread all move when somebody else acts — a box received, a step
@@ -306,7 +332,20 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
   // ---- List ----
   if (!openId) {
     const all = archived ? archivedPos : pos;
-    const list = all == null ? null : all.filter((p) => poMatchesSearch(p, q));
+    const ofSupplier = (p) => !supplier || supKey(p.supplier_name) === supKey(supplier);
+    // Reconciled = frozen by "Reconcile & close" (archived ones were too); everything
+    // else on the Active tab is still to be reconciled.
+    const isDone = (p) => p.status === 'reconciled' || p.status === 'closed';
+    const list = all == null ? null : all.filter((p) => poMatchesSearch(p, q) && ofSupplier(p)
+      && (!rstate || (rstate === 'done' ? isDone(p) : !isDone(p))));
+    const mine = supplier ? (pos || []).filter(ofSupplier) : [];
+    const tally = supplier && pos ? {
+      done: mine.filter(isDone).length,
+      open: mine.filter((p) => !isDone(p)).length,
+      archived: archivedPos == null ? null : archivedPos.filter(ofSupplier).length,
+      notReceived: allPos == null ? null
+        : allPos.filter((p) => ofSupplier(p) && !['receiving', 'reconciled', 'closed'].includes(p.status)).length,
+    } : null;
     const card = (p) => {
       const chip = poChip(p.status, p.rc);
       // "3 of 0 units received" is nonsense on a blind receipt — nothing was ever
@@ -373,10 +412,41 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
             {q ? <button className="btn sm ghost" onClick={() => setQ('')}>Clear</button> : null}
             {q && all ? <span className="muted sm">{list.length} of {all.length}</span> : null}
           </div>
+          <div className="rcn-filters">
+            <label><span className="muted xs">Supplier</span>
+              <select value={supplier} onChange={(e) => setSupplier(e.target.value)} aria-label="Supplier">
+                <option value="">All suppliers</option>
+                {supplierNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+            <label><span className="muted xs">Reconciled?</span>
+              <select value={rstate} onChange={(e) => setRstate(e.target.value)} aria-label="Reconciled or not">
+                <option value="">All</option>
+                <option value="open">Not reconciled yet</option>
+                <option value="done">Reconciled</option>
+              </select>
+            </label>
+            {(supplier || rstate) && (
+              <button className="btn sm ghost" onClick={() => { setSupplier(''); setRstate(''); }}>Clear</button>
+            )}
+          </div>
+          {tally && (
+            <div className="rcn-tally">
+              <b>{supplier}</b>: {tally.open + tally.done} active PO{tally.open + tally.done === 1 ? '' : 's'}
+              {' — '}<span className="rcn-tally-open">{tally.open} not reconciled</span>
+              {' · '}<span className="rcn-tally-done">{tally.done} reconciled</span>
+              {tally.archived != null && <> · {tally.archived} archived{tally.archived > 0 && !archived
+                ? <> (<button type="button" className="linklike" onClick={() => setTab('archived')}>see them</button>)</> : null}</>}
+              {tally.notReceived ? <> · {tally.notReceived} not received yet (on Purchase Orders)</> : null}
+            </div>
+          )}
           {list == null ? <p className="muted">Loading…</p>
             : list.length === 0 ? (
               <div className="card empty-state">
-                {q ? (
+                {!q && (supplier || rstate) ? (
+                  <>No {archived ? 'archived ' : ''}{rstate === 'done' ? 'reconciled ' : rstate === 'open' ? 'unreconciled ' : ''}order{supplier ? <> from <b>{supplier}</b></> : null} here.
+                    {' '}<button className="btn sm ghost" onClick={() => { setSupplier(''); setRstate(''); }}>Clear the filter</button></>
+                ) : q ? (
                   <>No {archived ? 'archived ' : ''}order matches <b>{q}</b> — not a shoe, style code, UPC, tracking number, PO code or state. The words of a shoe have to land on the same line, so try fewer.
                     {!archived && ' It may be under Archived.'}
                     {' '}<button className="btn sm ghost" onClick={() => setQ('')}>Clear search</button></>

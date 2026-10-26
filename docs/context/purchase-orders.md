@@ -976,6 +976,16 @@ Tests: `e2e/po-wholeorder-1id.spec.js` — verified to fail without the fix.
   printed total; 17 labels filled with 1 skipped as already-declared, and a second
   import of the same file writing nothing.
 
+## Reconciliation list: one supplier's orders (2026-10-27)
+Asked by Kevin: on PO Reconciliation (`src/screens/Reconciliation.jsx`), a **Supplier**
+dropdown (every supplier on the active + archived lists; names compared trimmed and
+case-insensitive, so "ABC Kicks " and "abc kicks" are one) and **Reconciled?** (All · Not
+reconciled yet · Reconciled — reconciled = status `reconciled` or `closed`). Picking a supplier
+prints one line: `X: N active POs — a not reconciled · b reconciled · c archived (see them) · d not
+received yet (on Purchase Orders)` — the archived list and `po/list` are fetched only then.
+Both filters ride in the URL (`?supplier=`, `?rstate=`) and combine with the search box.
+Browser-side over `po/reconcile-list`; no server change. Test: `e2e/reconcile-supplier-filter.spec.js`.
+
 ## Reconciliation matching — the two notations that faked 154 short pairs
 `getPoReconciliation` used to compare `sku`/`size` as literal text (upper-cased,
 nothing else). On PO-100005 that reported a **fully-correct 233-pair shipment as 88

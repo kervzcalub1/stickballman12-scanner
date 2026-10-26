@@ -70,8 +70,11 @@ test('the CSV carries the four facts on every row, and folds pairs into per-size
   expect(lines[0]).toContain('DATE DELIVERED');
   expect(lines[0]).toContain('Batch No.');
   expect(lines[0]).toContain('PO Number');
-  // Two size lines, not three pairs — a manifest is read against a carton.
-  expect(lines).toHaveLength(3);
+  // Two size lines, not three pairs — a manifest is read against a carton — then the
+  // SKU's subtotal and the grand total.
+  expect(lines).toHaveLength(5);
+  expect(lines[3]).toMatch(/RP-1234-100,,,,Subtotal,,3\s*$/);
+  expect(lines[4]).toMatch(/GRAND TOTAL,,,,1 SKU,,3\s*$/);
   // The identifying facts repeat per row: a CSV gets sorted and pasted elsewhere, and a
   // header block would be lost the first time that happens.
   for (const row of lines.slice(1)) {
@@ -144,6 +147,20 @@ test('rows are grouped by SKU, sizes smallest to biggest, then box', async () =>
   });
   expect(rows.map((r) => `${r.sku} ${r.size} ${r.box ?? 'loose'}`)).toEqual([
     'A 4Y 1', 'A 8.5 2', 'A 10 1', 'A 10 2', 'A 12 loose', 'B 6.5W 1', 'B 7W 2',
+  ]);
+});
+
+test('every SKU gets a subtotal, and the CSV keeps Qty summable', async () => {
+  const { batchReportRows, batchReportGroups, buildBatchReportCsv } = await import('../src/lib/batchReport.js');
+  const items = [{ sku: 'A', size: '9' }, { sku: 'A', size: '9' }, { sku: 'A', size: '10' }, { sku: 'B', size: '8' }];
+  const groups = batchReportGroups(batchReportRows({ items, boxes: [] }));
+  expect(groups.map((g) => [g.sku, g.qty])).toEqual([['A', 3], ['B', 1]]);
+  const lines = buildBatchReportCsv({ batch: { batch_code: 'B-T' }, items, boxes: [] }).trim().split('\n');
+  expect(lines.map((l) => l.split(',').slice(4).join(','))).toEqual([
+    'SKU,Size,Box,Box tracking,Name,Qty,Total',
+    'A,9,loose,,,2,', 'A,10,loose,,,1,', 'A,,,,Subtotal,,3',
+    'B,8,loose,,,1,', 'B,,,,Subtotal,,1',
+    'GRAND TOTAL,,,,2 SKUs,,4',
   ]);
 });
 

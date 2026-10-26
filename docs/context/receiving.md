@@ -378,7 +378,9 @@ them, every pair counted in, folded to **one line per SKU + size** — a manifes
 against a carton, not pair by pair. **Order: grouped by SKU, sizes smallest → biggest
 (`compareSizes`), then box** (Brent, 2026-10-26 — box-first split one SKU across the
 sheet). SKU is the first column in both formats; the PDF shades by SKU group with a rule
-between SKUs.
+between SKUs. **Each SKU closes with a subtotal row and the sheet with a GRAND TOTAL
+(SKUs + pairs)** (`batchReportGroups`, 2026-10-27). In the CSV those numbers sit in their
+own **Total** column, never in Qty — summing Qty must still give the pair count.
 
 - **Where a fact is missing it is stated, not left blank**: "no purchase order", "not
   recorded", and a delivered date falling back to the creation day is marked `(created)`

@@ -598,6 +598,12 @@ Suppliers often send just `100000317` / `Sizes 8-12 $50`, and a run of nine size
   per size — `9 · Did not count · BUY $61.39 · 98.9% ROI` / `· not priced` — inventory for the
   run, request code, supplier, store, and how to answer. A single size still gets the old card.
   Make (no bot token) has no reply handler, so there it stays a card per size.
+- **The SKU line is a link to the shoe on StockX** (both cards, 2026-10-27): `stockxLinkFor`
+  (`api/_lib/notify.js`) → `https://stockx.com/<urlKey>` when StockX's catalogue has that exact
+  style code (`stockxProductBySku`, cached 12 h), else `https://stockx.com/search?s=<sku>`; never
+  fails the card. Sent as a `text_link` entity laid over the whole line (`lineLinks`,
+  `api/_lib/telegram.js`, UTF-16 offsets on the text actually sent) — no HTML parse mode, so
+  nothing else in the caption needs escaping. The approver taps it to read StockX's own sales.
 - **Sizes smallest first** (`compareSizes`) on the card and in the form's selection, whatever
   order they were tapped in; the card's **example reply uses its own first two sizes** and the
   count in store (`10.5 x 3`, `11 x 2`; 1 when not counted) — the fixed "9 x 5 / 10.5 x 4" read

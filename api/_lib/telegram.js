@@ -121,15 +121,35 @@ const CAPTION_MAX = 1024; // Telegram's limit on a photo caption
  * the card still goes — as text, saying why — because the decision matters more than
  * the picture (the Make scenario did the same).
  */
-export async function sendApprovalCard({ caption, keyboard, photoFileId = null }) {
+// Links laid over whole LINES of the text (`{ line, url }`): the SKU line becomes a tap to
+// the shoe on StockX. Entities, not HTML, so nothing else in the card needs escaping;
+// offsets are UTF-16 like JS strings. Worked out on the text actually sent, so the
+// "Photo unavailable" prefix can't shift them.
+export function lineLinks(text, links = []) {
+  const out = [];
+  for (const { line, url } of links) {
+    if (!line || !url) continue;
+    // Where the line STARTS: first line, a middle line, or the last line.
+    let offset = -1;
+    if (text === line || text.startsWith(`${line}\n`)) offset = 0;
+    else if (text.includes(`\n${line}\n`)) offset = text.indexOf(`\n${line}\n`) + 1;
+    else if (text.endsWith(`\n${line}`)) offset = text.length - line.length;
+    if (offset < 0) continue;
+    out.push({ type: 'text_link', offset, length: line.length, url });
+  }
+  return out;
+}
+
+export async function sendApprovalCard({ caption, keyboard, photoFileId = null, links = [] }) {
   const chatId = telegramChatId();
   const reply_markup = JSON.stringify(keyboard);
+  const ents = (text) => { const e = lineLinks(text, links); return e.length ? e : undefined; };
   return enqueue(async () => {
     if (photoFileId && caption.length <= CAPTION_MAX) {
       const cached = photoCache.get(Number(photoFileId));
       if (cached) {
         try {
-          return await tg('sendPhoto', { chat_id: chatId, photo: cached, caption, reply_markup: keyboard });
+          return await tg('sendPhoto', { chat_id: chatId, photo: cached, caption, caption_entities: ents(caption), reply_markup: keyboard });
         } catch (e) {
           if (e.status === 429) throw e;
           photoCache.delete(Number(photoFileId)); // a stale id — upload it fresh below
@@ -143,6 +163,7 @@ export async function sendApprovalCard({ caption, keyboard, photoFileId = null }
         const form = new FormData();
         form.set('chat_id', chatId);
         form.set('caption', caption);
+        if (ents(caption)) form.set('caption_entities', JSON.stringify(ents(caption)));
         form.set('reply_markup', reply_markup);
         const name = `${String(file.sku || 'shoe').replace(/[^A-Za-z0-9._-]/g, '_')}.jpg`;
         form.set('photo', new Blob([bytes], { type: contentType || 'image/jpeg' }), name);
@@ -154,9 +175,10 @@ export async function sendApprovalCard({ caption, keyboard, photoFileId = null }
         if (e.status === 429) throw e;
         why = e.message;
       }
-      return tg('sendMessage', { chat_id: chatId, text: `⚠️ Photo unavailable (${why})\n\n${caption}`, reply_markup: keyboard });
+      const text = `⚠️ Photo unavailable (${why})\n\n${caption}`;
+      return tg('sendMessage', { chat_id: chatId, text, entities: ents(text), reply_markup: keyboard });
     }
-    return tg('sendMessage', { chat_id: chatId, text: caption, reply_markup: keyboard });
+    return tg('sendMessage', { chat_id: chatId, text: caption, entities: ents(caption), reply_markup: keyboard });
   });
 }
 

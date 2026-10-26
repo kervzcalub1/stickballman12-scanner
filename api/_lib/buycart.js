@@ -668,11 +668,15 @@ export const allChecksPass = (checks) => checks.every((c) => c.ok);
 export async function decideTip({ cart, lines, action, amount = null, actor }) {
   if (['closed', 'cancelled'].includes(cart?.status))
     return { code: 409, error: 'This request is closed — the tip can no longer be changed.' };
-  const withTip = (lines || []).filter((l) => l.tip_status != null);
-  if (!withTip.length) return { code: 409, error: 'No tip was proposed for this shoe.' };
+  // A PREMIUM shoe with no tip proposed is the desk's to set (2026-10-27: a blank tip box
+  // means "up to the desk"), so it answers here too — with an amount.
+  const withTip = (lines || []).filter((l) => l.tip_status != null || l.premium);
+  if (!withTip.length) return { code: 409, error: 'This shoe isn’t marked premium and has no tip proposed.' };
   const amt = amount == null ? null : Math.round(Number(amount) * 100) / 100;
   if (amt != null && !(amt > 0 && amt <= 500)) return { code: 400, error: 'Enter a tip between $0.01 and $500 a pair.' };
-  const proposed = Number(withTip[0].tip_proposed);
+  const proposed = withTip[0].tip_proposed == null ? null : Number(withTip[0].tip_proposed);
+  if (action === 'approve' && amt == null && proposed == null)
+    return { code: 400, error: 'No tip was proposed for this shoe — say the amount, like "tip 10".' };
   const ok = action === 'approve' ? (amt ?? proposed) : null;
   const calls = {};
   for (const l of withTip) {
@@ -684,8 +688,10 @@ export async function decideTip({ cart, lines, action, amount = null, actor }) {
   const $ = (n) => `$${Number(n).toFixed(2)}`;
   const sku = withTip[0].sku;
   const outcome = action === 'approve'
-    ? `${who} approved the tip for ${sku}: ${$(ok)} per pair${amt != null && amt !== proposed ? ` (proposed ${$(proposed)})` : ''}`
-    : `${who} declined the ${$(proposed)} tip for ${sku}`;
+    ? (proposed == null
+      ? `${who} set a ${$(ok)} tip per pair for ${sku} (none was proposed)`
+      : `${who} approved the tip for ${sku}: ${$(ok)} per pair${amt != null && amt !== proposed ? ` (proposed ${$(proposed)})` : ''}`)
+    : (proposed == null ? `${who} set no tip for ${sku}` : `${who} declined the ${$(proposed)} tip for ${sku}`);
   const out = await decideBuyCartTip(cart.id, withTip.map((l) => l.id), { action, amount: ok }, calls, actor, outcome);
   return { lines: out, outcome };
 }

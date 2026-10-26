@@ -32,6 +32,7 @@ import { PriceInput } from './common.jsx';
 import { Icon } from './NavIcons.jsx';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../lib/payout.js';
 import { parseBuyPaste, sizeKey } from '../lib/buyPaste.js';
+import { compareSizes } from '../lib/codes.js';
 
 // Lazy, like every other camera surface here — the decoder is a large chunk and most
 // buyers type the code.
@@ -95,7 +96,6 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   // PREMIUM, and a tip the buyer proposes for THIS shoe only (per pair) — docs/context/
   // buy-cart.md "Premium shoes". The desk approves or declines it on the Telegram card.
   const [premium, setPremium] = useState(false);
-  const [proposeTip, setProposeTip] = useState(false);
   const [tip, setTip] = useState('');
   const [shooting, setShooting] = useState(false);
   const [busy, setBusy] = useState('');
@@ -111,8 +111,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
 
   const shelfNum = Number(String(shelf).replace(/[$,\s]/g, ''));
   const tipNum = Number(String(tip).replace(/[$,\s]/g, ''));
-  // Ticked "Propose a tip" but no amount: not sendable — a blank tip is not a $0 tip.
-  const tipMissing = premium && proposeTip && !(tipNum > 0);
+  // A blank tip box on a premium shoe is not $0: it means "no tip proposed — the desk decides".
   // Photos already on this request for the shoe on screen. Keyed by STYLE CODE, so a
   // buyer sending a 7, an 8 and a 9 of one pair photographs it once.
   const shots = (cart.files || []).filter((f) => f.kind === 'shoe'
@@ -203,7 +202,8 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   // at a shelf, and trying three sizes no longer spends three upstream calls.
   function tapSize(sz) {
     const v = String(sz);
-    setSizes((cur) => (cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]));
+    // Kept smallest → biggest, not in tap order: the lines, the card and the reply read that way.
+    setSizes((cur) => (cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v].sort(compareSizes)));
     // Deselecting drops its own price with it. A stale override would come back the next
     // time that size was tapped and send a price the buyer typed for a different shoe.
     setSizePrice((cur) => {
@@ -274,7 +274,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
         name: product.name || null, colorway: product.colorway || null,
         gender: product.gender || null, upc: product.upc || null,
         basis: 'with_you',
-        premium, tipProposed: premium && proposeTip ? tipNum : null,
+        premium, tipProposed: premium && tipNum > 0 ? tipNum : null,
       });
       // Several sizes go in ONE call: the server prices them one at a time and the desk
       // gets ONE Telegram card for the shoe, answered with "size x qty" — not one per size.
@@ -286,7 +286,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
       // next action; the buyer said otherwise: every add is a fresh shoe, and a form
       // still showing the last one's code and photo count was being re-sent by mistake.
       setProduct(null); setSkuInput(''); setSizes([]); setShelf(''); setSizePrice({}); setSizeAvail({});
-      setPremium(false); setProposeTip(false); setTip('');
+      setPremium(false); setTip('');
       setFromPaste(null);
       onAdded();
     } catch (err) {
@@ -397,26 +397,20 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
 
           </div>
 
-          {/* PREMIUM → PROPOSE A TIP → THE AMOUNT. Each question only once the one before it
-              is answered yes. The tip is for this shoe only, per pair, on every size asked. */}
+          {/* PREMIUM → the tip, straight away (2026-10-27: no "Propose a tip" step). The tip is
+              optional and for this shoe only, per pair, on every size asked; left blank, the
+              desk decides it. */}
           <div className="bc-premium">
             <label className="bc-check">
               <input type="checkbox" checked={premium}
-                onChange={(e) => { setPremium(e.target.checked); if (!e.target.checked) { setProposeTip(false); setTip(''); } }} />
+                onChange={(e) => { setPremium(e.target.checked); if (!e.target.checked) setTip(''); }} />
               <span>Premium shoe?</span>
             </label>
             {premium && (
-              <label className="bc-check">
-                <input type="checkbox" checked={proposeTip}
-                  onChange={(e) => { setProposeTip(e.target.checked); if (!e.target.checked) setTip(''); }} />
-                <span>Propose a tip for this shoe</span>
-              </label>
-            )}
-            {premium && proposeTip && (
               <label className="field bc-tip-field">
-                <span className="field-label">Tip per pair <span className="muted xs">· this shoe only{sizes.length > 1 ? `, all ${sizes.length} sizes` : ''}</span></span>
+                <span className="field-label">Tip per pair <span className="muted xs">· optional, this shoe only{sizes.length > 1 ? `, all ${sizes.length} sizes` : ''}</span></span>
                 <PriceInput value={tip} onChange={(e) => setTip(e.target.value)} aria-label="Tip per pair" />
-                <span className="muted xs">The desk approves or declines it with the pair.</span>
+                <span className="muted xs">{tipNum > 0 ? 'The desk approves or declines it with the pair.' : 'Leave it blank and the desk decides the tip.'}</span>
               </label>
             )}
           </div>
@@ -514,7 +508,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                 is still on the shelf. The photo is required BEFORE this, because it is
                 what the approver decides on. */}
             <button type="button" className="btn primary"
-              disabled={busy === 'add' || !(shelfNum > 0) || !shots.length || !!product.codeCheck || tipMissing}
+              disabled={busy === 'add' || !(shelfNum > 0) || !shots.length || !!product.codeCheck}
               onClick={add}>
               {busy === 'add'
                 ? 'Sending…'
@@ -525,9 +519,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                 ? 'Take a photo of the shoe first — it is what the desk decides on.'
                 : !(shelfNum > 0)
                   ? 'Type the price on the shelf ticket.'
-                  : tipMissing
-                    ? 'Type the tip you are proposing per pair — or untick "Propose a tip".'
-                    : 'Goes straight to the desk. They price it, decide, and say how many to buy.'}
+                  : 'Goes straight to the desk. They price it, decide, and say how many to buy.'}
             </span>
           </div>
         </div>

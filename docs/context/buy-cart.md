@@ -1123,6 +1123,30 @@ input / 270 output tokens.
   every read writes `receipt_ai_read` to the trail **including whether it agreed with the
   receipt's own totals**.
 
+#### Receipts that print UPCs, and long receipts (2026-10-27)
+A Nike Factory receipt prints `NIKE METCON 8 / 00196154520164 Size: 10` — a UPC, no style
+code — and is a long strip photographed lying sideways. The old pipeline (whole photo shrunk
+to 1500 px, prompt asking for a style code "e.g. HJ5996-001") returned 26 invented lines for
+22 items, copying the prompt's example code. Now (`api/_lib/receipt-ai.js`):
+- **Image:** EXIF-rotate → crop to the paper (`paperBox`: bounding box of the bright pixels on a
+  400 px greyscale copy; skipped when the paper already fills the frame) → stand it upright when
+  it's much wider than tall → long edge **2400 px**. ~1,900 tokens in for the 22-item receipt.
+- **Prompt** asks for name, **UPC**, style code ONLY if printed, size, Final Price; no example
+  codes in it any more.
+- **Read twice on the buying request too** (`readReceiptTwice`, as store orders already were);
+  disagreeing totals are a `check` problem.
+- **Every UPC is checked before its style code is used** (`resolveReceiptUpcs`): the GS1 **check
+  digit** (`src/lib/gtin.js` — catches a changed or dropped digit), the **receiving UPC lookup**
+  (`resolveUpc`: StockX → Nike → our stock → Alias), and the **size it names vs the size
+  printed**. A misread UPC is **repaired** only when exactly one valid UPC from either reading
+  fits the line (same size + price, names agree). Anything that fails keeps its price, gets a
+  blank style code and a **`note`** shown under the row in the review table; the check says
+  "N lines need their style code typed in". A name that disagrees keeps the code with a note.
+- Measured on the real receipt, 3 runs: all 22 lines + all totals right twice; once a UPC
+  misread in BOTH readings was flagged for a person (never guessed). ~$0.006 per receipt.
+- Tests: `e2e/receipt-upc.spec.js` (check digit, resolve/repair/flag with a stubbed lookup,
+  crop + stand-up on a synthetic sideways strip).
+
 #### The closing checklist shows what is LEFT
 Outstanding conditions render at full strength and completed ones recede — it was the
 other way round, so the list drew the eye to the work already behind you. Within each

@@ -74,7 +74,10 @@ export function checkReceiptRead({ rows, subtotal, itemsSold, statedTotal, tax }
   }
 
   // --- rows that cannot be true ------------------------------------------------
-  const bad = list.filter((r) => !String(r.sku || '').trim() || !(num(r.qty) > 0) || num(r.totalPrice) == null);
+  // A line whose UPC couldn't be trusted carries a note saying why — point at it.
+  const upcLeft = list.filter((r) => !String(r.sku || '').trim() && r.note);
+  if (upcLeft.length) problems.push(`${upcLeft.length} line${upcLeft.length === 1 ? ' needs its' : 's need their'} style code typed in — the UPC couldn't be trusted (see the note on ${upcLeft.length === 1 ? 'it' : 'each'}).`);
+  const bad = list.filter((r) => !upcLeft.includes(r) && (!String(r.sku || '').trim() || !(num(r.qty) > 0) || num(r.totalPrice) == null));
   if (bad.length) problems.push(`${bad.length} line${bad.length === 1 ? ' is' : 's are'} missing a style code, a quantity or a price.`);
 
   return { ok: problems.length === 0, problems, checked };

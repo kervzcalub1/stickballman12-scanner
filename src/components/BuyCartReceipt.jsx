@@ -511,7 +511,13 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
                       title={r.ok ? 'Checked — click to un-check' : 'I have checked this row against the receipt'}
                       onClick={() => toggleRow(i)}>{r.ok ? '✓' : '○'}</button>
                   </td>
-                  <td><input className="input sm" value={r.sku || ''} onChange={(e) => editRow(i, { sku: e.target.value.toUpperCase() })} /></td>
+                  <td>
+                    <input className="input sm" value={r.sku || ''} onChange={(e) => editRow(i, { sku: e.target.value.toUpperCase() })} />
+                    {/* Why a person must look at this row — a UPC that failed its check digit,
+                        named a different size, or was repaired from the second reading. */}
+                    {r.note && <div className="bc-row-note">{r.note}</div>}
+                    {!r.note && r.upc && <div className="muted xs">UPC {r.upc}</div>}
+                  </td>
                   <td><input className="input sm bc-w-sm" value={r.size || ''} onChange={(e) => editRow(i, { size: e.target.value })} /></td>
                   <td><input className="input sm bc-w-sm" type="number" min="1" value={r.qty} onChange={(e) => editRow(i, { qty: Number(e.target.value) || 1 })} /></td>
                   <td><input className="input sm bc-w-md" value={r.unitPrice ?? ''} onChange={(e) => editRow(i, { unitPrice: Number(e.target.value) || null })} /></td>

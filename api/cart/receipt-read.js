@@ -26,7 +26,7 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged 
 import { getBuyCart, getBuyCartFile, logCartEvent, dbConfigured } from '../_lib/db.js';
 import { cartVisibleTo, requireBuyerAccess } from '../_lib/buycart.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
-import { imageForModel, readReceiptOnce, receiptAiConfigured, RECEIPT_MODEL as MODEL } from '../_lib/receipt-ai.js';
+import { readReceiptTwice, receiptAiConfigured, RECEIPT_MODEL as MODEL } from '../_lib/receipt-ai.js';
 
 // The model call itself lives in api/_lib/receipt-ai.js, shared with store-order receipts.
 export { receiptAiConfigured };
@@ -68,8 +68,10 @@ export default async function handler(req, res) {
     if (String(file.content_type || '').includes('pdf'))
       return send(res, 409, { ok: false, error: 'That is a PDF — its text is read directly, no AI needed.' });
 
-    const { rows, subtotal, tax, statedTotal, itemsSold, check, usage } =
-      await readReceiptOnce(await imageForModel(await getObject(file.r2_key)));
+    // Read TWICE (2026-10-27), like a store order's receipt: the second reading repairs a
+    // UPC the first misread, and two totals that disagree are said out loud.
+    const { rows, subtotal, tax, statedTotal, itemsSold, check, usage, agreed } =
+      await readReceiptTwice(await getObject(file.r2_key));
 
     await logCartEvent({
       cartId, kind: 'receipt_ai_read', actor: user,
@@ -78,7 +80,7 @@ export default async function handler(req, res) {
     });
 
     return send(res, 200, {
-      ok: true, rows, subtotal, tax, statedTotal, itemsSold, check, model: MODEL,
+      ok: true, rows, subtotal, tax, statedTotal, itemsSold, check, model: MODEL, agreed,
       usage,
     });
   } catch (e) {

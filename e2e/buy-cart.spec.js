@@ -2039,6 +2039,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     Object.assign(process.env, {
       TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: String(CHAT),
       TELEGRAM_API_BASE: 'http://127.0.0.1:5198', MAKE_WEBHOOK_URL: '',
+      STOCKX_API_KEY: '',   // no real StockX call from a test: the SKU links to a StockX search
     });
     try {
       const { notifyLineAsked } = await import('../api/_lib/notify.js');
@@ -2061,7 +2062,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
         `✕ Turn it down=reject:${cartId}:${line.id}:${env}`,
       ]);
     } finally {
-      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL']) {
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL', 'STOCKX_API_KEY']) {
         if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
       }
     }
@@ -2076,6 +2077,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     Object.assign(process.env, {
       TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: String(CHAT),
       TELEGRAM_API_BASE: 'http://127.0.0.1:5198', MAKE_WEBHOOK_URL: '',
+      STOCKX_API_KEY: '',   // no real StockX call from a test: the SKU links to a StockX search
     });
     let card;
     try {
@@ -2084,7 +2086,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
       expect((await notifyLineAsked(cartId, Number(line.id))).sent).toBe(true);
       card = since(t0).find((c) => c.method === 'sendMessage');
     } finally {
-      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL']) {
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL', 'STOCKX_API_KEY']) {
         if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
       }
     }
@@ -2095,6 +2097,8 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(buttons).toContain(`✓ Buy 1=approve:${cartId}:${line.id}:1:${env}`);
     expect(buttons).toContain(`💵 Approve $10.00 tip=tipok:${cartId}:${line.id}:${env}`);
     expect(buttons).toContain(`✕ Decline tip=tipno:${cartId}:${line.id}:${env}`);
+    const link = (card.body.entities || []).find((e) => e.type === 'text_link');
+    expect(card.body.text.slice(link.offset, link.offset + link.length)).toBe('CW2288-111');
 
     const t1 = calls.length;
     await hook(request, tapUpdate(`tipok:${cartId}:${line.id}:dev`, { messageId: 4242 }));
@@ -2185,6 +2189,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     Object.assign(process.env, {
       TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: String(CHAT),
       TELEGRAM_API_BASE: 'http://127.0.0.1:5198', MAKE_WEBHOOK_URL: '',
+      STOCKX_API_KEY: '',   // no real StockX call from a test: the SKU links to a StockX search
     });
     try {
       const { notifyGroupAsked } = await import('../api/_lib/notify.js');
@@ -2195,7 +2200,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
       const row = (await pool.query('SELECT * FROM telegram_group_cards WHERE cart_id = $1', [cartId])).rows[0];
       return { cartId, lines, card: sent[0].body, row };
     } finally {
-      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL']) {
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL', 'STOCKX_API_KEY']) {
         if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
       }
     }
@@ -2217,6 +2222,10 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const { card, row, lines } = await groupCard(request);
     expect(card.text).toContain('CW2288-111');
     expect(card.text).toContain('Sizes (3):');
+    // The SKU line is a link to the shoe on StockX (a search when StockX isn't set up).
+    const link = (card.entities || []).find((e) => e.type === 'text_link');
+    expect(card.text.slice(link.offset, link.offset + link.length)).toBe('CW2288-111');
+    expect(link.url).toBe('https://stockx.com/search?s=CW2288-111');
     expect(card.text).toMatch(/^9 · Did not count · BUY$/m);
     expect(card.text).toMatch(/^10 · Did not count · BUY$/m);
     expect(card.text).toContain('Sizes you leave out are turned down.');
@@ -2974,4 +2983,13 @@ test('a tip answer is read strictly — ok / no / an amount, and nothing else', 
   expect(splitTipReply('tip maybe').error).toMatch(/Couldn't read "tip maybe"/);
   expect(splitTipReply('tip ok\ntip no').error).toMatch(/twice/);
   expect(splitTipReply('9 x 2')).toEqual({ tip: null, rest: '9 x 2' });
+});
+
+test('a card link sits exactly on its line, whatever comes before it', async () => {
+  const { lineLinks } = await import('../api/_lib/telegram.js');
+  const at = (text, line) => { const [e] = lineLinks(text, [{ line, url: 'https://stockx.com/x' }]); return e ? text.slice(e.offset, e.offset + e.length) : null; };
+  expect(at('Air Jordan 1\nDO9328-004\nShelf $50', 'DO9328-004')).toBe('DO9328-004');
+  expect(at('DO9328-004\nShelf $50', 'DO9328-004')).toBe('DO9328-004');            // no name line
+  expect(at('⚠️ Photo unavailable (x)\n\n⭐ Nike\nDO9328-004\nmore', 'DO9328-004')).toBe('DO9328-004'); // emoji before it
+  expect(at('Shelf DO9328-004 x\nmore', 'DO9328-004')).toBe(null);                  // only a WHOLE line
 });

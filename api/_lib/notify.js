@@ -25,6 +25,20 @@ import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js'
 import { telegramConfigured, telegramChatId, sendApprovalCard, sendNote, cardKeyboard, groupCardKeyboard } from './telegram.js';
 import { cardsIssuable } from '../../src/lib/buycartRules.js';
 import { compareSizes } from '../../src/lib/codes.js';
+import { stockxConfigured, stockxProductBySku } from './stockx.js';
+
+// Where the card's SKU line links: the shoe's own StockX page when StockX's catalogue has that
+// exact style code (`urlKey`, cached 12 h — the pricing read already warmed it), else a StockX
+// search for the code. Never fails the card.
+export async function stockxLinkFor(sku) {
+  const code = String(sku || '').trim();
+  const search = `https://stockx.com/search?s=${encodeURIComponent(code)}`;
+  if (!code || !stockxConfigured()) return search;
+  try {
+    const p = await stockxProductBySku(code);
+    return p?.exact && p.urlKey ? `https://stockx.com/${p.urlKey}` : search;
+  } catch { return search; }
+}
 
 // THE TEST SUITE MUST NOT POST TO TELEGRAM.
 //
@@ -309,6 +323,8 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
         keyboard: cardKeyboard(Number(cart.id), Number(line.id), notifyEnv(),
           { tip: line.tip_status === 'proposed' ? money(line.tip_proposed) : null }),
         photoFileId: extra.photoFileId ?? null,
+        // The SKU line opens the shoe on StockX — sales, asks, bids at a tap.
+        links: [{ line: line.sku, url: await stockxLinkFor(line.sku) }],
       });
       console.log(`[notify] ${cart.cart_code} ${line.sku}/${line.size || '—'} → Telegram message ${msg?.message_id}`
         + `${msg?.photo ? ' (with photo)' : ' (no photo)'}`);
@@ -439,6 +455,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       caption,
       keyboard: groupCardKeyboard(card.id, notifyEnv()),
       photoFileId: extra.photoFileId ?? null,
+      links: [{ line: first.sku, url: await stockxLinkFor(first.sku) }],
     });
     if (msg?.message_id) await setTelegramGroupCardMessage(card.id, msg.message_id);
     console.log(`[notify] ${cart.cart_code} ${first.sku} × ${lines.length} sizes → Telegram message ${msg?.message_id} (one card)`

@@ -451,7 +451,7 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', undelivered: '/ph/undelivered', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', sheinreprice: '/ph/shein-reprice', sheincheck: '/ph/shein-check', ebaylistings: '/ph/ebay-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', undelivered: '/ph/undelivered', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', sheinreprice: '/ph/shein-reprice', sheincheck: '/ph/shein-check', ebaylistings: '/ph/ebay-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', access: '/ph/access' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -508,6 +508,10 @@ export const PH_HOME_SECTIONS = [
     { key: 'payout', icon: 'payout', title: 'Payout Calculator', sub: 'Cost vs. Alias/StockX payout — is this pair a buy?' },
     { key: 'batches', icon: 'batches', title: 'Batches', sub: 'Find a shipment by any box’s tracking number' },
     { key: 'deleted', icon: 'deleted', title: 'Deleted', sub: 'Pairs removed from inventory, with history kept' },
+  ] },
+  // Drawn only for an account holding the privilege (`privKey`) — "Manage user access".
+  { title: 'Administration', accent: 'orders', cards: [
+    { key: 'access', icon: 'access', title: 'Check Access', sub: 'Approve sign-ups, change roles and privileges, link Telegram, reset passwords', privKey: 'manage_access' },
   ] },
   { title: 'Help', accent: 'help', cards: [
     { key: 'sop', icon: 'sop', title: 'SOP & Help', sub: 'Step-by-step procedures for every screen, plus FAQ' },

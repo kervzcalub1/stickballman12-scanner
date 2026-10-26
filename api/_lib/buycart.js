@@ -47,7 +47,13 @@ export const PRIVILEGES = [
   // Store orders (docs/store-orders-plan.md §4.6): Kevin is ph_team and does this on top.
   // Not a buying-request duty — just the same "permission on top of a job" model.
   { key: 'audit_po', label: 'Audit store orders' },
+  // ADMIN TOOLS on top of a job (2026-10-27): the admin's two everyday powers, held by a PH or
+  // warehouse account WITHOUT becoming an admin — their dashboard stays their own. Only a
+  // real admin grants or removes these two (ADMIN_LEVEL_PRIVILEGES, api/admin/review.js).
+  { key: 'manage_access', label: 'Manage user access' },
+  { key: 'connect_integrations', label: 'Connect integrations (SHEIN, eBay)' },
 ];
+export const ADMIN_LEVEL_PRIVILEGES = ['manage_access', 'connect_integrations'];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
 // What a supplier may hold — everything else is stripped (setUserPrivileges, db:setup).
 export const BUYER_PRIVILEGE_KEYS = ['request_buying'];
@@ -694,4 +700,33 @@ export async function decideTip({ cart, lines, action, amount = null, actor }) {
     : (proposed == null ? `${who} set no tip for ${sku}` : `${who} declined the ${$(proposed)} tip for ${sku}`);
   const out = await decideBuyCartTip(cart.id, withTip.map((l) => l.id), { action, amount: ok }, calls, actor, outcome);
   return { lines: out, outcome };
+}
+
+/**
+ * Check Access (api/admin/*): an admin, or an account holding "Manage user access". Returns
+ * the user (with `fullAdmin`), or null after answering 401/403. A privilege holder works on
+ * other people's NON-admin accounts only, and can't hand out the admin-level privileges —
+ * those rules are the endpoints' (api/admin/review.js), this only opens the door.
+ */
+export async function requireAccessManager(req, res) {
+  const user = await requirePrivilege(req, res, 'manage_access', 'Managing accounts needs an admin, or the “Manage user access” privilege.');
+  return user ? { ...user, fullAdmin: isPrivileged(user.role) } : null;
+}
+
+/**
+ * What a non-admin access manager may NOT do to an account — the reason, or null when it's
+ * allowed. Admins are never refused here.
+ */
+export function accessRefusal(actor, target, { role = null, privileges = null } = {}) {
+  if (actor.fullAdmin) return null;
+  if (Number(actor.uid) === Number(target.id)) return 'You can’t change your own account — ask an admin.';
+  if (isPrivileged(target.role)) return 'Only an admin can change an admin’s account.';
+  if (role === 'admin') return 'Only an admin can make someone an admin.';
+  if (privileges) {
+    const had = new Set((target.privileges || []).filter((k) => ADMIN_LEVEL_PRIVILEGES.includes(k)));
+    const want = new Set(privileges.filter((k) => ADMIN_LEVEL_PRIVILEGES.includes(k)));
+    if (had.size !== want.size || [...had].some((k) => !want.has(k)))
+      return 'Only an admin can grant or remove “Manage user access” and “Connect integrations”.';
+  }
+  return null;
 }

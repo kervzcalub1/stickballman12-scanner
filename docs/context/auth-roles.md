@@ -82,6 +82,25 @@
   never privileged, and an admin isn't scoped to a supplier id, so scoping code branches
   on `role === 'supplier'` directly (`po/list`, `payout/presets`).
 
+## Admin tools as PRIVILEGES (2026-10-27)
+Two admin powers can be held ON TOP of a role, so a PH or warehouse account gets them without
+becoming an admin — its role, and so its dashboard, stays its own:
+- **`manage_access`** "Manage user access" → **Check Access** (`api/admin/users|review|reset-password`
+  via `requireAccessManager`, `api/_lib/buycart.js`). Card on the PH home (`/ph/access`, section
+  "Administration") and on the warehouse home (the admin-only section shows a non-admin the
+  cards whose `privKey` they hold).
+- **`connect_integrations`** "Connect integrations" → Connect / Disconnect **SHEIN** and **eBay**
+  (`api/shein/connect`, `api/ebay/connect` via `requirePrivilege`), the SHEIN live-sync switches
+  (`api/shein/live`), and every "Connect eBay again" button. The eBay **Sales report** stays
+  admin-only. Opens `/shein-check` + `/ebay` on the warehouse side too.
+- **Limits on a holder who isn't an admin** (`accessRefusal`, enforced server-side; the screen
+  only greys them): no action on an **admin's** account, none on **their own**, can't set role
+  **admin**, and can't grant or remove **either of these two** — only a real admin does
+  (`ADMIN_LEVEL_PRIVILEGES`). Staff privileges (buying duties, audit_po) they can set.
+- Read fresh from the DB on every call, like every privilege. The UI's cards come from the
+  privileges stored at sign-in, so a newly granted holder signs out and in once to see them.
+- No schema change (privileges is a free TEXT[]). Test: `e2e/admin-privileges.spec.js`.
+
 ## Sessions
 - HMAC bearer tokens (`SESSION_SECRET`, ≥16 chars, enforced), ~8h TTL.
 - **Stateless** → a deleted account / role change only takes effect on next

@@ -5,6 +5,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { TopBar, Modal } from '../components/common.jsx';
 import { api } from '../api.js';
+import { hasPriv } from '../lib/constants.js';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estDate, PH_DATETIME } from '../lib/format.js';
@@ -57,6 +58,9 @@ function Thumb({ src, alt }) {
 
 export function EbayListings({ user, onHome, onSignOut }) {
   const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
+  // Connect / Disconnect / "Connect eBay again": an admin, or "Connect integrations"
+  // (2026-10-27). The Sales report stays admin-only.
+  const canConnect = isAdmin || hasPriv(user, 'connect_integrations');
   const [st, setSt] = useState(null);
   const [rows, setRows] = useState(null);
   const [busy, setBusy] = useState('');
@@ -136,14 +140,14 @@ export function EbayListings({ user, onHome, onSignOut }) {
         <h3 className="er-step-title">eBay account</h3>
         <p className="muted sm">Pulls what’s live on eBay — photos, sizes, Custom labels, prices and quantities — and checks each Custom label against Shopify. From here you can reprice sizes (market + markup), make coupon codes, and end listings that are no longer in Shopify. Quantities are never changed here (DPL, Shopify → eBay, still does that).</p>
         {!st ? <p className="muted">Loading…</p> : !st.configured ? (
-          <p className="sm">eBay isn’t set up on this server yet{isAdmin && st.missing?.length ? <> — missing <b>{st.missing.join(', ')}</b> on Railway</> : ''}.</p>
+          <p className="sm">eBay isn’t set up on this server yet{canConnect && st.missing?.length ? <> — missing <b>{st.missing.join(', ')}</b> on Railway</> : ''}.</p>
         ) : st.connected ? (
           <div className="ebl-account">
             <span className="ebl-ok">● Connected{st.user ? <> as <b>{st.user}</b></> : ''}{st.sandbox ? ' (sandbox)' : ''}</span>
             <span className="muted sm">Approved {st.connectedAt ? estDate(st.connectedAt) : ''}{st.connectedBy ? ` by ${st.connectedBy}` : ''} · access good until {st.refreshExpiresAt ? estDate(st.refreshExpiresAt) : '—'}</span>
-            {isAdmin && <button type="button" className="btn ghost sm" disabled={!!busy} onClick={disconnectNow}>Disconnect</button>}
+            {canConnect && <button type="button" className="btn ghost sm" disabled={!!busy} onClick={disconnectNow}>Disconnect</button>}
           </div>
-        ) : isAdmin ? (
+        ) : canConnect ? (
           <div className="ebl-account">
             <button type="button" className="btn primary" disabled={!!busy || !st.secrets} onClick={connect}>{busy === 'connect' ? 'Opening eBay…' : 'Connect eBay'}</button>
             <span className="muted sm">Opens eBay’s sign-in. Sign in as the <b>seller account</b> and press Agree — you come back here.</span>
@@ -186,13 +190,13 @@ export function EbayListings({ user, onHome, onSignOut }) {
           <button type="button" className={`seg-btn${tab === 'ended' ? ' on' : ''}`} onClick={() => setTab('ended')}>Ended</button>
         </div>
       )}
-      {tab === 'orphans' && rows && <OrphansTab orphans={orphanListings} checked={rows.some((r) => r.in_shopify != null)} isAdmin={isAdmin}
+      {tab === 'orphans' && rows && <OrphansTab orphans={orphanListings} checked={rows.some((r) => r.in_shopify != null)} isAdmin={canConnect}
         onSignOut={onSignOut} onEnded={load} onConnect={connect} />}
       {tab === 'ended' && <EndedTab onSignOut={onSignOut} />}
-      {tab === 'orders' && st?.connected && <EbayOrders isAdmin={isAdmin} onSignOut={onSignOut} onConnect={connect} />}
+      {tab === 'orders' && st?.connected && <EbayOrders isAdmin={canConnect} onSignOut={onSignOut} onConnect={connect} />}
       {tab === 'sales' && st?.connected && <EbaySalesReport isAdmin={isAdmin} onSignOut={onSignOut} onConnect={connect} />}
-      {tab === 'reprice' && rows && rows.length > 0 && <EbayApiReprice listings={listings} isAdmin={isAdmin} onSignOut={onSignOut} onConnect={connect} onChanged={load} />}
-      {tab === 'coupons' && rows && rows.length > 0 && <EbayCoupons listings={listings} isAdmin={isAdmin} onSignOut={onSignOut} onConnect={connect} />}
+      {tab === 'reprice' && rows && rows.length > 0 && <EbayApiReprice listings={listings} isAdmin={canConnect} onSignOut={onSignOut} onConnect={connect} onChanged={load} />}
+      {tab === 'coupons' && rows && rows.length > 0 && <EbayCoupons listings={listings} isAdmin={canConnect} onSignOut={onSignOut} onConnect={connect} />}
       {tab === 'all' && rows && rows.length > 0 && (
         <div className="card">
           <div className="ebl-filters">

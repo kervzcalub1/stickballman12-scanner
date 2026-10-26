@@ -198,11 +198,11 @@ export const HOME_SECTIONS = [
   // (listings, orders, sales report, reprice, coupons) — here so an ADMIN can reach it and
   // connect the account without the superadmin-only PH workspace.
   { title: 'Marketplaces', adminOnly: true, accent: 'listing', cards: [
-    { key: 'ebay', icon: '🛒', title: 'eBay', sub: 'Orders & late shipments, sales report (CSV), listings, reprice, coupons — and connect the account' },
-    { key: 'shein-check', icon: '🧭', title: 'SHEIN ↔ Shopify check', sub: 'Wrong sizes, SKUs gone from Shopify, more stock on SHEIN — export in, fix list out' },
+    { key: 'ebay', privKey: 'connect_integrations', icon: '🛒', title: 'eBay', sub: 'Orders & late shipments, sales report (CSV), listings, reprice, coupons — and connect the account' },
+    { key: 'shein-check', privKey: 'connect_integrations', icon: '🧭', title: 'SHEIN ↔ Shopify check', sub: 'Wrong sizes, SKUs gone from Shopify, more stock on SHEIN — export in, fix list out' },
   ] },
   { title: 'Administration', adminOnly: true, accent: 'orders', cards: [
-    { key: 'access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },
+    { key: 'access', privKey: 'manage_access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },
     { key: 'settings', icon: '⚙️', title: 'Settings', sub: 'Price margin % and other app-wide settings' },
   ] },
   // Superadmin only: both tools rewrite records other people rely on and neither can be
@@ -233,6 +233,10 @@ export const PRIVILEGES = [
   { key: 'request_buying', label: 'Raise buying requests', hint: 'Buy stock for the company: list what to buy, get funded, send the receipt back', buyer: true },
   // Store orders: mark an order bought from several stores audited (received vs declared vs card).
   { key: 'audit_po', label: 'Audit store orders', hint: 'Check a store order’s pairs, receipts and card charges, then mark it audited', notBuying: true },
+  // ADMIN TOOLS on top of a job (2026-10-27): the role — and so the dashboard — stays theirs.
+  // Only a real admin grants or removes these two (`adminLevel`).
+  { key: 'manage_access', label: 'Manage user access', hint: 'Open Check Access: approve sign-ups, change roles and privileges, link Telegram, reset passwords — on non-admin accounts', notBuying: true, adminLevel: true },
+  { key: 'connect_integrations', label: 'Connect integrations', hint: 'Connect or disconnect SHEIN and eBay, and switch the SHEIN live sync', notBuying: true, adminLevel: true },
 ];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
 export const STAFF_PRIVILEGES = PRIVILEGES.filter((p) => !p.buyer);

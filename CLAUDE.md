@@ -100,6 +100,8 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
   admin · supplier). `users.privileges` is a set of permissions on top — the gift-card
   duties, `audit_po` (store-order audit), plus `request_buying` — the only one a **supplier** can hold, and the switch
   that turns the buying screens on for that account (most suppliers only ship boxes).
+  **`manage_access` / `connect_integrations`** give a PH or warehouse account Check Access and
+  SHEIN/eBay Connect without making them an admin; only an admin grants those two (`auth-roles.md`).
   Privileges are read from the DB on every call, NOT from the token, so revoking one
   takes effect at once. Never add a "role" for something one person could hold
   alongside their real job.

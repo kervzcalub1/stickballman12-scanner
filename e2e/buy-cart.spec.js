@@ -2243,6 +2243,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const rows = card.text.split('\n').filter((l) => /^\d+(\.5)? · /.test(l)).map((l) => l.split(' · ')[0]);
     expect(rows).toEqual(['10.5', '11', '11.5']);
     expect(card.text).toContain('To approve, REPLY to this card — one size per line, e.g.:\n10.5 x 3\n11 x 2\n');
+    expect(card.text).toContain('A range works too: 10.5-11.5 x 1 · or "all x 1".');
     expect(card.text).not.toContain('9 x 5');
   });
 
@@ -2992,4 +2993,15 @@ test('a card link sits exactly on its line, whatever comes before it', async () 
   expect(at('DO9328-004\nShelf $50', 'DO9328-004')).toBe('DO9328-004');            // no name line
   expect(at('⚠️ Photo unavailable (x)\n\n⭐ Nike\nDO9328-004\nmore', 'DO9328-004')).toBe('DO9328-004'); // emoji before it
   expect(at('Shelf DO9328-004 x\nmore', 'DO9328-004')).toBe(null);                  // only a WHOLE line
+});
+
+test('a reply can name a RANGE of sizes — the card sizes between them, one quantity each', async () => {
+  const { parseApprovalReply } = await import('../src/lib/buyPaste.js');
+  const lines = ['10.5', '11', '11.5', '13.5', '14'].map((size, i) => ({ id: i + 1, size }));
+  const read = (t) => { const r = parseApprovalReply(t, lines); return r.ok ? r.approve.map((a) => `${a.line.size}×${a.qty}`) : r.error; };
+  expect(read('10.5-11.5 x 2')).toEqual(['10.5×2', '11×2', '11.5×2']);
+  expect(read('10.5 - 11.5 x 2\n14 x 1')).toEqual(['10.5×2', '11×2', '11.5×2', '14×1']);
+  expect(read('11 to 14 x 3')).toEqual(['11×3', '11.5×3', '13.5×3', '14×3']);
+  expect(read('10.5-11.5 x 2\n11 x 1')).toMatch(/Size 11 is in the reply twice/);
+  expect(read('5-6 x 1')).toMatch(/5-6 isn’t on this card/);
 });

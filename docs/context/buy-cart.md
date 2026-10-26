@@ -608,6 +608,10 @@ Suppliers often send just `100000317` / `Sizes 8-12 $50`, and a run of nine size
   order they were tapped in; the card's **example reply uses its own first two sizes** and the
   count in store (`10.5 x 3`, `11 x 2`; 1 when not counted) — the fixed "9 x 5 / 10.5 x 4" read
   as real sizes under a card of 10.5 / 11 / 11.5 (2026-10-27).
+- **A RANGE in a reply** (2026-10-27): `10.5-11.5 x 2` (also `10.5 - 11.5`, `11 to 14`) = every size
+  ON THE CARD between the two, inclusive, that many each; a W/Y suffix narrows it. A size also
+  named on its own line is "in the reply twice" (nothing recorded). The card says so under its
+  example. Losses print `-$19.74`, not `$-19.74`.
 - **Answer by REPLYING** to the card: `11 x 3` / `10.5 x 4` (also `10.5x4`, `11 × 2`, `all x 2`,
   `9 x 0` = turn down). `parseApprovalReply`: listed sizes approved at those quantities, **every
   other size on the card turned down**. Strict — an unreadable line, a size not on the card, or a

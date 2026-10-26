@@ -25,12 +25,12 @@
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
 import { dbConfigured, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
-import { decideFromTelegram } from '../_lib/telegramDecide.js';
+import { decideFromTelegram, decideTipFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
 import { alertCancellationsLogged } from '../_lib/alerts.js';
 import { downloadTelegramFile, fileCancellationPhoto, fileTypedCancellation, replyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport } from '../_lib/cancellations.js';
 import { platformFromCommand, platformLabel, PLATFORMS } from '../../src/lib/cancellations.js';
-import { parseApprovalReply } from '../../src/lib/buyPaste.js';
+import { parseApprovalReply, splitTipReply } from '../../src/lib/buyPaste.js';
 const PLATFORM_KEYS = new Set(PLATFORMS.map((p) => p.key));
 
 const env = (k) => String(process.env[k] || '').trim();
@@ -213,10 +213,26 @@ async function handleGroupReply(msg, cardMsg, cardEnv) {
   return oneCardAtATime(card.id, async () => {
     const lines = await cardLines(card);
     if (!lines.length) return say('⚠️ Those sizes are no longer on the request, so nothing was recorded.');
-    const read = parseApprovalReply(msg.text, lines);
-    if (!read.ok) return say(`⚠️ ${read.error}`);
+    // A premium shoe's TIP answer ("tip ok" / "tip no" / "tip 5") can come alone or beside
+    // the sizes. Everything is read before anything is recorded, as before.
+    const split = splitTipReply(msg.text);
+    if (split.error) return say(`⚠️ ${split.error}`);
+    if (split.tip && !lines.some((l) => l.tip_status != null))
+      return say('⚠️ No tip was proposed on this card, so nothing was recorded.');
+    const sizesSaid = !split.tip || split.rest.trim() !== '';
+    const read = sizesSaid ? parseApprovalReply(split.tip ? split.rest : msg.text, lines) : null;
+    if (read && !read.ok) return say(`⚠️ ${read.error}`);
     // Telegram redelivers an update it didn't get a 200 for; the second copy is a no-op.
     if (!(await claimTelegramGroupReply(card.id, msg.message_id))) return null;
+    if (split.tip) {
+      const from = msg.from || {};
+      const out = await decideTipFromTelegram({
+        telegramUserId: from.id, telegramName: from.first_name, telegramUsername: from.username,
+        cartId: card.cart_id, lineIds: lines.map((l) => Number(l.id)), ...split.tip,
+      });
+      await say(out.body?.ok ? `💵 ${out.body.outcome}` : `⚠️ ${out.body?.error || 'The tip answer was not recorded'}`);
+    }
+    if (!read) return null;
     return decideGroup({
       from: msg.from || {}, card, chatId, messageId: cardMsg.message_id, cardEnv, lines,
       approve: read.approve.map((a) => ({ id: Number(a.line.id), size: a.line.size, qty: a.qty })),

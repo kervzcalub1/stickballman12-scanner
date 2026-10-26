@@ -1449,6 +1449,13 @@ button.ph-plat-chip { cursor: pointer; }
 .bc-size-avail { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .bc-size-avail-head { display: block; }
 .bc-size-avail-note { margin: 0; }
+/* Premium → propose a tip → the amount (buy-cart.md "Premium shoes"). */
+.bc-premium { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.bc-check { display: flex; align-items: center; gap: 10px; min-height: 40px; cursor: pointer; font-size: 15px; }
+.bc-check input { width: 20px; height: 20px; flex: none; }
+.bc-tip-field { max-width: 220px; }
+.bc-premium-tag { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.bc-tip-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 /* On a decided/pending line: the count under the size, and the flag when an approver
    goes above it. Amber, not red — over-approving is allowed on purpose (stock moves),
    so this is something to notice, not an error. */

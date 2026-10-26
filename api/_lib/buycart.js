@@ -6,7 +6,7 @@
 // `cart/close` re-evaluates them server-side, so a person is never told they can close
 // something the server will refuse.
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
-import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty } from './db.js';
+import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty, decideBuyCartTip } from './db.js';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
 import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly } from '../../src/lib/buycartRules.js';
 import { alertLinesDecided } from './alerts.js';
@@ -240,6 +240,18 @@ export function describeCostChange(before, after) {
 }
 
 /**
+ * The extra tip per pair a PREMIUM line carries on top of the request's stack (2026-10-27).
+ * Proposed counts as if approved — the approver is deciding on the cost WITH the tip — then
+ * the approved amount (which may be lower), and nothing once declined.
+ */
+export function lineTip(line) {
+  const s = line?.tip_status;
+  const n = s === 'approved' ? Number(line.tip_approved ?? line.tip_proposed)
+    : s === 'proposed' ? Number(line.tip_proposed) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
  * Re-derive one line's landed cost and buy call against a cost stack.
  *
  * **This is the one place the snapshot rule bends, and only on purpose.** A line's call
@@ -261,7 +273,9 @@ export function repriceLine(line, stack) {
   const shelf = Number(line?.shelf_price);
   if (!(shelf > 0)) return null;
   const r2 = (n) => Math.round(Number(n) * 100) / 100;
-  const cost = calcCostBreakdown({ ...(stack || {}), shelfPrice: shelf });
+  // A premium shoe's own tip rides on top of the request's tip (`lineTip`).
+  const tipAmt = (Number(stack?.tipAmt) || 0) + lineTip(line);
+  const cost = calcCostBreakdown({ ...(stack || {}), tipAmt, shelfPrice: shelf });
   const alias = Number(line.alias_price) > 0 ? Number(line.alias_price) : null;
   const stockx = Number(line.stockx_price) > 0 ? Number(line.stockx_price) : null;
   const payouts = [
@@ -642,3 +656,36 @@ export async function cartCloseChecks(full) {
 }
 
 export const allChecksPass = (checks) => checks.every((c) => c.ok);
+
+/**
+ * The desk's answer to a premium shoe's PROPOSED TIP (docs/context/buy-cart.md "Premium
+ * shoes"). One path for the screen (`cart/tip`) and a Telegram reply ("tip ok"), so both
+ * record it the same way; the caller has already checked `approve_buying`.
+ * `lines` = the run (every size of the shoe); `amount` = approve a different figure.
+ * Each line is re-priced with the tip that now applies — it is part of what the pair costs.
+ * Returns `{ lines, outcome }` or `{ code, error }`.
+ */
+export async function decideTip({ cart, lines, action, amount = null, actor }) {
+  if (['closed', 'cancelled'].includes(cart?.status))
+    return { code: 409, error: 'This request is closed — the tip can no longer be changed.' };
+  const withTip = (lines || []).filter((l) => l.tip_status != null);
+  if (!withTip.length) return { code: 409, error: 'No tip was proposed for this shoe.' };
+  const amt = amount == null ? null : Math.round(Number(amount) * 100) / 100;
+  if (amt != null && !(amt > 0 && amt <= 500)) return { code: 400, error: 'Enter a tip between $0.01 and $500 a pair.' };
+  const proposed = Number(withTip[0].tip_proposed);
+  const ok = action === 'approve' ? (amt ?? proposed) : null;
+  const calls = {};
+  for (const l of withTip) {
+    const c = repriceLine({ ...l, tip_status: action === 'approve' ? 'approved' : 'declined', tip_approved: ok }, cart.cost_stack || {});
+    const priced = Number(l.alias_price) > 0 || Number(l.stockx_price) > 0;
+    if (c) calls[Number(l.id)] = priced ? c : { ...c, costOnly: true };
+  }
+  const who = actor?.name || actor?.username || 'Someone';
+  const $ = (n) => `$${Number(n).toFixed(2)}`;
+  const sku = withTip[0].sku;
+  const outcome = action === 'approve'
+    ? `${who} approved the tip for ${sku}: ${$(ok)} per pair${amt != null && amt !== proposed ? ` (proposed ${$(proposed)})` : ''}`
+    : `${who} declined the ${$(proposed)} tip for ${sku}`;
+  const out = await decideBuyCartTip(cart.id, withTip.map((l) => l.id), { action, amount: ok }, calls, actor, outcome);
+  return { lines: out, outcome };
+}

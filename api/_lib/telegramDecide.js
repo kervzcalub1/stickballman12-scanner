@@ -7,8 +7,8 @@
 // `body` = { telegramUserId, telegramName?, telegramUsername?, cartId, lineIds:[…],
 //            action:'approve'|'reject', qty?, reason? }
 // Returns { code, body } — the HTTP status and JSON the endpoint used to send.
-import { getBuyCart, userByTelegramId, noteTelegramLinkRequest } from './db.js';
-import { hasPrivilege, decideLines } from './buycart.js';
+import { getBuyCart, getBuyCartLine, userByTelegramId, noteTelegramLinkRequest } from './db.js';
+import { hasPrivilege, decideLines, decideTip } from './buycart.js';
 import { notifyIssuersIfReady } from './notify.js';
 
 const R = (code, body) => ({ code, body });
@@ -116,5 +116,39 @@ export async function decideFromTelegram(body) {
   } catch (e) {
     console.error('[cart/telegram-decide]', e.message);
     return R(500, { ok: false, error: 'Could not record that decision.' });
+  }
+}
+
+// A reply's TIP answer ("tip ok" / "tip no" / "tip 5") under a premium shoe's card. Same
+// identity rules as a size decision: the linked account, and `approve_buying` re-read now.
+// `body` = { telegramUserId, telegramName?, telegramUsername?, cartId, lineIds, action, amount? }
+export async function decideTipFromTelegram(body) {
+  const cartId = Number(body.cartId);
+  const tgId = Number(body.telegramUserId);
+  console.log(`[telegram-decide] tip reply from tg:${tgId || '?'} cart:${cartId || '?'} lines:${JSON.stringify(body.lineIds || [])} ${body.action} ${body.amount ?? ''}`);
+  if (!Number.isInteger(cartId) || !Number.isInteger(tgId) || tgId <= 0)
+    return R(400, { ok: false, error: 'A tip answer needs a request and a person.' });
+  try {
+    const actor = await userByTelegramId(tgId);
+    if (!actor) {
+      await noteTelegramLinkRequest({
+        telegramUserId: tgId,
+        name: String(body.telegramName ?? '').trim().slice(0, 120) || null,
+        username: String(body.telegramUsername ?? '').trim().slice(0, 60) || null,
+      }).catch(() => {});
+      return R(403, { ok: false, needsLink: true, error: `Telegram account ${tgId} isn’t linked to anyone here yet, so the tip answer has nobody to record against. An admin links it on Check Access.` });
+    }
+    if (actor.status !== 'approved') return R(403, { ok: false, error: `${actor.name}’s account is not active here.` });
+    if (!(await hasPrivilege(actor, 'approve_buying')))
+      return R(403, { ok: false, error: `${actor.name} cannot approve buying requests, so can’t answer the tip.` });
+    const cart = await getBuyCart(cartId);
+    if (!cart) return R(404, { ok: false, error: 'That buying request does not exist.' });
+    const lines = (await Promise.all((body.lineIds || []).map((id) => getBuyCartLine(cartId, Number(id))))).filter(Boolean);
+    const out = await decideTip({ cart, lines, action: body.action === 'decline' ? 'decline' : 'approve', amount: body.amount ?? null, actor });
+    if (out.error) return R(out.code, { ok: false, error: out.error });
+    return R(200, { ok: true, by: actor.name || actor.username, outcome: out.outcome });
+  } catch (e) {
+    console.error('[telegram-decide] tip', e.message);
+    return R(500, { ok: false, error: 'Could not record the tip answer.' });
   }
 }

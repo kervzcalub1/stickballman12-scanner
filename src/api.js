@@ -390,6 +390,8 @@ export const api = {
   // Approving CARRIES the quantity: the buyer reports what they found, and how many to
   // buy is the decision. `qty` is a { lineId: n } map; `qtyAll` covers an approve-all.
   cartDecide: (cartId, payload) => post('/api/cart/decide', { cartId, ...payload }),
+  // A premium shoe's proposed tip: approve (optionally a different amount) or decline.
+  cartTip: (cartId, sku, action, amount = null) => post('/api/cart/tip', { cartId, sku, action, amount }),
   cartAddGiftCard: (cartId, card) => post('/api/cart/gift-card', { cartId, card }),
   cartVoidGiftCard: (cartId, voidId, reason) => post('/api/cart/gift-card', { cartId, voidId, reason }),
   cartFund: (cartId) => post('/api/cart/gift-card', { cartId, fund: true }),

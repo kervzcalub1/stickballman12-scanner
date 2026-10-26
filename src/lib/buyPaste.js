@@ -185,3 +185,33 @@ export function parseApprovalReply(text, lines) {
   }
   return { ok: true, approve, reject };
 }
+
+/**
+ * Pull the TIP answer out of a reply to a premium shoe's card (docs/context/buy-cart.md
+ * "Premium shoes"), leaving the "size x qty" lines for `parseApprovalReply`.
+ *   "tip ok" / "tip yes" / "approve tip" / "approved tip request" → approve the amount proposed
+ *   "tip 5" / "tip $7.50"                                         → approve that amount instead
+ *   "tip no" / "decline tip" / "no tip"                           → decline
+ * A line that starts with "tip" but says none of those is an error — this pays money.
+ * @returns {{ tip: null | { action:'approve'|'decline', amount:number|null }, rest: string, error?: string }}
+ */
+export function splitTipReply(text) {
+  const keep = []; let tip = null; let error = null;
+  // Same separators as parseApprovalReply, so "9 x 2, tip ok" on one line works too.
+  for (const raw of String(text || '').split(/[\r\n,;]+/)) {
+    const t = raw.trim().toLowerCase().replace(/[.!]+$/, '');
+    if (!/\btip\b/.test(t)) { keep.push(raw); continue; }
+    let found = null;
+    if (/^(?:(?:approve|approved|ok|okay|yes)\s+(?:the\s+)?tip(?:\s+request)?|tip\s+(?:ok|okay|yes|approve|approved|✅|👍)(?:\s+request)?)$/.test(t)) found = { action: 'approve', amount: null };
+    else if (/^(?:(?:decline|declined|deny|denied|reject|rejected|no)\s+(?:the\s+)?tip(?:\s+request)?|tip\s+(?:no|decline|declined|deny|denied|reject|rejected|❌|👎)(?:\s+request)?)$/.test(t)) found = { action: 'decline', amount: null };
+    else {
+      const m = /^(?:approve(?:d)?\s+)?tip\s*(?:of\s*)?\$?\s*(\d{1,3}(?:\.\d{1,2})?)\s*(?:per\s+pair|\/\s*pair|each|ea)?$/.exec(t);
+      if (m && Number(m[1]) > 0) found = { action: 'approve', amount: Math.round(Number(m[1]) * 100) / 100 };
+      else if (m) found = { action: 'decline', amount: null };   // "tip 0" = no tip
+    }
+    if (!found) { error = `Couldn't read "${raw.trim()}". For the tip, reply "tip ok", "tip no", or "tip 5" for $5 a pair.`; continue; }
+    if (tip) { error = 'The tip is in the reply twice — say it once. Nothing was recorded.'; continue; }
+    tip = found;
+  }
+  return { tip, rest: keep.join('\n'), ...(error ? { error } : {}) };
+}

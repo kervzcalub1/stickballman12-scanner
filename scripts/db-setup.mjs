@@ -1559,6 +1559,16 @@ await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS available_qty INT
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_by TEXT`);
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_status TEXT`);
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS overrode_qty INT`);
+// PREMIUM + a PROPOSED TIP for one shoe (2026-10-27, docs/context/buy-cart.md "Premium shoes").
+// The buyer ticks Premium and may propose a tip per pair for THAT SKU only; the desk approves
+// (maybe a lower amount) or declines it. Per line, like everything else on a line, and set
+// the same on every size of the run. `tip_status`: proposed | approved | declined.
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS premium BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_proposed NUMERIC(10,2)`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_status TEXT`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_approved NUMERIC(10,2)`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_decided_by TEXT`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_decided_at TIMESTAMPTZ`);
 
 // The cards themselves. A code plus a PIN is money in the hand, so neither is ever
 // stored as typed — api/_lib/secrets.js encrypts both under BUY_GC_KEY, and only

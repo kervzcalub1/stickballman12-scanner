@@ -300,7 +300,20 @@ function StockPanel({ s }) {
   );
 }
 
-function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, autoStock, onChanged, onSignOut }) {
+// What became of a premium shoe's proposed tip, in one chip.
+function TipChip({ line: l }) {
+  const $ = (n) => `$${Number(n).toFixed(2)}`;
+  if (l.tip_status === 'approved') {
+    const changed = l.tip_approved != null && Number(l.tip_approved) !== Number(l.tip_proposed);
+    return <span className="po-chip ok" title={l.tip_decided_by ? `Approved by ${l.tip_decided_by}` : undefined}>
+      Tip {$(l.tip_approved ?? l.tip_proposed)}/pair approved{changed ? ` (asked ${$(l.tip_proposed)})` : ''}</span>;
+  }
+  if (l.tip_status === 'declined')
+    return <span className="po-chip bad" title={l.tip_decided_by ? `Declined by ${l.tip_decided_by}` : undefined}>Tip {$(l.tip_proposed)} declined</span>;
+  return <span className="po-chip warn">Tip {$(l.tip_proposed)}/pair proposed</span>;
+}
+
+function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, canPrice, isBuyer, autoStock, onChanged, onSignOut }) {
   const [sel, setSel] = useState([]);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -435,6 +448,19 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [autoStock, lines.length]);
 
+  // A premium shoe's proposed tip — the whole SKU at once (api/cart/tip.js). `tipping` holds
+  // the line whose "Other amount" form is open.
+  const [tipping, setTipping] = useState(null);
+  async function tipAnswer(l, action, amount = null) {
+    setBusy(`tip${l.id}`); setErr('');
+    try { await api.cartTip(cart.id, l.sku, action, amount); setTipping(null); onChanged(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(''); }
+  }
+  // The tip's buttons sit on the FIRST size of the shoe only — it's one answer for the run.
+  const firstTipLine = new Map();
+  for (const l of lines) if (l.tip_status != null && !firstTipLine.has(l.sku)) firstTipLine.set(l.sku, Number(l.id));
+
   // Not through `act`-style error swallowing: FormModal keeps the typed values when the
   // server refuses, which is the whole reason these stopped being window.prompts.
   async function fix({ size, qty, shelfPrice }) {
@@ -457,6 +483,15 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
           onSubmit={({ reason }) => commit('reject', rejecting.all, reason.trim())}
           fields={[{ name: 'reason', label: 'Why?', type: 'textarea', required: true,
             placeholder: 'e.g. Too close to retail — only worth it under $95' }]} />
+      )}
+      {tipping && (
+        <FormModal
+          title={`Tip for ${tipping.sku}`}
+          message={`${cart.buyer_name || 'The supplier'} proposed $${Number(tipping.tip_proposed).toFixed(2)} a pair. Approve a different amount — it applies to every size of this shoe.`}
+          submitLabel="Approve this tip"
+          onClose={() => setTipping(null)}
+          onSubmit={({ amount }) => api.cartTip(cart.id, tipping.sku, 'approve', Number(amount)).then(() => { setTipping(null); onChanged(); })}
+          fields={[{ name: 'amount', label: 'Tip per pair ($)', type: 'number', step: '0.01', min: 0.01, required: true }]} />
       )}
       {fixing && (
         <FormModal
@@ -530,6 +565,22 @@ function Lines({ cart, canDecide, whyNoDecide, canEditLines, canPrice, isBuyer, 
                   <td className="bc-td-shoe">
                     <b>{l.sku}</b>
                     {l.name && <div className="muted xs">{l.name}</div>}
+                    {(l.premium || l.tip_status) && (
+                      <div className="bc-premium-tag" onClick={(e) => e.stopPropagation()}>
+                        <span className="po-chip warn">Premium</span>
+                        {l.tip_status && <TipChip line={l} />}
+                        {canTip && l.tip_status === 'proposed' && firstTipLine.get(l.sku) === Number(l.id) && (
+                          <span className="bc-tip-actions">
+                            <button type="button" className="btn sm primary" disabled={!!busy}
+                              onClick={() => tipAnswer(l, 'approve')}>Approve tip</button>
+                            <button type="button" className="btn sm ghost" disabled={!!busy}
+                              onClick={() => setTipping(l)}>Other amount</button>
+                            <button type="button" className="btn sm ghost" disabled={!!busy}
+                              onClick={() => tipAnswer(l, 'decline')}>Decline</button>
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <ShoeShots cart={cart} sku={l.sku} onSignOut={onSignOut} />
                     {/* Amber only when we already hold at least as many as are being
                         asked for. Any-stock-is-amber made a single spare pair look like
@@ -1122,6 +1173,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
 
       <div id="bc-sec-lines" className="bc-sec" />
       <Lines cart={cart} canDecide={canDecide} isBuyer={isBuyer}
+        canTip={mayDecide && !['closed', 'cancelled'].includes(cart?.status)}
         // Load it WITHOUT being asked for whoever would act on it, while there is still
         // something to act on. `mayDecide`, not `canDecide`: an approver reading a draft
         // that has not been sent yet is exactly who benefits from seeing we already hold

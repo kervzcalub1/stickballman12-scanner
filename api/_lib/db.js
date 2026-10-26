@@ -7277,6 +7277,8 @@ const lineOut = (r) => (r ? {
   roi: r.roi == null ? null : Number(r.roi),
   alias_price: r.alias_price == null ? null : Number(r.alias_price),
   stockx_price: r.stockx_price == null ? null : Number(r.stockx_price),
+  tip_proposed: r.tip_proposed == null ? null : Number(r.tip_proposed),
+  tip_approved: r.tip_approved == null ? null : Number(r.tip_approved),
 } : null);
 
 // Recompute the cart's money and counts FROM ITS ROWS. Called by every mutation that
@@ -7556,13 +7558,14 @@ export async function addBuyCartLine(cartId, line, actor) {
     INSERT INTO buy_cart_lines
       (cart_id, sku, size, qty, available_qty, name, colorway, gender, upc, shelf_price, verdict,
        final_cost, best_platform, best_payout, profit, roi, alias_price, stockx_price,
-       liquidity, basis, quoted_at)
+       liquidity, basis, quoted_at, premium, tip_proposed, tip_status)
     VALUES (${cartId}, ${line.sku}, ${line.size || null}, ${line.qty}, ${line.availableQty ?? null}, ${line.name || null},
             ${line.colorway || null}, ${line.gender || null}, ${line.upc || null},
             ${line.shelfPrice}, ${line.verdict || null}, ${line.finalCost ?? null},
             ${line.bestPlatform || null}, ${line.bestPayout ?? null}, ${line.profit ?? null},
             ${line.roi ?? null}, ${line.aliasPrice ?? null}, ${line.stockxPrice ?? null},
-            ${line.liquidity || null}, ${line.basis || null}, now())
+            ${line.liquidity || null}, ${line.basis || null}, now(),
+            ${line.premium === true}, ${line.tipProposed ?? null}, ${line.tipProposed != null ? 'proposed' : null})
     RETURNING *`;
   await recalcCartMoney(sql, cartId);
   await logCartEvent({
@@ -7572,7 +7575,7 @@ export async function addBuyCartLine(cartId, line, actor) {
     // the trail read like a request for zero pairs.
     // The in-store count belongs in the trail beside the price: it is half of what the
     // buyer reported, and the approver's quantity is judged against it.
-    body: `${line.sku}${line.size ? ` size ${line.size}` : ''}${Number(line.qty) > 0 ? ` ×${line.qty}` : ''} @ $${Number(line.shelfPrice || 0).toFixed(2)}${line.availableQty != null ? ` · ${line.availableQty} in store` : ''}${line.verdict ? ` — ${line.verdict}` : ''}`,
+    body: `${line.sku}${line.size ? ` size ${line.size}` : ''}${Number(line.qty) > 0 ? ` ×${line.qty}` : ''} @ $${Number(line.shelfPrice || 0).toFixed(2)}${line.availableQty != null ? ` · ${line.availableQty} in store` : ''}${line.premium ? ' · premium' : ''}${line.tipProposed != null ? ` · tip $${Number(line.tipProposed).toFixed(2)}/pair proposed` : ''}${line.verdict ? ` — ${line.verdict}` : ''}`,
   });
   return lineOut(rows[0]);
 }
@@ -7647,6 +7650,40 @@ export async function priceBuyCartLine(cartId, lineId, snap, actor, note) {
   if (!rows[0]) return null;
   await logCartEvent({ cartId, kind: 'line_priced', lineId, actor, body: note });
   return lineOut(rows[0]);
+}
+
+// The desk's answer to a PROPOSED TIP on a premium shoe (docs/context/buy-cart.md "Premium
+// shoes"): every line of the run at once. `approve` with no amount = the amount proposed;
+// with one = that amount instead (a counter). `calls` = each line re-priced with the tip that
+// now applies (repriceLine), keyed by line id — the tip is part of what the pair costs us.
+export async function decideBuyCartTip(cartId, lineIds, { action, amount = null }, calls, actor, note) {
+  const sql = db();
+  const ids = (lineIds || []).map(Number).filter(Number.isInteger);
+  if (!ids.length) return [];
+  const name = actor ? (actor.name || actor.username || null) : null;
+  const out = [];
+  for (const id of ids) {
+    const c = calls?.[id] || null;
+    // No market on the line → only its cost moves; the call it carries stays as it is.
+    const full = !!c && !c.costOnly;
+    const rows = await sql`
+      UPDATE buy_cart_lines SET
+        tip_status = ${action === 'approve' ? 'approved' : 'declined'},
+        tip_approved = ${action === 'approve' ? amount : null},
+        tip_decided_by = ${name}, tip_decided_at = now(),
+        final_cost = coalesce(${c ? c.finalCost : null}::numeric, final_cost),
+        verdict = CASE WHEN ${full}::boolean THEN ${c ? c.verdict : null} ELSE verdict END,
+        best_platform = CASE WHEN ${full}::boolean THEN ${c ? c.bestPlatform : null} ELSE best_platform END,
+        best_payout = CASE WHEN ${full}::boolean THEN ${c ? c.bestPayout : null}::numeric ELSE best_payout END,
+        profit = CASE WHEN ${full}::boolean THEN ${c ? c.profit : null}::numeric ELSE profit END,
+        roi = CASE WHEN ${full}::boolean THEN ${c ? c.roi : null}::numeric ELSE roi END,
+        updated_at = now()
+      WHERE id = ${id} AND cart_id = ${cartId} AND tip_status IS NOT NULL
+      RETURNING *`;
+    if (rows[0]) out.push(lineOut(rows[0]));
+  }
+  if (out.length) await logCartEvent({ cartId, kind: 'tip_decided', lineId: out.length === 1 ? Number(out[0].id) : null, actor, body: note });
+  return out;
 }
 
 // Write the request's cost stack and re-derive every line against it.

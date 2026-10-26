@@ -216,9 +216,9 @@ export default async function handler(req, res) {
     // `photos` is read now because the file rows are already there.
     const asking = isOwnBuyer(user, cart);
     const photos = asking ? await cartShoePhotos(cartId, sku) : [];
-    // A proposed tip is answered by REPLYING to the card ("tip ok"), and only the one-card-
-    // per-shoe card takes replies — so a single premium size with a tip gets that card too.
-    const tell = { notify: asking, photos, oneCard: prepared[0].row.tipProposed != null };
+    // One size keeps the tap-button card even with a tip — the tip gets its own two buttons
+    // (owner, 2026-10-27: replies only when a shoe has several sizes).
+    const tell = { notify: asking, photos };
     if (added.length > 1) {
       priceRunInBackground(cartId, added, cart.cost_stack || {}, tell);
     } else {
@@ -226,9 +226,7 @@ export default async function handler(req, res) {
       if (p.toPrice) {
         priceInBackground(cartId, Number(line.id), { ...p.market }, cart.cost_stack || {}, tell);
       } else if (asking) {
-        const extra = { photoFileId: photos[0] ?? null, photoCount: photos.length };
-        if (tell.oneCard) notifyGroupAsked(cartId, [Number(line.id)], { ...extra, oneCard: true });
-        else notifyLineAsked(cartId, Number(line.id), extra);
+        notifyLineAsked(cartId, Number(line.id), { photoFileId: photos[0] ?? null, photoCount: photos.length });
       }
     }
     // ADDING A PAIR *IS* ASKING ABOUT IT. There is no separate "send for approval" for a
@@ -419,8 +417,6 @@ async function priceInBackground(cartId, lineId, { sku, size, upc, basis, shelfP
   if (!tell) return;   // one size of a run — the run sends its own card (priceRunInBackground)
   if (!tell.notify) console.log(`[cart/line] line ${lineId} priced — no card (not the buyer's own ask)`);
   if (tell?.notify) {
-    const extra = { photoFileId: tell.photos?.[0] ?? null, photoCount: tell.photos?.length ?? 0 };
-    if (tell.oneCard) await notifyGroupAsked(cartId, [lineId], { ...extra, oneCard: true });
-    else await notifyLineAsked(cartId, lineId, extra);
+    await notifyLineAsked(cartId, lineId, { photoFileId: tell.photos?.[0] ?? null, photoCount: tell.photos?.length ?? 0 });
   }
 }

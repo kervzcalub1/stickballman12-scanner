@@ -2067,6 +2067,44 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     }
   });
 
+  // ONE size keeps the tap-button card even when premium (owner, 2026-10-27) — the tip gets
+  // its own two buttons, and a tap on one is the same decision a "tip ok" reply makes.
+  test('a one-size premium pair: Buy buttons as ever, plus Approve / Decline tip', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [{ ...LINE, premium: true, tipProposed: 10 }] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    const keep = { ...process.env };
+    Object.assign(process.env, {
+      TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: String(CHAT),
+      TELEGRAM_API_BASE: 'http://127.0.0.1:5198', MAKE_WEBHOOK_URL: '',
+    });
+    let card;
+    try {
+      const { notifyLineAsked } = await import('../api/_lib/notify.js');
+      const t0 = calls.length;
+      expect((await notifyLineAsked(cartId, Number(line.id))).sent).toBe(true);
+      card = since(t0).find((c) => c.method === 'sendMessage');
+    } finally {
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL']) {
+        if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+      }
+    }
+    expect(card.body.text).toContain(`⭐ PREMIUM — ${people.buyer.name} is proposing a $10.00 tip per pair`);
+    expect(card.body.text).toContain('use the tip buttons below');
+    const env = process.env.APP_ENV === 'dev' ? 'dev' : 'prod';
+    const buttons = card.body.reply_markup.inline_keyboard.flat().map((b) => `${b.text}=${b.callback_data}`);
+    expect(buttons).toContain(`✓ Buy 1=approve:${cartId}:${line.id}:1:${env}`);
+    expect(buttons).toContain(`💵 Approve $10.00 tip=tipok:${cartId}:${line.id}:${env}`);
+    expect(buttons).toContain(`✕ Decline tip=tipno:${cartId}:${line.id}:${env}`);
+
+    const t1 = calls.length;
+    await hook(request, tapUpdate(`tipok:${cartId}:${line.id}:dev`, { messageId: 4242 }));
+    const tip = (await pool.query('SELECT tip_status, tip_approved, status FROM buy_cart_lines WHERE id = $1', [line.id])).rows[0];
+    expect(tip).toMatchObject({ tip_status: 'approved', tip_approved: '10.00', status: 'pending' });
+    const said = since(t1).find((c) => c.method === 'sendMessage');
+    expect(said.body.text).toBe(`💵 ${people.approver.name} approved the tip for CW2288-111: $10.00 per pair · [dev]`);
+    expect(said.body.reply_parameters.message_id).toBe(4242);
+  });
+
   test('without the secret, the webhook refuses — a tap has to come from Telegram', async ({ request }) => {
     const r = await hook(request, tapUpdate('approve:1:1:1:dev'), 'wrong');
     expect(r.status()).toBe(401);

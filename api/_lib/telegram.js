@@ -82,7 +82,9 @@ export function enqueue(job) {
 
 // The buttons. Identical to what the Make scenario built — including the trailing env —
 // so cards already in the group keep working across the switch.
-export function cardKeyboard(cartId, lineId, envName) {
+// `tip` = a premium pair's proposed tip per pair: one more row, approve it / decline it
+// (docs/context/buy-cart.md "Premium shoes"). A different amount is the request page's.
+export function cardKeyboard(cartId, lineId, envName, { tip = null } = {}) {
   const tail = `${cartId}:${lineId}`;
   return {
     inline_keyboard: [
@@ -92,6 +94,10 @@ export function cardKeyboard(cartId, lineId, envName) {
         { text: '✓ Buy 3', callback_data: `approve:${tail}:3:${envName}` },
         { text: 'More…', callback_data: `more:${tail}:${envName}` },
       ],
+      ...(tip > 0 ? [[
+        { text: `💵 Approve $${Number(tip).toFixed(2)} tip`, callback_data: `tipok:${tail}:${envName}` },
+        { text: '✕ Decline tip', callback_data: `tipno:${tail}:${envName}` },
+      ]] : []),
       [{ text: '✕ Turn it down', callback_data: `reject:${tail}:${envName}` }],
     ],
   };

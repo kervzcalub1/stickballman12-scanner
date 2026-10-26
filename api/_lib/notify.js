@@ -70,7 +70,8 @@ export const notifyConfigured = () => telegramConfigured() || !!String(process.e
 export const notifyEnv = () => (process.env.APP_ENV === 'dev' ? 'dev' : 'prod');
 
 const money = (n) => (n == null || !Number.isFinite(Number(n)) ? null : Math.round(Number(n) * 100) / 100);
-const dollars = (n) => (money(n) == null ? '—' : `$${money(n).toFixed(2)}`);
+// A loss reads "-$19.74", not "$-19.74".
+const dollars = (n) => (money(n) == null ? '—' : `${money(n) < 0 ? '-' : ''}$${Math.abs(money(n)).toFixed(2)}`);
 
 /**
  * @param {number} cartId
@@ -445,6 +446,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       // a made-up "9 x 5" under a card of 10.5 / 11 / 11.5 read as an instruction.
       'To approve, REPLY to this card — one size per line, e.g.:',
       ...lines.slice(0, 2).map((l) => `${l.size} x ${l.available_qty > 0 ? l.available_qty : 1}`),
+      ...(lines.length > 2 ? [`A range works too: ${lines[0].size}-${lines[lines.length - 1].size} x 1 · or "all x 1".`] : []),
       'Sizes you leave out are turned down. A new reply replaces the last one (edits aren’t read).',
     ].join('\n');
 

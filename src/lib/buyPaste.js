@@ -162,6 +162,20 @@ export function parseApprovalReply(text, lines) {
   for (const raw of String(text || '').split(/[\r\n,;]+/)) {
     const t = raw.trim();
     if (!t) continue;
+    // A RANGE of sizes, one quantity each: "10.5-11.5 x 2" = 10.5, 11 and 11.5, two of each —
+    // the sizes ON THE CARD between the two, inclusive (2026-10-27).
+    const rg = /^(\d{1,2}(?:\.5)?)([a-z]?)\s*(?:-|–|to)\s*(\d{1,2}(?:\.5)?)([a-z]?)\s*[x×*:=]\s*(\d{1,3})\s*(?:pairs?|prs?)?$/i.exec(t);
+    if (rg) {
+      const [a, b] = [Number(rg[1]), Number(rg[3])].sort((x, y) => x - y);
+      const suffix = (rg[2] || rg[4] || '').toUpperCase();
+      const hit = lines.filter((l) => {
+        const k = sizeKey(l.size); const v = parseFloat(k);
+        return v >= a && v <= b && (!suffix || k.endsWith(suffix));
+      });
+      if (!hit.length) { unknown.push(`${rg[1]}${rg[2]}-${rg[3]}${rg[4]}`); continue; }
+      for (const line of hit) { if (qty.has(line.id)) twice.push(line.size); qty.set(line.id, Number(rg[5])); }
+      continue;
+    }
     const m = /^(\S+?)\s*(?:[x×*:=]|-(?=\s*\d+\s*$))\s*(\d{1,3})\s*(?:pairs?|prs?)?$/i.exec(t);
     if (!m) { bad.push(t); continue; }
     const n = Number(m[2]);

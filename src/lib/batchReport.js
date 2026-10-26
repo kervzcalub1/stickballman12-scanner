@@ -77,6 +77,18 @@ export function batchReportRows({ items = [], boxes = [] }) {
     || (a.box ?? 1e9) - (b.box ?? 1e9));
 }
 
+// The rows above cut into SKU groups, each with its pair count — the per-SKU subtotal
+// (Brent, 2026-10-27: check a SKU's count at a glance, then the grand total at the end).
+export function batchReportGroups(rows) {
+  const groups = [];
+  for (const r of rows || []) {
+    const last = groups[groups.length - 1];
+    if (last && last.sku === r.sku) { last.rows.push(r); last.qty += r.qty; }
+    else groups.push({ sku: r.sku, rows: [r], qty: r.qty });
+  }
+  return groups;
+}
+
 export function buildBatchReportCsv({ batch, items = [], boxes = [] }) {
   const f = batchReportFacts(batch);
   const rows = batchReportRows({ items, boxes });
@@ -88,17 +100,31 @@ export function buildBatchReportCsv({ batch, items = [], boxes = [] }) {
     ['date_order', 'DATE ORDER'], ['date_delivered', 'DATE DELIVERED'],
     ['batch_no', 'Batch No.'], ['po_number', 'PO Number'],
     ['sku', 'SKU'], ['size', 'Size'], ['box', 'Box'], ['box_tracking', 'Box tracking'],
-    ['name', 'Name'], ['qty', 'Qty'],
+    ['name', 'Name'], ['qty', 'Qty'], ['total', 'Total'],
   ];
-  return toCsv(cols, rows.map((r) => ({
+  const facts = {
     date_order: f.dateOrder, date_delivered: f.dateDelivered,
     batch_no: f.batchNo, po_number: f.poNumber || 'none',
-    // 'loose' rather than a blank cell, matching the PDF. Box is an identifier, not a
-    // quantity, so nothing arithmetic is lost — and an empty cell reads as "missing
-    // data" just as easily as "no box", which is the ambiguity this app keeps paying for.
-    box: r.box ?? 'loose', box_tracking: r.boxTracking,
-    sku: r.sku, size: r.size, name: r.name, qty: r.qty,
-  })));
+  };
+  // Subtotals and the grand total go in their OWN column: summing Qty in a spreadsheet
+  // must still give the pair count, which it wouldn't if a subtotal sat in Qty too.
+  const out = [];
+  const groups = batchReportGroups(rows);
+  for (const g of groups) {
+    for (const r of g.rows) {
+      out.push({
+        ...facts,
+        // 'loose' rather than a blank cell, matching the PDF. Box is an identifier, not a
+        // quantity, so nothing arithmetic is lost — and an empty cell reads as "missing
+        // data" just as easily as "no box", which is the ambiguity this app keeps paying for.
+        box: r.box ?? 'loose', box_tracking: r.boxTracking,
+        sku: r.sku, size: r.size, name: r.name, qty: r.qty, total: '',
+      });
+    }
+    out.push({ ...facts, sku: g.sku, name: 'Subtotal', total: g.qty });
+  }
+  out.push({ ...facts, sku: 'GRAND TOTAL', name: `${groups.length} SKU${groups.length === 1 ? '' : 's'}`, total: items.length });
+  return toCsv(cols, out);
 }
 
 async function loadJsPDF() {
@@ -184,37 +210,52 @@ export async function buildBatchReportPdf({ batch, items = [], boxes = [], busin
   tableHead();
 
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-  // Shade by SKU GROUP, not by row, with a rule between SKUs — one SKU reads as one block.
-  let group = -1;
-  rows.forEach((r, i) => {
-    const newSku = !i || r.sku !== rows[i - 1].sku;
-    if (newSku) group += 1;
+  // Shade by SKU GROUP, not by row, with a rule between SKUs — one SKU reads as one block,
+  // closed by its subtotal row.
+  const qtyX = right - 2;   // where the Qty column's figures right-align (see the row cells)
+  const roomFor = () => {
     if (y > PAGE_H - MARGIN - 14) {   // room for the row plus the footer rule
       doc.addPage(); header(); tableHead(); doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    } else if (newSku && i) {
-      doc.setDrawColor(...HAIR); doc.setLineWidth(0.3); doc.line(MARGIN, y, right, y);
+      return true;
     }
-    if (group % 2) { doc.setFillColor(...ZEBRA); doc.rect(MARGIN, y, right - MARGIN, 6, 'F'); }
-    doc.setTextColor(...INK);
-    let x = MARGIN + 2;
-    const cells = [
-      r.sku || dash,
-      r.size || dash,
-      r.box != null ? String(r.box) : 'loose',
-      (r.name || dash).slice(0, 46),
-      String(r.qty),
-    ];
-    cells.forEach((text, ci) => {
-      const width = columns[ci][1] || nameW;
-      if (ci === 4) doc.text(text, x + width - 4, y + 4.2, { align: 'right' });
-      else doc.text(text, x, y + 4.2);
-      x += width;
+    return false;
+  };
+  const groups = batchReportGroups(rows);
+  groups.forEach((g, gi) => {
+    if (!roomFor() && gi) { doc.setDrawColor(...HAIR); doc.setLineWidth(0.3); doc.line(MARGIN, y, right, y); }
+    const shade = () => { if (gi % 2) { doc.setFillColor(...ZEBRA); doc.rect(MARGIN, y, right - MARGIN, 6, 'F'); } };
+    g.rows.forEach((r, ri) => {
+      if (ri) roomFor();
+      shade();
+      doc.setTextColor(...INK);
+      let x = MARGIN + 2;
+      const cells = [
+        r.sku || dash,
+        r.size || dash,
+        r.box != null ? String(r.box) : 'loose',
+        (r.name || dash).slice(0, 46),
+        String(r.qty),
+      ];
+      cells.forEach((text, ci) => {
+        const width = columns[ci][1] || nameW;
+        if (ci === 4) doc.text(text, x + width - 4, y + 4.2, { align: 'right' });
+        else doc.text(text, x, y + 4.2);
+        x += width;
+      });
+      y += 6;
     });
+    roomFor();
+    shade();
+    doc.setFont('helvetica', 'bold'); doc.setTextColor(...INK);
+    doc.text(`Subtotal ${g.sku || dash}`.slice(0, 40), qtyX - 12, y + 4.2, { align: 'right' });
+    doc.text(String(g.qty), qtyX, y + 4.2, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
     y += 6;
   });
 
-  doc.setDrawColor(...HAIR); doc.line(MARGIN, y + 1, right, y + 1);
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...INK);
-  doc.text(`TOTAL  ${items.length} pair${items.length === 1 ? '' : 's'}`, right, y + 6, { align: 'right' });
+  if (y > PAGE_H - MARGIN - 10) { doc.addPage(); header(); }
+  doc.setDrawColor(...INK); doc.setLineWidth(0.4); doc.line(MARGIN, y + 1, right, y + 1);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...INK);
+  doc.text(`GRAND TOTAL   ${groups.length} SKU${groups.length === 1 ? '' : 's'}   |   ${items.length} pair${items.length === 1 ? '' : 's'}`, qtyX, y + 6.5, { align: 'right' });
   return doc;
 }

@@ -216,7 +216,9 @@ export default async function handler(req, res) {
     // `photos` is read now because the file rows are already there.
     const asking = isOwnBuyer(user, cart);
     const photos = asking ? await cartShoePhotos(cartId, sku) : [];
-    const tell = { notify: asking, photos };
+    // A proposed tip is answered by REPLYING to the card ("tip ok"), and only the one-card-
+    // per-shoe card takes replies — so a single premium size with a tip gets that card too.
+    const tell = { notify: asking, photos, oneCard: prepared[0].row.tipProposed != null };
     if (added.length > 1) {
       priceRunInBackground(cartId, added, cart.cost_stack || {}, tell);
     } else {
@@ -224,7 +226,9 @@ export default async function handler(req, res) {
       if (p.toPrice) {
         priceInBackground(cartId, Number(line.id), { ...p.market }, cart.cost_stack || {}, tell);
       } else if (asking) {
-        notifyLineAsked(cartId, Number(line.id), { photoFileId: photos[0] ?? null, photoCount: photos.length });
+        const extra = { photoFileId: photos[0] ?? null, photoCount: photos.length };
+        if (tell.oneCard) notifyGroupAsked(cartId, [Number(line.id)], { ...extra, oneCard: true });
+        else notifyLineAsked(cartId, Number(line.id), extra);
       }
     }
     // ADDING A PAIR *IS* ASKING ABOUT IT. There is no separate "send for approval" for a
@@ -282,6 +286,14 @@ function prepareLine(l, user, cart) {
 
   const size = String(l.size ?? '').trim().slice(0, 20) || null;
   const upc = String(l.upc ?? '').replace(/\D/g, '').slice(0, 20) || null;
+  // PREMIUM, and the tip the buyer proposes for THIS shoe only (per pair). Only a premium
+  // shoe can carry one; a tip box left blank means no tip asked, never $0.
+  const premium = l.premium === true;
+  const tipProposed = premium && !blank(l.tipProposed) ? money(l.tipProposed) : null;
+  if (premium && !blank(l.tipProposed) && !(tipProposed > 0))
+    return { error: 'Enter the tip you are proposing per pair, or untick "Propose a tip".' };
+  if (tipProposed != null && tipProposed > 500)
+    return { error: 'A tip above $500 a pair can’t be right — check the amount.' };
   const basis = l.basis === 'consigned' ? 'consigned' : 'with_you';
 
   // WHERE THE CALL COMES FROM depends on who is adding.
@@ -303,7 +315,8 @@ function prepareLine(l, user, cart) {
     // The pair still LANDS AT something without any market at all: `final_cost` is
     // the buyer's own shelf price run through the cost stack, and it is not part of
     // the call (it is theirs to see). Computed here so the column is true instantly.
-    call = repriceLine({ shelf_price: shelfPrice, alias_price: null, stockx_price: null, liquidity: null },
+    call = repriceLine({ shelf_price: shelfPrice, alias_price: null, stockx_price: null, liquidity: null,
+      tip_proposed: tipProposed, tip_status: tipProposed != null ? 'proposed' : null },
       cart.cost_stack || {});
     toPrice = !!size;
   } else {
@@ -315,12 +328,21 @@ function prepareLine(l, user, cart) {
       aliasPrice: money(l.aliasPrice), stockxPrice: money(l.stockxPrice),
       liquidity: String(l.liquidity ?? '').slice(0, 20) || null,
     };
+    // The screen's figures know nothing of this shoe's own tip — re-derive from the same
+    // market prices with it included, so the line's cost says what the pair really costs.
+    if (tipProposed != null) {
+      const withTip = repriceLine({ shelf_price: shelfPrice, alias_price: call.aliasPrice, stockx_price: call.stockxPrice,
+        liquidity: call.liquidity, tip_proposed: tipProposed, tip_status: 'proposed' }, cart.cost_stack || {});
+      // Only the cost when the screen sent no market prices — a null call must not
+      // replace the one it did send.
+      if (withTip) call = call.aliasPrice || call.stockxPrice ? { ...call, ...withTip } : { ...call, finalCost: withTip.finalCost };
+    }
   }
   return {
     sku, toPrice,
-    market: { sku, size, upc, basis, shelfPrice },
+    market: { sku, size, upc, basis, shelfPrice, tipProposed },
     row: {
-      sku, size, qty, availableQty, shelfPrice, upc,
+      sku, size, qty, availableQty, shelfPrice, upc, premium, tipProposed,
       name: String(l.name ?? '').trim().slice(0, 200) || null,
       colorway: String(l.colorway ?? '').trim().slice(0, 120) || null,
       gender: String(l.gender ?? '').trim().slice(0, 20) || null,
@@ -368,7 +390,7 @@ async function priceRunInBackground(cartId, added, stack, tell) {
  * Logged with NO actor, so the trail reads as system-generated rather than crediting
  * the buyer with a call they are not allowed to see or make.
  */
-async function priceInBackground(cartId, lineId, { sku, size, upc, basis, shelfPrice }, stack, tell = null) {
+async function priceInBackground(cartId, lineId, { sku, size, upc, basis, shelfPrice, tipProposed = null }, stack, tell = null) {
   try {
     const m = await readMarketForLine({ sku, size, upc, consigned: basis === 'consigned' });
     // Nothing answered. Leave the row alone rather than stamping two zeros on it — a
@@ -378,6 +400,7 @@ async function priceInBackground(cartId, lineId, { sku, size, upc, basis, shelfP
       ...repriceLine({
         shelf_price: shelfPrice,
         alias_price: m.aliasPrice, stockx_price: m.stockxPrice, liquidity: m.liquidity,
+        tip_proposed: tipProposed, tip_status: tipProposed != null ? 'proposed' : null,
       }, stack),
       aliasPrice: m.aliasPrice, stockxPrice: m.stockxPrice, liquidity: m.liquidity,
     };
@@ -396,9 +419,8 @@ async function priceInBackground(cartId, lineId, { sku, size, upc, basis, shelfP
   if (!tell) return;   // one size of a run — the run sends its own card (priceRunInBackground)
   if (!tell.notify) console.log(`[cart/line] line ${lineId} priced — no card (not the buyer's own ask)`);
   if (tell?.notify) {
-    await notifyLineAsked(cartId, lineId, {
-      photoFileId: tell.photos?.[0] ?? null,
-      photoCount: tell.photos?.length ?? 0,
-    });
+    const extra = { photoFileId: tell.photos?.[0] ?? null, photoCount: tell.photos?.length ?? 0 };
+    if (tell.oneCard) await notifyGroupAsked(cartId, [lineId], { ...extra, oneCard: true });
+    else await notifyLineAsked(cartId, lineId, extra);
   }
 }

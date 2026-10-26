@@ -2140,8 +2140,8 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
   // ONE CARD PER SHOE (docs/context/buy-cart.md → "One card per shoe"): several sizes go out
   // as one card, answered by replying "size x qty" lines; sizes left out are turned down.
   const RUN = ['9', '9.5', '10'].map((size) => ({ ...LINE, size }));
-  async function groupCard(request) {
-    const cartId = await newRequest(request, { lines: RUN });
+  async function groupCard(request, run = RUN) {
+    const cartId = await newRequest(request, { lines: run });
     const lines = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines;
     const keep = { ...process.env };
     Object.assign(process.env, {
@@ -2238,6 +2238,56 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
       hook(request, replyUpdate(row, '10 x 1', { replyId: 710002 })),
     ]);
     expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'approved ×1' });
+  });
+
+  // PREMIUM + a PROPOSED TIP (docs/context/buy-cart.md "Premium shoes"): the card says who is
+  // proposing what, and "tip ok" / "tip no" / "tip 5" in a reply answers it for the whole shoe.
+  const PREMIUM_RUN = RUN.map((l) => ({ ...l, premium: true, tipProposed: 10 }));
+  const costs = async (cartId) => Object.fromEntries((await pool.query(
+    'SELECT size, final_cost FROM buy_cart_lines WHERE cart_id = $1', [cartId])).rows.map((r) => [r.size, Number(r.final_cost)]));
+
+  test('a premium shoe with a proposed tip: the card names who proposes what, and the cost carries it', async ({ request }) => {
+    const { cartId, card } = await groupCard(request, PREMIUM_RUN);
+    expect(card.text).toContain(`⭐ PREMIUM — ${people.buyer.name} is proposing a $10.00 tip per pair`);
+    expect(card.text).toContain('reply "tip ok" to approve it, "tip no" to decline, or "tip 5"');
+    // The tip is part of what the pair costs us: $50 through the fixture's stack is $63.05
+    // (gift 8 %, tax 8.25 %, tip $5, shipping $8.25) — plus this shoe's $10 tip.
+    expect((await costs(cartId))['9']).toBeCloseTo(73.05, 2);
+    const line = (await pool.query(`SELECT premium, tip_proposed, tip_status FROM buy_cart_lines WHERE cart_id = $1 AND size = '9'`, [cartId])).rows[0];
+    expect(line).toMatchObject({ premium: true, tip_proposed: '10.00', tip_status: 'proposed' });
+  });
+
+  test('"tip 7" beside the sizes approves the sizes AND a $7 tip — and re-prices the run', async ({ request }) => {
+    const { cartId, row } = await groupCard(request, PREMIUM_RUN);
+    const before = await costs(cartId);
+    const t0 = calls.length;
+    await hook(request, replyUpdate(row, '9 x 1\ntip 7'));
+    expect(await statuses(cartId)).toEqual({ 9: 'approved ×1', '9.5': 'rejected', 10: 'rejected' });
+    const tips = (await pool.query('SELECT tip_status, tip_approved, tip_decided_by FROM buy_cart_lines WHERE cart_id = $1', [cartId])).rows;
+    expect(tips.every((t) => t.tip_status === 'approved' && t.tip_approved === '7.00' && t.tip_decided_by === people.approver.name)).toBe(true);
+    expect((await costs(cartId))['9'] - before['9']).toBeCloseTo(-3, 2);
+    const said = since(t0).filter((c) => c.method === 'sendMessage').map((c) => c.body.text);
+    expect(said).toContain(`💵 ${people.approver.name} approved the tip for CW2288-111: $7.00 per pair (proposed $10.00) · [dev]`);
+  });
+
+  test('"tip ok" on a card with no tip records nothing and says so', async ({ request }) => {
+    const { cartId, row } = await groupCard(request);
+    const t0 = calls.length;
+    await hook(request, replyUpdate(row, 'tip ok'));
+    expect(await statuses(cartId)).toEqual({ 9: 'pending', '9.5': 'pending', 10: 'pending' });
+    expect(since(t0).find((c) => c.method === 'sendMessage').body.text).toBe('⚠️ No tip was proposed on this card, so nothing was recorded. · [dev]');
+  });
+
+  test('the request page answers the tip too — approvers only — and a declined tip leaves the cost', async ({ request }) => {
+    const { cartId } = await groupCard(request, PREMIUM_RUN);
+    const before = await costs(cartId);
+    expect((await call(request, 'buyer', 'cart/tip', { cartId, sku: 'CW2288-111', action: 'approve' })).status).toBe(403);
+    const out = await call(request, 'approver', 'cart/tip', { cartId, sku: 'CW2288-111', action: 'decline' });
+    expect(out.status).toBe(200);
+    expect(out.body.outcome).toBe(`${people.approver.name} declined the $10.00 tip for CW2288-111`);
+    expect((await costs(cartId))['10'] - before['10']).toBeCloseTo(-10, 2);
+    const view = (await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    expect(view).toMatchObject({ premium: true, tip_status: 'declined', tip_proposed: 10 });
   });
 
   test('cart/line refuses the same size twice in one ask — the card could not tell them apart', async ({ request }) => {
@@ -2386,6 +2436,51 @@ test.describe('one price for the run, and the sizes that break it', () => {
     await expect(page.locator('.bc-add-body')).toHaveCount(0);
     expect(posts.length).toBe(1);
     expect(posts[0].lines.map((l) => [l.size, l.shelfPrice])).toEqual([['11', 50], ['11.5', 50], ['12', 50], ['12.5', 50]]);
+  });
+
+  // PREMIUM → PROPOSE A TIP → the amount, each asked only after the one before is ticked
+  // (docs/context/buy-cart.md "Premium shoes"); then the desk answers it on the request page.
+  test('a premium shoe with a proposed tip: asked step by step, sent with the pair, answered by the desk', async ({ page, request }) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    const cartId = await newRequest(request, { lines: [], submit: false });
+    await shoePhotos(cartId, ['IX8478-410']);
+    await page.route('**/api/sku-search', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ ok: true, product: { sku: 'IX8478-410', name: "Air Jordan 1 Low OG 'Howard University'", sizes: ['9', '10'] } }),
+    }));
+    const posts = [];
+    page.on('request', (r) => { if (r.url().includes('/api/cart/line') && r.method() === 'POST') posts.push(r.postDataJSON()); });
+
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await page.getByPlaceholder('SKU or style code').fill('IX8478-410');
+    await page.getByRole('button', { name: 'Look up' }).click();
+    await page.locator('.bc-sizes .size-chip').filter({ hasText: /^9$/ }).click();
+    await page.locator('.bc-sizes .size-chip').filter({ hasText: /^10$/ }).click();
+    await page.locator('.bc-add-row .ph-price').fill('140');
+
+    // The tip question waits for Premium, and the amount waits for the tip question.
+    await expect(page.getByText('Propose a tip for this shoe')).toHaveCount(0);
+    await page.getByLabel('Premium shoe?').check();
+    await expect(page.getByLabel('Tip per pair')).toHaveCount(0);
+    await page.getByLabel('Propose a tip for this shoe').check();
+    // Ticked but blank is not sendable — a blank tip is not a $0 tip.
+    await expect(page.getByRole('button', { name: 'Ask about 2 sizes' })).toBeDisabled();
+    await page.getByLabel('Tip per pair').fill('10');
+    await page.locator('.bc-premium').screenshot({ path: 'test-results/premium-form.png' });
+    await page.getByRole('button', { name: 'Ask about 2 sizes' }).click();
+    await expect(page.locator('.bc-add-body')).toHaveCount(0);
+    expect(posts[0].lines.map((l) => [l.size, l.premium, l.tipProposed])).toEqual([['9', true, 10], ['10', true, 10]]);
+
+    // The desk: one set of buttons for the shoe, and the chip says what became of it.
+    await as(page, 'approver');
+    await page.goto(`/buy-carts?request=${cartId}`);
+    await expect(page.locator('.bc-premium-tag .po-chip', { hasText: 'Tip $10.00/pair proposed' })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Approve tip' })).toHaveCount(1);
+    await page.locator('.bc-lines').screenshot({ path: 'test-results/premium-desk.png' });
+    await page.getByRole('button', { name: 'Approve tip' }).click();
+    await expect(page.locator('.bc-premium-tag .po-chip', { hasText: 'Tip $10.00/pair approved' })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Approve tip' })).toHaveCount(0);
   });
 
   test('the endpoint takes a different price per size on one request', async ({ request }) => {
@@ -2799,4 +2894,16 @@ test('the count can be corrected, and cleared back to "didn’t count"', async (
   const cleared = await call(request, 'approver', 'cart/line', { cartId, lineId, patch: { availableQty: '' } });
   expect(cleared.status).toBe(200);
   expect(cleared.body.line.available_qty).toBeNull();
+});
+
+test('a tip answer is read strictly — ok / no / an amount, and nothing else', async () => {
+  const { splitTipReply } = await import('../src/lib/buyPaste.js');
+  expect(splitTipReply('tip ok')).toEqual({ tip: { action: 'approve', amount: null }, rest: '' });
+  expect(splitTipReply('Approved tip request').tip).toEqual({ action: 'approve', amount: null });
+  expect(splitTipReply('tip $7.50').tip).toEqual({ action: 'approve', amount: 7.5 });
+  expect(splitTipReply('decline tip').tip).toEqual({ action: 'decline', amount: null });
+  expect(splitTipReply('9 x 2, tip no')).toEqual({ tip: { action: 'decline', amount: null }, rest: '9 x 2' });
+  expect(splitTipReply('tip maybe').error).toMatch(/Couldn't read "tip maybe"/);
+  expect(splitTipReply('tip ok\ntip no').error).toMatch(/twice/);
+  expect(splitTipReply('9 x 2')).toEqual({ tip: null, rest: '9 x 2' });
 });

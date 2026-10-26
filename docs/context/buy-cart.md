@@ -634,6 +634,34 @@ Suppliers often send just `100000317` / `Sizes 8-12 $50`, and a run of nine size
   in the per-size boxes at $60; two prices on ONE line → a warning); `$1,050` is 1050; a range
   above 22 (`40-44`, EU) is not read as sizes.
 
+### Premium shoes + a proposed tip (2026-10-27)
+Suppliers ask for an extra tip on a premium pair — e.g. $10 a pair on THAT SKU only, not the
+whole request.
+- **Form** (`BuyCartAdd.jsx`, under the shelf price): `Premium shoe?` → once ticked, `Propose a
+  tip for this shoe` → once ticked, `Tip per pair`. Ticked-but-blank can't be sent (a blank tip
+  is not $0). Sent on every size of the ask (`premium`, `tipProposed`); `cart/line` refuses a
+  tip ≤ 0 or > $500 and only lets a premium line carry one.
+- **Columns** on `buy_cart_lines` (→ **db:setup**): `premium`, `tip_proposed`, `tip_status`
+  (proposed | approved | declined), `tip_approved` (may be lower — a counter), `tip_decided_by/at`.
+- **Cost:** `lineTip` (`api/_lib/buycart.js`) adds the shoe's tip to the stack's tip in
+  `repriceLine` — **proposed counts as if approved** (the approver decides on the cost WITH it),
+  then the approved amount, nothing once declined. Every answer re-prices the run; a line with no
+  market price only moves its cost, never its call.
+- **Telegram:** a tip always goes out on the one-card-per-shoe card (`oneCard`, even for one
+  size) because only that card takes replies: `⭐ PREMIUM — Andrew is proposing a $10.00 tip per
+  pair` + how to answer. Reply **`tip ok`** / `approve tip` / `approved tip request` = approve as
+  proposed, **`tip 5`** / `tip $7.50` = approve that amount, **`tip no`** / `decline tip` / `tip 0`
+  = decline (`splitTipReply`, `src/lib/buyPaste.js`). It can sit beside the sizes (`9 x 2` + `tip
+  ok`, or one line `9 x 2, tip ok`) or alone (sizes untouched). Strict like the sizes: an
+  unreadable tip line, the tip twice, or a tip on a card with none records NOTHING.
+  `decideTipFromTelegram` = the same linked-account + `approve_buying` check as a tap; answered
+  `💵 Kervy approved the tip for IX8478-410: $7.00 per pair (proposed $10.00)`.
+- **Screen:** `Premium` + tip chip on every size; approvers get **Approve tip / Other amount /
+  Decline** once per shoe (`POST /api/cart/tip { cartId, sku, action, amount? }`, `approve_buying`,
+  until the request is closed). Both doors run `decideTip`; trail event `tip_decided`.
+- Tests: `buy-cart.spec.js` — card wording + cost, `tip 7` beside sizes, tip on a card without
+  one, `cart/tip` (approver only, decline drops the cost), the phone form, `splitTipReply`.
+
 ### The cost stack is the desk's too (2026-09-11)
 It moved the same way the buy call did, and for the same reason: **the stack is what turns
 a shelf price into a profit, so it is the basis on which a request gets approved or turned

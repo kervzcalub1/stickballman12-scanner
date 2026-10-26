@@ -92,6 +92,11 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   // make it. Keyed by size label like `sizePrice`; blank means "didn't count", which is
   // a different answer from any number and is left as one.
   const [sizeAvail, setSizeAvail] = useState({});
+  // PREMIUM, and a tip the buyer proposes for THIS shoe only (per pair) — docs/context/
+  // buy-cart.md "Premium shoes". The desk approves or declines it on the Telegram card.
+  const [premium, setPremium] = useState(false);
+  const [proposeTip, setProposeTip] = useState(false);
+  const [tip, setTip] = useState('');
   const [shooting, setShooting] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -105,6 +110,9 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   const [fromPaste, setFromPaste] = useState(null);
 
   const shelfNum = Number(String(shelf).replace(/[$,\s]/g, ''));
+  const tipNum = Number(String(tip).replace(/[$,\s]/g, ''));
+  // Ticked "Propose a tip" but no amount: not sendable — a blank tip is not a $0 tip.
+  const tipMissing = premium && proposeTip && !(tipNum > 0);
   // Photos already on this request for the shoe on screen. Keyed by STYLE CODE, so a
   // buyer sending a 7, an 8 and a 9 of one pair photographs it once.
   const shots = (cart.files || []).filter((f) => f.kind === 'shoe'
@@ -266,6 +274,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
         name: product.name || null, colorway: product.colorway || null,
         gender: product.gender || null, upc: product.upc || null,
         basis: 'with_you',
+        premium, tipProposed: premium && proposeTip ? tipNum : null,
       });
       // Several sizes go in ONE call: the server prices them one at a time and the desk
       // gets ONE Telegram card for the shoe, answered with "size x qty" — not one per size.
@@ -277,6 +286,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
       // next action; the buyer said otherwise: every add is a fresh shoe, and a form
       // still showing the last one's code and photo count was being re-sent by mistake.
       setProduct(null); setSkuInput(''); setSizes([]); setShelf(''); setSizePrice({}); setSizeAvail({});
+      setPremium(false); setProposeTip(false); setTip('');
       setFromPaste(null);
       onAdded();
     } catch (err) {
@@ -387,6 +397,30 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
 
           </div>
 
+          {/* PREMIUM → PROPOSE A TIP → THE AMOUNT. Each question only once the one before it
+              is answered yes. The tip is for this shoe only, per pair, on every size asked. */}
+          <div className="bc-premium">
+            <label className="bc-check">
+              <input type="checkbox" checked={premium}
+                onChange={(e) => { setPremium(e.target.checked); if (!e.target.checked) { setProposeTip(false); setTip(''); } }} />
+              <span>Premium shoe?</span>
+            </label>
+            {premium && (
+              <label className="bc-check">
+                <input type="checkbox" checked={proposeTip}
+                  onChange={(e) => { setProposeTip(e.target.checked); if (!e.target.checked) setTip(''); }} />
+                <span>Propose a tip for this shoe</span>
+              </label>
+            )}
+            {premium && proposeTip && (
+              <label className="field bc-tip-field">
+                <span className="field-label">Tip per pair <span className="muted xs">· this shoe only{sizes.length > 1 ? `, all ${sizes.length} sizes` : ''}</span></span>
+                <PriceInput value={tip} onChange={(e) => setTip(e.target.value)} aria-label="Tip per pair" />
+                <span className="muted xs">The desk approves or declines it with the pair.</span>
+              </label>
+            )}
+          </div>
+
           {/* THE EXCEPTIONS, and only once there is a rule to except. A run of one shoe is
               usually one ticket price, so the field above covers it and this list stays
               out of the way; when the 12.5 and the 13 sit higher, they get typed here
@@ -480,7 +514,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                 is still on the shelf. The photo is required BEFORE this, because it is
                 what the approver decides on. */}
             <button type="button" className="btn primary"
-              disabled={busy === 'add' || !(shelfNum > 0) || !shots.length || !!product.codeCheck}
+              disabled={busy === 'add' || !(shelfNum > 0) || !shots.length || !!product.codeCheck || tipMissing}
               onClick={add}>
               {busy === 'add'
                 ? 'Sending…'
@@ -491,7 +525,9 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                 ? 'Take a photo of the shoe first — it is what the desk decides on.'
                 : !(shelfNum > 0)
                   ? 'Type the price on the shelf ticket.'
-                  : 'Goes straight to the desk. They price it, decide, and say how many to buy.'}
+                  : tipMissing
+                    ? 'Type the tip you are proposing per pair — or untick "Propose a tip".'
+                    : 'Goes straight to the desk. They price it, decide, and say how many to buy.'}
             </span>
           </div>
         </div>

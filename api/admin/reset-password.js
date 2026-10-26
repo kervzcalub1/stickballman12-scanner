@@ -7,8 +7,9 @@
 // DB row and cannot be reset here.
 
 import crypto from 'node:crypto';
-import { getJsonBody, send, applySecurity, requireAdmin, rateLimit, hashPassword } from '../_lib/util.js';
-import { adminResetPassword, dbConfigured } from '../_lib/db.js';
+import { getJsonBody, send, applySecurity, rateLimit, hashPassword } from '../_lib/util.js';
+import { adminResetPassword, dbConfigured, getUserById } from '../_lib/db.js';
+import { requireAccessManager, accessRefusal } from '../_lib/buycart.js';
 
 // Readable temp password: 12 chars from an unambiguous alphabet (no 0/O/1/I/l).
 function makeTempPassword(len = 12) {
@@ -22,7 +23,8 @@ function makeTempPassword(len = 12) {
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const admin = requireAdmin(req, res);
+  // An admin, or an account holding "Manage user access" (not on an admin's account).
+  const admin = await requireAccessManager(req, res);
   if (!admin) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 20 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded. Slow down a moment.' });
@@ -33,6 +35,12 @@ export default async function handler(req, res) {
   if (!Number.isInteger(userId)) return send(res, 400, { ok: false, error: 'Provide a userId.' });
 
   try {
+    if (!admin.fullAdmin) {
+      const target = await getUserById(userId);
+      if (!target) return send(res, 404, { ok: false, error: 'Account not found.' });
+      const why = accessRefusal(admin, target);
+      if (why) return send(res, 403, { ok: false, error: why });
+    }
     const tempPassword = makeTempPassword();
     const updated = await adminResetPassword(userId, hashPassword(tempPassword));
     if (!updated) return send(res, 404, { ok: false, error: 'Account not found.' });

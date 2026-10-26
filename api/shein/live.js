@@ -14,6 +14,7 @@ import { sheinStatus } from '../_lib/shein.js';
 import { startWalk, walkActive, heartbeat, MODES } from '../_lib/shein-live.js';
 import { readSync, writeSync, switchOn, switchOff, actOnUnits } from '../_lib/shein-orders.js';
 import { sheinWorkerEnabled } from '../_lib/shein-worker.js';
+import { hasPrivilege } from '../_lib/buycart.js';
 import { shopifyEnsureInventoryWebhook } from '../_lib/shopify.js';
 
 const isAdmin = (u) => u?.role === 'admin' || u?.role === 'superadmin';
@@ -58,7 +59,8 @@ export default async function handler(req, res) {
       }
       case 'retry': return send(res, 200, { ok: true, ...(await actOnUnits(undefined, { manual: true })) });
       case 'orders_on': case 'orders_off': case 'push_on': case 'push_off': {
-        if (!isAdmin(user)) return send(res, 403, { ok: false, error: 'Only an admin can switch the live sync.' });
+        if (!isAdmin(user) && !(await hasPrivilege(user, 'connect_integrations')))
+          return send(res, 403, { ok: false, error: 'Switching the live sync needs an admin, or the “Connect integrations” privilege.' });
         if (b.action === 'orders_on') return send(res, 200, { ok: true, ...(await switchOn({ by, openAtStart: !!b.openAtStart })), sync: await readSync() });
         if (b.action === 'orders_off') return send(res, 200, { ok: true, sync: await switchOff(by) });
         if (b.action === 'push_on') {

@@ -13,7 +13,8 @@ import { waitlistDaysLeft } from '../lib/waitlist.js';
 import { NavIcon, Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { skuCodes } from '../lib/sku.js';
-import { roleLabel, SYNC_BADGES, homeCardBadges, hasAnyPriv } from '../lib/constants.js';
+import { roleLabel, SYNC_BADGES, homeCardBadges, hasAnyPriv, hasPriv } from '../lib/constants.js';
+import { CheckAccess } from './CheckAccess.jsx';
 import { markupSuffix } from '../lib/config.js';
 import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice, estDate, estToday } from '../lib/format.js';
 import {
@@ -78,12 +79,13 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   const canBuyNav = hasAnyPriv(user);
   const nav = {
     page,
-    sections: PH_HOME_SECTIONS.map((sec) => ({ ...sec, cards: sec.cards.filter((c) => !c.priv || canBuyNav) })),
+    sections: PH_HOME_SECTIONS.map((sec) => ({ ...sec, cards: sec.cards.filter((c) => (!c.priv || canBuyNav) && (!c.privKey || hasPriv(user, c.privKey))) })),
     // The menu shows the same "work waiting" number the home's Needs-attention tile does.
     badge: (key) => { const a = PH_ATTENTION.find((x) => x.key === key); return a && counts ? counts[a.count] : null; },
     go: goPage,
   };
   function phScreen() {
+    if (page === 'access' && hasPriv(user, 'manage_access')) return <CheckAccess user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'nobox') return <NoBoxReport user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'costs') return <ItemCosts onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'request') return <RescaleRequestsReport canCreate onHome={() => goPage(null)} onSignOut={onSignOut} />;
@@ -182,7 +184,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           (`ph-home`) so a five-card section is one row on a laptop instead of 4 + 1. */}
       <div className="ph-home">
         {PH_HOME_SECTIONS.map((section) => {
-          const cards = section.cards.filter((c) => !c.priv || canBuy);
+          const cards = section.cards.filter((c) => (!c.priv || canBuy) && (!c.privKey || hasPriv(user, c.privKey)));
           if (!cards.length) return null;
           return (
             <section className="home-section" key={section.title} data-accent={section.accent}>

@@ -11,7 +11,13 @@ import { TopBar, Modal, CopyText, FormModal } from '../components/common.jsx';
 import { STAFF_PRIVILEGES, BUYER_PRIVILEGES, isAdminRole } from '../lib/constants.js';
 import { useMediaQuery, useLive } from '../hooks.js';
 
-export function CheckAccess({ onHome, onSignOut }) {
+export function CheckAccess({ user: viewer, onHome, onSignOut }) {
+  // An admin, or an account holding "Manage user access" (2026-10-27). The latter works on
+  // other people's non-admin accounts only and can't hand out the admin-level privileges —
+  // the server refuses all of that (api/_lib/buycart.js accessRefusal); this only draws it.
+  const fullAdmin = isAdminRole(viewer?.role);
+  const locked = (u) => !fullAdmin && (isAdminRole(u.role) || String(u.id) === String(viewer?.uid));
+  const lockWhy = (u) => (isAdminRole(u.role) ? 'Only an admin can change an admin’s account' : 'You can’t change your own account — ask an admin');
   const [users, setUsers] = useState(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState(null);
@@ -85,11 +91,12 @@ export function CheckAccess({ onHome, onSignOut }) {
   }
 
   const RoleSelect = ({ u }) => (
-    <select className="role-select" value={u.role} disabled={busyId === u.id} onChange={(e) => changeRole(u.id, e.target.value)}>
+    <select className="role-select" value={u.role} disabled={busyId === u.id || locked(u)} title={locked(u) ? lockWhy(u) : undefined}
+      onChange={(e) => changeRole(u.id, e.target.value)}>
       <option value="warehouse">Warehouse</option>
       <option value="ph_team">PH Team</option>
       <option value="supplier">Supplier (buyer)</option>
-      <option value="admin">Admin</option>
+      {(fullAdmin || u.role === 'admin') && <option value="admin">Admin</option>}
     </select>
   );
   // An ADMIN already holds every privilege implicitly (the server's isPrivileged), so
@@ -128,13 +135,17 @@ export function CheckAccess({ onHome, onSignOut }) {
     const both = held.includes('approve_buying') && held.includes('audit_buying');
     return (
       <div className="priv-group">
-        {offered.map((p) => (
-          <label className="priv" key={p.key} title={p.hint}>
-            <input type="checkbox" checked={held.includes(p.key)} disabled={busyId === u.id}
-              onChange={() => togglePriv(u, p.key)} />
-            <span>{p.label}</span>
-          </label>
-        ))}
+        {offered.map((p) => {
+          // The admin-level two are an admin's to grant; a privilege holder sees them, greyed.
+          const off = locked(u) || (p.adminLevel && !fullAdmin);
+          return (
+            <label className="priv" key={p.key} title={off ? (locked(u) ? lockWhy(u) : 'Only an admin can grant or remove this') : p.hint}>
+              <input type="checkbox" checked={held.includes(p.key)} disabled={busyId === u.id || off}
+                onChange={() => togglePriv(u, p.key)} />
+              <span>{p.label}</span>
+            </label>
+          );
+        })}
         {both && (
           // Allowed, and worth saying out loud: holding both is fine, but the server
           // still refuses to let anyone audit a request THEY approved.
@@ -144,14 +155,14 @@ export function CheckAccess({ onHome, onSignOut }) {
     );
   };
 
-  const Actions = ({ u }) => (
+  const Actions = ({ u }) => (locked(u) ? <span className="muted sm">{lockWhy(u)}</span> : (
     <>
       {u.status !== 'approved' && <button className="btn sm primary" disabled={busyId === u.id} onClick={() => review(u.id, 'approve')}>Approve</button>}
       {u.status !== 'rejected' && <button className="btn sm ghost" disabled={busyId === u.id} onClick={() => setConfirm({ u, action: 'reject' })}>Reject</button>}
       <button className="btn sm ghost" disabled={busyId === u.id} onClick={() => setConfirm({ u, action: 'reset' })}>Reset password</button>
       <button className="btn sm danger" disabled={busyId === u.id} onClick={() => setConfirm({ u, action: 'delete' })}>Delete</button>
     </>
-  );
+  ));
 
   return (
     <div className="app">

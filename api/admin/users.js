@@ -4,13 +4,15 @@
 // the first tap so linking is one click rather than a hunt for a number nobody knows
 // about themselves (docs/context/buy-cart.md).
 
-import { send, applySecurity, requireAdmin } from '../_lib/util.js';
+import { send, applySecurity } from '../_lib/util.js';
+import { requireAccessManager } from '../_lib/buycart.js';
 import { listUsers, listTelegramLinkRequests, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  if (!requireAdmin(req, res)) return;
+  // An admin, or an account holding "Manage user access" (2026-10-27).
+  if (!(await requireAccessManager(req, res))) return;
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Accounts are not configured.' });
 
   try {

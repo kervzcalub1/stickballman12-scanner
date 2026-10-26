@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { TopBar } from '../components/common.jsx';
 import { api } from '../api.js';
+import { hasPriv } from '../lib/constants.js';
 import { downloadCSV } from '../lib/csv.js';
 import { estToday, PH_DATETIME } from '../lib/format.js';
 import { SheinFixPanel } from './SheinFixPanel.jsx';
@@ -25,7 +26,8 @@ function Thumb({ src }) {
 }
 
 export function SheinCheck({ user, onHome, onSignOut }) {
-  const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
+  // Connect + the live-sync switches: an admin, or "Connect integrations" (2026-10-27).
+  const isAdmin = user?.role === 'admin' || user?.role === 'superadmin' || hasPriv(user, 'connect_integrations');
   const [file, setFile] = useState(null);       // { name, rows }
   const [variants, setVariants] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);

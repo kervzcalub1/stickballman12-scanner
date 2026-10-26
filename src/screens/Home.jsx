@@ -19,8 +19,11 @@ export function Home({ user, onPick, onSignOut }) {
   // than for a role — a warehouse account with none never sees it, and a PH account with
   // one does. The server refuses independently either way.
   const canBuy = hasAnyPriv(user);
+  // An admin-only section still shows a non-admin the cards whose PRIVILEGE they hold
+  // (`privKey`: Check Access for "Manage user access", eBay + SHEIN for "Connect integrations").
   const sections = HOME_SECTIONS
     .map((s) => (s.cards.some((c) => c.priv) ? { ...s, cards: s.cards.filter((c) => !c.priv || canBuy) } : s))
+    .map((s) => (s.adminOnly && !isAdmin ? { ...s, adminOnly: false, cards: s.cards.filter((c) => c.privKey && hasPriv(user, c.privKey)) } : s))
     .filter((s) => s.cards.length);
   const attention = counts
     ? HOME_ATTENTION.filter((a) => (counts[a.count] || 0) > 0 && (!a.priv || hasPriv(user, a.priv))

@@ -7900,7 +7900,7 @@ export async function setUserTelegramId(userId, telegramUserId) {
 }
 
 export async function getUserById(userId) {
-  const rows = await db()`SELECT id, name, username, role, status FROM users WHERE id = ${userId}`;
+  const rows = await db()`SELECT id, name, username, role, status, privileges FROM users WHERE id = ${userId}`;
   return rows[0] || null;
 }
 

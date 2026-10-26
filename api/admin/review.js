@@ -7,9 +7,9 @@
 // privilege is a permission on top of it — the gift-card duties are held by a PH team
 // member or an admin who ALSO does that, not instead of it. See docs/context/buy-cart.md.
 
-import { getJsonBody, send, applySecurity, requireAdmin } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity } from '../_lib/util.js';
 import { reviewUser, setUserRole, setUserPrivileges, deleteUser, dbConfigured, setUserTelegramId, getUserById, clearTelegramLinkRequest } from '../_lib/db.js';
-import { PRIVILEGE_KEYS, BUYER_PRIVILEGE_KEYS } from '../_lib/buycart.js';
+import { PRIVILEGE_KEYS, BUYER_PRIVILEGE_KEYS, requireAccessManager, accessRefusal } from '../_lib/buycart.js';
 
 // `supplier` = external scan-out partner (PO feature); admin-assignable, never at signup.
 const ROLES = ['warehouse', 'ph_team', 'admin', 'supplier'];
@@ -17,7 +17,9 @@ const ROLES = ['warehouse', 'ph_team', 'admin', 'supplier'];
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const admin = requireAdmin(req, res);
+  // An admin, or an account holding "Manage user access" — who then works on other people's
+  // non-admin accounts only and can't hand out the admin-level privileges (`accessRefusal`).
+  const admin = await requireAccessManager(req, res);
   if (!admin) return;
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Accounts are not configured.' });
 
@@ -27,6 +29,14 @@ export default async function handler(req, res) {
   if (!Number.isInteger(userId)) return send(res, 400, { ok: false, error: 'Provide a userId.' });
 
   try {
+    if (!admin.fullAdmin) {
+      const target = await getUserById(userId);
+      if (!target) return send(res, 404, { ok: false, error: 'Account not found.' });
+      const wanted = decision === 'privileges'
+        ? [...new Set((Array.isArray(body.privileges) ? body.privileges : []).filter((k) => PRIVILEGE_KEYS.includes(k)))] : null;
+      const why = accessRefusal(admin, target, { role: decision === 'role' ? body.role : null, privileges: wanted });
+      if (why) return send(res, 403, { ok: false, error: why });
+    }
     if (decision === 'delete') {
       const ok = await deleteUser(userId);
       if (!ok) return send(res, 404, { ok: false, error: 'Account not found.' });

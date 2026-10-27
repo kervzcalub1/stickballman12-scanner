@@ -1275,3 +1275,4 @@ Reviews `scratchpad/plan/security-review.md` and `phase4-review.md` → "Re-revi
 - Tests: +10 (5 pure, 5 end to end); the Phase 4 page test now shows a PH dry run converting nothing, then the admin's.
 **Results:** `npm run build` ✓; shein-listings + shein-live + shein-check + smoke 211 passed, 1 skipped; shein-fix +
 shein-reprice 15 passed; shein-listings in `TZ=Asia/Manila` 138 passed, 1 skipped. Open (user): `db:setup` for `resumed_by`.
+- **2026-10-27 — box sizes in inches / pounds** (user's request): the Setup tab's box card and the dry-run sheet show and take in / lb; saved and sent to SHEIN in cm / g as before. The user's default for every shoe: 16 × 12 × 6 in, 4 lb.

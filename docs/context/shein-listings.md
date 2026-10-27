@@ -458,7 +458,7 @@ Spec: `scratchpad/plan/phase4-spec.md` (API specialist; raw pages `scratchpad/p4
   child|toddler → leaf `category_id` + `product_type_id` + path; live), `shein_attr_defaults` (per SHEIN
   product type + attribute: `value_ids`, `extra_values`, `stale`), `shein_brand_map` (lower-cased vendor →
   `brand_code`; live); `shein_listing_products` + `title_override`, `skc_value_id`, `use_ph_photos`,
-  `publish_again_by/at`; `shein_api_log.asset`. D6 lives in `app_settings.shein_box_defaults`.
+  `publish_again_by/at`; `shein_api_log.asset`. D6 lives in `app_settings.shein_box_defaults` (stored in cm / g, what SHEIN takes). **Since 2026-10-27 the page shows and takes inches / pounds** (the team's default box: 16 × 12 × 6 in, 4 lb) and converts on save (`boxToImperial` / `boxFromImperial` in `src/lib/sheinPublish.js`); the dry-run sheet shows the box in in / lb too.
 - **Flow** (op `publish`, alone): dry run = store gates (check-publish-permission, publish quota, shelf
   quota, site list, warehouse; cached 1 h, read FRESH by the run) → category (map + tree leaf check; no map →
   image-category-suggestion) → fill-in-standard + template (7 d) + associated rules (≤ 3 rounds) → brand →

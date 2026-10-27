@@ -3134,7 +3134,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     const pl = it.locator('[data-plan="publish"]');
     await expect(pl).toContainText('E2E Shoes › E2E Men’s Sneakers');
     await expect(pl).toContainText('Nike');
-    await expect(pl).toContainText('34 × 22 × 13 cm · 1,450 g');
+    await expect(pl).toContainText('13.39 × 8.66 × 5.12 in · 3.2 lb');          // the saved 34 × 22 × 13 cm / 1,450 g, shown in in / lb
     await expect(pl).toContainText('uses 1 of 5 left this month');
     await expect(pl).toContainText('SB12-P7708');
     await expect(pl.locator('.shl-pthumb-w')).toHaveCount(4);
@@ -3193,6 +3193,31 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(box.locator('[data-box-save]')).toBeDisabled();
     const { status } = await page.request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_again', productIds: [gidP(7708)] } }).then((r) => ({ status: r.status() }));
     expect(status).toBe(403);
+  });
+
+  test('box sizes are shown and typed in inches / pounds, and saved for SHEIN in cm / grams', async ({ page }) => {
+    const before = (await (await page.request.get('/api/shein/listing-maps?type=box', { headers: auth.admin })).json()).box.groups;
+    await loginAs(page, 'admin');
+    await page.setViewportSize({ width: 1320, height: 1000 });
+    await page.goto('/shein-listings?tab=setup');
+    const box = page.locator('[data-setup="box"] [data-panel="box"]');
+    const adultLen = box.getByLabel('Adult — men’s and women’s Length (in)');
+    await expect(adultLen).toHaveValue(String(Math.round((before.adult.length / 2.54) * 100) / 100));   // the stored cm, shown in inches
+    await expect(box.getByLabel('Adult — men’s and women’s Weight (lb)')).toHaveValue(String(Math.round((before.adult.weight / 453.59237) * 100) / 100));
+    for (const g of ['Adult — men’s and women’s', 'GS / youth', 'Kids (PS)', 'Toddler (TD)']) {
+      for (const [k, v] of [['Length (in)', '16'], ['Width (in)', '12'], ['Height (in)', '6'], ['Weight (lb)', '4']]) await box.getByLabel(`${g} ${k}`).fill(v);
+    }
+    await box.locator('[data-box-save]').click();
+    await expect(box).toContainText('Confirmed by');
+    const saved = await (await page.request.get('/api/shein/listing-maps?type=box', { headers: auth.admin })).json();
+    expect(saved.box.groups.adult).toMatchObject({ length: '40.64', width: '30.48', height: '15.24', weight: 1814 });
+    expect(saved.box.groups.toddler).toMatchObject({ length: '40.64', weight: 1814 });
+    await expect(adultLen).toHaveValue('16');                                    // read back in inches, same as typed
+    await box.getByLabel('GS / youth Weight (lb)').fill('4.123');
+    await expect(box).toContainText('youth weight: a positive number of lb, at most 2 decimals.');
+    await expect(box.locator('[data-box-save]')).toBeDisabled();
+    // Put the earlier box back, exactly, for the tests after this one.
+    expect((await page.request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups: before } })).status()).toBe(200);
   });
 
   test('admin: Publish again → recorded, and a fresh dry run opens (ready to publish again)', async ({ page }) => {

@@ -605,6 +605,16 @@ export function ShoeThumb({ url, onOpen, size = 36 }) {
   return <span className="shoe-thumb-wrap">{img}</span>;
 }
 
+// A remote product photo (Shopify / eBay / SHEIN CDN) for list rows, with an empty grey
+// square when there is none or it fails to load. The eBay and SHEIN pages each had their
+// own copy (`Thumb`); new screens use this one.
+export function RemoteThumb({ src, alt = '', className = 'ebl-thumb' }) {
+  const [bad, setBad] = useState(false);
+  return src && !bad
+    ? <img className={className} src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setBad(true)} />
+    : <span className={`${className} ebl-thumb-empty`} aria-hidden="true" />;
+}
+
 // Full-screen single-image preview with zoom in/out/reset. Works for both remote
 // URLs and local object: URLs. Zoom widens the image inside a scrollable viewport
 // (so panning is native scroll/touch on every device); double-click toggles 1x↔2x.

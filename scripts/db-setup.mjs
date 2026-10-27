@@ -2701,6 +2701,251 @@ await sql(`
     queued_at       TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 
+// ── SHEIN Listings (docs/shein-listings-plan.md, docs/context/shein-listings.md) ───────
+// Shopify → SHEIN listing sync (retires 4seller). Phase 0 (probe) + Phase 1 (read-only
+// dashboard) built 2026-10-27; the Phase 2+ columns are created now so later phases don't
+// migrate twice. Every CHECK is defined ONCE, here (the old-enum trap).
+//
+// SHEIN's answers that change slowly (templates, permissions, the probe) and each SPU's last
+// read (kind 'spu') — a stale entry beats none. Not live: no screen reads it directly.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_listing_cache (
+    kind        TEXT NOT NULL,              -- probe | spu | spu_list | attr_template | custom_perm | …
+    key         TEXT NOT NULL,
+    payload     JSONB,
+    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    fetched_by  TEXT,
+    PRIMARY KEY (kind, key)
+  )`);
+// Every listing-side SHEIN call: path, method, request (writes: the full body; reads: none),
+// SHEIN's code / msg / traceId, ms, who. 90-day prune (shein-listing.js). Admin-only screen.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_api_log (
+    id          BIGSERIAL PRIMARY KEY,
+    at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    job_id      BIGINT,
+    item_id     BIGINT,
+    spu         TEXT,
+    source      TEXT,                       -- probe | snapshot | preview | run | …
+    path        TEXT NOT NULL,
+    method      TEXT,
+    write       BOOLEAN NOT NULL DEFAULT false,
+    dry         BOOLEAN NOT NULL DEFAULT false,
+    request     JSONB,
+    response    JSONB,
+    http_status INT,
+    code        TEXT,
+    msg         TEXT,
+    trace_id    TEXT,
+    ms          INT,
+    by          TEXT
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_api_log_job ON shein_api_log (job_id, id)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_api_log_spu ON shein_api_log (spu, at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_api_log_at ON shein_api_log (at DESC)`);
+// One row per Shopify product (key = its gid) — or `shein:<spu>` for a SHEIN product none of
+// whose sizes Shopify has. Roll-up status + counts recomputed with its variants.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_listing_products (
+    shopify_product_id TEXT PRIMARY KEY,
+    title           TEXT, handle TEXT, vendor TEXT, product_type TEXT, tags TEXT[] NOT NULL DEFAULT '{}', style TEXT,
+    shopify_status  TEXT,
+    image_url       TEXT, image_count INT, description_len INT,
+    shopify_hash    TEXT,
+    shopify_updated_at TIMESTAMPTZ,
+    shopify_json    JSONB,
+    spu             TEXT, spu_count INT NOT NULL DEFAULT 0, spu_source TEXT,
+    category_id     BIGINT, product_type_id BIGINT, category_source TEXT, brand_code TEXT,
+    attr_overrides  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    excluded        BOOLEAN NOT NULL DEFAULT false, excluded_by TEXT, excluded_at TIMESTAMPTZ,
+    status          TEXT NOT NULL DEFAULT 'unknown',
+    counts          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    blockers        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    review_state    INT, review_version TEXT, review_reason TEXT, review_checked_at TIMESTAMPTZ,
+    synced_hash     TEXT, last_published_at TIMESTAMPTZ, last_job_id BIGINT,
+    search_text     TEXT,
+    computed_hash   TEXT,
+    last_snapshot_at TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT shein_listing_products_status_check CHECK (status IN ('unknown','synced','not_on_shein','out_of_date','in_review','blocked','error','shein_only','excluded'))
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_products_status ON shein_listing_products (status)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_products_spu ON shein_listing_products (spu)`);
+// Every status the product's counted sizes have (2026-10-27): the tiles / ?status= filter list a
+// product under each of them, not only its worst (roll-up) status. NULL = computed before this.
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS size_statuses TEXT[]`);
+// Phase 5 (4seller cut-over): when a product first appeared on the page, and when it first read
+// Synced / In review / a named blocker / a person's "Don't list" (src/lib/sheinCutover.js
+// productAnswered). NULL first_seen_at = seen before this column existed (not counted as new).
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ`);
+// One row per Shopify variant (row_key = its gid) or per SHEIN-only size (row_key = shein:<skuCode>).
+// shein_sku is NOT unique at the DB level: the compute assigns each SHEIN SKU to one row, and a
+// SKU moving between products mid-batch must not trip a constraint (Build log).
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_listing_variants (
+    id              BIGSERIAL PRIMARY KEY,
+    row_key         TEXT NOT NULL UNIQUE,
+    shopify_variant_id TEXT UNIQUE,
+    shopify_product_id TEXT NOT NULL,
+    seller_sku      TEXT, shopify_size TEXT, size_key TEXT,
+    shopify_price   NUMERIC(12,2), shopify_compare_at NUMERIC(12,2), shopify_qty INT, shopify_barcode TEXT, shopify_weight_g INT,
+    spu             TEXT, skc TEXT, shein_sku TEXT, shein_seller_sku TEXT, shein_size TEXT,
+    shein_size_value_id BIGINT, shein_size_custom TEXT,
+    shein_price     NUMERIC(12,2), shein_mall_state INT, shein_shelf_status TEXT, shein_qty INT,
+    match           TEXT NOT NULL DEFAULT 'none',
+    status          TEXT NOT NULL DEFAULT 'unknown',
+    blockers        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    diffs           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    notes           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    size_plan       JSONB,
+    target_hash     TEXT, synced_hash TEXT, synced_fields JSONB,
+    review_state    INT,
+    excluded        BOOLEAN NOT NULL DEFAULT false, excluded_by TEXT, excluded_at TIMESTAMPTZ,
+    last_error      JSONB,
+    last_job_item_id BIGINT,
+    sort            INT NOT NULL DEFAULT 0,
+    computed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT shein_listing_variants_match_check CHECK (match IN ('sku','link','published','none')),
+    CONSTRAINT shein_listing_variants_status_check CHECK (status IN ('unknown','synced','not_on_shein','out_of_date','in_review','blocked','error','shein_only','excluded'))
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_variants_product ON shein_listing_variants (shopify_product_id, sort)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_variants_spu ON shein_listing_variants (spu)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_variants_status ON shein_listing_variants (status)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_variants_sku ON shein_listing_variants (seller_sku)`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_variants_shein_sku ON shein_listing_variants (shein_sku)`);
+// Our size → SHEIN's value id, or a custom spelling a PERSON confirmed (a custom value is
+// store-wide and permanent on SHEIN). category_id 0 = any category. Never the nearest size.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_size_map (
+    id              BIGSERIAL PRIMARY KEY,
+    category_id     BIGINT NOT NULL DEFAULT 0,
+    attribute_id    BIGINT NOT NULL DEFAULT 0,
+    size_key        TEXT NOT NULL,
+    attribute_value_id BIGINT,
+    custom_value    TEXT,
+    shein_label     TEXT,
+    foot_length     NUMERIC(8,2),
+    source          TEXT NOT NULL DEFAULT 'person',
+    verified        BOOLEAN NOT NULL DEFAULT false,
+    note            TEXT,
+    set_by          TEXT,
+    set_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT shein_size_map_key UNIQUE (category_id, attribute_id, size_key),
+    CONSTRAINT shein_size_map_value_check CHECK (attribute_value_id IS NOT NULL OR custom_value IS NOT NULL),
+    CONSTRAINT shein_size_map_source_check CHECK (source IN ('exact','person','custom_created'))
+  )`);
+// Server jobs (snapshot · probe · preview · run · recheck): claimed with a 3-minute lease +
+// heartbeat, resumable after a restart. At most ONE queued/running job (the partial unique index).
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_listing_jobs (
+    id              BIGSERIAL PRIMARY KEY,
+    kind            TEXT NOT NULL,
+    mode            TEXT NOT NULL DEFAULT 'dry',
+    status          TEXT NOT NULL DEFAULT 'queued',
+    preview_job_id  BIGINT,
+    scope           JSONB NOT NULL DEFAULT '{}'::jsonb,
+    started_by      TEXT, confirmed_by TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at      TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at     TIMESTAMPTZ,
+    lease_owner     TEXT, lease_until TIMESTAMPTZ,
+    phase           TEXT, total INT NOT NULL DEFAULT 0, done INT NOT NULL DEFAULT 0, current TEXT,
+    counts          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error           TEXT,
+    stop_requested  BOOLEAN NOT NULL DEFAULT false,
+    resumes         INT NOT NULL DEFAULT 0,
+    CONSTRAINT shein_listing_jobs_kind_check CHECK (kind IN ('snapshot','probe','preview','run','recheck')),
+    CONSTRAINT shein_listing_jobs_mode_check CHECK (mode IN ('dry','run')),
+    CONSTRAINT shein_listing_jobs_status_check CHECK (status IN ('queued','running','awaiting_confirm','done','stopped','failed','interrupted'))
+  )`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS shein_listing_jobs_one_active ON shein_listing_jobs ((true)) WHERE status IN ('queued','running')`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_jobs_recent ON shein_listing_jobs (id DESC)`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_listing_job_items (
+    id              BIGSERIAL PRIMARY KEY,
+    job_id          BIGINT NOT NULL REFERENCES shein_listing_jobs(id) ON DELETE CASCADE,
+    seq             INT NOT NULL DEFAULT 0,
+    shopify_product_id TEXT,
+    spu             TEXT,
+    op              TEXT NOT NULL,
+    variant_ids     TEXT[] NOT NULL DEFAULT '{}',
+    status          TEXT NOT NULL DEFAULT 'pending',
+    attempts        INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ,
+    body            JSONB, body_hash TEXT,
+    idem_key        TEXT UNIQUE,
+    response        JSONB, version TEXT, trace_id TEXT, error TEXT,
+    blockers        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT shein_listing_job_items_op_check CHECK (op IN ('read','add_sku','edit','price','mall_state','publish','seller_sku','recheck')),
+    CONSTRAINT shein_listing_job_items_status_check CHECK (status IN ('pending','sending','sent','in_review','done','skipped','deferred','changed','failed'))
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_job_items_job ON shein_listing_job_items (job_id, seq)`);
+// Phase 2 (add sizes, 2026-10-27): the per-product plan a person reads (sizes / relinks / skipped),
+// SHEIN's review follow-up, and the transport-retry count (business refusals are never retried).
+await sql(`ALTER TABLE shein_listing_job_items ADD COLUMN IF NOT EXISTS plan JSONB`);
+await sql(`ALTER TABLE shein_listing_job_items ADD COLUMN IF NOT EXISTS retries INT NOT NULL DEFAULT 0`);
+await sql(`ALTER TABLE shein_listing_job_items ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE shein_listing_job_items ADD COLUMN IF NOT EXISTS sku_codes JSONB`);
+await sql(`ALTER TABLE shein_listing_job_items ADD COLUMN IF NOT EXISTS document_state INT`);
+await sql(`ALTER TABLE shein_listing_job_items ADD COLUMN IF NOT EXISTS review_checked_at TIMESTAMPTZ`);
+// security H1: who resumed a job (a run job's confirmed_by is the approver and is never overwritten)
+await sql(`ALTER TABLE shein_listing_jobs ADD COLUMN IF NOT EXISTS resumed_by TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_job_items_open ON shein_listing_job_items (status, spu) WHERE status IN ('sending','sent','in_review','deferred')`);
+// ── SHEIN Listings Phase 4 (publish brand-new products; scratchpad spec phase4-spec.md) ──────
+// Person-set maps (DB only, never a SHEIN write): Shopify product type + size group → SHEIN leaf
+// category (D7); per SHEIN product type the product attributes (never automatic, §3.1); Shopify
+// vendor → SHEIN brand_code (D5). D6's box size / weight defaults live in app_settings
+// (`shein_box_defaults`), "unconfirmed" until a person saves them.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_category_map (
+    shopify_product_type TEXT NOT NULL,
+    size_group      TEXT NOT NULL,
+    category_id     BIGINT NOT NULL,
+    product_type_id BIGINT NOT NULL,
+    category_path   TEXT,
+    suggestion      JSONB,
+    set_by          TEXT, set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (shopify_product_type, size_group),
+    CONSTRAINT shein_category_map_group_check CHECK (size_group IN ('adult','women','youth','child','toddler'))
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_attr_defaults (
+    product_type_id BIGINT NOT NULL,
+    attribute_id    BIGINT NOT NULL,
+    scope           TEXT NOT NULL DEFAULT 'product',
+    value_ids       BIGINT[] NOT NULL DEFAULT '{}',
+    extra_values    TEXT[] NOT NULL DEFAULT '{}',
+    stale           BOOLEAN NOT NULL DEFAULT false,
+    set_by          TEXT, set_at TIMESTAMPTZ NOT NULL DEFAULT now(), template_seen_at TIMESTAMPTZ,
+    PRIMARY KEY (product_type_id, attribute_id, scope),
+    CONSTRAINT shein_attr_defaults_scope_check CHECK (scope IN ('product','box'))
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_brand_map (
+    vendor      TEXT PRIMARY KEY,          -- lower-cased Shopify vendor
+    brand_code  TEXT NOT NULL,
+    brand_name  TEXT,
+    set_by      TEXT, set_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+// D5 (review F2): a vendor a person marked "no brand" (a real generic product) goes up without a
+// brand_code; refused for known brands (src/lib/sheinPublish.js KNOWN_BRANDS). brand_code is then NULL.
+await sql(`ALTER TABLE shein_brand_map ADD COLUMN IF NOT EXISTS no_brand BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE shein_brand_map ALTER COLUMN brand_code DROP NOT NULL`);
+// Per product: a person-shortened title, the SKC colour value (main_attribute_status 3), "use PH
+// edited photos", an admin's "Publish again" after a rejection.
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS title_override TEXT`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS skc_value_id BIGINT`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS use_ph_photos BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_by TEXT`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_at TIMESTAMPTZ`);
+// SHEIN image conversion (transform-pic) is an ASSET call: it makes a SHEIN-hosted URL, changes no product.
+await sql(`ALTER TABLE shein_api_log ADD COLUMN IF NOT EXISTS asset BOOLEAN NOT NULL DEFAULT false`);
+
 // ── Order cancellations (docs/context/cancellations.md) ─────────────────────────────
 // The warehouse sends the bot a picture of an order to cancel; the AI reads the platform +
 // order number off it; PH/admin check every row against the photo, then cancel it on the
@@ -2873,6 +3118,7 @@ await sql(`CREATE INDEX IF NOT EXISTS inbound_issue_events_idx ON inbound_issue_
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
+  'shein_category_map', 'shein_brand_map',
   'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
   'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions',
   'po_stores', 'po_store_charges', 'po_store_receipts', 'presell_stock_po', 'presell_box_lines',
@@ -2885,6 +3131,7 @@ const LIVE_TABLES = [
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_live_runs', 'shein_live_items',
+  'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items',
   'cancellations', 'cancellation_photos', 'cancellation_events',
   'inbound_issues', 'inbound_issue_events',
 ];

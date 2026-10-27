@@ -111,6 +111,10 @@ export default defineConfig({
       // so no test can spend OpenAI money on a receipt (api/_lib/receipt-ai.js).
       RECEIPT_AI_URL: 'http://127.0.0.1:5195/v1/chat/completions',
       TELEGRAM_CANCEL_CHAT_ID: '-100555',
+      // SHEIN: every call from the test server goes to a FAKE SHEIN on localhost
+      // (e2e/shein-listings.spec.js starts it; it refuses any write path), so no run can reach
+      // SHEIN's real API whatever the database says about a connection.
+      SHEIN_API_HOST: 'http://127.0.0.1:5194',
     },
   },
 });

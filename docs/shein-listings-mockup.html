@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SHEIN Listings mockup</title>
+<style>
+/* Tokens copied from src/styles.css :root — the app is dark-only. */
+:root {
+  --bg:#0f1115; --panel:#181b22; --panel-2:#20242d; --border:#2a2f3a; --text:#e8eaed; --muted:#9aa0aa;
+  --primary:#4f7cff; --primary-d:#3a63d8; --ok:#5fc58a; --bad:#ec8f8f; --warn:#e0b05f; --info:#9db8ff; --violet:#a595ff;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; -webkit-font-smoothing:antialiased; font-size:14px; }
+a { color:#9db8ff; text-decoration:none; } a:hover { text-decoration:underline; }
+.app { max-width:1320px; margin:0 auto; padding:16px 20px 90px; }
+.muted { color:var(--muted); } .xs { font-size:12px; } .sm { font-size:13px; } .mt { margin-top:10px; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+
+/* topbar */
+.topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+.brand { font-weight:700; display:flex; align-items:center; gap:10px; font-size:16px; }
+.logo { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#4f7cff,#a595ff); border:1px solid var(--border); }
+.clock { color:var(--muted); font-size:13px; }
+.live-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:7px; background:#4cc38a; box-shadow:0 0 0 3px rgba(76,195,138,.18); }
+
+.card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,.18); }
+.card h3 { margin:0 0 6px; font-size:15px; }
+
+/* buttons */
+.btn { border:1px solid var(--border); background:var(--panel-2); color:var(--text); border-radius:10px; padding:12px 16px; font-size:15px; font-weight:600; cursor:pointer; font-family:inherit; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.btn:hover { border-color:#3a4150; }
+.btn.primary { background:var(--primary); border-color:var(--primary); color:#fff; }
+.btn.primary:hover { background:var(--primary-d); }
+.btn.ghost { background:transparent; }
+.btn.sm { padding:8px 12px; font-size:13px; }
+.btn.xs { padding:2px 9px; font-size:12px; line-height:1.6; border-radius:8px; }
+.btn.violet { background:rgba(165,149,255,.14); border-color:rgba(165,149,255,.5); color:var(--violet); }
+.btn.fix { background:rgba(79,124,255,.14); border-color:rgba(79,124,255,.5); color:#bcd0ff; }
+
+/* connection strip (.ebl-account) */
+.strip { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; }
+.ok-text { color:var(--ok); font-weight:600; }
+
+/* tiles (.shc-tiles) */
+.tiles { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; }
+.tile { display:flex; flex-direction:column; gap:2px; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:rgba(255,255,255,.03); color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.tile b { font-size:22px; line-height:1.1; font-variant-numeric:tabular-nums; }
+.tile span { font-size:12px; color:var(--muted); }
+.tile .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:1px; }
+.tile.on { border-color:var(--primary); background:rgba(79,124,255,.1); }
+.tile.ok b { color:var(--ok); } .tile.bad b { color:var(--bad); } .tile.warn b { color:var(--warn); } .tile.info b { color:var(--info); } .tile.violet b { color:var(--violet); }
+
+/* tabs (.ebl-tabs.seg) */
+.seg { display:flex; flex-wrap:wrap; gap:6px; }
+.seg-btn { flex:1 1 auto; padding:12px; border-radius:10px; cursor:pointer; font-weight:700; white-space:nowrap; background:var(--panel-2); border:1px solid var(--border); color:var(--muted); font-family:inherit; font-size:14px; }
+.seg-btn.on { color:var(--primary); border-color:var(--primary); background:rgba(79,124,255,.12); }
+.seg-n { font-variant-numeric:tabular-nums; opacity:.7; font-size:11px; margin-left:4px; }
+.seg-btn .warnn { color:var(--bad); opacity:1; }
+.seg.sm .seg-btn { flex:none; padding:4px 10px; font-size:12px; }
+.tabs { margin:0 0 16px; }
+
+/* filters (.ebl-filters) */
+.filters { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:10px; }
+.input { flex:1 1 280px; min-width:0; background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:10px; padding:10px 12px; font-size:14px; font-family:inherit; }
+.select { background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:10px; padding:9px 10px; font-size:13px; font-family:inherit; }
+.check-pill { display:inline-flex; align-items:center; gap:8px; padding:6px 11px; border-radius:999px; font-size:12px; font-weight:600; border:1.5px solid var(--border); background:var(--panel-2); cursor:pointer; }
+.check-pill.on { border-color:var(--primary); background:rgba(79,124,255,.16); }
+
+/* checkbox (global style from styles.css) */
+input[type=checkbox] { appearance:none; -webkit-appearance:none; margin:0; flex:none; width:20px; height:20px; border-radius:6px; cursor:pointer; border:2px solid #6b7280; background:var(--panel-2); display:inline-grid; place-content:center; vertical-align:middle; }
+input[type=checkbox]::after { content:'✓'; color:#fff; font-size:14px; font-weight:800; line-height:1; transform:scale(0); }
+input[type=checkbox]:checked { background:var(--primary); border-color:var(--primary); }
+input[type=checkbox]:checked::after { transform:scale(1); }
+input[type=checkbox]:disabled { opacity:.35; cursor:not-allowed; }
+
+/* chips (.ebo-chip) */
+.chip { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; font-size:12px; font-weight:600; padding:2px 9px; border-radius:999px; background:rgba(255,255,255,.07); color:var(--muted); }
+.chip::before { content:''; width:6px; height:6px; border-radius:50%; background:currentColor; }
+.chip.ok { background:rgba(95,197,138,.14); color:var(--ok); }
+.chip.bad { background:rgba(236,143,143,.16); color:var(--bad); }
+.chip.warn { background:rgba(224,176,95,.16); color:var(--warn); }
+.chip.info { background:rgba(79,124,255,.14); color:var(--info); }
+.chip.violet { background:rgba(165,149,255,.16); color:var(--violet); }
+.chip.plain::before { display:none; }
+
+/* product rows */
+.list-head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; margin:4px 0 8px; }
+.product { border:1px solid var(--border); border-radius:12px; margin-top:10px; background:rgba(255,255,255,.015); overflow:hidden; }
+.product.sel { border-color:rgba(79,124,255,.55); box-shadow:0 0 0 1px rgba(79,124,255,.25) inset; }
+.product.e-bad { border-left:3px solid var(--bad); } .product.e-info { border-left:3px solid var(--info); }
+.product.e-violet { border-left:3px solid var(--violet); } .product.e-ok { border-left:3px solid var(--ok); } .product.e-muted { border-left:3px solid #5b6270; }
+.product > summary { list-style:none; cursor:pointer; display:grid; grid-template-columns:28px 64px minmax(0,1fr) 170px 150px 96px; gap:12px; align-items:center; padding:12px 14px; }
+.product > summary::-webkit-details-marker { display:none; }
+.thumb { width:64px; height:64px; border-radius:8px; background:#fff; display:grid; place-items:center; overflow:hidden; }
+.thumb svg { width:56px; height:auto; }
+.thumb.empty { background:rgba(255,255,255,.06); color:var(--muted); font-size:10px; text-align:center; }
+.p-name { font-weight:600; line-height:1.3; }
+.p-meta { display:flex; flex-wrap:wrap; gap:4px 12px; margin-top:3px; font-size:12px; color:var(--muted); }
+.p-blocker { margin-top:6px; font-size:12.5px; color:var(--bad); }
+.p-blocker.info { color:var(--info); } .p-blocker.violet { color:var(--violet); } .p-blocker.muted { color:var(--muted); }
+.cover b { font-size:15px; font-variant-numeric:tabular-nums; }
+.cover-bar { height:6px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; margin-top:6px; display:flex; }
+.cover-bar i { display:block; height:100%; }
+.caret { color:var(--primary); font-weight:600; font-size:12px; text-align:right; }
+.product[open] .caret .c::before { content:'▾ '; } .product:not([open]) .caret .c::before { content:'▸ '; }
+.p-actions { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+
+/* variant table */
+.vwrap { border-top:1px solid var(--border); background:rgba(255,255,255,.02); overflow-x:auto; }
+table.v { width:100%; border-collapse:collapse; font-size:13px; }
+table.v th { text-align:left; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); padding:8px 12px; border-bottom:1px solid var(--border); white-space:nowrap; }
+table.v td { padding:8px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
+table.v tr:last-child td { border-bottom:none; }
+table.v .num { text-align:right; font-variant-numeric:tabular-nums; }
+table.v tr td:first-child { box-shadow:inset 3px 0 0 transparent; }
+table.v tr.st-bad td:first-child { box-shadow:inset 3px 0 0 var(--bad); }
+table.v tr.st-info td:first-child { box-shadow:inset 3px 0 0 var(--info); }
+table.v tr.st-muted td:first-child { box-shadow:inset 3px 0 0 #5b6270; }
+table.v tr.zero td { opacity:.5; }
+.size { font-weight:700; }
+.was { color:var(--warn); }
+.todo { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; }
+.todo .say { min-width:0; }
+.shein-said { display:block; color:var(--muted); font-size:11.5px; margin-top:2px; }
+.vfoot { padding:10px 14px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; border-top:1px solid var(--border); }
+
+/* banner + notice */
+.banner { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; padding:10px 14px; border-radius:12px; border:1px solid rgba(79,124,255,.35); background:rgba(79,124,255,.08); margin-bottom:16px; }
+.banner .pb { flex:1 1 200px; height:8px; border-radius:999px; background:rgba(255,255,255,.1); overflow:hidden; }
+.banner .pb span { display:block; height:100%; width:50%; background:var(--primary); }
+.notice { padding:10px 12px; border-radius:10px; border:1px solid rgba(233,196,106,.4); background:rgba(233,196,106,.12); color:#e9c46a; font-size:13px; }
+
+/* sticky action bar (.batch-bar) */
+.batch-bar { position:sticky; bottom:8px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:12px 14px; margin-top:12px; background:var(--panel); border:1px solid var(--primary); border-radius:12px; box-shadow:0 6px 20px rgba(0,0,0,.45); z-index:5; }
+.batch-bar .tot { font-size:15px; } .batch-bar .tot b { font-variant-numeric:tabular-nums; }
+.batch-bar .btns { display:flex; gap:8px; flex-wrap:wrap; }
+
+/* legend */
+.legend { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:6px 16px; }
+.legend div { font-size:12px; color:var(--muted); display:flex; gap:8px; align-items:baseline; }
+
+/* drawer (CSS :target, no script) */
+.drawer-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; z-index:20; }
+.drawer { position:fixed; top:0; right:0; bottom:0; width:min(560px,100vw); background:var(--panel); border-left:1px solid var(--border); box-shadow:-10px 0 30px rgba(0,0,0,.5); z-index:21; display:none; flex-direction:column; }
+#details:target ~ .drawer-bg, #details:target ~ .drawer { display:flex; }
+.drawer-bg { display:none; } #details:target ~ .drawer-bg { display:block; }
+.d-head { display:grid; grid-template-columns:64px minmax(0,1fr) auto; gap:12px; align-items:center; padding:16px; border-bottom:1px solid var(--border); }
+.d-body { padding:16px; overflow-y:auto; flex:1; }
+.d-foot { padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; padding-bottom:max(12px, env(safe-area-inset-bottom)); }
+.d-sec { margin-bottom:18px; } .d-sec h4 { margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); }
+.req { display:grid; grid-template-columns:20px minmax(0,1fr) auto; gap:8px; align-items:start; padding:7px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.req:last-child { border-bottom:none; }
+.req .y { color:var(--ok); font-weight:800; } .req .n { color:var(--bad); font-weight:800; }
+.kv { display:grid; grid-template-columns:110px minmax(0,1fr); gap:6px 12px; font-size:13px; }
+.kv dt { color:var(--muted); } .kv dd { margin:0; }
+.imgs { display:flex; gap:6px; }
+.imgs span { width:48px; height:48px; border-radius:6px; background:#fff; display:grid; place-items:center; font-size:10px; color:#333; position:relative; }
+.imgs span i { position:absolute; top:2px; left:4px; font-style:normal; font-size:10px; color:#555; }
+.chg { background:rgba(224,176,95,.12); }
+.close { font-size:20px; color:var(--muted); padding:4px 10px; }
+
+.note-box { border:1px dashed var(--border); border-radius:10px; padding:10px 12px; font-size:12px; color:var(--muted); margin-top:10px; }
+
+/* ---- phone ---- */
+@media (max-width: 768px) {
+  .app { padding:12px 16px 120px; }
+  .tiles { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .seg-btn { padding:10px 8px; font-size:13px; }
+  .product > summary { grid-template-columns:48px minmax(0,1fr) 28px; grid-template-areas:"img main chk" "img roll roll" "cov cov cov" "act act act"; gap:6px 10px; }
+  .product > summary > .chkcell { grid-area:chk; justify-self:end; align-self:start; }
+  .product > summary > .thumb { grid-area:img; width:48px; height:48px; }
+  .product > summary > .main { grid-area:main; }
+  .product > summary > .rollup { grid-area:roll; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .product > summary > .cover { grid-area:cov; }
+  .product > summary > .p-actions { grid-area:act; flex-direction:row; justify-content:space-between; align-items:center; }
+  .hide-sm { display:none !important; }
+  table.v thead { display:none; }
+  table.v, table.v tbody, table.v tr, table.v td { display:block; width:100%; }
+  table.v tr { padding:8px 12px; border-bottom:1px solid var(--border); display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 10px; }
+  table.v td { padding:0; border:none; }
+  table.v td.c-size { grid-column:1; } table.v td.c-status { grid-column:2; grid-row:1; text-align:right; }
+  table.v td.c-shop { grid-column:1; color:var(--muted); font-size:12px; text-align:left; } table.v td.c-shop::after { content:" in stock on Shopify"; }
+  table.v td.c-todo { grid-column:1 / -1; }
+  table.v td.c-todo .btn { width:100%; justify-content:center; margin-top:4px; }
+  table.v td.c-hide { display:none; }
+  table.v tr.st-bad { box-shadow:inset 3px 0 0 var(--bad); }
+  .batch-bar .btns { width:100%; } .batch-bar .btns .btn { flex:1 1 auto; justify-content:center; }
+  .drawer { width:100vw; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="brand"><span class="logo"></span><span>SHEIN Listings</span></div>
+    <div class="clock hide-sm"><span class="live-dot"></span>Tue Oct 27 · 2:44 PM EST</div>
+    <div style="display:flex;gap:8px"><button class="btn ghost sm">Pages ▾</button><button class="btn ghost sm">Home</button></div>
+  </div>
+
+  <!-- connection strip -->
+  <div class="card">
+    <div class="strip">
+      <span class="ok-text">● SHEIN connected</span>
+      <span class="muted sm">Shopify read 2:41 PM EST · SHEIN read 2:40 PM EST · 412 products · 3,906 sizes</span>
+      <span class="muted sm">Shelf quota <b style="color:var(--text)">1,840 of 2,000</b> SKCs used · 160 left this month</span>
+      <span style="flex:1"></span>
+      <button class="btn ghost sm">↻ Re-read Shopify + SHEIN</button>
+    </div>
+    <p class="muted xs" style="margin:8px 0 0">Stock is kept in step by the live sync (SHEIN ↔ Shopify check page). This page is about <b>what is listed</b>: sizes, SKUs, prices, photos, categories.</p>
+  </div>
+
+  <!-- running job banner -->
+  <div class="banner">
+    <b class="sm">Job #43 · Publishing 2 products</b>
+    <span class="muted sm">1 of 2 · now <span class="mono">U9060GRY</span> · started 2:39 PM EST by Kim</span>
+    <div class="pb"><span></span></div>
+    <a class="sm" href="#">View job →</a>
+  </div>
+
+  <!-- counts bar = filters -->
+  <div class="card">
+    <div class="tiles" role="group" aria-label="Filter by status">
+      <button class="tile on" aria-pressed="true"><b>412</b><span>All products</span></button>
+      <button class="tile ok"><b>301</b><span><i class="dot" style="background:var(--ok)"></i>Synced</span></button>
+      <button class="tile"><b>46</b><span><i class="dot" style="background:#7d8491"></i>Not on SHEIN · 118 sizes</span></button>
+      <button class="tile info"><b>22</b><span><i class="dot" style="background:var(--info)"></i>Out of date · 64 sizes</span></button>
+      <button class="tile violet"><b>9</b><span><i class="dot" style="background:var(--violet)"></i>In review</span></button>
+      <button class="tile bad"><b>27</b><span><i class="dot" style="background:var(--bad)"></i>Blocked · 61 sizes</span></button>
+      <button class="tile warn"><b>7</b><span><i class="dot" style="background:var(--warn)"></i>Error — SHEIN refused</span></button>
+    </div>
+  </div>
+
+  <!-- tabs -->
+  <div class="seg tabs">
+    <button class="seg-btn on">Products <span class="seg-n">412</span></button>
+    <button class="seg-btn">Sizes <span class="seg-n warnn">27 to map</span></button>
+    <button class="seg-btn">Jobs <span class="seg-n">1 running</span></button>
+  </div>
+
+  <div class="card">
+    <div class="filters">
+      <input class="input" type="search" placeholder="Search name, style code, seller SKU, size…" aria-label="Search products">
+      <select class="select" aria-label="Brand"><option>All brands</option><option>Jordan</option><option>Nike</option><option>New Balance</option></select>
+      <select class="select" aria-label="Blocker"><option>Any blocker</option><option>Size not on SHEIN (14)</option><option>Photos (6)</option><option>No category (5)</option><option>Brand not authorised (2)</option></select>
+      <span class="check-pill on"><input type="checkbox" checked aria-label="In stock only"> In stock on Shopify</span>
+    </div>
+    <div class="list-head">
+      <span class="muted xs">Showing 6 of 412 products · worst first · tap a product for its sizes</span>
+      <label class="sm" style="display:inline-flex;gap:8px;align-items:center"><input type="checkbox"> Select all on this page</label>
+    </div>
+
+    <!-- 1. BLOCKED: sizes not in SHEIN's list -->
+    <details class="product e-bad sel" open>
+      <summary>
+        <span class="chkcell"><input type="checkbox" checked aria-label="Select"></span>
+        <span class="thumb"><svg viewBox="0 0 120 60"><path d="M6 44c10-2 22-10 32-22 6-7 14-10 22-6 8 4 12 10 22 12 12 2 26 2 32 8 3 3 2 8-2 9H8c-3 0-4-1-2-1z" fill="#f4f4f4" stroke="#222" stroke-width="2"/><path d="M8 51h104" stroke="#222" stroke-width="3"/><path d="M40 26l8 8M48 22l8 8M56 20l8 8" stroke="#bbb" stroke-width="2"/></svg></span>
+        <span class="main">
+          <div class="p-name">Nike Air Force 1 '07 Women's "Triple White"</div>
+          <div class="p-meta"><span class="mono">DD8959-100</span><span>Nike</span><a href="#">Shopify ↗</a><a href="#">SHEIN SPU s24101588231 ↗</a></div>
+          <div class="p-blocker">2 sizes aren't SHEIN sizes — <b>14.5W, 15W</b>. Add them as custom sizes.</div>
+        </span>
+        <span class="rollup"><span class="chip bad">Blocked</span></span>
+        <span class="cover"><b>9 of 11</b> <span class="muted xs">sizes on SHEIN</span>
+          <span class="cover-bar"><i style="width:82%;background:var(--ok)"></i><i style="width:18%;background:var(--bad)"></i></span></span>
+        <span class="p-actions"><a class="btn xs" href="#details">Details</a><span class="caret"><span class="c">11 sizes</span></span></span>
+      </summary>
+      <div class="vwrap">
+        <table class="v">
+          <thead><tr><th>Size</th><th class="num">Shopify</th><th class="num">Price</th><th>SHEIN size</th><th>Seller SKU</th><th class="num">SHEIN</th><th>Status</th><th>What to do</th></tr></thead>
+          <tbody>
+            <tr><td class="c-size size">6W</td><td class="c-shop num">4<span class="hide-sm"></span></td><td class="c-hide num">$115</td><td class="c-hide">US6W</td><td class="c-hide mono">DD8959-100-6W</td><td class="c-hide num">4 · $115</td><td class="c-status"><span class="chip ok">Synced</span></td><td class="c-todo muted xs">—</td></tr>
+            <tr><td class="c-size size">7W</td><td class="c-shop num">6</td><td class="c-hide num">$115</td><td class="c-hide">US7W</td><td class="c-hide mono">DD8959-100-7W</td><td class="c-hide num">6 · $115</td><td class="c-status"><span class="chip ok">Synced</span></td><td class="c-todo muted xs">—</td></tr>
+            <tr><td class="c-size size">8W … 13W</td><td class="c-shop num">31</td><td class="c-hide num">$115–$125</td><td class="c-hide">US8W … US13W</td><td class="c-hide mono">7 sizes</td><td class="c-hide num">31</td><td class="c-status"><span class="chip ok">Synced</span></td><td class="c-todo muted xs">7 sizes, all match</td></tr>
+            <tr class="st-bad"><td class="c-size size">14.5W</td><td class="c-shop num">2</td><td class="c-hide num">$139</td><td class="c-hide muted">— none —</td><td class="c-hide mono">DD8959-100-14.5W</td><td class="c-hide num muted">not listed</td><td class="c-status"><span class="chip bad">Blocked</span></td>
+              <td class="c-todo"><div class="todo"><span class="say"><b>14.5W isn't a SHEIN size.</b> Add it as a custom size for the store — it then works for every product.</span><button class="btn xs fix">✚ Add 14.5W as a custom size</button></div></td></tr>
+            <tr class="st-bad"><td class="c-size size">15W</td><td class="c-shop num">1</td><td class="c-hide num">$139</td><td class="c-hide muted">— none —</td><td class="c-hide mono">DD8959-100-15W</td><td class="c-hide num muted">not listed</td><td class="c-status"><span class="chip bad">Blocked</span></td>
+              <td class="c-todo"><div class="todo"><span class="say"><b>15W isn't a SHEIN size.</b> SHEIN allows custom sizes in Women's Sneakers.</span><button class="btn xs fix">✚ Add 15W as a custom size</button></div></td></tr>
+          </tbody>
+        </table>
+        <div class="vfoot"><span class="muted xs">Women's Sneakers · custom sizes allowed (checked 2:40 PM EST). The 9 synced sizes stay live while the 2 are fixed.</span><a class="btn xs" href="#details">What SHEIN will receive →</a></div>
+      </div>
+    </details>
+
+    <!-- 2. BLOCKED: images + category -->
+    <details class="product e-bad" open>
+      <summary>
+        <span class="chkcell"><input type="checkbox" aria-label="Select"></span>
+        <span class="thumb empty">no photo</span>
+        <span class="main">
+          <div class="p-name">New Balance 550 "White Green"</div>
+          <div class="p-meta"><span class="mono">BB550WT1</span><span>New Balance</span><a href="#">Shopify ↗</a><span>not on SHEIN yet</span></div>
+          <div class="p-blocker">Product can't be published — no SHEIN category, and only 1 photo (SHEIN needs 3).</div>
+        </span>
+        <span class="rollup"><span class="chip bad">Blocked</span></span>
+        <span class="cover"><b>0 of 8</b> <span class="muted xs">sizes on SHEIN</span>
+          <span class="cover-bar"><i style="width:100%;background:var(--bad)"></i></span></span>
+        <span class="p-actions"><a class="btn xs" href="#details">Details</a><span class="caret"><span class="c">8 sizes</span></span></span>
+      </summary>
+      <div class="vwrap">
+        <table class="v">
+          <thead><tr><th>Product requirement</th><th colspan="6"></th><th>What to do</th></tr></thead>
+          <tbody>
+            <tr class="st-bad"><td class="c-size size">Category</td><td class="c-hide" colspan="5"></td><td class="c-status"><span class="chip bad">Blocked</span></td>
+              <td class="c-todo"><div class="todo"><span class="say"><b>No SHEIN category picked.</b> We suggest <i>Men's Shoes › Sneakers</i> from the title.</span><button class="btn xs fix">Choose category</button></div></td></tr>
+            <tr class="st-bad"><td class="c-size size">Photos</td><td class="c-hide" colspan="5"></td><td class="c-status"><span class="chip bad">Blocked</span></td>
+              <td class="c-todo"><div class="todo"><span class="say"><b>Only 1 photo, SHEIN needs at least 3</b> (square, 800 px+). PH has 5 edited photos for this SKU.</span><button class="btn xs fix">Use PH edited photos (5)</button><a class="btn xs ghost" href="#">Open in Shopify ↗</a></div></td></tr>
+            <tr class="st-muted"><td class="c-size size">Sizes 7–13</td><td class="c-shop num">19</td><td class="c-hide num">$109</td><td class="c-hide">US7 … US13</td><td class="c-hide mono">8 sizes</td><td class="c-hide num muted">—</td><td class="c-status"><span class="chip">Not on SHEIN</span></td>
+              <td class="c-todo muted xs">All 8 sizes map to standard SHEIN sizes. Ready once the two above are fixed.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <!-- 3. OUT OF DATE: price changed on Shopify -->
+    <details class="product e-info sel" open>
+      <summary>
+        <span class="chkcell"><input type="checkbox" checked aria-label="Select"></span>
+        <span class="thumb"><svg viewBox="0 0 120 60"><path d="M6 42c12-2 20-12 34-20 8-4 16-4 22 0 6 4 12 8 24 9 12 1 22 3 26 9 2 3 0 6-3 7H8c-3 0-4-2-2-5z" fill="#c9cdd3" stroke="#333" stroke-width="2"/><path d="M8 50h104" stroke="#8a8f96" stroke-width="5"/><path d="M50 22c6 6 16 10 26 10" stroke="#777" stroke-width="2" fill="none"/></svg></span>
+        <span class="main">
+          <div class="p-name">New Balance 9060 "Rain Cloud"</div>
+          <div class="p-meta"><span class="mono">U9060GRY</span><span>New Balance</span><a href="#">Shopify ↗</a><a href="#">SHEIN SPU s24092204417 ↗</a></div>
+          <div class="p-blocker info">Shopify price changed on 3 sizes since the last sync (10/26, 9:15 PM EST). A re-sync sends the new prices.</div>
+        </span>
+        <span class="rollup"><span class="chip info">Out of date</span></span>
+        <span class="cover"><b>10 of 10</b> <span class="muted xs">sizes on SHEIN</span>
+          <span class="cover-bar"><i style="width:70%;background:var(--ok)"></i><i style="width:30%;background:var(--info)"></i></span></span>
+        <span class="p-actions"><a class="btn xs" href="#details">Details</a><span class="caret"><span class="c">10 sizes</span></span></span>
+      </summary>
+      <div class="vwrap">
+        <table class="v">
+          <thead><tr><th>Size</th><th class="num">Shopify</th><th class="num">Price</th><th>SHEIN size</th><th>Seller SKU</th><th class="num">SHEIN</th><th>Status</th><th>What to do</th></tr></thead>
+          <tbody>
+            <tr class="st-info"><td class="c-size size">9</td><td class="c-shop num">3</td><td class="c-hide num"><b>$149</b></td><td class="c-hide">US9</td><td class="c-hide mono">U9060GRY-9</td><td class="c-hide num">3 · <span class="was">$159</span></td><td class="c-status"><span class="chip info">Out of date</span></td><td class="c-todo xs">Price <span class="was">$159</span> → <b>$149</b> on the next sync.</td></tr>
+            <tr class="st-info"><td class="c-size size">9.5</td><td class="c-shop num">2</td><td class="c-hide num"><b>$149</b></td><td class="c-hide">US9.5</td><td class="c-hide mono">U9060GRY-9.5</td><td class="c-hide num">2 · <span class="was">$159</span></td><td class="c-status"><span class="chip info">Out of date</span></td><td class="c-todo xs">Price <span class="was">$159</span> → <b>$149</b> on the next sync.</td></tr>
+            <tr class="st-info"><td class="c-size size">10</td><td class="c-shop num">5</td><td class="c-hide num"><b>$152</b></td><td class="c-hide">US10</td><td class="c-hide mono">U9060GRY-10</td><td class="c-hide num">5 · <span class="was">$159</span></td><td class="c-status"><span class="chip info">Out of date</span></td><td class="c-todo xs">Price <span class="was">$159</span> → <b>$152</b> on the next sync.</td></tr>
+            <tr><td class="c-size size">7 … 12 (7 more)</td><td class="c-shop num">18</td><td class="c-hide num">$159</td><td class="c-hide">US7 … US12</td><td class="c-hide mono">7 sizes</td><td class="c-hide num">18 · $159</td><td class="c-status"><span class="chip ok">Synced</span></td><td class="c-todo muted xs">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <!-- 4. PARTIAL: 2 sizes Not on SHEIN -->
+    <details class="product e-muted sel" open>
+      <summary>
+        <span class="chkcell"><input type="checkbox" checked aria-label="Select"></span>
+        <span class="thumb"><svg viewBox="0 0 120 60"><path d="M6 44c10-2 22-10 32-22 6-7 14-10 22-6 8 4 12 10 22 12 12 2 26 2 32 8 3 3 2 8-2 9H8c-3 0-4-1-2-1z" fill="#fff" stroke="#111" stroke-width="2"/><path d="M38 22c8 4 14 12 18 22M60 16c4 8 6 16 6 28M18 40c20 0 50-4 78-4" stroke="#111" stroke-width="6" fill="none"/><path d="M8 51h104" stroke="#111" stroke-width="3"/></svg></span>
+        <span class="main">
+          <div class="p-name">Nike Dunk Low Retro "Panda"</div>
+          <div class="p-meta"><span class="mono">DD1391-100</span><span>Nike</span><a href="#">Shopify ↗</a><a href="#">SHEIN SPU s24081190216 ↗</a></div>
+          <div class="p-blocker muted">2 sizes came into stock on Shopify and aren't on SHEIN yet — 13, 14. Nothing is wrong; publish to add them.</div>
+        </span>
+        <span class="rollup"><span class="chip">Not on SHEIN</span></span>
+        <span class="cover"><b>11 of 13</b> <span class="muted xs">sizes on SHEIN</span>
+          <span class="cover-bar"><i style="width:85%;background:var(--ok)"></i><i style="width:15%;background:#7d8491"></i></span></span>
+        <span class="p-actions"><a class="btn xs" href="#details">Details</a><span class="caret"><span class="c">13 sizes</span></span></span>
+      </summary>
+      <div class="vwrap">
+        <table class="v">
+          <thead><tr><th>Size</th><th class="num">Shopify</th><th class="num">Price</th><th>SHEIN size</th><th>Seller SKU</th><th class="num">SHEIN</th><th>Status</th><th>What to do</th></tr></thead>
+          <tbody>
+            <tr><td class="c-size size">7 … 12 (11 sizes)</td><td class="c-shop num">47</td><td class="c-hide num">$118–$129</td><td class="c-hide">US7 … US12</td><td class="c-hide mono">11 sizes</td><td class="c-hide num">47</td><td class="c-status"><span class="chip ok">Synced</span></td><td class="c-todo muted xs">—</td></tr>
+            <tr class="st-muted"><td class="c-size size">13</td><td class="c-shop num">2</td><td class="c-hide num">$131</td><td class="c-hide">US13 <span class="muted xs">(standard)</span></td><td class="c-hide mono">DD1391-100-13</td><td class="c-hide num muted">—</td><td class="c-status"><span class="chip">Not on SHEIN</span></td><td class="c-todo xs">Ready. Goes up with the next publish.</td></tr>
+            <tr class="st-muted"><td class="c-size size">14</td><td class="c-shop num">1</td><td class="c-hide num">$135</td><td class="c-hide">US14 <span class="muted xs">(standard)</span></td><td class="c-hide mono">DD1391-100-14</td><td class="c-hide num muted">—</td><td class="c-status"><span class="chip">Not on SHEIN</span></td><td class="c-todo xs">Ready. Goes up with the next publish.</td></tr>
+            <tr class="zero"><td class="c-size size">6, 6.5</td><td class="c-shop num">0</td><td class="c-hide num">$118</td><td class="c-hide">US6, US6.5</td><td class="c-hide mono">2 sizes</td><td class="c-hide num">0</td><td class="c-status"><span class="chip plain">Out of stock on Shopify</span></td><td class="c-todo muted xs">Listed at 0 — not counted.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <!-- 5. IN REVIEW -->
+    <details class="product e-violet">
+      <summary>
+        <span class="chkcell"><input type="checkbox" disabled title="SHEIN is reviewing it — edits wait" aria-label="Select"></span>
+        <span class="thumb"><svg viewBox="0 0 120 60"><path d="M6 42c10-2 20-10 32-20 8-6 16-8 24-4 8 4 14 10 26 11 12 1 22 3 24 8 2 3 0 6-3 7H8c-3 0-4-1-2-2z" fill="#fff" stroke="#222" stroke-width="2"/><ellipse cx="34" cy="44" rx="10" ry="5" fill="#9ad0ff" stroke="#222"/><path d="M60 22c10 4 18 10 30 10" stroke="#c0392b" stroke-width="6" fill="none"/><path d="M8 51h104" stroke="#c0392b" stroke-width="3"/></svg></span>
+        <span class="main">
+          <div class="p-name">Nike Air Max 1 '86 OG "Big Bubble Sport Red"</div>
+          <div class="p-meta"><span class="mono">DQ3989-100</span><span>Nike</span><a href="#">Shopify ↗</a><a href="#">SHEIN SPU s24102733508 ↗</a></div>
+          <div class="p-blocker violet">Sent 10/26, 4:12 PM EST — SHEIN is reviewing it (usually 1–2 days). We check every 15 min.</div>
+        </span>
+        <span class="rollup"><span class="chip violet">In review</span></span>
+        <span class="cover"><b>0 of 9</b> <span class="muted xs">live · 9 in review</span>
+          <span class="cover-bar"><i style="width:100%;background:var(--violet)"></i></span></span>
+        <span class="p-actions"><a class="btn xs" href="#details">Details</a><span class="caret"><span class="c">9 sizes</span></span></span>
+      </summary>
+      <div class="vwrap"><p class="muted xs" style="padding:10px 14px;margin:0">All 9 sizes sent as standard SHEIN sizes US7–US12. Nothing to do.</p></div>
+    </details>
+
+    <!-- 6. SYNCED -->
+    <details class="product e-ok">
+      <summary>
+        <span class="chkcell"><input type="checkbox" aria-label="Select"></span>
+        <span class="thumb"><svg viewBox="0 0 120 60"><path d="M8 44c6-4 12-14 20-22 8-8 20-12 30-8 10 4 14 12 26 14 12 2 22 4 26 10 2 3 0 6-3 6H10c-3 0-4-0-2 0z" fill="#f2f2f2" stroke="#222" stroke-width="2"/><path d="M30 26c8 2 16 8 20 18M52 18c6 6 8 14 8 26" stroke="#2f5d9e" stroke-width="5" fill="none"/><path d="M8 51h104" stroke="#2f5d9e" stroke-width="4"/></svg></span>
+        <span class="main">
+          <div class="p-name">Jordan 4 Retro "Military Blue" (2024)</div>
+          <div class="p-meta"><span class="mono">FV5029-141</span><span>Jordan</span><a href="#">Shopify ↗</a><a href="#">SHEIN SPU s24050912873 ↗</a></div>
+          <div class="p-blocker muted" style="color:var(--ok)">Every in-stock size is on SHEIN and matches Shopify. Last checked 2:40 PM EST.</div>
+        </span>
+        <span class="rollup"><span class="chip ok">Synced</span></span>
+        <span class="cover"><b>11 of 11</b> <span class="muted xs">sizes on SHEIN</span>
+          <span class="cover-bar"><i style="width:100%;background:var(--ok)"></i></span></span>
+        <span class="p-actions"><a class="btn xs" href="#details">Details</a><span class="caret"><span class="c">11 sizes</span></span></span>
+      </summary>
+      <div class="vwrap"><p class="muted xs" style="padding:10px 14px;margin:0">US7–US13 · seller SKUs FV5029-141-7 … -13 · $215–$245 · 34 pairs.</p></div>
+    </details>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px" class="sm muted">
+      <span>Page 1 of 69</span><span style="display:flex;gap:6px"><button class="btn xs" disabled>‹ Prev</button><button class="btn xs">Next ›</button></span>
+    </div>
+  </div>
+
+  <!-- status legend (lives behind a "What do these mean?" disclosure in the real page) -->
+  <div class="card">
+    <h3>What the statuses mean</h3>
+    <div class="legend">
+      <div><span class="chip ok">Synced</span> On SHEIN, approved, matches Shopify now.</div>
+      <div><span class="chip">Not on SHEIN</span> Ready to list, not published yet.</div>
+      <div><span class="chip info">Out of date</span> On SHEIN, Shopify changed since — re-sync sends it.</div>
+      <div><span class="chip violet">In review</span> Sent; SHEIN is reviewing. Nothing to do.</div>
+      <div><span class="chip bad">Blocked</span> Can't publish until fixed — the row has the button.</div>
+      <div><span class="chip warn">Error</span> SHEIN refused the last try — read why, then retry.</div>
+    </div>
+  </div>
+
+  <!-- sticky selection bar -->
+  <div class="batch-bar">
+    <span class="tot"><b>3 products</b> · 31 sizes selected <span class="muted sm">· 1 is blocked and will be skipped</span></span>
+    <span class="btns"><button class="btn ghost sm">Clear</button><button class="btn primary">Dry run 3 products</button></span>
+  </div>
+
+  <!-- the drawer (opened by any "Details" via :target) -->
+  <span id="details"></span>
+  <a class="drawer-bg" href="#" aria-label="Close"></a>
+  <aside class="drawer" role="dialog" aria-label="Product details">
+    <div class="d-head">
+      <span class="thumb"><svg viewBox="0 0 120 60"><path d="M6 44c10-2 22-10 32-22 6-7 14-10 22-6 8 4 12 10 22 12 12 2 26 2 32 8 3 3 2 8-2 9H8c-3 0-4-1-2-1z" fill="#f4f4f4" stroke="#222" stroke-width="2"/><path d="M8 51h104" stroke="#222" stroke-width="3"/></svg></span>
+      <div><div class="p-name">Nike Air Force 1 '07 Women's "Triple White"</div>
+        <div class="p-meta"><span class="mono">DD8959-100</span><span class="chip bad">Blocked</span><a href="#">Shopify ↗</a><a href="#">SHEIN ↗</a></div></div>
+      <a class="close" href="#" aria-label="Close">✕</a>
+    </div>
+    <div class="d-body">
+      <div class="d-sec">
+        <h4>Requirements</h4>
+        <div class="req"><span class="y">✓</span><span>Category <span class="muted">— Women's Shoes › Sneakers</span></span><span></span></div>
+        <div class="req"><span class="y">✓</span><span>Brand Nike authorised on our store</span><span></span></div>
+        <div class="req"><span class="y">✓</span><span>Photos <span class="muted">— 6, square, 1200 px</span></span><span></span></div>
+        <div class="req"><span class="y">✓</span><span>Title 68 / 200 characters</span><span></span></div>
+        <div class="req"><span class="y">✓</span><span>Seller SKUs unique on SHEIN (11 checked)</span><span></span></div>
+        <div class="req"><span class="n">✕</span><span><b>14.5W and 15W aren't SHEIN sizes.</b> Women's Sneakers allows custom sizes.</span><button class="btn xs fix">✚ Add both as custom sizes</button></div>
+        <div class="req"><span class="y">✓</span><span>Shelf quota — uses 0 new SKCs (160 left)</span><span></span></div>
+        <div class="req"><span class="y">✓</span><span>No SHEIN review open</span><span></span></div>
+      </div>
+      <div class="d-sec">
+        <h4>What SHEIN will receive</h4>
+        <dl class="kv">
+          <dt>Title</dt><dd>Nike Air Force 1 '07 Women's Triple White DD8959-100</dd>
+          <dt>Category</dt><dd>Women's Shoes › Sneakers</dd>
+          <dt>Brand</dt><dd>Nike</dd>
+          <dt>Photos</dt><dd><div class="imgs"><span><i>1</i>main</span><span><i>2</i>side</span><span><i>3</i>top</span><span><i>4</i>back</span><span><i>5</i>sole</span><span><i>6</i>box</span></div></dd>
+        </dl>
+        <table class="v" style="margin-top:10px">
+          <thead><tr><th>Our size</th><th>SHEIN size</th><th>Seller SKU</th><th class="num">Price</th><th class="num">Stock</th></tr></thead>
+          <tbody>
+            <tr><td>6W … 13W</td><td>US6W … US13W <span class="muted xs">standard</span></td><td class="mono">9 SKUs</td><td class="num">$115–$125</td><td class="num">41</td></tr>
+            <tr class="chg"><td><b>14.5W</b></td><td>✚ <b>US14.5W</b> <span class="muted xs">custom · new</span></td><td class="mono">DD8959-100-14.5W</td><td class="num">$139</td><td class="num">2</td></tr>
+            <tr class="chg"><td><b>15W</b></td><td>✚ <b>US15W</b> <span class="muted xs">custom · new</span></td><td class="mono">DD8959-100-15W</td><td class="num">$139</td><td class="num">1</td></tr>
+          </tbody>
+        </table>
+        <p class="muted xs">Highlighted rows are new on SHEIN. Custom sizes are created with this publish (SHEIN's new scheme) and then work for every product in the store. <a href="#">{ } Raw request</a></p>
+      </div>
+      <div class="d-sec">
+        <h4>History</h4>
+        <p class="xs" style="margin:0 0 4px">10/24, 8:02 PM EST · Publish · Kim · <span class="chip ok">9 published</span> <span class="chip bad">2 skipped</span></p>
+        <p class="xs muted" style="margin:0">10/24, 7:58 PM EST · Dry run · Kim · 2 sizes have no SHEIN size</p>
+      </div>
+    </div>
+    <div class="d-foot">
+      <button class="btn ghost sm">Dry run this product</button>
+      <button class="btn primary sm" disabled title="Fix the blocker, then dry run first" style="opacity:.5">Publish this product</button>
+    </div>
+  </aside>
+
+  <div class="note-box">Mockup only — static HTML, no scripts. "Details" opens the drawer (CSS :target). Resize under 768 px for the phone card layout. Tokens copied from src/styles.css; chip/tile/table/bar shapes mirror .ebo-chip, .shc-tile, .ebl-table, .batch-bar.</div>
+</div>
+</body>
+</html>

@@ -28,6 +28,8 @@ function Thumb({ src }) {
 export function SheinCheck({ user, onHome, onSignOut }) {
   // Connect + the live-sync switches: an admin, or "Connect integrations" (2026-10-27).
   const isAdmin = user?.role === 'admin' || user?.role === 'superadmin' || hasPriv(user, 'connect_integrations');
+  // SHEIN Listings lives under the same workspace (PH /ph/…, admin /…).
+  const listingsPath = window.location.pathname.startsWith('/ph') ? '/ph/shein-listings' : '/shein-listings';
   const [file, setFile] = useState(null);       // { name, rows }
   const [variants, setVariants] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
@@ -104,6 +106,7 @@ export function SheinCheck({ user, onHome, onSignOut }) {
   return (
     <div className="app">
       <TopBar title="SHEIN listings — check & fix" onHome={onHome} onSignOut={onSignOut} />
+      {(listingsPath.startsWith('/ph') || user?.role === 'admin' || user?.role === 'superadmin') && <p className="shl-crosslink">New: <a className="ebl-link" href={listingsPath} onClick={(e) => { e.preventDefault(); window.history.pushState(null, '', listingsPath); window.dispatchEvent(new PopStateEvent('popstate')); }}>SHEIN Listings</a> — every Shopify shoe on SHEIN size by size: what’s listed, what isn’t and why.</p>}
       {sheinApi?.connected && <SheinLivePanel isAdmin={isAdmin} onSignOut={onSignOut} />}
       <div className="card">
         <p className="muted sm">{sheinApi?.connected && <><b>From an export file</b> (the old way — the live fix above doesn’t need one). </>}Upload SHEIN’s <b>Export Products</b> file (Seller Center → Products → Export). Every SHEIN size is matched to the Shopify variant with the same <b>seller SKU</b> and checked for the wrong size, wrong age group, a SKU that’s gone from Shopify, and more stock on SHEIN than in Shopify. Nothing on SHEIN or Shopify is changed.</p>

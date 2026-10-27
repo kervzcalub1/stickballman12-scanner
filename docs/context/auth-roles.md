@@ -93,6 +93,10 @@ becoming an admin — its role, and so its dashboard, stays its own:
   (`api/shein/connect`, `api/ebay/connect` via `requirePrivilege`), the SHEIN live-sync switches
   (`api/shein/live`), and every "Connect eBay again" button. The eBay **Sales report** stays
   admin-only. Opens `/shein-check` + `/ebay` on the warehouse side too.
+  **SHEIN Listings** (`docs/context/shein-listings.md` → "Security gates"): PH + admin read and dry-run;
+  every SHEIN write (run, retry, probe, webhooks, auto price, publish again, send again, box sizes, re-reading
+  SHEIN's rules) **and stopping / resuming a run job** need an admin or this privilege (403). A PH publish dry
+  run converts no photos (no R2 upload, no SHEIN transform-pic) — only a holder's dry run does.
 - **Limits on a holder who isn't an admin** (`accessRefusal`, enforced server-side; the screen
   only greys them): no action on an **admin's** account, none on **their own**, can't set role
   **admin**, and can't grant or remove **either of these two** — only a real admin does

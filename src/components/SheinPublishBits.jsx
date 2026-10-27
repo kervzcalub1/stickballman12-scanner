@@ -18,7 +18,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { fmt, when, NEEDS_PRIV, BlockerSay, FixButton } from './SheinListingsBits.jsx';
-import { BOX_PLACEHOLDERS, sizeGroupOf, validateBoxDefaults, cleanTitle, isKnownBrand } from '../lib/sheinPublish.js';
+import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand } from '../lib/sheinPublish.js';
 
 export const GROUP_LABEL = {
   adult: 'Men’s / adult', women: 'Women’s (W)', youth: 'GS / youth (Y)', child: 'Kids · PS (10.5C and up)', toddler: 'Toddler · TD (up to 10C)',
@@ -409,7 +409,8 @@ export function TitleEditor({ product, max = null, onSaved, onSignOut }) {
 }
 
 /* --------------------------------- D6 box --------------------------------- */
-const BOX_FIELDS = [['length', 'Length', 'cm'], ['width', 'Width', 'cm'], ['height', 'Height', 'cm'], ['weight', 'Weight', 'g']];
+// Shown and typed in inches / pounds; saved as cm / g (boxFromImperial).
+const BOX_FIELDS = [['length', 'Length', 'in'], ['width', 'Width', 'in'], ['height', 'Height', 'in'], ['weight', 'Weight', 'lb']];
 export function BoxDefaults({ canWrite, onSaved, onSignOut, compact = false }) {
   const { d, err, reload } = useLoad(() => api.sheinPublishMaps('box'), [], onSignOut);
   useLive(['app_settings'], reload, { mount: false });
@@ -417,12 +418,13 @@ export function BoxDefaults({ canWrite, onSaved, onSignOut, compact = false }) {
   const [busy, setBusy] = useState(false);
   const [saveErr, setSaveErr] = useState('');
   const box = d?.box;
-  useEffect(() => { if (box && !draft) setDraft(JSON.parse(JSON.stringify(box.groups || BOX_PLACEHOLDERS))); }, [box]); // eslint-disable-line react-hooks/exhaustive-deps
-  const bad = draft ? validateBoxDefaults(draft) : null;
+  const saved = box ? boxToImperial(box.groups || BOX_PLACEHOLDERS) : null;
+  useEffect(() => { if (box && !draft) setDraft(boxToImperial(box.groups || BOX_PLACEHOLDERS)); }, [box]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bad = draft ? validateImperialBox(draft) : null;
   async function save() {
     setBusy(true); setSaveErr('');
     try {
-      await api.sheinPublishMapSave('box', { groups: Object.fromEntries(Object.entries(draft).map(([g, x]) => [g, { ...x, weight: Number(x.weight) }])) });
+      await api.sheinPublishMapSave('box', { groups: boxFromImperial(draft) });
       setDraft(null); await reload(); onSaved?.();
     } catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(e.message); } finally { setBusy(false); }
   }
@@ -454,11 +456,11 @@ export function BoxDefaults({ canWrite, onSaved, onSignOut, compact = false }) {
           ))}
         </tbody>
       </table>
-      {!compact && <p className="muted xs">Women’s shoes use the adult box. Length, width and height in cm (up to 2 decimals), weight in grams — the box with the shoes in it.</p>}
+      {!compact && <p className="muted xs">Women’s shoes use the adult box. Length, width and height in inches, weight in pounds (up to 2 decimals) — the box with the shoes in it. SHEIN gets them in cm and grams; we convert when you save.</p>}
       {canWrite && bad && <p className="shl-field-bad">{bad}</p>}
       {saveErr && <p className="error xs" role="alert">{saveErr}</p>}
       <div className="shl-pub-acts">
-        {canWrite && JSON.stringify(draft) !== JSON.stringify(box.groups) && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setDraft(JSON.parse(JSON.stringify(box.groups)))}>Undo</button>}
+        {canWrite && JSON.stringify(draft) !== JSON.stringify(saved) && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setDraft(saved)}>Undo</button>}
         <button type="button" className="btn primary sm" data-box-save="" disabled={!canWrite || busy || !!bad} title={canWrite ? 'Saving confirms them — publishing can use them from now on' : NEEDS_PRIV}
           onClick={save}>{busy ? 'Saving…' : box.confirmed ? 'Save box sizes' : 'Confirm these box sizes'}</button>
       </div>

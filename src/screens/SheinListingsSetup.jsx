@@ -189,7 +189,7 @@ export function SheinListingsSetup({ canWrite, gates, cut, onSignOut, onOpenProd
       <Gates gates={gates.gates} readAt={gates.readAt} canWrite={canWrite} reload={gates.reload} onSignOut={onSignOut} />
       <div className="card" data-setup="box">
         <h3 className="er-step-title">Box size and weight</h3>
-        <p className="muted sm">SHEIN needs every size’s box: length × width × height (cm) and weight (g). One default per size group.</p>
+        <p className="muted sm">SHEIN needs every size’s box: length × width × height (inches) and weight (pounds). One default per size group.</p>
         <BoxDefaults canWrite={canWrite} onSignOut={onSignOut} />
       </div>
       <Categories canWrite={canWrite} onSignOut={onSignOut} />

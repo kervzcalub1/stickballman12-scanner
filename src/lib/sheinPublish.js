@@ -58,6 +58,33 @@ export function validateBoxDefaults(groups) {
   return null;
 }
 
+// The team measures boxes in inches and pounds (2026-10-27); SHEIN and the stored setting stay in cm
+// and grams. The page shows and takes in/lb and converts on save — nothing server-side changes.
+export const CM_PER_IN = 2.54;
+export const G_PER_LB = 453.59237;
+const round2 = (n) => Math.round(n * 100) / 100;
+export const cmToIn = (cm) => round2(Number(cm) / CM_PER_IN);
+export const gToLb = (g) => round2(Number(g) / G_PER_LB);
+export const inToCm = (inch) => round2(Number(inch) * CM_PER_IN);
+export const lbToG = (lb) => Math.round(Number(lb) * G_PER_LB);
+export const boxToImperial = (groups) => Object.fromEntries(Object.entries(groups || {}).map(([g, x]) => [g, {
+  length: String(cmToIn(x.length)), width: String(cmToIn(x.width)), height: String(cmToIn(x.height)), weight: String(gToLb(x.weight)),
+}]));
+export const boxFromImperial = (draft) => Object.fromEntries(Object.entries(draft || {}).map(([g, x]) => [g, {
+  length: String(inToCm(x.length)), width: String(inToCm(x.width)), height: String(inToCm(x.height)), weight: lbToG(x.weight),
+}]));
+// A typed in/lb draft: positive numbers, at most 2 decimals.
+export function validateImperialBox(draft) {
+  for (const g of Object.keys(BOX_PLACEHOLDERS)) {
+    const x = draft?.[g];
+    if (!x) return `Missing the ${g} box.`;
+    for (const k of ['length', 'width', 'height', 'weight']) {
+      if (!/^\d{1,3}(\.\d{1,2})?$/.test(String(x[k]).trim()) || !(Number(x[k]) > 0)) return `${g} ${k}: a positive number of ${k === 'weight' ? 'lb' : 'inches'}, at most 2 decimals.`;
+    }
+  }
+  return validateBoxDefaults(boxFromImperial(draft));
+}
+
 // Shopify title → SHEIN name: trimmed, single spaces, no emoji.
 export const cleanTitle = (t) => trim(String(t ?? '').replace(EMOJI_ALL, '').replace(/\s+/g, ' '));
 // Shopify descriptionHtml → plain text (doc: "请不要输入html内容"): block tags → new lines, entities

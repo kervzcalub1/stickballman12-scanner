@@ -29,6 +29,7 @@ import { useLive } from '../hooks.js';
 import { ProgressBar, RemoteThumb } from './common.jsx';
 import { renderBlocker, itemStatus, itemRetryable, itemUnconfirmed, itemCanSendAgain, PRICE_FROM, ITEM_NO_ANSWER, OP_LABEL, OP_SAY, PRICE_CODE, isUpdateOps, isPublishOps, PUBLISH_WORD } from '../lib/sheinListings.js';
 import { GROUP_LABEL, BOX_LABEL } from './SheinPublishBits.jsx';
+import { cmToIn, gToLb } from '../lib/sheinPublish.js';
 import { fmt, money, when, NEEDS_PRIV } from './SheinListingsBits.jsx';
 
 const plural = (n, one, many = `${one}s`) => `${fmt(n)} ${n === 1 ? one : many}`;
@@ -118,7 +119,7 @@ function PublishPlan({ plan }) {
         <dt>Brand</dt><dd>{plan.brand ? <>{plan.brand.name || plan.brand.code} <span className="muted xs">{plan.brand.code}</span></> : <span className="muted">none (allowed in this category)</span>}</dd>
         {plan.skcValue && <><dt>Colour</dt><dd>{plan.skcValue.label}</dd></>}
         {plan.sizeGroup && <><dt>Size group</dt><dd>{GROUP_LABEL[plan.sizeGroup] || plan.sizeGroup}</dd></>}
-        {plan.box && <><dt>Box</dt><dd>{plan.box.length} × {plan.box.width} × {plan.box.height} cm · {fmt(plan.box.weight)} g <span className="muted xs">({BOX_LABEL[plan.box.group] || plan.box.group})</span></dd></>}
+        {plan.box && <><dt>Box</dt><dd>{cmToIn(plan.box.length)} × {cmToIn(plan.box.width)} × {cmToIn(plan.box.height)} in · {gToLb(plan.box.weight)} lb <span className="muted xs">({BOX_LABEL[plan.box.group] || plan.box.group})</span></dd></>}
         {(plan.attributes || []).length > 0 && <><dt>SHEIN details</dt><dd>{fmt(new Set(plan.attributes.map((a) => a.attribute_id)).size)} set from the product type’s defaults</dd></>}
         {q && <><dt>Publish quota</dt><dd>{q.controlled ? <>uses {fmt(q.uses)} of {fmt(q.available)} left this month</> : 'not limited for the store'}</dd></>}
         {plan.supplierCode && <><dt>Our code on SHEIN</dt><dd className="shl-mono">{plan.supplierCode}</dd></>}

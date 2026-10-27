@@ -30,8 +30,17 @@ async function cached(kind, key, maxAgeMs, fetcher, { fresh = false } = {}) {
 /* --------------------------------- D6 box defaults --------------------------------- */
 // app_settings shein_box_defaults = { groups: {adult, youth, child, toddler: {length,width,height,weight}}, confirmed, by, at }.
 // Until a person saves them they are the spec's PLACEHOLDERS, unconfirmed — and nothing is published.
+// A saved box that fails today's check (e.g. 166 in, saved before the 30 in limit) reads UNCONFIRMED
+// with the reason, so box_unconfirmed blocks publishing until someone fixes and confirms it.
 export async function readBoxDefaults() {
-  try { const v = await getSetting(BOX_KEY); if (v) return JSON.parse(v); } catch { /* fall through */ }
+  try {
+    const v = await getSetting(BOX_KEY);
+    if (v) {
+      const box = JSON.parse(v);
+      const problem = box?.confirmed ? validateBoxDefaults(box.groups) : null;
+      return problem ? { ...box, confirmed: false, problem } : box;
+    }
+  } catch { /* fall through */ }
   return { groups: BOX_PLACEHOLDERS, confirmed: false, by: null, at: null };
 }
 export async function saveBoxDefaults(groups, by) {

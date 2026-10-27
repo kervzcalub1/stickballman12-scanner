@@ -48,12 +48,22 @@ export function sizeGroupOf(size) {
 export const boxGroupOf = (g) => (g === 'women' ? 'adult' : g);
 
 // Validate a D6 box setting a person saves: four groups, cm strings (positive, ≤ 2 decimals), grams > 0.
+// A shoe box is never over 30 in a side or 30 lb (2026-10-28: a toddler length typed as 166 in saved
+// and would have gone to SHEIN). Checked on save AND on read, so a bad saved box blocks publishing.
+export const BOX_MAX_IN = 30;
+export const BOX_MAX_LB = 30;
+const BOX_MAX_CM = BOX_MAX_IN * 2.54;
+const BOX_MAX_G = Math.round(BOX_MAX_LB * 453.59237);
 export function validateBoxDefaults(groups) {
   for (const g of Object.keys(BOX_PLACEHOLDERS)) {
     const x = groups?.[g];
     if (!x) return `Missing the ${g} box.`;
-    for (const k of ['length', 'width', 'height']) if (!/^\d{1,3}(\.\d{1,2})?$/.test(String(x[k])) || !(Number(x[k]) > 0)) return `${g} ${k}: a positive number of cm, at most 2 decimals.`;
+    for (const k of ['length', 'width', 'height']) {
+      if (!/^\d{1,3}(\.\d{1,2})?$/.test(String(x[k])) || !(Number(x[k]) > 0)) return `${g} ${k}: a positive number of cm, at most 2 decimals.`;
+      if (Number(x[k]) > BOX_MAX_CM) return `${g} ${k}: ${Math.round(Number(x[k]) / 2.54 * 100) / 100} in is over ${BOX_MAX_IN} in — check for a typo.`;
+    }
     if (!(Number(x.weight) > 0) || Math.round(Number(x.weight) * 100) !== Number(x.weight) * 100) return `${g} weight: grams, more than 0, at most 2 decimals.`;
+    if (Number(x.weight) > BOX_MAX_G) return `${g} weight: ${Math.round(Number(x.weight) / 453.59237 * 100) / 100} lb is over ${BOX_MAX_LB} lb — check for a typo.`;
   }
   return null;
 }
@@ -73,13 +83,15 @@ export const boxToImperial = (groups) => Object.fromEntries(Object.entries(group
 export const boxFromImperial = (draft) => Object.fromEntries(Object.entries(draft || {}).map(([g, x]) => [g, {
   length: String(inToCm(x.length)), width: String(inToCm(x.width)), height: String(inToCm(x.height)), weight: lbToG(x.weight),
 }]));
-// A typed in/lb draft: positive numbers, at most 2 decimals.
+// A typed in/lb draft: positive numbers, at most 2 decimals, at most 30 in / 30 lb.
 export function validateImperialBox(draft) {
   for (const g of Object.keys(BOX_PLACEHOLDERS)) {
     const x = draft?.[g];
     if (!x) return `Missing the ${g} box.`;
     for (const k of ['length', 'width', 'height', 'weight']) {
+      const unit = k === 'weight' ? 'lb' : 'in';
       if (!/^\d{1,3}(\.\d{1,2})?$/.test(String(x[k]).trim()) || !(Number(x[k]) > 0)) return `${g} ${k}: a positive number of ${k === 'weight' ? 'lb' : 'inches'}, at most 2 decimals.`;
+      if (Number(x[k]) > (k === 'weight' ? BOX_MAX_LB : BOX_MAX_IN)) return `${g} ${k}: ${Number(x[k])} ${unit} is over ${k === 'weight' ? BOX_MAX_LB : BOX_MAX_IN} ${unit} — check for a typo.`;
     }
   }
   return validateBoxDefaults(boxFromImperial(draft));

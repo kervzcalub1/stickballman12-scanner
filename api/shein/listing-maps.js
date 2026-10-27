@@ -155,7 +155,11 @@ async function phase4Maps(req, res, user, type, qs) {
     const admin = user.role === 'admin' || user.role === 'superadmin';
     if (!admin && !(await hasPrivilege(user, 'connect_integrations'))) return send(res, 403, { ok: false, error: 'This needs an admin, or the “Connect integrations” privilege.' });
     const b = await getJsonBody(req);
-    try { return send(res, 200, { ok: true, box: await saveBoxDefaults(b.groups, by) }); } catch (e) { return send(res, e.status || 500, { ok: false, error: e.message }); }
+    let box;
+    try { box = await saveBoxDefaults(b.groups, by); } catch (e) { return send(res, e.status || 500, { ok: false, error: e.message }); }
+    // The box_unconfirmed blocker clears (or comes back) at once, not at the next Re-read. DB only — no SHEIN call.
+    if (await latestListingJob('snapshot', 'done')) await recomputeStored().catch((e) => console.error('[shein-listing] recompute after box', e.message));
+    return send(res, 200, { ok: true, box });
   }
   if (type === 'category') {
     const tree = (await getListingCache('category_tree', 'store'))?.payload || null;

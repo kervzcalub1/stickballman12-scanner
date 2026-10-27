@@ -2636,6 +2636,15 @@ test.describe('SHEIN Listings Phase 4 — the planner (pure)', () => {
     expect(imageConversions(imagePlan({}), 3)).toEqual([{ photo: 0, type: 1 }, { photo: 1, type: 2 }, { photo: 2, type: 2 }, { photo: 0, type: 5 }]);   // the square is its own conversion (type is part of the key)
     expect(validateBoxDefaults(BOX_PLACEHOLDERS)).toBe(null);
     expect(validateBoxDefaults({ ...BOX_PLACEHOLDERS, adult: { ...BOX_PLACEHOLDERS.adult, weight: 0 } })).toMatch(/weight/);
+    // 30 in / 30 lb limits (2026-10-28: a toddler length saved as 166 in = 421.64 cm)
+    expect(validateBoxDefaults({ ...BOX_PLACEHOLDERS, toddler: { ...BOX_PLACEHOLDERS.toddler, length: '421.64' } })).toBe('toddler length: 166 in is over 30 in — check for a typo.');
+    expect(validateBoxDefaults({ ...BOX_PLACEHOLDERS, adult: { ...BOX_PLACEHOLDERS.adult, weight: 14000 } })).toMatch(/^adult weight: 30\.86 lb is over 30 lb/);
+    const { validateImperialBox } = await import('../src/lib/sheinPublish.js');
+    const ok = { adult: { length: '16', width: '12', height: '6', weight: '4' }, youth: { length: '16', width: '12', height: '6', weight: '4' }, child: { length: '16', width: '12', height: '6', weight: '4' }, toddler: { length: '16', width: '12', height: '6', weight: '4' } };
+    expect(validateImperialBox(ok)).toBe(null);
+    expect(validateImperialBox({ ...ok, adult: { ...ok.adult, length: '30' } })).toBe(null);                    // the limit itself is allowed
+    expect(validateImperialBox({ ...ok, toddler: { ...ok.toddler, length: '166' } })).toBe('toddler length: 166 in is over 30 in — check for a typo.');
+    expect(validateImperialBox({ ...ok, child: { ...ok.child, weight: '40' } })).toBe('child weight: 40 lb is over 30 lb — check for a typo.');
   });
   test('attributes are never automatic: a required one without a person’s default blocks; assoc rules add requirements; values must be in the template', async () => {
     const { templateParts, buildAttributes } = await import('../src/lib/sheinPublish.js');
@@ -2762,7 +2771,20 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     const groups = { adult: { length: '34', width: '22', height: '13', weight: 1450 }, youth: { length: '30', width: '19', height: '11', weight: 1000 }, child: { length: '27', width: '17', height: '10', weight: 800 }, toddler: { length: '24', width: '16', height: '9', weight: 600 } };
     expect((await ph('box', { groups })).status()).toBe(403);
     expect((await request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups: { ...groups, adult: { ...groups.adult, width: 'x' } } } })).status()).toBe(400);
+    expect((await request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups: { ...groups, toddler: { ...groups.toddler, length: '421.64' } } } })).status()).toBe(400);   // 166 in
     expect((await (await request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups } })).json()).box).toMatchObject({ confirmed: true, by: 'Alex', groups: { adult: { length: '34', weight: 1450 } } });
+    // saving recounts at once (DB only): box_unconfirmed is gone from the shoe without a Re-read
+    const codes = async () => (await pool.query(`SELECT blockers FROM shein_listing_variants WHERE row_key = $1`, [gidV(770809)])).rows[0].blockers.map((b) => b.code);
+    expect(await codes()).not.toContain('box_unconfirmed');
+    // a box saved BEFORE the limit (166 in) reads unconfirmed with the reason — it blocks publishing
+    const good = (await pool.query(`SELECT value FROM app_settings WHERE key = 'shein_box_defaults'`)).rows[0].value;
+    const badBox = JSON.parse(good); badBox.groups.toddler.length = '421.64';
+    await pool.query(`UPDATE app_settings SET value = $1 WHERE key = 'shein_box_defaults'`, [JSON.stringify(badBox)]);
+    expect((await (await request.get('/api/shein/listing-maps?type=box', { headers: auth.ph })).json()).box).toMatchObject({ confirmed: false, problem: 'toddler length: 166 in is over 30 in — check for a typo.' });
+    await L.recomputeStored();
+    expect(await codes()).toContain('box_unconfirmed');
+    expect((await request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups } })).status()).toBe(200);   // fixed → confirmed again, recounted
+    expect(await codes()).not.toContain('box_unconfirmed');
   });
 
   test('associated rules add a requirement (a leather upper needs a lining) → blocked until a person sets it; then the EXACT body, photos converted (assets), 0 writes', async ({ request }) => {

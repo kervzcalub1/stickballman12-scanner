@@ -436,8 +436,9 @@ export function BoxDefaults({ canWrite, onSaved, onSignOut, compact = false }) {
         ? <p className="ebl-ok xs">Confirmed by {box.by || '—'} {when(box.at)}. Every new product is sent with its size group’s box.</p>
         : (
           <div className="shl-banner warn shl-box-banner" role="status">
-            <b>UNCONFIRMED — placeholders, publishing is blocked until someone confirms</b>
-            <span className="xs">SHEIN needs the box’s length × width × height and the weight on every size. These numbers are guesses nobody has measured; no product is published with them.{canWrite ? ' Check them against a real box, then confirm.' : ' An admin (or someone with Connect integrations) checks and confirms them.'}</span>
+            <b>{box.problem ? 'UNCONFIRMED — a saved box size looks wrong, publishing is blocked until someone fixes it' : 'UNCONFIRMED — placeholders, publishing is blocked until someone confirms'}</b>
+            {box.problem && <span className="xs" data-box-problem="">{box.problem}</span>}
+            {!box.problem && <span className="xs">SHEIN needs the box’s length × width × height and the weight on every size. These numbers are guesses nobody has measured; no product is published with them.{canWrite ? ' Check them against a real box, then confirm.' : ' An admin (or someone with Connect integrations) checks and confirms them.'}</span>}
           </div>
         )}
       <table className="shl-rtable shl-boxtable">
